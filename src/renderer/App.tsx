@@ -18,10 +18,24 @@ function Workspace() {
     setSessionStatus,
   } = useStore()
 
+  // Restore previously opened projects. Sessions are not restored — the
+  // processes are gone — but the project list is, so ⌘T works immediately.
+  useEffect(() => {
+    let cancelled = false
+    void window.pawl.listProjects().then((saved) => {
+      if (cancelled) return
+      for (const p of saved) addProject(p.path)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [addProject])
+
   const openProject = useCallback(async () => {
     const path = await window.pawl.pickProjectFolder()
     if (!path) return
     addProject(path)
+    void window.pawl.addProject(path)
     const meta = await window.pawl.createSession({ cwd: path, cols: 100, rows: 30 })
     addSession(meta)
   }, [addProject, addSession])

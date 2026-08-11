@@ -4,6 +4,7 @@ import { BRAND } from '../shared/brand'
 import type { CreateSessionInput } from '../shared/types'
 import { PtyManager } from './pty-manager'
 import { detectProviders, loginPath, PROVIDERS } from './providers'
+import { store, type Preferences } from './store'
 
 const isDev = !!process.env.ELECTRON_RENDERER_URL
 
@@ -43,9 +44,12 @@ const ptys = new PtyManager(
 )
 
 function createWindow(): void {
+  const saved = store().getState().windowBounds
   mainWindow = new BrowserWindow({
-    width: 1440,
-    height: 900,
+    width: saved?.width ?? 1440,
+    height: saved?.height ?? 900,
+    x: saved?.x,
+    y: saved?.y,
     minWidth: 720,
     minHeight: 480,
     show: false,
@@ -65,6 +69,19 @@ function createWindow(): void {
   mainWindow.on('closed', () => {
     mainWindow = null
   })
+
+  // Remember size and position. Debounced so a drag doesn't hammer the disk.
+  let boundsTimer: NodeJS.Timeout | undefined
+  const rememberBounds = () => {
+    clearTimeout(boundsTimer)
+    boundsTimer = setTimeout(() => {
+      if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isMaximized()) {
+        store().setWindowBounds(mainWindow.getNormalBounds())
+      }
+    }, 400)
+  }
+  mainWindow.on('resize', rememberBounds)
+  mainWindow.on('move', rememberBounds)
 
   // Surface renderer errors in the terminal — without this a blank window
   // gives no clue what failed.
@@ -106,6 +123,12 @@ function registerIpc(): void {
   })
 
   ipcMain.handle('providers:detect', () => detectProviders())
+
+  ipcMain.handle('projects:list', () => store().getProjects())
+  ipcMain.handle('projects:add', (_e, path: string) => store().addProject(path))
+  ipcMain.handle('projects:remove', (_e, path: string) => store().removeProject(path))
+  ipcMain.handle('prefs:get', () => store().getPreferences())
+  ipcMain.handle('prefs:set', (_e, patch: Partial<Preferences>) => store().setPreferences(patch))
 
   ipcMain.handle('session:create', async (_e, input: CreateSessionInput) => {
     const path = await loginPath()

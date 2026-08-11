@@ -10,6 +10,14 @@ const api = {
 
   detectProviders: (): Promise<Record<string, boolean>> => ipcRenderer.invoke('providers:detect'),
 
+  listProjects: (): Promise<Array<{ path: string; lastOpenedAt: number }>> =>
+    ipcRenderer.invoke('projects:list'),
+  addProject: (path: string): Promise<unknown> => ipcRenderer.invoke('projects:add', path),
+  removeProject: (path: string): Promise<void> => ipcRenderer.invoke('projects:remove', path),
+  getPreferences: (): Promise<Record<string, unknown>> => ipcRenderer.invoke('prefs:get'),
+  setPreferences: (patch: Record<string, unknown>): Promise<Record<string, unknown>> =>
+    ipcRenderer.invoke('prefs:set', patch),
+
   pickProjectFolder: (): Promise<string | null> => ipcRenderer.invoke('project:pick'),
 
   createSession: (input: CreateSessionInput): Promise<SessionMeta> =>

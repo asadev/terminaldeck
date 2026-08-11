@@ -38,9 +38,27 @@ export interface BrandInfo {
 }
 
 /** Everything the renderer may call, exposed by the preload bridge. */
+export interface Preferences {
+  theme: 'dark' | 'light' | 'system'
+  defaultProvider: ProviderId
+  restoreSessions: boolean
+  notifyOnComplete: boolean
+}
+
+export interface PersistedProject {
+  path: string
+  provider?: ProviderId
+  lastOpenedAt: number
+}
+
 export interface PawlApi {
   getBrand(): Promise<BrandInfo>
   detectProviders(): Promise<Record<ProviderId, boolean>>
+  listProjects(): Promise<PersistedProject[]>
+  addProject(path: string): Promise<PersistedProject>
+  removeProject(path: string): Promise<void>
+  getPreferences(): Promise<Preferences>
+  setPreferences(patch: Partial<Preferences>): Promise<Preferences>
   pickProjectFolder(): Promise<string | null>
   createSession(input: CreateSessionInput): Promise<SessionMeta>
   writeToSession(id: string, data: string): void
