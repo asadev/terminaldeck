@@ -1,0 +1,117 @@
+import { randomUUID } from 'node:crypto'
+import { basename } from 'node:path'
+import * as pty from 'node-pty'
+import { BRAND } from '../shared/brand'
+import type { CreateSessionInput, ProviderId, SessionMeta } from '../shared/types'
+
+/** Fully resolved launch instruction, decided by the caller. */
+export interface SpawnSpec {
+  provider: ProviderId
+  command: string
+  args: string[]
+  path: string
+}
+
+interface Session {
+  meta: SessionMeta
+  proc: pty.IPty
+  /** Rolling buffer so a tab can be re-rendered after switching away. */
+  scrollback: string[]
+}
+
+const SCROLLBACK_LIMIT = 4000
+
+/**
+ * Owns every live terminal process. The renderer never touches node-pty —
+ * it addresses sessions by id and receives output through the IPC bridge.
+ */
+export class PtyManager {
+  private sessions = new Map<string, Session>()
+
+  constructor(
+    private readonly onData: (id: string, data: string) => void,
+    private readonly onExit: (id: string, exitCode: number) => void,
+  ) {}
+
+  create(input: CreateSessionInput, spawnSpec: SpawnSpec): SessionMeta {
+    const id = randomUUID()
+    const meta: SessionMeta = {
+      id,
+      cwd: input.cwd,
+      title: basename(input.cwd) || input.cwd,
+      provider: spawnSpec.provider,
+      exitCode: null,
+      createdAt: Date.now(),
+    }
+
+    const proc = pty.spawn(spawnSpec.command, spawnSpec.args, {
+      name: 'xterm-256color',
+      cols: input.cols,
+      rows: input.rows,
+      cwd: input.cwd,
+      env: {
+        ...(process.env as Record<string, string>),
+        // A GUI app inherits a minimal PATH; use the login shell's instead so
+        // CLIs installed via nvm/Homebrew/~/.local/bin resolve.
+        PATH: spawnSpec.path,
+        [BRAND.sessionEnvVar]: id,
+        TERM: 'xterm-256color',
+        COLORTERM: 'truecolor',
+      },
+    })
+
+    const session: Session = { meta, proc, scrollback: [] }
+    this.sessions.set(id, session)
+
+    proc.onData((data) => {
+      session.scrollback.push(data)
+      if (session.scrollback.length > SCROLLBACK_LIMIT) session.scrollback.shift()
+      this.onData(id, data)
+    })
+
+    proc.onExit(({ exitCode }) => {
+      session.meta.exitCode = exitCode
+      this.onExit(id, exitCode)
+    })
+
+    return meta
+  }
+
+  write(id: string, data: string): void {
+    this.sessions.get(id)?.proc.write(data)
+  }
+
+  resize(id: string, cols: number, rows: number): void {
+    const s = this.sessions.get(id)
+    if (!s || s.meta.exitCode !== null) return
+    try {
+      s.proc.resize(Math.max(cols, 1), Math.max(rows, 1))
+    } catch {
+      /* process died between the check and the resize — safe to ignore */
+    }
+  }
+
+  /** Replay buffered output so a re-mounted terminal shows its history. */
+  scrollback(id: string): string {
+    return this.sessions.get(id)?.scrollback.join('') ?? ''
+  }
+
+  kill(id: string): void {
+    const s = this.sessions.get(id)
+    if (!s) return
+    try {
+      s.proc.kill()
+    } catch {
+      /* already gone */
+    }
+    this.sessions.delete(id)
+  }
+
+  list(): SessionMeta[] {
+    return [...this.sessions.values()].map((s) => s.meta)
+  }
+
+  killAll(): void {
+    for (const id of [...this.sessions.keys()]) this.kill(id)
+  }
+}

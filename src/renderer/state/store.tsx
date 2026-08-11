@@ -1,0 +1,119 @@
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useMemo,
+  useState,
+  type ReactNode,
+} from 'react'
+import type { SessionMeta, SessionStatus } from '@shared/types'
+
+export interface Project {
+  /** Absolute path — also the identity of the project. */
+  path: string
+  name: string
+}
+
+export interface Session extends SessionMeta {
+  projectPath: string
+  status: SessionStatus
+}
+
+interface StoreValue {
+  projects: Project[]
+  sessions: Session[]
+  activeSessionId: string | null
+  addProject(path: string): Project
+  removeProject(path: string): void
+  addSession(meta: SessionMeta): void
+  removeSession(id: string): void
+  setActiveSession(id: string | null): void
+  setSessionStatus(id: string, status: SessionStatus): void
+  sessionsForProject(path: string): Session[]
+}
+
+const StoreContext = createContext<StoreValue | null>(null)
+
+function folderName(path: string): string {
+  const parts = path.split('/').filter(Boolean)
+  return parts[parts.length - 1] ?? path
+}
+
+export function StoreProvider({ children }: { children: ReactNode }) {
+  const [projects, setProjects] = useState<Project[]>([])
+  const [sessions, setSessions] = useState<Session[]>([])
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
+
+  const addProject = useCallback((path: string): Project => {
+    const project: Project = { path, name: folderName(path) }
+    setProjects((prev) => (prev.some((p) => p.path === path) ? prev : [...prev, project]))
+    return project
+  }, [])
+
+  const removeProject = useCallback((path: string) => {
+    setProjects((prev) => prev.filter((p) => p.path !== path))
+    setSessions((prev) => prev.filter((s) => s.projectPath !== path))
+  }, [])
+
+  const addSession = useCallback((meta: SessionMeta) => {
+    const session: Session = { ...meta, projectPath: meta.cwd, status: 'idle' }
+    setSessions((prev) => [...prev, session])
+    setActiveSessionId(meta.id)
+  }, [])
+
+  const removeSession = useCallback((id: string) => {
+    setSessions((prev) => {
+      const next = prev.filter((s) => s.id !== id)
+      setActiveSessionId((current) => {
+        if (current !== id) return current
+        // Fall back to the neighbouring tab, mirroring editor behaviour.
+        const idx = prev.findIndex((s) => s.id === id)
+        return next[idx]?.id ?? next[idx - 1]?.id ?? null
+      })
+      return next
+    })
+  }, [])
+
+  const setSessionStatus = useCallback((id: string, status: SessionStatus) => {
+    setSessions((prev) => prev.map((s) => (s.id === id ? { ...s, status } : s)))
+  }, [])
+
+  const sessionsForProject = useCallback(
+    (path: string) => sessions.filter((s) => s.projectPath === path),
+    [sessions],
+  )
+
+  const value = useMemo<StoreValue>(
+    () => ({
+      projects,
+      sessions,
+      activeSessionId,
+      addProject,
+      removeProject,
+      addSession,
+      removeSession,
+      setActiveSession: setActiveSessionId,
+      setSessionStatus,
+      sessionsForProject,
+    }),
+    [
+      projects,
+      sessions,
+      activeSessionId,
+      addProject,
+      removeProject,
+      addSession,
+      removeSession,
+      setSessionStatus,
+      sessionsForProject,
+    ],
+  )
+
+  return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>
+}
+
+export function useStore(): StoreValue {
+  const ctx = useContext(StoreContext)
+  if (!ctx) throw new Error('useStore must be used inside <StoreProvider>')
+  return ctx
+}

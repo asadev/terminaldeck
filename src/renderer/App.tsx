@@ -1,0 +1,120 @@
+import { useCallback, useEffect } from 'react'
+import { StoreProvider, useStore } from './state/store'
+import { TitleBar } from './components/TitleBar'
+import { Sidebar } from './components/Sidebar'
+import { TabBar } from './components/TabBar'
+import { TerminalView } from './components/TerminalView'
+import { EmptyState } from './components/EmptyState'
+
+function Workspace() {
+  const {
+    projects,
+    sessions,
+    activeSessionId,
+    addProject,
+    addSession,
+    removeSession,
+    setActiveSession,
+    setSessionStatus,
+  } = useStore()
+
+  const openProject = useCallback(async () => {
+    const path = await window.pawl.pickProjectFolder()
+    if (!path) return
+    addProject(path)
+    const meta = await window.pawl.createSession({ cwd: path, cols: 100, rows: 30 })
+    addSession(meta)
+  }, [addProject, addSession])
+
+  const newSessionIn = useCallback(
+    async (path: string) => {
+      const meta = await window.pawl.createSession({ cwd: path, cols: 100, rows: 30 })
+      addSession(meta)
+    },
+    [addSession],
+  )
+
+  const closeSession = useCallback(
+    async (id: string) => {
+      await window.pawl.killSession(id)
+      removeSession(id)
+    },
+    [removeSession],
+  )
+
+  // Global shortcuts. Kept in one place so the keymap is readable at a glance.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const mod = e.metaKey || e.ctrlKey
+      if (!mod) return
+
+      if (e.key === 't') {
+        e.preventDefault()
+        const target = sessions.find((s) => s.id === activeSessionId)?.projectPath ?? projects[0]?.path
+        if (target) void newSessionIn(target)
+        else void openProject()
+        return
+      }
+      if (e.key === 'w' && activeSessionId) {
+        e.preventDefault()
+        void closeSession(activeSessionId)
+        return
+      }
+      if (e.key === 'o') {
+        e.preventDefault()
+        void openProject()
+        return
+      }
+      // Cmd+1..9 jumps straight to a tab.
+      const n = Number(e.key)
+      if (Number.isInteger(n) && n >= 1 && n <= 9 && sessions[n - 1]) {
+        e.preventDefault()
+        setActiveSession(sessions[n - 1].id)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [
+    sessions,
+    projects,
+    activeSessionId,
+    newSessionIn,
+    openProject,
+    closeSession,
+    setActiveSession,
+  ])
+
+  return (
+    <div className="app">
+      <TitleBar />
+      <div className="app-body">
+        <Sidebar onOpenProject={openProject} onNewSession={newSessionIn} />
+        <main className="workspace">
+          {sessions.length > 0 && <TabBar onClose={closeSession} />}
+          <div className="panes">
+            {sessions.length === 0 ? (
+              <EmptyState onOpenProject={openProject} />
+            ) : (
+              sessions.map((s) => (
+                <TerminalView
+                  key={s.id}
+                  sessionId={s.id}
+                  visible={s.id === activeSessionId}
+                  onStatusChange={(status) => setSessionStatus(s.id, status)}
+                />
+              ))
+            )}
+          </div>
+        </main>
+      </div>
+    </div>
+  )
+}
+
+export function App() {
+  return (
+    <StoreProvider>
+      <Workspace />
+    </StoreProvider>
+  )
+}
