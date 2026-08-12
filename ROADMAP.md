@@ -36,10 +36,17 @@ Turns a terminal multiplexer into something that understands agents.
 - [x] **Provider picker** — per-session choice, per-project default, global default
 - [x] **Session resume** — `claude --continue`, `codex resume --last`
 - [x] **Preferences modal** — theme, default provider, notifications, restore-on-launch
+      (`restoreSessions` is stored and shown, but nothing in `src/main` reads it
+      to restore anything on launch)
 - [x] **Live re-theming** — terminals recolour without restart
-- [x] **Desktop notifications + sounds** on completion / input needed
-- [x] **Session titles** — derive from the task rather than the folder name
-- [x] **Unread indicators** — output arrived on a background tab
+- [ ] **Desktop notifications + sounds** on completion / input needed —
+      `renderer/notifications.ts` is imported only by the Notifications settings
+      section, so the only banner that fires is its Test button
+- [ ] **Session titles** — derive from the task rather than the folder name.
+      `pty-manager.ts` hardcodes `title: basename(cwd)`; `CreateSessionInput`
+      has no title field
+- [ ] **Unread indicators** — output arrived on a background tab.
+      `renderer/unread.ts` has no importers
 
 ## Phase 3 — Cost, context and telemetry
 
@@ -74,7 +81,9 @@ data source for all of this — no scraping of terminal output.
 ## Phase 6 — Multi-session power features
 
 - [x] **Swarm mode** — grid view of every running session (⌘\)
-- [x] **Split panes** with focus routing
+- [ ] **Split panes** with focus routing — `SplitView.tsx` and `pane-tree.ts`
+      exist and are tested, but `SplitView` is rendered nowhere, so there is no
+      way to reach it
 - [x] **Multiple Claude profiles** — isolated `CLAUDE_CONFIG_DIR` per profile so
       work and personal logins never mix; per-session / per-project / global default
 - [x] **Full keymap** + shortcut reference sheet

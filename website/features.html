@@ -598,11 +598,15 @@ hr {
     <li><span class="dot dot-idle" aria-hidden="true"></span> Exited</li>
   </ul>
 
-  <p>Around that: unread indicators when output arrives on a background tab,
-  desktop notifications and sounds when a session finishes or needs you, session
-  titles derived from the conversation rather than the folder name, and
-  <kbd>⌘⇧T</kbd> for the new-session dialog, where continuing a project's last
-  conversation is one of the choices.</p>
+  <p>Around that: <kbd>⌘⇧T</kbd> for the new-session dialog, where continuing a
+  project's last conversation is one of the choices. A tab is named for its
+  project folder.</p>
+
+  <p class="small">Not built, despite having code in the repository: unread
+  indicators, and desktop notifications or sounds when a session finishes.
+  <code>renderer/unread.ts</code> has no importers, and
+  <code>renderer/notifications.ts</code> is reached only by the Test button in
+  settings — nothing fires a banner when a session actually finishes.</p>
 
   <h2>Chat mode</h2>
 

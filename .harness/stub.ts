@@ -43,6 +43,12 @@ const api: Record<string, unknown> = new Proxy(
     resizeSession: () => {},
     onSessionData: noop, onSessionExit: noop, onSessionStatus: noop,
     onCostUpdate: noop, onGitStatus: noop, onBrowserState: noop, onBrowserElement: noop,
+    onPlanLimits: noop,
+    // The harness has no live session, so the plan half reports "not available"
+    // — which is the state worth being able to look at anyway.
+    watchPlanLimits: async () => null,
+    refreshPlanLimits: async () => ({ ok: false, reason: 'unwired', snapshot: null }),
+    unwatchPlanLimits: () => {},
     listProfiles: async () => ({ profiles: [{ id: 'default', name: 'Default', system: true }], defaultId: 'default' }),
     gitStatus: async () => ({ ok: false, kind: 'not-a-repo', message: 'Not a git repository.' }),
     githubOverview: async () => ({ ok: false, kind: 'no-remote', message: 'This repository has no remotes yet.' }),

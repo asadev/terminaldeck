@@ -72,6 +72,22 @@ const api = {
     return () => ipcRenderer.off('cost:update', handler)
   },
 
+  /* ------------------------------------------------------ plan limits -- */
+  // Read off the session's own screen, so these are keyed on a session id
+  // rather than a project. `plan:unwatch` is a send, not an invoke — there is
+  // nothing to return and nothing to await.
+  watchPlanLimits: (sessionId: string): Promise<unknown> =>
+    ipcRenderer.invoke('plan:watch', sessionId),
+  refreshPlanLimits: (sessionId: string): Promise<unknown> =>
+    ipcRenderer.invoke('plan:refresh', sessionId),
+  unwatchPlanLimits: (sessionId: string): void => ipcRenderer.send('plan:unwatch', sessionId),
+  onPlanLimits: (cb: (sessionId: string, payload: unknown) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, sessionId: string, payload: unknown) =>
+      cb(sessionId, payload)
+    ipcRenderer.on('plan:update', handler)
+    return () => ipcRenderer.off('plan:update', handler)
+  },
+
   /* ------------------------------------------------------------- git -- */
 
   gitStatus: (cwd: string): Promise<unknown> => ipcRenderer.invoke('git:status', cwd),

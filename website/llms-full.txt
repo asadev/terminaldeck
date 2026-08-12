@@ -363,11 +363,15 @@ accurately as the visible one.
 
 - Exited
 
-Around that: unread indicators when output arrives on a background tab,
-desktop notifications and sounds when a session finishes or needs you,
-session titles derived from the conversation rather than the folder name,
-and ⌘⇧T for the new-session dialog, where continuing a project's last
-conversation is one of the choices.
+Around that: ⌘⇧T for the new-session dialog, where continuing a project's
+last conversation is one of the choices. A tab is named for its project
+folder.
+
+Not built, despite having code in the repository: unread indicators, and
+desktop notifications or sounds when a session finishes.
+`renderer/unread.ts` has no importers, and `renderer/notifications.ts` is
+reached only by the Test button in settings — nothing fires a banner when a
+session actually finishes.
 
 ### Chat mode
 
@@ -1252,9 +1256,15 @@ argument.
 - Preferences, and live re-theming that recolours terminals without a
   restart
 
-- Desktop notifications and sounds
+- **Desktop notifications and sounds** — `renderer/notifications.ts` exists
+  but is imported only by the Notifications settings section, so the only
+  banner that fires is its Test button. Nothing notifies when a session
+  finishes. Listed under Done until this audit; it was not true.
 
-- Session titles derived from the task; unread indicators
+- **Session titles derived from the task, and unread indicators** —
+  `pty-manager.ts` hardcodes `title: basename(cwd)` and `CreateSessionInput`
+  has no title field; `renderer/unread.ts` has no importers at all. Listed
+  under Done until this audit; neither was true.
 
 #### 3 · Cost, context and telemetry
 

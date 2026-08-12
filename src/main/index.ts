@@ -15,6 +15,12 @@ import { registerInsightsIpc } from './session-insights'
 import { registerChatIpc } from './chat-transcript'
 import { registerDevPortsIpc } from './dev-ports'
 import { registerAgentControlsIpc } from './agent-controls'
+import {
+  dropPlanSession,
+  notePlanOutput,
+  notePlanResize,
+  registerPlanLimitIpc,
+} from './plan-limit'
 import { registerGitHubIpc } from './github'
 import { registerReadinessIpc } from './readiness'
 import { registerDashboardIpc } from './dashboard-store'
@@ -80,9 +86,15 @@ function send(channel: string, ...args: unknown[]): void {
 const liveStatus = new Map<string, { status: SessionStatus; at: number }>()
 
 const ptys = new PtyManager(
-  (id, data) => send('session:data', id, data),
+  (id, data) => {
+    // Plan limits are read off the same bytes the terminal draws — the CLI
+    // reports them in its own output, so there is nothing else to ask.
+    notePlanOutput(id, data)
+    send('session:data', id, data)
+  },
   (id, exitCode) => {
     liveStatus.delete(id)
+    dropPlanSession(id)
     send('session:exit', id, exitCode)
   },
   (id, status) => {
@@ -197,6 +209,10 @@ function registerIpc(): void {
   // PtyManager is the SessionAccess: controls are read off the rendered
   // screen and applied by typing, exactly as a person would.
   registerAgentControlsIpc(ipcMain, ptys)
+  // `write` is what lets plan:refresh run /usage in the session; without it the
+  // module reports 'unwired' and the strip hides the control rather than
+  // offering a button that does nothing.
+  registerPlanLimitIpc(ipcMain, { write: (id, data) => ptys.write(id, data) })
   registerGitHubIpc(ipcMain)
   registerReadinessIpc(ipcMain)
   registerDashboardIpc(ipcMain)
@@ -260,9 +276,11 @@ function registerIpc(): void {
   })
 
   ipcMain.on('session:write', (_e, id: string, data: string) => ptys.write(id, data))
-  ipcMain.on('session:resize', (_e, id: string, cols: number, rows: number) =>
-    ptys.resize(id, cols, rows),
-  )
+  ipcMain.on('session:resize', (_e, id: string, cols: number, rows: number) => {
+    // The tracker parses a rendered screen, so it has to be the same size.
+    notePlanResize(id, cols, rows)
+    ptys.resize(id, cols, rows)
+  })
   ipcMain.handle('session:scrollback', (_e, id: string) => ptys.scrollback(id))
   ipcMain.handle('session:kill', (_e, id: string) => ptys.kill(id))
   ipcMain.handle('session:list', () => ptys.list())
