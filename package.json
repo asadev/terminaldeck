@@ -20,8 +20,6 @@
     "art": "node build/art/icon.mjs && iconutil -c icns build/icon.iconset -o build/icon.icns && node build/art/dmg-background.mjs",
     "dist:mac": "npm run build && electron-builder --mac --publish never",
     "pack:mac": "npm run build && electron-builder --mac dir:arm64 --publish never",
-    "site:llms": "node scripts/build-llms.mjs",
-    "site:check": "node scripts/build-llms.mjs check",
     "release:check": "node scripts/check-release.mjs",
     "preversion": "npm run typecheck && npm test && node scripts/version.mjs check",
     "version": "node scripts/version.mjs stamp && git add CHANGELOG.md",

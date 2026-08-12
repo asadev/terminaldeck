@@ -5,6 +5,11 @@ A desktop workspace for running AI coding agents.
 Run several Claude Code, Codex or Gemini sessions side by side, see at a glance
 which ones are working and which are waiting on you, and know what they cost.
 
+[terminaldeck.dev](https://terminaldeck.dev) — the site lives in its own
+repository, `asadev/terminaldeck-site`, because it changes for its own reasons.
+Its CI checks out this repo and fails any page describing a feature nothing
+here can reach.
+
 [![Licence: MIT](https://img.shields.io/badge/licence-MIT-blue.svg)](LICENSE)
 ![Platform: macOS](https://img.shields.io/badge/platform-macOS-lightgrey.svg)
 ![Status: alpha](https://img.shields.io/badge/status-alpha-orange.svg)
