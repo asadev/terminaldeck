@@ -77,12 +77,15 @@ button {
   gap: 10px;
 }
 
+/* --text-secondary, not --text-muted: muted lands at 2.5:1 on --bg-secondary in
+   the light theme, and this is a heading rather than a placeholder. The same
+   swap is made on every uppercase section label in the app. */
 .sidebar-title {
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .sidebar-scroll {
@@ -93,7 +96,7 @@ button {
 
 .sidebar-empty {
   margin: 8px 6px;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   font-size: 12px;
 }
 
@@ -110,6 +113,21 @@ button {
 .icon-btn:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
+}
+
+/* One focus idiom for the whole app: a 2px --accent outline. It is the only
+   thing besides text selection the blue is allowed to do. */
+.icon-btn:focus-visible,
+.session-item:focus-visible,
+.tab-close:focus-visible,
+.btn-primary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
 .icon-btn.small {
@@ -184,8 +202,11 @@ button {
   color: var(--text-primary);
 }
 
+/* Selected rows are grey, not blue, everywhere in the app: --bg-active is a
+   step past --bg-hover, so a selected row still reads as selected when the
+   pointer is somewhere else. The blue is reserved for focus. */
 .session-item.active {
-  background: var(--accent-soft);
+  background: var(--bg-active);
   color: var(--text-primary);
 }
 
@@ -282,10 +303,12 @@ button {
   background: var(--bg-hover);
 }
 
+/* The lifted surface does most of the work; the rule underneath is ink rather
+   than colour, because which tab is open is not a focus state. */
 .tab.active {
   background: var(--tab-active);
   color: var(--text-primary);
-  box-shadow: inset 0 -2px 0 var(--accent);
+  box-shadow: inset 0 -2px 0 var(--text-primary);
 }
 
 .tab-label {
@@ -296,8 +319,9 @@ button {
   text-overflow: ellipsis;
 }
 
+/* This number is the tab's ⌘-shortcut, so it has to be readable, not decorative. */
 .tab-index {
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .tab-close {
@@ -305,7 +329,7 @@ button {
   place-items: center;
   width: 18px;
   height: 18px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   color: var(--text-muted);
   opacity: 0;
   transition: opacity 120ms ease, background 120ms ease;
@@ -353,8 +377,9 @@ button {
   color: var(--text-secondary);
 }
 
+/* An icon is not a meaning-carrying colour, so it takes a text token. */
 .empty-mark {
-  color: var(--accent);
+  color: var(--text-muted);
   margin-bottom: 2px;
 }
 
@@ -389,17 +414,22 @@ button {
 .empty-hint {
   margin-top: 14px;
   font-size: 11.5px;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 kbd {
   display: inline-block;
   padding: 1px 5px;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--bg-tertiary);
   font-family: var(--font-mono);
   font-size: 10.5px;
+}
+
+/* The one other place the blue is allowed: the selection the OS draws. */
+::selection {
+  background: var(--accent-soft);
 }
 
 /* -------------------------------------------------------------- scroll -- */
@@ -409,9 +439,11 @@ kbd {
   height: 10px;
 }
 
+/* A scrollbar thumb is a capsule by definition rather than a box on the radius
+   scale, so 999px here is a shape, not a magic number. */
 ::-webkit-scrollbar-thumb {
   background: var(--border-strong);
-  border-radius: 5px;
+  border-radius: 999px;
   border: 3px solid transparent;
   background-clip: content-box;
 }

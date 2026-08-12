@@ -42,7 +42,7 @@
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .readiness-band {
@@ -60,7 +60,7 @@
 .readiness-summary {
   margin: 2px 0 0;
   font-size: 12px;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .readiness-rescan {
@@ -85,6 +85,13 @@
   cursor: default;
 }
 
+.readiness-rescan:focus-visible,
+.readiness-fix:focus-visible,
+.readiness-cancel:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 /* ------------------------------------------------------------------ ring -- */
 
 .readiness-ring {
@@ -92,15 +99,17 @@
   flex-shrink: 0;
   width: 84px;
   height: 84px;
-  /* Band colour drives the arc, so the number and the ring never disagree. */
-  --ring-color: var(--accent);
+  /* Band colour drives the arc, so the number and the ring never disagree.
+     The bands read from the status palette rather than the accent: this is a
+     score, and an 84px blue ring is the loudest thing on the panel. */
+  --ring-color: var(--status-idle);
 }
 
 .readiness-ring[data-band='strong'] {
   --ring-color: var(--readiness-pass);
 }
 .readiness-ring[data-band='fair'] {
-  --ring-color: var(--accent);
+  --ring-color: var(--status-working);
 }
 .readiness-ring[data-band='weak'] {
   --ring-color: var(--readiness-warn);
@@ -165,7 +174,7 @@
   margin: 0;
   padding: 24px 0;
   text-align: center;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 /* ------------------------------------------------------------------ rows -- */
@@ -251,7 +260,7 @@
   font-size: 10.5px;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .readiness-row[data-status='skip'] .readiness-title {
@@ -260,7 +269,7 @@
 
 .readiness-gate-tag {
   padding: 1px 6px;
-  border-radius: 9px;
+  border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--readiness-fail) 16%, transparent);
   color: var(--readiness-fail);
   font-size: 10.5px;
@@ -276,7 +285,7 @@
 
 .readiness-row[data-status='pass'] .readiness-detail,
 .readiness-row[data-status='skip'] .readiness-detail {
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 /* What a fix will do, shown while it waits for a second confirmation. */
@@ -351,7 +360,7 @@
 .readiness-cancel {
   border-color: transparent;
   background: none;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .readiness-cancel:hover {

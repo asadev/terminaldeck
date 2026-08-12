@@ -30,6 +30,8 @@ export interface CreateSessionInput {
   provider?: ProviderId
   /** Continue the most recent session in this folder instead of starting fresh. */
   resume?: boolean
+  /** Which agent profile (isolated login) to run as. Null uses the default. */
+  profileId?: string | null
 }
 
 export interface BrandInfo {
@@ -111,6 +113,40 @@ export interface PawlApi {
   applyReadinessFix(projectPath: string, checkId: string): Promise<unknown>
 
   checkPrerequisites(): Promise<unknown>
+
+
+  getSettings(): Promise<unknown>
+  setSettings(patch: Record<string, unknown>): Promise<unknown>
+  resetSettings(): Promise<unknown>
+  settingsPaths(): Promise<unknown>
+  openSettingsPath(key: string): Promise<unknown>
+  appAbout(): Promise<unknown>
+  clearBrowserData(): Promise<unknown>
+  browserSessionInfo(): Promise<unknown>
+  browserCookies(filter?: unknown): Promise<unknown>
+  clearBrowserCookies(): Promise<unknown>
+  clearBrowserCache(): Promise<unknown>
+  clearBrowserStorage(): Promise<unknown>
+  browserViewClaim(request: unknown): Promise<unknown>
+  browserViewRelease(id: string): Promise<unknown>
+  browserViewReveal(request: unknown): Promise<unknown>
+  browserViewZoom(id: string, factor: number): Promise<unknown>
+  browserViewUserAgent(id: string, ua: string | null): Promise<unknown>
+  browserViewDevtools(id: string): Promise<unknown>
+  browserViewScreenshot(id: string): Promise<unknown>
+  browserViewRecord(id: string, on: boolean): Promise<unknown>
+  browserViewRecordClear(id: string): Promise<unknown>
+  debugAbout(): Promise<unknown>
+  debugDiagnostics(): Promise<unknown>
+  debugDiagnosticsText(): Promise<unknown>
+  debugIpcLog(): Promise<unknown>
+  debugIpcClear(): Promise<unknown>
+  debugSubscribe(): Promise<unknown>
+  debugUnsubscribe(): Promise<unknown>
+  logRecent(lines?: number): Promise<unknown>
+  logStatus(): Promise<unknown>
+  logClear(): Promise<unknown>
+  openLogFolder(): Promise<unknown>
 
   loadDashboard(projectPath: string): Promise<unknown>
   saveDashboard(projectPath: string, layout: unknown): Promise<void>

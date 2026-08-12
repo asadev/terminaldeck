@@ -17,7 +17,7 @@
   margin: 0 0 12px;
   font-family: var(--font-mono);
   font-size: 11px;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -49,9 +49,12 @@
   border-color: var(--border);
 }
 
+/* The card goes grey like every other selected row in the app; the radio mark
+   inside keeps the accent, because that dot is the control's own state and it
+   has to agree with the native checkbox sitting under this list. */
 .picker-option[data-selected='true'] {
-  border-color: var(--accent);
-  background: var(--accent-soft);
+  border-color: var(--border-strong);
+  background: var(--bg-active);
 }
 
 /* Dimmed, but still legible: the reason it is dimmed is written inside it. */
@@ -126,18 +129,18 @@
 .picker-tag {
   padding: 1px 6px;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   font-size: 10px;
   font-weight: 550;
   letter-spacing: 0.03em;
   text-transform: uppercase;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .picker-hint {
   font-size: 11.5px;
   line-height: 1.45;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .picker-install {

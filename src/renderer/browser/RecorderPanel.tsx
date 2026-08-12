@@ -1,0 +1,118 @@
+import type { RecordedStep, RecordingState } from './bridge'
+
+interface Props {
+  state: RecordingState
+  onStop(): void
+  onClear(): void
+  onCopy(): void
+  copied: boolean
+  /** Absent when no session is focused. */
+  onSend: ((text: string) => void) | undefined
+}
+
+/** One word per kind, so the eye can scan the left edge of the list. */
+function kindLabel(kind: RecordedStep['kind']): string {
+  switch (kind) {
+    case 'navigate':
+      return 'Go'
+    case 'click':
+      return 'Click'
+    case 'type':
+      return 'Type'
+    case 'select':
+      return 'Choose'
+    case 'check':
+      return 'Check'
+    case 'press':
+      return 'Press'
+    case 'submit':
+      return 'Submit'
+  }
+}
+
+function stepDetail(step: RecordedStep): string {
+  if (step.kind === 'navigate') return step.url
+  if (step.kind === 'type') return step.redacted ? 'the password' : `"${step.value}"`
+  if (step.kind === 'select') return step.redacted ? 'a value' : `"${step.value}"`
+  if (step.kind === 'press') return step.key
+  if (step.kind === 'check') return step.checked ? 'on' : 'off'
+  return step.label ? `"${step.label}"` : ''
+}
+
+/**
+ * The recorded flow.
+ *
+ * Two things this panel refuses to do quietly. It never shows a password, even
+ * as asterisks in a field it could have captured — the value never left the
+ * page, and a row of dots would suggest it did. And while recording is on, the
+ * panel says so at the top in a way that does not scroll away, because the
+ * other indicator is inside the page and the page is what you are looking at.
+ */
+export function RecorderPanel({ state, onStop, onClear, onCopy, copied, onSend }: Props) {
+  const empty = state.steps.length === 0
+
+  return (
+    <div className="bw-panel">
+      <div className="bw-panel-head">
+        {state.recording ? (
+          <span className="bw-recording" role="status">
+            <span className="bw-recording-dot" aria-hidden="true" />
+            Recording
+          </span>
+        ) : (
+          <span className="bw-badge">Flow</span>
+        )}
+        <span className="bw-muted">
+          {empty
+            ? state.recording
+              ? 'Use the page — every click, entry and navigation lands here.'
+              : 'Nothing recorded yet.'
+            : `${state.steps.length} step${state.steps.length === 1 ? '' : 's'}`}
+        </span>
+        {state.truncated && <span className="bw-warn">stopped at the step limit</span>}
+        <span className="bw-spacer" />
+        {state.recording && (
+          <button type="button" className="bw-text-button" onClick={onStop}>
+            Stop
+          </button>
+        )}
+        <button type="button" className="bw-text-button" disabled={empty} onClick={onCopy}>
+          {copied ? 'Copied' : 'Copy'}
+        </button>
+        <button type="button" className="bw-text-button" disabled={empty} onClick={onClear}>
+          Clear
+        </button>
+      </div>
+
+      {!empty && (
+        <ol className="bw-steps">
+          {state.steps.map((step, index) => (
+            <li key={`${step.at}-${index}`}>
+              <span className="bw-step-kind">{kindLabel(step.kind)}</span>
+              <span className="bw-step-detail">{stepDetail(step)}</span>
+              {step.selector && (
+                <code className="bw-step-selector" title={step.selector}>
+                  {step.selector}
+                </code>
+              )}
+            </li>
+          ))}
+        </ol>
+      )}
+
+      <div className="bw-send">
+        <span className="bw-muted bw-grow">
+          {onSend ? 'Hand the whole flow to the agent as one line.' : 'Open a session to send this to.'}
+        </span>
+        <button
+          type="button"
+          className="bw-primary"
+          disabled={empty || !onSend}
+          onClick={() => onSend?.(state.line)}
+        >
+          Send flow to agent
+        </button>
+      </div>
+    </div>
+  )
+}

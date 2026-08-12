@@ -39,9 +39,9 @@
   flex: none;
   padding: 1px 6px;
   border: 1px solid var(--border-subtle);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--bg-tertiary);
-  color: var(--text-muted);
+  color: var(--text-secondary);
   font-family: var(--font-mono);
   font-size: 10px;
   letter-spacing: 0.03em;
@@ -50,7 +50,7 @@
 .file-viewer-meta {
   margin-left: auto;
   flex: none;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   font-size: 11.5px;
   white-space: nowrap;
 }
@@ -63,7 +63,8 @@
 }
 
 .file-viewer-body:focus-visible {
-  box-shadow: inset 0 0 0 1px var(--accent);
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
 /* min-width keeps the row as wide as the widest code line, so the sticky

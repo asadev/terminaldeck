@@ -46,7 +46,7 @@
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .alerts-summary {
@@ -105,7 +105,7 @@
      screen in dark and light. The full border still reads as calm. */
   border: 1px dashed var(--border);
   border-radius: var(--radius-md);
-  color: var(--text-muted);
+  color: var(--text-secondary);
   font-size: 12px;
   line-height: 1.6;
   text-align: center;
@@ -126,7 +126,7 @@
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .alerts-group[data-severity='critical'] .alerts-group-head {
@@ -140,7 +140,7 @@
 .alerts-count {
   min-width: 16px;
   padding: 0 5px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   background: var(--bg-tertiary);
   color: var(--text-secondary);
   font-size: 10px;
@@ -227,9 +227,9 @@
 }
 
 .alerts-action:hover {
-  background: var(--accent-soft);
-  border-color: transparent;
-  color: var(--accent);
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+  color: var(--text-primary);
 }
 
 .alerts-action:focus-visible {

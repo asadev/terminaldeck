@@ -33,6 +33,19 @@
   color: var(--text-muted);
 }
 
+/* The input is borderless and takes focus when the sheet opens, so a ring drawn
+   around it would be permanent noise. The rule under the field takes the accent
+   instead — the same "focus is blue" idea as the command palette, at the scale
+   of the field. Drawn as an inset shadow over the existing hairline rather than
+   a thicker border, so the field does not grow by a pixel when it takes focus.
+   Without this the sheet's only text input has no visible focus state at all:
+   the close button is the other tab stop, and tabbing back to the field would
+   otherwise land silently. */
+.sheet-search:focus-within {
+  border-bottom-color: var(--accent);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
 .sheet-input {
   flex: 1;
   min-width: 0;
@@ -82,7 +95,7 @@
   margin: 2px 0 0;
   font-size: 11.5px;
   line-height: 1.45;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .sheet-rows {
@@ -123,9 +136,9 @@
 
 .sheet-flag {
   padding: 1px 5px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   background: var(--bg-tertiary);
-  color: var(--text-muted);
+  color: var(--text-secondary);
   font-size: 10px;
   letter-spacing: 0.02em;
   white-space: nowrap;
@@ -165,13 +178,13 @@
 
 .sheet-or {
   font-size: 10.5px;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .sheet-empty {
   margin: 8px 0;
   font-size: 12.5px;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 /* The panel is fixed-width, so on a short window the two columns collide

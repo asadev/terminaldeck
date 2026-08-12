@@ -80,9 +80,12 @@
   height: var(--pane-divider-hit);
 }
 
+/* Pointing at a divider is not focusing it, so hovering and dragging darken it
+   rather than turning it blue. Keyboard focus keeps the accent, which is what
+   makes the two states tell apart when a divider is both. */
 .pane-divider:hover,
 .pane-divider[data-dragging='true'] {
-  background: var(--accent);
+  background: var(--border-strong);
 }
 
 .pane-divider:focus-visible {

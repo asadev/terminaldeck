@@ -1,14 +1,23 @@
 /* ============================================================================
    Modal shell — scrim, panel, header/body/footer bands, action buttons.
-   Only the scrim and the drop shadow are local values: tokens.css has no
-   overlay tokens yet, and they are shading rather than palette. Everything
-   else reads a token.
+
+   Every colour derives from a foundation token. tokens.css has no scrim token,
+   so the scrim is mixed from an existing one rather than invented: the dark
+   theme dims towards its own page background, and the light theme darkens
+   towards its ink. A hardcoded black would be wrong on the light theme, where
+   Notion's overlay is a soft grey wash rather than a blackout.
    ============================================================================ */
 
-.modal-overlay {
-  --modal-scrim: rgba(6, 7, 11, 0.62);
-  --modal-shadow: 0 24px 64px rgba(0, 0, 0, 0.48);
+:root,
+[data-theme='light'] {
+  --modal-scrim: color-mix(in srgb, var(--text-primary) 28%, transparent);
+}
 
+[data-theme='dark'] {
+  --modal-scrim: color-mix(in srgb, var(--bg-primary) 68%, transparent);
+}
+
+.modal-overlay {
   position: fixed;
   inset: 0;
   z-index: 100;
@@ -23,11 +32,6 @@
   animation: modal-scrim-in 120ms ease;
 }
 
-[data-theme='light'] .modal-overlay {
-  --modal-scrim: rgba(20, 22, 28, 0.32);
-  --modal-shadow: 0 24px 64px rgba(20, 22, 28, 0.18);
-}
-
 .modal-panel {
   display: flex;
   flex-direction: column;
@@ -37,7 +41,7 @@
   background: var(--bg-secondary);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  box-shadow: var(--modal-shadow);
+  box-shadow: var(--shadow-md);
   animation: modal-panel-in 140ms cubic-bezier(0.2, 0.7, 0.3, 1);
 }
 

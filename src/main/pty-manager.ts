@@ -11,6 +11,8 @@ export interface SpawnSpec {
   command: string
   args: string[]
   path: string
+  /** Extra environment, e.g. a profile's redirected config directory. */
+  env?: Record<string, string>
 }
 
 interface Session {
@@ -57,6 +59,9 @@ export class PtyManager {
         // A GUI app inherits a minimal PATH; use the login shell's instead so
         // CLIs installed via nvm/Homebrew/~/.local/bin resolve.
         PATH: spawnSpec.path,
+        // A profile redirects the agent's config dir, which is what actually
+        // keeps two logins apart. Applied last so it wins.
+        ...(spawnSpec.env ?? {}),
         [BRAND.sessionEnvVar]: id,
         TERM: 'xterm-256color',
         COLORTERM: 'truecolor',

@@ -1,0 +1,124 @@
+/* ============================================================================
+   Join a remote session.
+
+   The notice at the top is the whole point of the screen, so it is the only
+   element with a fill. Everything below it is an ordinary form that happens to
+   end in a button that cannot be pressed.
+   ============================================================================ */
+
+.join {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-top: 6px;
+}
+
+/* Bordered rather than tinted with a warning colour: this is not an error, and
+   colouring it like one would suggest something went wrong rather than that a
+   feature has not arrived. */
+.join-unavailable {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--text-muted);
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  background: var(--bg-tertiary);
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+
+.join-unavailable strong {
+  display: block;
+  margin-bottom: 2px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+/* ------------------------------------------------------------------ field -- */
+
+.join-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.join-label {
+  font-size: 12.5px;
+  font-weight: 550;
+  color: var(--text-primary);
+}
+
+.join-input {
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 13px;
+}
+
+/* Monospaced and tracked out: these are read aloud character by character, and
+   a proportional font makes 8 and B a guess. */
+.join-input-code,
+.join-input-pin {
+  font-family: var(--font-mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.join-input-pin {
+  text-transform: none;
+}
+
+.join-input::placeholder {
+  color: var(--text-muted);
+  letter-spacing: 0.14em;
+}
+
+.join-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+  border-color: var(--accent);
+}
+
+.join-input[aria-invalid='true'] {
+  border-color: var(--color-critical);
+}
+
+.join-note {
+  margin: 0;
+  min-height: 15px;
+  font-size: 11.5px;
+  line-height: 1.3;
+  color: var(--color-critical);
+}
+
+/* The same line carries guidance and complaint, so the neutral case has to opt
+   out of the complaint colour rather than the other way round. */
+.join-note-ok {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+/* ----------------------------------------------------------------- action -- */
+
+.join-submit {
+  align-self: flex-start;
+  margin-top: 2px;
+}
+
+.join-submit:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Not styled as an error: nothing has failed, the feature simply is not here. */
+.join-status {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-muted);
+}

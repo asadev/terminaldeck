@@ -1,7 +1,7 @@
 /* ============================================================================
    Session inspector — hero stats, tab strip, and the four detail panels.
-   Every colour is a token; the only local values are the two chart alphas,
-   which are shading rather than palette.
+   Every colour is a token. The charts and meters read from the status palette
+   rather than the accent: they are data, and the accent means focus.
    ============================================================================ */
 
 /* The shell caps at 560px, which is a two-column table's worth of room short.
@@ -50,7 +50,7 @@
   font-weight: 600;
   letter-spacing: 0.05em;
   text-transform: uppercase;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .si-stat-value {
@@ -98,15 +98,20 @@
   color: var(--text-primary);
 }
 
+.si-tab:focus-visible,
+.si-more-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
 /* Sits on the strip's own border so the active tab reads as connected to the
-   panel below it. */
+   panel below it. Ink rather than colour — an open tab is not a focused one. */
 .si-tab[aria-selected='true']::after {
   content: '';
   position: absolute;
   inset: auto 0 -1px;
   height: 2px;
-  background: var(--accent);
-  border-radius: 2px 2px 0 0;
+  background: var(--text-primary);
 }
 
 .si-panel {
@@ -131,7 +136,7 @@
   font-weight: 650;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 /* ---------------------------------------------------------------- timeline */
@@ -165,13 +170,13 @@
 /* A sub-agent runs in its own context, so it is set apart rather than read as
    part of the main thread's run of turns. */
 .si-row[data-sidechain] {
-  border-left: 2px solid var(--accent-dim);
+  border-left: 2px solid var(--border-strong);
 }
 
 .si-row-index {
   font-family: var(--font-mono);
   font-size: 11px;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   text-align: right;
   padding-top: 2px;
 }
@@ -214,7 +219,7 @@
 
 .si-row-facts dt {
   font-size: 10.5px;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .si-row-facts dd {
@@ -241,7 +246,7 @@
 .si-row-context {
   font-family: var(--font-mono);
   font-size: 10.5px;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .si-row-context[data-level='warning'] {
@@ -257,7 +262,7 @@
   padding: 6px 10px;
   font-size: 11.5px;
   color: var(--text-secondary);
-  background: var(--accent-soft);
+  background: var(--bg-tertiary);
   border-radius: var(--radius-sm);
 }
 
@@ -266,7 +271,7 @@
   align-items: center;
   gap: 10px;
   font-size: 11.5px;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .si-more-btn {
@@ -291,7 +296,7 @@
   display: inline-flex;
   align-items: center;
   padding: 1px 6px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   font-family: var(--font-mono);
   font-size: 10.5px;
   line-height: 1.55;
@@ -300,15 +305,17 @@
   color: var(--text-secondary);
 }
 
+/* Three chips sit side by side in one row, so they separate by weight rather
+   than by hue — otherwise the row turns into a colour key nobody has. */
 .si-chip-accent {
-  background: var(--accent-soft);
-  border-color: transparent;
-  color: var(--accent);
+  background: var(--bg-active);
+  border-color: var(--border);
+  color: var(--text-primary);
 }
 
 .si-chip-quiet {
   background: transparent;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .si-tool-chip {
@@ -342,7 +349,7 @@ th .si-chip {
   font-weight: 600;
   letter-spacing: 0.05em;
   text-transform: uppercase;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   /* Parked directly under the pinned tab strip. The tools table runs to fifty
      rows, and a column of bare numbers with no header above it is unreadable.
      Measured, not guessed: the strip renders 37px tall and sticks at -4px. */
@@ -378,14 +385,14 @@ th .si-chip {
 }
 
 .si-muted {
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 /* ----------------------------------------------------------------- meters */
 
 .si-meter {
   height: 6px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   background: var(--bg-hover);
   overflow: hidden;
 }
@@ -393,7 +400,7 @@ th .si-chip {
 .si-meter-fill {
   height: 100%;
   border-radius: inherit;
-  background: var(--accent);
+  background: var(--status-working);
   transition: width 180ms ease;
 }
 
@@ -443,20 +450,22 @@ th .si-chip {
 
 .si-chart-line {
   fill: none;
-  stroke: var(--accent);
+  stroke: var(--status-working);
   stroke-width: 1.5;
   stroke-linejoin: round;
 }
 
+/* Mixed from the line's own colour, so the fill tracks the stroke instead of
+   being an unrelated tint that happens to look close. */
 .si-chart-area {
-  fill: var(--accent-soft);
+  fill: color-mix(in srgb, var(--status-working) 14%, transparent);
   stroke: none;
 }
 
 .si-chart figcaption {
   margin-top: 6px;
   font-size: 11px;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 /* ------------------------------------------------------------------ lists */
@@ -520,7 +529,7 @@ th .si-chip {
   margin: 8px 0 0;
   font-size: 11px;
   line-height: 1.5;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .si-warn {
@@ -532,13 +541,13 @@ th .si-chip {
   padding: 26px 0;
   text-align: center;
   font-size: 12.5px;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .si-footer-note {
   margin-right: auto;
   font-size: 11px;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 @media (prefers-reduced-motion: reduce) {

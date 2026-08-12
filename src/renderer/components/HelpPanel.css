@@ -1,0 +1,399 @@
+/* ============================================================================
+   Help
+
+   Reading matter, so it is set like reading matter: one measure, generous
+   leading, and headings that separate by weight rather than by colour. The
+   section rail on the left is the only navigation, and the search field
+   replaces it entirely while a query is active — two ways to filter at once is
+   how a help panel starts feeling like a database.
+
+   Every colour is a foundation token. The only saturated thing on the page is
+   the selected section marker.
+   ============================================================================ */
+
+.help {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  color: var(--text-secondary);
+}
+
+/* ---------------------------------------------------------------- search -- */
+
+.help-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  position: sticky;
+  /* Cancels the modal body's top padding so topics scroll under the field
+     rather than appearing in a gap above it. Both values live in Modal.css. */
+  top: -4px;
+  z-index: 1;
+  margin: 0 -18px;
+  padding: 8px 18px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+}
+
+.help-input {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  border: none;
+  outline: none;
+  background: none;
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: 13px;
+}
+
+.help-input::placeholder {
+  color: var(--text-muted);
+}
+
+.help-input::-webkit-search-cancel-button {
+  appearance: none;
+}
+
+.help-count {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ------------------------------------------------------------------ body -- */
+
+.help-body {
+  display: flex;
+  align-items: flex-start;
+  gap: 24px;
+}
+
+.help-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex-shrink: 0;
+  width: 148px;
+  position: sticky;
+  top: 40px;
+}
+
+.help-nav-item {
+  position: relative;
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+  text-align: left;
+  font-size: 12.5px;
+  line-height: 1.35;
+  color: var(--text-secondary);
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.help-nav-item:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.help-nav-item[data-active] {
+  background: var(--bg-active);
+  color: var(--text-primary);
+  font-weight: 550;
+}
+
+/* The one piece of colour in the panel: which section you are reading. */
+.help-nav-item[data-active]::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+}
+
+.help-content {
+  flex: 1;
+  min-width: 0;
+  /* A measure, not a column of full-width prose. */
+  max-width: 62ch;
+}
+
+.help-section-hint {
+  margin: 0 0 14px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+/* ---------------------------------------------------------------- topics -- */
+
+.help-topic {
+  padding-bottom: 18px;
+  margin-bottom: 18px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.help-topic:last-child {
+  border-bottom: none;
+  margin-bottom: 0;
+  padding-bottom: 0;
+}
+
+.help-topic-title {
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  color: var(--text-primary);
+}
+
+.help-text,
+.help-steps,
+.help-bullets {
+  margin: 0 0 10px;
+  font-size: 13px;
+  line-height: 1.62;
+  color: var(--text-secondary);
+}
+
+.help-steps,
+.help-bullets {
+  padding-left: 20px;
+}
+
+.help-steps li,
+.help-bullets li {
+  margin-bottom: 5px;
+}
+
+.help-steps li::marker {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.help-bullets li::marker {
+  color: var(--text-muted);
+}
+
+.help-note {
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border-left: 2px solid var(--border-strong);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: var(--bg-tertiary);
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-muted);
+}
+
+/* A command inside a sentence. Tinted, not boxed — a border on every one of
+   these turns a paragraph into a fence. */
+.help-inline-code {
+  padding: 1px 4px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-primary);
+}
+
+.help-code {
+  margin: 0 0 10px;
+  padding: 9px 11px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  overflow-x: auto;
+}
+
+.help-code code {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--text-primary);
+  white-space: pre;
+}
+
+.help-link {
+  padding: 0;
+  font-size: 12.5px;
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.help-empty {
+  margin: 8px 0;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+/* ------------------------------------------------------------- shortcuts -- */
+
+.help-keys-group {
+  margin-bottom: 16px;
+}
+
+.help-keys-title {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.help-keys-hint {
+  margin: 2px 0 4px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.help-keys {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.help-key-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.help-key-row:last-child {
+  border-bottom: none;
+}
+
+.help-key-label {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--text-primary);
+}
+
+.help-flag {
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.help-key-chords {
+  display: flex;
+  align-items: baseline;
+  flex-shrink: 0;
+  gap: 6px;
+  /* Same lane as the shortcuts sheet, so the column is scannable. */
+  min-width: 132px;
+  justify-content: flex-end;
+}
+
+.help-key-chords kbd {
+  padding: 2px 6px;
+  font-size: 11.5px;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.help-or {
+  margin-right: 6px;
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+
+/* ----------------------------------------------------------------- about -- */
+
+.help-about-name {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+}
+
+.help-about-tagline {
+  margin: 2px 0 14px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+.help-about-rows {
+  margin: 0 0 14px;
+}
+
+.help-about-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 12.5px;
+}
+
+.help-about-row dt {
+  color: var(--text-muted);
+}
+
+.help-about-row dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text-primary);
+}
+
+.help-copy {
+  margin-bottom: 14px;
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  font-size: 12px;
+  color: var(--text-secondary);
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.help-copy:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+/* The rail costs more than it gives once the content column is this narrow. */
+@media (max-width: 620px) {
+  .help-body {
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .help-nav {
+    position: static;
+    flex-direction: row;
+    flex-wrap: wrap;
+    width: auto;
+    gap: 4px;
+  }
+
+  .help-key-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
+
+  .help-key-chords {
+    min-width: 0;
+    justify-content: flex-start;
+  }
+}

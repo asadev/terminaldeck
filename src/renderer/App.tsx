@@ -4,12 +4,15 @@ import { TitleBar } from './components/TitleBar'
 import { TabBar } from './components/TabBar'
 import { TerminalView } from './components/TerminalView'
 import { EmptyState } from './components/EmptyState'
-import { PreferencesModal } from './components/PreferencesModal'
+import { SettingsWindow } from './settings/SettingsWindow'
+import { NewSessionDialog } from './components/NewSessionDialog'
+import { HelpDialog } from './components/HelpPanel'
+import { JoinRemoteDialog } from './components/JoinRemoteDialog'
 import { SessionInspector } from './components/SessionInspector'
 import { CommandPalette, type PaletteCommand } from './components/CommandPalette'
 import { ShortcutsSheet } from './components/ShortcutsSheet'
 import { Onboarding } from './components/Onboarding'
-import { BrowserTab } from './components/BrowserTab'
+import { BrowserWorkspace } from './browser/BrowserWorkspace'
 import { Board } from './board/Board'
 import { Dashboard } from './dashboard/Dashboard'
 import { SwarmGrid } from './layout/SwarmGrid'
@@ -45,6 +48,9 @@ function Workspace() {
   const [view, setView] = useState<MainView>('terminal')
   const [swarm, setSwarm] = useState(false)
   const [prefsOpen, setPrefsOpen] = useState(false)
+  const [newSessionOpen, setNewSessionOpen] = useState(false)
+  const [helpOpen, setHelpOpen] = useState(false)
+  const [joinOpen, setJoinOpen] = useState(false)
   const [inspectorOpen, setInspectorOpen] = useState(false)
   const [paletteMode, setPaletteMode] = useState<'files' | 'commands' | null>(null)
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
@@ -142,7 +148,8 @@ function Workspace() {
 
       if (e.key === 't' || e.key === 'T') {
         e.preventDefault()
-        if (activeProjectPath) void newSessionIn(activeProjectPath, e.shiftKey)
+        if (e.shiftKey) setNewSessionOpen(true)
+        else if (activeProjectPath) void newSessionIn(activeProjectPath)
         else void openProject()
         return
       }
@@ -240,7 +247,16 @@ function Workspace() {
       )
     }
     if (view === 'browser') {
-      return <BrowserTab initialUrl="http://localhost:3000" visible />
+      return (
+        <BrowserWorkspace
+          visible
+          onSendToAgent={(context) => {
+            // Element context goes straight into the focused session, which is
+            // the whole point of inspecting from inside the app.
+            if (activeSessionId) window.pawl.writeToSession(activeSessionId, context)
+          }}
+        />
+      )
     }
     if (sessions.length === 0) return <EmptyState onOpenProject={openProject} />
     if (swarm) {
@@ -298,7 +314,20 @@ function Workspace() {
         </main>
       </div>
 
-      <PreferencesModal open={prefsOpen} onClose={() => setPrefsOpen(false)} />
+      <SettingsWindow open={prefsOpen} onClose={() => setPrefsOpen(false)} />
+      <NewSessionDialog
+        open={newSessionOpen}
+        projectPath={activeProjectPath}
+        onClose={() => setNewSessionOpen(false)}
+        onStart={async (request) => {
+          setNewSessionOpen(false)
+          const meta = await window.pawl.createSession(request)
+          addSession(meta)
+          setView('terminal')
+        }}
+      />
+      <HelpDialog open={helpOpen} onClose={() => setHelpOpen(false)} />
+      <JoinRemoteDialog open={joinOpen} onClose={() => setJoinOpen(false)} />
       <SessionInspector
         open={inspectorOpen}
         onClose={() => setInspectorOpen(false)}

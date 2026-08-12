@@ -8,8 +8,10 @@
   --git-added: var(--status-completed);
   --git-modified: var(--status-waiting);
   --git-deleted: var(--color-critical);
-  --git-renamed: var(--accent);
-  --git-untracked: var(--text-muted);
+  /* --status-working, not --accent: a rename is a status like the four around
+     it, and the blue in this app means focus rather than "renamed". */
+  --git-renamed: var(--status-working);
+  --git-untracked: var(--text-secondary);
   --git-conflicted: var(--status-input);
   --git-row-height: 24px;
 
@@ -69,9 +71,9 @@
   flex-shrink: 0;
   min-width: 18px;
   padding: 1px 6px;
-  border-radius: 9px;
-  background: var(--accent-soft);
-  color: var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
   font-family: var(--font-mono);
   font-size: 10.5px;
   text-align: center;
@@ -91,6 +93,11 @@
 .git-refresh:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
+}
+
+.git-refresh:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
 }
 
 .git-refresh svg {
@@ -122,7 +129,7 @@
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .git-group-count {
@@ -158,13 +165,13 @@
 }
 
 .git-row[data-selected='true'] {
-  background: var(--accent-soft);
+  background: var(--bg-active);
   color: var(--text-primary);
 }
 
 .git-row:focus-visible {
-  outline: 1px solid var(--accent);
-  outline-offset: -1px;
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
 .git-code {
@@ -211,11 +218,13 @@
 
 /* The directory trails the filename and gives up its width first — the name
    is what you scan for, the folder is only there to disambiguate. */
+/* The folder is what tells two files of the same name apart, so it is real
+   information rather than decoration and has to stay legible. */
 .git-dir {
   flex: 1;
   min-width: 0;
   font-size: 11px;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -248,7 +257,7 @@
   line-height: var(--git-row-height);
   font-size: 11px;
   font-style: italic;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 /* -------------------------------------------------------------- messages -- */
@@ -256,6 +265,6 @@
 .git-message {
   margin: 0;
   padding: 14px 12px;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   font-size: 12px;
 }

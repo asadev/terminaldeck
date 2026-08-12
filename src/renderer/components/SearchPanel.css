@@ -3,9 +3,10 @@
 
    The whole panel is a reading surface, so the type is set for prose rather
    than for a table: the snippet is the interface, and everything else is
-   chrome around it. Highlights use the accent's soft tint rather than the
-   browser's default yellow `<mark>`, which is the one colour in the app that
-   belongs to no theme.
+   chrome around it. The matched term keeps the accent's soft tint — a hit is
+   the reading equivalent of a selection, and it is the one thing on the panel
+   the eye has to find first. The browser's default yellow `<mark>` is the one
+   colour in the app that belongs to no theme.
    ============================================================================ */
 
 .session-search {
@@ -81,7 +82,7 @@
 .search-chip {
   padding: 3px 9px;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-secondary);
   font-family: inherit;
@@ -100,9 +101,9 @@
 }
 
 .search-chip[data-on='true'] {
-  border-color: transparent;
-  background: var(--accent-soft);
-  color: var(--accent);
+  border-color: var(--border-strong);
+  background: var(--bg-active);
+  color: var(--text-primary);
 }
 
 .search-chip:focus-visible {
@@ -121,7 +122,7 @@
   flex-shrink: 0;
   margin: 0;
   padding: 8px 14px;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   font-size: 11px;
   /* Reserves the line so results do not jump every time the text changes. */
   min-height: 28px;
@@ -163,7 +164,7 @@
 
 .search-project {
   padding: 1px 7px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   background: var(--bg-tertiary);
   color: var(--text-secondary);
   font-weight: 400;
@@ -203,8 +204,8 @@
 }
 
 .search-hit[data-selected='true'] .search-hit-button {
-  border-left-color: var(--accent);
-  background: var(--bg-hover);
+  border-left-color: var(--border-strong);
+  background: var(--bg-active);
 }
 
 .search-hit-button:focus-visible {
@@ -224,32 +225,33 @@
   font-weight: 600;
   letter-spacing: 0.03em;
   text-transform: uppercase;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 /* Who said it is the fastest thing to scan for, so each role gets its own hue
-   from the status palette rather than a shared grey. */
+   from the status palette rather than a shared grey — the status palette, not
+   the accent, which in this app only ever means focus. */
 .search-role[data-role='user'] {
-  color: var(--accent);
+  color: var(--status-working);
 }
 .search-role[data-role='assistant'] {
   color: var(--status-completed);
 }
 .search-role[data-role='thinking'] {
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 .search-role[data-role='tool'] {
   color: var(--status-waiting);
 }
 .search-role[data-role='system'] {
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .search-tag {
   padding: 0 6px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   background: var(--bg-tertiary);
-  color: var(--text-muted);
+  color: var(--text-secondary);
   font-size: 10px;
   line-height: 16px;
 }
@@ -273,12 +275,12 @@
 
 .search-mark {
   padding: 0 1px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   background: var(--accent-soft);
   color: var(--text-primary);
   font-weight: 600;
 }
 
 .search-ellipsis {
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }

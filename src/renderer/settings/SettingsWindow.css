@@ -1,0 +1,708 @@
+/* ============================================================================
+   Settings — a narrow section list, one panel, hairline dividers.
+
+   Every colour is a token from tokens.css. The only literal values here are
+   geometry: widths, gaps and the two durations. Colour carries meaning in this
+   window and nowhere else — a status dot, a selected row, a destructive button.
+   ============================================================================ */
+
+/* The Modal owns its two widths (440 / 560) and this window needs a third.
+   Modal.tsx is off-limits while several agents are working in parallel, so the
+   panel is widened from here by matching on what it contains. The tidy version
+   is a `size="xl"` in Modal.tsx — see the handoff. */
+.modal-panel:has(.settings) {
+  width: 880px;
+  height: min(660px, 100%);
+}
+
+.settings {
+  display: grid;
+  grid-template-columns: 168px minmax(0, 1fr);
+  gap: 0;
+  align-items: start;
+  min-height: 100%;
+}
+
+/* ------------------------------------------------------------------- nav -- */
+
+.settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  /* The body scrolls, not the list — a section list that scrolled away would
+     leave the user with no way back without scrolling up first. */
+  position: sticky;
+  top: 0;
+  padding: 2px 10px 12px 0;
+  border-right: 1px solid var(--border-subtle);
+}
+
+.settings-nav-item {
+  padding: 5px 9px;
+  border-radius: var(--radius-sm);
+  text-align: left;
+  font-size: 13px;
+  font-weight: 450;
+  color: var(--text-secondary);
+  transition: background 100ms ease, color 100ms ease;
+}
+
+.settings-nav-item:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.settings-nav-item[aria-selected='true'] {
+  background: var(--bg-active);
+  color: var(--text-primary);
+  font-weight: 550;
+}
+
+/* ----------------------------------------------------------------- panel -- */
+
+.settings-panel {
+  min-width: 0;
+  padding: 0 2px 8px 20px;
+}
+
+.settings-panel:focus {
+  outline: none;
+}
+
+.settings[data-loading] .settings-panel {
+  /* Loaded values arrive in one frame; this is the flicker of that frame, not
+     a spinner pretending to be work. */
+  opacity: 0.72;
+}
+
+.settings-head {
+  margin-bottom: 14px;
+}
+
+.settings-head-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+}
+
+.settings-head-blurb {
+  margin: 3px 0 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.settings-group {
+  margin-top: 20px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.settings-group-title {
+  margin: 0 0 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.settings-prose {
+  margin: 8px 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+  max-width: 62ch;
+}
+
+/* ------------------------------------------------------------------ rows -- */
+
+.settings-item {
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.settings-item:last-child {
+  border-bottom: none;
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 10px 0;
+}
+
+.settings-row-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.settings-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.settings-help {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+  max-width: 58ch;
+}
+
+.settings-row-control {
+  flex-shrink: 0;
+}
+
+.settings-item-extra {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 0 0 10px;
+}
+
+/* -------------------------------------------------------------- controls -- */
+
+.settings-switch {
+  display: inline-flex;
+  cursor: pointer;
+}
+
+.settings-switch input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.settings-switch-track {
+  display: block;
+  width: 30px;
+  height: 18px;
+  padding: 2px;
+  border-radius: 999px;
+  background: var(--bg-active);
+  border: 1px solid var(--border);
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.settings-switch-thumb {
+  display: block;
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  background: var(--text-secondary);
+  transition: transform 120ms ease, background 120ms ease;
+}
+
+.settings-switch input:checked + .settings-switch-track {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.settings-switch input:checked + .settings-switch-track .settings-switch-thumb {
+  background: var(--accent-fg);
+  transform: translateX(12px);
+}
+
+.settings-switch input:disabled + .settings-switch-track {
+  opacity: 0.5;
+}
+
+.settings-switch input:focus-visible + .settings-switch-track {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.settings-select-wrap {
+  display: inline-flex;
+}
+
+.settings-select,
+.settings-input {
+  min-width: 120px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+}
+
+.settings-input.wide {
+  min-width: 240px;
+}
+
+.settings-select:hover,
+.settings-input:hover {
+  border-color: var(--border-strong);
+}
+
+.settings-select:disabled,
+.settings-input:disabled {
+  opacity: 0.55;
+}
+
+.settings-number {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.settings-number .settings-input {
+  min-width: 72px;
+}
+
+.settings-unit {
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+.settings-btn {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 500;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.settings-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+
+.settings-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.settings-btn[data-tone='primary'] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-fg);
+}
+
+.settings-btn[data-tone='primary']:hover:not(:disabled) {
+  background: var(--accent-dim);
+  border-color: var(--accent-dim);
+}
+
+.settings-btn[data-tone='danger'] {
+  color: var(--color-critical);
+  border-color: var(--border);
+}
+
+.settings-btn[data-tone='danger']:hover:not(:disabled) {
+  border-color: var(--color-critical);
+  background: var(--bg-hover);
+}
+
+.settings-link,
+.settings-inline-btn {
+  color: var(--accent);
+  font-size: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  background: none;
+}
+
+.settings-inline-btn {
+  padding: 0;
+  font-weight: 500;
+}
+
+.settings-actions,
+.settings-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+/* -------------------------------------------------------------- messages -- */
+
+.settings-notice {
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-tertiary);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.settings-notice[data-tone='warn'] {
+  border-color: var(--border);
+  color: var(--text-primary);
+}
+
+.settings-notice[data-tone='warn']::before,
+.settings-notice[data-tone='error']::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 7px;
+  border-radius: 999px;
+  vertical-align: 1px;
+  background: var(--color-warning);
+}
+
+.settings-notice[data-tone='error']::before {
+  background: var(--color-critical);
+}
+
+.settings-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  font-size: 12.5px;
+  color: var(--text-primary);
+}
+
+.settings-status {
+  flex: 1;
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+.settings-status[data-tone='error'] {
+  color: var(--color-critical);
+}
+
+.settings-badge {
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.settings-badge.quiet {
+  background: var(--bg-active);
+  color: var(--text-muted);
+}
+
+/* ----------------------------------------------------------------- lists -- */
+
+.settings-tools,
+.settings-urls,
+.settings-profiles,
+.settings-paths {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.settings-tool,
+.settings-url,
+.settings-path-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.settings-tool:last-child,
+.settings-url:last-child,
+.settings-path-row:last-child {
+  border-bottom: none;
+}
+
+.settings-tool-main,
+.settings-url-main,
+.settings-path-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.settings-tool-dot {
+  width: 7px;
+  height: 7px;
+  flex-shrink: 0;
+  border-radius: 999px;
+  background: var(--status-idle);
+}
+
+.settings-tool[data-state='ready'] .settings-tool-dot {
+  background: var(--status-completed);
+}
+
+.settings-tool[data-state='installed-not-authed'] .settings-tool-dot {
+  background: var(--status-waiting);
+}
+
+.settings-tool[data-state='missing'] .settings-tool-dot {
+  background: var(--status-idle);
+}
+
+.settings-tool-name {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.settings-tool-version {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+
+.settings-tool-note,
+.settings-url-note {
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+
+.settings-tool-state {
+  flex-shrink: 0;
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+.settings-url-address {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* -------------------------------------------------------------- profiles -- */
+
+.settings-profile {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.settings-profile:last-child {
+  border-bottom: none;
+}
+
+.settings-profile-dot {
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  border-radius: 999px;
+}
+
+.settings-profile-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.settings-profile-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.settings-profile-path {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-profile-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.settings-inline-form {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+}
+
+/* ------------------------------------------------------ paths and about -- */
+
+.settings-path {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-path-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.settings-code {
+  margin: 8px 0 0;
+  padding: 10px;
+  max-height: 260px;
+  overflow: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.settings-about {
+  padding: 4px 0 10px;
+}
+
+.settings-about-name {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  color: var(--text-primary);
+}
+
+.settings-about-tagline {
+  margin: 2px 0 0;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+
+.settings-about-version {
+  margin: 6px 0 0;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+.settings-fact {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 5px 0;
+  font-size: 12.5px;
+}
+
+.settings-fact-label {
+  width: 96px;
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.settings-fact-value {
+  color: var(--text-primary);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* --------------------------------------------------------- font preview -- */
+
+.settings-font-preview {
+  width: 100%;
+  padding: 9px 11px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.settings-font-prompt {
+  color: var(--status-completed);
+}
+
+/* -------------------------------------------------------------- density -- */
+
+[data-density='compact'] .settings-row {
+  padding: 6px 0;
+}
+
+[data-density='compact'] .settings-group {
+  margin-top: 14px;
+  padding-top: 10px;
+}
+
+[data-density='compact'] .settings-tool,
+[data-density='compact'] .settings-url,
+[data-density='compact'] .settings-profile,
+[data-density='compact'] .settings-path-row {
+  padding: 5px 0;
+}
+
+/* ------------------------------------------------------------ responsive -- */
+
+/* Below this the two columns stop fitting side by side inside the panel. */
+@media (max-width: 900px) {
+  .modal-panel:has(.settings) {
+    width: 100%;
+  }
+
+  .settings {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .settings-nav {
+    position: static;
+    flex-direction: row;
+    flex-wrap: wrap;
+    padding: 0 0 10px;
+    border-right: none;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .settings-panel {
+    padding: 12px 2px 8px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-nav-item,
+  .settings-btn,
+  .settings-switch-track,
+  .settings-switch-thumb {
+    transition: none;
+  }
+}

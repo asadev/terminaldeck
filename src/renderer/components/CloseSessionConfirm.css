@@ -1,0 +1,86 @@
+/* ============================================================================
+   Close confirmation.
+
+   Deliberately plain — a warning that shouts is a warning that gets clicked
+   through. The only colour is on the destructive button, and only there so the
+   two footer actions cannot be told apart by position alone.
+   ============================================================================ */
+
+.close-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 6px;
+}
+
+.close-confirm-headline {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 550;
+  color: var(--text-primary);
+}
+
+.close-confirm-detail {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.close-confirm-suppress {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 6px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-subtle);
+  cursor: pointer;
+}
+
+/* Native rendering kept: a tick is a tick, and this dialog is not the place to
+   introduce a second control language. */
+.close-confirm-suppress input {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  margin-top: 1px;
+  accent-color: var(--accent);
+}
+
+.close-confirm-suppress-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.close-confirm-suppress-label {
+  font-size: 12.5px;
+  font-weight: 550;
+  color: var(--text-primary);
+}
+
+/* ----------------------------------------------------------------- button -- */
+
+/* Lives here rather than in Modal.css because no other dialog needs it yet —
+   it should move up the moment a second one does. `--color-critical` is the
+   only meaning-bearing colour in the palette that fits: this button destroys
+   work in progress. */
+.modal-btn.danger {
+  background: var(--color-critical);
+  border-color: var(--color-critical);
+  color: var(--accent-fg);
+}
+
+.modal-btn.danger:hover:not(:disabled) {
+  /* No darker critical token exists, so the hover is a shade rather than a
+     second hue — noted for tokens.css. */
+  filter: brightness(0.92);
+  background: var(--color-critical);
+  border-color: var(--color-critical);
+}
+
+.modal-btn.danger:disabled {
+  opacity: 0.6;
+  cursor: default;
+}

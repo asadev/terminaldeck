@@ -1,0 +1,273 @@
+/* ============================================================================
+   Debug panel
+
+   Instrument panel, not a document: dense rows, monospace numbers in tabular
+   figures so a column of timings can be scanned, and hairline rules instead of
+   boxes. The only colour is on a failure or a slow call — everything else stays
+   neutral, or the eye has nothing left to catch when something is actually
+   wrong.
+   ============================================================================ */
+
+.debug {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 16px 24px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+/* ------------------------------------------------------------------ head -- */
+
+.debug-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.debug-title {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.debug-subtitle {
+  margin: 3px 0 0;
+  max-width: 60ch;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+/* -------------------------------------------------------------- sections -- */
+
+.debug-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.debug-section-title {
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.debug-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.debug-hint {
+  margin: 0 0 8px;
+  max-width: 72ch;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text-muted);
+}
+
+.debug-empty {
+  margin: 0;
+  padding: 12px 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* --------------------------------------------------------------- controls -- */
+
+.debug-button {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  font-size: 11.5px;
+  white-space: nowrap;
+  color: var(--text-secondary);
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.debug-button:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.debug-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Paused is a state you must be able to see at a glance — a trace that has
+   silently stopped updating reads as an app that has hung. */
+.debug-button[data-active] {
+  border-color: transparent;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.debug-filter {
+  width: 150px;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  outline: none;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: 11.5px;
+}
+
+.debug-filter:focus {
+  border-color: var(--accent);
+}
+
+.debug-filter::-webkit-search-cancel-button {
+  appearance: none;
+}
+
+/* ---------------------------------------------------------------- tables -- */
+
+.debug-scroll {
+  max-height: 260px;
+  overflow: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.debug-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11.5px;
+}
+
+.debug-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-tertiary);
+  text-align: left;
+  font-weight: 500;
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.debug-table td {
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  vertical-align: baseline;
+}
+
+.debug-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.debug-table tbody tr:hover td {
+  background: var(--bg-hover);
+}
+
+.debug-summary {
+  margin-bottom: 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.debug-channel,
+.debug-number,
+.debug-path {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.debug-channel {
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.debug-number {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.debug-path {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.debug-result {
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A call that failed, and a call slow enough to be the reason someone opened
+   this panel.
+
+   The colour lands on the cell that carries the news and a wash behind the
+   row, not on every cell: a fully red row makes the timestamp and the channel
+   shout as loudly as the failure, and two red rows then read as an app on
+   fire rather than as two calls that failed. */
+.debug-table tr[data-bad] {
+  background: color-mix(in srgb, var(--color-critical) 7%, transparent);
+}
+
+.debug-table tr[data-bad] td:last-child,
+.debug-table td[data-bad] {
+  color: var(--color-critical);
+}
+
+.debug-table td[data-slow] {
+  color: var(--color-warning);
+}
+
+/* ------------------------------------------------------------------ text -- */
+
+.debug-pre {
+  max-height: 320px;
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+@media (max-width: 620px) {
+  .debug-section-head {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+  }
+
+  .debug-filter {
+    width: 120px;
+  }
+}

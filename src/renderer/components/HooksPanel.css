@@ -42,7 +42,7 @@
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .hooks-sub {
@@ -67,6 +67,13 @@
 .hooks-refresh:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
+}
+
+.hooks-refresh:focus-visible,
+.hooks-install:focus-visible,
+.hooks-remove:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 /* -------------------------------------------------------------- endpoint -- */
@@ -102,7 +109,7 @@
   margin: 0;
   padding: 24px 0;
   text-align: center;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 /* ------------------------------------------------------------------ rows -- */
@@ -168,7 +175,7 @@
   font-size: 10.5px;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .hooks-row[data-state='stale'] .hooks-state,
@@ -182,11 +189,11 @@
 
 .hooks-count {
   padding: 1px 6px;
-  border-radius: 9px;
+  border-radius: var(--radius-sm);
   background: var(--bg-hover);
   font-family: var(--font-mono);
   font-size: 10.5px;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .hooks-message {
@@ -197,14 +204,15 @@
 }
 
 /* The path is the point — it is the user's real config, so never truncate it
-   to something that could be mistaken for a different file. */
+   to something that could be mistaken for a different file, and never set it
+   in the muted tier, which does not clear AA on this surface. */
 .hooks-file {
   margin: 5px 0 0;
   font-family: var(--font-mono);
   font-size: 11px;
   line-height: 1.5;
   overflow-wrap: anywhere;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .hooks-foreign,
@@ -213,7 +221,7 @@
   font-size: 11.5px;
   line-height: 1.5;
   overflow-wrap: anywhere;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .hooks-confirm {
@@ -276,7 +284,7 @@
 .hooks-remove {
   border-color: transparent;
   background: none;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .hooks-remove:hover:not(:disabled) {

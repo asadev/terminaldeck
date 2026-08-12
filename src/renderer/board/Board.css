@@ -43,8 +43,12 @@
   transition: border-color 150ms ease, color 150ms ease;
 }
 
+/* The app's one field-focus idiom: the border takes the accent and a soft ring
+   sits outside it, so a focused field reads at a glance without an outline
+   clipping against the rounded corner. */
 .board-search:focus-within {
   border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
   color: var(--text-secondary);
 }
 
@@ -82,7 +86,7 @@
 .tag-chip {
   padding: 2px 9px;
   border: 1px solid var(--border);
-  border-radius: 20px;
+  border-radius: var(--radius-sm);
   background: var(--bg-secondary);
   color: var(--text-secondary);
   font-size: 11px;
@@ -96,8 +100,8 @@
 }
 
 .tag-chip.on {
-  border-color: var(--accent);
-  background: var(--accent-soft);
+  border-color: var(--border-strong);
+  background: var(--bg-active);
   color: var(--text-primary);
 }
 
@@ -105,7 +109,7 @@
   margin-left: auto;
   padding: 3px 8px;
   border-radius: var(--radius-sm);
-  color: var(--text-muted);
+  color: var(--text-secondary);
   font-size: 11.5px;
   transition: background 150ms ease, color 150ms ease;
 }
@@ -113,6 +117,16 @@
 .board-clear:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
+}
+
+.tag-chip:focus-visible,
+.board-clear:focus-visible,
+.card-remove:focus-visible,
+.composer-open:focus-visible,
+.btn-small:focus-visible,
+.btn-ghost:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 /* --------------------------------------------------------------- columns -- */
@@ -174,9 +188,9 @@
   margin-left: auto;
   min-width: 20px;
   padding: 1px 7px;
-  border-radius: 20px;
+  border-radius: var(--radius-sm);
   background: var(--bg-tertiary);
-  color: var(--text-muted);
+  color: var(--text-secondary);
   font-size: 11px;
   text-align: center;
   font-variant-numeric: tabular-nums;
@@ -194,14 +208,16 @@
   transition: background 150ms ease;
 }
 
-/* Whole-column feedback while a card hovers it, so the target is never a guess. */
+/* Whole-column feedback while a card hovers it, so the target is never a guess.
+   Grey: the insertion caret below is the thing that says exactly where, and a
+   column-sized wash of colour is far too loud for a hover state. */
 .column-body.over {
-  background: var(--accent-soft);
+  background: var(--bg-active);
 }
 
 .column-empty {
   margin: 6px 4px;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   font-size: 11.5px;
 }
 
@@ -211,10 +227,12 @@
   position: relative;
 }
 
+/* The insertion caret. This one keeps the accent: it marks where the card will
+   land, which is the drag's equivalent of a selection point. */
 .drop-line {
   height: 2px;
   margin: 2px 0;
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
   background: var(--accent);
 }
 
@@ -239,15 +257,17 @@
 
 .card.dragging {
   opacity: 0.4;
-  border-color: var(--accent);
+  border-color: var(--border-strong);
   cursor: grabbing;
 }
 
+/* The field inside carries the focus ring, so the card only has to look
+   different from its neighbours — a second blue edge around it is noise. */
 .card.editing {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  border-color: var(--accent);
+  border-color: var(--border-strong);
   background: var(--bg-tertiary);
   cursor: default;
 }
@@ -273,14 +293,15 @@
   width: 18px;
   height: 18px;
   flex-shrink: 0;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   color: var(--text-muted);
   opacity: 0;
   transition: opacity 150ms ease, background 150ms ease, color 150ms ease;
 }
 
 .card:hover .card-remove,
-.card:focus-within .card-remove {
+.card:focus-within .card-remove,
+.card-remove:focus-visible {
   opacity: 1;
 }
 
@@ -307,8 +328,8 @@
 
 .card-tag {
   padding: 1px 7px;
-  border-radius: 20px;
-  background: var(--accent-soft);
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
   color: var(--text-secondary);
   font-size: 10px;
   line-height: 1.7;
@@ -317,8 +338,8 @@
 .card-session {
   padding: 1px 7px;
   border: 1px solid var(--border);
-  border-radius: 20px;
-  color: var(--text-muted);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
   font-family: var(--font-mono);
   font-size: 9.5px;
   line-height: 1.7;
@@ -345,6 +366,7 @@
 .card-notes-input:focus,
 .composer input:focus {
   border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
 }
 
 .card-notes-input {
@@ -393,7 +415,7 @@
   margin-top: 2px;
   padding: 6px 8px;
   border-radius: var(--radius-sm);
-  color: var(--text-muted);
+  color: var(--text-secondary);
   font-size: 11.5px;
   text-align: left;
   transition: background 150ms ease, color 150ms ease;

@@ -8,8 +8,10 @@
 
 .gh-panel {
   --gh-open: var(--status-completed);
-  --gh-draft: var(--text-muted);
-  --gh-merged: var(--accent);
+  --gh-draft: var(--text-secondary);
+  /* GitHub paints merged purple; this palette has no purple, and the app's blue
+     means focus. --status-working is the token for "a thing that happened". */
+  --gh-merged: var(--status-working);
   --gh-closed: var(--color-critical);
   --gh-approved: var(--status-completed);
   --gh-changes: var(--color-critical);
@@ -57,7 +59,7 @@
 
 .gh-repo:hover {
   background: var(--bg-hover);
-  color: var(--accent);
+  color: var(--text-primary);
 }
 
 .gh-head-spacer {
@@ -70,17 +72,17 @@
   gap: 4px;
   flex-shrink: 0;
   padding: 1px 7px 1px 5px;
-  border-radius: 9px;
+  border-radius: var(--radius-sm);
   background: var(--bg-tertiary);
-  color: var(--text-muted);
+  color: var(--text-secondary);
   font-family: var(--font-mono);
   font-size: 10.5px;
 }
 
-/* Something is waiting on *this* project, not just somewhere in the account. */
+/* Something is waiting on *this* project, not just somewhere in the account —
+   which is exactly what --status-input names elsewhere in the app. */
 .gh-bell[data-mine='true'] {
-  background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--status-input);
 }
 
 .gh-refresh {
@@ -118,13 +120,15 @@
   border-bottom: 1px solid var(--border-subtle);
 }
 
+/* A button's own label has to clear AA, so tabs sit at --text-secondary even
+   when unselected; --text-muted is for things that repeat elsewhere. */
 .gh-tab {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   padding: 4px 9px;
   border-radius: var(--radius-sm);
-  color: var(--text-muted);
+  color: var(--text-secondary);
   font-size: 11.5px;
   font-weight: 550;
   transition: background 120ms ease, color 120ms ease;
@@ -136,8 +140,8 @@
 }
 
 .gh-tab[aria-selected='true'] {
-  background: var(--accent-soft);
-  color: var(--accent);
+  background: var(--bg-active);
+  color: var(--text-primary);
 }
 
 .gh-tab-count {
@@ -151,8 +155,8 @@
 .gh-refresh:focus-visible,
 .gh-row:focus-visible,
 .gh-retry:focus-visible {
-  outline: 1px solid var(--accent);
-  outline-offset: -1px;
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
 /* ----------------------------------------------------------------- list -- */
@@ -212,7 +216,7 @@
   align-items: center;
   gap: 6px;
   font-size: 10.5px;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .gh-number,
@@ -225,7 +229,7 @@
   margin-left: 4px;
   padding: 0 3px;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   font-size: 8.5px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -243,7 +247,7 @@
   min-width: 48px;
   margin-top: 1px;
   padding: 2px 6px;
-  border-radius: 9px;
+  border-radius: var(--radius-sm);
   border: 1px solid transparent;
   font-size: 9.5px;
   font-weight: 600;
@@ -263,9 +267,10 @@
   color: var(--gh-draft);
 }
 
+/* Outlined like the other three rather than filled — four badges in a column
+   should differ by one variable, not two. */
 .gh-badge[data-badge='merged'] {
   border-color: var(--gh-merged);
-  background: var(--accent-soft);
   color: var(--gh-merged);
 }
 
@@ -278,7 +283,7 @@
 
 .gh-review {
   padding: 0 5px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   font-weight: 550;
 }
 
@@ -309,7 +314,7 @@
   max-width: 120px;
   padding: 0 5px;
   border: 1px solid var(--border-subtle);
-  border-radius: 9px;
+  border-radius: var(--radius-sm);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -350,7 +355,7 @@
 .gh-message {
   margin: 0;
   padding: 14px 12px;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   font-size: 12px;
 }
 
@@ -358,14 +363,14 @@
   margin: 0;
   padding: 8px 12px;
   border-top: 1px solid var(--border-subtle);
-  color: var(--text-muted);
+  color: var(--text-secondary);
   font-size: 11px;
 }
 
 .gh-note code,
 .gh-failure-action code {
   padding: 1px 4px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--bg-tertiary);
   font-family: var(--font-mono);
   font-size: 10.5px;
@@ -401,7 +406,7 @@
 .gh-failure-detail {
   width: 100%;
   font-size: 11px;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .gh-failure-detail summary {

@@ -35,14 +35,14 @@
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .mcp-subheading {
   margin: 3px 0 0;
   max-width: 52ch;
   font-size: 12px;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .mcp-refresh,
@@ -68,12 +68,27 @@
   opacity: 0.55;
 }
 
+/* This panel is almost entirely buttons and disclosure rows; one rule keeps
+   every one of them reachable by keyboard. */
+.mcp-refresh:focus-visible,
+.mcp-server-action:focus-visible,
+.mcp-server-toggle:focus-visible,
+.mcp-tab:focus-visible,
+.mcp-item-head:focus-visible,
+.mcp-array-add:focus-visible,
+.mcp-array-remove:focus-visible,
+.mcp-run:focus-visible,
+.mcp-details > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 /* --------------------------------------------------------------- messages -- */
 
 .mcp-empty,
 .mcp-note {
   margin: 10px 0 0;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .mcp-error {
@@ -144,7 +159,7 @@
 .mcp-server-state {
   margin-left: auto;
   flex-shrink: 0;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 /* Status dot. Colours alias the session tokens so a connected MCP server and a
@@ -174,16 +189,18 @@
   flex-shrink: 0;
   padding: 1px 6px;
   border: 1px solid var(--border-subtle);
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   font-size: 10px;
   letter-spacing: 0.03em;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
+/* Where a server is configured is a fact about it, not a warning and not a
+   selection — so it is stated in ink and a firmer edge, not in colour. */
 .mcp-tag[data-scope='project'],
 .mcp-tag[data-scope='local'] {
-  border-color: var(--accent);
-  color: var(--accent);
+  border-color: var(--border-strong);
+  color: var(--text-primary);
 }
 
 .mcp-tag[data-warn='true'] {
@@ -191,11 +208,12 @@
   color: var(--color-warning);
 }
 
+/* The command is the one thing that identifies a server; it has to be read. */
 .mcp-server-command {
   margin: 6px 0 0;
   font-family: var(--font-mono);
   font-size: 11px;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   overflow-wrap: anywhere;
 }
 
@@ -217,8 +235,8 @@
 .mcp-instructions {
   margin: 6px 0 0;
   padding: 7px 10px;
-  border-left: 2px solid var(--accent);
-  background: var(--accent-soft);
+  border-left: 2px solid var(--border-strong);
+  background: var(--bg-tertiary);
   color: var(--text-secondary);
 }
 
@@ -243,7 +261,7 @@
   background: none;
   font-family: inherit;
   font-size: 12px;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   text-transform: capitalize;
 }
 
@@ -259,10 +277,10 @@
 
 .mcp-count {
   padding: 0 5px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   background: var(--bg-hover);
   font-size: 10px;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .mcp-tabs .mcp-server-action {
@@ -332,7 +350,7 @@ button.mcp-item-head:hover {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .mcp-item-body {
@@ -366,7 +384,7 @@ button.mcp-item-head:hover {
 
 .mcp-details > summary {
   cursor: default;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .mcp-details > summary:hover {
@@ -400,7 +418,7 @@ button.mcp-item-head:hover {
 
 .mcp-form-note {
   margin: 0;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .mcp-field {
@@ -436,14 +454,14 @@ button.mcp-item-head:hover {
 .mcp-field-type {
   font-size: 10px;
   letter-spacing: 0.03em;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .mcp-field-description {
   margin: 0;
   max-width: 68ch;
   font-size: 11px;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .mcp-field-error {
@@ -537,7 +555,7 @@ button.mcp-item-head:hover {
   background: none;
   font-family: inherit;
   font-size: 11px;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 /* ------------------------------------------------------------------- run -- */
@@ -570,7 +588,7 @@ button.mcp-item-head:hover {
 }
 
 .mcp-run-hint {
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .mcp-result {

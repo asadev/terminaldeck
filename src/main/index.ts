@@ -16,7 +16,7 @@ import { registerReadinessIpc } from './readiness'
 import { registerDashboardIpc } from './dashboard-store'
 import { registerSessionSearchIpc } from './session-search'
 import { registerAlertsIpc } from './alerts'
-import { registerProfilesIpc } from './profiles'
+import { registerProfilesIpc, getState as profilesState, resolveProfile, sessionEnv } from './profiles'
 import { registerPawlignoreIpc } from './pawlignore'
 import { registerHooksIpc } from './hooks'
 import { registerHookServer, stopHookServer } from './hook-server'
@@ -24,6 +24,11 @@ import { registerMcpIpc } from './mcp-client'
 import { registerBrowserIpc } from './browser-tab'
 import { registerChromeImportIpc } from './chrome-import'
 import { registerPrerequisitesIpc } from './prerequisites'
+import { registerSettingsIpc, clearBrowserDataIfNotPersisting } from './settings-extra'
+import { registerBrowserSessionIpc } from './browser-session'
+import { registerBrowserViewIpc } from './browser-view'
+import { registerDiagnosticsIpc } from './diagnostics'
+import { registerLogIpc } from './app-log'
 import type { SessionStatus } from '../shared/types'
 
 const isDev = !!process.env.ELECTRON_RENDERER_URL
@@ -186,6 +191,12 @@ function registerIpc(): void {
   registerBrowserIpc(ipcMain)
   registerChromeImportIpc(ipcMain)
   registerPrerequisitesIpc(ipcMain)
+  registerSettingsIpc(ipcMain)
+  // registerBrowserSessionIpc installs the recorder preload itself.
+  registerBrowserSessionIpc(ipcMain)
+  registerBrowserViewIpc(ipcMain)
+  registerDiagnosticsIpc(ipcMain)
+  registerLogIpc(ipcMain)
 
   registerAlertsIpc(ipcMain, {
     liveSessions: (projectPath) =>
@@ -211,11 +222,20 @@ function registerIpc(): void {
     const provider = available[requested] ? requested : 'shell'
     const spec = PROVIDERS[provider]
 
+    // Resolve the profile the session should run as and hand the PTY its
+    // config-dir override. Without this the picker records a choice that never
+    // reaches the process, and two "separate" logins quietly share one.
+    const profile = resolveProfile(profilesState(), {
+      sessionProfileId: input.profileId ?? undefined,
+      projectPath: input.cwd,
+    })
+
     return ptys.create(input, {
       provider,
       command: spec.bin,
       args: input.resume && spec.resumeArgs.length > 0 ? spec.resumeArgs : spec.args,
       path,
+      env: sessionEnv(profile, provider),
     })
   })
 
@@ -253,4 +273,5 @@ app.on('before-quit', () => {
   ptys.killAll()
   stopAllGitWatches()
   void stopHookServer()
+  void clearBrowserDataIfNotPersisting()
 })

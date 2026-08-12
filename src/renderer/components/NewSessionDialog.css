@@ -1,0 +1,466 @@
+/* ============================================================================
+   New session dialog.
+
+   Five decisions in one panel, so the panel has to read as five decisions and
+   not as a form. Sections are separated by a hairline and nothing else — no
+   cards, no fills, no colour except the one blue that marks what is selected.
+   Every value here comes from tokens.css.
+   ============================================================================ */
+
+.ns {
+  display: flex;
+  flex-direction: column;
+  padding-top: 4px;
+}
+
+.ns-section {
+  padding: 14px 0;
+  border-top: 1px solid var(--border-subtle);
+}
+
+/* The first section sits directly under the dialog's own header rule. */
+.ns-section:first-of-type {
+  padding-top: 8px;
+  border-top: none;
+}
+
+.ns-section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ns-section-title {
+  margin: 0 0 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.ns-section-head .ns-section-title {
+  margin-bottom: 8px;
+}
+
+.ns-hint {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.ns-error,
+.ns-problem {
+  margin: 0 0 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+/* A blocked start is a fact about the machine, not an alarm — it borrows the
+   critical colour for its rule only, so it reads as "cannot" not "danger". */
+.ns-problem {
+  border-left: 2px solid var(--color-critical);
+}
+
+/* ---------------------------------------------------------------- shared -- */
+
+/* Covers its row so the whole thing is the hit target, and stays focusable —
+   only the native rendering is hidden. */
+.ns-project input,
+.ns-agent input,
+.ns-choice input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: inherit;
+}
+
+.ns-mark {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  margin-top: 2px;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 50%;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+/* An inset ring rather than a child element: one box-shadow draws the dot. */
+[data-selected='true'] > .ns-mark {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 3px var(--accent);
+}
+
+[data-available='false'] > .ns-mark {
+  border-style: dashed;
+  border-color: var(--text-muted);
+}
+
+.ns input:focus-visible ~ .ns-mark {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* A project row has no `.ns-mark` to hang a ring on, and its radio is
+   `opacity: 0` — so before this it took keyboard focus with nothing at all on
+   screen to show where focus had gone. The row itself is the indicator. */
+.ns-project:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.ns-link {
+  padding: 2px 4px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-weight: 550;
+  color: var(--accent);
+}
+
+.ns-link:hover {
+  background: var(--bg-hover);
+}
+
+/* --------------------------------------------------------------- project -- */
+
+/* A shortlist, not a browser: it scrolls at about five rows so the four
+   decisions below it stay on screen without the dialog growing a second
+   scrollbar of its own. */
+.ns-projects {
+  display: flex;
+  flex-direction: column;
+  max-height: 156px;
+  overflow-y: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.ns-project {
+  position: relative;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border-subtle);
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.ns-project:last-child {
+  border-bottom: none;
+}
+
+.ns-project:hover {
+  background: var(--bg-hover);
+}
+
+.ns-project[data-selected='true'] {
+  background: var(--accent-soft);
+}
+
+.ns-project-name {
+  flex-shrink: 0;
+  font-size: 13px;
+  font-weight: 550;
+  color: var(--text-primary);
+}
+
+/* The tail of a long path is the part worth losing — the leading `/Users/...`
+   is what tells two same-named folders apart at a glance. */
+.ns-project-path,
+.ns-chosen-path {
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ns-chosen-path {
+  margin: 8px 0 0;
+}
+
+.ns-empty {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* ----------------------------------------------------------------- agent -- */
+
+.ns-agents,
+.ns-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ns-agent,
+.ns-choice {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 11px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.ns-agent:hover[data-available='true'],
+.ns-choice:hover:not([data-available='false']) {
+  background: var(--bg-hover);
+  border-color: var(--border);
+}
+
+.ns-agent[data-selected='true'],
+.ns-choice[data-selected='true'] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* Dimmed but legible: the reason it is dimmed is written inside it. */
+.ns-agent[data-available='false'],
+.ns-choice[data-available='false'] {
+  cursor: default;
+  background: transparent;
+  border-style: dashed;
+}
+
+.ns-agent-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.ns-agent-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 550;
+  color: var(--text-primary);
+}
+
+[data-available='false'] .ns-agent-label {
+  color: var(--text-secondary);
+}
+
+.ns-tag {
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 550;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.ns-install {
+  margin-top: 2px;
+  padding: 4px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+/* --------------------------------------------------------------- profile -- */
+
+.ns-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.ns-row-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ns-row-label {
+  display: block;
+  font-size: 13px;
+  font-weight: 550;
+  color: var(--text-primary);
+}
+
+/* The config directory sits here, and it is long — it must truncate rather
+   than push the select off the panel. */
+.ns-row-text .ns-hint {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ns-select-wrap {
+  position: relative;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+/* Drawn rather than an image: the CSP forbids remote assets. */
+.ns-select-wrap::after {
+  content: '';
+  position: absolute;
+  right: 11px;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid var(--text-muted);
+  border-bottom: 1.5px solid var(--text-muted);
+  transform: translateY(-70%) rotate(45deg);
+  pointer-events: none;
+}
+
+.ns-select {
+  appearance: none;
+  min-width: 168px;
+  padding: 6px 28px 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+
+.ns-select:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+
+.ns-select:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* A limit on what the control above can actually do. Muted rather than warned:
+   nothing has gone wrong, the wiring simply is not there yet. */
+.ns-caveat {
+  margin: 8px 0 0;
+  padding-left: 8px;
+  border-left: 2px solid var(--border-strong);
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+/* ---------------------------------------------------------------- prompt -- */
+
+.ns-optional {
+  margin-left: 6px;
+  font-size: 10px;
+  font-weight: 550;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.ns-prompt {
+  display: block;
+  width: 100%;
+  margin: 8px 0 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12.5px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.ns-prompt::placeholder {
+  color: var(--text-muted);
+}
+
+.ns-prompt:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+  border-color: var(--accent);
+}
+
+.ns-preview {
+  margin: 6px 0 0;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+
+.ns-preview strong {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+/* -------------------------------------------------------------- outcomes -- */
+
+/* Adjustments the resolver made, said out loud. Muted on purpose: a fallback
+   that worked is information, not a warning. */
+.ns-notices {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0 0 4px;
+  padding: 0;
+  list-style: none;
+}
+
+.ns-notice {
+  padding: 6px 10px;
+  border-left: 2px solid var(--border-strong);
+  background: var(--bg-tertiary);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.ns-remember {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-subtle);
+  cursor: pointer;
+}
+
+/* Native rendering kept — a tick is a tick, and restyling it would add a
+   second control language to the same dialog. */
+.ns-remember input {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  margin-top: 2px;
+  accent-color: var(--accent);
+}
+
+.ns-footer-hint {
+  margin-right: auto;
+  font-size: 11px;
+  color: var(--text-muted);
+}

@@ -140,8 +140,8 @@
 }
 
 .swarm-spare-add:hover {
-  border-color: var(--accent);
-  background: var(--accent-soft);
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
   color: var(--text-primary);
 }
 

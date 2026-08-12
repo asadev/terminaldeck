@@ -1,0 +1,497 @@
+import { mkdir, writeFile } from 'node:fs/promises'
+import { join, resolve, sep } from 'node:path'
+import {
+  app,
+  shell,
+  type IpcMain,
+  type IpcMainEvent,
+  type IpcMainInvokeEvent,
+  type WebContents,
+} from 'electron'
+import { BRAND } from '../shared/brand'
+import { guestSession } from './browser-session'
+import { GUEST_RECORD_CHANNEL, GUEST_STEP_CHANNEL, safeAccent } from './browser-record-preload'
+import {
+  appendStep,
+  flowLine,
+  formatFlow,
+  isFull,
+  navigateStep,
+  parseGuestStep,
+  type RecordedStep,
+} from './browser-steps'
+
+/**
+ * Everything a browser tab can do that `browser-tab.ts` does not already do:
+ * zoom, devtools, screenshots, load progress and the flow recorder.
+ *
+ * ## Why this module has to find the view for itself
+ *
+ * `browser-tab.ts` owns the views and keeps them in a private map. It is not
+ * mine to change, and duplicating it would mean two modules creating views into
+ * the same window. So the link is made the other way round: every WebContents
+ * Electron creates announces itself, the ones belonging to the guest partition
+ * are held aside, and the renderer *claims* the one it was just handed an id
+ * for. That the guest session is already set when `web-contents-created` fires
+ * is not an assumption — it was checked on Electron 41.10.5, along with the
+ * `capturePage`, `setZoomFactor` and `openDevTools` this module leans on.
+ *
+ * The claim is ordered, not guessed: the renderer awaits its `browser:create`
+ * before claiming, and creates tabs one at a time, so "the newest guest view
+ * nobody has claimed" is the one that call just produced. If that ever stops
+ * being true — a second window creating tabs concurrently — the fix is a lookup
+ * exported from `browser-tab.ts`; {@link setViewResolver} is the seam for it and
+ * costs nothing until it is needed.
+ *
+ * ## The page is still untrusted here
+ *
+ * Recorded steps arrive from the same guest scripts the inspector uses and get
+ * the same treatment: only the tab's own top frame may speak, only while
+ * recording is explicitly on, and the payload goes through `browser-steps.ts`
+ * before it can reach the UI or an agent's prompt. The page's idea of what URL
+ * it is on is never used — the main process supplies that.
+ */
+
+/* ------------------------------------------------------------------ types -- */
+
+export type LoadPhase = 'idle' | 'navigating' | 'loading' | 'done'
+
+export interface LoadProgress {
+  phase: LoadPhase
+  /** 0 to 1. Milestones, not a byte count — Chromium does not expose one. */
+  fraction: number
+}
+
+export interface RecordingState {
+  recording: boolean
+  steps: RecordedStep[]
+  /** The numbered list, ready to show or copy. */
+  text: string
+  /** The same flow on one line, ready to type into an agent's prompt. */
+  line: string
+  /** Recording hit the step cap and stopped adding. */
+  truncated: boolean
+}
+
+export interface ScreenshotResult {
+  path: string
+  width: number
+  height: number
+}
+
+interface ViewEntry {
+  tabId: string
+  wc: WebContents
+  /** The renderer that claimed this tab, and the only one told about it. */
+  host: WebContents
+  recording: boolean
+  /**
+   * The badge colour last handed over by the renderer.
+   *
+   * Held rather than passed around because every new document needs it again —
+   * see the `dom-ready` re-arm in {@link attach}.
+   */
+  accent: string
+  steps: RecordedStep[]
+  /** Listener removals, run when the tab is released or the view dies. */
+  detach: Array<() => void>
+}
+
+/* --------------------------------------------------------------- registry -- */
+
+const views = new Map<string, ViewEntry>()
+/** Guest views that exist but have not been claimed by a tab id yet. */
+const unclaimed: WebContents[] = []
+let watchingCreations = false
+
+/**
+ * Optional override for how a tab id becomes a WebContents.
+ *
+ * Unused today. It exists so that if `browser-tab.ts` ever exports a lookup —
+ * `export const browserTabContents = (id: string) => tabs.get(id)?.view.webContents ?? null` —
+ * wiring it here is one line in `index.ts` and the claim dance below can be
+ * deleted rather than reworked.
+ */
+let resolveView: ((tabId: string) => WebContents | null) | null = null
+
+export function setViewResolver(resolver: (tabId: string) => WebContents | null): void {
+  resolveView = resolver
+}
+
+/**
+ * Is this a page the user browsed to, in one of our browser tabs?
+ *
+ * The session test alone is not enough, and this was checked rather than
+ * assumed. Opening devtools on a guest page creates a *third* WebContents that
+ * reports the guest session as its own — so a session-only filter puts the
+ * devtools window on the unclaimed pile, and the next new tab claims it instead
+ * of its page. What separates them is `getType()`: a `WebContentsView`'s page
+ * reports `window`, devtools reports `remote`.
+ *
+ * The URL check is the second net. It does nothing at creation time, when every
+ * URL is still empty, but it catches anything already loaded by the time it is
+ * claimed.
+ */
+function isGuest(wc: WebContents): boolean {
+  if (wc.isDestroyed()) return false
+  if (wc.getType() !== 'window') return false
+  if (wc.getURL().startsWith('devtools://')) return false
+  return wc.session === guestSession()
+}
+
+function watchCreations(): void {
+  if (watchingCreations) return
+  watchingCreations = true
+  app.on('web-contents-created', (_event, contents) => {
+    if (!isGuest(contents)) return
+    unclaimed.push(contents)
+    contents.once('destroyed', () => {
+      const index = unclaimed.indexOf(contents)
+      if (index >= 0) unclaimed.splice(index, 1)
+    })
+  })
+}
+
+function claim(): WebContents | null {
+  // Prune first: a view closed before it was ever claimed — which StrictMode's
+  // double mount produces on every dev reload — would otherwise be handed out,
+  // and so would a devtools window that only revealed itself once it had a URL.
+  for (let i = unclaimed.length - 1; i >= 0; i--) {
+    if (!isGuest(unclaimed[i])) unclaimed.splice(i, 1)
+  }
+  return unclaimed.pop() ?? null
+}
+
+function entryFor(tabId: unknown): ViewEntry {
+  const entry = typeof tabId === 'string' ? views.get(tabId) : undefined
+  if (!entry || entry.wc.isDestroyed()) {
+    throw new Error('browser-view: that tab is not open here')
+  }
+  return entry
+}
+
+function send(entry: ViewEntry, channel: string, payload: unknown): void {
+  if (entry.host.isDestroyed()) return
+  entry.host.send(channel, entry.tabId, payload)
+}
+
+/* -------------------------------------------------------------- recording -- */
+
+function stateOf(entry: ViewEntry): RecordingState {
+  return {
+    recording: entry.recording,
+    steps: entry.steps,
+    text: formatFlow(entry.steps),
+    line: flowLine(entry.steps),
+    truncated: isFull(entry.steps),
+  }
+}
+
+function pushRecording(entry: ViewEntry): void {
+  send(entry, 'browser-view:recording', stateOf(entry))
+}
+
+function record(entry: ViewEntry, step: RecordedStep | null): void {
+  if (!entry.recording || !step) return
+  const next = appendStep(entry.steps, step)
+  // appendStep returns the same array when a step folded into the previous one
+  // or the cap was hit; re-rendering the panel for that is pure noise.
+  if (next === entry.steps) return
+  entry.steps = next
+  pushRecording(entry)
+}
+
+function tellGuestRecording(entry: ViewEntry): void {
+  if (entry.wc.isDestroyed()) return
+  entry.wc.send(GUEST_RECORD_CHANNEL, { on: entry.recording, accent: entry.accent })
+}
+
+/**
+ * Only the tab's own top document may report a step.
+ *
+ * Fail closed, the same way `browser-tab.ts` does for element captures:
+ * `senderFrame` is null once the sending frame has navigated away, and older
+ * Electron throws rather than returning null, so "no frame" has to mean refuse.
+ * Reading it as "must be the main frame, then" lets an embedded frame's message
+ * through whenever it manages to die between the send and the receipt.
+ */
+function isFromMainFrame(event: IpcMainEvent, wc: WebContents): boolean {
+  try {
+    const frame = event.senderFrame
+    return frame !== null && frame === wc.mainFrame
+  } catch {
+    return false
+  }
+}
+
+/* ------------------------------------------------------------- attachment -- */
+
+function progress(entry: ViewEntry, phase: LoadPhase, fraction: number): void {
+  send(entry, 'browser-view:progress', { phase, fraction } satisfies LoadProgress)
+}
+
+function attach(entry: ViewEntry): void {
+  const { wc } = entry
+
+  // `did-start-navigation` carries its details on the *event* object — the
+  // positional `url`/`isMainFrame` arguments after it are deprecated. A
+  // same-document navigation (pushState, a fragment link) never loads anything,
+  // so showing progress for one would leave a bar that never finishes.
+  const onStart = (details: { isMainFrame: boolean; isSameDocument: boolean }) => {
+    if (!details.isMainFrame || details.isSameDocument) return
+    progress(entry, 'navigating', 0.15)
+  }
+  // Every document gets a fresh copy of the session preload, so recording has to
+  // be switched back on after each navigation or it silently stops observing —
+  // the same re-arm `browser-tab.ts` does for the inspector, and the same
+  // failure without it. This one is worse than a dead inspector: the panel, the
+  // tab's dot and the in-page badge would all still say Recording while every
+  // click after the first navigation went unrecorded, and a login flow navigates
+  // by definition.
+  const onDom = () => {
+    progress(entry, 'loading', 0.65)
+    if (entry.recording) tellGuestRecording(entry)
+  }
+  const onStop = () => progress(entry, 'done', 1)
+  const onNavigate = (_event: unknown, url: string) => {
+    record(entry, navigateStep(url, Date.now()))
+  }
+
+  wc.on('did-start-navigation', onStart)
+  wc.on('dom-ready', onDom)
+  wc.on('did-stop-loading', onStop)
+  wc.on('did-navigate', onNavigate)
+
+  entry.detach.push(() => {
+    if (wc.isDestroyed()) return
+    wc.off('did-start-navigation', onStart)
+    wc.off('dom-ready', onDom)
+    wc.off('did-stop-loading', onStop)
+    wc.off('did-navigate', onNavigate)
+  })
+
+  // A guest process can die on its own — a crash, or a window taking its child
+  // views down. Without this the map keeps a dead view forever and every later
+  // call walks it.
+  wc.once('destroyed', () => {
+    views.delete(entry.tabId)
+  })
+}
+
+function release(tabId: string): void {
+  const entry = views.get(tabId)
+  if (!entry) return
+  // Releasing usually precedes closing, but not always — the workspace can be
+  // unmounted while its pages stay alive. A guest left recording would keep its
+  // capture-phase listeners and its badge with nothing on this side listening,
+  // which is the surveillance-shaped bug the recorder is built to avoid.
+  if (entry.recording) {
+    entry.recording = false
+    tellGuestRecording(entry)
+  }
+  for (const off of entry.detach) off()
+  views.delete(tabId)
+}
+
+/* ------------------------------------------------------------ screenshots -- */
+
+/** Where captures land. Visible to the user, which a screenshot has to be. */
+function screenshotDir(): string {
+  return join(app.getPath('pictures'), BRAND.name)
+}
+
+/** `2026-08-12-163045` — sorts chronologically in a file listing. */
+function stamp(now: Date): string {
+  const pad = (value: number): string => String(value).padStart(2, '0')
+  return [
+    now.getFullYear(),
+    pad(now.getMonth() + 1),
+    pad(now.getDate()),
+    '-',
+    pad(now.getHours()),
+    pad(now.getMinutes()),
+    pad(now.getSeconds()),
+  ].join('')
+}
+
+/** A filename from the page's own host, with everything a path cares about gone. */
+export function screenshotName(url: string, now: Date): string {
+  let host = ''
+  try {
+    host = new URL(url).host
+  } catch {
+    host = ''
+  }
+  const safe = host.replace(/[^a-zA-Z0-9.-]/g, '-').replace(/^[.-]+/, '').slice(0, 48)
+  return `${safe || 'page'}-${stamp(now)}.png`
+}
+
+const ZOOM_MIN = 0.25
+const ZOOM_MAX = 3
+
+export function clampZoom(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 1
+  return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, value))
+}
+
+/* --------------------------------------------------------------- register -- */
+
+/**
+ * Wire the browser workspace's per-view controls. Call once from
+ * `registerIpc()`, after `registerBrowserSessionIpc`:
+ *
+ *     import { registerBrowserViewIpc } from './browser-view'
+ *     registerBrowserViewIpc(ipcMain)
+ *
+ * Channels (all keyed by the tab id `browser:create` returned):
+ * - `browser-view:claim`        (invoke, id)              → { ok, reason? }
+ * - `browser-view:release`      (invoke, id)              → void
+ * - `browser-view:zoom`         (invoke, id, factor)      → number
+ * - `browser-view:devtools`     (invoke, id)              → boolean (now open?)
+ * - `browser-view:screenshot`   (invoke, id)              → {@link ScreenshotResult}
+ * - `browser-view:reveal`       (invoke, path)            → void
+ * - `browser-view:user-agent`   (invoke, id, ua | null)   → string
+ * - `browser-view:record`       (invoke, id, {on, accent})→ {@link RecordingState}
+ * - `browser-view:record-clear` (invoke, id)              → {@link RecordingState}
+ *
+ * Emits `browser-view:progress` (id, {@link LoadProgress}) and
+ * `browser-view:recording` (id, {@link RecordingState}).
+ */
+export function registerBrowserViewIpc(ipcMain: IpcMain): void {
+  watchCreations()
+
+  ipcMain.handle('browser-view:claim', (event: IpcMainInvokeEvent, tabId: unknown) => {
+    if (typeof tabId !== 'string' || tabId === '') return { ok: false, reason: 'no tab id' }
+    if (views.has(tabId)) return { ok: true }
+
+    const wc = resolveView ? resolveView(tabId) : claim()
+    if (!wc || wc.isDestroyed()) {
+      return { ok: false, reason: 'no unclaimed browser view — create the tab first' }
+    }
+
+    const entry: ViewEntry = {
+      tabId,
+      wc,
+      host: event.sender,
+      recording: false,
+      accent: '',
+      steps: [],
+      detach: [],
+    }
+    views.set(tabId, entry)
+    attach(entry)
+    return { ok: true }
+  })
+
+  ipcMain.handle('browser-view:release', (_event, tabId: unknown) => {
+    if (typeof tabId === 'string') release(tabId)
+  })
+
+  ipcMain.handle('browser-view:zoom', (_event, tabId: unknown, factor: unknown) => {
+    const entry = entryFor(tabId)
+    // null reads without writing. Chromium remembers zoom per origin inside the
+    // partition, so a tab that opens a site the user zoomed last week opens
+    // zoomed — and a UI that assumed 100% would both show the wrong number and
+    // reset their preference the first time they pressed a button.
+    if (factor !== null && factor !== undefined) entry.wc.setZoomFactor(clampZoom(factor))
+    return entry.wc.getZoomFactor()
+  })
+
+  ipcMain.handle('browser-view:devtools', (_event, tabId: unknown) => {
+    const entry = entryFor(tabId)
+    if (entry.wc.isDevToolsOpened()) {
+      entry.wc.closeDevTools()
+      return false
+    }
+    // Detached: the guest view is a native layer positioned by the renderer, and
+    // docked devtools would be laid out inside that rectangle and fight it.
+    entry.wc.openDevTools({ mode: 'detach' })
+    return true
+  })
+
+  ipcMain.handle('browser-view:screenshot', async (_event, tabId: unknown) => {
+    const entry = entryFor(tabId)
+    // Verified on Electron 41: capturing a page whose window is hidden fails
+    // with "Current display surface not available for capture", and `stayHidden`
+    // does not rescue it. So this is a real precondition, not a transient error,
+    // and it deserves a sentence rather than a stack trace.
+    const image = await entry.wc.capturePage().catch(() => null)
+    const size = image?.getSize()
+    if (!image || !size || size.width === 0 || size.height === 0) {
+      throw new Error('The page has to be on screen to capture it.')
+    }
+
+    const dir = screenshotDir()
+    await mkdir(dir, { recursive: true })
+    const path = join(dir, screenshotName(entry.wc.getURL(), new Date()))
+    await writeFile(path, image.toPNG())
+    return { path, width: size.width, height: size.height } satisfies ScreenshotResult
+  })
+
+  ipcMain.handle('browser-view:reveal', (_event, path: unknown) => {
+    if (typeof path !== 'string') return
+    // Only our own screenshots. This channel takes a path from the renderer, and
+    // a renderer bug that passed something else through should not turn into a
+    // "reveal any file on disk" primitive.
+    const full = resolve(path)
+    if (!full.startsWith(screenshotDir() + sep)) return
+    shell.showItemInFolder(full)
+  })
+
+  ipcMain.handle('browser-view:user-agent', (_event, tabId: unknown, ua: unknown) => {
+    const entry = entryFor(tabId)
+    // Empty means "back to Chromium's own", which is what the app was launched
+    // with — not the empty string, which would send no User-Agent at all.
+    const next = typeof ua === 'string' && ua.trim() !== '' ? ua.trim() : app.userAgentFallback
+    entry.wc.setUserAgent(next)
+    return next
+  })
+
+  ipcMain.handle('browser-view:record', (_event, tabId: unknown, options: unknown) => {
+    const entry = entryFor(tabId)
+    const opts = (typeof options === 'object' && options !== null ? options : {}) as Record<
+      string,
+      unknown
+    >
+    const on = opts.on === true
+    // Kept only when it is actually a colour, so a stop with no accent does not
+    // wipe the one every later document is drawn with.
+    const accent = safeAccent(opts.accent)
+    if (accent !== '') entry.accent = accent
+
+    if (on && !entry.recording) {
+      entry.recording = true
+      // A flow that does not say where it starts cannot be replayed.
+      entry.steps = appendStep(entry.steps, navigateStep(entry.wc.getURL(), Date.now()))
+    } else {
+      entry.recording = on
+    }
+    tellGuestRecording(entry)
+    return stateOf(entry)
+  })
+
+  ipcMain.handle('browser-view:record-clear', (_event, tabId: unknown) => {
+    const entry = entryFor(tabId)
+    entry.steps = []
+    return stateOf(entry)
+  })
+
+  /* ---- from the guest page. Hostile until proven otherwise. */
+
+  ipcMain.on(GUEST_STEP_CHANNEL, (event: IpcMainEvent, payload: unknown) => {
+    for (const entry of views.values()) {
+      if (entry.wc.isDestroyed() || entry.wc.id !== event.sender.id) continue
+      if (!entry.recording) return
+      if (!isFromMainFrame(event, entry.wc)) return
+      // The URL is the main process's, never the payload's: a page that could
+      // forge these must not also get to name the site whose flow this is.
+      record(entry, parseGuestStep(payload, entry.wc.getURL(), Date.now()))
+      return
+    }
+  })
+}
+
+/** Called from `before-quit`, and whenever the app tears the browser down. */
+export function releaseAllBrowserViews(): void {
+  for (const tabId of [...views.keys()]) release(tabId)
+}
