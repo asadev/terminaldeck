@@ -1,0 +1,87 @@
+/* The start page sits inside .bw-stage, where the native browser view is
+   normally painted. The view is hidden while this shows, so this is the only
+   thing on the rectangle. */
+.bw-start {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: var(--bg-primary);
+  overflow: auto;
+}
+
+.bw-start-inner {
+  width: min(30rem, 100%);
+  padding: 24px;
+}
+
+.bw-start-title {
+  margin: 0 0 6px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.bw-start-note {
+  margin: 0 0 14px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.bw-start-list {
+  list-style: none;
+  margin: 0 0 14px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.bw-start-port {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  text-align: left;
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.bw-start-port:hover {
+  background: var(--bg-hover);
+}
+
+.bw-start-port-num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.bw-start-port-cmd {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.bw-start-port-tag {
+  margin-left: auto;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.bw-start-refresh {
+  padding: 5px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.bw-start-refresh:hover {
+  color: var(--text-primary);
+}

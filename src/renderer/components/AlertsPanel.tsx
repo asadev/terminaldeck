@@ -263,7 +263,6 @@ export function AlertsPanel({ projectPath, onAction, bridge, refreshMs }: Alerts
     <section className="alerts" aria-label="Project alerts">
       <header className="alerts-head">
         <div className="alerts-headline">
-          <h2 className="alerts-heading">Alerts</h2>
           <p className="alerts-summary" data-worst={report?.worst ?? 'none'}>
             {error ?? summarize(report)}
           </p>

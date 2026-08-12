@@ -326,7 +326,6 @@ export function ReadinessPanel({ projectPath, bridge }: ReadinessPanelProps) {
       <header className="readiness-head">
         {report ? <ScoreRing score={report.score} band={report.band} /> : <div className="readiness-ring" />}
         <div className="readiness-headline">
-          <h2 className="readiness-heading">AI readiness</h2>
           {report ? (
             <>
               <p className="readiness-band" data-band={report.band}>

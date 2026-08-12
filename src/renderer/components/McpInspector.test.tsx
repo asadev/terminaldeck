@@ -161,7 +161,9 @@ describe('<McpInspector>', () => {
 
   it('renders its frame when a bridge is supplied', () => {
     const html = renderToStaticMarkup(<McpInspector bridge={bridge} projectPath="/work/app" />)
-    expect(html).toContain('MCP servers')
+    // Not the title — the panel dock owns that now, and repeating it here is
+    // what made four panels render their own name twice.
+    expect(html).toContain('Read from your Claude Code configuration')
     // Effects do not run under static rendering, so the first paint is the
     // loading state — the point is that it renders at all.
     expect(html).toContain('Reading')

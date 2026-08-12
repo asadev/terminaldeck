@@ -80,6 +80,13 @@
   overflow: hidden;
 }
 
+.panel-dock-title {
+  margin: 0;
+  font: inherit;
+  letter-spacing: inherit;
+  color: inherit;
+}
+
 .panel-dock-header {
   display: flex;
   align-items: center;

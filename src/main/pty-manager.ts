@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { basename } from 'node:path'
 import * as pty from 'node-pty'
 import { BRAND } from '../shared/brand'
+import { stripInheritedSessionEnv } from './session-env'
 import type { CreateSessionInput, ProviderId, SessionMeta, SessionStatus } from '../shared/types'
 import { ActivityTracker } from './session-activity'
 
@@ -55,7 +56,11 @@ export class PtyManager {
       rows: input.rows,
       cwd: input.cwd,
       env: {
-        ...(process.env as Record<string, string>),
+        // Not `process.env` directly: if this app was launched from inside an
+        // agent session, its markers are in here and the CLI would treat the
+        // new session as a child — which turns transcript saving off, and
+        // chat mode and cost both read those transcripts.
+        ...stripInheritedSessionEnv(process.env, BRAND.sessionEnvVar),
         // A GUI app inherits a minimal PATH; use the login shell's instead so
         // CLIs installed via nvm/Homebrew/~/.local/bin resolve.
         PATH: spawnSpec.path,

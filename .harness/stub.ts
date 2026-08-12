@@ -43,6 +43,12 @@ const api: Record<string, unknown> = new Proxy(
     resizeSession: () => {},
     onSessionData: noop, onSessionExit: noop, onSessionStatus: noop,
     onCostUpdate: noop, onGitStatus: noop, onBrowserState: noop, onBrowserElement: noop,
+    // A couple of real-looking dev servers, so the browser start page has
+    // something to render in the harness.
+    devPorts: async () => [
+      { port: 5173, process: 'node', guessed: false },
+      { port: 8080, process: '', guessed: true },
+    ],
     onPlanLimits: noop,
     // The harness has no live session, so the plan half reports "not available"
     // — which is the state worth being able to look at anyway.

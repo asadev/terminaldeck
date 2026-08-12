@@ -350,7 +350,6 @@ export function Dashboard({ projectPath, context, bridge }: DashboardProps) {
   return (
     <section className="dashboard" aria-label="Project dashboard">
       <header className="dashboard-bar">
-        <h2 className="dashboard-title">Overview</h2>
         <span className="dashboard-hint">Drag a widget by its header · Alt+arrows to move</span>
         <button type="button" className="dashboard-btn" onClick={() => setPicking(true)}>
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">

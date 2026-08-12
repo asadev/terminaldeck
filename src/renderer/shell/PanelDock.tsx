@@ -94,7 +94,9 @@ export function PanelDock({
     <>
       <aside className="panel-dock" style={{ width }} aria-label={label}>
         <header className="panel-dock-header">
-          <span>{label}</span>
+          {/* The panel's only heading. Four panels used to repeat it in
+              their own <h2> directly underneath, which read as a stutter. */}
+          <h2 className="panel-dock-title">{label}</h2>
           <div className="panel-dock-actions">
             {panel === 'projects' && (
               <button

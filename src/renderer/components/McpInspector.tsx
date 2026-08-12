@@ -434,7 +434,6 @@ export function McpInspector({ projectPath = null, bridge }: McpInspectorProps) 
     <div className="mcp">
       <header className="mcp-head">
         <div>
-          <h2 className="mcp-heading">MCP servers</h2>
           <p className="mcp-subheading">
             Read from your Claude Code configuration — add or remove them there and they appear here.
           </p>

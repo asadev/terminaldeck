@@ -35,6 +35,7 @@ import {
   type IsolationApi,
 } from './isolation-bridge'
 import { resolveOmnibox, securityOf } from './omnibox'
+import { StartPage } from './StartPage'
 import {
   closeTab as closeInList,
   cycle,
@@ -75,7 +76,9 @@ export interface BrowserWorkspaceProps {
 }
 
 const HOME_KEY = 'terminaldeck.browser.home'
-const DEFAULT_HOME = 'http://localhost:3000'
+// Empty, not a guess. Opening a fixed port meant the panel's first screen was
+// Chrome's error page unless you happened to be running something on 3000.
+const DEFAULT_HOME = ''
 
 const EMPTY_RECORDING: RecordingState = {
   recording: false,
@@ -287,7 +290,10 @@ export function BrowserWorkspace({
       if (!tab.id) continue
       const isActive = tab.key === activeKey
       if (isActive) api.browserBounds(tab.id, bounds)
-      api.browserVisible(tab.id, isActive && visible && !sessionOpen)
+      // A tab still on the start page keeps its native view hidden, so the
+      // React start page underneath is what the user sees.
+      const onStartPage = !tab.url || tab.url === 'about:blank'
+      api.browserVisible(tab.id, isActive && visible && !sessionOpen && !onStartPage)
     }
   }, [api, tabs, activeKey, fit, visible, sessionOpen])
 
@@ -741,6 +747,11 @@ export function BrowserWorkspace({
         {tabs.length === 0 && (
           <p className="bw-empty">No tabs open. Press the plus above to open one.</p>
         )}
+        {(() => {
+          const active = tabs.find((t) => t.key === activeKey)
+          if (!active || (active.url && active.url !== 'about:blank')) return null
+          return <StartPage onOpen={(url) => navigate(url)} />
+        })()}
         {deviceSize !== null && tabs.length > 0 && (
           <span
             className="bw-frame"
