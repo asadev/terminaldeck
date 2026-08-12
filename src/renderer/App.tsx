@@ -58,6 +58,18 @@ function Workspace() {
   const [onboardingDone, setOnboardingDone] = useState(false)
   const [needsOnboarding, setNeedsOnboarding] = useState<boolean | null>(null)
 
+  /**
+   * Any app-level dialog being open.
+   *
+   * The browser is a native WebContentsView layered ABOVE the HTML, so every
+   * modal opens behind it — pressing Cmd+, while the Browser view was active
+   * dimmed the app and showed nothing, because Settings was underneath the
+   * web page. The view has to be hidden while a dialog is up.
+   */
+  const anyModalOpen =
+    prefsOpen || newSessionOpen || helpOpen || joinOpen || inspectorOpen || shortcutsOpen ||
+    paletteMode !== null
+
   const activeProjectPath =
     sessions.find((s) => s.id === activeSessionId)?.projectPath ?? projects[0]?.path ?? null
 
@@ -250,7 +262,7 @@ function Workspace() {
     if (view === 'browser') {
       return (
         <BrowserWorkspace
-          visible
+          visible={!anyModalOpen}
           onSendToAgent={(context) => {
             // Element context goes straight into the focused session, which is
             // the whole point of inspecting from inside the app.
