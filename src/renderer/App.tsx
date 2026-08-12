@@ -57,8 +57,8 @@ function Workspace() {
   }, [addProject, addSession])
 
   const newSessionIn = useCallback(
-    async (path: string) => {
-      const meta = await window.pawl.createSession({ cwd: path, cols: 100, rows: 30 })
+    async (path: string, resume = false) => {
+      const meta = await window.pawl.createSession({ cwd: path, cols: 100, rows: 30, resume })
       addSession(meta)
     },
     [addSession],
@@ -78,10 +78,12 @@ function Workspace() {
       const mod = e.metaKey || e.ctrlKey
       if (!mod) return
 
-      if (e.key === 't') {
+      if (e.key === 't' || e.key === 'T') {
         e.preventDefault()
         const target = sessions.find((s) => s.id === activeSessionId)?.projectPath ?? projects[0]?.path
-        if (target) void newSessionIn(target)
+        // Shift resumes the project's most recent agent session instead of
+        // starting a fresh one (claude --continue / codex resume --last).
+        if (target) void newSessionIn(target, e.shiftKey)
         else void openProject()
         return
       }

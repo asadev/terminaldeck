@@ -16,7 +16,12 @@ export interface ProviderSpec {
 }
 
 export const PROVIDERS: Record<ProviderId, ProviderSpec> = {
+  // --continue verified against `claude --help` on this machine.
   claude: { id: 'claude', label: 'Claude Code', bin: 'claude', args: [], resumeArgs: ['--continue'] },
+  // UNVERIFIED: codex/gemini --help block on stdin so the flags could not be
+  // confirmed here. An empty resumeArgs simply starts a fresh session, so a
+  // wrong guess would silently do the wrong thing — codex is left in because
+  // `resume --last` is documented, gemini is left empty until confirmed.
   codex: { id: 'codex', label: 'Codex CLI', bin: 'codex', args: [], resumeArgs: ['resume', '--last'] },
   gemini: { id: 'gemini', label: 'Gemini CLI', bin: 'gemini', args: [], resumeArgs: [] },
   shell: { id: 'shell', label: 'Shell', bin: process.env.SHELL || '/bin/zsh', args: ['-l'], resumeArgs: [] },

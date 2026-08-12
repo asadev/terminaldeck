@@ -3,7 +3,7 @@ import { StatusDot } from './StatusDot'
 
 interface Props {
   onOpenProject(): void
-  onNewSession(projectPath: string): void
+  onNewSession(projectPath: string, resume?: boolean): void
 }
 
 export function Sidebar({ onOpenProject, onNewSession }: Props) {
@@ -41,6 +41,22 @@ export function Sidebar({ onOpenProject, onNewSession }: Props) {
                   {project.name}
                 </span>
                 <div className="project-actions">
+                  <button
+                    type="button"
+                    className="icon-btn small"
+                    title="Continue last session (⌘⇧T)"
+                    aria-label={`Continue the last session in ${project.name}`}
+                    onClick={() => onNewSession(project.path, true)}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                      <path
+                        d="M3 12a9 9 0 1 0 3-6.7M3 4v4h4"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                  </button>
                   <button
                     type="button"
                     className="icon-btn small"
