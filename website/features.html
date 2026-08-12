@@ -601,7 +601,8 @@ hr {
   <p>Around that: unread indicators when output arrives on a background tab,
   desktop notifications and sounds when a session finishes or needs you, session
   titles derived from the conversation rather than the folder name, and
-  <kbd>⌘⇧T</kbd> to continue a project's last conversation.</p>
+  <kbd>⌘⇧T</kbd> for the new-session dialog, where continuing a project's last
+  conversation is one of the choices.</p>
 
   <h2>Chat mode</h2>
 
@@ -683,8 +684,10 @@ hr {
     </li>
     <li class="card">
       <h3><code>.deckignore</code></h3>
-      <p>One list of what the app should not look at, honoured by the tree, quick
-      open, search and the watchers, with gitignore semantics.</p>
+      <p>One list of what the app should not look at, with gitignore semantics and
+      last-match-wins, so it can re-include a file <code>.gitignore</code> hides.
+      Read by the file tree today; quick open enumerates through
+      <code>git ls-files</code> and does not consult it yet.</p>
     </li>
   </ul>
 

@@ -617,7 +617,7 @@ hr {
     <li class="done">Quick open and command palette</li>
     <li class="done">GitHub integration through <code>gh</code></li>
     <li class="done">AI readiness score with one-click fixes</li>
-    <li class="done"><code>.deckignore</code>, honoured by the tree, search and watchers</li>
+    <li class="done"><code>.deckignore</code> with gitignore semantics, read by the file tree — quick open and the watchers still do not consult it</li>
   </ul>
 
   <h3>5 · Dashboard and board</h3>
@@ -647,8 +647,7 @@ hr {
 
   <h3>8 · Ship</h3>
   <ul class="checklist">
-    <li class="todo"><strong>Code signing and notarisation.</strong> The packaging itself is done — <code>npm run dist:mac</code> writes a <code>.dmg</code> and a <code>.zip</code> for arm64 and x64 — but <code>identity: null</code> is set deliberately, so nothing is signed and Gatekeeper needs the right-click step.</li>
-    <li class="todo"><strong>A tested Intel build.</strong> The x64 artefact is produced by the same command and has never been launched.</li>
+    <li class="todo"><strong>Code signing and notarisation.</strong> The packaging itself is done — <code>npm run dist:mac</code> writes a <code>.dmg</code> and a <code>.zip</code> for arm64 — but <code>identity: null</code> is set deliberately, so nothing is signed and Gatekeeper needs the right-click step.</li>
     <li class="todo"><strong>Split panes</strong> — the layout code and the <code>⌘D</code> / <code>⌘⇧S</code> / <code>⌘⇧W</code> chords exist in the repository, but nothing in the app renders the split view, so it cannot be reached. Listed under Done until this audit; it was not true.</li>
     <li class="todo"><strong>Auto-updates</strong> pointed at our own releases. The library is present; nothing calls it yet.</li>
     <li class="todo"><strong>Peer-to-peer session sharing</strong> — read-only or read-write, with PIN auth. The single biggest remaining feature, and the only one that would need infrastructure.</li>

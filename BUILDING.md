@@ -43,10 +43,8 @@ under the running app.
 npm run build            # compile main + preload + renderer into out/. Not a package.
 npm run art              # regenerate the icon and the disk-image background
 npm run pack:mac         # unpackaged .app in release/mac-arm64/ — fastest way to smoke-test
-npm run dist:mac         # the real thing: DMG + zip, arm64 and x64
+npm run dist:mac         # the real thing: DMG + zip, arm64
 npm run release:check    # preflight the contents of release/ before uploading
-npm run dist:mac:arm64   # one architecture — LOCAL TESTING ONLY, see the warning below
-npm run dist:mac:x64
 ```
 
 `dist:*` runs `npm run build` first, so it is always one command from a clean
@@ -58,10 +56,10 @@ uploads anything; see [Publishing](#publishing).
 > **Build a release with `npm run dist:mac`, in one invocation.**
 >
 > electron-builder rewrites `latest-mac.yml` every time it runs, listing only
-> the architectures *that* run produced. Build arm64 and x64 as two separate
-> commands and the manifest ends up describing whichever finished last — the
-> release page looks complete, and every user on the other architecture is
-> offered the wrong update or none at all. Nothing warns you.
+> what *that* run produced. With one architecture that is no longer a way to
+> ship a half-written manifest, but the manifest and the files on disk can
+> still drift — a rebuilt artifact with a stale manifest beside it is a release
+> the updater rejects.
 >
 > `npm run release:check` exists to catch exactly this, plus missing artifacts
 > and any size or SHA-512 in the manifest that disagrees with the file on disk.
@@ -74,13 +72,10 @@ After `npm run dist:mac`, `release/` holds:
 | File | What it is | Who consumes it |
 |---|---|---|
 | `terminaldeck-<version>-arm64.dmg` | Installer disk image, Apple silicon | humans, download page |
-| `terminaldeck-<version>-x64.dmg` | Installer disk image, Intel | humans, download page |
 | `terminaldeck-<version>-arm64.zip` | The same `.app`, zipped | `electron-updater` |
-| `terminaldeck-<version>-x64.zip` | ditto | `electron-updater` |
 | `*.blockmap` | Per-file chunk hashes | `electron-updater`, to download only changed blocks |
 | `latest-mac.yml` | Update manifest: versions, sizes, SHA-512s | `electron-updater` |
-| `mac-arm64/Terminal Deck.app` | The unpackaged bundle the arm64 DMG was made from | debugging |
-| `mac/Terminal Deck.app` | Same, x64 | debugging |
+| `mac-arm64/Terminal Deck.app` | The unpackaged bundle the DMG was made from | debugging |
 | `builder-debug.yml` | The file globs electron-builder resolved | debugging a packaging surprise |
 
 The DMG is for people. The zip is for the updater — a disk image cannot be
@@ -93,11 +88,11 @@ the blockmaps.
 Actual output of `npm run dist:mac` at v0.1.0 on Electron 41.10.5, built on an
 M1 Pro:
 
-| | arm64 | x64 |
-|---|---|---|
-| `.app`, sum of its files | 285 MB | 291 MB |
-| `.dmg` | 113.8 MB | 119.0 MB |
-| `.zip` | 113.8 MB | 119.1 MB |
+| | arm64 |
+|---|---|
+| `.app`, sum of its files | 285 MB |
+| `.dmg` | 113.8 MB |
+| `.zip` | 113.8 MB |
 | `app.asar` (our code + deps) | 19.5 MB | 19.5 MB |
 
 Mebibytes, and the `.app` rows are the sum of the file sizes inside the bundle.
@@ -121,20 +116,34 @@ the source maps and the packages' test and example directories.
 
 ---
 
-## Two architectures, not one universal binary
+## Apple silicon only
 
-`electron-builder.yml` builds `arm64` and `x64` separately.
+`electron-builder.yml` builds `arm64` and nothing else.
 
-A universal binary is the sum of both slices: roughly a 230 MB download for
-every user, up from 114, to spare Intel users one choice on a download page. It
-also has to fuse three native binaries — `better_sqlite3.node`, `pty.node`, and
-`node-pty`'s `spawn-helper` executable. `@electron/universal` can `lipo` those
-together, but each one is a way for a release to break on hardware we cannot
-test on.
+Rosetta is not the reason, and it is the thing everyone assumes: Rosetta
+translates Intel binaries to run on Apple silicon, never the reverse. Dropping
+the x64 slice costs Apple silicon users nothing at all. The reason is that
+**macOS 27 does not run on any Intel Mac.** An Intel slice would serve only the
+four Intel models that reach macOS 26 Tahoe — 2019-2020 hardware, last sold in
+June 2023 — and no one else, ever again.
 
-Nothing downstream loses out: `electron-updater` selects the right zip because
-the architecture is in the file name, which is why `artifactName` is
-`${name}-${version}-${arch}.${ext}` and should stay that way.
+It also cost something. CI runs on Apple silicon, so an x64 slice could only be
+cross-built, and `node-pty` and `better-sqlite3` compile from source against
+Electron's ABI, which is where cross-architecture builds break. It was never
+launched on Intel hardware, and there is no Intel hardware here to launch it
+on. Meanwhile an Apple silicon user who picked the x64 disk image got a system
+notification saying the app will not open in macOS 28, and a first launch that
+took half a minute while Rosetta translated Chromium.
+
+A universal binary was the other option and is worse: the sum of both slices,
+roughly a 230 MB download for every user, up from 114, buying the same Intel
+coverage this decision already declined — paid for in bytes taken from the
+users there actually are. It also has to fuse three native binaries —
+`better_sqlite3.node`, `pty.node`, and `node-pty`'s `spawn-helper`.
+
+`artifactName` keeps `${arch}` even so. Left off, electron-builder's default
+treats x64 as the implicit architecture and drops the suffix, so an unsuffixed
+file reads as the Intel build to anyone who knows the convention.
 
 Cross-building works in both directions on either kind of Mac —
 electron-builder downloads the other architecture's Electron and rebuilds the
@@ -298,7 +307,7 @@ trigger, deliberately, by hand.
 # 1. create the repo and push (once)
 gh repo create asadev/terminaldeck --public --source=. --remote=origin --push
 
-# 2. build the artifacts, both architectures, one invocation
+# 2. build the artifacts
 npm run dist:mac
 npm run release:check
 
@@ -318,11 +327,14 @@ release with only DMGs is one that `electron-updater` cannot read.
 
 ## Verifying a build
 
-Both disk images for v0.1.0 were mounted, and the app inside each was launched
-and confirmed to open its window — the arm64 one natively, the x64 one under
-Rosetta 2. Note that the first launch of the x64 build on Apple silicon takes
-around half a minute while Rosetta translates the Electron framework; it looks
-hung and is not.
+The v0.1.0 disk image was mounted and the app inside it launched and confirmed
+to open its window, natively on Apple silicon.
+
+An earlier note here claimed the Intel build had been verified too, "under
+Rosetta 2". That was not a test of anything: running an x86_64 build under
+Rosetta on Apple silicon exercises the translator, not Intel hardware. No
+build of this app has ever run on an Intel Mac, which is part of why there is
+no longer an Intel build.
 
 How to repeat it:
 

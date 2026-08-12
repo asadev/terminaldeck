@@ -529,9 +529,10 @@ hr {
       "url": "https://terminaldeck.dev/",
       "description": "A desktop workspace for running AI coding agents. Terminal Deck runs multiple Claude Code, Codex CLI and Gemini CLI sessions in one macOS window, shows which are working and which are waiting on you, and reads cost and context use from the agent's own transcripts.",
       "applicationCategory": "DeveloperApplication",
-      "operatingSystem": "macOS 12.0 or later",
+      "operatingSystem": "macOS 12.0 or later (Apple silicon)",
+      "processorRequirements": "Apple silicon (arm64). There is no Intel build.",
       "softwareVersion": "0.1.0",
-      "softwareRequirements": "macOS 12.0 or later, and at least one agent CLI installed and authenticated (Claude Code, Codex CLI or Gemini CLI). Node.js 22 or newer is needed only to build from source.",
+      "softwareRequirements": "macOS 12.0 or later on Apple silicon, and at least one agent CLI installed and authenticated (Claude Code, Codex CLI or Gemini CLI). Node.js 22 or newer is needed only to build from source.",
       "runtimePlatform": "Electron",
       "license": "https://opensource.org/license/mit",
       "isAccessibleForFree": true,
@@ -625,7 +626,7 @@ hr {
           </div>
 
           <p class="cta-note">
-            Version 0.1.0 · macOS 12+, Apple Silicon (Intel built but untested) · unsigned build ·
+            Version 0.1.0 · macOS 12+, Apple Silicon only · unsigned build ·
             MIT licence · you bring your own agent CLI, already installed and signed in.
           </p>
         </div>
@@ -881,7 +882,8 @@ hr {
               <p>
                 A tree that loads a level at a time, a viewer that refuses files over 2 MB rather
                 than freezing on them, and symlinks that leave the project refused outright.
-                <code>.deckignore</code> is honoured by the tree, the search and the watchers.
+                <code>.deckignore</code> is honoured by the tree, layered over
+                <code>.gitignore</code> so it can re-include a file git hides.
               </p>
             </div>
             <div class="card">
@@ -1055,8 +1057,8 @@ hr {
                 repository, but nothing in the app renders it, so the chords for it do nothing.
               </p>
               <p>
-                Packaging produces an Apple Silicon and an Intel build, but only Apple Silicon has
-                been run. There is no Linux or Windows build.
+                Apple Silicon only. There is no Intel build — macOS 27 does not run on Intel Macs
+                at all — and no Linux or Windows build.
               </p>
             </div>
           </div>
@@ -1072,8 +1074,8 @@ hr {
           <dl class="detail" style="max-width: 44rem">
             <dt>Operating system</dt>
             <dd>
-              macOS 12 or newer. Both an arm64 and an x64 build are produced and both are unsigned;
-              only the arm64 one has been run, so treat the Intel build as untested.
+              macOS 12 or newer, on Apple silicon. One unsigned arm64 build; there is no Intel
+              build.
             </dd>
             <dt>An agent</dt>
             <dd>

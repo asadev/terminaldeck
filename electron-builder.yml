@@ -10,8 +10,10 @@ directories:
 # — and a space in a release asset becomes %20 in every download URL and every
 # curl command someone pastes. Named from the slug instead.
 #
-# The architecture in the name is also load-bearing: it is how electron-updater
-# picks the right zip out of a release that contains both.
+# The architecture stays in the name even though only one is built. Left off,
+# electron-builder's default treats x64 as the implicit arch and drops the
+# suffix, so an unsuffixed file would read as the Intel build to anyone who
+# knows that convention. Explicit costs nothing and keeps the door open.
 artifactName: ${name}-${version}-${arch}.${ext}
 
 # Everything the app needs at runtime and nothing else. electron-builder adds
@@ -29,9 +31,14 @@ files:
   # ALL prebuilds, not just the Windows ones. electron-builder rebuilds
   # build/Release/pty.node against the target architecture and node-pty loads
   # that first, so the folder is a fallback that ships every platform at once.
-  # Keeping darwin-x64 inside an arm64 app is enough for macOS to report the
-  # whole thing as Intel: "This version will not open in macOS 28." Each
-  # per-arch artifact gets exactly one native module, its own.
+  # Keeping darwin-x64 inside an arm64 app is enough for macOS to flag the
+  # whole bundle: "App Update Required — This version of Terminal Deck will not
+  # open in macOS 28." The trigger is a nested x86_64 binary actually being
+  # executed, and macOS attributes it to the parent bundle, not the helper.
+  #
+  # Now that only arm64 ships, this line is the last thing standing between
+  # this app and that notification. The darwin-x64 prebuilt is still sitting in
+  # node_modules; delete or mistype this line and the bug is back.
   - '!**/node_modules/node-pty/prebuilds/**'
 
 asar: true
@@ -44,22 +51,33 @@ asarUnpack:
   - '**/node_modules/better-sqlite3/**'
 
 mac:
-  # Two per-architecture builds rather than one universal binary.
+  # Apple silicon only. Not universal, and no separate Intel build.
   #
-  # A universal build is the sum of both slices — roughly double the download
-  # for every user, to spare Intel users one dropdown. It also has to fuse both
-  # architectures' native binaries: better_sqlite3.node, pty.node, and
-  # node-pty's spawn-helper executable. @electron/universal can lipo those
-  # together, but each one is a new way for a release to break on a machine we
-  # cannot test on. Two artifacts are boring, and nothing downstream suffers,
-  # because electron-updater selects on the architecture in the file name.
+  # Rosetta is not the reason, and it is worth being explicit because it is the
+  # thing everyone assumes: Rosetta translates Intel to Apple silicon, never the
+  # reverse, so dropping x64 costs Apple silicon users nothing whatsoever. The
+  # reason is that macOS 27 does not run on any Intel Mac. An x64 slice would
+  # serve only the four Intel models that reach macOS 26 Tahoe — 2019-2020
+  # hardware, last sold June 2023 — and nobody else, ever again.
+  #
+  # It also had a cost. CI runs on arm64, so an x64 slice could only ever be
+  # cross-built, and node-pty and better-sqlite3 both compile from source
+  # against Electron's ABI, which is exactly where cross-arch builds break. It
+  # was never launched on real Intel hardware and could not be. Worse, an Apple
+  # silicon user who picked the x64 disk image got a system notification saying
+  # the app will not open in macOS 28, plus a ~30-second first launch while
+  # Rosetta translated Chromium.
+  #
+  # One architecture also removes the latest-mac.yml hazard: on macOS the update
+  # manifest carries no arch suffix, so two arches built in two invocations
+  # overwrite each other's manifest silently.
   target:
     - target: dmg
-      arch: [arm64, x64]
+      arch: [arm64]
     # The zip is what electron-updater downloads. A DMG cannot be applied as an
     # update, so shipping the DMG alone would mean shipping no updates.
     - target: zip
-      arch: [arm64, x64]
+      arch: [arm64]
 
   category: public.app-category.developer-tools
   icon: build/icon.icns

@@ -26,7 +26,7 @@ const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
 const RELEASE = resolve(process.argv[2] ?? join(ROOT, 'release'))
 const { version, name } = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'))
 
-const ARCHES = ['arm64', 'x64']
+const ARCHES = ['arm64']
 const problems = []
 const note = (s) => process.stdout.write(`  ${s}\n`)
 

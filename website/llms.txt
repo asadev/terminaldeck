@@ -1,12 +1,12 @@
 # Terminal Deck
 
-> Terminal Deck is a free, MIT-licensed desktop application for macOS that runs AI coding-agent sessions — Claude Code, Codex CLI and Gemini CLI — in a single window. Each session gets a tab with a live status dot classified from what is drawn on that session's terminal screen, and cost, token use and context-window pressure are read from Claude Code's own JSONL transcripts. It is at version 0.1.0. `npm run dist:mac` packages an unsigned .dmg and .zip for arm64 and x64; there is no signed, published installer yet. It has no account, no telemetry and no analytics.
+> Terminal Deck is a free, MIT-licensed desktop application for macOS that runs AI coding-agent sessions — Claude Code, Codex CLI and Gemini CLI — in a single window. Each session gets a tab with a live status dot classified from what is drawn on that session's terminal screen, and cost, token use and context-window pressure are read from Claude Code's own JSONL transcripts. It is at version 0.1.0. `npm run dist:mac` packages an unsigned .dmg and .zip for arm64; there is no signed, published installer yet, and no Intel build. It has no account, no telemetry and no analytics.
 
 Built by Asad Iqbal. Repository: https://github.com/asadev/terminaldeck
 
 What works today: multiple sessions per project in tabs with scrollback that survives switching; status dots for working, waiting, needs-input and exited; a chat view that reads the agent's transcript and shows only the conversation, with a composer that types into the same session; cost and context tracking; a session inspector; full-text search across past transcripts; a git panel; a file tree and viewer; quick open and a command palette; a GitHub panel driven by the `gh` CLI; AI-readiness scoring with one-click fixes; a project dashboard and a Kanban board; a swarm view; agent profiles with isolated logins; an embedded browser whose element inspector sends CSS selectors to the agent; an MCP inspector; provider hook management; and a settings window of eleven sections.
 
-Not built yet: code signing and notarisation, auto-updates, peer-to-peer session sharing, split panes (layout code exists but nothing renders it), and translations. An Intel build is produced but has never been launched; Linux and Windows have no target at all.
+Not built yet: code signing and notarisation, auto-updates, peer-to-peer session sharing, split panes (layout code exists but nothing renders it), and translations. Apple silicon only — there is no Intel build, because macOS 27 does not run on Intel Macs. Linux and Windows have no target at all.
 
 ## Docs
 

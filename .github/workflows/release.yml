@@ -12,10 +12,9 @@ permissions:
 
 jobs:
   macos:
-    # Both mac artifacts are built here. The runner is arm64 and the x64 slice
-    # is cross-built from it — verified: the x64 bundle carries an x86_64
-    # Electron, an x86_64 better_sqlite3.node and an x86_64 node-pty
-    # spawn-helper, not arm64 binaries in an x64 wrapper.
+    # arm64 only, built natively — macos-latest is Apple silicon. No x64 slice
+    # is produced: macOS 27 drops Intel hardware entirely, and an x64 build here
+    # could only ever be cross-compiled and never tested on real Intel hardware.
     runs-on: macos-latest
     timeout-minutes: 45
 
@@ -80,8 +79,8 @@ jobs:
           notes="$(cat <<'NOTE'
           ### Install
 
-          macOS 12 or later. Take `-arm64.dmg` for Apple silicon, `-x64.dmg` for
-          Intel. Open it and drag the app to Applications.
+          macOS 12 or later, Apple silicon. Open `-arm64.dmg` and drag the app
+          to Applications. There is no Intel build.
 
           This build is **not signed or notarised** — an Apple Developer identity
           would be needed for that. macOS will refuse the first launch. Either

@@ -1043,6 +1043,24 @@ kbd {
   border-top: 0;
 }
 
+/* The sticky header wraps as the window narrows — one row to 590px, two to
+   440px, three below that — and `scroll-margin-top` has to clear whichever it
+   is. At 5rem a jump from the contents list on a phone parked the heading
+   exactly on the header's bottom edge, with the section's own rule and padding
+   hidden behind it. These match the measured header heights plus the same
+   1rem of air the wide layout gets. */
+@media (max-width: 589px) {
+  .docs-main > section {
+    scroll-margin-top: 7.25rem;
+  }
+}
+
+@media (max-width: 439px) {
+  .docs-main > section {
+    scroll-margin-top: 9.5rem;
+  }
+}
+
 .docs-main h2 {
   font-size: 1.375rem;
   margin-bottom: 0.85rem;

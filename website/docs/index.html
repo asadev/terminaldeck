@@ -809,8 +809,11 @@ hr {
                   points at nothing is marked as refused instead of being followed.
                 </li>
                 <li>
-                  A <code>.deckignore</code> file in the project is honoured by the tree, the file
-                  search and the watchers.
+                  A <code>.deckignore</code> file in the project is read by the tree, layered over
+                  <code>.gitignore</code> and evaluated last-match-wins, so it can re-include
+                  something git hides. It is the tree only for now — quick open enumerates through
+                  <code>git ls-files</code> and a fixed list of build directories, and no watcher
+                  consults it.
                 </li>
               </ul>
             </section>
@@ -1203,10 +1206,27 @@ hr {
               </div>
 
               <p>
-                Everything reachable by a shortcut is also in the command palette
-                (<kbd>⌘</kbd><kbd>K</kbd>) and in the menu bar, and both dispatch the same commands
-                — so a menu item and its shortcut cannot drift apart.
+                The menu bar and the command palette (<kbd>⌘</kbd><kbd>K</kbd>) dispatch the same
+                command ids, so most menu items and their shortcuts stay in step. Three
+                qualifications, because “cannot drift” was too strong:
               </p>
+              <ul class="bullets">
+                <li>
+                  The menu bar’s <strong>Settings…</strong> item sends a command id
+                  (<code>app.preferences</code>) that nothing in the interface handles, so clicking
+                  it does nothing. The window’s own key listener has a separate case for
+                  <kbd>⌘</kbd><kbd>,</kbd>.
+                </li>
+                <li>
+                  <kbd>⌘</kbd><kbd>W</kbd> and <kbd>⌘</kbd><kbd>B</kbd> are in the menu bar but not
+                  the palette, and <kbd>⌘</kbd><kbd>1</kbd>–<kbd>9</kbd> is in neither.
+                </li>
+                <li>
+                  The palette lists <kbd>⌘</kbd><kbd>⇧</kbd><kbd>T</kbd> beside “Continue last
+                  session”. The command does continue the last session; the keystroke opens the
+                  new-session dialog, where continuing is one of the choices.
+                </li>
+              </ul>
             </section>
           </div>
         </div>

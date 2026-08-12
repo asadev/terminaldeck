@@ -70,6 +70,13 @@ jobs:
       - name: Test
         run: npm test
 
+      # llms-full.txt claims to be generated from the pages. It was not, and it
+      # drifted: after the Intel build was dropped it still told every model
+      # that read it an untested x64 artifact shipped. This makes the claim
+      # enforceable.
+      - name: Site copy is in sync
+        run: npm run site:check
+
       # Last, because a bundling failure is the least interesting failure and
       # this step overwrites `out/`.
       - name: Build

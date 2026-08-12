@@ -565,8 +565,8 @@ hr {
         <div class="wrap">
           <h1>Download</h1>
           <p class="lede">
-            Terminal Deck 0.1.0 for macOS 12 or newer — Apple Silicon, with an untested Intel
-            build alongside it. Both are unsigned, which adds one step the first time you open it.
+            Terminal Deck 0.1.0 for macOS 12 or newer, Apple Silicon. There is no Intel build. It
+            is unsigned, which adds one step the first time you open it.
           </p>
           <div class="cta-row">
             <a class="btn btn-primary" href="https://github.com/asadev/terminaldeck/releases"
@@ -589,11 +589,11 @@ hr {
           </div>
 
           <dl class="detail" style="max-width: 44rem">
-            <dt>macOS 12 or newer</dt>
+            <dt>macOS 12 or newer, Apple silicon</dt>
             <dd>
-              Packaging produces an arm64 and an x64 disk image, but only the arm64 one has been
-              run — the Intel build exists and is untested. Linux and Windows have no target
-              configured at all.
+              One arm64 disk image. There is no Intel build: macOS 27 dropped Intel Macs entirely,
+              and an Intel slice could not be tested on any machine here. Linux and Windows have no
+              target configured at all.
             </dd>
 
             <dt>An agent CLI</dt>
@@ -638,7 +638,7 @@ hr {
             <li>
               <h3>Download and unzip</h3>
               <p>
-                Take the macOS arm64 archive from the releases page and unzip it. Inside is
+                Take the macOS arm64 archive from the releases page — it is the only one — and unzip it. Inside is
                 <code>Terminal Deck.app</code>. It is an Electron app, so the unpacked bundle is
                 around 300 MB.
               </p>
@@ -718,21 +718,14 @@ npm run dev</code></pre>
 
           <h3 style="font-size: 1rem; margin: 2rem 0 0.6rem">Package a real .app</h3>
           <pre class="code"><code>npm run pack:mac   # unpackaged .app, fastest to smoke-test
-npm run dist:mac   # the disk images: dmg + zip, arm64 and x64</code></pre>
+npm run dist:mac   # the disk image: dmg + zip, arm64</code></pre>
           <p class="small" style="max-width: 44rem; margin-top: 0.75rem">
             <code>pack:mac</code> leaves <code>release/mac-arm64/Terminal Deck.app</code>;
-            <code>dist:mac</code> writes the <code>.dmg</code> and <code>.zip</code> for both
-            architectures into <code>release/</code>. Both run <code>npm run build</code> first.
+            <code>dist:mac</code> writes the <code>.dmg</code> and <code>.zip</code> into
+            <code>release/</code>. Both run <code>npm run build</code> first.
             Because you built it locally it carries no quarantine flag, so it opens on a
             double-click with no Gatekeeper step at all.
           </p>
-          <p class="small" style="max-width: 44rem; margin-top: 0.75rem">
-            Build a release with the single <code>dist:mac</code> invocation rather than the two
-            per-architecture scripts: electron-builder rewrites <code>latest-mac.yml</code> on every
-            run and the last one wins, so building the arches separately leaves a feed file that
-            lists only one of them. <code>BUILDING.md</code> in the repository has the detail.
-          </p>
-
           <div class="note note-warn" style="margin-top: 1.75rem">
             <p>
               <strong>Do not run <code>npm run build</code> while <code>npm run dev</code> is
@@ -766,9 +759,8 @@ npm run typecheck # both tsconfigs</code></pre>
               right-click step above.
             </li>
             <li>
-              <strong>Only the Apple Silicon build has been run.</strong> An Intel disk image is
-              produced by the same command and has never been launched. Linux and Windows have no
-              target configured.
+              <strong>Apple Silicon only.</strong> There is no Intel build, and Linux and Windows
+              have no target configured.
             </li>
             <li>
               <strong>Session sharing, translations and split panes are not built yet.</strong> The

@@ -12,7 +12,7 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [0.1.0] — 2026-08-12
 
-First cut. macOS 12+, Apple silicon and Intel, unsigned.
+First cut. macOS 12+, Apple silicon, unsigned.
 
 ### Added
 

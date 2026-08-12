@@ -40,9 +40,10 @@ empty, no version has been tagged yet; build from source in the meantime.
 
 ## Requirements
 
-- **macOS 12 or later.** A release carries both slices — `-arm64` for Apple
-  silicon, `-x64` for Intel — as separate artifacts rather than one universal
-  binary. Only the arm64 one is tested; the x64 one is built and unexercised
+- **macOS 12 or later, on Apple silicon.** A release carries one artifact,
+  `-arm64`. There is no Intel build and no universal binary: macOS 27 does not
+  run on Intel Macs at all, so an Intel slice would serve only 2019-2020
+  hardware frozen at macOS 26 — and it could not be tested on any machine here
 - **Node 22 or newer** (CI runs 22 and 24)
 - **At least one agent CLI**, installed and already authenticated:
   [Claude Code](https://docs.anthropic.com/en/docs/claude-code), Codex CLI or
@@ -80,26 +81,21 @@ against Electron's ABI, so the first install takes a while.
 To produce an installable app rather than run from source:
 
 ```bash
-npm run dist:mac:arm64   # build + package a .dmg and .zip into release/
-npm run dist:mac         # both architectures — what a release runs
+npm run dist:mac         # build + package a .dmg and .zip into release/
 npm run pack:mac         # just the .app, no installer — faster for testing
 ```
 
-`npm run dist:mac` produces eight files in `release/`: a `.dmg` and a `.zip`
-per architecture, each with a `.blockmap`. Named from the slug, so no download
-URL contains an escaped space:
+`npm run dist:mac` produces four files in `release/`: a `.dmg` and a `.zip`,
+each with a `.blockmap`. Named from the slug, so no download URL contains an
+escaped space:
 
 ```
 terminaldeck-0.1.0-arm64.dmg   114 MiB
 terminaldeck-0.1.0-arm64.zip   114 MiB
-terminaldeck-0.1.0-x64.dmg     119 MiB
-terminaldeck-0.1.0-x64.zip     119 MiB
 ```
 
-…plus `latest-mac.yml`, the update manifest. Build a release with
-`npm run dist:mac` in a single invocation — the per-architecture scripts are
-for local testing, because each run rewrites `latest-mac.yml` with only the
-architectures it built. `npm run release:check` verifies that before an upload.
+…plus `latest-mac.yml`, the update manifest. `npm run release:check` verifies
+the two agree before an upload.
 
 [BUILDING.md](BUILDING.md) covers all of it: outputs, the icon, what signing
 and notarisation would take, and what they cost.
