@@ -110,6 +110,8 @@ export interface PawlApi {
   scanReadiness(projectPath: string): Promise<unknown>
   applyReadinessFix(projectPath: string, checkId: string): Promise<unknown>
 
+  checkPrerequisites(): Promise<unknown>
+
   loadDashboard(projectPath: string): Promise<unknown>
   saveDashboard(projectPath: string, layout: unknown): Promise<void>
   clearDashboard(projectPath: string): Promise<void>

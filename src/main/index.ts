@@ -23,6 +23,7 @@ import { registerHookServer, stopHookServer } from './hook-server'
 import { registerMcpIpc } from './mcp-client'
 import { registerBrowserIpc } from './browser-tab'
 import { registerChromeImportIpc } from './chrome-import'
+import { registerPrerequisitesIpc } from './prerequisites'
 import type { SessionStatus } from '../shared/types'
 
 const isDev = !!process.env.ELECTRON_RENDERER_URL
@@ -184,6 +185,7 @@ function registerIpc(): void {
   registerMcpIpc(ipcMain)
   registerBrowserIpc(ipcMain)
   registerChromeImportIpc(ipcMain)
+  registerPrerequisitesIpc(ipcMain)
 
   registerAlertsIpc(ipcMain, {
     liveSessions: (projectPath) =>

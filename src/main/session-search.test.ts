@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile, utimes } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
@@ -554,16 +554,43 @@ describe('searchSessions', () => {
 
   it('ignores a transcript older than the age window', async () => {
     const config = await makeConfigDir()
-    await writeTranscript(config, PROJECT, 'sess-old', [
+    const path = await writeTranscript(config, PROJECT, 'sess-old', [
       userLine('an ancient marker', '2020-01-01T09:00:00Z'),
     ])
 
-    // The cutoff is by file mtime, which is "now" for a file just written, so a
-    // one-millisecond window is what proves the filter is applied at all.
+    // The cutoff compares against the file's mtime, so the file must actually be
+    // old. Earlier this leaned on a hardcoded `now` being ahead of wall clock,
+    // which quietly stopped being true once real time passed that constant —
+    // the test failed on a clock, not on a regression. Age the file explicitly.
+    const old = new Date(NOW - 90 * 24 * 60 * 60 * 1000)
+    await utimes(path, old, old)
+
     const result = ok(
-      await searchSessions(PROJECT, 'marker', { configDir: config, now: NOW + 60_000, maxAgeMs: 1 }),
+      await searchSessions(PROJECT, 'marker', {
+        configDir: config,
+        now: NOW,
+        maxAgeMs: 24 * 60 * 60 * 1000,
+      }),
     )
     expect(result.hits).toEqual([])
+  })
+
+  it('keeps a transcript inside the age window', async () => {
+    const config = await makeConfigDir()
+    const path = await writeTranscript(config, PROJECT, 'sess-recent', [
+      userLine('a fresh marker', '2026-08-12T09:00:00Z'),
+    ])
+    const recent = new Date(NOW - 60 * 60 * 1000)
+    await utimes(path, recent, recent)
+
+    const result = ok(
+      await searchSessions(PROJECT, 'marker', {
+        configDir: config,
+        now: NOW,
+        maxAgeMs: 24 * 60 * 60 * 1000,
+      }),
+    )
+    expect(result.hits).toHaveLength(1)
   })
 
   it('centres the snippet on the rare term, not the common one', async () => {

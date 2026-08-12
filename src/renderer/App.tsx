@@ -1,13 +1,32 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { StoreProvider, useStore } from './state/store'
-import { PreferencesModal } from './components/PreferencesModal'
-import { SessionInspector } from './components/SessionInspector'
-import { applyStoredTheme } from './theme'
 import { TitleBar } from './components/TitleBar'
-import { Sidebar } from './components/Sidebar'
 import { TabBar } from './components/TabBar'
 import { TerminalView } from './components/TerminalView'
 import { EmptyState } from './components/EmptyState'
+import { PreferencesModal } from './components/PreferencesModal'
+import { SessionInspector } from './components/SessionInspector'
+import { CommandPalette, type PaletteCommand } from './components/CommandPalette'
+import { ShortcutsSheet } from './components/ShortcutsSheet'
+import { Onboarding } from './components/Onboarding'
+import { BrowserTab } from './components/BrowserTab'
+import { Board } from './board/Board'
+import { Dashboard } from './dashboard/Dashboard'
+import { SwarmGrid } from './layout/SwarmGrid'
+import { ActivityBar } from './shell/ActivityBar'
+import { PanelDock } from './shell/PanelDock'
+import { type PanelId } from './shell/panels'
+import { applyStoredTheme } from './theme'
+import './shell/shell.css'
+
+type MainView = 'terminal' | 'overview' | 'board' | 'browser'
+
+const VIEWS: Array<{ id: MainView; label: string }> = [
+  { id: 'terminal', label: 'Sessions' },
+  { id: 'overview', label: 'Overview' },
+  { id: 'board', label: 'Board' },
+  { id: 'browser', label: 'Browser' },
+]
 
 function Workspace() {
   const {
@@ -21,8 +40,28 @@ function Workspace() {
     setSessionStatus,
   } = useStore()
 
-  // Restore previously opened projects. Sessions are not restored — the
-  // processes are gone — but the project list is, so ⌘T works immediately.
+  const [panel, setPanel] = useState<PanelId>('projects')
+  const [view, setView] = useState<MainView>('terminal')
+  const [swarm, setSwarm] = useState(false)
+  const [prefsOpen, setPrefsOpen] = useState(false)
+  const [inspectorOpen, setInspectorOpen] = useState(false)
+  const [paletteMode, setPaletteMode] = useState<'files' | 'commands' | null>(null)
+  const [shortcutsOpen, setShortcutsOpen] = useState(false)
+  const [onboardingDone, setOnboardingDone] = useState(false)
+  const [needsOnboarding, setNeedsOnboarding] = useState<boolean | null>(null)
+
+  const activeProjectPath =
+    sessions.find((s) => s.id === activeSessionId)?.projectPath ?? projects[0]?.path ?? null
+
+  useEffect(() => {
+    const off = window.pawl.onSessionStatus((id, status) => setSessionStatus(id, status))
+    return off
+  }, [setSessionStatus])
+
+  useEffect(() => {
+    void window.pawl.getPreferences().then((p) => applyStoredTheme(p.theme))
+  }, [])
+
   useEffect(() => {
     let cancelled = false
     void window.pawl.listProjects().then((saved) => {
@@ -34,22 +73,13 @@ function Workspace() {
     }
   }, [addProject])
 
-  const [prefsOpen, setPrefsOpen] = useState(false)
-  const [inspectorOpen, setInspectorOpen] = useState(false)
-
-  const activeProjectPath =
-    sessions.find((s) => s.id === activeSessionId)?.projectPath ?? projects[0]?.path ?? null
-
-  // Single subscription for every session's status, rather than one per
-  // terminal — the main process classifies, the renderer just reflects.
+  // Show the first-run screen only when no agent is usable. Someone with a
+  // working setup should never be made to click through a welcome screen.
   useEffect(() => {
-    const off = window.pawl.onSessionStatus((id, status) => setSessionStatus(id, status))
-    return off
-  }, [setSessionStatus])
-
-  // Apply the saved theme before the user sees anything.
-  useEffect(() => {
-    void window.pawl.getPreferences().then((p) => applyStoredTheme(p.theme))
+    void window.pawl
+      .checkPrerequisites()
+      .then((p) => setNeedsOnboarding(!(p as { canRunSessions: boolean }).canRunSessions))
+      .catch(() => setNeedsOnboarding(false))
   }, [])
 
   const openProject = useCallback(async () => {
@@ -59,12 +89,15 @@ function Workspace() {
     void window.pawl.addProject(path)
     const meta = await window.pawl.createSession({ cwd: path, cols: 100, rows: 30 })
     addSession(meta)
+    setOnboardingDone(true)
+    setView('terminal')
   }, [addProject, addSession])
 
   const newSessionIn = useCallback(
     async (path: string, resume = false) => {
       const meta = await window.pawl.createSession({ cwd: path, cols: 100, rows: 30, resume })
       addSession(meta)
+      setView('terminal')
     },
     [addSession],
   )
@@ -77,7 +110,30 @@ function Workspace() {
     [removeSession],
   )
 
-  // Global shortcuts. Kept in one place so the keymap is readable at a glance.
+  const commands = useMemo<PaletteCommand[]>(
+    () => [
+      { id: 'session.new', title: 'New session', group: 'Session', shortcut: '⌘T', run: () => activeProjectPath && void newSessionIn(activeProjectPath) },
+      { id: 'session.resume', title: 'Continue last session', group: 'Session', shortcut: '⌘⇧T', run: () => activeProjectPath && void newSessionIn(activeProjectPath, true) },
+      { id: 'project.open', title: 'Open a project', group: 'Project', shortcut: '⌘O', run: () => void openProject() },
+      { id: 'view.overview', title: 'Show project overview', group: 'View', run: () => setView('overview') },
+      { id: 'view.board', title: 'Show task board', group: 'View', run: () => setView('board') },
+      { id: 'view.browser', title: 'Show browser', group: 'View', run: () => setView('browser') },
+      { id: 'view.swarm', title: 'Toggle swarm view', group: 'View', shortcut: '⌘\\', run: () => { setView('terminal'); setSwarm((s) => !s) } },
+      { id: 'panel.git', title: 'Show source control', group: 'Panel', run: () => setPanel('git') },
+      { id: 'panel.files', title: 'Show files', group: 'Panel', run: () => setPanel('files') },
+      { id: 'panel.search', title: 'Search past sessions', group: 'Panel', shortcut: '⌘⇧F', run: () => setPanel('search') },
+      { id: 'panel.alerts', title: 'Show alerts', group: 'Panel', run: () => setPanel('alerts') },
+      { id: 'panel.github', title: 'Show GitHub', group: 'Panel', run: () => setPanel('github') },
+      { id: 'panel.readiness', title: 'Show AI readiness', group: 'Panel', run: () => setPanel('readiness') },
+      { id: 'panel.mcp', title: 'Show MCP servers', group: 'Panel', run: () => setPanel('mcp') },
+      { id: 'panel.hooks', title: 'Show hooks', group: 'Panel', run: () => setPanel('hooks') },
+      { id: 'app.inspector', title: 'Session inspector', group: 'App', shortcut: '⌘⇧I', run: () => setInspectorOpen(true) },
+      { id: 'app.prefs', title: 'Preferences', group: 'App', shortcut: '⌘,', run: () => setPrefsOpen(true) },
+      { id: 'app.shortcuts', title: 'Keyboard shortcuts', group: 'App', shortcut: '⌘/', run: () => setShortcutsOpen(true) },
+    ],
+    [activeProjectPath, newSessionIn, openProject],
+  )
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey
@@ -85,10 +141,7 @@ function Workspace() {
 
       if (e.key === 't' || e.key === 'T') {
         e.preventDefault()
-        const target = sessions.find((s) => s.id === activeSessionId)?.projectPath ?? projects[0]?.path
-        // Shift resumes the project's most recent agent session instead of
-        // starting a fresh one (claude --continue / codex resume --last).
-        if (target) void newSessionIn(target, e.shiftKey)
+        if (activeProjectPath) void newSessionIn(activeProjectPath, e.shiftKey)
         else void openProject()
         return
       }
@@ -107,13 +160,37 @@ function Workspace() {
         setPrefsOpen(true)
         return
       }
-      // Shift+I arrives as 'I' on macOS, so match case-insensitively.
+      if (e.key === '/') {
+        e.preventDefault()
+        setShortcutsOpen(true)
+        return
+      }
+      if (e.key === '\\') {
+        e.preventDefault()
+        setView('terminal')
+        setSwarm((s) => !s)
+        return
+      }
+      if (e.key === 'p' || e.key === 'P') {
+        e.preventDefault()
+        setPaletteMode(e.shiftKey ? 'commands' : 'files')
+        return
+      }
+      if (e.key === 'k' || e.key === 'K') {
+        e.preventDefault()
+        setPaletteMode('commands')
+        return
+      }
+      if (e.shiftKey && (e.key === 'f' || e.key === 'F')) {
+        e.preventDefault()
+        setPanel('search')
+        return
+      }
       if (e.shiftKey && (e.key === 'i' || e.key === 'I')) {
         e.preventDefault()
         setInspectorOpen(true)
         return
       }
-      // Cmd+1..9 jumps straight to a tab.
       const n = Number(e.key)
       if (Number.isInteger(n) && n >= 1 && n <= 9 && sessions[n - 1]) {
         e.preventDefault()
@@ -124,7 +201,7 @@ function Workspace() {
     return () => window.removeEventListener('keydown', onKey)
   }, [
     sessions,
-    projects,
+    activeProjectPath,
     activeSessionId,
     newSessionIn,
     openProject,
@@ -132,30 +209,100 @@ function Workspace() {
     setActiveSession,
   ])
 
+  if (needsOnboarding && !onboardingDone) {
+    return (
+      <div className="app">
+        <TitleBar />
+        <Onboarding onContinue={() => setOnboardingDone(true)} onOpenProject={openProject} />
+      </div>
+    )
+  }
+
+  const mainView = () => {
+    if (view === 'overview') {
+      return activeProjectPath ? (
+        <Dashboard projectPath={activeProjectPath} />
+      ) : (
+        <EmptyState onOpenProject={openProject} />
+      )
+    }
+    if (view === 'board') {
+      return activeProjectPath ? (
+        <Board projectPath={activeProjectPath} />
+      ) : (
+        <EmptyState onOpenProject={openProject} />
+      )
+    }
+    if (view === 'browser') {
+      return <BrowserTab initialUrl="http://localhost:3000" visible />
+    }
+    if (sessions.length === 0) return <EmptyState onOpenProject={openProject} />
+    if (swarm) {
+      return (
+        <SwarmGrid
+          sessions={sessions}
+          activeSessionId={activeSessionId}
+          onFocusSession={setActiveSession}
+          renderCell={({ session }) => <TerminalView sessionId={session.id} visible />}
+        />
+      )
+    }
+    return sessions.map((s) => (
+      <TerminalView key={s.id} sessionId={s.id} visible={s.id === activeSessionId} />
+    ))
+  }
+
   return (
     <div className="app">
       <TitleBar />
       <div className="app-body">
-        <Sidebar onOpenProject={openProject} onNewSession={newSessionIn} />
+        <ActivityBar active={panel} onSelect={setPanel} />
+        <PanelDock
+          panel={panel}
+          projectPath={activeProjectPath}
+          onOpenProject={openProject}
+          onNewSession={newSessionIn}
+          onOpenFile={() => setPanel('files')}
+        />
         <main className="workspace">
-          {sessions.length > 0 && <TabBar onClose={closeSession} />}
-          <div className="panes">
-            {sessions.length === 0 ? (
-              <EmptyState onOpenProject={openProject} />
+          <div className="view-bar">
+            {view === 'terminal' && sessions.length > 0 ? (
+              <TabBar onClose={closeSession} />
             ) : (
-              sessions.map((s) => (
-                <TerminalView key={s.id} sessionId={s.id} visible={s.id === activeSessionId} />
-              ))
+              <div className="view-switcher" />
             )}
+            <div className="view-modes">
+              {VIEWS.map((v) => (
+                <button
+                  key={v.id}
+                  type="button"
+                  className={`view-tab${view === v.id ? ' active' : ''}`}
+                  onClick={() => setView(v.id)}
+                >
+                  {v.label}
+                </button>
+              ))}
+            </div>
           </div>
+          <div className="panes">{mainView()}</div>
         </main>
       </div>
+
       <PreferencesModal open={prefsOpen} onClose={() => setPrefsOpen(false)} />
       <SessionInspector
         open={inspectorOpen}
         onClose={() => setInspectorOpen(false)}
         cwd={activeProjectPath}
         sessionTitle={sessions.find((s) => s.id === activeSessionId)?.title}
+      />
+      <ShortcutsSheet open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
+      <CommandPalette
+        open={paletteMode !== null}
+        mode={paletteMode ?? 'commands'}
+        commands={commands}
+        projectRoot={activeProjectPath}
+        onClose={() => setPaletteMode(null)}
+        onOpenFile={() => setPaletteMode(null)}
       />
     </div>
   )

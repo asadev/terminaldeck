@@ -230,6 +230,8 @@ const api = {
 
   /* --------------------------------------------------- chrome import -- */
 
+  checkPrerequisites: (): Promise<unknown> => ipcRenderer.invoke('prereq:check'),
+
   listBrowsers: (): Promise<unknown> => ipcRenderer.invoke('chrome-import:browsers'),
   scanBrowserTabs: (browserId?: string): Promise<unknown> =>
     ipcRenderer.invoke('chrome-import:scan', browserId),
