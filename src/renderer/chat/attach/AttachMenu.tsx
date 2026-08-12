@@ -117,8 +117,10 @@ export function AttachMenu({ root, attachments, onAdd, onInsert, onClose, disabl
     (relPath: string, isDirectory: boolean) => {
       onAdd(relPath, isDirectory)
       // Deliberately stays open: attaching three files should be three clicks,
-      // not three trips through the menu. The chips above the box are the
-      // feedback that it worked.
+      // not three trips through the menu. The confirmation is the "added" tag
+      // the picker puts on the row — measured: this popover is 340×309 anchored
+      // over the composer, so it covers the chip row while it is open, and the
+      // chips only become the feedback once it closes.
     },
     [onAdd],
   )

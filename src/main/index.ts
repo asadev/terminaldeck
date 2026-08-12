@@ -5,6 +5,7 @@ import type { CreateSessionInput } from '../shared/types'
 import { PtyManager } from './pty-manager'
 import { detectProviders, loginPath, PROVIDERS } from './providers'
 import { store, type Preferences } from './store'
+import { pinUserData } from './user-data'
 import { registerCostIpc } from './cost-ipc'
 import { registerGitIpc, stopAllGitWatches } from './git'
 import { registerFsIpc } from './fs-tree'
@@ -266,6 +267,10 @@ function registerIpc(): void {
   ipcMain.handle('session:kill', (_e, id: string) => ptys.kill(id))
   ipcMain.handle('session:list', () => ptys.list())
 }
+
+// Before anything reads userData — the store, the trace log and Chromium's own
+// profile all resolve their paths from it.
+pinUserData(app)
 
 app.whenReady().then(() => {
   if (process.platform === 'darwin') app.setName(BRAND.name)

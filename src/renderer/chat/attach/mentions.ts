@@ -136,8 +136,10 @@ export function kindFor(path: string, isDirectory: boolean): AttachmentKind {
 /**
  * One attachment as the CLI wants to read it.
  *
- * A folder keeps its trailing slash: it is what tells the CLI to list the
- * directory instead of trying to read it as a file.
+ * A folder keeps its trailing slash, but only as a signal to the person reading
+ * their own message: the CLI decides between "read this file" and "list this
+ * directory" by stat-ing the resolved path, and `@"/dir"` and `@"/dir/"` were
+ * both measured returning the same listing.
  */
 export function mentionFor(attachment: Attachment): string {
   const path = normalise(attachment.path)

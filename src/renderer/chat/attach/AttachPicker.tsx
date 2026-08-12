@@ -47,22 +47,34 @@ type Load =
 
 const LIMIT = 400
 
-const COPY: Record<PickerMode, { title: string; placeholder: string; empty: string }> = {
+/**
+ * Two different empty lists that must not share a sentence.
+ *
+ * `empty` is "the project contains none of this kind"; `noMatch` is "your query
+ * excluded them all". Saying the first while the user is looking at a query is
+ * a statement about their project that the component can see is false — the
+ * image panel claimed "No images in this project yet" with three of them one
+ * keystroke away.
+ */
+const COPY: Record<PickerMode, { title: string; placeholder: string; empty: string; noMatch: string }> = {
   file: {
     title: 'Add files',
     placeholder: 'Search files in this project…',
-    empty: 'No file matches that.',
+    empty: 'No files in this project.',
+    noMatch: 'No file matches that.',
   },
   folder: {
     title: 'Add folder',
     placeholder: 'Search folders in this project…',
-    empty: 'No folder matches that.',
+    empty: 'No folders in this project — every file sits at the top level.',
+    noMatch: 'No folder matches that.',
   },
   image: {
     title: 'Add an image',
     placeholder: 'Search images in this project…',
     empty:
       'No images in this project yet. Take a screenshot with ⇧⌘4, save it inside the project folder, and it will appear here.',
+    noMatch: 'No image matches that.',
   },
 }
 
@@ -221,7 +233,7 @@ export function AttachPicker({ root, mode, attachments, onPick, onBack, bridge }
 
       {load.state === 'ready' ? (
         ranked.length === 0 ? (
-          <p className="at-note">{query === '' ? copy.empty : COPY[mode].empty}</p>
+          <p className="at-note">{query === '' ? copy.empty : copy.noMatch}</p>
         ) : (
           <ul className="at-list" ref={listRef} role="listbox" aria-label={copy.title}>
             {ranked.map((hit, index) => {
@@ -262,7 +274,11 @@ export function AttachPicker({ root, mode, attachments, onPick, onBack, bridge }
         )
       ) : null}
 
-      {load.state === 'ready' && load.truncated ? (
+      {/* Two ways to be looking at a partial list: the main process stopped
+          walking, or the ranking hit its own ceiling. Either way the row you
+          want may not be on screen, and silence about that reads as "not in
+          this project". */}
+      {load.state === 'ready' && (load.truncated || ranked.length >= LIMIT) ? (
         <p className="at-note at-note-quiet">This project is large; the list is capped. Type to narrow it.</p>
       ) : null}
     </div>
