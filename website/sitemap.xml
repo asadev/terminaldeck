@@ -13,10 +13,22 @@
     <priority>0.8</priority>
   </url>
   <url>
-    <loc>https://terminaldeck.dev/docs.html</loc>
+    <loc>https://terminaldeck.dev/docs/</loc>
     <lastmod>2026-08-12</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://terminaldeck.dev/download.html</loc>
+    <lastmod>2026-08-12</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://terminaldeck.dev/changelog.html</loc>
+    <lastmod>2026-08-12</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.5</priority>
   </url>
   <url>
     <loc>https://terminaldeck.dev/roadmap.html</loc>
@@ -25,27 +37,27 @@
     <priority>0.5</priority>
   </url>
   <url>
-    <loc>https://terminaldeck.dev/privacy.html</loc>
-    <lastmod>2026-08-12</lastmod>
-    <changefreq>monthly</changefreq>
-    <priority>0.3</priority>
-  </url>
-  <url>
     <loc>https://terminaldeck.dev/about.html</loc>
     <lastmod>2026-08-12</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.5</priority>
   </url>
   <url>
-    <loc>https://terminaldeck.dev/terms.html</loc>
+    <loc>https://terminaldeck.dev/security.html</loc>
+    <lastmod>2026-08-12</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.4</priority>
+  </url>
+  <url>
+    <loc>https://terminaldeck.dev/privacy.html</loc>
     <lastmod>2026-08-12</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.3</priority>
   </url>
   <url>
-    <loc>https://terminaldeck.dev/security.html</loc>
+    <loc>https://terminaldeck.dev/terms.html</loc>
     <lastmod>2026-08-12</lastmod>
     <changefreq>monthly</changefreq>
-    <priority>0.4</priority>
+    <priority>0.3</priority>
   </url>
 </urlset>

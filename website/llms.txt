@@ -1,20 +1,25 @@
 # Terminal Deck
 
-> Terminal Deck is a free, MIT-licensed desktop application for macOS that runs AI coding-agent sessions — Claude Code, Codex CLI and Gemini CLI — in a single window. Each session gets a tab with a live status dot classified from what is drawn on that session's terminal screen, and cost, token use and context-window pressure are read from Claude Code's own JSONL transcripts. It is at version 0.1.0 and runs from source; there is no packaged installer yet. It has no account, no telemetry and no analytics.
+> Terminal Deck is a free, MIT-licensed desktop application for macOS that runs AI coding-agent sessions — Claude Code, Codex CLI and Gemini CLI — in a single window. Each session gets a tab with a live status dot classified from what is drawn on that session's terminal screen, and cost, token use and context-window pressure are read from Claude Code's own JSONL transcripts. It is at version 0.1.0. `npm run dist:mac` packages an unsigned .dmg and .zip for arm64 and x64; there is no signed, published installer yet. It has no account, no telemetry and no analytics.
 
 Built by Asad Iqbal. Repository: https://github.com/asadev/terminaldeck
 
-What works today: multiple sessions per project in tabs with scrollback that survives switching; status dots for working, waiting, needs-input and exited; a chat view that reads the agent's transcript and shows only the conversation, with a composer that types into the same session; cost and context tracking; a session inspector; full-text search across past transcripts; a git panel; a file tree and viewer; quick open and a command palette; a GitHub panel driven by the `gh` CLI; AI-readiness scoring with one-click fixes; a project dashboard and a Kanban board; a swarm view and split panes; agent profiles with isolated logins; an embedded browser whose element inspector sends CSS selectors to the agent; an MCP inspector; provider hook management; and a settings window of eleven sections.
+What works today: multiple sessions per project in tabs with scrollback that survives switching; status dots for working, waiting, needs-input and exited; a chat view that reads the agent's transcript and shows only the conversation, with a composer that types into the same session; cost and context tracking; a session inspector; full-text search across past transcripts; a git panel; a file tree and viewer; quick open and a command palette; a GitHub panel driven by the `gh` CLI; AI-readiness scoring with one-click fixes; a project dashboard and a Kanban board; a swarm view; agent profiles with isolated logins; an embedded browser whose element inspector sends CSS selectors to the agent; an MCP inspector; provider hook management; and a settings window of eleven sections.
 
-Not built yet: packaging and code signing, auto-updates, peer-to-peer session sharing, and translations. Linux and Windows are not exercised.
+Not built yet: code signing and notarisation, auto-updates, peer-to-peer session sharing, split panes (layout code exists but nothing renders it), and translations. An Intel build is produced but has never been launched; Linux and Windows have no target at all.
 
 ## Docs
 
 - [Terminal Deck](https://terminaldeck.dev/): what the app is, what works today, requirements, and how to run it.
 - [Features](https://terminaldeck.dev/features.html): a feature-by-feature account of everything in the app today, and a list of what is not.
-- [Docs](https://terminaldeck.dev/docs.html): requirements, the two commands that start it, the full keyboard map, where it keeps its data, and what to do when it cannot find your agent CLI.
-- [Roadmap](https://terminaldeck.dev/roadmap.html): the eight build phases, seven of them finished, with the remaining work named.
+- [Docs](https://terminaldeck.dev/docs/): what every panel does, where it keeps its data, the shortcuts the app actually dispatches, and what to do when it cannot find your agent CLI.
+- [Download](https://terminaldeck.dev/download.html): requirements, the right-click step an unsigned build needs, and how to build and package it from source.
+- [Changelog](https://terminaldeck.dev/changelog.html): what changed in 0.1.0, grouped by meaning rather than commit order.
+- [Roadmap](https://terminaldeck.dev/roadmap.html): the eight build phases and the remaining work named.
+- [About](https://terminaldeck.dev/about.html): why the project exists, how it is built, and the four rules it is built to.
+- [Security](https://terminaldeck.dev/security.html): the threat model, what is hardened, what is deliberately not defended, and how to report a vulnerability.
 - [Privacy](https://terminaldeck.dev/privacy.html): exactly what the app reads, what it writes, what it sends (nothing of its own), and what the agent CLIs do under their own terms.
+- [Terms](https://terminaldeck.dev/terms.html): MIT, as-is, and who is responsible for what the agents do.
 
 ## Optional
 

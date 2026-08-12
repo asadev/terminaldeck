@@ -366,6 +366,14 @@ const api = {
 
   /** Ports actually listening on this machine, for the browser start page. */
   devPorts: (force?: boolean): Promise<unknown> => ipcRenderer.invoke('dev:ports', force === true),
+  readAgentControls: (request: { sessionId?: string; cwd?: string }): Promise<unknown> =>
+    ipcRenderer.invoke('agent:controls:read', request),
+  applyAgentControl: (request: {
+    sessionId: string
+    cwd?: string
+    control: string
+    value: string
+  }): Promise<unknown> => ipcRenderer.invoke('agent:controls:apply', request),
 
   listBrowsers: (): Promise<unknown> => ipcRenderer.invoke('chrome-import:browsers'),
   scanBrowserTabs: (browserId?: string): Promise<unknown> =>

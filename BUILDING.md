@@ -110,9 +110,14 @@ Almost all of it is Electron. Our own code and its dependencies are the 19.5 MB
 move that number is to ship less Electron, not less app.
 
 The `files` rules in `electron-builder.yml` cut `app.asar` from 33 MB to
-19.5 MB by dropping things that only exist in order to compile the native
-modules — `better-sqlite3/deps` is the entire SQLite amalgamation, and
-`node-pty`'s Windows prebuilds can never load on macOS.
+19.5 MB — measured, by packaging once with those rules removed. They drop
+things that only exist in order to compile the native modules, plus every
+source map: `better-sqlite3/deps` is the entire SQLite amalgamation, and
+`node-pty/prebuilds` carries every platform's binary at once — 58 MB, of which
+57 MB is the two Windows slices that can never load here. Those two land in
+`app.asar.unpacked` rather than the archive, so they shrink the bundle
+(310 MB down to 293 MB) rather than the asar; the asar's own 13 MB comes from
+the source maps and the packages' test and example directories.
 
 ---
 
@@ -243,9 +248,9 @@ Once there is an identity, `mac.notarize: false` in `electron-builder.yml`
 becomes `true` and the credentials come from the environment:
 
 ```bash
-export APPLE_ID='the-apple-id@example.com'                   # the developer account
+export APPLE_ID='the-developer-account@example.com'
 export APPLE_APP_SPECIFIC_PASSWORD='xxxx-xxxx-xxxx-xxxx'   # appleid.apple.com
-export APPLE_TEAM_ID='XXXXXXXXXX'
+export APPLE_TEAM_ID='XXXXXXXXXX'                          # 10 chars, from developer.apple.com
 npm run dist:mac
 ```
 

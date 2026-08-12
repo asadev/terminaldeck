@@ -218,6 +218,25 @@ body {
   line-height: 1.65;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  /* A bare URL or a long path in inline code is one unbreakable word. At 380px
+     that is enough to widen the page and give the whole site a sideways
+     scrollbar, which is how `github.com/asadev/…/advisories/new` used to do it.
+     `.code` blocks scroll themselves and are exempt below. */
+  overflow-wrap: break-word;
+}
+
+a,
+code,
+kbd,
+samp {
+  overflow-wrap: anywhere;
+}
+
+/* A <pre> is the one place a break is wrong: it would silently rewrite the
+   command someone is about to paste. It scrolls sideways instead. */
+pre,
+pre code {
+  overflow-wrap: normal;
 }
 
 img,
@@ -628,6 +647,76 @@ hr {
 
 .bullets li::marker {
   color: var(--text-muted);
+}
+
+/* ----------------------------------------------------------- checklist -- */
+
+/* Done/not-done lists on the roadmap and the features page. The marker is a
+   glyph in the ::before rather than a list-style, because the two states have
+   to be distinguishable without colour — a green tick and a grey circle read
+   the same to a monochrome or colour-blind reader, so the shapes differ. */
+
+.checklist {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  max-width: var(--prose);
+}
+
+.checklist li {
+  position: relative;
+  padding-left: 1.75rem;
+}
+
+.checklist li + li {
+  margin-top: 0.4rem;
+}
+
+.checklist li::before {
+  position: absolute;
+  left: 0;
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+}
+
+.checklist .done::before {
+  content: '✓';
+  color: var(--status-completed);
+}
+
+.checklist .todo {
+  color: var(--text-quiet);
+}
+
+.checklist .todo::before {
+  content: '○';
+  color: var(--text-muted);
+}
+
+/* ---------------------------------------------------------- breadcrumb -- */
+
+.breadcrumb {
+  font-size: 0.875rem;
+  color: var(--text-quiet);
+}
+
+.breadcrumb ol {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+}
+
+.breadcrumb li + li::before {
+  content: '/';
+  margin-right: 0.4rem;
+  color: var(--text-muted);
+}
+
+.breadcrumb a {
+  color: var(--text-quiet);
 }
 
 .steps {

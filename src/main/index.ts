@@ -13,6 +13,7 @@ import { registerBoardIpc } from './board-store'
 import { registerInsightsIpc } from './session-insights'
 import { registerChatIpc } from './chat-transcript'
 import { registerDevPortsIpc } from './dev-ports'
+import { registerAgentControlsIpc } from './agent-controls'
 import { registerGitHubIpc } from './github'
 import { registerReadinessIpc } from './readiness'
 import { registerDashboardIpc } from './dashboard-store'
@@ -192,6 +193,9 @@ function registerIpc(): void {
   registerInsightsIpc(ipcMain)
   registerChatIpc(ipcMain)
   registerDevPortsIpc(ipcMain)
+  // PtyManager is the SessionAccess: controls are read off the rendered
+  // screen and applied by typing, exactly as a person would.
+  registerAgentControlsIpc(ipcMain, ptys)
   registerGitHubIpc(ipcMain)
   registerReadinessIpc(ipcMain)
   registerDashboardIpc(ipcMain)
