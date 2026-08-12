@@ -12,7 +12,13 @@ import {
 } from '../settings-bridge'
 
 /**
- * Advanced — diagnostics, the files on disk, and starting over.
+ * Advanced — launch behaviour, diagnostics, the files on disk, and starting
+ * over.
+ *
+ * Restoring sessions on launch landed here when General was cut down to the
+ * nine settings people change while working. It is a once-and-forget choice
+ * about what the app does before you have touched it, which is the same shape
+ * as everything else on this screen.
  *
  * The paths come from the main process rather than being rebuilt here: only it
  * knows where Electron put `userData` on this machine, and a settings panel
@@ -112,8 +118,24 @@ export function AdvancedSection({ values, save, bridge, loading, reload }: Secti
     <>
       <SectionHead title={meta.label} blurb={meta.blurb} />
 
+      <Group title="On launch">
+        <SettingList
+          section="advanced"
+          values={values}
+          save={save}
+          disabled={loading}
+          omit={['advanced.debugMode']}
+        />
+      </Group>
+
       <Group title="Diagnostics">
-        <SettingList section="advanced" values={values} save={save} disabled={loading} />
+        <SettingList
+          section="advanced"
+          values={values}
+          save={save}
+          disabled={loading}
+          omit={['advanced.restoreSessions']}
+        />
         <div className="settings-actions">
           <Button onClick={() => open('logs')} disabled={!bridge.openSettingsPath}>
             Open the log folder

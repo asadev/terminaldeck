@@ -85,7 +85,9 @@ describe('renderer → preload contract', () => {
     const missing: string[] = []
     for (const file of rendererFiles('renderer')) {
       const text = read(file)
-      for (const match of text.matchAll(/(?:export )?interface (\w*Bridge)\b[^{]*\{([\s\S]*?)\n\}/g)) {
+      // \w*Bridge\w* — not just names ending in Bridge. SettingsBridgeMethods
+      // declared three methods and was invisible to the earlier pattern.
+      for (const match of text.matchAll(/(?:export )?interface (\w*Bridge\w*)\b[^{]*\{([\s\S]*?)\n\}/g)) {
         for (const [, method] of match[2].matchAll(/^\s{2}([a-zA-Z][A-Za-z0-9_]*)\s*[(<]/gm)) {
           if (!exposed.has(method)) missing.push(`${file} ${match[1]}.${method}`)
         }

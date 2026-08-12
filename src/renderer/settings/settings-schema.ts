@@ -46,12 +46,17 @@ export const SECTIONS = [
   {
     id: 'notifications',
     label: 'Notifications',
-    blurb: 'When the app is allowed to interrupt you.',
+    blurb: 'How a banner is delivered once General has asked for one.',
   },
   {
     id: 'agents',
     label: 'Agents',
-    blurb: 'Which CLI runs a new session, and as whom.',
+    blurb: 'What is installed, and which login a session runs as.',
+  },
+  {
+    id: 'setup',
+    label: 'Setup',
+    blurb: 'What this app needs on your machine, and what it found.',
   },
   {
     id: 'browser',
@@ -71,7 +76,12 @@ export const SECTIONS = [
   {
     id: 'advanced',
     label: 'Advanced',
-    blurb: 'Diagnostics, files on disk, and starting over.',
+    blurb: 'Launch behaviour, diagnostics, files on disk, and starting over.',
+  },
+  {
+    id: 'help',
+    label: 'Help',
+    blurb: 'How this works, and what to do when it does not.',
   },
   {
     id: 'about',
@@ -175,10 +185,90 @@ export const SOUND_OPTIONS: readonly SelectOption[] = [
 
 export const SETTINGS: readonly Setting[] = [
   /* ------------------------------------------------------------- general -- */
+  /*
+   * The order below is the order on screen, and it is the one thing about this
+   * block that is not free to drift: General is the first thing anyone opens,
+   * so it lists the choice you make once (language, which tool) before the ones
+   * you change while working.
+   */
+  {
+    id: 'general.language',
+    section: 'general',
+    label: 'Language',
+    help: 'English is the only one there is — no other language has been translated yet.',
+    store: 'extra',
+    kind: 'select',
+    default: 'en',
+    // Deliberately one option. A picker that says "English" and nothing else is
+    // an honest answer to "can I have this in my language"; hiding the row until
+    // a second language exists just makes people ask.
+    options: [{ value: 'en', label: 'English' }],
+  },
+  {
+    id: 'general.defaultProvider',
+    section: 'general',
+    label: 'Default coding tool',
+    help: 'Runs when you start a session, unless the project or the new-session dialog says otherwise.',
+    store: 'prefs',
+    prefsKey: 'defaultProvider',
+    kind: 'select',
+    default: 'claude',
+    options: [
+      { value: 'claude', label: 'Claude Code' },
+      { value: 'codex', label: 'Codex CLI' },
+      { value: 'gemini', label: 'Gemini CLI' },
+      { value: 'shell', label: 'Plain shell' },
+    ],
+  },
+  {
+    id: 'general.soundOnFinish',
+    section: 'general',
+    label: 'Play sound when session finishes work',
+    help: 'A short sound the moment an agent stops working. Which sound it plays is under Notifications.',
+    store: 'extra',
+    kind: 'toggle',
+    default: false,
+  },
+  {
+    id: 'general.notifyOnAttention',
+    section: 'general',
+    label: 'Desktop notifications when sessions need attention',
+    help: 'A banner when a session is waiting on you — a permission prompt, or a question.',
+    store: 'extra',
+    kind: 'toggle',
+    default: true,
+  },
+  {
+    id: 'general.recordHistory',
+    section: 'general',
+    label: 'Record session history when sessions close',
+    help: 'Keeps a local record of a session once it ends, so search and the inspector can find it. Turning this off stops new records; it deletes nothing.',
+    store: 'extra',
+    kind: 'toggle',
+    default: true,
+  },
+  {
+    id: 'general.showInsightAlerts',
+    section: 'general',
+    label: 'Show insight alerts',
+    help: 'What the Alerts panel raises without being asked — a session filling its context window, a tool failing repeatedly, work that has stalled.',
+    store: 'extra',
+    kind: 'toggle',
+    default: true,
+  },
+  {
+    id: 'general.autoNameSessions',
+    section: 'general',
+    label: 'Auto-name sessions from conversation title',
+    help: 'The tab keeps the folder name until the conversation has a title of its own, then takes that.',
+    store: 'extra',
+    kind: 'toggle',
+    default: true,
+  },
   {
     id: 'general.confirmCloseWorking',
     section: 'general',
-    label: 'Confirm before closing a working session',
+    label: 'Confirm closing an active session',
     help: 'A session still running gets a confirmation step. An idle one always closes straight away.',
     store: 'extra',
     kind: 'toggle',
@@ -187,39 +277,11 @@ export const SETTINGS: readonly Setting[] = [
   {
     id: 'general.copyOnSelect',
     section: 'general',
-    label: 'Copy on select in terminals',
+    label: 'Copy on select',
     help: 'Selecting text in a session copies it, the way a Unix terminal does.',
     store: 'extra',
     kind: 'toggle',
     default: false,
-  },
-  {
-    id: 'general.autoNameSessions',
-    section: 'general',
-    label: 'Name a session from its first prompt',
-    help: 'The tab keeps the folder name until you send something, then takes its title from that.',
-    store: 'extra',
-    kind: 'toggle',
-    default: true,
-  },
-  {
-    id: 'general.restoreSessions',
-    section: 'general',
-    label: 'Restore sessions on launch',
-    help: 'Reopen the projects and tabs that were up when you quit.',
-    store: 'prefs',
-    prefsKey: 'restoreSessions',
-    kind: 'toggle',
-    default: true,
-  },
-  {
-    id: 'general.recordHistory',
-    section: 'general',
-    label: 'Record session history',
-    help: 'Keeps a local record of sessions so search and the inspector can find them. Turning this off stops new records; it deletes nothing.',
-    store: 'extra',
-    kind: 'toggle',
-    default: true,
   },
 
   /* ---------------------------------------------------------- appearance -- */
@@ -279,22 +341,19 @@ export const SETTINGS: readonly Setting[] = [
   },
 
   /* ------------------------------------------------------- notifications -- */
+  /*
+   * What is left here after the two headline switches moved to General: whether
+   * a *finished* session also earns a banner, when banners are allowed at all,
+   * and which sound General's switch plays. General says whether to interrupt
+   * you; this section says how.
+   */
   {
     id: 'notifications.onComplete',
     section: 'notifications',
     label: 'Notify when a session finishes',
-    help: 'A desktop notification the moment an agent stops working.',
+    help: 'A desktop notification the moment an agent stops working, alongside the sound.',
     store: 'prefs',
     prefsKey: 'notifyOnComplete',
-    kind: 'toggle',
-    default: true,
-  },
-  {
-    id: 'notifications.onNeedsInput',
-    section: 'notifications',
-    label: 'Notify when a session needs input',
-    help: 'A permission prompt or a question, waiting on you.',
-    store: 'extra',
     kind: 'toggle',
     default: true,
   },
@@ -308,19 +367,10 @@ export const SETTINGS: readonly Setting[] = [
     default: true,
   },
   {
-    id: 'notifications.sound',
-    section: 'notifications',
-    label: 'Play a sound',
-    help: 'Alongside the banner.',
-    store: 'extra',
-    kind: 'toggle',
-    default: false,
-  },
-  {
     id: 'notifications.soundName',
     section: 'notifications',
     label: 'Sound',
-    help: 'Synthesised by the app — nothing is downloaded or read from your sound library.',
+    help: 'Which sound General’s finish-work switch plays. Synthesised by the app — nothing is downloaded or read from your sound library.',
     store: 'extra',
     kind: 'select',
     default: 'chime',
@@ -328,22 +378,12 @@ export const SETTINGS: readonly Setting[] = [
   },
 
   /* -------------------------------------------------------------- agents -- */
-  {
-    id: 'agents.defaultProvider',
-    section: 'agents',
-    label: 'Default agent',
-    help: 'Used for new sessions unless a project overrides it.',
-    store: 'prefs',
-    prefsKey: 'defaultProvider',
-    kind: 'select',
-    default: 'claude',
-    options: [
-      { value: 'claude', label: 'Claude Code' },
-      { value: 'codex', label: 'Codex CLI' },
-      { value: 'gemini', label: 'Gemini CLI' },
-      { value: 'shell', label: 'Plain shell' },
-    ],
-  },
+  /*
+   * Nothing is stored here any more. The default tool moved to General, and
+   * everything the section still shows is either discovered (`prerequisites.ts`)
+   * or owned by `profiles.ts`, which is why it stays in the list rather than
+   * being deleted along with its one setting.
+   */
 
   /* ------------------------------------------------------------- browser -- */
   {
@@ -368,6 +408,16 @@ export const SETTINGS: readonly Setting[] = [
   },
 
   /* ------------------------------------------------------------ advanced -- */
+  {
+    id: 'advanced.restoreSessions',
+    section: 'advanced',
+    label: 'Restore sessions on launch',
+    help: 'Reopen the projects and tabs that were up when you quit.',
+    store: 'prefs',
+    prefsKey: 'restoreSessions',
+    kind: 'toggle',
+    default: true,
+  },
   {
     id: 'advanced.debugMode',
     section: 'advanced',
@@ -483,13 +533,28 @@ export const SETTINGS_VERSION = 1
 /**
  * Ids that have been renamed, old → new.
  *
- * Empty because nothing has been renamed yet, and that is exactly why it is
- * here: the first rename has to arrive with the table, or every user who set
- * that option silently reverts to the default. `mergeSettings` applies it
- * before defaults are filled in, and takes an override so a test can prove the
- * mechanism without waiting for a real rename.
+ * An id carries its section as a prefix, so moving a setting between sections
+ * *is* a rename — and a rename with no entry here is a user's choice silently
+ * reverting to the default the first time the new build reads their file.
+ * `mergeSettings` applies this before defaults are filled in, and takes an
+ * override so a test can prove the mechanism independently of the real table.
+ *
+ * The four below are one change: General was rebuilt to hold the nine settings
+ * people actually reach for, which pulled the default tool out of Agents and
+ * the two headline switches out of Notifications, and pushed launch restore
+ * into Advanced.
+ *
+ * A prefs-backed id (`defaultProvider`, `restoreSessions`) keeps its value
+ * regardless — `valuesFromPreferences` reads it by `prefsKey`, not by id — but
+ * it is listed anyway, because a settings.json written by any build that
+ * mirrored those keys would otherwise arrive as an unknown key and sit there.
  */
-export const RENAMED_IDS: Readonly<Record<string, string>> = {}
+export const RENAMED_IDS: Readonly<Record<string, string>> = {
+  'agents.defaultProvider': 'general.defaultProvider',
+  'notifications.sound': 'general.soundOnFinish',
+  'notifications.onNeedsInput': 'general.notifyOnAttention',
+  'general.restoreSessions': 'advanced.restoreSessions',
+}
 
 export interface MergeOptions {
   renames?: Readonly<Record<string, string>>
@@ -634,7 +699,12 @@ export function settingsSchemaProblems(settings: readonly Setting[] = SETTINGS):
     }
 
     if (setting.kind === 'select') {
-      if (setting.options.length < 2) problems.push(`${setting.id}: a select needs at least two options`)
+      // One option is allowed, two used to be required. `general.language` ships
+      // English alone on purpose: the row exists to answer the question, and a
+      // second option would have to be a language nobody translated. Zero
+      // options is still a bug — the control renders empty and can store
+      // nothing, so `coerce` would reject the setting's own default.
+      if (setting.options.length === 0) problems.push(`${setting.id}: a select needs an option`)
       const values = new Set<string>()
       for (const option of setting.options) {
         if (values.has(option.value)) problems.push(`${setting.id}: duplicate option ${option.value}`)

@@ -37,9 +37,20 @@ export interface WorkspaceTab {
   /** What is in this tab's URL bar while the user is editing it. */
   draft: string
   editing: boolean
+  /**
+   * On a partition of its own: no imported cookies, no other tab's logins.
+   *
+   * Kept here rather than read back from the main process because it is decided
+   * *before* the view exists — the partition is fixed when the WebContents is
+   * constructed and cannot be changed afterwards, which is also why switching it
+   * replaces the tab rather than editing it.
+   */
+  isolated: boolean
+  /** The partition key the main process minted, or null for a shared tab. */
+  isolationKey: string | null
 }
 
-export function newTab(key: string, url = ''): WorkspaceTab {
+export function newTab(key: string, url = '', isolated = false): WorkspaceTab {
   return {
     key,
     id: null,
@@ -55,6 +66,8 @@ export function newTab(key: string, url = ''): WorkspaceTab {
     recording: false,
     draft: url,
     editing: false,
+    isolated,
+    isolationKey: null,
   }
 }
 

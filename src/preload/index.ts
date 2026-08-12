@@ -329,6 +329,22 @@ const api = {
     return () => ipcRenderer.off('debug:ipc-call', handler)
   },
 
+  /* ------------------------------------------ setup & browser cookies -- */
+
+  setupStatus: (): Promise<unknown> => ipcRenderer.invoke('setup:status'),
+
+  browserCookieSources: (): Promise<unknown> => ipcRenderer.invoke('cookie-import:sources'),
+  browserCookieImportStatus: (): Promise<unknown> => ipcRenderer.invoke('cookie-import:status'),
+  importBrowserCookies: (request?: unknown): Promise<unknown> =>
+    ipcRenderer.invoke('cookie-import:run', request),
+  clearImportedCookies: (): Promise<unknown> => ipcRenderer.invoke('cookie-import:clear'),
+
+  browserIsolationKey: (tabKey?: unknown): Promise<unknown> =>
+    ipcRenderer.invoke('browser-isolation:key', tabKey),
+  browserIsolationDispose: (partition?: unknown): Promise<unknown> =>
+    ipcRenderer.invoke('browser-isolation:dispose', partition),
+  browserIsolationCount: (): Promise<unknown> => ipcRenderer.invoke('browser-isolation:count'),
+
   listBrowsers: (): Promise<unknown> => ipcRenderer.invoke('chrome-import:browsers'),
   scanBrowserTabs: (browserId?: string): Promise<unknown> =>
     ipcRenderer.invoke('chrome-import:scan', browserId),

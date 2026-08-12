@@ -672,6 +672,26 @@
   padding: 5px 0;
 }
 
+/* ------------------------------------------------------------------ help -- */
+
+/* The Help section renders the very same panel the ⌘? dialog does. That panel's
+   search field is styled to bleed into the modal body's own 18px side padding,
+   which this pane does not have — left as it was, the field's background ran
+   under the section list. Cancelled from here rather than by forking
+   HelpPanel.css: one copy of the help, two frames around it.
+
+   Only the horizontal bleed is cancelled. `top` is deliberately left alone:
+   the scrollport both frames share is `.modal-body`, whose 4px top padding is
+   exactly what HelpPanel.css's `top: -4px` subtracts, so the field parks flush
+   with the top of the scroll area. Overriding it to 0 parked the field 4px
+   lower, which left a 4px band of the previous topic scrolling in the gap
+   above it and pushed the field's lower edge 3px over `.help-nav`'s own sticky
+   offset, clipping the first section in the list. */
+.settings-panel .help-search {
+  margin: 0;
+  padding: 8px 0;
+}
+
 /* ------------------------------------------------------------ responsive -- */
 
 /* Below this the two columns stop fitting side by side inside the panel. */

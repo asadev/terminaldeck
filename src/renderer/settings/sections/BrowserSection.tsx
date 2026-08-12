@@ -6,25 +6,40 @@ import {
   missingChannelNote,
   toBrowsers,
   toClearResult,
+  toCookieImportReport,
+  toCookieImportStatus,
+  toCookieSources,
   toScanResult,
+  type CookieImportStatus,
+  type CookieSource,
   type DetectedBrowser,
   type DevUrl,
   type SectionProps,
 } from '../settings-bridge'
 
 /**
- * Browser — the built-in tab, what it opens with, and what it keeps.
+ * Browser — the built-in tab, what it opens with, what it keeps, and who it
+ * keeps it for.
  *
- * ## What "import from an installed browser" honestly is
+ * ## Three separate things, and they are deliberately not one button
  *
- * It imports the local dev addresses already in another browser's bookmarks,
- * history and open tabs, so a start page does not have to be retyped. It does
- * **not** copy cookies or logins, and this panel says so rather than implying
- * otherwise: Chromium encrypts its cookie store with a key held in the login
- * keychain, so copying the file out produces ciphertext, and prompting for the
- * keychain to decrypt another application's secrets is not something a settings
- * panel should be doing quietly. `chrome-import.ts` is deliberately read-only
- * for the same reason.
+ * **Addresses** come out of another browser's bookmarks, history and open tabs
+ * so a start page does not have to be retyped. It is a read-only look at those
+ * files and it asks for nothing — `chrome-import.ts` is read-only by design.
+ *
+ * **Cookies** are a different act with a different cost. Chromium encrypts its
+ * cookie store with a key in the login keychain, so importing means asking
+ * macOS for another application's secret, and macOS puts a dialog on screen
+ * naming this app. That has to be a button somebody pressed, never a
+ * side-effect of opening this panel — so nothing here calls
+ * `importBrowserCookies` on mount, and the panel says what will happen before
+ * it happens.
+ *
+ * **Isolation** is the counterweight. Once cookies have been imported, every
+ * tab is signed in as whoever Chrome was signed in as, which is wrong often
+ * enough that the browser toolbar carries a per-tab switch out of it. This
+ * panel explains that switch rather than duplicating it: it is per tab, so it
+ * belongs on the tab.
  */
 
 const SOURCE_LABEL: Record<DevUrl['source'], string> = {
@@ -52,6 +67,80 @@ export function noteFor(hit: DevUrl): string {
   return parts.join(' · ')
 }
 
+/**
+ * Group the cookie sources by browser.
+ *
+ * A button per profile was the obvious layout and it is wrong on a real
+ * machine: this one has fourteen Chrome profiles, because the numbering counts
+ * every profile ever created rather than the ones that exist. Fourteen buttons
+ * reading "Import from Chrome — Person 1" is not a chooser, it is a wall. So a
+ * browser gets one row, and its profiles become a menu on that row.
+ */
+export function groupSources(sources: readonly CookieSource[]): Array<{
+  browserId: string
+  browserName: string
+  profiles: CookieSource[]
+}> {
+  const byBrowser = new Map<string, { browserId: string; browserName: string; profiles: CookieSource[] }>()
+  for (const source of sources) {
+    const group = byBrowser.get(source.browserId)
+    if (group) group.profiles.push(source)
+    else {
+      byBrowser.set(source.browserId, {
+        browserId: source.browserId,
+        browserName: source.browserName,
+        profiles: [source],
+      })
+    }
+  }
+  return [...byBrowser.values()]
+}
+
+/** "3 minutes ago", "12 Aug" — enough to know whether an import is stale. */
+export function whenImported(at: number | null, now: number): string {
+  if (at === null || !Number.isFinite(at)) return ''
+  const minutes = Math.round((now - at) / 60_000)
+  if (minutes < 1) return 'just now'
+  if (minutes < 60) return `${minutes} minute${minutes === 1 ? '' : 's'} ago`
+  const hours = Math.round(minutes / 60)
+  if (hours < 24) return `${hours} hour${hours === 1 ? '' : 's'} ago`
+  return new Date(at).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
+}
+
+/**
+ * What the count line says.
+ *
+ * Two numbers, because they answer different questions and conflating them is
+ * how a Clear button looks broken: `present` is how many imported cookies the
+ * browser tab still holds, `recorded` is how many were ever brought in. Sites
+ * expire their own cookies, so the first drifting below the second is normal
+ * and worth saying out loud.
+ */
+export function importedCountText(status: CookieImportStatus): string {
+  if (status.recorded === 0) return 'No cookies have been imported.'
+  const where = status.source ? ` from ${status.source}` : ''
+  if (status.present === status.recorded) {
+    return `${status.present} imported cookie${status.present === 1 ? '' : 's'}${where}.`
+  }
+  return `${status.present} of ${status.recorded} imported cookies${where} are still here — the rest have expired or been cleared by the sites themselves.`
+}
+
+/**
+ * The whole count line: how many, and when.
+ *
+ * One function rather than two expressions in the JSX because the two halves
+ * can contradict each other. A ledger can carry an `importedAt` with no
+ * entries — a hand-edited file, or an older build that stamped one after a run
+ * that wrote nothing — and the pieces then render as "No cookies have been
+ * imported. Last imported just now.", which argues with itself. The time is
+ * only ever shown next to something it is the time *of*.
+ */
+export function importedSummary(status: CookieImportStatus, now: number): string {
+  const count = importedCountText(status)
+  if (status.recorded === 0 || status.importedAt === null) return count
+  return `${count} Last imported ${whenImported(status.importedAt, now)}.`
+}
+
 export function BrowserSection({ values, save, bridge, loading }: SectionProps) {
   const meta = sectionMeta('browser')
   const [browsers, setBrowsers] = useState<DetectedBrowser[] | null>(null)
@@ -60,6 +149,14 @@ export function BrowserSection({ values, save, bridge, loading }: SectionProps) 
   const [scanning, setScanning] = useState(false)
   const [status, setStatus] = useState<string | null>(null)
   const [confirmClear, setConfirmClear] = useState(false)
+
+  const [sources, setSources] = useState<CookieSource[] | null>(null)
+  const [imports, setImports] = useState<CookieImportStatus | null>(null)
+  const [importing, setImporting] = useState<string | null>(null)
+  const [importNote, setImportNote] = useState<{ text: string; ok: boolean } | null>(null)
+  const [confirmForget, setConfirmForget] = useState(false)
+  /** Which profile is chosen, per browser. Defaults to the first, which is Default. */
+  const [chosenProfile, setChosenProfile] = useState<Record<string, string>>({})
 
   const startUrl = stringSetting(values, 'browser.startUrl')
 
@@ -94,6 +191,73 @@ export function BrowserSection({ values, save, bridge, loading }: SectionProps) 
     [bridge],
   )
 
+  /* -- cookies. Reads only; the import itself needs a press. */
+  const refreshImports = useCallback(() => {
+    if (!bridge.browserCookieImportStatus) return
+    void bridge.browserCookieImportStatus().then(
+      (raw) => setImports(toCookieImportStatus(raw)),
+      () => setImports(null),
+    )
+  }, [bridge])
+
+  useEffect(() => {
+    if (!bridge.browserCookieSources) return
+    void bridge.browserCookieSources().then(
+      (raw) => setSources(toCookieSources(raw)),
+      () => setSources([]),
+    )
+  }, [bridge])
+
+  useEffect(refreshImports, [refreshImports])
+
+  const runImport = useCallback(
+    (source: CookieSource) => {
+      if (!bridge.importBrowserCookies) return
+      setImporting(`${source.browserId}/${source.profileId}`)
+      setImportNote(null)
+      void bridge
+        .importBrowserCookies({ browserId: source.browserId, profileId: source.profileId })
+        .then(
+          (raw) => {
+            const report = toCookieImportReport(raw)
+            setImportNote({ text: report.message, ok: report.ok })
+            setImporting(null)
+            refreshImports()
+          },
+          (cause: unknown) => {
+            setImportNote({
+              text: errorText(cause, 'The import stopped before it could read anything.'),
+              ok: false,
+            })
+            setImporting(null)
+          },
+        )
+    },
+    [bridge, refreshImports],
+  )
+
+  const forgetImported = useCallback(() => {
+    if (!bridge.clearImportedCookies) return
+    setConfirmForget(false)
+    void bridge.clearImportedCookies().then(
+      (raw) => {
+        const removed = typeof raw === 'object' && raw !== null ? (raw as { removed?: unknown }).removed : 0
+        const count = typeof removed === 'number' ? removed : 0
+        setImportNote({
+          text: `Removed ${count} imported cookie${count === 1 ? '' : 's'}. Anything you signed into inside the browser tab itself is untouched.`,
+          ok: true,
+        })
+        refreshImports()
+      },
+      (cause: unknown) => {
+        setImportNote({
+          text: errorText(cause, 'Could not remove the imported cookies.'),
+          ok: false,
+        })
+      },
+    )
+  }, [bridge, refreshImports])
+
   const clear = useCallback(() => {
     if (!bridge.clearBrowserData) return
     setConfirmClear(false)
@@ -111,12 +275,11 @@ export function BrowserSection({ values, save, bridge, loading }: SectionProps) 
 
       <SettingList section="browser" values={values} save={save} disabled={loading} />
 
-      <Group title="Import from a browser you already use">
+      <Group title="Import addresses from a browser you already use">
         <p className="settings-prose">
           Finds the local addresses in another browser’s bookmarks, history and open tabs so you can
-          pick one as the start page. It is a read-only look at those files. Cookies and logins are
-          not copied — Chromium encrypts them with a key in your login keychain, and nothing here
-          asks for that.
+          pick one as the start page. It is a read-only look at those files, and it asks for nothing.
+          Signing in is separate — that is the next block.
         </p>
 
         {!bridge.listBrowsers || !bridge.scanBrowserTabs ? (
@@ -185,6 +348,134 @@ export function BrowserSection({ values, save, bridge, loading }: SectionProps) 
             ))}
           </>
         )}
+      </Group>
+
+      <Group title="Sign-ins: cookies from Chrome">
+        <p className="settings-prose">
+          Copies the cookies out of an installed Chromium browser into the browser tab, so a dev
+          server behind a login opens signed in instead of at a sign-in page. Chromium keeps those
+          cookies encrypted with a key in your login keychain, so <strong>macOS will ask your
+          permission</strong> the first time — a dialog naming this app. Nothing is read until you
+          press one of these, and if you say no, nothing is imported and this panel says so.
+        </p>
+        <p className="settings-prose">
+          Cookies are the credentials that keep you signed in. They go into the browser tab’s own
+          store and are never shown, logged or sent anywhere. A tab you set to{' '}
+          <strong>Isolated</strong> in the browser toolbar cannot see them at all.
+        </p>
+
+        {!bridge.importBrowserCookies || !bridge.browserCookieSources ? (
+          <Notice tone="warn">{missingChannelNote('Importing cookies')}</Notice>
+        ) : imports !== null && !imports.supported ? (
+          <Notice tone="info">
+            Importing cookies is implemented for macOS, where the key lives in the login keychain.
+            On this system there is nothing to read it from.
+          </Notice>
+        ) : (
+          <>
+            {groupSources(sources ?? []).map((group) => {
+              const chosenId = chosenProfile[group.browserId] ?? group.profiles[0].profileId
+              const source =
+                group.profiles.find((profile) => profile.profileId === chosenId) ?? group.profiles[0]
+              const busyId = `${source.browserId}/${source.profileId}`
+              return (
+                <div className="settings-chips" key={group.browserId}>
+                  {group.profiles.length > 1 && (
+                    <span className="settings-select-wrap">
+                      <select
+                        className="settings-select"
+                        value={source.profileId}
+                        aria-label={`${group.browserName} profile to import from`}
+                        disabled={importing !== null}
+                        onChange={(event) =>
+                          setChosenProfile((prev) => ({
+                            ...prev,
+                            [group.browserId]: event.target.value,
+                          }))
+                        }
+                      >
+                        {group.profiles.map((profile) => (
+                          <option key={profile.profileId} value={profile.profileId}>
+                            {profile.profileName === profile.profileId
+                              ? profile.profileId
+                              : `${profile.profileName} (${profile.profileId})`}
+                          </option>
+                        ))}
+                      </select>
+                    </span>
+                  )}
+                  <Button
+                    onClick={() => runImport(source)}
+                    disabled={importing !== null || !source.keychainItem}
+                  >
+                    {importing === busyId
+                      ? 'Asking the keychain…'
+                      : `Import from ${group.browserName}`}
+                  </Button>
+                </div>
+              )
+            })}
+
+            {sources?.length === 0 && (
+              <Notice tone="info">
+                No installed browser with a readable cookie database was found. macOS protects those
+                files until this app has Full Disk Access.
+              </Notice>
+            )}
+
+            {sources?.some((source) => !source.keychainItem) && (
+              <Notice tone="info">
+                Some browsers are listed without an import button: this machine has no “Safe
+                Storage” keychain item for them, so there is no key to decrypt their cookies with.
+              </Notice>
+            )}
+
+            {imports !== null && (
+              <p className="settings-prose">{importedSummary(imports, Date.now())}</p>
+            )}
+
+            {importNote && (
+              <Notice tone={importNote.ok ? 'info' : 'warn'}>{importNote.text}</Notice>
+            )}
+
+            {!bridge.clearImportedCookies ? (
+              <Notice tone="warn">{missingChannelNote('Clearing imported cookies')}</Notice>
+            ) : confirmForget ? (
+              // Inline, for the same reason the clear below is: two modals both
+              // listen for Escape, so the inner one closes the settings window.
+              <div className="settings-confirm">
+                <span>Remove the cookies that were imported? You stay signed into anything you signed into inside the browser tab.</span>
+                <Button tone="danger" onClick={forgetImported}>
+                  Remove them
+                </Button>
+                <Button onClick={() => setConfirmForget(false)}>Keep them</Button>
+              </div>
+            ) : (
+              <Button
+                tone="danger"
+                onClick={() => setConfirmForget(true)}
+                disabled={(imports?.recorded ?? 0) === 0}
+              >
+                Clear imported cookies
+              </Button>
+            )}
+          </>
+        )}
+      </Group>
+
+      <Group title="Per-tab isolation">
+        <p className="settings-prose">
+          Every browser tab shares one session by default, which is what keeps you signed in between
+          runs. Each tab’s toolbar has a <strong>Shared / Isolated</strong> switch that opts out of
+          it: an isolated tab gets a cookie jar of its own, held in memory and thrown away when the
+          app quits. It cannot see imported cookies, and it cannot see what the other tabs are
+          signed into.
+        </p>
+        <p className="settings-prose">
+          Use it to open the same app as a second user, or to check what a signed-out visitor
+          actually sees. Switching a tab reopens its page, because a tab’s session is fixed the
+          moment the page is created — the address is kept, the sign-in is not.
+        </p>
       </Group>
 
       <Group title="Stored browsing data">

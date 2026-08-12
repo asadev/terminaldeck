@@ -6,6 +6,16 @@ interface Props {
   open: boolean
   bridge: BrowserBridge
   onClose(): void
+  /**
+   * True when the tab this was opened from is on a partition of its own.
+   *
+   * Everything below reads the *shared* session, which is the only one with
+   * anything worth managing — an isolated tab's jar is in memory and dies with
+   * the tab. Saying nothing would be the misleading part: the dialog would list
+   * cookies the tab in front of it cannot see, under a Clear button that does
+   * not touch what that tab is signed into.
+   */
+  isolated?: boolean
 }
 
 /** Bytes, rounded the way a person reads them. */
@@ -40,7 +50,7 @@ export function formatBytes(bytes: number): string {
  * and does its own loading — it exists for exactly as long as the page is
  * hidden, and the shorter that is, the better.
  */
-export function SessionModal({ open, bridge, onClose }: Props) {
+export function SessionModal({ open, bridge, onClose, isolated = false }: Props) {
   const [info, setInfo] = useState<BrowserSessionInfo | null>(null)
   const [domains, setDomains] = useState<CookieDomain[]>([])
   const [busy, setBusy] = useState(false)
@@ -107,6 +117,14 @@ export function SessionModal({ open, bridge, onClose }: Props) {
       }
     >
       {error && <p className="bw-error">{error}</p>}
+
+      {isolated && (
+        <p className="bw-muted">
+          This tab is <strong>Isolated</strong>, so none of the below is what it is using. Its
+          cookies are held in memory on a partition of its own and are thrown away when the tab
+          closes — there is nothing here to clear for it.
+        </p>
+      )}
 
       {info && (
         <dl className="bw-facts">

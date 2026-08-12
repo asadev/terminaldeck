@@ -116,7 +116,17 @@ export interface BrowserSessionInfo {
 
 export interface BrowserBridge {
   /* browser-tab.ts */
-  browserCreate(options: { url?: string; bounds?: Bounds; visible?: boolean }): Promise<BrowserTabState>
+  browserCreate(options: {
+    url?: string
+    bounds?: Bounds
+    visible?: boolean
+    /**
+     * A key from `browserIsolationKey()` puts this tab on a partition of its
+     * own — see `isolation-bridge.ts`. Omitted, the tab joins the shared
+     * session every other tab uses.
+     */
+    isolationKey?: string
+  }): Promise<BrowserTabState>
   browserNavigate(id: string, url: string): Promise<BrowserTabState>
   browserBack(id: string): Promise<BrowserTabState>
   browserForward(id: string): Promise<BrowserTabState>

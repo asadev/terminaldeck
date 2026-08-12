@@ -18,6 +18,7 @@ import {
   writeGuestPreload,
 } from './browser-preload'
 import { composeAgentContext, parseCapture, type ElementCapture } from './selector'
+import { isolatedSession } from './browser-isolation'
 
 /**
  * The embedded browser tab: a real Chromium view, hosted inside the app window,
@@ -351,7 +352,7 @@ function tabForSender(event: IpcMainEvent): BrowserTab | null {
  *     registerBrowserIpc(ipcMain)
  *
  * Channels (all take the tab id returned by `browser:create`):
- * - `browser:create`   (invoke, {url?, bounds?, visible?}) → {@link BrowserTabState}
+ * - `browser:create`   (invoke, {url?, bounds?, visible?, isolationKey?}) → {@link BrowserTabState}
  * - `browser:navigate` (invoke, id, url)                   → {@link BrowserTabState}
  * - `browser:back` / `browser:forward` / `browser:reload` / `browser:stop`
  * - `browser:inspect`  (invoke, id, enabled)               → {@link BrowserTabState}
@@ -374,8 +375,12 @@ export function registerBrowserIpc(ipcMain: IpcMain): void {
 
     const view = new WebContentsView({
       webPreferences: {
+        // An `isolationKey` means this tab was opened as Isolated and gets its
+        // own in-memory partition — see `browser-isolation.ts`. A session is
+        // fixed at construction and cannot be swapped afterwards, which is why
+        // the choice has to be made here rather than bolted on later.
         preload: preloadPath(),
-        session: hardenedGuestSession(),
+        session: isolatedSession(opts.isolationKey) ?? hardenedGuestSession(),
         contextIsolation: true,
         nodeIntegration: false,
         nodeIntegrationInSubFrames: false,

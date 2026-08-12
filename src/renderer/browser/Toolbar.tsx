@@ -29,6 +29,15 @@ interface Props {
   deviceOpen: boolean
   onToggleDevice(): void
   onOpenSession(): void
+
+  /**
+   * Switch this tab between the shared session and one of its own.
+   *
+   * Absent when the preload has not wired isolation yet, in which case the
+   * control explains itself instead of disappearing — a security control that
+   * silently vanishes is worse than one that says it is unavailable.
+   */
+  onToggleIsolation?: () => void
 }
 
 /**
@@ -63,6 +72,7 @@ export function Toolbar({
   deviceOpen,
   onToggleDevice,
   onOpenSession,
+  onToggleIsolation,
 }: Props) {
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -165,6 +175,7 @@ export function Toolbar({
       </form>
 
       <div className="bw-actions">
+        <IsolationToggle tab={tab} onToggle={onToggleIsolation} />
         <IconButton
           label="Inspect an element"
           pressed={tab?.inspecting === true}
@@ -215,6 +226,66 @@ export function Toolbar({
         </div>
       )}
     </div>
+  )
+}
+
+/**
+ * Shared or Isolated, for this tab.
+ *
+ * A word, not a glyph. Everything else on this bar is an icon, and that is
+ * right for actions — but this reports a *state* that decides whether the tab
+ * can see the cookies imported from Chrome and whatever the other tabs are
+ * signed into. There is no icon anyone reads correctly for that, and being
+ * wrong about it is how someone demonstrates a bug while logged in as the
+ * wrong person.
+ *
+ * Switching replaces the page rather than reconfiguring it, because a
+ * WebContents' session is fixed when it is constructed. The title says so —
+ * a control that reloads the page without warning reads as a glitch.
+ */
+function IsolationToggle({
+  tab,
+  onToggle,
+}: {
+  tab: WorkspaceTab | null
+  onToggle?: () => void
+}) {
+  const isolated = tab?.isolated === true
+  const unavailable = !onToggle
+
+  const title = unavailable
+    ? 'Per-tab isolation is not available in this build.'
+    : isolated
+      ? 'Isolated: this tab has its own cookie jar, kept in memory and thrown away when the app quits. It cannot see imported cookies or the other tabs’ logins. Switching back reopens the page.'
+      : 'Shared: this tab uses the browser session every other tab uses, including any cookies imported from Chrome. Switching to Isolated reopens the page in an empty one.'
+
+  return (
+    <button
+      type="button"
+      className="bw-isolation"
+      title={title}
+      aria-label={`Session: ${isolated ? 'Isolated' : 'Shared'}`}
+      aria-pressed={isolated}
+      data-on={isolated || undefined}
+      disabled={!tab || unavailable}
+      onClick={() => onToggle?.()}
+    >
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        {isolated ? (
+          <>
+            <rect x="4" y="10" width="16" height="10" rx="2" />
+            <path d="M8 10V7a4 4 0 0 1 8 0v3" />
+          </>
+        ) : (
+          <>
+            <circle cx="9" cy="9" r="3" />
+            <circle cx="16" cy="15" r="3" />
+            <path d="M11.4 11.1 13.6 12.9" />
+          </>
+        )}
+      </svg>
+      <span>{isolated ? 'Isolated' : 'Shared'}</span>
+    </button>
   )
 }
 

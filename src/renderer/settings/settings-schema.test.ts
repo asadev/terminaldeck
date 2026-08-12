@@ -9,6 +9,7 @@ import {
   mergeSettings,
   migrateSettingsFile,
   numberSetting,
+  RENAMED_IDS,
   SECTION_IDS,
   SETTINGS,
   SETTINGS_VERSION,
@@ -55,13 +56,66 @@ describe('the table itself', () => {
   })
 
   it('lists the sections that carry stored settings', () => {
-    // The other four are real sections with nothing to persist — shortcuts and
+    // The rest are real sections with nothing to persist — shortcuts, help and
     // about are read-only, profiles and agents write through their own modules.
     expect(settingsIn('general').length).toBeGreaterThan(0)
     expect(settingsIn('appearance').length).toBeGreaterThan(0)
     expect(settingsIn('notifications').length).toBeGreaterThan(0)
     expect(settingsIn('shortcuts')).toEqual([])
+    expect(settingsIn('help')).toEqual([])
     expect(settingsIn('about')).toEqual([])
+    // Agents kept its pane and lost its setting when the default coding tool
+    // moved to General. An empty list here is the expected state, not a hole.
+    expect(settingsIn('agents')).toEqual([])
+  })
+
+  it('shows General exactly what it promises, in order', () => {
+    // This section is the one people open, and its order was chosen rather than
+    // accumulated. Asserting it here is what stops the next setting from being
+    // appended to the end of the block because that is where the cursor was.
+    expect(settingsIn('general').map((setting) => setting.id)).toEqual([
+      'general.language',
+      'general.defaultProvider',
+      'general.soundOnFinish',
+      'general.notifyOnAttention',
+      'general.recordHistory',
+      'general.showInsightAlerts',
+      'general.autoNameSessions',
+      'general.confirmCloseWorking',
+      'general.copyOnSelect',
+    ])
+  })
+})
+
+describe('the rename table', () => {
+  /**
+   * A rename that points at nothing, or one whose old id is still declared,
+   * fails in the one way this table exists to prevent: silently. `mergeSettings`
+   * would map the stored value onto a key no setting owns, and the control would
+   * come up on its default with the user's choice sitting in the file beside it.
+   */
+  it('renames onto settings that exist, from ids that no longer do', () => {
+    const ids = new Set(SETTINGS.map((setting) => setting.id))
+    for (const [from, to] of Object.entries(RENAMED_IDS)) {
+      expect(ids.has(from), `${from} is renamed but still declared`).toBe(false)
+      expect(ids.has(to), `${from} renames to ${to}, which is not declared`).toBe(true)
+    }
+  })
+
+  it('carries a value written under the old id onto the new one', () => {
+    // The real case: General was rebuilt, and these four moved section — which
+    // is a rename, because an id carries its section as its prefix.
+    const merged = mergeSettings({
+      'notifications.sound': true,
+      'notifications.onNeedsInput': false,
+      'general.restoreSessions': false,
+      'agents.defaultProvider': 'codex',
+    })
+    expect(merged['general.soundOnFinish']).toBe(true)
+    expect(merged['general.notifyOnAttention']).toBe(false)
+    expect(merged['advanced.restoreSessions']).toBe(false)
+    expect(merged['general.defaultProvider']).toBe('codex')
+    expect(merged['notifications.sound']).toBeUndefined()
   })
 })
 
@@ -78,13 +132,24 @@ describe('the prefs-backed settings', () => {
   })
 
   it('offers exactly the provider ids store.ts accepts', () => {
-    const provider = find('agents.defaultProvider') as SelectSetting
+    const provider = find('general.defaultProvider') as SelectSetting
     expect(provider.options.map((o) => o.value)).toEqual(['claude', 'codex', 'gemini', 'shell'])
   })
 
   it('names a distinct prefsKey for each', () => {
     const keys = SETTINGS.filter((s) => s.store === 'prefs').map((s) => s.prefsKey)
-    expect(keys).toEqual(['restoreSessions', 'theme', 'notifyOnComplete', 'defaultProvider'])
+    expect(keys).toEqual(['defaultProvider', 'theme', 'notifyOnComplete', 'restoreSessions'])
+  })
+})
+
+describe('the language picker', () => {
+  it('offers English and says nothing it cannot deliver', () => {
+    const language = find('general.language') as SelectSetting
+    expect(language.options.map((option) => option.value)).toEqual(['en'])
+    // A one-option select is deliberate here, so the schema's own check has to
+    // allow it — this is the assertion that catches the rule being tightened
+    // back to "at least two" without anyone noticing this row.
+    expect(settingsSchemaProblems()).toEqual([])
   })
 })
 
@@ -229,8 +294,8 @@ describe('valuesFromPreferences', () => {
       }),
     ).toEqual({
       'appearance.theme': 'light',
-      'agents.defaultProvider': 'codex',
-      'general.restoreSessions': false,
+      'general.defaultProvider': 'codex',
+      'advanced.restoreSessions': false,
       'notifications.onComplete': false,
     })
   })

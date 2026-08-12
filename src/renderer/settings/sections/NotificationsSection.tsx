@@ -8,11 +8,16 @@ import { errorText, type SectionProps } from '../settings-bridge'
 /**
  * Notifications.
  *
- * The toggles are generated, but a notification preference is worthless on its
- * own: the OS holds the real switch, and a user who has denied the app can turn
- * every setting here on and never see a banner. So permission state is shown
- * beside the toggles, and the Test buttons are the only honest way to prove the
- * whole chain works — preference, permission, and an audio device.
+ * The two switches people look for — sound when a session finishes, a banner
+ * when one needs attention — are in General now. What is left here is how a
+ * banner is delivered rather than whether to ask for one, which is why this
+ * section reads two of General's values without owning them.
+ *
+ * A notification preference is worthless on its own: the OS holds the real
+ * switch, and a user who has denied the app can turn every setting here on and
+ * never see a banner. So permission state is shown beside the toggles, and the
+ * Test buttons are the only honest way to prove the whole chain works —
+ * preference, permission, and an audio device.
  *
  * Chromium only shows the permission prompt while the state is `default`;
  * asking again after a denial is a silent no-op, which is why the denied case
@@ -27,16 +32,18 @@ function readPermission(): Permission {
   return state === 'granted' || state === 'denied' ? state : 'default'
 }
 
-export function NotificationsSection({ values, save, loading }: SectionProps) {
+export function NotificationsSection({ values, save, loading, goTo }: SectionProps) {
   const meta = sectionMeta('notifications')
   const [permission, setPermission] = useState<Permission>(readPermission)
   const [note, setNote] = useState<string | null>(null)
 
-  const soundOn = booleanSetting(values, 'notifications.sound')
+  // Both of these are General's settings. Read, never written from here — one
+  // switch in two places is the drift this window was built to avoid.
+  const soundOn = booleanSetting(values, 'general.soundOnFinish')
   const soundName = stringSetting(values, 'notifications.soundName')
   const wantsBanners =
     booleanSetting(values, 'notifications.onComplete') ||
-    booleanSetting(values, 'notifications.onNeedsInput')
+    booleanSetting(values, 'general.notifyOnAttention')
 
   const ask = useCallback(() => {
     void requestNotificationPermission().then((granted) => {
@@ -106,9 +113,23 @@ export function NotificationsSection({ values, save, loading }: SectionProps) {
             </Button>
           ),
           'notifications.soundName': (
-            <Button onClick={testSound} disabled={!soundOn}>
-              Test
-            </Button>
+            <>
+              <Button onClick={testSound} disabled={!soundOn}>
+                Test
+              </Button>
+              {!soundOn && (
+                <span className="settings-help">
+                  Sounds are off, so this plays nothing.{' '}
+                  <button
+                    type="button"
+                    className="settings-inline-btn"
+                    onClick={() => goTo('general')}
+                  >
+                    Turn them on in General
+                  </button>
+                </span>
+              )}
+            </>
           ),
         }}
       />

@@ -221,6 +221,59 @@
   cursor: default;
 }
 
+/*
+ * The Shared / Isolated switch.
+ *
+ * Wider than its neighbours because it carries a word, and outlined rather than
+ * filled so it reads as a state next to a row of actions. Isolated is drawn in
+ * the app's one accent, which is otherwise reserved for selection and focus —
+ * this is the exception the accent is worth making, because it is the only
+ * control on the bar whose setting changes what the page can see.
+ */
+.bw-isolation {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: var(--bw-control);
+  margin-right: 4px;
+  padding: 0 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.bw-isolation:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.bw-isolation[data-on] {
+  border-color: var(--accent-dim);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.bw-isolation:disabled {
+  color: var(--text-muted);
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* The strip's marker for the same state, for the tabs that are not in front. */
+.bw-tab-isolated {
+  flex-shrink: 0;
+  margin-left: 2px;
+  color: var(--accent);
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
 .bw-address {
   display: flex;
   align-items: center;

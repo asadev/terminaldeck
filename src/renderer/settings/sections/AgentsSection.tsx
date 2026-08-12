@@ -1,14 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import {
-  Button,
-  Group,
-  LinkOut,
-  Notice,
-  Row,
-  SectionHead,
-  SettingList,
-  type OptionState,
-} from '../controls'
+import { Button, Group, LinkOut, Notice, Row, SectionHead } from '../controls'
 import { sectionMeta } from '../settings-schema'
 import {
   errorText,
@@ -22,13 +13,18 @@ import {
 } from '../settings-bridge'
 
 /**
- * Agents — which CLI a new session runs, and which login it runs as.
+ * Agents — what is installed, and which login a session runs as.
  *
- * Availability is discovered, never declared: `prerequisites.ts` asks the
- * user's login shell what is on PATH and, for Claude, whether a credential
- * exists. An agent that is not installed is shown and disabled rather than
- * hidden, because "Codex is missing from this list" is a worse bug report than
- * "Codex is greyed out and links to its install page".
+ * The picker for *which* agent runs by default now lives in General, with the
+ * rest of the day-to-day choices. What is left is the part that is not a
+ * setting at all: availability is discovered, never declared — `prerequisites.ts`
+ * asks the user's login shell what is on PATH and, for Claude, whether a
+ * credential exists. An agent that is not installed is shown and disabled
+ * rather than hidden, because "Codex is missing from this list" is a worse bug
+ * report than "Codex is greyed out and links to its install page".
+ *
+ * So this section stores nothing (`settingsIn('agents')` is empty) and is still
+ * worth a pane.
  */
 
 const AGENT_IDS = ['claude', 'codex', 'gemini']
@@ -40,19 +36,7 @@ const STATE_LABEL: Record<ToolStatus['state'], string> = {
   unknown: 'Unknown',
 }
 
-/** Suffix for the picker. Short — it renders inside an <option>. */
-function optionStateFor(prereq: Prerequisites | null, value: string): OptionState {
-  // A plain shell is always available; it is the fallback the main process
-  // already falls back to when a requested provider is missing.
-  if (value === 'shell' || !prereq) return {}
-  const tool = prereq.tools.find((entry) => entry.id === value)
-  if (!tool) return {}
-  if (tool.state === 'missing') return { disabled: true, suffix: 'not installed' }
-  if (tool.state === 'installed-not-authed') return { suffix: 'sign-in needed' }
-  return {}
-}
-
-export function AgentsSection({ values, save, bridge, loading, goTo }: SectionProps) {
+export function AgentsSection({ bridge, goTo }: SectionProps) {
   const meta = sectionMeta('agents')
   const [prereq, setPrereq] = useState<Prerequisites | null>(null)
   const [profiles, setProfiles] = useState<ProfilesSnapshot | null>(null)
@@ -113,15 +97,12 @@ export function AgentsSection({ values, save, bridge, loading, goTo }: SectionPr
 
       {error && <Notice tone="error">{error}</Notice>}
 
-      <SettingList
-        section="agents"
-        values={values}
-        save={save}
-        disabled={loading}
-        optionStates={{
-          'agents.defaultProvider': (value) => optionStateFor(prereq, value),
-        }}
-      />
+      <Notice tone="info">
+        Which one runs by default is in General, with the other day-to-day settings.{' '}
+        <button type="button" className="settings-inline-btn" onClick={() => goTo('general')}>
+          Choose the default coding tool
+        </button>
+      </Notice>
 
       <Group title="What is installed">
         {!bridge.checkPrerequisites ? (

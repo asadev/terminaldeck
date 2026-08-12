@@ -30,10 +30,12 @@ import { GeneralSection } from './sections/GeneralSection'
 import { AppearanceSection } from './sections/AppearanceSection'
 import { NotificationsSection } from './sections/NotificationsSection'
 import { AgentsSection } from './sections/AgentsSection'
+import { SetupSection } from './sections/SetupSection'
 import { BrowserSection } from './sections/BrowserSection'
 import { ShortcutsSection } from './sections/ShortcutsSection'
 import { ProfilesSection } from './sections/ProfilesSection'
 import { AdvancedSection } from './sections/AdvancedSection'
+import { HelpSection } from './sections/HelpSection'
 import { AboutSection } from './sections/AboutSection'
 import './SettingsWindow.css'
 
@@ -66,10 +68,13 @@ const SECTION_VIEWS: Record<SectionId, ComponentType<SectionProps>> = {
   appearance: AppearanceSection,
   notifications: NotificationsSection,
   agents: AgentsSection,
+  setup: SetupSection,
   browser: BrowserSection,
   shortcuts: ShortcutsSection,
   profiles: ProfilesSection,
   advanced: AdvancedSection,
+  // Takes no props: it renders the shared HelpPanel, which reads its own bridge.
+  help: HelpSection,
   about: AboutSection,
 }
 

@@ -79,6 +79,17 @@ export function TabStrip({ tabs, activeKey, onSelect, onClose, onOpen, onReorder
             >
               <StatusDot tab={tab} />
               <span className="bw-tab-title">{tabTitle(tab)}</span>
+              {/*
+                The toolbar's Shared/Isolated switch only speaks for the tab in
+                front. With three tabs open, which of the others is isolated is
+                exactly the thing you must not have to guess at, so the strip
+                marks them too.
+              */}
+              {tab.isolated && (
+                <span className="bw-tab-isolated" title="Isolated session" role="img" aria-label="Isolated">
+                  iso
+                </span>
+              )}
             </button>
             <button
               type="button"

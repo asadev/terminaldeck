@@ -28,6 +28,12 @@ import {
   type Rect,
   type Size,
 } from './devices'
+import {
+  asIsolationKey,
+  isolationAvailable,
+  resolveIsolationApi,
+  type IsolationApi,
+} from './isolation-bridge'
 import { resolveOmnibox, securityOf } from './omnibox'
 import {
   closeTab as closeInList,
@@ -51,6 +57,13 @@ export interface BrowserWorkspaceProps {
   onSendToAgent?: (text: string) => void
   /** Injectable for tests; defaults to the preload bridge on `window.pawl`. */
   bridge?: BrowserBridge
+  /**
+   * Per-tab isolation, which is optional rather than required.
+   *
+   * Separate from `bridge` because a preload without it should cost one toggle,
+   * not the whole browser panel — see `isolation-bridge.ts`.
+   */
+  isolation?: IsolationApi
 }
 
 const HOME_KEY = 'pawl.browser.home'
@@ -153,8 +166,14 @@ function without<T>(map: Record<string, T>, key: string): Record<string, T> {
  * claim resolves to "the newest view nobody has claimed", which is only
  * unambiguous while creation is serialised. `queue` below is what serialises it.
  */
-export function BrowserWorkspace({ visible = true, onSendToAgent, bridge }: BrowserWorkspaceProps) {
+export function BrowserWorkspace({
+  visible = true,
+  onSendToAgent,
+  bridge,
+  isolation,
+}: BrowserWorkspaceProps) {
   const api = useMemo(() => bridge ?? resolveBrowserBridge(), [bridge])
+  const iso = useMemo(() => isolation ?? resolveIsolationApi(), [isolation])
   const missing = useMemo(
     () => (bridge ? [] : missingBridgeMethods(typeof window === 'undefined' ? null : (window as unknown as { pawl?: unknown }).pawl)),
     [bridge],
@@ -295,23 +314,43 @@ export function BrowserWorkspace({ visible = true, onSendToAgent, bridge }: Brow
 
   /* -- open a tab: place it in the strip first, then create and claim its view. */
   const openNewTab = useCallback(
-    (url: string, focusAddress = true): void => {
-      if (!api) return
+    (url: string, focusAddress = true, isolated = false): string => {
+      if (!api) return ''
       seq.current += 1
       const key = `tab-${seq.current}`
       const mine = generation.current
-      setTabs((prev) => openTab(prev, newTab(key, url), activeRef.current))
+      setTabs((prev) => openTab(prev, newTab(key, url, isolated), activeRef.current))
       setActiveKey(key)
       // Only for a tab the user asked for. Doing it on mount would pull focus
       // out of wherever they were the moment the panel appeared.
       if (focusAddress) setFocusToken((token) => token + 1)
 
       enqueue(async () => {
+        // The partition is fixed when the view is constructed, so the key has to
+        // exist before `browserCreate` — it cannot be applied afterwards.
+        const isolationKey = isolated
+          ? asIsolationKey(await iso.browserIsolationKey?.().catch(() => null))
+          : null
+        if (isolated && !isolationKey) {
+          // Never quietly open a *shared* tab that the strip and the toolbar
+          // both label Isolated. That is the one failure mode of this feature
+          // that actively misleads.
+          setTabs((prev) => prev.filter((tab) => tab.key !== key))
+          setNotice('This build could not open an isolated tab, so none was opened.')
+          return
+        }
+        setTabs((prev) => withTab(prev, key, { isolationKey }))
+
         // Invisible until the layout effect has given it a rectangle, or it
         // paints once at whatever the previous tab was using.
-        const state = await api.browserCreate({ url, visible: false })
+        const state = await api.browserCreate({
+          url,
+          visible: false,
+          ...(isolationKey ? { isolationKey } : {}),
+        })
         if (generation.current !== mine) {
           await api.browserClose(state.id).catch(() => undefined)
+          if (isolationKey) await iso.browserIsolationDispose?.(isolationKey).catch(() => undefined)
           return
         }
         const claimed = await api.browserClaim(state.id)
@@ -324,8 +363,9 @@ export function BrowserWorkspace({ visible = true, onSendToAgent, bridge }: Brow
           )
         }
       })
+      return key
     },
-    [api, enqueue],
+    [api, iso, enqueue],
   )
 
   /* -- first tab, and cleanup. */
@@ -335,6 +375,12 @@ export function BrowserWorkspace({ visible = true, onSendToAgent, bridge }: Brow
     return () => {
       generation.current += 1
       for (const tab of tabsRef.current) {
+        // An isolated partition holds its cookies in memory for the life of the
+        // process, so it has to be thrown away with the tab rather than left to
+        // the next quit.
+        if (tab.isolationKey) {
+          void iso.browserIsolationDispose?.(tab.isolationKey).catch(() => undefined)
+        }
         if (!tab.id) continue
         void api.browserRelease(tab.id).catch(() => undefined)
         void api.browserClose(tab.id).catch(() => undefined)
@@ -345,7 +391,7 @@ export function BrowserWorkspace({ visible = true, onSendToAgent, bridge }: Brow
       setTabs([])
       setActiveKey('')
     }
-  }, [api, openNewTab])
+  }, [api, iso, openNewTab])
 
   /* -- acting on the active tab. */
   const act = useCallback(
@@ -387,15 +433,45 @@ export function BrowserWorkspace({ visible = true, onSendToAgent, bridge }: Brow
       setRecordings((prev) => without(prev, key))
       setZooms((prev) => without(prev, key))
       setDevtools((prev) => without(prev, key))
-      if (!api || !tab?.id) return
+
+      const isolationKey = tab?.isolationKey ?? null
+      if (!api || !tab?.id) {
+        // A tab closed before its view existed still minted a partition, and a
+        // partition nobody holds a reference to is a cookie jar kept in memory
+        // for the rest of the run.
+        if (isolationKey) void iso.browserIsolationDispose?.(isolationKey).catch(() => undefined)
+        return
+      }
       const id = tab.id
       enqueue(async () => {
         await api.browserRelease(id).catch(() => undefined)
         await api.browserClose(id).catch(() => undefined)
+        // After the view is gone, not before: clearing a partition still in use
+        // signs the page out on its way to being closed, which shows.
+        if (isolationKey) await iso.browserIsolationDispose?.(isolationKey).catch(() => undefined)
       })
     },
-    [api, enqueue],
+    [api, iso, enqueue],
   )
+
+  /**
+   * Move this tab between the shared session and one of its own.
+   *
+   * It reopens the page rather than reconfiguring it, because a WebContents'
+   * session is chosen when it is constructed and Electron offers no way to swap
+   * it afterwards. So this closes the tab and opens a replacement at the same
+   * address, then puts it back where the old one was — a switch that silently
+   * moved the tab to the end of the strip would read as a bug in the strip.
+   */
+  const toggleIsolation = useCallback((): void => {
+    const tab = tabsRef.current.find((entry) => entry.key === activeRef.current)
+    if (!tab) return
+    const index = tabsRef.current.findIndex((entry) => entry.key === tab.key)
+    const url = tab.url || tab.draft
+    closeTab(tab.key)
+    const key = openNewTab(url, false, !tab.isolated)
+    if (key !== '') setTabs((prev) => moveTab(prev, key, index))
+  }, [closeTab, openNewTab])
 
   /* -- the extras, all of which need the claimed view. */
   const withId = useCallback(
@@ -584,6 +660,7 @@ export function BrowserWorkspace({ visible = true, onSendToAgent, bridge }: Brow
         deviceOpen={deviceOpen}
         onToggleDevice={() => setDeviceOpen((open) => !open)}
         onOpenSession={() => setSessionOpen(true)}
+        onToggleIsolation={isolationAvailable(iso) ? toggleIsolation : undefined}
       />
 
       {deviceOpen && (
@@ -743,7 +820,12 @@ export function BrowserWorkspace({ visible = true, onSendToAgent, bridge }: Brow
         )}
       </div>
 
-      <SessionModal open={sessionOpen} bridge={api} onClose={() => setSessionOpen(false)} />
+      <SessionModal
+        open={sessionOpen}
+        bridge={api}
+        isolated={active?.isolated === true}
+        onClose={() => setSessionOpen(false)}
+      />
     </div>
   )
 }

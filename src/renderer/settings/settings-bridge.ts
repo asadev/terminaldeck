@@ -149,6 +149,43 @@ export interface ClearResult {
   message: string
 }
 
+/** Mirrors `CookieSource` in `src/main/cookie-import.ts`. */
+export interface CookieSource {
+  browserId: string
+  browserName: string
+  profileId: string
+  profileName: string
+  /** False when nothing on this machine holds that browser's encryption key. */
+  keychainItem: boolean
+}
+
+/** Mirrors `CookieImportStatus` in `src/main/cookie-import.ts`. */
+export interface CookieImportStatus {
+  present: number
+  recorded: number
+  importedAt: number | null
+  source: string
+  supported: boolean
+}
+
+/**
+ * Mirrors `CookieImportReport` in `src/main/cookie-import.ts`.
+ *
+ * `keychain` is the field that separates "nothing to import" from "you said no
+ * to the keychain", which are the same number of cookies and completely
+ * different situations.
+ */
+export interface CookieImportReport {
+  ok: boolean
+  browserName: string
+  imported: number
+  skipped: number
+  failed: number
+  domains: number
+  keychain: string | null
+  message: string
+}
+
 /* -------------------------------------------------------------- bridge -- */
 
 export interface SettingsBridgeMethods {
@@ -175,6 +212,27 @@ export interface SettingsBridgeMethods {
 
   listBrowsers(): Promise<unknown>
   scanBrowserTabs(request?: unknown): Promise<unknown>
+
+  /**
+   * Cookie import. `importBrowserCookies` is the one call in this bridge that
+   * can put a system dialog on screen — macOS asks before handing over the
+   * keychain key — so nothing calls it except a button the user pressed.
+   */
+  browserCookieSources(): Promise<unknown>
+  browserCookieImportStatus(): Promise<unknown>
+  importBrowserCookies(request?: unknown): Promise<unknown>
+  clearImportedCookies(): Promise<unknown>
+
+  /**
+   * Setup: one read of what is installed and what our hooks look like, and the
+   * two writes that change the second half of that. The names are the preload's
+   * — `installHooks`, not `hooksInstall` — because the contract test matches
+   * these strings against it and a near-miss renders a panel that looks
+   * unimplemented rather than one that fails.
+   */
+  setupStatus(): Promise<unknown>
+  installHooks(providerId: string): Promise<unknown>
+  removeHooks(providerId: string): Promise<unknown>
 }
 
 export type SettingsBridge = Partial<SettingsBridgeMethods>
@@ -199,6 +257,13 @@ const BRIDGE_METHODS: ReadonlyArray<keyof SettingsBridgeMethods> = [
   'setDefaultProfile',
   'listBrowsers',
   'scanBrowserTabs',
+  'browserCookieSources',
+  'browserCookieImportStatus',
+  'importBrowserCookies',
+  'clearImportedCookies',
+  'setupStatus',
+  'installHooks',
+  'removeHooks',
 ]
 
 /**
@@ -454,6 +519,51 @@ export function toScanResult(raw: unknown): ScanResult {
     return [{ message }]
   })
   return { urls, problems }
+}
+
+export function toCookieSources(raw: unknown): CookieSource[] {
+  return asArray(raw).flatMap((entry): CookieSource[] => {
+    const source = asRecord(entry)
+    if (!source || typeof source.browserId !== 'string' || typeof source.profileId !== 'string') {
+      return []
+    }
+    return [
+      {
+        browserId: source.browserId,
+        browserName: asString(source.browserName, source.browserId),
+        profileId: source.profileId,
+        profileName: asString(source.profileName, source.profileId),
+        keychainItem: asBoolean(source.keychainItem),
+      },
+    ]
+  })
+}
+
+export function toCookieImportStatus(raw: unknown): CookieImportStatus {
+  const record = asRecord(raw)
+  return {
+    present: asNumber(record?.present),
+    recorded: asNumber(record?.recorded),
+    importedAt: typeof record?.importedAt === 'number' ? record.importedAt : null,
+    source: asString(record?.source),
+    // Defaults to false: claiming an import will work and then failing at the
+    // keychain is worse than saying up front that it will not.
+    supported: asBoolean(record?.supported),
+  }
+}
+
+export function toCookieImportReport(raw: unknown): CookieImportReport {
+  const record = asRecord(raw)
+  return {
+    ok: asBoolean(record?.ok),
+    browserName: asString(record?.browserName),
+    imported: asNumber(record?.imported),
+    skipped: asNumber(record?.skipped),
+    failed: asNumber(record?.failed),
+    domains: asNumber(record?.domains),
+    keychain: typeof record?.keychain === 'string' ? record.keychain : null,
+    message: asString(record?.message, 'The import finished without saying what happened.'),
+  }
 }
 
 export function toClearResult(raw: unknown): ClearResult {

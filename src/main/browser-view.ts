@@ -10,6 +10,7 @@ import {
 } from 'electron'
 import { BRAND } from '../shared/brand'
 import { guestSession } from './browser-session'
+import { isIsolatedGuestSession } from './browser-isolation'
 import { GUEST_RECORD_CHANNEL, GUEST_STEP_CHANNEL, safeAccent } from './browser-record-preload'
 import {
   appendStep,
@@ -136,7 +137,11 @@ function isGuest(wc: WebContents): boolean {
   if (wc.isDestroyed()) return false
   if (wc.getType() !== 'window') return false
   if (wc.getURL().startsWith('devtools://')) return false
-  return wc.session === guestSession()
+  // An isolated tab is on a partition of its own, so a check against the shared
+  // session alone would leave it permanently unclaimed — no zoom, no devtools,
+  // no screenshots, no load progress and no recording, with nothing on screen
+  // to say why.
+  return wc.session === guestSession() || isIsolatedGuestSession(wc.session)
 }
 
 function watchCreations(): void {

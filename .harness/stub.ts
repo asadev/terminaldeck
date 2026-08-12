@@ -4,6 +4,18 @@ const sessions = [
   { id: 's1', cwd: '/Users/apple/Projects/pawl', title: 'pawl', provider: 'claude', exitCode: null, createdAt: Date.now() },
   { id: 's2', cwd: '/Users/apple/Projects/pawl', title: 'pawl', provider: 'claude', exitCode: null, createdAt: Date.now() },
 ]
+/** Mirrors `BrowserTabState` in `src/main/browser-tab.ts` — every field of it. */
+const browserTabState = {
+  id: 'b1',
+  url: 'http://localhost:3000/',
+  label: 'localhost:3000',
+  title: 'Dev server',
+  loading: false,
+  canGoBack: false,
+  canGoForward: false,
+  inspecting: false,
+  error: null,
+}
 const api: Record<string, unknown> = new Proxy(
   {
     getBrand: async () => ({ name: 'Pawl', tagline: 'Run and watch your Claude sessions' }),
@@ -46,7 +58,19 @@ const api: Record<string, unknown> = new Proxy(
     browserClaim: async () => ({ ok: true }),
     browserRelease: async () => {},
     browserZoom: async () => 1,
-    browserCreate: async () => ({ id: 'b1', url: 'http://localhost:3000' }),
+    // A *complete* BrowserTabState. The short version — `{ id, url }` — took the
+    // whole browser panel down through an error boundary: `patchFrom` copies
+    // every field onto the strip entry, so a missing `title` overwrote the real
+    // empty string with undefined and `tabTitle` threw on `.trim()`. The real
+    // main process always sends all of it; a stub that sends less invents a bug.
+    browserCreate: async () => browserTabState,
+    browserNavigate: async () => browserTabState,
+    browserBack: async () => browserTabState,
+    browserForward: async () => browserTabState,
+    browserReload: async () => browserTabState,
+    browserStop: async () => browserTabState,
+    browserInspect: async () => browserTabState,
+    browserState: async () => browserTabState,
     browserCookies: async () => [],
     hooksStatus: async () => [],
     loadBoard: async () => null,
@@ -55,6 +79,33 @@ const api: Record<string, unknown> = new Proxy(
     searchSessions: async () => ({ hits: [] }),
     browserSessionInfo: async () => ({ partition: 'persist:pawl-browser', persistent: true }),
     listBrowsers: async () => ({ browsers: [] }),
+    // Per-tab isolation. The Proxy's fallback would resolve these to null, and
+    // a null key is indistinguishable from "this build cannot do it" — so the
+    // toggle would appear and then refuse to work, which is a bug the harness
+    // would be inventing rather than finding.
+    browserIsolationKey: async () => `pawl-tab-${crypto.randomUUID()}`,
+    browserIsolationDispose: async () => {},
+    // Cookie import. Deliberately the "nothing found" answer rather than a
+    // fabricated success: a stub that pretends to import cookies would make the
+    // count line and the Clear button look tested when neither had run.
+    browserCookieSources: async () => [],
+    browserCookieImportStatus: async () => ({
+      present: 0,
+      recorded: 0,
+      importedAt: null,
+      source: '',
+      supported: true,
+    }),
+    importBrowserCookies: async () => ({
+      ok: false,
+      imported: 0,
+      skipped: 0,
+      failed: 0,
+      domains: 0,
+      keychain: null,
+      message: 'The harness has no keychain, so nothing was imported.',
+    }),
+    clearImportedCookies: async () => ({ removed: 0 }),
   },
   {
     // Mirror the real preload's shape: on* methods are subscriptions that

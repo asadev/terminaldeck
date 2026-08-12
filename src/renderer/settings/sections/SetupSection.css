@@ -1,0 +1,165 @@
+/* ============================================================================
+   Setup — the tool list, the probe lines and the hook blocks.
+
+   Only what this section adds: the rows, paths, notices and buttons are the
+   shared classes in SettingsWindow.css. Every colour is a token; the literal
+   values here are geometry.
+
+   Kept in its own file rather than appended to SettingsWindow.css so that a
+   section can be added without touching a file other sections are being edited
+   in — the same rule the main process follows with registerXIpc.
+   ============================================================================ */
+
+/* A tick or a cross. Colour repeats the state the word on the right already
+   gives, so nothing here is the only carrier of meaning. */
+.setup-mark {
+  flex-shrink: 0;
+  width: 14px;
+  font-size: 11px;
+  line-height: 1.2;
+  text-align: center;
+  color: var(--status-idle);
+}
+
+.setup-mark[data-state='ready'],
+.setup-mark[data-state='installed'] {
+  color: var(--status-completed);
+}
+
+.setup-mark[data-state='installed-not-authed'],
+.setup-mark[data-state='stale'] {
+  color: var(--status-waiting);
+}
+
+.setup-mark[data-state='missing'] {
+  color: var(--color-critical);
+}
+
+/* What the shell actually said. Mono because it is a command's output, not
+   prose, and selectable because the next thing a person does is paste it. */
+.setup-probe {
+  display: block;
+  margin-top: 3px;
+  padding: 4px 7px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+/* ------------------------------------------------------------------ hooks -- */
+
+.setup-endpoint {
+  margin: 8px 0 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  max-width: 62ch;
+}
+
+.setup-endpoint::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 7px;
+  border-radius: 999px;
+  vertical-align: 1px;
+  background: var(--status-idle);
+}
+
+.setup-endpoint[data-running]::before {
+  background: var(--status-completed);
+}
+
+.setup-hooks {
+  margin-top: 10px;
+  padding: 10px 11px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+}
+
+.setup-hooks-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.setup-hooks-name {
+  font-size: 13px;
+  font-weight: 550;
+  color: var(--text-primary);
+}
+
+.setup-hooks .settings-path {
+  display: block;
+  margin-top: 2px;
+}
+
+.setup-hooks .settings-tool-note {
+  display: block;
+  margin: 6px 0 0;
+  max-width: 62ch;
+}
+
+.setup-hooks .settings-actions {
+  margin: 10px 0 0;
+}
+
+/* The events, in the order the CLI fires them. Wrapping rather than scrolling:
+   Claude has ten and all ten matter equally. */
+.setup-events {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+}
+
+.setup-event {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.setup-event-name {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.setup-event[data-state='installed'] .setup-event-name {
+  color: var(--text-primary);
+}
+
+.setup-event[data-state='missing'] .setup-event-name {
+  text-decoration: line-through;
+  text-decoration-color: var(--border-strong);
+}
+
+/* Read out, never shown: the tick and the cross are decoration, and this is the
+   text that carries their meaning to a screen reader. */
+.setup-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+[data-density='compact'] .setup-hooks {
+  margin-top: 8px;
+  padding: 8px 9px;
+}

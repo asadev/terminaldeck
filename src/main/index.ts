@@ -30,6 +30,9 @@ import { registerBrowserViewIpc } from './browser-view'
 import { registerDiagnosticsIpc } from './diagnostics'
 import { registerLogIpc } from './app-log'
 import { traceIpc } from './ipc-trace'
+import { registerSetupIpc } from './setup'
+import { registerCookieImportIpc } from './cookie-import'
+import { registerBrowserIsolationIpc } from './browser-isolation'
 import type { SessionStatus } from '../shared/types'
 
 const isDev = !!process.env.ELECTRON_RENDERER_URL
@@ -195,6 +198,9 @@ function registerIpc(): void {
   registerBrowserIpc(ipcMain)
   registerChromeImportIpc(ipcMain)
   registerPrerequisitesIpc(ipcMain)
+  registerSetupIpc(ipcMain)
+  registerCookieImportIpc(ipcMain)
+  registerBrowserIsolationIpc(ipcMain)
   registerSettingsIpc(ipcMain)
   // registerBrowserSessionIpc installs the recorder preload itself.
   registerBrowserSessionIpc(ipcMain)
