@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Entitlements for the main Terminal Deck bundle under the hardened runtime.
+
+  Only what an Electron app that spawns terminals actually needs. Every entry
+  below has a reason; nothing is here "because the template had it".
+-->
+<plist version="1.0">
+<dict>
+  <!-- V8 compiles JavaScript to machine code at runtime. Without these two the
+       hardened runtime kills the process the first time it JITs. -->
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+
+  <!-- better-sqlite3 and node-pty are native .node modules that are not signed
+       with this app's identity, and sessions load whatever the user's own
+       toolchain drags in. Library validation would refuse all of it. -->
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+
+  <!-- Sessions are spawned through the user's login shell, which sets the
+       environment (including DYLD_* on some setups) before exec. -->
+  <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+  <true/>
+
+  <!-- The app runs the user's own agent CLIs, git and gh as child processes. -->
+  <key>com.apple.security.inherit</key>
+  <false/>
+
+  <!-- Not sandboxed (this is a Developer ID build, not a Mac App Store one), so
+       the entries below are inert today. They are declared anyway so that a
+       future sandboxed build fails loudly on something else rather than
+       silently losing the network or the user's project folders. -->
+  <key>com.apple.security.network.client</key>
+  <true/>
+  <key>com.apple.security.network.server</key>
+  <true/>
+  <key>com.apple.security.files.user-selected.read-write</key>
+  <true/>
+</dict>
+</plist>

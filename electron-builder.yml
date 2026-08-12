@@ -1,16 +1,135 @@
 appId: dev.terminaldeck.app
 productName: Terminal Deck
+copyright: Copyright © 2026 Asad Iqbal. MIT licensed.
+
 directories:
   output: release
   buildResources: build
+
+# Default names carry the product name verbatim — "Terminal Deck-0.1.0-arm64.dmg"
+# — and a space in a release asset becomes %20 in every download URL and every
+# curl command someone pastes. Named from the slug instead.
+#
+# The architecture in the name is also load-bearing: it is how electron-updater
+# picks the right zip out of a release that contains both.
+artifactName: ${name}-${version}-${arch}.${ext}
+
+# Everything the app needs at runtime and nothing else. electron-builder adds
+# production dependencies from package.json automatically; the negations below
+# drop the parts of them that only exist in order to compile the native
+# modules — better-sqlite3/deps alone is the whole SQLite amalgamation, several
+# megabytes of C that a packaged app never reads.
 files:
   - out/**/*
   - package.json
+  - '!**/*.map'
+  - '!**/node_modules/*/{test,tests,__tests__,example,examples,benchmark,benchmarks}/**'
+  - '!**/node_modules/better-sqlite3/{src,deps}/**'
+  - '!**/node_modules/node-pty/{src,scripts,deps,node-addon-api}/**'
+  # ALL prebuilds, not just the Windows ones. electron-builder rebuilds
+  # build/Release/pty.node against the target architecture and node-pty loads
+  # that first, so the folder is a fallback that ships every platform at once.
+  # Keeping darwin-x64 inside an arm64 app is enough for macOS to report the
+  # whole thing as Intel: "This version will not open in macOS 28." Each
+  # per-arch artifact gets exactly one native module, its own.
+  - '!**/node_modules/node-pty/prebuilds/**'
+
+asar: true
+# electron-builder detects native modules and unpacks them on its own; naming
+# them keeps that from being a silent assumption. node-pty needs more than its
+# .node file — spawn-helper is a separate executable that it forks.
+asarUnpack:
+  - '**/*.node'
+  - '**/node_modules/node-pty/**'
+  - '**/node_modules/better-sqlite3/**'
+
 mac:
+  # Two per-architecture builds rather than one universal binary.
+  #
+  # A universal build is the sum of both slices — roughly double the download
+  # for every user, to spare Intel users one dropdown. It also has to fuse both
+  # architectures' native binaries: better_sqlite3.node, pty.node, and
+  # node-pty's spawn-helper executable. @electron/universal can lipo those
+  # together, but each one is a new way for a release to break on a machine we
+  # cannot test on. Two artifacts are boring, and nothing downstream suffers,
+  # because electron-updater selects on the architecture in the file name.
   target:
-    - target: dir
-      arch: arm64
+    - target: dmg
+      arch: [arm64, x64]
+    # The zip is what electron-updater downloads. A DMG cannot be applied as an
+    # update, so shipping the DMG alone would mean shipping no updates.
+    - target: zip
+      arch: [arm64, x64]
+
   category: public.app-category.developer-tools
-  # Unsigned for now: signing needs an Apple Developer identity, and a local
-  # build does not need one. Right-click → Open the first time.
+  icon: build/icon.icns
+
+  # Electron 41 itself refuses to launch below this, so claiming anything lower
+  # would turn a clear Finder refusal into a crash on launch.
+  minimumSystemVersion: '12.0'
+  darkModeSupport: true
+
+  # Signing is configured, only the identity is missing. To sign later: supply
+  # CSC_LINK + CSC_KEY_PASSWORD (or CSC_NAME) and delete the `identity: null`
+  # line. Nothing else here has to change.
+  #
+  # identity is null because there is no Developer ID on this machine, and
+  # electron-builder then signs nothing at all — it logs "skipped macOS code
+  # signing". What the binaries carry is the ad-hoc signature Apple's linker put
+  # on Electron itself, which is enough for the app to launch on Apple silicon
+  # but not enough for `codesign --verify` to pass on the bundle, and nowhere
+  # near enough for Gatekeeper. BUILDING.md spells out what that means for
+  # anyone who downloads it.
+  #
+  # Never reach for `codesign --deep` to fix a signing problem: it walks
+  # Electron's nested frameworks in the wrong order and produces a bundle that
+  # will not launch. It has already happened once here.
   identity: null
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  notarize: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.inherit.plist
+
+  extendInfo:
+    NSSupportsAutomaticGraphicsSwitching: true
+    # Projects live in the user's own folders, so macOS will ask for access.
+    # These are the sentences it shows in that prompt.
+    NSDesktopFolderUsageDescription: Terminal Deck opens coding projects stored on your Desktop.
+    NSDocumentsFolderUsageDescription: Terminal Deck opens coding projects stored in your Documents folder.
+    NSDownloadsFolderUsageDescription: Terminal Deck opens coding projects stored in your Downloads folder.
+    NSRemovableVolumesUsageDescription: Terminal Deck opens coding projects stored on external drives.
+
+dmg:
+  title: ${productName} ${version}
+  # Ours, not electron-builder's. There is no way to have no background at all —
+  # `background: null` falls through to a stock image bundled inside the npm
+  # package — so the choice is our artwork or theirs. Regenerate with
+  # `npm run art`; the geometry below is what build/art/dmg-background.mjs
+  # draws against, so the two move together.
+  background: build/background.tiff
+  window:
+    width: 600
+    height: 400
+  iconSize: 110
+  contents:
+    - x: 155
+      y: 180
+      type: file
+    - x: 445
+      y: 180
+      type: link
+      path: /Applications
+  # There is no identity to sign the disk image with either, and attempting it
+  # fails the build on its very last step.
+  sign: false
+
+# Where a release would go. Declaring it is what puts app-update.yml inside the
+# bundle, which is where electron-updater reads the feed from. It does not
+# publish anything by itself: every packaging script in package.json passes
+# `--publish never`, and publishing stays a separate, deliberate act.
+publish:
+  provider: github
+  owner: asadev
+  repo: terminaldeck
+  releaseType: draft

@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A newer push to the same branch makes the older run's answer worthless.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    # macOS only, deliberately. This is a macOS app: `electron-builder.yml`
+    # targets mac, the tests exercise real `git`, `mkfifo` and Chrome-profile
+    # paths, and nobody has ever run the product on Linux. A green Ubuntu job
+    # would be testing a platform we do not ship, and a red one would be
+    # telling us about a platform we never promised.
+    runs-on: macos-latest
+    timeout-minutes: 25
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # 22 is the floor the README states and `engines.node` enforces; 24 is
+        # the next line a contributor is likely to have.
+        #
+        # No test count is written here on purpose. A number in a comment is a
+        # second copy of a fact that changes every time a test is added, and the
+        # copy in the comment is the one that goes stale silently. `npm test`
+        # prints the real one.
+        node: ['22', '24']
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ matrix.node }}
+
+      # node_modules itself is cached, not just the npm download cache, because
+      # the expensive part of an install here is not the download: `postinstall`
+      # runs `electron-builder install-app-deps`, which rebuilds better-sqlite3
+      # and node-pty against Electron's ABI. A restored node_modules already
+      # holds those binaries and the extracted Electron dist (~580 MB total).
+      #
+      # No `restore-keys`: a near-miss restore would hand the job a node_modules
+      # built from a different lockfile, which is worse than no cache at all.
+      # The key carries the Node major because the native binaries and the
+      # Electron dist are only valid for the ABI they were built against.
+      - name: Restore node_modules
+        id: modules
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-${{ runner.arch }}-node${{ matrix.node }}-${{ hashFiles('package-lock.json') }}
+
+      - name: Install
+        if: steps.modules.outputs.cache-hit != 'true'
+        run: npm ci
+
+      # Both tsconfigs — the main/preload project and the renderer project.
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      # Last, because a bundling failure is the least interesting failure and
+      # this step overwrites `out/`.
+      - name: Build
+        run: npm run build

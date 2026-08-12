@@ -1,0 +1,135 @@
+name: Bug report
+description: Something in Terminal Deck does not work
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting.
+
+        **If this is a security vulnerability, stop here** and follow
+        [SECURITY.md](https://github.com/asadev/terminaldeck/blob/main/SECURITY.md)
+        instead — a public issue publishes the exploit before there is a fix.
+
+        The support bundle field below is the one that decides whether this gets
+        fixed on the first attempt or after four rounds of questions. Please fill it in.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you got instead.
+      placeholder: |
+        I opened a project with two sessions running and clicked the Git panel.
+        Expected the changed files. Got an empty panel with no error.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: >
+        Number them. If it only happens sometimes, say roughly how often and
+        what seems to change.
+      placeholder: |
+        1. Open a project that is a git repo with uncommitted changes
+        2. Start a Claude session
+        3. Press Cmd+Shift+G
+        4. Panel is empty
+    validations:
+      required: true
+
+  - type: textarea
+    id: bundle
+    attributes:
+      label: Support bundle
+      description: |
+        **Settings → Advanced → Debug mode**, then open the Debug panel and use
+        **Support bundle → Collect → Copy**.
+
+        It carries versions, which agent CLIs were detected, which IPC modules
+        registered, config paths and the tail of the log. Tokens, API keys,
+        authorization headers and your home directory are stripped out in the
+        main process before it reaches the UI, and IPC arguments are never
+        recorded — but read it before pasting anyway.
+
+        A blank panel and a broken panel look identical from a screenshot; the
+        bundle is what tells them apart.
+      render: text
+    validations:
+      required: true
+
+  - type: input
+    id: app-version
+    attributes:
+      label: Terminal Deck version
+      description: >
+        Settings → About. If you built from source, paste the commit
+        (`git rev-parse --short HEAD`) instead.
+      placeholder: "0.1.0 — or commit 41a96fc"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: build
+    attributes:
+      label: How are you running it
+      options:
+        - npm run dev
+        - Packaged app built locally (electron-builder)
+        - Other (describe below)
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      description: Version and chip. `sw_vers` and `uname -m` on macOS.
+      placeholder: "macOS 27.0, Apple M1 Pro"
+    validations:
+      required: true
+
+  - type: input
+    id: agent-cli
+    attributes:
+      label: Agent CLI and version
+      description: >
+        Which agent the session was running, and its version — `claude --version`,
+        `codex --version`, `gemini --version`. Put "none / not applicable" if no
+        session was involved.
+      placeholder: "claude 2.4.1"
+    validations:
+      required: true
+
+  - type: input
+    id: node
+    attributes:
+      label: Node version
+      description: "`node -v`. Only needed if the problem is with install or build."
+      placeholder: "v22.12.0"
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log output or console errors
+      description: >
+        The Debug panel has **Open log folder**. If the renderer threw, the
+        DevTools console (View → Toggle Developer Tools) is the place to look.
+        Paste the relevant lines, not the whole file.
+      render: shell
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: >
+        Screenshots or a screen recording help a lot for anything visual.
+        Drag them in here.
+    validations:
+      required: false

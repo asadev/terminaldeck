@@ -1,8 +1,52 @@
+# Dependencies and build output
 node_modules/
 out/
 dist/
 release/
-*.log
-.DS_Store
+coverage/
 .vite/
 *.tsbuildinfo
+
+# NOT ignored, deliberately: `build/`.
+# electron-builder reads it as `buildResources` — the app icon and the macOS
+# entitlements live there. Most stock Node .gitignore templates carry a
+# `build/` line, and pasting one in here silently ships an app with no icon.
+
+# Secrets. Nothing below should ever reach a public repository.
+.env
+.env.*
+.npmrc
+
+# Signing and notarisation material. None of it exists yet — the build is
+# unsigned — but an Apple Developer identity arrives as exactly these files,
+# and the moment to have this rule is before one is downloaded, not after.
+*.p12
+*.pem
+*.key
+*.cer
+*.certSigningRequest
+*.mobileprovision
+*.p8
+
+# Local agent configuration. Anything shared in `.claude/` may be committed;
+# `settings.local.json` is the per-machine one, and it records local permission
+# grants and absolute paths.
+.claude/settings.local.json
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editors
+.vscode/
+.idea/
+*.swp
+
+# macOS
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+
+# Windows
+Thumbs.db

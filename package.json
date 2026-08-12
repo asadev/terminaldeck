@@ -16,8 +16,23 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
-    "postinstall": "electron-builder install-app-deps"
+    "postinstall": "electron-builder install-app-deps",
+    "art": "node build/art/icon.mjs && iconutil -c icns build/icon.iconset -o build/icon.icns && node build/art/dmg-background.mjs",
+    "dist:mac": "npm run build && electron-builder --mac --publish never",
+    "dist:mac:arm64": "npm run build && electron-builder --mac dmg:arm64 zip:arm64 --publish never",
+    "dist:mac:x64": "npm run build && electron-builder --mac dmg:x64 zip:x64 --publish never",
+    "pack:mac": "npm run build && electron-builder --mac dir:arm64 --publish never",
+    "release:check": "node scripts/check-release.mjs",
+    "preversion": "npm run typecheck && npm test && node scripts/version.mjs check",
+    "version": "node scripts/version.mjs stamp && git add CHANGELOG.md",
+    "postversion": "node scripts/version.mjs next"
   },
+  "engines": {
+    "node": ">=22"
+  },
+  "files": [
+    "out"
+  ],
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.27.1",
     "@xterm/addon-fit": "^0.11.0",

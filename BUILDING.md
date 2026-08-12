@@ -1,0 +1,356 @@
+# Building and releasing Terminal Deck
+
+How to turn the source in this repository into a disk image someone else can
+install. macOS only for now — Linux and Windows targets are not configured.
+
+Everything below is unsigned. That is a deliberate current state, not an
+oversight; [Signing](#signing) explains exactly what changes when an Apple
+Developer identity exists.
+
+---
+
+## Prerequisites
+
+| Need | Version | Why |
+|---|---|---|
+| macOS | 12 or newer | Electron 41's own floor, and the SDK the build links against |
+| Xcode Command Line Tools | any current | `clang` to compile the native modules, `iconutil` and `tiffutil` to build the artwork, `codesign` and `lipo` to inspect the result |
+| Node | 22 or newer | enforced by `engines` in `package.json` |
+| npm | 10 or newer | ships with Node 22 |
+
+```bash
+xcode-select --install     # if `iconutil` is missing
+npm install                # postinstall rebuilds the native modules for Electron
+```
+
+`npm install` runs `electron-builder install-app-deps`, which rebuilds
+`better-sqlite3` and `node-pty` against Electron's ABI rather than Node's. If
+you ever see `NODE_MODULE_VERSION` mismatch at runtime, that step did not run —
+`npx electron-builder install-app-deps` repeats it.
+
+No Apple Developer account, certificate or network access to Apple is needed to
+produce any of the outputs below.
+
+---
+
+## The commands
+
+Run from the repository root. Never run a packaging command while `npm run dev`
+is serving — both write `out/`, and the build will pull the ground out from
+under the running app.
+
+```bash
+npm run build            # compile main + preload + renderer into out/. Not a package.
+npm run art              # regenerate the icon and the disk-image background
+npm run pack:mac         # unpackaged .app in release/mac-arm64/ — fastest way to smoke-test
+npm run dist:mac         # the real thing: DMG + zip, arm64 and x64
+npm run release:check    # preflight the contents of release/ before uploading
+npm run dist:mac:arm64   # one architecture — LOCAL TESTING ONLY, see the warning below
+npm run dist:mac:x64
+```
+
+`dist:*` runs `npm run build` first, so it is always one command from a clean
+checkout to a disk image.
+
+Every packaging script passes `--publish never`. Nothing in this repository
+uploads anything; see [Publishing](#publishing).
+
+> **Build a release with `npm run dist:mac`, in one invocation.**
+>
+> electron-builder rewrites `latest-mac.yml` every time it runs, listing only
+> the architectures *that* run produced. Build arm64 and x64 as two separate
+> commands and the manifest ends up describing whichever finished last — the
+> release page looks complete, and every user on the other architecture is
+> offered the wrong update or none at all. Nothing warns you.
+>
+> `npm run release:check` exists to catch exactly this, plus missing artifacts
+> and any size or SHA-512 in the manifest that disagrees with the file on disk.
+> Run it before every upload.
+
+### What each output is
+
+After `npm run dist:mac`, `release/` holds:
+
+| File | What it is | Who consumes it |
+|---|---|---|
+| `terminaldeck-<version>-arm64.dmg` | Installer disk image, Apple silicon | humans, download page |
+| `terminaldeck-<version>-x64.dmg` | Installer disk image, Intel | humans, download page |
+| `terminaldeck-<version>-arm64.zip` | The same `.app`, zipped | `electron-updater` |
+| `terminaldeck-<version>-x64.zip` | ditto | `electron-updater` |
+| `*.blockmap` | Per-file chunk hashes | `electron-updater`, to download only changed blocks |
+| `latest-mac.yml` | Update manifest: versions, sizes, SHA-512s | `electron-updater` |
+| `mac-arm64/Terminal Deck.app` | The unpackaged bundle the arm64 DMG was made from | debugging |
+| `mac/Terminal Deck.app` | Same, x64 | debugging |
+| `builder-debug.yml` | The file globs electron-builder resolved | debugging a packaging surprise |
+
+The DMG is for people. The zip is for the updater — a disk image cannot be
+applied as an update, so a release with only DMGs is a release that can never
+update itself. Both must be uploaded together, along with `latest-mac.yml` and
+the blockmaps.
+
+### Measured sizes
+
+Actual output of `npm run dist:mac` at v0.1.0 on Electron 41.10.5, built on an
+M1 Pro:
+
+| | arm64 | x64 |
+|---|---|---|
+| `.app`, sum of its files | 285 MB | 291 MB |
+| `.dmg` | 113.8 MB | 119.0 MB |
+| `.zip` | 113.8 MB | 119.1 MB |
+| `app.asar` (our code + deps) | 19.5 MB | 19.5 MB |
+
+Mebibytes, and the `.app` rows are the sum of the file sizes inside the bundle.
+`du -sh` on the same bundle says 293 MB / 303 MB, because it counts allocated
+blocks rather than bytes. Expect either number depending on how you measure;
+the DMG is the only one anyone downloads.
+
+Almost all of it is Electron. Our own code and its dependencies are the 19.5 MB
+`app.asar`; the other ~265 MB is the Chromium framework, and the only way to
+move that number is to ship less Electron, not less app.
+
+The `files` rules in `electron-builder.yml` cut `app.asar` from 33 MB to
+19.5 MB by dropping things that only exist in order to compile the native
+modules — `better-sqlite3/deps` is the entire SQLite amalgamation, and
+`node-pty`'s Windows prebuilds can never load on macOS.
+
+---
+
+## Two architectures, not one universal binary
+
+`electron-builder.yml` builds `arm64` and `x64` separately.
+
+A universal binary is the sum of both slices: roughly a 230 MB download for
+every user, up from 114, to spare Intel users one choice on a download page. It
+also has to fuse three native binaries — `better_sqlite3.node`, `pty.node`, and
+`node-pty`'s `spawn-helper` executable. `@electron/universal` can `lipo` those
+together, but each one is a way for a release to break on hardware we cannot
+test on.
+
+Nothing downstream loses out: `electron-updater` selects the right zip because
+the architecture is in the file name, which is why `artifactName` is
+`${name}-${version}-${arch}.${ext}` and should stay that way.
+
+Cross-building works in both directions on either kind of Mac —
+electron-builder downloads the other architecture's Electron and rebuilds the
+native modules for it. Both artifacts on this page were produced on an M1.
+
+---
+
+## The artwork
+
+Both the app icon and the disk-image background are original, generated from
+vector descriptions by two dependency-free scripts:
+
+```
+build/art/icon.mjs             the icon
+build/art/dmg-background.mjs   the disk-image background
+```
+
+`npm run art` runs both and compiles `build/icon.iconset/` into
+`build/icon.icns` with `iconutil`.
+
+The icon is drawn from signed-distance fields at each size natively, so no size
+is a downscale of a bigger bitmap, and 16px and 32px use a deliberately
+simplified composition — at those sizes the prompt chevron is under two pixels
+wide and turns to mud. The generated PNGs and the `.icns` are committed, so a
+build does not depend on running the generator.
+
+If you change the disk image's `window` or `contents` geometry in
+`electron-builder.yml`, change the matching constants at the top of
+`build/art/dmg-background.mjs` and re-run `npm run art`, or the background and
+the icons will disagree.
+
+Note that `dmg.background` cannot be turned off. Setting it to `null` makes
+electron-builder fall through to a stock image bundled inside its own npm
+package, so the real choice is our artwork or theirs.
+
+---
+
+## Signing
+
+The build is **not signed**, because there is no Apple Developer identity on
+this machine. Everything around signing is already configured, so getting there
+later means supplying credentials and deleting one line — no restructuring.
+
+What is already in place in `electron-builder.yml`:
+
+- `hardenedRuntime: true`
+- `entitlements: build/entitlements.mac.plist` — JIT and unsigned executable
+  memory for V8, library validation disabled so the unsigned `.node` modules
+  load, and dyld environment variables allowed because sessions are spawned
+  through the user's login shell
+- `entitlementsInherit: build/entitlements.mac.inherit.plist` for the nested
+  helper bundles
+- `identity: null` — the one line that has to go
+
+To sign, once a Developer ID Application certificate exists:
+
+```bash
+export CSC_LINK=/absolute/path/to/DeveloperID.p12   # or a base64 data: URL
+export CSC_KEY_PASSWORD='…'
+# then delete the `identity: null` line in electron-builder.yml
+npm run dist:mac
+```
+
+electron-builder picks the identity out of the keychain or `CSC_LINK`, signs
+every nested binary inside-out, and applies the entitlements above.
+
+**Never reach for `codesign --deep`.** It walks Electron's nested frameworks in
+the wrong order and produces a bundle that will not launch. That has already
+happened once on this machine. If signing fails, fix the identity or the
+entitlements — do not add `--deep`.
+
+### What the unsigned build means for users
+
+With `identity: null`, electron-builder signs **nothing** — it logs `skipped
+macOS code signing`. The only signature in the bundle is the ad-hoc one Apple's
+linker already put on Electron's own binaries:
+
+```
+$ codesign -dvv "release/mac-arm64/Terminal Deck.app"
+Identifier=Electron
+flags=0x20002(adhoc,linker-signed)
+Signature=adhoc
+
+$ codesign --verify "release/mac-arm64/Terminal Deck.app"
+…: code has no resources but signature indicates they must be present
+```
+
+That is enough for the app to launch on Apple silicon, which is why the
+verification below works, and it is why local builds are usable. It is nowhere
+near enough for Gatekeeper. Anyone who downloads it gets *"Terminal Deck is
+damaged and can't be opened"* or *"cannot be opened because the developer
+cannot be verified"*, because the download carries a quarantine flag. Their way
+past it is System Settings → Privacy & Security → **Open Anyway**, or:
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/Terminal Deck.app"
+```
+
+Asking strangers to run `xattr` on an app they just downloaded is a bad look
+and trains a bad habit. Treat a Developer ID as a prerequisite for a public
+release, not a nice-to-have.
+
+---
+
+## Notarisation
+
+Not done, and not attempted. It requires signing first — Apple will not
+notarise an unsigned or ad-hoc-signed bundle.
+
+Once there is an identity, `mac.notarize: false` in `electron-builder.yml`
+becomes `true` and the credentials come from the environment:
+
+```bash
+export APPLE_ID='the-apple-id@example.com'                   # the developer account
+export APPLE_APP_SPECIFIC_PASSWORD='xxxx-xxxx-xxxx-xxxx'   # appleid.apple.com
+export APPLE_TEAM_ID='XXXXXXXXXX'
+npm run dist:mac
+```
+
+electron-builder uploads each artifact to Apple's notary service, waits for the
+ticket, and staples it. Budget 5–20 minutes per artifact on top of the build,
+and remember there are two.
+
+Verify afterwards:
+
+```bash
+spctl -a -vvv -t install "release/mac-arm64/Terminal Deck.app"
+xcrun stapler validate "release/terminaldeck-<version>-arm64.dmg"
+```
+
+### What it costs
+
+| Item | Cost |
+|---|---|
+| Apple Developer Program membership | **USD 99 / year**, and it is the only way to get a Developer ID certificate |
+| Developer ID Application certificate | included in the membership |
+| Notarisation itself | free and unlimited, once you are a member |
+| App-specific password for the notary service | free |
+
+The membership is the entire monetary cost. The non-monetary cost is that
+enrolment takes days rather than minutes (Apple verifies identity, and for a
+company it wants a D-U-N-S number), so start it well before a release date.
+
+Distributing through the Mac App Store instead is a different build (`mas`
+target, full App Sandbox) and is not configured here — the App Sandbox would
+have to allow spawning arbitrary user binaries, which it does not.
+
+---
+
+## Publishing
+
+**Nothing in this repository publishes anything.** Every packaging script passes
+`--publish never`, and the `publish:` block in `electron-builder.yml` exists
+only so that `app-update.yml` is written into the bundle for `electron-updater`
+to read.
+
+Creating the GitHub repository and uploading a release are the owner's to
+trigger, deliberately, by hand.
+
+```bash
+# 1. create the repo and push (once)
+gh repo create asadev/terminaldeck --public --source=. --remote=origin --push
+
+# 2. build the artifacts, both architectures, one invocation
+npm run dist:mac
+npm run release:check
+
+# 3. cut a release and upload everything the updater needs
+gh release create v0.1.0 \
+  release/terminaldeck-0.1.0-*.dmg \
+  release/terminaldeck-0.1.0-*.zip \
+  release/terminaldeck-0.1.0-*.blockmap \
+  release/latest-mac.yml \
+  --title "Terminal Deck 0.1.0" --generate-notes
+```
+
+Upload the zips, the blockmaps and `latest-mac.yml` as well as the DMGs. A
+release with only DMGs is one that `electron-updater` cannot read.
+
+---
+
+## Verifying a build
+
+Both disk images for v0.1.0 were mounted, and the app inside each was launched
+and confirmed to open its window — the arm64 one natively, the x64 one under
+Rosetta 2. Note that the first launch of the x64 build on Apple silicon takes
+around half a minute while Rosetta translates the Electron framework; it looks
+hung and is not.
+
+How to repeat it:
+
+```bash
+# it mounts
+hdiutil attach -nobrowse -readonly release/terminaldeck-0.1.0-arm64.dmg
+
+# the window layout is real: 600x400, icons at (155,180) and (445,180),
+# our background, no toolbar or sidebar
+#   -> recorded in "/Volumes/Terminal Deck 0.1.0/.DS_Store"
+
+# the app inside launches, from the read-only volume, without touching your
+# real profile
+open -n "/Volumes/Terminal Deck 0.1.0/Terminal Deck.app" --args --user-data-dir=/tmp/td-verify
+
+# expect four processes: main, GPU, network utility, renderer.
+# a renderer only exists if a window was created and loaded.
+ps -Ao pid,command | grep "/Volumes/Terminal Deck"
+
+hdiutil detach "/Volumes/Terminal Deck 0.1.0"
+```
+
+Sanity-check the bundle itself:
+
+```bash
+APP="release/mac-arm64/Terminal Deck.app"
+/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$APP/Contents/Info.plist"   # 12.0
+lipo -archs "$APP/Contents/MacOS/Terminal Deck"                                        # arm64
+codesign -dvv "$APP"                                                                   # adhoc, today
+find "$APP/Contents/Resources/app.asar.unpacked" -name '*.node' -o -name spawn-helper
+```
+
+The native modules must be present **outside** `app.asar` — a `.node` file
+cannot be loaded from inside an archive, and `node-pty` forks `spawn-helper` as
+a real file on disk. If that `find` comes back empty, sessions will fail to
+start in the packaged app while working perfectly in `npm run dev`.

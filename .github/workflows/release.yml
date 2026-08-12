@@ -1,0 +1,113 @@
+name: Release
+
+# Only a version tag releases. Pushing to main never does — cutting a release
+# is an explicit act by the owner (`npm version …` then `git push --follow-tags`).
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  # Creating the Release and uploading its assets. Nothing else.
+  contents: write
+
+jobs:
+  macos:
+    # Both mac artifacts are built here. The runner is arm64 and the x64 slice
+    # is cross-built from it — verified: the x64 bundle carries an x86_64
+    # Electron, an x86_64 better_sqlite3.node and an x86_64 node-pty
+    # spawn-helper, not arm64 binaries in an x64 wrapper.
+    runs-on: macos-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+
+      # No cache here on purpose: a release is rare, and the one thing worse
+      # than a slow release build is one assembled from a stale node_modules.
+      - name: Install
+        run: npm ci
+
+      # A tag that disagrees with package.json means the artifacts inside the
+      # dmg would be stamped with a different version than the release naming
+      # them. `npm version` keeps the two in step; this catches a hand-made tag.
+      - name: Tag must match package.json
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(node -p "require('./package.json').version")"
+          if [ "$tag" != "$pkg" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match package.json version ${pkg}"
+            exit 1
+          fi
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      # `dist:mac` is `npm run build && electron-builder … --publish never`, and
+      # both halves matter. electron-builder packages whatever is in `out/` and
+      # does not produce it — a run without the build step fails the asar sanity
+      # check ("out/main/index.js … was not found in this archive"), which is
+      # verified behaviour, not a guess. `--publish never` is the other half:
+      # electron-builder infers a GitHub publish target from the `repository`
+      # field and would upload on its own. Uploading happens below instead,
+      # explicitly, with the artifacts chosen here.
+      - name: Build the mac artifacts
+        run: npm run dist:mac
+
+      - name: Checksums
+        working-directory: release
+        run: shasum -a 256 *.dmg *.zip > SHA256SUMS.txt
+
+      # `--generate-notes` writes the commit/PR summary; `--notes` is prepended
+      # to it. The install note is not decoration: the app is unsigned, so a
+      # first launch without this instruction looks like a broken download.
+      #
+      # The product name is read from package.json and substituted into a
+      # placeholder rather than typed out here — this repo keeps the name in one
+      # place, and a workflow is no more exempt from that than a component is.
+      # The heredoc stays quoted so the backticks in the markdown are markdown.
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          app="$(node -p "require('./package.json').productName")"
+          notes="$(cat <<'NOTE'
+          ### Install
+
+          macOS 12 or later. Take `-arm64.dmg` for Apple silicon, `-x64.dmg` for
+          Intel. Open it and drag the app to Applications.
+
+          This build is **not signed or notarised** — an Apple Developer identity
+          would be needed for that. macOS will refuse the first launch. Either
+          right-click the app and choose *Open*, or clear the quarantine flag:
+
+          ```sh
+          xattr -dr com.apple.quarantine "/Applications/{{APP}}.app"
+          ```
+
+          {{APP}} runs agent CLIs; it does not bundle them. At least one of
+          Claude Code, Codex CLI or Gemini CLI needs to be installed and
+          authenticated already.
+
+          Install the `.dmg`. The `.zip` files are the same app in the format an
+          updater consumes — nothing in this build checks for updates yet, so
+          there is no reason to download one by hand. `SHA256SUMS.txt` lists the
+          checksum of every artifact below.
+          NOTE
+          )"
+
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes \
+            --notes "${notes//\{\{APP\}\}/$app}" \
+            release/*.dmg \
+            release/*.zip \
+            release/*.blockmap \
+            release/latest-mac.yml \
+            release/SHA256SUMS.txt
