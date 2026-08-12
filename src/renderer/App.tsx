@@ -362,6 +362,10 @@ function Workspace() {
               {active && mode === 'chat' ? (
                 <ChatView
                   cwd={session.projectPath ?? null}
+                  // Without this the controls row and the usage strip both
+                  // render in their "no session focused" state: model, effort
+                  // and permission mode are read off this session's screen.
+                  sessionId={session.id}
                   onSend={(text) => {
                     // Written to the session's own terminal: chat mode is a
                     // different view of the same session, not a second channel,
