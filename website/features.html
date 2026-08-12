@@ -603,10 +603,16 @@ hr {
 
   <h2>Chat mode</h2>
 
-  <p>The same session, read as a conversation. Chat mode reads Claude Code's own
+  <p>The session, read as a conversation. Chat mode reads Claude Code's own
   transcript and shows only what a person said and what the agent said back —
   tool calls, usage blocks and compaction markers are thrown away, because hiding
   them is the entire point of the view.</p>
+
+  <p>It is keyed to the project folder, not to the tab: the view loads the newest
+  Claude Code transcript for that folder. With one Claude session open in a
+  project that is the session you are looking at. With two, both tabs show the
+  newer conversation — and a Codex or Gemini tab shows the project's Claude
+  conversation rather than nothing.</p>
 
   <p>The rules for what counts as a typed prompt were measured against the
   transcripts on a real machine rather than assumed. A <code>user</code> line is

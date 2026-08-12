@@ -158,7 +158,7 @@ function createWindow(): void {
 
 function registerIpc(): void {
   // Installed first so it wraps every handler registered below.
-  traceIpc(ipcMain, ['browser', 'git:', 'mcp:', 'hooks:'])
+  traceIpc(ipcMain)
 
   ipcMain.handle('brand:get', () => ({ name: BRAND.name, tagline: BRAND.tagline }))
 
