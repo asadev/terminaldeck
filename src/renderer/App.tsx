@@ -15,7 +15,7 @@ import { Dashboard } from './dashboard/Dashboard'
 import { SwarmGrid } from './layout/SwarmGrid'
 import { ActivityBar } from './shell/ActivityBar'
 import { PanelDock } from './shell/PanelDock'
-import { type PanelId } from './shell/panels'
+import { usePanelDock } from './shell/usePanelDock'
 import { applyStoredTheme } from './theme'
 import './shell/shell.css'
 
@@ -40,7 +40,8 @@ function Workspace() {
     setSessionStatus,
   } = useStore()
 
-  const [panel, setPanel] = useState<PanelId>('projects')
+  const dock = usePanelDock()
+  const { panel, selectPanel: setPanel } = dock
   const [view, setView] = useState<MainView>('terminal')
   const [swarm, setSwarm] = useState(false)
   const [prefsOpen, setPrefsOpen] = useState(false)
@@ -165,6 +166,11 @@ function Workspace() {
         setShortcutsOpen(true)
         return
       }
+      if (e.key === 'b' || e.key === 'B') {
+        e.preventDefault()
+        dock.toggleCollapsed()
+        return
+      }
       if (e.key === '\\') {
         e.preventDefault()
         setView('terminal')
@@ -260,6 +266,10 @@ function Workspace() {
         <PanelDock
           panel={panel}
           projectPath={activeProjectPath}
+          width={dock.width}
+          collapsed={dock.collapsed}
+          onToggleCollapsed={dock.toggleCollapsed}
+          onStartResize={dock.startResize}
           onOpenProject={openProject}
           onNewSession={newSessionIn}
           onOpenFile={() => setPanel('files')}

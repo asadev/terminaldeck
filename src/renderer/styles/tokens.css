@@ -1,7 +1,10 @@
 /* ============================================================================
    Pawl — foundation tokens
-   Cool-slate surfaces, single iris accent, hairline alpha borders.
-   Every surface reads these, so re-theming is a single variable swap.
+
+   Notion-style: near-neutral surfaces, warm-grey text, hairline dividers, and
+   colour used only where it carries meaning. There is no decorative accent —
+   the single blue appears on selection and focus and nowhere else. Status
+   colours are deliberately muted so a row of them never looks like a warning.
    ============================================================================ */
 
 @font-face {
@@ -19,83 +22,102 @@
   src: url('../assets/fonts/jetbrains-mono.woff2') format('woff2');
 }
 
+/* ------------------------------------------------------------- light -- */
+
 :root,
-[data-theme='dark'] {
-  /* surfaces */
-  --bg-primary: #0e0f13;
-  --bg-secondary: #101116;
-  --bg-tertiary: #171922;
-  --bg-hover: #1b1d27;
+[data-theme='light'] {
+  --bg-primary: #ffffff;
+  --bg-secondary: #f7f7f5;
+  --bg-tertiary: #f1f1ef;
+  --bg-hover: rgba(55, 53, 47, 0.06);
+  --bg-active: rgba(55, 53, 47, 0.09);
 
-  /* text */
-  --text-primary: #e9eaf1;
-  --text-secondary: #969aac;
-  --text-muted: #5d6172;
+  --text-primary: #37352f;
+  --text-secondary: #787774;
+  --text-muted: #9b9a97;
 
-  /* accent */
-  --accent: #8588f2;
-  --accent-dim: #6d70e6;
-  --accent-soft: rgba(133, 136, 242, 0.15);
+  /* One blue, used only for selection and focus. */
+  --accent: #2383e2;
+  --accent-dim: #1b6fc4;
+  --accent-soft: rgba(35, 131, 226, 0.09);
   --accent-fg: #ffffff;
 
-  /* borders */
-  --border: rgba(255, 255, 255, 0.1);
+  --border: rgba(55, 53, 47, 0.09);
+  --border-subtle: rgba(55, 53, 47, 0.055);
+  --border-strong: rgba(55, 53, 47, 0.16);
+
+  /* Muted so a column of dots reads as information, not alarm. */
+  --status-working: #337ea9;
+  --status-waiting: #cb912f;
+  --status-input: #d9730d;
+  --status-completed: #448361;
+  --status-idle: #9b9a97;
+
+  --color-warning: #cb912f;
+  --color-critical: #d44c47;
+
+  --tab-active: #ffffff;
+  --tab-inactive: #f7f7f5;
+  --pane-focus: var(--accent);
+  --pane-unfocus: var(--border);
+
+  --shadow-sm: 0 1px 2px rgba(15, 15, 15, 0.06), 0 2px 4px rgba(15, 15, 15, 0.04);
+  --shadow-md: 0 2px 4px rgba(15, 15, 15, 0.06), 0 8px 20px rgba(15, 15, 15, 0.09);
+}
+
+/* -------------------------------------------------------------- dark -- */
+
+[data-theme='dark'] {
+  --bg-primary: #191919;
+  --bg-secondary: #202020;
+  --bg-tertiary: #252525;
+  --bg-hover: rgba(255, 255, 255, 0.055);
+  --bg-active: rgba(255, 255, 255, 0.085);
+
+  --text-primary: #d4d4d4;
+  --text-secondary: #9b9b9b;
+  --text-muted: #6f6f6f;
+
+  --accent: #529cca;
+  --accent-dim: #3f87b4;
+  --accent-soft: rgba(82, 156, 202, 0.14);
+  --accent-fg: #ffffff;
+
+  --border: rgba(255, 255, 255, 0.094);
   --border-subtle: rgba(255, 255, 255, 0.055);
   --border-strong: rgba(255, 255, 255, 0.16);
 
-  /* session status */
-  --status-working: var(--accent);
-  --status-waiting: #f4b400;
-  --status-input: #e67e22;
-  --status-completed: #34a853;
-  --status-idle: var(--text-muted);
+  --status-working: #529cca;
+  --status-waiting: #c9a227;
+  --status-input: #d9730d;
+  --status-completed: #4dab9a;
+  --status-idle: #6f6f6f;
 
-  --color-warning: #e2b65f;
-  --color-critical: #f0656b;
+  --color-warning: #c9a227;
+  --color-critical: #ff7369;
 
-  --tab-active: #0e0f13;
-  --tab-inactive: #101116;
-  --pane-focus: var(--accent);
-  --pane-unfocus: var(--border);
+  --tab-active: #191919;
+  --tab-inactive: #202020;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
 }
 
-[data-theme='light'] {
-  --bg-primary: #ffffff;
-  --bg-secondary: #f6f7f9;
-  --bg-tertiary: #eef0f4;
-  --bg-hover: #e6e9ef;
-
-  --text-primary: #14161c;
-  --text-secondary: #545a6b;
-  --text-muted: #878da0;
-
-  --accent: #5b5ee0;
-  --accent-dim: #4a4dd4;
-  --accent-soft: rgba(91, 94, 224, 0.12);
-  --accent-fg: #ffffff;
-
-  --border: rgba(0, 0, 0, 0.12);
-  --border-subtle: rgba(0, 0, 0, 0.06);
-  --border-strong: rgba(0, 0, 0, 0.2);
-
-  --tab-active: #ffffff;
-  --tab-inactive: #f6f7f9;
-}
+/* ------------------------------------------------------------ shared -- */
 
 :root {
-  /* type */
   --font-ui: 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
 
-  /* radii */
-  --radius-sm: 7px;
-  --radius-md: 10px;
-  --radius-lg: 13px;
+  /* Notion's radii are small and consistent. */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
 
-  /* layout */
-  --sidebar-width: 264px;
-  --sidebar-min: 150px;
-  --sidebar-max: 500px;
+  --sidebar-width: 260px;
+  --sidebar-min: 180px;
+  --sidebar-max: 480px;
   --titlebar-height: 38px;
   --tabbar-height: 36px;
+  --rail-width: 44px;
 }

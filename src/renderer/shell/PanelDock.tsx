@@ -12,6 +12,10 @@ import { PANELS, type PanelId } from './panels'
 interface Props {
   panel: PanelId
   projectPath: string | null
+  width: number
+  collapsed: boolean
+  onToggleCollapsed(): void
+  onStartResize(event: React.MouseEvent): void
   onOpenProject(): void
   onNewSession(projectPath: string, resume?: boolean): void
   onOpenFile(path: string): void
@@ -34,14 +38,25 @@ function NeedsProject({ label }: { label: string }) {
  * them against a null path made them render permanent error states, which reads
  * as "this feature is broken" rather than "you have not opened anything yet".
  */
-export function PanelDock({ panel, projectPath, onOpenProject, onNewSession, onOpenFile }: Props) {
+export function PanelDock({
+  panel,
+  projectPath,
+  width,
+  collapsed,
+  onToggleCollapsed,
+  onStartResize,
+  onOpenProject,
+  onNewSession,
+  onOpenFile,
+}: Props) {
   const label = PANELS.find((p) => p.id === panel)?.label ?? panel
 
-  if (panel === 'projects') {
-    return <Sidebar onOpenProject={onOpenProject} onNewSession={onNewSession} />
-  }
+  if (collapsed) return null
 
   const body = (() => {
+    if (panel === 'projects') {
+      return <Sidebar onOpenProject={onOpenProject} onNewSession={onNewSession} />
+    }
     switch (panel) {
       case 'hooks':
         return <HooksPanel />
@@ -69,9 +84,31 @@ export function PanelDock({ panel, projectPath, onOpenProject, onNewSession, onO
   })()
 
   return (
-    <aside className="panel-dock" aria-label={label}>
-      <header className="panel-dock-header">{label}</header>
-      <div className="panel-dock-body">{body}</div>
-    </aside>
+    <>
+      <aside className="panel-dock" style={{ width }} aria-label={label}>
+        <header className="panel-dock-header">
+          <span>{label}</span>
+          <button
+            type="button"
+            className="icon-btn small"
+            onClick={onToggleCollapsed}
+            title="Collapse panel (⌘B)"
+            aria-label="Collapse panel"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+              <path d="M14 6l-6 6 6 6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+        </header>
+        <div className="panel-dock-body">{body}</div>
+      </aside>
+      <div
+        className="dock-resize"
+        onMouseDown={onStartResize}
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize panel"
+      />
+    </>
   )
 }

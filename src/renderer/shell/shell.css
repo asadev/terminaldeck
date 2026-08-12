@@ -52,7 +52,7 @@
   padding: 0 4px;
   border-radius: 8px;
   background: var(--color-critical);
-  color: #fff;
+  color: var(--accent-fg);
   font-size: 9.5px;
   font-weight: 650;
   line-height: 15px;
@@ -62,24 +62,43 @@
 /* --------------------------------------------------------- panel dock -- */
 
 .panel-dock {
-  width: var(--sidebar-width);
   min-width: var(--sidebar-min);
+  max-width: var(--sidebar-max);
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
   background: var(--bg-secondary);
-  border-right: 1px solid var(--border);
   overflow: hidden;
 }
 
 .panel-dock-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   flex-shrink: 0;
-  padding: 14px 14px 10px;
+  padding: 12px 8px 8px 14px;
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--text-muted);
+}
+
+/* Drag to resize. Wider hit area than the visible line, or it is fiddly. */
+.dock-resize {
+  width: 5px;
+  margin-left: -2px;
+  flex-shrink: 0;
+  cursor: col-resize;
+  background: transparent;
+  border-right: 1px solid var(--border);
+  transition: border-color 120ms ease;
+}
+
+.dock-resize:hover,
+.dock-resize:active {
+  border-right-color: var(--accent);
 }
 
 .panel-dock-body {
