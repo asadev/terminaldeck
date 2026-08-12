@@ -25,11 +25,11 @@ import './shell/shell.css'
 
 type MainView = 'terminal' | 'overview' | 'board' | 'browser'
 
-const VIEWS: Array<{ id: MainView; label: string }> = [
-  { id: 'terminal', label: 'Sessions' },
-  { id: 'overview', label: 'Overview' },
-  { id: 'board', label: 'Board' },
-  { id: 'browser', label: 'Browser' },
+const VIEWS: Array<{ id: MainView; label: string; icon: string; hint: string }> = [
+  { id: 'terminal', label: 'Sessions', hint: 'Your agent terminals', icon: 'M4 17l6-6-6-6M12 19h8' },
+  { id: 'overview', label: 'Overview', hint: 'Project dashboard', icon: 'M4 4h7v7H4zM13 4h7v4h-7zM13 11h7v9h-7zM4 14h7v6H4z' },
+  { id: 'board', label: 'Board', hint: 'Task board', icon: 'M4 5h4v14H4zM10 5h4v9h-4zM16 5h4v11h-4z' },
+  { id: 'browser', label: 'Browser', hint: 'Open a web page', icon: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM3 12h18M12 3c2.5 2.6 2.5 15.4 0 18M12 3c-2.5 2.6-2.5 15.4 0 18' },
 ]
 
 function Workspace() {
@@ -310,15 +310,21 @@ function Workspace() {
             ) : (
               <div className="view-switcher" />
             )}
-            <div className="view-modes">
+            <div className="view-modes" role="tablist" aria-label="Main view">
               {VIEWS.map((v) => (
                 <button
                   key={v.id}
                   type="button"
+                  role="tab"
+                  aria-selected={view === v.id}
                   className={`view-tab${view === v.id ? ' active' : ''}`}
+                  title={v.hint}
                   onClick={() => setView(v.id)}
                 >
-                  {v.label}
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+                    <path d={v.icon} strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                  <span>{v.label}</span>
                 </button>
               ))}
             </div>
