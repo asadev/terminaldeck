@@ -30,6 +30,7 @@ import { registerBrowserViewIpc } from './browser-view'
 import { registerDiagnosticsIpc } from './diagnostics'
 import { registerLogIpc } from './app-log'
 import { traceIpc } from './ipc-trace'
+import { buildMenu } from './menu'
 import { registerSetupIpc } from './setup'
 import { registerCookieImportIpc } from './cookie-import'
 import { registerBrowserIsolationIpc } from './browser-isolation'
@@ -269,6 +270,7 @@ app.whenReady().then(() => {
     console.error('[hook-server] failed to start, hook callbacks disabled:', err),
   )
   createWindow()
+  buildMenu(() => mainWindow)
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

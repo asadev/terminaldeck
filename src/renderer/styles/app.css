@@ -37,14 +37,19 @@ button {
 }
 
 .titlebar {
+  display: flex;
+  align-items: stretch;
   height: var(--titlebar-height);
   flex-shrink: 0;
   background: var(--bg-secondary);
-  border-bottom: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border);
 }
 
-/* The whole strip drags the window; interactive children opt back out. */
+/* Only the leftover space drags — a drag region over the tabs would swallow
+   their clicks. */
 .titlebar-drag {
+  flex: 1;
+  min-width: 24px;
   height: 100%;
   -webkit-app-region: drag;
 }

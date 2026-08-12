@@ -345,6 +345,13 @@ const api = {
     ipcRenderer.invoke('browser-isolation:dispose', partition),
   browserIsolationCount: (): Promise<unknown> => ipcRenderer.invoke('browser-isolation:count'),
 
+  /** Menu items are commands; App maps them to the same handlers as the keys. */
+  onMenuCommand: (cb: (command: string) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, command: string) => cb(command)
+    ipcRenderer.on('menu:command', handler)
+    return () => ipcRenderer.off('menu:command', handler)
+  },
+
   listBrowsers: (): Promise<unknown> => ipcRenderer.invoke('chrome-import:browsers'),
   scanBrowserTabs: (browserId?: string): Promise<unknown> =>
     ipcRenderer.invoke('chrome-import:scan', browserId),

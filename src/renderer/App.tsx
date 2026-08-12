@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { StoreProvider, useStore } from './state/store'
 import { TitleBar } from './components/TitleBar'
-import { TabBar } from './components/TabBar'
 import { TerminalView } from './components/TerminalView'
 import { EmptyState } from './components/EmptyState'
 import { SettingsWindow } from './settings/SettingsWindow'
@@ -19,18 +18,17 @@ import { SwarmGrid } from './layout/SwarmGrid'
 import { ActivityBar } from './shell/ActivityBar'
 import { PanelDock } from './shell/PanelDock'
 import { usePanelDock } from './shell/usePanelDock'
+import { HeaderTabs } from './shell/HeaderTabs'
+import {
+  isSingleton,
+  nextActiveId,
+  singletonId,
+  type TabKind,
+  type WorkspaceTab,
+} from './shell/workspace-tabs'
 import { ErrorBoundary } from './shell/ErrorBoundary'
 import { applyStoredTheme } from './theme'
 import './shell/shell.css'
-
-type MainView = 'terminal' | 'overview' | 'board' | 'browser'
-
-const VIEWS: Array<{ id: MainView; label: string; icon: string; hint: string }> = [
-  { id: 'terminal', label: 'Sessions', hint: 'Your agent terminals', icon: 'M4 17l6-6-6-6M12 19h8' },
-  { id: 'overview', label: 'Overview', hint: 'Project dashboard', icon: 'M4 4h7v7H4zM13 4h7v4h-7zM13 11h7v9h-7zM4 14h7v6H4z' },
-  { id: 'board', label: 'Board', hint: 'Task board', icon: 'M4 5h4v14H4zM10 5h4v9h-4zM16 5h4v11h-4z' },
-  { id: 'browser', label: 'Browser', hint: 'Open a web page', icon: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM3 12h18M12 3c2.5 2.6 2.5 15.4 0 18M12 3c-2.5 2.6-2.5 15.4 0 18' },
-]
 
 function Workspace() {
   const {
@@ -46,7 +44,8 @@ function Workspace() {
 
   const dock = usePanelDock()
   const { panel, selectPanel: setPanel } = dock
-  const [view, setView] = useState<MainView>('terminal')
+  const [extraTabs, setExtraTabs] = useState<WorkspaceTab[]>([])
+  const [activeTabId, setActiveTabId] = useState<string | null>(null)
   const [swarm, setSwarm] = useState(false)
   const [prefsOpen, setPrefsOpen] = useState(false)
   const [newSessionOpen, setNewSessionOpen] = useState(false)
@@ -70,8 +69,27 @@ function Workspace() {
     prefsOpen || newSessionOpen || helpOpen || joinOpen || inspectorOpen || shortcutsOpen ||
     paletteMode !== null
 
+  /** Sessions first, then anything else the user opened, in one strip. */
+  const tabs: WorkspaceTab[] = [
+    ...sessions.map((session) => ({
+      id: session.id,
+      kind: 'session' as const,
+      label: session.title,
+      status: session.status,
+      projectPath: session.projectPath,
+      closable: true,
+    })),
+    ...extraTabs,
+  ]
+
+  const activeTab = tabs.find((t) => t.id === activeTabId) ?? tabs[0] ?? null
+  const activeSession = activeTab?.kind === 'session' ? activeTab : null
+
   const activeProjectPath =
-    sessions.find((s) => s.id === activeSessionId)?.projectPath ?? projects[0]?.path ?? null
+    activeSession?.projectPath ??
+    sessions.find((s) => s.id === activeSessionId)?.projectPath ??
+    projects[0]?.path ??
+    null
 
   useEffect(() => {
     const off = window.pawl.onSessionStatus((id, status) => setSessionStatus(id, status))
@@ -110,16 +128,51 @@ function Workspace() {
     const meta = await window.pawl.createSession({ cwd: path, cols: 100, rows: 30 })
     addSession(meta)
     setOnboardingDone(true)
-    setView('terminal')
+    setActiveTabId(meta.id)
   }, [addProject, addSession])
 
   const newSessionIn = useCallback(
     async (path: string, resume = false) => {
       const meta = await window.pawl.createSession({ cwd: path, cols: 100, rows: 30, resume })
       addSession(meta)
-      setView('terminal')
+      setActiveTabId(meta.id)
     },
     [addSession],
+  )
+
+  const openTab = useCallback(
+    (kind: TabKind) => {
+      if (kind === 'session') {
+        if (activeProjectPath) void newSessionIn(activeProjectPath)
+        else void openProject()
+        return
+      }
+      // Overview and Board show the same thing however many times you open
+      // them, so focus the existing tab instead of stacking duplicates.
+      const id = isSingleton(kind) ? singletonId(kind) : `browser:${Date.now()}`
+      setExtraTabs((prev) => {
+        if (prev.some((t) => t.id === id)) return prev
+        const label = kind === 'browser' ? 'New tab' : kind === 'overview' ? 'Overview' : 'Board'
+        return [...prev, { id, kind, label, closable: true }]
+      })
+      setActiveTabId(id)
+    },
+    [activeProjectPath, newSessionIn, openProject],
+  )
+
+  const closeTab = useCallback(
+    (id: string) => {
+      const tab = tabs.find((t) => t.id === id)
+      const following = nextActiveId(tabs, id)
+      if (tab?.kind === 'session') {
+        void window.pawl.killSession(id)
+        removeSession(id)
+      } else {
+        setExtraTabs((prev) => prev.filter((t) => t.id !== id))
+      }
+      setActiveTabId(following)
+    },
+    [tabs, removeSession],
   )
 
   const closeSession = useCallback(
@@ -130,15 +183,25 @@ function Workspace() {
     [removeSession],
   )
 
+  const selectTab = useCallback(
+    (id: string) => {
+      setActiveTabId(id)
+      // Terminals key off the store's active session; keep the two in step or
+      // switching to a session tab shows the previously focused terminal.
+      if (sessions.some((session) => session.id === id)) setActiveSession(id)
+    },
+    [sessions, setActiveSession],
+  )
+
   const commands = useMemo<PaletteCommand[]>(
     () => [
       { id: 'session.new', title: 'New session', group: 'Session', shortcut: '⌘T', run: () => activeProjectPath && void newSessionIn(activeProjectPath) },
       { id: 'session.resume', title: 'Continue last session', group: 'Session', shortcut: '⌘⇧T', run: () => activeProjectPath && void newSessionIn(activeProjectPath, true) },
       { id: 'project.open', title: 'Open a project', group: 'Project', shortcut: '⌘O', run: () => void openProject() },
-      { id: 'view.overview', title: 'Show project overview', group: 'View', run: () => setView('overview') },
-      { id: 'view.board', title: 'Show task board', group: 'View', run: () => setView('board') },
-      { id: 'view.browser', title: 'Show browser', group: 'View', run: () => setView('browser') },
-      { id: 'view.swarm', title: 'Toggle swarm view', group: 'View', shortcut: '⌘\\', run: () => { setView('terminal'); setSwarm((s) => !s) } },
+      { id: 'view.overview', title: 'Show project overview', group: 'View', run: () => openTab('overview') },
+      { id: 'view.board', title: 'Show task board', group: 'View', run: () => openTab('board') },
+      { id: 'view.browser', title: 'Show browser', group: 'View', run: () => openTab('browser') },
+      { id: 'view.swarm', title: 'Toggle swarm view', group: 'View', shortcut: '⌘\\', run: () => setSwarm((value) => !value) },
       { id: 'panel.git', title: 'Show source control', group: 'Panel', run: () => setPanel('git') },
       { id: 'panel.files', title: 'Show files', group: 'Panel', run: () => setPanel('files') },
       { id: 'panel.search', title: 'Search past sessions', group: 'Panel', shortcut: '⌘⇧F', run: () => setPanel('search') },
@@ -154,6 +217,30 @@ function Workspace() {
     [activeProjectPath, newSessionIn, openProject],
   )
 
+  // Menu items dispatch the same commands the palette runs, so a menu entry
+  // and its shortcut can never drift apart.
+  useEffect(() => {
+    return window.pawl.onMenuCommand((command) => {
+      const run = commands.find((c) => c.id === command)
+      if (run) {
+        void run.run()
+        return
+      }
+      switch (command) {
+        case 'session.newDialog': setNewSessionOpen(true); break
+        case 'session.close': if (activeTab) closeTab(activeTab.id); break
+        case 'view.terminal': if (sessions[0]) selectTab(sessions[0].id); break
+        case 'view.sidebar': dock.toggleCollapsed(); break
+        case 'app.palette': setPaletteMode('commands'); break
+        case 'app.quickOpen': setPaletteMode('files'); break
+        case 'app.help': setHelpOpen(true); break
+        case 'app.about': setPrefsOpen(true); break
+        case 'app.setup': setPrefsOpen(true); break
+        default: break
+      }
+    })
+  }, [commands, activeSessionId, closeSession, dock])
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey
@@ -166,9 +253,9 @@ function Workspace() {
         else void openProject()
         return
       }
-      if (e.key === 'w' && activeSessionId) {
+      if (e.key === 'w' && activeTab) {
         e.preventDefault()
-        void closeSession(activeSessionId)
+        closeTab(activeTab.id)
         return
       }
       if (e.key === 'o') {
@@ -193,8 +280,7 @@ function Workspace() {
       }
       if (e.key === '\\') {
         e.preventDefault()
-        setView('terminal')
-        setSwarm((s) => !s)
+        setSwarm((value) => !value)
         return
       }
       if (e.key === 'p' || e.key === 'P') {
@@ -218,9 +304,9 @@ function Workspace() {
         return
       }
       const n = Number(e.key)
-      if (Number.isInteger(n) && n >= 1 && n <= 9 && sessions[n - 1]) {
+      if (Number.isInteger(n) && n >= 1 && n <= 9 && tabs[n - 1]) {
         e.preventDefault()
-        setActiveSession(sessions[n - 1].id)
+        selectTab(tabs[n - 1].id)
       }
     }
     window.addEventListener('keydown', onKey)
@@ -245,53 +331,78 @@ function Workspace() {
   }
 
   const mainView = () => {
-    if (view === 'overview') {
+    if (!activeTab) return <EmptyState onOpenProject={openProject} />
+
+    if (activeTab.kind === 'overview') {
       return activeProjectPath ? (
         <Dashboard projectPath={activeProjectPath} />
       ) : (
         <EmptyState onOpenProject={openProject} />
       )
     }
-    if (view === 'board') {
+    if (activeTab.kind === 'board') {
       return activeProjectPath ? (
         <Board projectPath={activeProjectPath} />
       ) : (
         <EmptyState onOpenProject={openProject} />
       )
     }
-    if (view === 'browser') {
-      return (
-        <BrowserWorkspace
-          visible={!anyModalOpen}
-          onSendToAgent={(context) => {
-            // Element context goes straight into the focused session, which is
-            // the whole point of inspecting from inside the app.
-            if (activeSessionId) window.pawl.writeToSession(activeSessionId, context)
-          }}
-        />
-      )
-    }
-    if (sessions.length === 0) return <EmptyState onOpenProject={openProject} />
     if (swarm) {
       return (
         <SwarmGrid
           sessions={sessions}
           activeSessionId={activeSessionId}
-          onFocusSession={setActiveSession}
+          onFocusSession={selectTab}
           renderCell={({ session }) => <TerminalView sessionId={session.id} visible />}
         />
       )
     }
-    return sessions.map((s) => (
-      <TerminalView key={s.id} sessionId={s.id} visible={s.id === activeSessionId} />
-    ))
+
+    // Every browser and terminal stays mounted and is shown or hidden, so a
+    // page keeps its scroll position and a terminal keeps its scrollback when
+    // you switch tabs and come back.
+    return (
+      <>
+        {tabs
+          .filter((tab) => tab.kind === 'browser')
+          .map((tab) => (
+            <BrowserWorkspace
+              key={tab.id}
+              visible={tab.id === activeTab.id && !anyModalOpen}
+              onSendToAgent={(context) => {
+                if (activeSessionId) window.pawl.writeToSession(activeSessionId, context)
+              }}
+            />
+          ))}
+        {sessions.map((session) => (
+          <TerminalView
+            key={session.id}
+            sessionId={session.id}
+            visible={session.id === activeTab.id}
+          />
+        ))}
+      </>
+    )
   }
 
   return (
     <div className="app">
-      <TitleBar />
+      <TitleBar>
+        <HeaderTabs
+          tabs={tabs}
+          activeId={activeTab?.id ?? null}
+          onSelect={selectTab}
+          onClose={closeTab}
+          onOpen={openTab}
+        />
+      </TitleBar>
       <div className="app-body">
-        <ActivityBar active={panel} onSelect={setPanel} />
+        <ActivityBar
+          active={panel}
+          onSelect={setPanel}
+          onOpenSettings={() => setPrefsOpen(true)}
+          onOpenHelp={() => setHelpOpen(true)}
+        />
         <PanelDock
           panel={panel}
           projectPath={activeProjectPath}
@@ -304,33 +415,8 @@ function Workspace() {
           onOpenFile={() => setPanel('files')}
         />
         <main className="workspace">
-          <div className="view-bar">
-            {view === 'terminal' && sessions.length > 0 ? (
-              <TabBar onClose={closeSession} />
-            ) : (
-              <div className="view-switcher" />
-            )}
-            <div className="view-modes" role="tablist" aria-label="Main view">
-              {VIEWS.map((v) => (
-                <button
-                  key={v.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={view === v.id}
-                  className={`view-tab${view === v.id ? ' active' : ''}`}
-                  title={v.hint}
-                  onClick={() => setView(v.id)}
-                >
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
-                    <path d={v.icon} strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
-                  </svg>
-                  <span>{v.label}</span>
-                </button>
-              ))}
-            </div>
-          </div>
           <div className="panes">
-            <ErrorBoundary label={VIEWS.find((v) => v.id === view)?.label ?? view}>
+            <ErrorBoundary label={activeTab?.label ?? 'Workspace'}>
               {mainView()}
             </ErrorBoundary>
           </div>
@@ -346,7 +432,7 @@ function Workspace() {
           setNewSessionOpen(false)
           const meta = await window.pawl.createSession(request)
           addSession(meta)
-          setView('terminal')
+          setActiveTabId(meta.id)
         }}
       />
       <HelpDialog open={helpOpen} onClose={() => setHelpOpen(false)} />

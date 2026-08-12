@@ -72,6 +72,8 @@ export interface PawlApi {
   onSessionData(cb: (id: string, data: string) => void): () => void
   onSessionExit(cb: (id: string, exitCode: number) => void): () => void
   onSessionStatus(cb: (id: string, status: SessionStatus) => void): () => void
+  /** Application-menu items, dispatched as command ids. */
+  onMenuCommand(cb: (command: string) => void): () => void
 
   // Feature modules. These cross the bridge as `unknown` and each consumer
   // narrows to its own module's types — the main-process modules own those
