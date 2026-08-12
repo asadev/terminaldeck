@@ -238,3 +238,9 @@
 .status-alert {
   color: var(--color-warning);
 }
+
+.panel-dock-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}

@@ -191,8 +191,6 @@ const api = {
   mcpConnect: (serverId: string): Promise<unknown> => ipcRenderer.invoke('mcp:connect', serverId),
   mcpDisconnect: (serverId: string): Promise<void> =>
     ipcRenderer.invoke('mcp:disconnect', serverId),
-  mcpInventory: (serverId: string): Promise<unknown> =>
-    ipcRenderer.invoke('mcp:inventory', serverId),
   mcpCall: (serverId: string, tool: string, args: unknown): Promise<unknown> =>
     ipcRenderer.invoke('mcp:call', serverId, tool, args),
   mcpReadResource: (serverId: string, uri: string): Promise<unknown> =>
@@ -243,18 +241,11 @@ const api = {
   clearBrowserData: (): Promise<unknown> => ipcRenderer.invoke('settings:clear-browser-data'),
   browserSessionInfo: (): Promise<unknown> => ipcRenderer.invoke('browser-session:info'),
   browserCookies: (filter?: unknown): Promise<unknown> => ipcRenderer.invoke('browser-session:cookies', filter),
-  clearBrowserCookies: (): Promise<unknown> => ipcRenderer.invoke('browser-session:clear-cookies'),
   clearBrowserCache: (): Promise<unknown> => ipcRenderer.invoke('browser-session:clear-cache'),
-  clearBrowserStorage: (): Promise<unknown> => ipcRenderer.invoke('browser-session:clear-storage'),
-  browserViewClaim: (request: unknown): Promise<unknown> => ipcRenderer.invoke('browser-view:claim', request),
   browserViewRelease: (id: string): Promise<unknown> => ipcRenderer.invoke('browser-view:release', id),
-  browserViewReveal: (request: unknown): Promise<unknown> => ipcRenderer.invoke('browser-view:reveal', request),
   browserViewZoom: (id: string, factor: number): Promise<unknown> => ipcRenderer.invoke('browser-view:zoom', id, factor),
-  browserViewUserAgent: (id: string, ua: string | null): Promise<unknown> => ipcRenderer.invoke('browser-view:user-agent', id, ua),
   browserViewDevtools: (id: string): Promise<unknown> => ipcRenderer.invoke('browser-view:devtools', id),
-  browserViewScreenshot: (id: string): Promise<unknown> => ipcRenderer.invoke('browser-view:screenshot', id),
   browserViewRecord: (id: string, on: boolean): Promise<unknown> => ipcRenderer.invoke('browser-view:record', id, on),
-  browserViewRecordClear: (id: string): Promise<unknown> => ipcRenderer.invoke('browser-view:record-clear', id),
   debugAbout: (): Promise<unknown> => ipcRenderer.invoke('debug:about'),
   debugDiagnostics: (): Promise<unknown> => ipcRenderer.invoke('debug:diagnostics'),
   debugDiagnosticsText: (): Promise<unknown> => ipcRenderer.invoke('debug:diagnostics-text'),
@@ -266,6 +257,56 @@ const api = {
   logStatus: (): Promise<unknown> => ipcRenderer.invoke('log:status'),
   logClear: (): Promise<unknown> => ipcRenderer.invoke('log:clear'),
   openLogFolder: (): Promise<unknown> => ipcRenderer.invoke('log:open-folder'),
+
+  /* ---------------------------------------------- browser (real names) -- */
+
+  browserClaim: (id: string): Promise<unknown> => ipcRenderer.invoke('browser-view:claim', id),
+  browserRelease: (id: string): Promise<void> => ipcRenderer.invoke('browser-view:release', id),
+  browserZoom: (id: string, factor: number | null): Promise<number> =>
+    ipcRenderer.invoke('browser-view:zoom', id, factor),
+  browserDevtools: (id: string): Promise<void> => ipcRenderer.invoke('browser-view:devtools', id),
+  browserScreenshot: (id: string): Promise<unknown> =>
+    ipcRenderer.invoke('browser-view:screenshot', id),
+  browserRevealScreenshot: (path: string): Promise<void> =>
+    ipcRenderer.invoke('browser-view:reveal', path),
+  browserUserAgent: (id: string, ua: string | null): Promise<unknown> =>
+    ipcRenderer.invoke('browser-view:user-agent', id, ua),
+  browserRecord: (id: string, on: boolean): Promise<unknown> =>
+    ipcRenderer.invoke('browser-view:record', id, on),
+  browserRecordClear: (id: string): Promise<unknown> =>
+    ipcRenderer.invoke('browser-view:record-clear', id),
+  browserClearCookies: (): Promise<unknown> => ipcRenderer.invoke('browser-session:clear-cookies'),
+  browserClearStorage: (): Promise<unknown> => ipcRenderer.invoke('browser-session:clear-storage'),
+  browserClearCache: (): Promise<unknown> => ipcRenderer.invoke('browser-session:clear-cache'),
+
+  // No main-process emitter exists for these two yet, so they never fire. They
+  // are still real subscriptions returning a real unsubscribe: the workspace
+  // calls them on mount, and returning undefined crashed the whole panel.
+  onBrowserProgress: (cb: (id: string, progress: unknown) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, id: string, p: unknown) => cb(id, p)
+    ipcRenderer.on('browser:progress', handler)
+    return () => ipcRenderer.off('browser:progress', handler)
+  },
+  onBrowserRecording: (cb: (id: string, state: unknown) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, id: string, st: unknown) => cb(id, st)
+    ipcRenderer.on('browser:recording', handler)
+    return () => ipcRenderer.off('browser:recording', handler)
+  },
+
+  /* -------------------------------------------------- mcp (real names) -- */
+
+  listMcpServers: (projectPath?: string | null): Promise<unknown> =>
+    ipcRenderer.invoke('mcp:list', projectPath),
+  connectMcpServer: (id: string): Promise<unknown> => ipcRenderer.invoke('mcp:connect', id),
+  disconnectMcpServer: (id: string): Promise<unknown> => ipcRenderer.invoke('mcp:disconnect', id),
+  mcpInventory: (id: string): Promise<unknown> => ipcRenderer.invoke('mcp:inventory', id),
+  callMcpTool: (id: string, tool: string, args: unknown): Promise<unknown> =>
+    ipcRenderer.invoke('mcp:call', id, tool, args),
+  onMcpState: (cb: (status: unknown) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, status: unknown) => cb(status)
+    ipcRenderer.on('mcp:state', handler)
+    return () => ipcRenderer.off('mcp:state', handler)
+  },
 
   listBrowsers: (): Promise<unknown> => ipcRenderer.invoke('chrome-import:browsers'),
   scanBrowserTabs: (browserId?: string): Promise<unknown> =>

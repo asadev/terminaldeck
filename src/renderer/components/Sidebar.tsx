@@ -2,31 +2,18 @@ import { useStore } from '../state/store'
 import { StatusDot } from './StatusDot'
 
 interface Props {
-  onOpenProject(): void
   onNewSession(projectPath: string, resume?: boolean): void
 }
 
-export function Sidebar({ onOpenProject, onNewSession }: Props) {
+export function Sidebar({ onNewSession }: Props) {
   const { projects, sessionsForProject, activeSessionId, setActiveSession, removeProject } =
     useStore()
 
   return (
+    // The dock supplies the "Projects" heading and the add button, so this
+    // renders only the list. Both drawing a header produced "PROJECTS"
+    // twice, one above the other.
     <aside className="sidebar">
-      <div className="sidebar-header">
-        <span className="sidebar-title">Projects</span>
-        <button
-          type="button"
-          className="icon-btn"
-          onClick={onOpenProject}
-          title="Open project (⌘O)"
-          aria-label="Open project"
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-            <path d="M12 5v14M5 12h14" strokeWidth="1.8" strokeLinecap="round" />
-          </svg>
-        </button>
-      </div>
-
       <div className="sidebar-scroll">
         {projects.length === 0 && (
           <p className="sidebar-empty">No projects open yet.</p>

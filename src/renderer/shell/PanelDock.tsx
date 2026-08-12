@@ -8,6 +8,7 @@ import { AlertsPanel } from '../components/AlertsPanel'
 import { McpInspector } from '../components/McpInspector'
 import { HooksPanel } from '../components/HooksPanel'
 import { PANELS, type PanelId } from './panels'
+import { ErrorBoundary } from './ErrorBoundary'
 
 interface Props {
   panel: PanelId
@@ -55,7 +56,7 @@ export function PanelDock({
 
   const body = (() => {
     if (panel === 'projects') {
-      return <Sidebar onOpenProject={onOpenProject} onNewSession={onNewSession} />
+      return <Sidebar onNewSession={onNewSession} />
     }
     switch (panel) {
       case 'hooks':
@@ -88,19 +89,36 @@ export function PanelDock({
       <aside className="panel-dock" style={{ width }} aria-label={label}>
         <header className="panel-dock-header">
           <span>{label}</span>
-          <button
-            type="button"
-            className="icon-btn small"
-            onClick={onToggleCollapsed}
-            title="Collapse panel (⌘B)"
-            aria-label="Collapse panel"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-              <path d="M14 6l-6 6 6 6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-          </button>
+          <div className="panel-dock-actions">
+            {panel === 'projects' && (
+              <button
+                type="button"
+                className="icon-btn small"
+                onClick={onOpenProject}
+                title="Open project (⌘O)"
+                aria-label="Open project"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path d="M12 5v14M5 12h14" strokeWidth="2" strokeLinecap="round" />
+                </svg>
+              </button>
+            )}
+            <button
+              type="button"
+              className="icon-btn small"
+              onClick={onToggleCollapsed}
+              title="Collapse panel (⌘B)"
+              aria-label="Collapse panel"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <path d="M14 6l-6 6 6 6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </button>
+          </div>
         </header>
-        <div className="panel-dock-body">{body}</div>
+        <div className="panel-dock-body">
+          <ErrorBoundary label={label}>{body}</ErrorBoundary>
+        </div>
       </aside>
       <div
         className="dock-resize"

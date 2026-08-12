@@ -19,6 +19,7 @@ import { SwarmGrid } from './layout/SwarmGrid'
 import { ActivityBar } from './shell/ActivityBar'
 import { PanelDock } from './shell/PanelDock'
 import { usePanelDock } from './shell/usePanelDock'
+import { ErrorBoundary } from './shell/ErrorBoundary'
 import { applyStoredTheme } from './theme'
 import './shell/shell.css'
 
@@ -310,7 +311,11 @@ function Workspace() {
               ))}
             </div>
           </div>
-          <div className="panes">{mainView()}</div>
+          <div className="panes">
+            <ErrorBoundary label={VIEWS.find((v) => v.id === view)?.label ?? view}>
+              {mainView()}
+            </ErrorBoundary>
+          </div>
         </main>
       </div>
 

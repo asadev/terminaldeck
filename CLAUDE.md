@@ -62,3 +62,20 @@ instructions. This has run twice with zero conflicts.
 2-space indent, no semicolons, single quotes, strict TypeScript, no `any`.
 Comments explain *why*, not *what*. Co-locate tests as `*.test.ts`.
 Use the CSS variables in `src/renderer/styles/tokens.css` — never raw hex.
+
+## Verifying the UI without Electron
+
+`.harness/` mounts the real `App` in a plain browser with a stubbed preload:
+
+```bash
+npx vite --config .harness/vite.config.ts   # serves on :5199
+```
+
+This is the only thing that has reliably caught the real defects. Typecheck and
+tests both passed while the browser panel rendered nothing, because the failures
+were contract mismatches and runtime throws, not type errors.
+
+**Keep `.harness/stub.ts` honest.** It must mirror the preload's actual shapes —
+`on*` methods return an unsubscribe function, everything else a promise. A stub
+that disagrees with the preload invents bugs that do not exist and hides ones
+that do; that happened three times in one session.
