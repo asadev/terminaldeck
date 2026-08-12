@@ -1,0 +1,297 @@
+/* ============================================================================
+   Provider hooks — one row per agent CLI, with the file it writes named in
+   full. State colours alias the foundation tokens so a theme swap moves this
+   panel with everything else.
+   ============================================================================ */
+
+.hooks {
+  --hooks-ok: var(--status-completed);
+  --hooks-warn: var(--color-warning);
+  --hooks-bad: var(--color-critical);
+  --hooks-off: var(--text-muted);
+
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 16px 24px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+/* ------------------------------------------------------------------ head -- */
+
+.hooks-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  flex-shrink: 0;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.hooks-headline {
+  flex: 1;
+  min-width: 0;
+}
+
+.hooks-heading {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.hooks-sub {
+  margin: 5px 0 0;
+  max-width: 56ch;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+
+.hooks-refresh {
+  flex-shrink: 0;
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  font-size: 12px;
+  color: var(--text-secondary);
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.hooks-refresh:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+/* -------------------------------------------------------------- endpoint -- */
+
+.hooks-endpoint {
+  margin: 12px 0 0;
+  padding: 8px 11px;
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--hooks-off);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+
+.hooks-endpoint[data-running='true'] {
+  border-left-color: var(--hooks-ok);
+}
+
+.hooks-error {
+  margin: 12px 0 0;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--hooks-bad);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.hooks-empty {
+  margin: 0;
+  padding: 24px 0;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+/* ------------------------------------------------------------------ rows -- */
+
+.hooks-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.hooks-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 2px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.hooks-row:last-child {
+  border-bottom: none;
+}
+
+.hooks-row-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.hooks-row-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* One dot carries the state, the same vocabulary as the session status dots. */
+.hooks-dot {
+  align-self: center;
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--hooks-off);
+}
+
+.hooks-row[data-state='complete'] .hooks-dot {
+  background: var(--hooks-ok);
+}
+.hooks-row[data-state='stale'] .hooks-dot,
+.hooks-row[data-state='partial'] .hooks-dot {
+  background: var(--hooks-warn);
+}
+.hooks-row[data-state='error'] .hooks-dot {
+  background: var(--hooks-bad);
+}
+
+.hooks-provider {
+  font-size: 13px;
+  font-weight: 550;
+  color: var(--text-primary);
+}
+
+.hooks-state {
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.hooks-row[data-state='stale'] .hooks-state,
+.hooks-row[data-state='partial'] .hooks-state {
+  color: var(--hooks-warn);
+}
+
+.hooks-row[data-state='error'] .hooks-state {
+  color: var(--hooks-bad);
+}
+
+.hooks-count {
+  padding: 1px 6px;
+  border-radius: 9px;
+  background: var(--bg-hover);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+
+.hooks-message {
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+
+/* The path is the point — it is the user's real config, so never truncate it
+   to something that could be mistaken for a different file. */
+.hooks-file {
+  margin: 5px 0 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  color: var(--text-muted);
+}
+
+.hooks-foreign,
+.hooks-backup {
+  margin: 5px 0 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  color: var(--text-muted);
+}
+
+.hooks-confirm {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  font-size: 11.5px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  color: var(--text-secondary);
+}
+
+.hooks-result {
+  margin: 8px 0 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  color: var(--hooks-warn);
+}
+
+.hooks-result[data-ok='true'] {
+  color: var(--hooks-ok);
+}
+
+/* --------------------------------------------------------------- actions -- */
+
+.hooks-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  padding-top: 1px;
+}
+
+.hooks-install,
+.hooks-remove {
+  padding: 5px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  font-size: 11.5px;
+  white-space: nowrap;
+  color: var(--text-secondary);
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.hooks-install:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.hooks-install:disabled,
+.hooks-remove:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.hooks-remove {
+  border-color: transparent;
+  background: none;
+  color: var(--text-muted);
+}
+
+.hooks-remove:hover:not(:disabled) {
+  color: var(--text-primary);
+}
+
+/* Confirming a write to somebody's real config is the one moment this panel
+   raises its voice. */
+.hooks-remove[data-confirming] {
+  border-color: transparent;
+  background: var(--hooks-bad);
+  color: var(--accent-fg);
+}
+
+.hooks-remove[data-confirming]:hover:not(:disabled) {
+  filter: brightness(1.08);
+  color: var(--accent-fg);
+}

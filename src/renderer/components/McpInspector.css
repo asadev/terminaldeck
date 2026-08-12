@@ -1,0 +1,590 @@
+/* ============================================================================
+   MCP inspector — configured servers, what each one offers, and a form built
+   from a tool's own schema.
+
+   Layout is a single scrolling column of disclosure rows rather than a
+   master/detail split: the panel is often docked narrow, and a detail pane at
+   that width shows one tool name and no schema.
+   ============================================================================ */
+
+.mcp {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 16px 24px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+/* ------------------------------------------------------------------ head -- */
+
+.mcp-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  flex-shrink: 0;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.mcp-heading {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.mcp-subheading {
+  margin: 3px 0 0;
+  max-width: 52ch;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.mcp-refresh,
+.mcp-server-action {
+  flex-shrink: 0;
+  padding: 4px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--text-secondary);
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.mcp-refresh:hover:not(:disabled),
+.mcp-server-action:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.mcp-refresh:disabled {
+  opacity: 0.55;
+}
+
+/* --------------------------------------------------------------- messages -- */
+
+.mcp-empty,
+.mcp-note {
+  margin: 10px 0 0;
+  color: var(--text-muted);
+}
+
+.mcp-error {
+  margin: 8px 0 0;
+  padding: 7px 10px;
+  border: 1px solid var(--color-critical);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--color-critical);
+  overflow-wrap: anywhere;
+}
+
+/* --------------------------------------------------------------- servers -- */
+
+.mcp-servers,
+.mcp-items,
+.mcp-args {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mcp-servers {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mcp-server {
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+}
+
+.mcp-server[data-open='true'] {
+  border-color: var(--border);
+}
+
+.mcp-server-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mcp-server-toggle {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-align: left;
+}
+
+.mcp-server-name {
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.mcp-server-state {
+  margin-left: auto;
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+/* Status dot. Colours alias the session tokens so a connected MCP server and a
+   working session read the same way across the app. */
+.mcp-dot {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--status-idle);
+}
+
+.mcp-dot[data-state='connecting'] {
+  background: var(--status-waiting);
+}
+.mcp-dot[data-state='ready'] {
+  background: var(--status-completed);
+}
+.mcp-dot[data-state='failed'] {
+  background: var(--color-critical);
+}
+.mcp-dot[data-state='closed'] {
+  background: var(--status-input);
+}
+
+.mcp-tag {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  font-size: 10px;
+  letter-spacing: 0.03em;
+  color: var(--text-muted);
+}
+
+.mcp-tag[data-scope='project'],
+.mcp-tag[data-scope='local'] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.mcp-tag[data-warn='true'] {
+  border-color: var(--color-warning);
+  color: var(--color-warning);
+}
+
+.mcp-server-command {
+  margin: 6px 0 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.mcp-server-body {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.mcp-meta {
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+.mcp-meta-dim {
+  color: var(--text-muted);
+}
+
+.mcp-instructions {
+  margin: 6px 0 0;
+  padding: 7px 10px;
+  border-left: 2px solid var(--accent);
+  background: var(--accent-soft);
+  color: var(--text-secondary);
+}
+
+/* ------------------------------------------------------------------ tabs -- */
+
+.mcp-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.mcp-tab {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: none;
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--text-muted);
+  text-transform: capitalize;
+}
+
+.mcp-tab:hover {
+  color: var(--text-primary);
+}
+
+.mcp-tab[aria-selected='true'] {
+  border-color: var(--border);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.mcp-count {
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--bg-hover);
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.mcp-tabs .mcp-server-action {
+  margin-left: auto;
+}
+
+/* ----------------------------------------------------------------- items -- */
+
+.mcp-items {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 8px;
+}
+
+.mcp-item {
+  border-radius: var(--radius-sm);
+}
+
+/* An open tool is marked with a rule and a lift, not a heavier fill: the fill
+   would have to be `--bg-tertiary` to read in dark, and that is the same
+   surface the inputs use, so every field inside would lose its edge. */
+.mcp-item[data-open='true'] {
+  margin: 4px 0;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-secondary);
+}
+
+.mcp-item[data-open='true'] > .mcp-item-head {
+  border-bottom: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+}
+
+.mcp-item-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-align: left;
+}
+
+button.mcp-item-head:hover {
+  background: var(--bg-hover);
+}
+
+.mcp-item-name {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+}
+
+.mcp-item-title {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
+
+.mcp-item-summary {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-muted);
+}
+
+.mcp-item-body {
+  padding: 4px 8px 12px;
+}
+
+.mcp-item-description {
+  margin: 0 0 10px;
+  max-width: 68ch;
+  color: var(--text-secondary);
+}
+
+.mcp-args {
+  margin: 6px 0 8px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: var(--text-muted);
+}
+
+.mcp-args code {
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+}
+
+/* --------------------------------------------------------------- details -- */
+
+.mcp-details {
+  margin-top: 8px;
+}
+
+.mcp-details > summary {
+  cursor: default;
+  color: var(--text-muted);
+}
+
+.mcp-details > summary:hover {
+  color: var(--text-primary);
+}
+
+.mcp-pre {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ------------------------------------------------------------------ form -- */
+
+.mcp-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.mcp-form-note {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.mcp-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* A checkbox beside its label reads better than one stacked under it. */
+.mcp-field[data-kind='boolean'] {
+  flex-direction: row-reverse;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.mcp-field-label {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.mcp-field-name {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-primary);
+}
+
+.mcp-field-required {
+  color: var(--color-critical);
+}
+
+.mcp-field-type {
+  font-size: 10px;
+  letter-spacing: 0.03em;
+  color: var(--text-muted);
+}
+
+.mcp-field-description {
+  margin: 0;
+  max-width: 68ch;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.mcp-field-error {
+  margin: 0;
+  font-size: 11px;
+  color: var(--color-critical);
+}
+
+.mcp-input {
+  width: 100%;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.mcp-input:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.mcp-input:disabled {
+  opacity: 0.55;
+}
+
+.mcp-input[aria-invalid='true'] {
+  border-color: var(--color-critical);
+}
+
+.mcp-input-json {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.mcp-checkbox {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--accent);
+}
+
+.mcp-nested {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-left: 10px;
+  border-left: 1px solid var(--border-subtle);
+}
+
+.mcp-array {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.mcp-array-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mcp-array-remove {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--text-secondary);
+}
+
+.mcp-array-remove:hover:not(:disabled),
+.mcp-array-add:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.mcp-array-add {
+  align-self: flex-start;
+  padding: 3px 9px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  background: none;
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* ------------------------------------------------------------------- run -- */
+
+.mcp-run-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.mcp-run {
+  padding: 5px 14px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent-fg);
+}
+
+.mcp-run:hover:not(:disabled) {
+  background: var(--accent-dim);
+  border-color: var(--accent-dim);
+}
+
+.mcp-run:disabled {
+  opacity: 0.5;
+}
+
+.mcp-run-hint {
+  color: var(--text-muted);
+}
+
+.mcp-result {
+  margin-top: 10px;
+  padding-left: 10px;
+  border-left: 2px solid var(--status-completed);
+}
+
+.mcp-result[data-ok='false'] {
+  border-left-color: var(--color-critical);
+}
+
+.mcp-result-error {
+  margin: 0;
+  color: var(--color-critical);
+  overflow-wrap: anywhere;
+}

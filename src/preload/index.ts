@@ -136,6 +136,103 @@ const api = {
     ipcRenderer.invoke('dashboard:save', projectPath, layout),
   clearDashboard: (projectPath: string): Promise<void> =>
     ipcRenderer.invoke('dashboard:clear', projectPath),
+
+  /* ------------------------------------------------- search & alerts -- */
+
+  searchSessions: (request: {
+    cwd: string
+    query: string
+    scope?: 'project' | 'all'
+    roles?: string[]
+    caseSensitive?: boolean
+    regex?: boolean
+    maxHits?: number
+  }): Promise<unknown> => ipcRenderer.invoke('session-search:run', request),
+  cancelSessionSearch: (): Promise<void> => ipcRenderer.invoke('session-search:cancel'),
+  projectAlerts: (projectPath: string): Promise<unknown> =>
+    ipcRenderer.invoke('alerts:project', projectPath),
+
+  /* --------------------------------------------------------- profiles -- */
+
+  listProfiles: (): Promise<unknown> => ipcRenderer.invoke('profiles:list'),
+  createProfile: (name: string): Promise<unknown> => ipcRenderer.invoke('profiles:create', name),
+  renameProfile: (id: string, name: string): Promise<unknown> =>
+    ipcRenderer.invoke('profiles:rename', id, name),
+  deleteProfile: (id: string): Promise<void> => ipcRenderer.invoke('profiles:delete', id),
+  resolveProfile: (projectPath: string, sessionChoice?: string): Promise<unknown> =>
+    ipcRenderer.invoke('profiles:resolve', projectPath, sessionChoice),
+  setDefaultProfile: (id: string): Promise<void> => ipcRenderer.invoke('profiles:set-default', id),
+  setProjectProfile: (projectPath: string, id: string | null): Promise<void> =>
+    ipcRenderer.invoke('profiles:set-project-default', projectPath, id),
+  profileStatus: (id: string): Promise<unknown> => ipcRenderer.invoke('profiles:status', id),
+
+  /* ------------------------------------------------------ pawlignore -- */
+
+  ignoreOverview: (root: string): Promise<unknown> =>
+    ipcRenderer.invoke('pawlignore:overview', root),
+  ignoreFilter: (root: string, paths: string[]): Promise<unknown> =>
+    ipcRenderer.invoke('pawlignore:filter', root, paths),
+  ignoreExplain: (root: string, path: string): Promise<unknown> =>
+    ipcRenderer.invoke('pawlignore:explain', root, path),
+  invalidateIgnore: (root: string): Promise<void> =>
+    ipcRenderer.invoke('pawlignore:invalidate', root),
+
+  /* ----------------------------------------------------------- hooks -- */
+
+  hooksStatus: (): Promise<unknown> => ipcRenderer.invoke('hooks:status'),
+  installHooks: (provider: string): Promise<unknown> =>
+    ipcRenderer.invoke('hooks:install', provider),
+  removeHooks: (provider: string): Promise<unknown> => ipcRenderer.invoke('hooks:remove', provider),
+  syncHooks: (): Promise<unknown> => ipcRenderer.invoke('hooks:sync'),
+
+  /* ------------------------------------------------------------- mcp -- */
+
+  mcpList: (): Promise<unknown> => ipcRenderer.invoke('mcp:list'),
+  mcpConnect: (serverId: string): Promise<unknown> => ipcRenderer.invoke('mcp:connect', serverId),
+  mcpDisconnect: (serverId: string): Promise<void> =>
+    ipcRenderer.invoke('mcp:disconnect', serverId),
+  mcpInventory: (serverId: string): Promise<unknown> =>
+    ipcRenderer.invoke('mcp:inventory', serverId),
+  mcpCall: (serverId: string, tool: string, args: unknown): Promise<unknown> =>
+    ipcRenderer.invoke('mcp:call', serverId, tool, args),
+  mcpReadResource: (serverId: string, uri: string): Promise<unknown> =>
+    ipcRenderer.invoke('mcp:read-resource', serverId, uri),
+  mcpGetPrompt: (serverId: string, name: string, args?: unknown): Promise<unknown> =>
+    ipcRenderer.invoke('mcp:get-prompt', serverId, name, args),
+
+  /* --------------------------------------------------------- browser -- */
+
+  browserCreate: (url: string): Promise<unknown> => ipcRenderer.invoke('browser:create', url),
+  browserNavigate: (id: string, url: string): Promise<unknown> =>
+    ipcRenderer.invoke('browser:navigate', id, url),
+  browserBack: (id: string): Promise<void> => ipcRenderer.invoke('browser:back', id),
+  browserForward: (id: string): Promise<void> => ipcRenderer.invoke('browser:forward', id),
+  browserReload: (id: string): Promise<void> => ipcRenderer.invoke('browser:reload', id),
+  browserStop: (id: string): Promise<void> => ipcRenderer.invoke('browser:stop', id),
+  browserClose: (id: string): Promise<void> => ipcRenderer.invoke('browser:close', id),
+  browserBounds: (id: string, bounds: unknown): Promise<void> =>
+    ipcRenderer.invoke('browser:bounds', id, bounds),
+  browserVisible: (id: string, visible: boolean): Promise<void> =>
+    ipcRenderer.invoke('browser:visible', id, visible),
+  browserInspect: (id: string, on: boolean): Promise<void> =>
+    ipcRenderer.invoke('browser:inspect', id, on),
+  browserState: (id: string): Promise<unknown> => ipcRenderer.invoke('browser:state', id),
+  onBrowserState: (cb: (id: string, state: unknown) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, id: string, state: unknown) => cb(id, state)
+    ipcRenderer.on('browser:state-changed', handler)
+    return () => ipcRenderer.off('browser:state-changed', handler)
+  },
+  onBrowserElement: (cb: (id: string, element: unknown) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, id: string, element: unknown) => cb(id, element)
+    ipcRenderer.on('browser:element', handler)
+    return () => ipcRenderer.off('browser:element', handler)
+  },
+
+  /* --------------------------------------------------- chrome import -- */
+
+  listBrowsers: (): Promise<unknown> => ipcRenderer.invoke('chrome-import:browsers'),
+  scanBrowserTabs: (browserId?: string): Promise<unknown> =>
+    ipcRenderer.invoke('chrome-import:scan', browserId),
 }
 
 contextBridge.exposeInMainWorld('pawl', api)

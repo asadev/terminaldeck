@@ -23,7 +23,8 @@ Everything else sits on this.
 - [x] Design tokens, dark + light, self-hosted open-licensed fonts
 - [x] JSON store, atomic writes, projects + window bounds persist
 - [x] CSP from main process — strict in prod, dev-permissive
-- [x] Visual verification pass (blocked: needs screen-access approval)
+- [x] Visual verification pass — screenshotted running, a live Claude session
+      inside it, status dots and light/dark both confirmed by eye
 
 ## Phase 2 — Session intelligence
 
@@ -111,3 +112,15 @@ is something worth sharing and updating.
 - Whether to publish, and if so whether to credit Vibeyard as prior art
 - Whether P2P sharing is wanted at all — it is the single biggest feature and
   the only one needing infrastructure
+
+## Tracked follow-ups
+
+- **Chunked JSONL reader is duplicated three times** — `transcript.ts`,
+  `session-insights.ts` and `session-search.ts` each carry their own 4MB +
+  StringDecoder read loop. Flagged by the search agent, which could not fix it
+  (that wave was create-only). Should be lifted into one `streamLines` helper.
+  Not urgent: all three are tested and working, and refactoring them carries
+  regression risk for no user-facing gain.
+- **Escape-to-close on modals is unconfirmed** — the code is correct, but
+  synthetic keypresses were not delivered during testing, so it needs a real
+  human keypress to verify.

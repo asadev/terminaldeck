@@ -1,0 +1,784 @@
+/**
+ * Multiple agent profiles — separate Claude logins running side by side.
+ *
+ * Claude Code keeps everything about "who you are" inside one config
+ * directory, and `CLAUDE_CONFIG_DIR` moves that directory. Point two sessions
+ * at two directories and they are two different logins: separate accounts,
+ * separate history, separate transcripts.
+ *
+ * Verified on this machine against the real CLI (2.1.206), because every part
+ * of this is the kind of thing that is easy to assume and wrong:
+ *
+ * 1. `CLAUDE_CONFIG_DIR=<fresh dir> claude config ls` reports "Not logged in"
+ *    while the same command without it is logged in. Isolation is real.
+ * 2. It creates `.claude.json`, `projects/`, `sessions/` and `backups/` inside
+ *    that directory. Transcripts move with it — see `transcriptDir()`.
+ * 3. Credentials live in the macOS Keychain, not in the directory, and the
+ *    Keychain service name carries a suffix derived from the config dir:
+ *    `Claude Code-credentials` for the default, `Claude Code-credentials-<hex>`
+ *    for a custom one. Both exist on this machine. So logging into a second
+ *    profile cannot overwrite the first one's token — and, the other way
+ *    round, deleting a profile's directory does NOT log it out.
+ * 4. **Setting the variable to the default path is not a no-op.** With
+ *    `CLAUDE_CONFIG_DIR=$HOME/.claude` the CLI looks for
+ *    `~/.claude/.claude.json`, but a default install keeps its config at
+ *    `~/.claude.json` — one level up. Doing that "harmlessly" makes the user's
+ *    normal login look unconfigured. The system profile therefore spawns with
+ *    the variable *unset*, never set to its own path. This is the single
+ *    reason `sessionEnv()` returns `{}` for it.
+ *
+ * The user's real `~/.claude` is represented as a synthesised, unpersisted
+ * profile that this module will not rename, relocate or delete.
+ */
+
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { app, type IpcMain, type IpcMainInvokeEvent } from 'electron'
+import type { ProviderId } from '../shared/types'
+import { claudeConfigDir, transcriptDir } from './transcript'
+
+/* ---------------------------------------------------------------- model -- */
+
+export interface Profile {
+  id: string
+  name: string
+  /** Absolute path handed to the CLI as `CLAUDE_CONFIG_DIR`. */
+  configDir: string
+  /** The user's own install. Synthesised on read, never written to disk. */
+  system: boolean
+  /**
+   * A custom property name from `tokens.css`, not a colour value — the picker
+   * wraps it in `var()`. Keeps the palette in one file, as the style rules require.
+   */
+  color: string
+  createdAt: number
+  lastUsedAt: number | null
+}
+
+export interface ProfilesState {
+  version: number
+  /** User-created profiles only. The system profile is never in here. */
+  profiles: Profile[]
+  /** Global fallback. Null means "the user's own install". */
+  defaultProfileId: string | null
+  /** Canonical project path -> profile id. */
+  projectDefaults: Record<string, string>
+}
+
+export interface ResolveInput {
+  /** Chosen in the new-session dialog. Beats everything else. */
+  sessionProfileId?: string | null
+  /** Folder the session will run in, used to find a per-project default. */
+  projectPath?: string | null
+}
+
+export const SYSTEM_PROFILE_ID = 'system'
+export const STATE_VERSION = 1
+export const MAX_NAME_LENGTH = 60
+
+/**
+ * Assigned round-robin so two profiles are never the same colour until there
+ * are more profiles than colours. Property names, resolved by the renderer.
+ */
+export const PROFILE_COLORS: readonly string[] = [
+  '--accent',
+  '--status-completed',
+  '--status-waiting',
+  '--status-input',
+  '--color-warning',
+  '--color-critical',
+]
+
+const EMPTY_STATE: ProfilesState = {
+  version: STATE_VERSION,
+  profiles: [],
+  defaultProfileId: null,
+  projectDefaults: {},
+}
+
+/* ----------------------------------------------------------- validation -- */
+
+export class ProfileError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'ProfileError'
+  }
+}
+
+/**
+ * A profile id becomes a directory name, so it has to survive a filesystem
+ * round-trip on any platform: no separators, no dots that could climb a level,
+ * nothing Windows reserves.
+ */
+export function slugifyProfileId(name: string): string {
+  const slug = name
+    .normalize('NFKD')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 32)
+  // A name of only punctuation ("!!!") would slug to nothing, and an empty
+  // directory name would silently resolve to the profiles root itself.
+  return slug === '' ? 'profile' : slug
+}
+
+/** Append -2, -3 … until the id is free. Two "Work" profiles are legal. */
+export function uniqueProfileId(base: string, taken: ReadonlySet<string>): string {
+  if (!taken.has(base) && base !== SYSTEM_PROFILE_ID) return base
+  for (let n = 2; n < 1000; n++) {
+    const candidate = `${base}-${n}`
+    if (!taken.has(candidate)) return candidate
+  }
+  throw new ProfileError('could not allocate a profile id')
+}
+
+/**
+ * Control and format characters, replaced rather than stripped so `a\nb` reads
+ * as two words instead of one.
+ *
+ * `\p{Cc}` catches NUL, which is not whitespace and so survives both `trim()`
+ * and `\s+`. `\p{Cf}` catches the bidi overrides — a name of
+ * `Work <U+202E>gro.exe` renders in the picker as if it ended in `.org`, and
+ * the picker's whole job is to show honestly which account is selected.
+ */
+const CONTROL_CHARS = /[\p{Cc}\p{Cf}]/gu
+
+export function normalizeProfileName(raw: unknown): string {
+  if (typeof raw !== 'string') throw new ProfileError('a profile needs a name')
+  const name = raw.replace(CONTROL_CHARS, ' ').trim().replace(/\s+/g, ' ')
+  if (name === '') throw new ProfileError('a profile needs a name')
+  if (name.length > MAX_NAME_LENGTH) {
+    throw new ProfileError(`profile names are limited to ${MAX_NAME_LENGTH} characters`)
+  }
+  return name
+}
+
+/** Same folder however the user typed it — `/w/app` and `/w/app/` are one project. */
+export function canonicalProjectKey(projectPath: string): string {
+  return resolve(projectPath)
+}
+
+/* --------------------------------------------------------------- paths -- */
+
+function userData(): string {
+  return app.getPath('userData')
+}
+
+/** Where profiles this app created live. Nothing outside it is ever deleted. */
+export function profilesRoot(): string {
+  return join(userData(), 'profiles')
+}
+
+function stateFile(): string {
+  return join(userData(), 'profiles.json')
+}
+
+/**
+ * True only for a directory this app created for a profile.
+ *
+ * The deletion guard. A profile may legitimately point at a directory the user
+ * already had (`~/.claude-work`), and removing that on "delete profile" would
+ * destroy data the app never created. `root` itself is excluded so an empty or
+ * malformed configDir cannot resolve to the whole profiles folder.
+ */
+export function isManagedConfigDir(configDir: string, root = profilesRoot()): boolean {
+  if (typeof configDir !== 'string' || configDir === '' || !isAbsolute(configDir)) return false
+  const rel = relative(resolve(root), resolve(configDir))
+  if (rel === '' || rel === '..') return false
+  return !rel.startsWith(`..${sep}`) && !isAbsolute(rel)
+}
+
+/**
+ * Directories that must never be handed to a delete, whatever the state file
+ * says. Belt and braces over `isManagedConfigDir` — a corrupted or
+ * hand-edited profiles.json is exactly how a path like `$HOME` gets in here.
+ */
+export function isProtectedDir(configDir: string): boolean {
+  const target = resolve(configDir)
+  return (
+    target === resolve(homedir()) ||
+    target === resolve(claudeConfigDir()) ||
+    target === resolve(join(homedir(), '.claude')) ||
+    target === dirname(target) // filesystem root
+  )
+}
+
+/* ------------------------------------------------------------ the system -- */
+
+/**
+ * The user's own Claude install, presented as a profile so the picker has
+ * something to select and the resolution chain always terminates.
+ *
+ * Its `configDir` comes from `claudeConfigDir()` rather than a hardcoded
+ * `~/.claude`: if Pawl itself was launched with `CLAUDE_CONFIG_DIR` set, that
+ * *is* the user's install, and sessions inherit the same variable.
+ */
+export function systemProfile(): Profile {
+  return {
+    id: SYSTEM_PROFILE_ID,
+    name: 'Default',
+    configDir: claudeConfigDir(),
+    system: true,
+    color: PROFILE_COLORS[0],
+    createdAt: 0,
+    lastUsedAt: null,
+  }
+}
+
+/* ------------------------------------------------------------ persistence -- */
+
+function sanitizeProfile(raw: unknown): Profile | null {
+  if (typeof raw !== 'object' || raw === null) return null
+  const value = raw as Partial<Profile>
+  if (typeof value.id !== 'string' || value.id === '' || value.id === SYSTEM_PROFILE_ID) return null
+  if (typeof value.name !== 'string' || value.name.trim() === '') return null
+  if (typeof value.configDir !== 'string' || !isAbsolute(value.configDir)) return null
+  return {
+    id: value.id,
+    name: value.name,
+    configDir: value.configDir,
+    // Never trusted from disk: a persisted record claiming to be the system
+    // profile would inherit the protections meant for the real one.
+    system: false,
+    color: typeof value.color === 'string' ? value.color : PROFILE_COLORS[0],
+    createdAt: typeof value.createdAt === 'number' ? value.createdAt : Date.now(),
+    lastUsedAt: typeof value.lastUsedAt === 'number' ? value.lastUsedAt : null,
+  }
+}
+
+export function sanitizeState(raw: unknown): ProfilesState {
+  if (typeof raw !== 'object' || raw === null) return structuredClone(EMPTY_STATE)
+  const value = raw as Partial<ProfilesState>
+
+  const profiles: Profile[] = []
+  const seen = new Set<string>()
+  if (Array.isArray(value.profiles)) {
+    for (const entry of value.profiles) {
+      const profile = sanitizeProfile(entry)
+      if (!profile || seen.has(profile.id)) continue
+      seen.add(profile.id)
+      profiles.push(profile)
+    }
+  }
+
+  const projectDefaults: Record<string, string> = {}
+  if (typeof value.projectDefaults === 'object' && value.projectDefaults !== null) {
+    for (const [path, id] of Object.entries(value.projectDefaults)) {
+      // A default pointing at a profile that no longer exists is dropped on
+      // load rather than resolved around forever.
+      if (typeof id !== 'string') continue
+      if (id !== SYSTEM_PROFILE_ID && !seen.has(id)) continue
+      projectDefaults[canonicalProjectKey(path)] = id
+    }
+  }
+
+  const defaultId = value.defaultProfileId
+  const defaultProfileId =
+    typeof defaultId === 'string' && (defaultId === SYSTEM_PROFILE_ID || seen.has(defaultId))
+      ? defaultId
+      : null
+
+  return { version: STATE_VERSION, profiles, defaultProfileId, projectDefaults }
+}
+
+let cached: ProfilesState | null = null
+
+/** Keys of ours. Anything else in the file belongs to someone else. */
+const KNOWN_STATE_KEYS: ReadonlySet<string> = new Set([
+  'version',
+  'profiles',
+  'defaultProfileId',
+  'projectDefaults',
+])
+
+/**
+ * Top-level keys we did not recognise, kept verbatim so writing the file back
+ * does not delete settings a newer version of the app put there. `getState`
+ * fills this; `persist` merges it under our own keys.
+ */
+let carriedForward: Record<string, unknown> = {}
+
+/**
+ * Set when `profiles.json` exists but this process could not make sense of it —
+ * unreadable, unparseable, or written by a version that knows more than we do.
+ *
+ * That file is the user's only copy of their profile list, and an empty state
+ * in memory is indistinguishable from a real one by the time `persist` runs.
+ * Without this flag the first write of the session — `markProfileUsed`, which
+ * fires on every session spawn — replaces the lot with `{"profiles": []}`.
+ */
+let backupBeforeWrite = false
+
+/** Drop the in-memory copy. Exported for tests, which swap userData per case. */
+export function resetProfilesCache(): void {
+  cached = null
+  carriedForward = {}
+  backupBeforeWrite = false
+}
+
+function unknownStateKeys(raw: object): Record<string, unknown> {
+  const extras: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(raw)) {
+    if (!KNOWN_STATE_KEYS.has(key)) extras[key] = value
+  }
+  return extras
+}
+
+export function getState(): ProfilesState {
+  if (cached) return cached
+  cached = structuredClone(EMPTY_STATE)
+  carriedForward = {}
+  backupBeforeWrite = false
+
+  let text: string
+  try {
+    text = readFileSync(stateFile(), 'utf8')
+  } catch (cause) {
+    // Absent is first run and the only case where an empty state is the truth.
+    // EACCES, EMFILE, EISDIR mean a file we cannot see is still holding the
+    // user's profiles, and it must survive this session either way.
+    backupBeforeWrite = (cause as NodeJS.ErrnoException | null)?.code !== 'ENOENT'
+    return cached
+  }
+
+  let raw: unknown
+  try {
+    raw = JSON.parse(text)
+  } catch {
+    // Corrupt. Boot anyway — a launch failure is worse than a lost list — but
+    // do not let the next write be the thing that makes the loss permanent.
+    backupBeforeWrite = true
+    return cached
+  }
+
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    backupBeforeWrite = true
+    return cached
+  }
+
+  cached = sanitizeState(raw)
+  carriedForward = unknownStateKeys(raw)
+
+  // A file from a newer version: we keep its unknown keys, but we cannot know
+  // what it did to the ones we do parse, so keep a copy before rewriting it.
+  const version = (raw as Partial<ProfilesState>).version
+  if (typeof version === 'number' && version > STATE_VERSION) backupBeforeWrite = true
+
+  return cached
+}
+
+function persist(state: ProfilesState): void {
+  const file = stateFile()
+  mkdirSync(dirname(file), { recursive: true })
+
+  // Overwriting a file we could not read is the one irreversible thing this
+  // module does to a user's config. Move it somewhere recoverable first.
+  if (backupBeforeWrite) {
+    try {
+      renameSync(file, `${file}.bak-${Date.now()}`)
+    } catch {
+      // Already gone, or the directory is unwritable — in both cases there is
+      // nothing left to preserve and the write below will report the problem.
+    }
+    backupBeforeWrite = false
+  }
+
+  // Composed field by field rather than serialising `state` directly: the
+  // in-memory object is ours, the file is shared, and unknown keys go back
+  // exactly as they came.
+  const payload = {
+    ...carriedForward,
+    version: STATE_VERSION,
+    profiles: state.profiles,
+    defaultProfileId: state.defaultProfileId,
+    projectDefaults: state.projectDefaults,
+  }
+
+  // Temp file plus rename, so a crash mid-write cannot truncate the list and
+  // orphan every profile directory on disk.
+  const tmp = `${file}.tmp`
+  writeFileSync(tmp, JSON.stringify(payload, null, 2), 'utf8')
+  renameSync(tmp, file)
+}
+
+/* ------------------------------------------------------------ resolution -- */
+
+/** Ids that can actually be selected right now, system always among them. */
+export function knownProfileIds(state: ProfilesState): Set<string> {
+  return new Set([SYSTEM_PROFILE_ID, ...state.profiles.map((profile) => profile.id)])
+}
+
+/**
+ * Which profile a new session runs under.
+ *
+ * Precedence: the choice made for this session, then the project's default,
+ * then the global default, then the user's own install.
+ *
+ * Every level is checked against the profiles that currently exist, and an id
+ * that has since been deleted falls through to the next level instead of
+ * throwing. A stale per-project default is the common case — the user deletes
+ * a profile and would otherwise be unable to start a session in that folder.
+ */
+export function resolveProfileId(state: ProfilesState, input: ResolveInput = {}): string {
+  const known = knownProfileIds(state)
+  const projectDefault =
+    typeof input.projectPath === 'string' && input.projectPath !== ''
+      ? state.projectDefaults[canonicalProjectKey(input.projectPath)]
+      : undefined
+
+  for (const candidate of [input.sessionProfileId, projectDefault, state.defaultProfileId]) {
+    if (typeof candidate === 'string' && known.has(candidate)) return candidate
+  }
+  return SYSTEM_PROFILE_ID
+}
+
+export function findProfile(state: ProfilesState, id: string): Profile | null {
+  if (id === SYSTEM_PROFILE_ID) return systemProfile()
+  return state.profiles.find((profile) => profile.id === id) ?? null
+}
+
+export function resolveProfile(state: ProfilesState, input: ResolveInput = {}): Profile {
+  return findProfile(state, resolveProfileId(state, input)) ?? systemProfile()
+}
+
+/* ------------------------------------------------------------------ env -- */
+
+/**
+ * Which environment variable isolates each agent's config.
+ *
+ * Only Claude's is listed because only Claude's was verified here. Codex ships
+ * as a shim around a native binary that is not present on this machine and
+ * Gemini's bundle yielded nothing, so `CODEX_HOME` and any Gemini equivalent
+ * stay out: a wrong variable name fails silently and *shares* the login, which
+ * is the exact failure profiles exist to prevent. `providers.ts` documents its
+ * unverified flags the same way.
+ */
+const CONFIG_DIR_ENV: Partial<Record<ProviderId, string>> = {
+  claude: 'CLAUDE_CONFIG_DIR',
+}
+
+/** True when this provider can be isolated at all — the picker greys out the rest. */
+export function supportsProfiles(provider: ProviderId): boolean {
+  return CONFIG_DIR_ENV[provider] !== undefined
+}
+
+/**
+ * Environment overrides a session must spawn with, merged over the inherited
+ * environment by the caller.
+ *
+ * Empty for the system profile *on purpose*: `CLAUDE_CONFIG_DIR=$HOME/.claude`
+ * is not equivalent to leaving it unset. A default install reads
+ * `~/.claude.json`, one level above the config directory, and setting the
+ * variable makes the CLI look inside `~/.claude/` instead and find nothing.
+ * Verified — see the module header.
+ */
+export function sessionEnv(profile: Profile, provider: ProviderId): Record<string, string> {
+  const key = CONFIG_DIR_ENV[provider]
+  if (!key || profile.system) return {}
+  return { [key]: profile.configDir }
+}
+
+/**
+ * Where this profile's transcripts land, so cost and inspector data follow the
+ * profile instead of always reading the default install.
+ */
+export function profileTranscriptDir(profile: Profile, cwd: string): string {
+  return transcriptDir(cwd, profile.configDir)
+}
+
+/* ------------------------------------------------------------------ crud -- */
+
+export interface CreateProfileOptions {
+  /** Adopt a config directory the user already has instead of making one. */
+  configDir?: string
+}
+
+/**
+ * Validate a config directory the user wants to adopt.
+ *
+ * Two ways to hand this feature a directory that quietly does the opposite of
+ * what it promises, both of which the rest of the module already treats as
+ * impossible:
+ *
+ * 1. The user's own install. `sessionEnv` would then export
+ *    `CLAUDE_CONFIG_DIR=$HOME/.claude`, and per the module header that is not a
+ *    no-op — the CLI looks for `~/.claude/.claude.json` while a default install
+ *    keeps its config at `~/.claude.json`, so the user's normal login reads as
+ *    unconfigured. `isProtectedDir` already names these paths for deletion;
+ *    they are just as wrong as a destination.
+ * 2. A directory another profile already uses. Same config dir is the same
+ *    account, so the picker would offer two names for one login — the exact
+ *    confusion this feature exists to remove.
+ */
+function adoptableConfigDir(state: ProfilesState, raw: string): string {
+  if (typeof raw !== 'string' || !isAbsolute(raw)) {
+    throw new ProfileError('a config directory must be an absolute path')
+  }
+  const resolved = resolve(raw)
+
+  if (isProtectedDir(resolved)) {
+    throw new ProfileError(
+      'that is your own Claude install — the default profile already uses it, and pointing a second profile at it would break the login',
+    )
+  }
+
+  const clash = state.profiles.find((entry) => resolve(entry.configDir) === resolved)
+  if (clash) {
+    throw new ProfileError(`"${clash.name}" already uses that config directory`)
+  }
+  return resolved
+}
+
+export function listProfiles(state = getState()): Profile[] {
+  // System first: it is the fallback every other level collapses to, so it
+  // should read as the top of the list rather than an entry among equals.
+  return [systemProfile(), ...state.profiles]
+}
+
+export function createProfile(name: string, options: CreateProfileOptions = {}): Profile {
+  const state = getState()
+  const clean = normalizeProfileName(name)
+  if (
+    listProfiles(state).some((profile) => profile.name.toLowerCase() === clean.toLowerCase())
+  ) {
+    // Two identically named profiles are indistinguishable in the picker, and
+    // picking the wrong login is the mistake this whole feature prevents.
+    throw new ProfileError(`a profile called "${clean}" already exists`)
+  }
+
+  const id = uniqueProfileId(slugifyProfileId(clean), knownProfileIds(state))
+  const configDir =
+    options.configDir !== undefined
+      ? adoptableConfigDir(state, options.configDir)
+      : join(profilesRoot(), id)
+
+  // Created eagerly: the CLI would make it anyway, and a directory that exists
+  // lets the picker show honestly whether a profile has ever been used.
+  mkdirSync(configDir, { recursive: true })
+
+  const profile: Profile = {
+    id,
+    name: clean,
+    configDir,
+    system: false,
+    color: PROFILE_COLORS[state.profiles.length % PROFILE_COLORS.length],
+    createdAt: Date.now(),
+    lastUsedAt: null,
+  }
+
+  state.profiles.push(profile)
+  persist(state)
+  return profile
+}
+
+export function renameProfile(id: string, name: string): Profile {
+  const state = getState()
+  if (id === SYSTEM_PROFILE_ID) throw new ProfileError('the default profile cannot be renamed')
+  const profile = state.profiles.find((entry) => entry.id === id)
+  if (!profile) throw new ProfileError(`no profile with id ${id}`)
+
+  const clean = normalizeProfileName(name)
+  const clash = listProfiles(state).some(
+    (entry) => entry.id !== id && entry.name.toLowerCase() === clean.toLowerCase(),
+  )
+  if (clash) throw new ProfileError(`a profile called "${clean}" already exists`)
+
+  profile.name = clean
+  persist(state)
+  return profile
+}
+
+export interface DeleteProfileResult {
+  removed: boolean
+  /** False when the directory was left alone — the app did not create it. */
+  filesDeleted: boolean
+  /**
+   * The login itself is not deleted. Claude stores credentials in the OS
+   * keychain under a service name derived from the config directory, so
+   * recreating a profile at the same path signs straight back in.
+   */
+  credentialsRetained: boolean
+}
+
+export function deleteProfile(id: string, options: { deleteFiles?: boolean } = {}): DeleteProfileResult {
+  const state = getState()
+  if (id === SYSTEM_PROFILE_ID) {
+    throw new ProfileError('the default profile is your own Claude install and cannot be deleted')
+  }
+
+  const index = state.profiles.findIndex((entry) => entry.id === id)
+  if (index === -1) throw new ProfileError(`no profile with id ${id}`)
+  const [profile] = state.profiles.splice(index, 1)
+
+  // Every reference goes with it, so nothing resolves to a profile that is gone.
+  if (state.defaultProfileId === id) state.defaultProfileId = null
+  for (const [path, assigned] of Object.entries(state.projectDefaults)) {
+    if (assigned === id) delete state.projectDefaults[path]
+  }
+  persist(state)
+
+  let filesDeleted = false
+  if (options.deleteFiles === true) {
+    // Both guards, deliberately. `isManagedConfigDir` is the rule; `isProtectedDir`
+    // is the backstop for a hand-edited or corrupted profiles.json, where a
+    // configDir of `$HOME` would otherwise be handed to a recursive delete.
+    if (isManagedConfigDir(profile.configDir) && !isProtectedDir(profile.configDir)) {
+      rmSync(profile.configDir, { recursive: true, force: true })
+      filesDeleted = true
+    }
+  }
+
+  return { removed: true, filesDeleted, credentialsRetained: true }
+}
+
+export function setGlobalDefault(id: string | null): ProfilesState {
+  const state = getState()
+  if (id !== null && !knownProfileIds(state).has(id)) throw new ProfileError(`no profile with id ${id}`)
+  state.defaultProfileId = id === SYSTEM_PROFILE_ID ? null : id
+  persist(state)
+  return state
+}
+
+export function setProjectDefault(projectPath: string, id: string | null): ProfilesState {
+  const state = getState()
+  if (typeof projectPath !== 'string' || projectPath === '') {
+    throw new ProfileError('a project path is required')
+  }
+  const key = canonicalProjectKey(projectPath)
+  if (id === null) {
+    delete state.projectDefaults[key]
+  } else {
+    if (!knownProfileIds(state).has(id)) throw new ProfileError(`no profile with id ${id}`)
+    state.projectDefaults[key] = id
+  }
+  persist(state)
+  return state
+}
+
+/** Recorded on spawn so the picker can order by recency. */
+export function markProfileUsed(id: string): void {
+  const state = getState()
+  const profile = state.profiles.find((entry) => entry.id === id)
+  if (!profile) return
+  profile.lastUsedAt = Date.now()
+  persist(state)
+}
+
+export interface ProfileStatus {
+  id: string
+  /** The config directory exists on disk. */
+  exists: boolean
+  /** A `.claude.json` is present, i.e. the CLI has run under this profile. */
+  initialized: boolean
+  /**
+   * Login state is deliberately absent. Credentials live in the OS keychain,
+   * not in the directory, so nothing here can tell whether a profile is signed
+   * in without prompting for keychain access on every render.
+   */
+  configDir: string
+}
+
+export function profileStatus(profile: Profile): ProfileStatus {
+  return {
+    id: profile.id,
+    exists: existsSync(profile.configDir),
+    initialized: existsSync(join(profile.configDir, '.claude.json')),
+    configDir: profile.configDir,
+  }
+}
+
+/* ------------------------------------------------------------------- ipc -- */
+
+function requireString(value: unknown, label: string): string {
+  if (typeof value !== 'string') throw new ProfileError(`${label} must be a string`)
+  return value
+}
+
+function optionalId(value: unknown): string | null {
+  return typeof value === 'string' && value !== '' ? value : null
+}
+
+export interface ProfilesSnapshot {
+  profiles: Profile[]
+  defaultProfileId: string | null
+  projectDefaults: Record<string, string>
+}
+
+function snapshot(): ProfilesSnapshot {
+  const state = getState()
+  return {
+    profiles: listProfiles(state),
+    defaultProfileId: state.defaultProfileId,
+    projectDefaults: { ...state.projectDefaults },
+  }
+}
+
+/**
+ * Wire the profile channels. Call once from `registerIpc()`:
+ * `registerProfilesIpc(ipcMain)`.
+ *
+ * Channels:
+ * - `profiles:list` → {@link ProfilesSnapshot}
+ * - `profiles:create` (name, options?) → {@link Profile}
+ * - `profiles:rename` (id, name) → {@link Profile}
+ * - `profiles:delete` (id, options?) → {@link DeleteProfileResult}
+ * - `profiles:set-default` (id | null) → {@link ProfilesSnapshot}
+ * - `profiles:set-project-default` (projectPath, id | null) → {@link ProfilesSnapshot}
+ * - `profiles:resolve` ({ sessionProfileId?, projectPath? }) → {@link Profile}
+ * - `profiles:status` (id) → {@link ProfileStatus}
+ *
+ * Errors reject with the `ProfileError` message, which the picker shows as-is —
+ * "a profile called Work already exists" is the whole explanation the user needs.
+ */
+export function registerProfilesIpc(ipcMain: IpcMain): void {
+  ipcMain.handle('profiles:list', () => snapshot())
+
+  ipcMain.handle('profiles:create', (_e: IpcMainInvokeEvent, name: unknown, options: unknown) => {
+    const configDir =
+      typeof options === 'object' && options !== null
+        ? (options as CreateProfileOptions).configDir
+        : undefined
+    return createProfile(requireString(name, 'name'), {
+      configDir: typeof configDir === 'string' ? configDir : undefined,
+    })
+  })
+
+  ipcMain.handle('profiles:rename', (_e: IpcMainInvokeEvent, id: unknown, name: unknown) =>
+    renameProfile(requireString(id, 'id'), requireString(name, 'name')),
+  )
+
+  ipcMain.handle('profiles:delete', (_e: IpcMainInvokeEvent, id: unknown, options: unknown) => {
+    const deleteFiles =
+      typeof options === 'object' && options !== null &&
+      (options as { deleteFiles?: unknown }).deleteFiles === true
+    return deleteProfile(requireString(id, 'id'), { deleteFiles })
+  })
+
+  ipcMain.handle('profiles:set-default', (_e: IpcMainInvokeEvent, id: unknown) => {
+    setGlobalDefault(optionalId(id))
+    return snapshot()
+  })
+
+  ipcMain.handle(
+    'profiles:set-project-default',
+    (_e: IpcMainInvokeEvent, projectPath: unknown, id: unknown) => {
+      setProjectDefault(requireString(projectPath, 'projectPath'), optionalId(id))
+      return snapshot()
+    },
+  )
+
+  ipcMain.handle('profiles:resolve', (_e: IpcMainInvokeEvent, input: unknown) => {
+    const request = (typeof input === 'object' && input !== null ? input : {}) as ResolveInput
+    return resolveProfile(getState(), {
+      sessionProfileId: optionalId(request.sessionProfileId),
+      projectPath: typeof request.projectPath === 'string' ? request.projectPath : null,
+    })
+  })
+
+  ipcMain.handle('profiles:status', (_e: IpcMainInvokeEvent, id: unknown) => {
+    const profile = findProfile(getState(), requireString(id, 'id'))
+    if (!profile) throw new ProfileError(`no profile with id ${id}`)
+    return profileStatus(profile)
+  })
+}

@@ -14,6 +14,16 @@ import { registerInsightsIpc } from './session-insights'
 import { registerGitHubIpc } from './github'
 import { registerReadinessIpc } from './readiness'
 import { registerDashboardIpc } from './dashboard-store'
+import { registerSessionSearchIpc } from './session-search'
+import { registerAlertsIpc } from './alerts'
+import { registerProfilesIpc } from './profiles'
+import { registerPawlignoreIpc } from './pawlignore'
+import { registerHooksIpc } from './hooks'
+import { registerHookServer, stopHookServer } from './hook-server'
+import { registerMcpIpc } from './mcp-client'
+import { registerBrowserIpc } from './browser-tab'
+import { registerChromeImportIpc } from './chrome-import'
+import type { SessionStatus } from '../shared/types'
 
 const isDev = !!process.env.ELECTRON_RENDERER_URL
 
@@ -47,10 +57,23 @@ function send(channel: string, ...args: unknown[]): void {
   }
 }
 
+/**
+ * Latest status per live session. PtyManager only pushes status through its
+ * callback, so anything that needs to *ask* (the alerts scanner) has nowhere
+ * to read it from without this.
+ */
+const liveStatus = new Map<string, { status: SessionStatus; at: number }>()
+
 const ptys = new PtyManager(
   (id, data) => send('session:data', id, data),
-  (id, exitCode) => send('session:exit', id, exitCode),
-  (id, status) => send('session:status', id, status),
+  (id, exitCode) => {
+    liveStatus.delete(id)
+    send('session:exit', id, exitCode)
+  },
+  (id, status) => {
+    liveStatus.set(id, { status, at: Date.now() })
+    send('session:status', id, status)
+  },
 )
 
 function createWindow(): void {
@@ -154,6 +177,28 @@ function registerIpc(): void {
   registerGitHubIpc(ipcMain)
   registerReadinessIpc(ipcMain)
   registerDashboardIpc(ipcMain)
+  registerSessionSearchIpc(ipcMain)
+  registerProfilesIpc(ipcMain)
+  registerPawlignoreIpc(ipcMain)
+  registerHooksIpc(ipcMain)
+  registerMcpIpc(ipcMain)
+  registerBrowserIpc(ipcMain)
+  registerChromeImportIpc(ipcMain)
+
+  registerAlertsIpc(ipcMain, {
+    liveSessions: (projectPath) =>
+      ptys
+        .list()
+        .filter((meta) => meta.cwd === projectPath)
+        .map((meta) => ({
+          sessionId: meta.id,
+          cwd: meta.cwd,
+          status: liveStatus.get(meta.id)?.status ?? 'idle',
+          statusSince: liveStatus.get(meta.id)?.at,
+          provider: meta.provider,
+        })),
+    defaultProvider: () => store().getPreferences().defaultProvider,
+  })
 
   ipcMain.handle('session:create', async (_e, input: CreateSessionInput) => {
     const path = await loginPath()
@@ -185,6 +230,12 @@ app.whenReady().then(() => {
   if (process.platform === 'darwin') app.setName(BRAND.name)
   applySecurityPolicy()
   registerIpc()
+  // Bound to 127.0.0.1 with a per-run token. Started early so hooks installed
+  // into a provider's config have somewhere to report to; failure is not fatal
+  // because everything except hook callbacks still works without it.
+  void registerHookServer(ipcMain).catch((err) =>
+    console.error('[hook-server] failed to start, hook callbacks disabled:', err),
+  )
   createWindow()
 
   app.on('activate', () => {
@@ -199,4 +250,5 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   ptys.killAll()
   stopAllGitWatches()
+  void stopHookServer()
 })

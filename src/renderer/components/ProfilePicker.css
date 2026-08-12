@@ -1,0 +1,329 @@
+/* ============================================================================
+   Profile picker — one row per Claude login.
+
+   The config directory is shown under every name because that, not the name,
+   is what makes two profiles different. Two rows called "Work" and "work-2"
+   are indistinguishable; two paths never are.
+
+   Rows are a grid rather than a flex row so the remove control and the inline
+   confirmation can occupy the same cell and swap without the name shifting
+   sideways underneath them.
+   ============================================================================ */
+
+.profiles {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 6px;
+}
+
+.profiles-notice,
+.profiles-empty {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.profiles-error {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--color-critical);
+  border-radius: var(--radius-sm);
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--color-critical);
+}
+
+/* ------------------------------------------------------------------ list -- */
+
+.profiles-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.profiles-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.profiles-row:hover {
+  background: var(--bg-hover);
+  border-color: var(--border);
+}
+
+.profiles-row[data-selected='true'] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* The label covers the row so the whole thing is the hit target; the radio
+   keeps its focus behaviour and only its native rendering is hidden. */
+.profiles-option {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.profiles-option input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: inherit;
+}
+
+/* Colour comes from the profile record as a token name, applied inline. A ring
+   rather than a filled disc when unselected, so the colour reads as an
+   identifier and the selection state stays the row's job. */
+.profiles-dot {
+  flex-shrink: 0;
+  width: 10px;
+  height: 10px;
+  margin-top: 4px;
+  border-radius: 50%;
+  opacity: 0.55;
+  transition: opacity 120ms ease, box-shadow 120ms ease;
+}
+
+.profiles-row[data-selected='true'] .profiles-dot {
+  opacity: 1;
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.profiles-option input:focus-visible ~ .profiles-dot {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.profiles-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.profiles-name {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 550;
+  color: var(--text-primary);
+}
+
+.profiles-hint {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.profiles-path {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-muted);
+  /* A long path loses its tail rather than widening the dialog; the full value
+     is on the title attribute. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.profiles-badge {
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 9.5px;
+  font-weight: 550;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+/* ---------------------------------------------------------------- remove -- */
+
+.profiles-remove {
+  padding: 3px 9px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--text-muted);
+  cursor: pointer;
+  /* Revealed on hover or keyboard focus: destructive, and not what the dialog
+     is for. `:focus-within` keeps it reachable by tab. */
+  opacity: 0;
+  transition: opacity 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.profiles-row:hover .profiles-remove,
+.profiles-remove:focus-visible {
+  opacity: 1;
+}
+
+.profiles-remove:hover {
+  border-color: var(--color-critical);
+  color: var(--color-critical);
+}
+
+.profiles-confirm {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.profiles-confirm-text {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.profiles-confirm-btn {
+  padding: 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.profiles-confirm-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.profiles-confirm-btn.danger:hover {
+  border-color: var(--color-critical);
+  color: var(--color-critical);
+}
+
+/* ------------------------------------------------------------------- new -- */
+
+.profiles-add {
+  align-self: flex-start;
+  padding: 5px 11px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font-family: inherit;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: border-color 120ms ease, color 120ms ease;
+}
+
+.profiles-add:hover {
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+
+.profiles-new {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+}
+
+.profiles-new-label {
+  font-size: 11px;
+  font-weight: 550;
+  color: var(--text-secondary);
+}
+
+.profiles-new-row {
+  display: flex;
+  gap: 6px;
+}
+
+.profiles-input {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  font-family: inherit;
+  font-size: 12.5px;
+  color: var(--text-primary);
+}
+
+.profiles-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+  border-color: var(--accent);
+}
+
+.profiles-new-btn {
+  padding: 5px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  font-family: inherit;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.profiles-new-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.profiles-new-hint {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+/* -------------------------------------------------------------- remember -- */
+
+.profiles-remember {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 4px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-subtle);
+  cursor: pointer;
+}
+
+/* Native checkbox rendering kept — a tick is a tick, and restyling it would
+   add a second control language to one dialog. */
+.profiles-remember input {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  margin-top: 2px;
+  accent-color: var(--accent);
+}
+
+.profiles-remember .profiles-name {
+  font-weight: 500;
+}

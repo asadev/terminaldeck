@@ -1,0 +1,190 @@
+/* ============================================================================
+   Shortcuts sheet
+
+   A reference table, so it is read by scanning down the key column rather than
+   across each row: the keys are right-aligned in a fixed lane and every label
+   starts at the same x. Colour is carried entirely by foundation tokens, and
+   the base `kbd` rule in app.css supplies the chip — only the size is
+   overridden here, because in this panel the keys are the content.
+   ============================================================================ */
+
+.sheet {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+/* ---------------------------------------------------------------- search -- */
+
+.sheet-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  position: sticky;
+  /* -4px cancels the modal body's top padding, so rows scroll under the field
+     rather than appearing in a 4px gap above it. Both values live in
+     Modal.css; if that padding changes, these follow. */
+  top: -4px;
+  z-index: 1;
+  margin: 0 -18px;
+  padding: 8px 18px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+}
+
+.sheet-input {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  border: none;
+  outline: none;
+  background: none;
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: 13px;
+}
+
+.sheet-input::placeholder {
+  color: var(--text-muted);
+}
+
+/* The native clear affordance sits on a themed surface it was not designed
+   for, and duplicates Escape. */
+.sheet-input::-webkit-search-cancel-button {
+  appearance: none;
+}
+
+.sheet-count {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------------------------------------------------------------- groups -- */
+
+.sheet-group-head {
+  margin-bottom: 6px;
+}
+
+.sheet-group-title {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.sheet-group-hint {
+  margin: 2px 0 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.sheet-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.sheet-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.sheet-row:last-child {
+  border-bottom: none;
+}
+
+/* Nothing is wired to this command yet. Dimmed rather than hidden: a gap in
+   the app is worth seeing, and hiding it is how the sheet starts lying. */
+.sheet-row[data-unassigned] .sheet-label,
+.sheet-row[data-unassigned] .sheet-keys {
+  opacity: 0.5;
+}
+
+.sheet-label {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--text-primary);
+}
+
+.sheet-flag {
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.sheet-flag.warn {
+  color: var(--color-warning);
+  background: color-mix(in srgb, var(--color-warning) 14%, transparent);
+}
+
+/* ------------------------------------------------------------------ keys -- */
+
+.sheet-keys {
+  display: flex;
+  align-items: baseline;
+  flex-shrink: 0;
+  gap: 6px;
+  /* Every row's keys begin at the same x, which is what makes the column
+     scannable. Wide enough for the longest spelled-out chord (Ctrl+Shift+Tab). */
+  min-width: 132px;
+  justify-content: flex-end;
+  text-align: right;
+}
+
+.sheet-chord {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.sheet-chord kbd {
+  padding: 2px 6px;
+  font-size: 11.5px;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.sheet-or {
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+
+.sheet-empty {
+  margin: 8px 0;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+/* The panel is fixed-width, so on a short window the two columns collide
+   before the viewport does. Stack them rather than letting labels truncate. */
+@media (max-width: 520px) {
+  .sheet-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
+
+  .sheet-keys {
+    min-width: 0;
+    justify-content: flex-start;
+  }
+}
