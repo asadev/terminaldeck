@@ -7,6 +7,8 @@ import { ReadinessPanel } from '../components/ReadinessPanel'
 import { AlertsPanel } from '../components/AlertsPanel'
 import { McpInspector } from '../components/McpInspector'
 import { HooksPanel } from '../components/HooksPanel'
+import { Dashboard } from '../dashboard/Dashboard'
+import { Board } from '../board/Board'
 import { PANELS, type PanelId } from './panels'
 import { ErrorBoundary } from './ErrorBoundary'
 
@@ -66,6 +68,10 @@ export function PanelDock({
       default:
         if (!projectPath) return <NeedsProject label={label} />
         switch (panel) {
+          case 'overview':
+            return <Dashboard projectPath={projectPath} />
+          case 'board':
+            return <Board projectPath={projectPath} />
           case 'files':
             return <FileTree root={projectPath} onSelect={(entry) => onOpenFile(entry.relPath)} />
           case 'search':

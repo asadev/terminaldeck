@@ -132,7 +132,9 @@ describe('the unwired panel', () => {
 })
 
 describe('the wired panel', () => {
-  const html = renderToStaticMarkup(<BrowserWorkspace bridge={noopBridge} />)
+  // showTabs on: the window header owns tabs in the app, so the panel's own
+  // strip is off by default. This case is about the strip's controls.
+  const html = renderToStaticMarkup(<BrowserWorkspace bridge={noopBridge} showTabs />)
 
   it('gives every control an accessible name', () => {
     for (const label of [

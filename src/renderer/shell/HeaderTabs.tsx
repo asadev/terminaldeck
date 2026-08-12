@@ -1,4 +1,3 @@
-import { useState } from 'react'
 import { StatusDot } from '../components/StatusDot'
 import { KIND_ICON, type TabKind, type WorkspaceTab } from './workspace-tabs'
 
@@ -10,13 +9,6 @@ interface Props {
   onOpen(kind: TabKind): void
 }
 
-const NEW_ITEMS: Array<{ kind: TabKind; label: string; hint: string }> = [
-  { kind: 'session', label: 'New session', hint: '⌘T' },
-  { kind: 'browser', label: 'New browser tab', hint: '' },
-  { kind: 'overview', label: 'Project overview', hint: '' },
-  { kind: 'board', label: 'Task board', hint: '' },
-]
-
 /**
  * The single tab strip in the window header.
  *
@@ -25,8 +17,6 @@ const NEW_ITEMS: Array<{ kind: TabKind; label: string; hint: string }> = [
  * at" belongs.
  */
 export function HeaderTabs({ tabs, activeId, onSelect, onClose, onOpen }: Props) {
-  const [menuOpen, setMenuOpen] = useState(false)
-
   return (
     // Two containers on purpose: the strip scrolls, the new-tab button does
     // not. With the button inside the scroller its dropdown was clipped by
@@ -78,47 +68,31 @@ export function HeaderTabs({ tabs, activeId, onSelect, onClose, onOpen }: Props)
         ))}
       </div>
 
+      {/* Two buttons rather than a plus menu: the thing you want to open is
+          one click, and the icons say which is which. */}
       <div className="htab-new">
         <button
           type="button"
           className="htab-new-button"
-          aria-label="Open a new tab"
-          aria-expanded={menuOpen}
-          title="Open a new tab"
-          onClick={() => setMenuOpen((open) => !open)}
+          aria-label="New session"
+          title="New session (⌘T)"
+          onClick={() => onOpen('session')}
         >
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-            <path d="M12 5v14M5 12h14" strokeWidth="2" strokeLinecap="round" />
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <path d={KIND_ICON.session} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
         </button>
-
-        {menuOpen && (
-          <>
-            {/* Click-away layer: a menu that only closes on re-click strands
-                the user behind an invisible panel. */}
-            <div className="htab-menu-scrim" onClick={() => setMenuOpen(false)} />
-            <div className="htab-menu" role="menu">
-              {NEW_ITEMS.map((item) => (
-                <button
-                  key={item.kind}
-                  type="button"
-                  role="menuitem"
-                  className="htab-menu-item"
-                  onClick={() => {
-                    setMenuOpen(false)
-                    onOpen(item.kind)
-                  }}
-                >
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
-                    <path d={KIND_ICON[item.kind]} strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
-                  </svg>
-                  <span>{item.label}</span>
-                  {item.hint && <kbd>{item.hint}</kbd>}
-                </button>
-              ))}
-            </div>
-          </>
-        )}
+        <button
+          type="button"
+          className="htab-new-button"
+          aria-label="New browser tab"
+          title="New browser tab"
+          onClick={() => onOpen('browser')}
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <path d={KIND_ICON.browser} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </button>
       </div>
     </div>
   )

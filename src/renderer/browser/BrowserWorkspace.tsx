@@ -53,6 +53,14 @@ import './BrowserWorkspace.css'
 export interface BrowserWorkspaceProps {
   /** False parks every view offscreen without tearing the pages down. */
   visible?: boolean
+  /**
+   * Draw this panel's own tab strip.
+   *
+   * Off when the window header already lists browser tabs — two strips, one
+   * above the other, both listing tabs, is the "doubling up" that made the
+   * layout confusing.
+   */
+  showTabs?: boolean
   /** Receives a single line for the agent. Absent means no session is focused. */
   onSendToAgent?: (text: string) => void
   /** Injectable for tests; defaults to the preload bridge on `window.pawl`. */
@@ -168,6 +176,7 @@ function without<T>(map: Record<string, T>, key: string): Record<string, T> {
  */
 export function BrowserWorkspace({
   visible = true,
+  showTabs = false,
   onSendToAgent,
   bridge,
   isolation,
@@ -621,14 +630,16 @@ export function BrowserWorkspace({
 
   return (
     <div className="bw" ref={rootRef} onKeyDown={onKeyDown}>
-      <TabStrip
-        tabs={tabs}
-        activeKey={activeKey}
-        onSelect={setActiveKey}
-        onClose={closeTab}
-        onOpen={() => openNewTab(home)}
-        onReorder={(key, index) => setTabs((prev) => moveTab(prev, key, index))}
-      />
+      {showTabs && (
+        <TabStrip
+          tabs={tabs}
+          activeKey={activeKey}
+          onSelect={setActiveKey}
+          onClose={closeTab}
+          onOpen={() => openNewTab(home)}
+          onReorder={(key, index) => setTabs((prev) => moveTab(prev, key, index))}
+        />
+      )}
 
       <Toolbar
         tab={active}

@@ -80,6 +80,8 @@ export const SECTIONS: ReadonlyArray<{ id: HelpSectionId; label: string; hint: s
 /** One line each, in the user's terms rather than the module's. */
 export const PANEL_HELP: Record<PanelId, string> = {
   projects: 'Folders you have opened. A project is the unit of work — sessions start in one, and closing a project ends its sessions.',
+  overview: 'A dashboard for the open project: sessions, spend, git state and readiness in one place. Widgets can be rearranged.',
+  board: 'A task board for the open project. Cards can spawn or resume a session, and move themselves to Done when it finishes.',
   files: 'The project tree, with anything your ignore rules exclude hidden. Open a file to read it beside the session.',
   search: 'Full-text search across past session transcripts, so you can find the conversation where something was decided.',
   git: 'Working-tree status and diffs for the project, refreshed as the agent edits files.',

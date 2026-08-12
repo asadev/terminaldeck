@@ -2,6 +2,8 @@
 
 export type PanelId =
   | 'projects'
+  | 'overview'
+  | 'board'
   | 'files'
   | 'search'
   | 'git'
@@ -21,6 +23,10 @@ export interface PanelSpec {
 
 export const PANELS: PanelSpec[] = [
   { id: 'projects', label: 'Projects', shortcut: '⌘1', icon: 'M3 7h6l2 2h10v9a2 2 0 0 1-2 2H3z M3 7V5a2 2 0 0 1 2-2h4l2 2' },
+  // Views of the current project rather than windows, so they belong here
+  // and not in the tab strip.
+  { id: 'overview', label: 'Overview', icon: 'M4 4h7v7H4zM13 4h7v4h-7zM13 11h7v9h-7zM4 14h7v6H4z' },
+  { id: 'board', label: 'Task board', icon: 'M4 5h4v14H4zM10 5h4v9h-4zM16 5h4v11h-4z' },
   { id: 'files', label: 'Files', shortcut: '⌘2', icon: 'M4 4h9l3 3v13H4z M13 4v3h3' },
   { id: 'search', label: 'Search sessions', shortcut: '⌘⇧F', icon: 'M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14z M20 20l-4.2-4.2' },
   { id: 'git', label: 'Source control', shortcut: '⌘3', icon: 'M6 4v9a3 3 0 0 0 3 3h6 M6 20a2 2 0 1 0 0-4 2 2 0 0 0 0 4z M6 8a2 2 0 1 0 0-4 2 2 0 0 0 0 4z M18 18a2 2 0 1 0 0-4 2 2 0 0 0 0 4z' },

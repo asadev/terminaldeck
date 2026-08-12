@@ -12,20 +12,12 @@ import { CommandPalette, type PaletteCommand } from './components/CommandPalette
 import { ShortcutsSheet } from './components/ShortcutsSheet'
 import { Onboarding } from './components/Onboarding'
 import { BrowserWorkspace } from './browser/BrowserWorkspace'
-import { Board } from './board/Board'
-import { Dashboard } from './dashboard/Dashboard'
 import { SwarmGrid } from './layout/SwarmGrid'
 import { ActivityBar } from './shell/ActivityBar'
 import { PanelDock } from './shell/PanelDock'
 import { usePanelDock } from './shell/usePanelDock'
 import { HeaderTabs } from './shell/HeaderTabs'
-import {
-  isSingleton,
-  nextActiveId,
-  singletonId,
-  type TabKind,
-  type WorkspaceTab,
-} from './shell/workspace-tabs'
+import { nextActiveId, type TabKind, type WorkspaceTab } from './shell/workspace-tabs'
 import { ErrorBoundary } from './shell/ErrorBoundary'
 import { applyStoredTheme } from './theme'
 import './shell/shell.css'
@@ -149,12 +141,8 @@ function Workspace() {
       }
       // Overview and Board show the same thing however many times you open
       // them, so focus the existing tab instead of stacking duplicates.
-      const id = isSingleton(kind) ? singletonId(kind) : `browser:${Date.now()}`
-      setExtraTabs((prev) => {
-        if (prev.some((t) => t.id === id)) return prev
-        const label = kind === 'browser' ? 'New tab' : kind === 'overview' ? 'Overview' : 'Board'
-        return [...prev, { id, kind, label, closable: true }]
-      })
+      const id = `browser:${Date.now()}`
+      setExtraTabs((prev) => [...prev, { id, kind, label: 'New tab', closable: true }])
       setActiveTabId(id)
     },
     [activeProjectPath, newSessionIn, openProject],
@@ -198,8 +186,8 @@ function Workspace() {
       { id: 'session.new', title: 'New session', group: 'Session', shortcut: '⌘T', run: () => activeProjectPath && void newSessionIn(activeProjectPath) },
       { id: 'session.resume', title: 'Continue last session', group: 'Session', shortcut: '⌘⇧T', run: () => activeProjectPath && void newSessionIn(activeProjectPath, true) },
       { id: 'project.open', title: 'Open a project', group: 'Project', shortcut: '⌘O', run: () => void openProject() },
-      { id: 'view.overview', title: 'Show project overview', group: 'View', run: () => openTab('overview') },
-      { id: 'view.board', title: 'Show task board', group: 'View', run: () => openTab('board') },
+      { id: 'view.overview', title: 'Show project overview', group: 'View', run: () => setPanel('overview') },
+      { id: 'view.board', title: 'Show task board', group: 'View', run: () => setPanel('board') },
       { id: 'view.browser', title: 'Show browser', group: 'View', run: () => openTab('browser') },
       { id: 'view.swarm', title: 'Toggle swarm view', group: 'View', shortcut: '⌘\\', run: () => setSwarm((value) => !value) },
       { id: 'panel.git', title: 'Show source control', group: 'Panel', run: () => setPanel('git') },
@@ -333,20 +321,6 @@ function Workspace() {
   const mainView = () => {
     if (!activeTab) return <EmptyState onOpenProject={openProject} />
 
-    if (activeTab.kind === 'overview') {
-      return activeProjectPath ? (
-        <Dashboard projectPath={activeProjectPath} />
-      ) : (
-        <EmptyState onOpenProject={openProject} />
-      )
-    }
-    if (activeTab.kind === 'board') {
-      return activeProjectPath ? (
-        <Board projectPath={activeProjectPath} />
-      ) : (
-        <EmptyState onOpenProject={openProject} />
-      )
-    }
     if (swarm) {
       return (
         <SwarmGrid
