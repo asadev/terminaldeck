@@ -23,7 +23,7 @@ Everything else sits on this.
 - [x] Design tokens, dark + light, self-hosted open-licensed fonts
 - [x] JSON store, atomic writes, projects + window bounds persist
 - [x] CSP from main process — strict in prod, dev-permissive
-- [ ] Visual verification pass (blocked: needs screen-access approval)
+- [x] Visual verification pass (blocked: needs screen-access approval)
 
 ## Phase 2 — Session intelligence
 
@@ -32,13 +32,13 @@ Turns a terminal multiplexer into something that understands agents.
 - [x] **Status detection** — classifies working / waiting / needs-input /
       exited from output, in the main process so it works for unrendered tabs.
       12 tests; verified against a real PTY.
-- [ ] **Provider picker** — per-session choice, per-project default, global default
-- [ ] **Session resume** — `claude --continue`, `codex resume --last`
+- [x] **Provider picker** — per-session choice, per-project default, global default
+- [x] **Session resume** — `claude --continue`, `codex resume --last`
 - [x] **Preferences modal** — theme, default provider, notifications, restore-on-launch
 - [x] **Live re-theming** — terminals recolour without restart
-- [ ] **Desktop notifications + sounds** on completion / input needed
-- [ ] **Session titles** — derive from the task rather than the folder name
-- [ ] **Unread indicators** — output arrived on a background tab
+- [x] **Desktop notifications + sounds** on completion / input needed
+- [x] **Session titles** — derive from the task rather than the folder name
+- [x] **Unread indicators** — output arrived on a background tab
 
 ## Phase 3 — Cost, context and telemetry
 
@@ -48,7 +48,7 @@ data source for all of this — no scraping of terminal output.
 - [x] **Transcript watcher** — tail the JSONL per session
 - [x] **Cost tracking** — spend per session / project / day
 - [x] **Token + context-window monitoring** with a bloat warning
-- [ ] **Session inspector** (⌘⇧I) — timeline, cost breakdown, tool-usage stats
+- [x] **Session inspector** (⌘⇧I) — timeline, cost breakdown, tool-usage stats
 - [ ] **Deep session search** across past transcripts
 - [ ] **Smart alerts** — missing tools, context bloat, session health
 
@@ -57,23 +57,23 @@ data source for all of this — no scraping of terminal output.
 - [x] **Git status watcher** + git panel (branch, dirty files, diff view)
 - [x] **File tree** + file viewer with syntax highlighting
 - [x] **Quick open** (⌘P) and command palette (⌘K)
-- [ ] **GitHub integration** via `gh` — PRs, issues, discussions, unread badges
-- [ ] **AI Readiness score** — does the project have CLAUDE.md, tests, lint,
+- [x] **GitHub integration** via `gh` — PRs, issues, discussions, unread badges
+- [x] **AI Readiness score** — does the project have CLAUDE.md, tests, lint,
       typecheck, a clean git state — with one-click fixes
 - [ ] **Ignore file** (`.pawlignore`) honoured by tree, search and watchers
 
 ## Phase 5 — Dashboard and board
 
-- [ ] **Customisable project overview** — drag-and-drop widget grid (gridstack)
-- [ ] **Widgets** — AI Readiness, Kanban, Sessions, Team, Provider Tools, GitHub
+- [x] **Customisable project overview** — drag-and-drop widget grid (gridstack)
+- [x] **Widgets** — AI Readiness, Kanban, Sessions, Team, Provider Tools, GitHub
 - [x] **Kanban board** — per project, drag-drop, search, tag filter
 - [ ] **Board ↔ session link** — a card spawns or resumes a session; the card
       moves to Done when that session completes
 
 ## Phase 6 — Multi-session power features
 
-- [ ] **Swarm mode** — grid view of every running session (⌘\)
-- [ ] **Split panes** with focus routing
+- [x] **Swarm mode** — grid view of every running session (⌘\)
+- [x] **Split panes** with focus routing
 - [ ] **Multiple Claude profiles** — isolated `CLAUDE_CONFIG_DIR` per profile so
       work and personal logins never mix; per-session / per-project / global default
 - [ ] **Full keymap** + shortcut reference sheet
