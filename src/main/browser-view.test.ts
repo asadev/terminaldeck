@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { IpcMain } from 'electron'
+import { BRAND } from '../shared/brand'
 
 /**
  * The guest session has to be one stable object: `isGuest` compares a view's
@@ -256,14 +257,14 @@ describe('revealing a screenshot', () => {
   it('refuses a path outside the screenshot directory', () => {
     revealed.length = 0
     invoke('browser-view:reveal', '/etc/passwd')
-    invoke('browser-view:reveal', '/tmp/Pictures/Deck/../../../etc/passwd')
+    invoke('browser-view:reveal', `/tmp/Pictures/${BRAND.name}/../../../etc/passwd`)
     invoke('browser-view:reveal', 42)
     expect(revealed).toEqual([])
   })
 
   it('reveals one of our own captures', () => {
     revealed.length = 0
-    invoke('browser-view:reveal', '/tmp/Deck/example.com-20260812-163045.png')
+    invoke('browser-view:reveal', `/tmp/${BRAND.name}/example.com-20260812-163045.png`)
     expect(revealed).toHaveLength(1)
   })
 })

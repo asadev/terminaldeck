@@ -234,9 +234,16 @@ export type ConfirmationScope = 'default' | 'session'
 function scopeOf(tail: string): ConfirmationScope | null {
   // Model says "and saved as your default …"; effort says "(saved as your
   // default …)". Matching the model's leading "and" silently lost every effort
-  // confirmation, so the shared part is what is matched.
-  if (/saved as your default for new sessions/i.test(tail)) return 'default'
-  if (/(?:^|\W)(?:\()?(?:for )?this session only/i.test(tail)) return 'session'
+  // confirmation, so only the shared part is matched.
+  //
+  // And only the *distinctive* part of it: these lines wrap in an 80-column
+  // terminal, and the real capture routinely ends "…and saved as your default
+  // for" with "new sessions" on the row below. Requiring the full phrase read
+  // the wrapped case as "no scope stated", which is safe but silent. Anything
+  // shorter than this still cannot collide — the alternative arm shares no
+  // words with it.
+  if (/saved as your default/i.test(tail)) return 'default'
+  if (/\bthis session\b/i.test(tail)) return 'session'
   return null
 }
 

@@ -132,6 +132,15 @@ describe('model from the CLI confirmation', () => {
     )
     expect(readModelConfirmation('  ⎿  Kept model as Opus 5')?.scope).toBeNull()
   })
+
+  it('still reads the scope when the terminal wrapped it mid-phrase', () => {
+    // What an 80-column screen actually holds: the clause is cut after "for".
+    const wrapped = [
+      '  ⎿  Set model to Opus 5 (1M context) (default) and saved as your default for',
+      '     new sessions',
+    ].join('\n')
+    expect(readModelConfirmation(wrapped)).toEqual({ name: 'Opus 5 (1M context) (default)', scope: 'default' })
+  })
 })
 
 describe('effort from the CLI confirmation', () => {
