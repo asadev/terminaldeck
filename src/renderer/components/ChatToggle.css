@@ -1,0 +1,76 @@
+/* ============================================================================
+   Terminal ⇄ Chat segmented toggle.
+
+   Notion's own segmented controls are a recessed track with a raised active
+   pill: the surface tells you which half is live, so no colour has to. The
+   accent stays out of it — this is a mode, not a selection.
+   ============================================================================ */
+
+/* Optional host row for the toggle, so App.tsx needs no inline styles to place
+   it above the session panes. */
+.chat-toggle-bar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex: 0 0 auto;
+  gap: 10px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary);
+}
+
+.chat-toggle {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  /* Sits over a terminal, so it needs its own edge to read against black. */
+  border: 1px solid var(--border-subtle);
+}
+
+.ct-option {
+  appearance: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  padding: 3px 12px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.5;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 90ms ease, color 90ms ease;
+}
+
+.ct-option:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.ct-on,
+.ct-on:hover {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-sm);
+}
+
+/* The raised pill has to be *lighter* than its track to read as raised, and in
+   the dark palette `--bg-primary` is the darkest surface there is — rendered
+   side by side, the selected half looked punched into the toolbar rather than
+   sitting on top of it. Swapping the two roles keeps one idiom in both themes. */
+[data-theme='dark'] .chat-toggle {
+  background: var(--bg-primary);
+}
+
+[data-theme='dark'] .ct-on,
+[data-theme='dark'] .ct-on:hover {
+  background: var(--bg-tertiary);
+}
+
+.ct-option:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}

@@ -116,6 +116,11 @@ export interface PawlApi {
 
   checkPrerequisites(): Promise<unknown>
 
+  loadChat(request: { cwd?: string; transcriptPath?: string }): Promise<unknown>
+  tailChat(request: { cwd?: string; transcriptPath?: string }): Promise<unknown>
+  closeChat(transcriptPath: string): void
+  devPorts(force?: boolean): Promise<unknown>
+
 
   getSettings(): Promise<unknown>
   setSettings(patch: Record<string, unknown>): Promise<unknown>

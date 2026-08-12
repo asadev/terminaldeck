@@ -11,6 +11,8 @@ import { registerFsIpc } from './fs-tree'
 import { registerSearchIpc } from './file-search'
 import { registerBoardIpc } from './board-store'
 import { registerInsightsIpc } from './session-insights'
+import { registerChatIpc } from './chat-transcript'
+import { registerDevPortsIpc } from './dev-ports'
 import { registerGitHubIpc } from './github'
 import { registerReadinessIpc } from './readiness'
 import { registerDashboardIpc } from './dashboard-store'
@@ -188,6 +190,8 @@ function registerIpc(): void {
     isAllowedRoot: (root) => store().getProjects().some((p) => p.path === root),
   })
   registerInsightsIpc(ipcMain)
+  registerChatIpc(ipcMain)
+  registerDevPortsIpc(ipcMain)
   registerGitHubIpc(ipcMain)
   registerReadinessIpc(ipcMain)
   registerDashboardIpc(ipcMain)

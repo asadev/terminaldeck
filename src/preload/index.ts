@@ -352,6 +352,21 @@ const api = {
     return () => ipcRenderer.off('menu:command', handler)
   },
 
+  /* ------------------------------------------------------------ chat -- */
+
+  loadChat: (request: { cwd?: string; transcriptPath?: string }): Promise<unknown> =>
+    ipcRenderer.invoke('chat:load', request),
+  tailChat: (request: { cwd?: string; transcriptPath?: string }): Promise<unknown> =>
+    ipcRenderer.invoke('chat:tail', request),
+  // send(), not invoke(): 'chat:close' is an ipcMain.on channel. An invoke here
+  // would reject and leak a file reader per session.
+  closeChat: (transcriptPath: string): void => {
+    ipcRenderer.send('chat:close', transcriptPath)
+  },
+
+  /** Ports actually listening on this machine, for the browser start page. */
+  devPorts: (force?: boolean): Promise<unknown> => ipcRenderer.invoke('dev:ports', force === true),
+
   listBrowsers: (): Promise<unknown> => ipcRenderer.invoke('chrome-import:browsers'),
   scanBrowserTabs: (browserId?: string): Promise<unknown> =>
     ipcRenderer.invoke('chrome-import:scan', browserId),

@@ -77,6 +77,20 @@ const api: Record<string, unknown> = new Proxy(
     loadDashboard: async () => null,
     getLatestSessionInsights: async () => null,
     searchSessions: async () => ({ hits: [] }),
+    // Chat view. The Proxy's fallback resolves an unknown method to `null`, and
+    // `null.found` throws inside a promise — the pane would go down through the
+    // error boundary and look broken rather than empty. A complete `ChatUpdate`
+    // is the honest answer: the harness has no transcript store, so `found` is
+    // false and the view shows its "no transcript yet" state.
+    loadChat: async () => ({
+      transcriptPath: '', sessionId: '', cwd: '', messages: [],
+      reset: false, cursor: 0, found: false, complete: true, updatedAt: Date.now(),
+    }),
+    tailChat: async () => ({
+      transcriptPath: '', sessionId: '', cwd: '', messages: [],
+      reset: false, cursor: 0, found: false, complete: true, updatedAt: Date.now(),
+    }),
+    closeChat: () => {},
     browserSessionInfo: async () => ({ partition: 'persist:pawl-browser', persistent: true }),
     listBrowsers: async () => ({ browsers: [] }),
     // Per-tab isolation. The Proxy's fallback would resolve these to null, and

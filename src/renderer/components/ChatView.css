@@ -1,0 +1,300 @@
+/* ============================================================================
+   Chat view — a session read as a conversation.
+
+   A reading surface, so the rules are a document's rules: one measure-limited
+   column, generous leading, and no colour doing decorative work. The two
+   speakers are told apart by label and by a hairline rule on the user's turn,
+   not by tinted bubbles — a page of alternating colour blocks is harder to read
+   than a page of text, which is the only thing this panel is for.
+   ============================================================================ */
+
+.chat-view {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+}
+
+.cv-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 28px 24px 40px;
+}
+
+/* 68ch is about 11 words a line — the span an eye tracks without losing its
+   place. The panel is often 900px+ wide, where full-bleed text is unreadable. */
+.cv-column {
+  max-width: 68ch;
+  margin: 0 auto;
+}
+
+/* ----------------------------------------------------------------- message */
+
+.cv-message {
+  padding: 2px 0 22px;
+}
+
+.cv-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.cv-who {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.cv-you .cv-who {
+  color: var(--text-primary);
+}
+
+.cv-time {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.cv-body {
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+/* The user's turn gets a rule and a tint rather than a bubble: it marks where a
+   new instruction starts when you are scanning back through a long session. */
+.cv-you .cv-body {
+  border-left: 2px solid var(--border-strong);
+  padding: 2px 0 2px 14px;
+  color: var(--text-secondary);
+}
+
+/* A typed prompt is not markup, so its newlines are all the structure it has. */
+.cv-plain {
+  white-space: pre-wrap;
+}
+
+/* --------------------------------------------------------- rendered markdown */
+
+.cv-rich > :first-child { margin-top: 0; }
+.cv-rich > :last-child { margin-bottom: 0; }
+
+.cv-rich p,
+.cv-rich ul,
+.cv-rich ol,
+.cv-rich blockquote {
+  margin: 0 0 12px;
+}
+
+.cv-rich h1,
+.cv-rich h2,
+.cv-rich h3,
+.cv-rich h4,
+.cv-rich h5,
+.cv-rich h6 {
+  /* Headings inside a reply are structure, not titles — a model writing `##`
+     should not out-shout the app's own chrome. */
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+  margin: 20px 0 8px;
+  color: var(--text-primary);
+}
+
+.cv-rich ul,
+.cv-rich ol {
+  padding-left: 22px;
+}
+
+.cv-rich li {
+  margin-bottom: 4px;
+}
+
+.cv-rich blockquote {
+  border-left: 2px solid var(--border);
+  padding-left: 14px;
+  color: var(--text-secondary);
+}
+
+.cv-rich hr {
+  border: 0;
+  border-top: 1px solid var(--border-subtle);
+  margin: 20px 0;
+}
+
+.cv-rich code {
+  font-family: var(--font-mono);
+  font-size: 0.86em;
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-sm);
+  padding: 1px 4px;
+}
+
+.cv-rich table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0 0 12px;
+  font-size: 13px;
+  display: block;
+  /* Tables are the one thing that can be wider than the measure; it scrolls
+     inside itself rather than widening the column. */
+  overflow-x: auto;
+}
+
+.cv-rich th,
+.cv-rich td {
+  border: 1px solid var(--border-subtle);
+  padding: 5px 8px;
+  text-align: left;
+}
+
+.cv-rich th {
+  font-weight: 600;
+  background: var(--bg-secondary);
+}
+
+/* A link keeps its text and loses its href — see the renderer in ChatView.tsx.
+   Dotted rather than solid so it never reads as clickable, which it is not. */
+.cv-link {
+  border-bottom: 1px dotted var(--border-strong);
+  cursor: help;
+}
+
+/* ------------------------------------------------------------- code, folded */
+
+.cv-code {
+  margin: 0 0 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  overflow: hidden;
+}
+
+.cv-code > summary {
+  cursor: pointer;
+  padding: 5px 10px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  list-style: none;
+  user-select: none;
+}
+
+.cv-code > summary::-webkit-details-marker { display: none; }
+
+.cv-code > summary::before {
+  content: '▸';
+  display: inline-block;
+  width: 12px;
+  color: var(--text-muted);
+}
+
+.cv-code[open] > summary::before { content: '▾'; }
+.cv-code > summary:hover { background: var(--bg-hover); color: var(--text-secondary); }
+
+.cv-code pre {
+  margin: 0;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border-subtle);
+  /* Bounded: opening a 400-line block should not turn the reading view into a
+     file viewer, which is what the terminal tab is already for. */
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.cv-code code {
+  background: none;
+  padding: 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+  /* Wrapped, not scrolled sideways. Rendering a real block showed the right
+     third of every line cut off behind a horizontal scrollbar nobody would
+     find — and half of what models put in fences here is prose (an image
+     prompt, a plan), which has no line structure to preserve. `pre-wrap` keeps
+     the indentation that makes real code readable and wraps the rest. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ---------------------------------------------------------------- day break */
+
+.cv-day {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 10px 0 22px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.cv-day::before,
+.cv-day::after {
+  content: '';
+  flex: 1;
+  border-top: 1px solid var(--border-subtle);
+}
+
+/* --------------------------------------------------------------- furniture */
+
+.cv-source {
+  margin: 16px 0 0;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-subtle);
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.cv-empty {
+  max-width: 44ch;
+  margin: 18vh auto 0;
+  text-align: center;
+}
+
+.cv-empty-title {
+  margin: 0 0 6px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.cv-empty-detail {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+/* The one place the accent is allowed: it is a focus target the user is being
+   pointed at, which is what the blue means everywhere else in the app. */
+.cv-jump {
+  position: absolute;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-primary);
+  color: var(--accent);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  box-shadow: var(--shadow-md);
+}
+
+.cv-jump:hover { background: var(--bg-hover); }
+.cv-jump:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

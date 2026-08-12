@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
 import { StoreProvider, useStore } from './state/store'
 import { TitleBar } from './components/TitleBar'
 import { TerminalView } from './components/TerminalView'
@@ -11,6 +11,8 @@ import { SessionInspector } from './components/SessionInspector'
 import { CommandPalette, type PaletteCommand } from './components/CommandPalette'
 import { ShortcutsSheet } from './components/ShortcutsSheet'
 import { Onboarding } from './components/Onboarding'
+import { ChatView } from './components/ChatView'
+import { ChatToggle, type SessionViewMode } from './components/ChatToggle'
 import { BrowserWorkspace } from './browser/BrowserWorkspace'
 import { SwarmGrid } from './layout/SwarmGrid'
 import { ActivityBar } from './shell/ActivityBar'
@@ -39,6 +41,7 @@ function Workspace() {
   const [extraTabs, setExtraTabs] = useState<WorkspaceTab[]>([])
   const [activeTabId, setActiveTabId] = useState<string | null>(null)
   const [swarm, setSwarm] = useState(false)
+  const [sessionView, setSessionView] = useState<Record<string, SessionViewMode>>({})
   const [prefsOpen, setPrefsOpen] = useState(false)
   const [newSessionOpen, setNewSessionOpen] = useState(false)
   const [helpOpen, setHelpOpen] = useState(false)
@@ -348,13 +351,18 @@ function Workspace() {
               }}
             />
           ))}
-        {sessions.map((session) => (
-          <TerminalView
-            key={session.id}
-            sessionId={session.id}
-            visible={session.id === activeTab.id}
-          />
-        ))}
+        {sessions.map((session) => {
+          const active = session.id === activeTab.id
+          const mode = sessionView[session.id] ?? 'terminal'
+          return (
+            <Fragment key={session.id}>
+              {/* The terminal stays mounted in chat mode — only hidden — so
+                  scrollback and cursor survive a trip through Chat. */}
+              <TerminalView sessionId={session.id} visible={active && mode === 'terminal'} />
+              {active && mode === 'chat' ? <ChatView cwd={session.projectPath ?? null} /> : null}
+            </Fragment>
+          )
+        })}
       </>
     )
   }
@@ -389,6 +397,16 @@ function Workspace() {
           onOpenFile={() => setPanel('files')}
         />
         <main className="workspace">
+          {activeSession ? (
+            <div className="chat-toggle-bar">
+              <ChatToggle
+                mode={sessionView[activeSession.id] ?? 'terminal'}
+                onChange={(mode) =>
+                  setSessionView((views) => ({ ...views, [activeSession.id]: mode }))
+                }
+              />
+            </div>
+          ) : null}
           <div className="panes">
             <ErrorBoundary label={activeTab?.label ?? 'Workspace'}>
               {mainView()}
