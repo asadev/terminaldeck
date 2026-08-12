@@ -1,3 +1,5 @@
+import { BRAND } from '@shared/brand'
+
 interface Props {
   onOpenProject(): void
 }
@@ -11,8 +13,8 @@ export function EmptyState({ onOpenProject }: Props) {
           <path d="M12 19h8" strokeWidth="1.6" strokeLinecap="round" />
         </svg>
       </div>
-      <h1>Deck</h1>
-      <p>Run and watch your Claude sessions.</p>
+      <h1>{BRAND.name}</h1>
+      <p>{BRAND.tagline}.</p>
       <button type="button" className="btn-primary" onClick={onOpenProject}>
         Open a project
       </button>

@@ -79,3 +79,20 @@ were contract mismatches and runtime throws, not type errors.
 `on*` methods return an unsubscribe function, everything else a promise. A stub
 that disagrees with the preload invents bugs that do not exist and hides ones
 that do; that happened three times in one session.
+
+## Testing native modules in a packaged build
+
+`node-pty` rewrites its `spawn-helper` path with
+`helperPath.replace('app.asar', 'app.asar.unpacked')`. So a smoke test must
+`require()` it through **`app.asar/node_modules/node-pty`**, never through
+`app.asar.unpacked/...` — the latter rewrites to `app.asar.unpacked.unpacked`,
+which does not exist, and node-pty reports it as `posix_spawnp failed`. That
+error means "wrong helper path", not "broken binary". Run the smoke test under
+the packaged app's own Electron:
+
+    ELECTRON_RUN_AS_NODE=1 "/Applications/Terminal Deck.app/Contents/MacOS/Terminal Deck" smoke.js
+
+`electron-builder.yml` excludes `node_modules/node-pty/prebuilds/**`. That is
+deliberate: the x86_64 slice in there made macOS 28 refuse the arm64 bundle.
+`build/Release/{pty.node,spawn-helper}` are what actually ship, and they are
+enough — verified spawning through the asar.

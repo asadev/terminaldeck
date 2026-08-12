@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import './Onboarding.css'
+import { BRAND } from '@shared/brand'
 
 interface ToolStatus {
   id: string
@@ -61,7 +62,7 @@ export function Onboarding({ onContinue, onOpenProject }: Props) {
   return (
     <div className="onboarding">
       <div className="onboarding-inner">
-        <h1>Welcome to Deck</h1>
+        <h1>Welcome to {BRAND.name}</h1>
         <p className="onboarding-lede">
           Deck runs coding agents in real terminals. It never sees your logins — each agent signs
           you in itself, inside the session.

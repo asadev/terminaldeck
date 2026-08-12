@@ -1,10 +1,13 @@
 /**
  * THE ONLY PLACE THE PRODUCT NAME LIVES.
  *
- * Renaming the app = change the values here, then update:
- *   - package.json  -> "name"
- *   - electron-builder.yml -> appId / productName
- * Nothing else in the codebase hardcodes the name.
+ * Renaming the app = change the values here, then update the four places that
+ * cannot import TypeScript:
+ *   - package.json           -> "name", "productName"
+ *   - electron-builder.yml   -> appId, productName, the macOS usage strings
+ *   - src/renderer/index.html -> <title>, on screen before React mounts
+ *   - docs (README.md, BUILDING.md) and the CSS file headers that name it
+ * No application code hardcodes the name; everything else imports BRAND.
  */
 export const BRAND = {
   /** Display name, shown in the UI and window title. */
