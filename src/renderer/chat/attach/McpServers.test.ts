@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { readServers, toolPrefix } from './McpServers'
+import { readServers, rowDetail, toolPrefix } from './McpServers'
 
 /**
  * The status rows cross the preload as `unknown` — the renderer cannot import
@@ -41,12 +41,12 @@ describe('reading the server list', () => {
     expect(readServers([{ scope: 'user' }, FULL])).toHaveLength(1)
   })
 
-  it('fills in what a partial row omits instead of throwing', () => {
-    // A row that reaches this far but lacks scope/transport still describes a
-    // real server; refusing to render it would hide a connector that works.
+  it('keeps a partial row but does not invent what it omits', () => {
+    // A row that reaches this far still describes a real server, so it renders;
+    // "user · stdio" underneath it would be two facts nobody read.
     expect(readServers([{ id: 'x', name: 'x' }])?.[0]).toMatchObject({
-      scope: 'user',
-      transport: 'stdio',
+      scope: null,
+      transport: null,
       enabled: true,
     })
   })
@@ -57,6 +57,23 @@ describe('reading the server list', () => {
     expect(readServers(null)).toBeNull()
     expect(readServers(undefined)).toBeNull()
     expect(readServers([])).toEqual([])
+  })
+})
+
+describe('the line under a server name', () => {
+  const row = readServers([FULL])![0]
+
+  it('describes the server from what was read', () => {
+    expect(rowDetail(row)).toBe('user · stdio')
+  })
+
+  it('gives the reason it is off precedence over the description', () => {
+    expect(rowDetail({ ...row, enabled: false, disabledReason: 'not approved' })).toBe('not approved')
+  })
+
+  it('says nothing at all rather than guessing', () => {
+    expect(rowDetail({ ...row, scope: null, transport: null })).toBe('')
+    expect(rowDetail({ ...row, transport: null })).toBe('user')
   })
 })
 

@@ -23,7 +23,14 @@
   <rect width="1200" height="630" fill="#ffffff"/>
   <rect x="40" y="40" width="1120" height="550" rx="10" fill="none" stroke="rgba(55,53,47,0.16)"/>
 
-  <text x="80" y="112" class="mark">TERMINAL DECK</text>
+  <g transform="translate(80,88)">
+    <rect width="34" height="34" rx="7.4" fill="#37352f"/>
+    <g fill="none" stroke="#ffffff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" transform="translate(1.06,1.06) scale(1.0625)">
+      <path d="M9 21l6-6-6-6"/>
+      <path d="M17 22h6"/>
+    </g>
+  </g>
+  <text x="126" y="112" class="mark">TERMINAL DECK</text>
   <text x="1120" y="112" class="mark" text-anchor="end">TERMINALDECK.DEV</text>
 
   <text x="78" y="214" class="head">Run your coding agents</text>

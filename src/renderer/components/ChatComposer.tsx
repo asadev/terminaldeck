@@ -39,6 +39,13 @@ const NOTICE_MS = 4000
  * `@"…"` mention the CLI expands on submit, not an upload. `chat/attach/
  * mentions.ts` holds the exact forms and the measurements behind them —
  * including the reason a message carrying one is sent with a trailing space.
+ *
+ * `onSend` is handed the message *without* its carriage return, and the caller
+ * must not simply append one: measured through a pty, a single write of 64
+ * bytes or more is read as pasted text and its Enter does not submit, so
+ * `writeToSession(id, text + '\r')` silently does nothing for every message
+ * carrying an attachment. `terminalWrites` in `mentions.ts` is the sequence
+ * that works — two writes, `SUBMIT_GAP_MS` apart.
  */
 export function ChatComposer({ onSend, cwd, disabled = false, placeholder }: Props) {
   const [text, setText] = useState('')

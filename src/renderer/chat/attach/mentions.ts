@@ -23,13 +23,20 @@
  *    model read as an injection attempt and refused — one more reason the root
  *    check below is a feature rather than hygiene.
  *
- * And the one that decides whether any of this works at all: typing `@` into
- * the interactive CLI opens its file-completion popup, and the Enter that
- * follows is swallowed by that popup — it accepts the highlighted suggestion
- * and replaces the whole line with a bare path. Measured end-to-end through a
- * real pty: the message was never sent. A single space after the mention
- * closes the popup, and then Enter submits the line intact. See
- * {@link terminalPayload}.
+ * And the two that decide whether any of this works at all, both re-measured
+ * through a real pty against 2.1.228 (see {@link terminalPayload} and
+ * {@link terminalWrites}):
+ *
+ *  - A mention at the end of the line leaves the CLI's completion popup open,
+ *    and the Enter that follows is swallowed by it: the popup accepts the
+ *    highlighted suggestion and replaces the whole line with a bare path.
+ *    Watched happen — the message was never sent. One trailing space closes it.
+ *  - The CLI treats a large stdin chunk as *pasted text*, and Enter inside a
+ *    paste must not submit or every pasted snippet would fire off half of
+ *    itself. Measured boundary: 57 bytes in one write submits, 64 does not.
+ *    Any message carrying a mention is far past that, because an absolute path
+ *    is most of a line on its own. So the carriage return has to arrive as its
+ *    own write, after a gap — {@link terminalWrites} is that sequence.
  */
 
 /** POSIX separator throughout: these paths come from the main process, which
@@ -162,15 +169,46 @@ export function composeMessage(attachments: readonly Attachment[], typed: string
 }
 
 /**
- * What to hand the PTY writer, minus the carriage return.
+ * The characters of the message, minus the carriage return.
  *
- * The trailing space is the whole fix for the completion popup, and it is free:
- * the CLI trims the line before it stores it, so the transcript records exactly
- * what the user wrote either way — verified by reading the JSONL back after a
- * real send.
+ * The trailing space is what closes the completion popup, and it is free: the
+ * CLI trims the line before it stores it, so the transcript records exactly
+ * what the user wrote either way. Measured both ways — with the mention last
+ * and no space, Enter was eaten and the line became a bare path; with the
+ * space, the same line submitted intact.
+ *
+ * It is necessary and *not* sufficient. See {@link terminalWrites}.
  */
 export function terminalPayload(message: string): string {
   return message.includes('@') ? `${message} ` : message
+}
+
+/**
+ * How long to wait between the two writes below.
+ *
+ * Measured: written back to back they are read as one chunk and nothing is
+ * sent; 30ms apart submits. 50 leaves room for a slower machine and is still
+ * far below anything a person notices.
+ */
+export const SUBMIT_GAP_MS = 50
+
+/**
+ * The writes a session must receive, in order, for one message to be sent.
+ *
+ * This is not decoration. The CLI classifies each stdin chunk before it looks
+ * at the keys in it, and a chunk of 64 bytes or more is pasted text, where a
+ * carriage return is a newline rather than submit. Sending
+ * `writeToSession(id, text + '\r')` therefore does nothing at all for any
+ * message longer than about half a line — the words appear in the session's
+ * input box and sit there. Every message carrying an attachment is longer than
+ * that, so on the single-write path the send button is a no-op 100% of the time
+ * for exactly the feature that produces these mentions.
+ *
+ * Wiring: write the first element, wait {@link SUBMIT_GAP_MS}, write the
+ * second. Both must reach the same session.
+ */
+export function terminalWrites(message: string): [string, string] {
+  return [terminalPayload(message), '\r']
 }
 
 /* ------------------------------------------------------------ the list ---- */

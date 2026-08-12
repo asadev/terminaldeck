@@ -32,8 +32,9 @@ export interface McpListBridge {
 export interface McpRow {
   id: string
   name: string
-  scope: string
-  transport: string
+  /** Null when the list did not carry it. Never guessed — see {@link readServers}. */
+  scope: string | null
+  transport: string | null
   enabled: boolean
   /** Why the CLI would not load it, when it would not. */
   disabledReason: string | null
@@ -54,6 +55,11 @@ interface Props {
  * Exported for its own test: the shapes here come from a module the renderer
  * cannot import, so the only way to keep the two honest is to state what is
  * read and check that a partial row degrades instead of throwing.
+ *
+ * A missing field becomes null rather than a plausible value. "user · stdio"
+ * under a server name reads as something this app went and looked up; printing
+ * it for a row that carried neither would be inventing the two facts most
+ * likely to be wrong when the bridge and the main process have drifted.
  */
 export function readServers(response: unknown): McpRow[] | null {
   if (!Array.isArray(response)) return null
@@ -65,13 +71,19 @@ export function readServers(response: unknown): McpRow[] | null {
     rows.push({
       id: server.id,
       name: server.name,
-      scope: typeof server.scope === 'string' ? server.scope : 'user',
-      transport: typeof server.transport === 'string' ? server.transport : 'stdio',
+      scope: typeof server.scope === 'string' ? server.scope : null,
+      transport: typeof server.transport === 'string' ? server.transport : null,
       enabled: server.enabled !== false,
       disabledReason: typeof server.disabledReason === 'string' ? server.disabledReason : null,
     })
   }
   return rows
+}
+
+/** What the second column says: the reason it is off, or what was read of it. */
+export function rowDetail(row: McpRow): string {
+  if (row.disabledReason) return row.disabledReason
+  return [row.scope, row.transport].filter((part): part is string => part !== null).join(' · ')
 }
 
 /** The namespace every tool on a server shares. */
@@ -148,9 +160,7 @@ export function McpServers({ root, onInsert, onBack, bridge }: Props) {
                 >
                   <span className={`at-dot${row.enabled ? '' : ' at-dot-off'}`} aria-hidden="true" />
                   <span className="at-row-name">{row.name}</span>
-                  <span className="at-row-dir">
-                    {row.disabledReason ?? `${row.scope} · ${row.transport}`}
-                  </span>
+                  <span className="at-row-dir">{rowDetail(row)}</span>
                 </button>
               </li>
             ))}

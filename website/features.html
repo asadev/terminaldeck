@@ -31,10 +31,12 @@
 <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="assets/logo-512.png">
 
+
+
 <style>
-/* Above-the-fold half of assets/site.css — tokens, reset, header,
-   hero, buttons — inlined so the first paint needs no network.
-   The rest of the sheet loads below without blocking. */
+/* Above-the-fold half of assets/site.css — tokens, reset, header, hero,
+   buttons — inlined so the first paint needs no network. The rest of the
+   sheet loads below without blocking. */
 @font-face {
   font-family: 'Hanken Grotesk';
   font-style: normal;
@@ -603,16 +605,10 @@ hr {
 
   <h2>Chat mode</h2>
 
-  <p>The session, read as a conversation. Chat mode reads Claude Code's own
+  <p>The same session, read as a conversation. Chat mode reads Claude Code's own
   transcript and shows only what a person said and what the agent said back —
   tool calls, usage blocks and compaction markers are thrown away, because hiding
   them is the entire point of the view.</p>
-
-  <p>It is keyed to the project folder, not to the tab: the view loads the newest
-  Claude Code transcript for that folder. With one Claude session open in a
-  project that is the session you are looking at. With two, both tabs show the
-  newer conversation — and a Codex or Gemini tab shows the project's Claude
-  conversation rather than nothing.</p>
 
   <p>The rules for what counts as a typed prompt were measured against the
   transcripts on a real machine rather than assumed. A <code>user</code> line is
@@ -687,8 +683,8 @@ hr {
     </li>
     <li class="card">
       <h3><code>.deckignore</code></h3>
-      <p>One list of what the file tree should not look at, with gitignore
-      semantics. Quick open has its own built-in list and does not read it.</p>
+      <p>One list of what the app should not look at, honoured by the tree, quick
+      open, search and the watchers, with gitignore semantics.</p>
     </li>
   </ul>
 

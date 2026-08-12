@@ -12,7 +12,9 @@ import {
   normalise,
   relativeTo,
   removeAttachment,
+  SUBMIT_GAP_MS,
   terminalPayload,
+  terminalWrites,
   type Attachment,
 } from './mentions'
 
@@ -114,6 +116,23 @@ describe('what actually reaches the terminal', () => {
 
   it('leaves an ordinary message alone', () => {
     expect(terminalPayload('run the tests')).toBe('run the tests')
+  })
+
+  it('keeps the carriage return out of the message write', () => {
+    // The CLI classifies a whole stdin chunk before it reads the keys in it,
+    // and 64 bytes or more is pasted text — where Enter is a newline, not
+    // submit. Measured through a pty: 57 bytes in one write submits, 64 does
+    // not, and every message carrying a mention is well past that. So the two
+    // halves travel separately, with a gap, or nothing is ever sent.
+    const [text, submit] = terminalWrites('@"/a/b.ts" explain')
+    expect(text).toBe('@"/a/b.ts" explain ')
+    expect(submit).toBe('\r')
+    expect(text).not.toContain('\r')
+    expect(SUBMIT_GAP_MS).toBeGreaterThanOrEqual(30)
+  })
+
+  it('splits a short ordinary message the same way, so there is one path', () => {
+    expect(terminalWrites('run the tests')).toEqual(['run the tests', '\r'])
   })
 })
 
