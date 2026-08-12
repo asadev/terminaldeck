@@ -244,3 +244,15 @@
   align-items: center;
   gap: 2px;
 }
+
+/* Panels are narrow by nature; anything laid out in a row has to wrap rather
+   than overflow. A cut-off filter chip reads as a broken panel. */
+.panel-dock-body [class*='filters'],
+.panel-dock-body [class*='chips'],
+.panel-dock-body [class*='segment'] {
+  flex-wrap: wrap;
+}
+
+.panel-dock-body {
+  overflow-x: hidden;
+}

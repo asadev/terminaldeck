@@ -4,8 +4,8 @@ import type { PanelId } from './panels'
 const WIDTH_KEY = 'pawl.dock.width'
 const COLLAPSED_KEY = 'pawl.dock.collapsed'
 const PANEL_KEY = 'pawl.dock.panel'
-const MIN = 180
-const MAX = 480
+const MIN = 240
+const MAX = 560
 
 function readNumber(key: string, fallback: number): number {
   const raw = Number(localStorage.getItem(key))
@@ -23,7 +23,7 @@ export function usePanelDock() {
   const [panel, setPanelState] = useState<PanelId>(
     () => (localStorage.getItem(PANEL_KEY) as PanelId | null) ?? 'projects',
   )
-  const [width, setWidth] = useState(() => readNumber(WIDTH_KEY, 260))
+  const [width, setWidth] = useState(() => readNumber(WIDTH_KEY, 300))
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem(COLLAPSED_KEY) === '1')
   const dragging = useRef(false)
 
@@ -48,7 +48,7 @@ export function usePanelDock() {
     event.preventDefault()
     dragging.current = true
     const startX = event.clientX
-    const startWidth = readNumber(WIDTH_KEY, 260)
+    const startWidth = readNumber(WIDTH_KEY, 300)
 
     const onMove = (e: MouseEvent) => {
       if (!dragging.current) return

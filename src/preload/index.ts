@@ -162,8 +162,6 @@ const api = {
   resolveProfile: (projectPath: string, sessionChoice?: string): Promise<unknown> =>
     ipcRenderer.invoke('profiles:resolve', projectPath, sessionChoice),
   setDefaultProfile: (id: string): Promise<void> => ipcRenderer.invoke('profiles:set-default', id),
-  setProjectProfile: (projectPath: string, id: string | null): Promise<void> =>
-    ipcRenderer.invoke('profiles:set-project-default', projectPath, id),
   profileStatus: (id: string): Promise<unknown> => ipcRenderer.invoke('profiles:status', id),
 
   /* ------------------------------------------------------ pawlignore -- */
@@ -246,16 +244,10 @@ const api = {
   browserViewZoom: (id: string, factor: number): Promise<unknown> => ipcRenderer.invoke('browser-view:zoom', id, factor),
   browserViewDevtools: (id: string): Promise<unknown> => ipcRenderer.invoke('browser-view:devtools', id),
   browserViewRecord: (id: string, on: boolean): Promise<unknown> => ipcRenderer.invoke('browser-view:record', id, on),
-  debugAbout: (): Promise<unknown> => ipcRenderer.invoke('debug:about'),
   debugDiagnostics: (): Promise<unknown> => ipcRenderer.invoke('debug:diagnostics'),
-  debugDiagnosticsText: (): Promise<unknown> => ipcRenderer.invoke('debug:diagnostics-text'),
   debugIpcLog: (): Promise<unknown> => ipcRenderer.invoke('debug:ipc-log'),
-  debugIpcClear: (): Promise<unknown> => ipcRenderer.invoke('debug:ipc-clear'),
   debugSubscribe: (): Promise<unknown> => ipcRenderer.invoke('debug:subscribe'),
-  debugUnsubscribe: (): Promise<unknown> => ipcRenderer.invoke('debug:unsubscribe'),
-  logRecent: (lines?: number): Promise<unknown> => ipcRenderer.invoke('log:recent', lines),
   logStatus: (): Promise<unknown> => ipcRenderer.invoke('log:status'),
-  logClear: (): Promise<unknown> => ipcRenderer.invoke('log:clear'),
   openLogFolder: (): Promise<unknown> => ipcRenderer.invoke('log:open-folder'),
 
   /* ---------------------------------------------- browser (real names) -- */
@@ -306,6 +298,27 @@ const api = {
     const handler = (_e: IpcRendererEvent, status: unknown) => cb(status)
     ipcRenderer.on('mcp:state', handler)
     return () => ipcRenderer.off('mcp:state', handler)
+  },
+
+  /* ------------------------------------------- debug, help, hooks, profiles -- */
+
+  about: (): Promise<unknown> => ipcRenderer.invoke('settings:about'),
+  hookServerInfo: (): Promise<unknown> => ipcRenderer.invoke('hooks:server'),
+  setProjectDefaultProfile: (projectPath: string, id: string | null): Promise<unknown> =>
+    ipcRenderer.invoke('profiles:set-project-default', projectPath, id),
+
+  ipcLog: (): Promise<unknown> => ipcRenderer.invoke('debug:ipc-log'),
+  clearIpcLog: (): Promise<unknown> => ipcRenderer.invoke('debug:ipc-clear'),
+  diagnostics: (): Promise<unknown> => ipcRenderer.invoke('debug:diagnostics'),
+  diagnosticsText: (): Promise<unknown> => ipcRenderer.invoke('debug:diagnostics-text'),
+  subscribeDebug: (): Promise<unknown> => ipcRenderer.invoke('debug:subscribe'),
+  unsubscribeDebug: (): Promise<unknown> => ipcRenderer.invoke('debug:unsubscribe'),
+  recentLog: (lines?: number): Promise<unknown> => ipcRenderer.invoke('log:recent', lines),
+  clearLog: (): Promise<unknown> => ipcRenderer.invoke('log:clear'),
+  onIpcCall: (cb: (entry: unknown) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, entry: unknown) => cb(entry)
+    ipcRenderer.on('debug:ipc-call', handler)
+    return () => ipcRenderer.off('debug:ipc-call', handler)
   },
 
   listBrowsers: (): Promise<unknown> => ipcRenderer.invoke('chrome-import:browsers'),

@@ -114,9 +114,9 @@
   --radius-md: 6px;
   --radius-lg: 10px;
 
-  --sidebar-width: 260px;
-  --sidebar-min: 180px;
-  --sidebar-max: 480px;
+  --sidebar-width: 300px;
+  --sidebar-min: 240px;
+  --sidebar-max: 560px;
   --titlebar-height: 38px;
   --tabbar-height: 36px;
   --rail-width: 44px;

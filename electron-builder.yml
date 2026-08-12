@@ -1,0 +1,16 @@
+appId: com.asadiqbal.pawl
+productName: Pawl
+directories:
+  output: release
+  buildResources: build
+files:
+  - out/**/*
+  - package.json
+mac:
+  target:
+    - target: dir
+      arch: arm64
+  category: public.app-category.developer-tools
+  # Unsigned for now: signing needs an Apple Developer identity, and a local
+  # build does not need one. Right-click → Open the first time.
+  identity: null
