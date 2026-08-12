@@ -28,6 +28,20 @@ export function traceIpc(ipcMain: IpcMain, prefixes: string[]): void {
 
   write(`--- trace started, watching: ${prefixes.join(', ')} ---`)
 
+  // `on` is wrapped too. Tracing only `handle` is what hid the bug this file
+  // was written to find: browser:bounds and browser:visible are `on` channels,
+  // so the trace showed no calls at all and made it look like the renderer was
+  // never asking for them.
+  const originalOn = ipcMain.on.bind(ipcMain)
+  ipcMain.on = ((channel: string, listener: (...args: unknown[]) => void) => {
+    if (!prefixes.some((p) => channel.startsWith(p))) return originalOn(channel, listener)
+    return originalOn(channel, (event: unknown, ...args: unknown[]) => {
+      const shown = args.map((a) => JSON.stringify(a)?.slice(0, 200) ?? String(a)).join(', ')
+      write(`⇢ ${channel}(${shown})   [send]`)
+      return listener(event, ...args)
+    })
+  }) as IpcMain['on']
+
   const original = ipcMain.handle.bind(ipcMain)
   ipcMain.handle = ((channel: string, listener: (...args: unknown[]) => unknown) => {
     if (!prefixes.some((p) => channel.startsWith(p))) return original(channel, listener)

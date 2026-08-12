@@ -119,7 +119,9 @@ const api = {
   githubOverview: (cwd: string): Promise<unknown> => ipcRenderer.invoke('github:overview', cwd),
   githubRefresh: (cwd: string): Promise<unknown> => ipcRenderer.invoke('github:refresh', cwd),
   githubRepo: (cwd: string): Promise<unknown> => ipcRenderer.invoke('github:repo', cwd),
-  clearGitHubCache: (cwd?: string): Promise<void> => ipcRenderer.invoke('github:clear-cache', cwd),
+  clearGitHubCache: (cwd?: string): void => {
+    ipcRenderer.send('github:clear-cache', cwd)
+  },
 
   /* -------------------------------------------------------- readiness -- */
 
@@ -206,10 +208,16 @@ const api = {
   browserReload: (id: string): Promise<void> => ipcRenderer.invoke('browser:reload', id),
   browserStop: (id: string): Promise<void> => ipcRenderer.invoke('browser:stop', id),
   browserClose: (id: string): Promise<void> => ipcRenderer.invoke('browser:close', id),
-  browserBounds: (id: string, bounds: unknown): Promise<void> =>
-    ipcRenderer.invoke('browser:bounds', id, bounds),
-  browserVisible: (id: string, visible: boolean): Promise<void> =>
-    ipcRenderer.invoke('browser:visible', id, visible),
+  // send(), not invoke(): main registers these with ipcMain.on. An invoke
+  // against an .on channel rejects with "no handler registered" — which is
+  // why the browser view was created and loaded pages but was never
+  // positioned or shown, so nothing ever appeared.
+  browserBounds: (id: string, bounds: unknown): void => {
+    ipcRenderer.send('browser:bounds', id, bounds)
+  },
+  browserVisible: (id: string, visible: boolean): void => {
+    ipcRenderer.send('browser:visible', id, visible)
+  },
   browserInspect: (id: string, on: boolean): Promise<void> =>
     ipcRenderer.invoke('browser:inspect', id, on),
   browserState: (id: string): Promise<unknown> => ipcRenderer.invoke('browser:state', id),

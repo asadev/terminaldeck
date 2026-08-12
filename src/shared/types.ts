@@ -107,7 +107,7 @@ export interface PawlApi {
   githubOverview(cwd: string): Promise<unknown>
   githubRefresh(cwd: string): Promise<unknown>
   githubRepo(cwd: string): Promise<unknown>
-  clearGitHubCache(cwd?: string): Promise<void>
+  clearGitHubCache(cwd?: string): void
 
   scanReadiness(projectPath: string): Promise<unknown>
   applyReadinessFix(projectPath: string, checkId: string): Promise<unknown>
@@ -124,29 +124,6 @@ export interface PawlApi {
   clearBrowserData(): Promise<unknown>
   browserSessionInfo(): Promise<unknown>
   browserCookies(filter?: unknown): Promise<unknown>
-  clearBrowserCookies(): Promise<unknown>
-  clearBrowserCache(): Promise<unknown>
-  clearBrowserStorage(): Promise<unknown>
-  browserViewClaim(request: unknown): Promise<unknown>
-  browserViewRelease(id: string): Promise<unknown>
-  browserViewReveal(request: unknown): Promise<unknown>
-  browserViewZoom(id: string, factor: number): Promise<unknown>
-  browserViewUserAgent(id: string, ua: string | null): Promise<unknown>
-  browserViewDevtools(id: string): Promise<unknown>
-  browserViewScreenshot(id: string): Promise<unknown>
-  browserViewRecord(id: string, on: boolean): Promise<unknown>
-  browserViewRecordClear(id: string): Promise<unknown>
-  debugAbout(): Promise<unknown>
-  debugDiagnostics(): Promise<unknown>
-  debugDiagnosticsText(): Promise<unknown>
-  debugIpcLog(): Promise<unknown>
-  debugIpcClear(): Promise<unknown>
-  debugSubscribe(): Promise<unknown>
-  debugUnsubscribe(): Promise<unknown>
-  logRecent(lines?: number): Promise<unknown>
-  logStatus(): Promise<unknown>
-  logClear(): Promise<unknown>
-  openLogFolder(): Promise<unknown>
 
   loadDashboard(projectPath: string): Promise<unknown>
   saveDashboard(projectPath: string, layout: unknown): Promise<void>
