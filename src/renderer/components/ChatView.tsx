@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Marked, type Renderer, type Tokens } from 'marked'
 import DOMPurify from 'dompurify'
+import { ChatComposer } from './ChatComposer'
 import './ChatView.css'
 
 /**
@@ -56,6 +57,11 @@ export interface ChatBridge {
 export interface ChatViewProps {
   /** Project folder; its newest transcript is the live session. */
   cwd: string | null
+  /**
+   * Send a typed message to the session. Absent means read-only — the composer
+   * says so rather than silently swallowing what you type.
+   */
+  onSend?: (text: string) => void
   /** A specific transcript. Wins over `cwd`. */
   transcriptPath?: string
   /** Poll interval while the session is live. 0 disables it. Defaults to 2s. */
@@ -272,7 +278,7 @@ export function ChatEmpty({ state }: { state: 'loading' | 'no-transcript' | 'sil
 
 /* ---------------------------------------------------------------- the view -- */
 
-export function ChatView({ cwd, transcriptPath, refreshMs = 2000, bridge }: ChatViewProps) {
+export function ChatView({ cwd, onSend, transcriptPath, refreshMs = 2000, bridge }: ChatViewProps) {
   const resolved = bridge ?? resolveBridge()
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [found, setFound] = useState<boolean | null>(null)
@@ -419,6 +425,7 @@ export function ChatView({ cwd, transcriptPath, refreshMs = 2000, bridge }: Chat
           Jump to latest
         </button>
       ) : null}
+      <ChatComposer onSend={onSend} />
     </div>
   )
 }

@@ -359,7 +359,17 @@ function Workspace() {
               {/* The terminal stays mounted in chat mode — only hidden — so
                   scrollback and cursor survive a trip through Chat. */}
               <TerminalView sessionId={session.id} visible={active && mode === 'terminal'} />
-              {active && mode === 'chat' ? <ChatView cwd={session.projectPath ?? null} /> : null}
+              {active && mode === 'chat' ? (
+                <ChatView
+                  cwd={session.projectPath ?? null}
+                  onSend={(text) => {
+                    // Written to the session's own terminal: chat mode is a
+                    // different view of the same session, not a second channel,
+                    // so a reply typed here also appears in the terminal view.
+                    window.pawl.writeToSession(session.id, `${text}\r`)
+                  }}
+                />
+              ) : null}
             </Fragment>
           )
         })}
