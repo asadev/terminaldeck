@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Marked, type Renderer, type Tokens } from 'marked'
 import DOMPurify from 'dompurify'
 import { ChatComposer } from './ChatComposer'
+import { AgentControls } from '../chat/controls/AgentControls'
 import './ChatView.css'
 
 /**
@@ -57,6 +58,12 @@ export interface ChatBridge {
 export interface ChatViewProps {
   /** Project folder; its newest transcript is the live session. */
   cwd: string | null
+  /**
+   * The live session behind this conversation. Needed by the control row, which
+   * changes model, effort and permissions by typing into that session's
+   * terminal. Absent means the row says so instead of pretending to work.
+   */
+  sessionId?: string
   /**
    * Send a typed message to the session. Absent means read-only — the composer
    * says so rather than silently swallowing what you type.
@@ -278,7 +285,7 @@ export function ChatEmpty({ state }: { state: 'loading' | 'no-transcript' | 'sil
 
 /* ---------------------------------------------------------------- the view -- */
 
-export function ChatView({ cwd, onSend, transcriptPath, refreshMs = 2000, bridge }: ChatViewProps) {
+export function ChatView({ cwd, sessionId, onSend, transcriptPath, refreshMs = 2000, bridge }: ChatViewProps) {
   const resolved = bridge ?? resolveBridge()
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [found, setFound] = useState<boolean | null>(null)
@@ -425,7 +432,10 @@ export function ChatView({ cwd, onSend, transcriptPath, refreshMs = 2000, bridge
           Jump to latest
         </button>
       ) : null}
-      <ChatComposer onSend={onSend} />
+      <ChatComposer onSend={onSend} cwd={cwd} />
+      {/* Under the composer, in the CLI's own order of importance: what is
+          answering, how hard it thinks, and what it may do without asking. */}
+      <AgentControls sessionId={sessionId} cwd={cwd} />
     </div>
   )
 }

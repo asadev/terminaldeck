@@ -1,15 +1,22 @@
 .chat-composer {
+  position: relative;
   display: flex;
-  align-items: flex-end;
-  gap: 8px;
+  flex-direction: column;
   flex-shrink: 0;
   padding: 10px 14px 12px;
   border-top: 1px solid var(--border);
   background: var(--bg-secondary);
 }
 
+.cc-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+}
+
 .cc-input {
   flex: 1;
+  min-width: 0;
   min-height: 34px;
   padding: 8px 11px;
   border: 1px solid var(--border);
@@ -36,6 +43,45 @@
 .cc-input:disabled {
   color: var(--text-muted);
   cursor: not-allowed;
+}
+
+/* The quiet controls either side of the box: plus and microphone. They are
+   ghosts until hovered, so the filled send button stays the only thing in this
+   row that looks like an action. */
+.cc-tool {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--text-secondary);
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.cc-tool:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.cc-tool-on {
+  background: var(--bg-active);
+  color: var(--text-primary);
+}
+
+.cc-tool:disabled {
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+.cc-tool:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.cc-tool svg {
+  display: block;
 }
 
 /* The one filled control in this view, and it is earned — it is the action. */

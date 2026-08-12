@@ -1,0 +1,66 @@
+/* Attachments riding along with the next message. */
+
+.at-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  padding: 0 0 7px;
+}
+
+.at-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 220px;
+  padding: 2px 3px 2px 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+/* The kind is carried by a glyph, not by colour: a row of coloured chips reads
+   as a row of warnings, and colour in this app means selection or status. */
+.at-chip-kind {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.at-chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.at-chip-x {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-muted);
+}
+
+.at-chip-x:hover {
+  background: var(--bg-active);
+  color: var(--text-primary);
+}
+
+.at-chip-x:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.at-chips-notice {
+  color: var(--color-warning);
+  font-family: var(--font-ui);
+  font-size: 11.5px;
+}

@@ -134,4 +134,20 @@ describe('ActivityTracker', () => {
     expect(seen.at(-1)).toBe('exited')
     tracker.dispose()
   })
+
+  /**
+   * The emulator parses asynchronously, so anything that reads the screen on
+   * demand — rather than from inside a write callback, as `classify` does — has
+   * to flush first. Running the chat controls' readers over real captured CLI
+   * output without this returned "unknown" for every single screen, including
+   * ones that plainly showed the answer, because each read saw the state from
+   * before the chunk that contained it.
+   */
+  it('settledText waits for pending writes; an unflushed read does not', async () => {
+    const tracker = new ActivityTracker('t', () => {})
+    tracker.push('bypass permissions on')
+    expect(tracker.visibleText()).not.toContain('bypass permissions on')
+    expect(await tracker.settledText()).toContain('bypass permissions on')
+    tracker.dispose()
+  })
 })

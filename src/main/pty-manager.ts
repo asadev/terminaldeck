@@ -110,6 +110,17 @@ export class PtyManager {
     return this.sessions.get(id)?.scrollback.join('') ?? ''
   }
 
+  /**
+   * What the session is showing right now, or null when there is no such
+   * session. Not the same thing as `scrollback`: agent CLIs repaint with cursor
+   * moves, so the raw stream and the screen say different things, and every
+   * question of the form "what state is the agent in?" needs the screen.
+   */
+  async screen(id: string): Promise<string | null> {
+    const session = this.sessions.get(id)
+    return session ? session.activity.settledText() : null
+  }
+
   kill(id: string): void {
     const s = this.sessions.get(id)
     if (!s) return

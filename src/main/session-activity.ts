@@ -133,7 +133,7 @@ export class ActivityTracker {
     clearTimeout(this.timer)
     this.timer = setTimeout(() => {
       // Flush pending writes before reading, or the viewport lags the output.
-      this.term.write('', () => this.set(classify(this.screen(), false)))
+      this.term.write('', () => this.set(classify(this.visibleText(), false)))
     }, SETTLE_MS)
   }
 
@@ -145,8 +145,26 @@ export class ActivityTracker {
     }
   }
 
-  /** The visible viewport, as the user sees it. */
-  private screen(): string {
+  /**
+   * The visible viewport, as the user sees it.
+   *
+   * Public because the status classifier is not the only thing that needs to
+   * know what is on screen: the chat controls read the permission-mode footer
+   * and the CLI's replies to slash commands from this same buffer. One shadow
+   * terminal per session, read by everyone — a second one fed the same bytes
+   * would drift the moment a resize was missed on one of them.
+   */
+  settledText(): Promise<string> {
+    // xterm parses what it is written asynchronously, so reading the buffer
+    // straight after a write returns the screen as it was BEFORE that write.
+    // Verified: running the readers over real captured output without this
+    // flush reported "unknown" for every screen, including ones plainly
+    // showing the answer. Writing an empty string queues a callback behind
+    // whatever is still pending, which is how `classify` above already does it.
+    return new Promise((resolve) => this.term.write('', () => resolve(this.visibleText())))
+  }
+
+  visibleText(): string {
     const buf = this.term.buffer.active
     const lines: string[] = []
     for (let y = 0; y < this.term.rows; y++) {

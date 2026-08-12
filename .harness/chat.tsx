@@ -7,9 +7,17 @@
  * at all. The static-markup test in `ChatView.test.tsx` exercises the *other*
  * branch (no window, no sanitiser, fall back to text).
  */
+// The composer reaches for `window.deck` on its own — the picker and the
+// connector list are not passed a bridge the way ChatView is — so this page
+// needs the stub for the same reason the main harness does.
+import './stub'
 import { StrictMode, useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import '../src/renderer/styles/tokens.css'
+// Without this the page renders against the browser's own defaults — every
+// button grows a UA border — so the harness disagrees with the app about
+// things that are not the component's fault. `main.tsx` has always loaded it.
+import '../src/renderer/styles/app.css'
 import { ChatToggle, type SessionViewMode } from '../src/renderer/components/ChatToggle'
 import { ChatView, type ChatBridge, type ChatMessage, type ChatUpdate } from '../src/renderer/components/ChatView'
 
@@ -155,6 +163,7 @@ function Harness() {
   const [theme, setTheme] = useState(initial)
   const [mode, setMode] = useState<SessionViewMode>('chat')
   const [report, setReport] = useState<string[]>([])
+  const [sent, setSent] = useState<string[]>([])
 
   // Runs itself so a headless screenshot carries the verdict, and so no click
   // is needed to get the audit into `--dump-dom`.
@@ -198,9 +207,37 @@ function Harness() {
           {report.join('\n')}
         </pre>
       ) : null}
+      {sent.length > 0 ? (
+        <pre
+          id="sent"
+          style={{
+            margin: 0,
+            padding: '6px 12px',
+            font: '11px var(--font-mono)',
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-all',
+            color: 'var(--text-secondary)',
+            borderBottom: '1px solid var(--border)',
+            background: 'var(--bg-tertiary)',
+          }}
+        >
+          {sent.map((line) => `→ pty: ${JSON.stringify(line + '\r')}`).join('\n')}
+        </pre>
+      ) : null}
       <div style={{ flex: 1, minHeight: 0 }}>
         {mode === 'chat' ? (
-          <ChatView cwd="/Users/apple/Projects/terminaldeck" refreshMs={0} bridge={pickBridge()} />
+          <ChatView
+            cwd="/Users/apple/Projects/terminaldeck"
+            refreshMs={0}
+            bridge={pickBridge()}
+            // The real App writes this straight into the pty and appends \r.
+            // Recording it verbatim is the only way to see what an attachment
+            // actually sends — the chips are the UI, this is the wire.
+            onSend={(text) => {
+              ;(window as unknown as Record<string, unknown>).__lastSend = text
+              setSent((all) => [...all, text])
+            }}
+          />
         ) : (
           <div style={{ padding: 24, color: 'var(--text-muted)', font: '13px var(--font-ui)' }}>
             (the terminal lives here in the real app)

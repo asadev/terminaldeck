@@ -1,0 +1,197 @@
+/* ============================================================================
+   Usage strip — what the session cost and how close it is to its limits.
+
+   It sits between the conversation and the composer, so it has to read as part
+   of the chrome rather than as a panel: one hairline, the composer's surface,
+   labels in the muted grey and numbers in the mono face. Colour appears only
+   where it carries meaning — a context or plan figure past a threshold — and
+   the blue is left alone, because in this app the blue means focus.
+   ============================================================================ */
+
+.usage-strip {
+  flex-shrink: 0;
+  padding: 6px 14px 7px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-secondary);
+  font-family: var(--font-ui);
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.usage-strip-empty {
+  padding: 7px 14px;
+}
+
+.us-items {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  /* Column gap wider than row gap: wrapped rows should read as one block. */
+  gap: 3px 18px;
+}
+
+.us-item {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* Context, tokens and the plan each carry a second value. In a narrow pane that
+   second value has to be allowed onto its own line: with the row locked to one
+   line it ran past the edge and the reset time was sliced in half. */
+.us-item-wide {
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+}
+
+.us-label {
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.us-value {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.us-value[data-level='warning'] {
+  color: var(--color-warning);
+}
+
+.us-value[data-level='critical'] {
+  color: var(--color-critical);
+}
+
+.us-sub {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--text-muted);
+  white-space: nowrap;
+  /* Last resort in a very narrow pane: trail off rather than run past the edge.
+     The item's own tooltip still carries the whole sentence. */
+  text-overflow: ellipsis;
+}
+
+.us-sub[data-tone='warning'] {
+  color: var(--color-warning);
+}
+
+.us-muted {
+  color: var(--text-muted);
+}
+
+/* ------------------------------------------------------------------ meter */
+
+.us-meter {
+  display: inline-block;
+  position: relative;
+  top: 1px;
+  width: 84px;
+  height: 4px;
+  flex-shrink: 0;
+  border-radius: var(--radius-sm);
+  background: var(--bg-active);
+  overflow: hidden;
+}
+
+.us-meter-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--status-working);
+  transition: width 180ms ease;
+}
+
+.us-meter[data-level='warning'] .us-meter-fill {
+  background: var(--color-warning);
+}
+
+.us-meter[data-level='critical'] .us-meter-fill {
+  background: var(--color-critical);
+}
+
+/* Occupancy past 100%: real, and the one number in the strip worth a badge. */
+.us-flag {
+  padding: 0 5px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-active);
+  color: var(--color-critical);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* ------------------------------------------------------------------- plan */
+
+.us-plan-limit {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+/* Three limits in a row need more air between them than between a name and its
+   number, or "Session 5% Week 80%" reads as one run-on figure. */
+.us-plan-limit + .us-plan-limit {
+  margin-left: 6px;
+}
+
+.us-plan-name {
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.us-refresh {
+  padding: 1px 7px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  font-family: var(--font-ui);
+  font-size: 11px;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.us-refresh:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.us-refresh:disabled {
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+.us-refresh:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* ------------------------------------------------------------------ notes */
+
+.us-notes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 14px;
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.us-note[data-tone='warning'] {
+  color: var(--color-warning);
+}
+
+.us-note[data-tone='critical'] {
+  color: var(--color-critical);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .us-meter-fill {
+    transition: none;
+  }
+}

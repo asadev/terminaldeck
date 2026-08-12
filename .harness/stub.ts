@@ -50,7 +50,48 @@ const api: Record<string, unknown> = new Proxy(
     projectAlerts: async () => ({ alerts: [] }),
     listDir: async () => ({ entries: [] }),
     hooksStatus: async () => [],
-    listMcpServers: async () => [],
+    // Complete `McpServerStatus` rows, not a name and a flag. The composer's
+    // connector list reads `enabled` and `disabledReason` to explain a server
+    // the CLI would skip, and a stub that omits them would make that branch
+    // look untested when it is the interesting one.
+    listMcpServers: async () => [
+      {
+        id: 'user:github', name: 'github', scope: 'user', transport: 'stdio',
+        command: 'npx', args: [], env: {}, cwd: null, url: null,
+        source: '~/.claude.json', enabled: true, disabledReason: null, unsupported: null,
+        state: 'idle', error: null, serverInfo: null, capabilities: [], instructions: null,
+        pid: null, connectedAt: null, stderr: '',
+      },
+      {
+        id: 'project:figma', name: 'figma', scope: 'project', transport: 'sse',
+        command: null, args: [], env: {}, cwd: null, url: 'https://mcp.figma.example/sse',
+        source: '.mcp.json', enabled: false, disabledReason: 'not approved for this project',
+        unsupported: 'only stdio servers can be dialled from here',
+        state: 'idle', error: null, serverInfo: null, capabilities: [], instructions: null,
+        pid: null, connectedAt: null, stderr: '',
+      },
+    ],
+    // The project file index, in its real `FileSearchResponse` shape. The
+    // attach picker ranks this list locally on every keystroke.
+    searchProjectFiles: async () => ({
+      ok: true,
+      root: '/Users/apple/Projects/terminaldeck',
+      files: [
+        'README.md', 'ROADMAP.md', 'package.json', 'electron-builder.yml',
+        'build/icon.png', 'build/dmg-background.png',
+        'src/main/index.ts', 'src/main/pty-manager.ts', 'src/main/chat-transcript.ts',
+        'src/main/mcp-client.ts', 'src/main/file-search.ts', 'src/main/git.ts',
+        'src/preload/index.ts', 'src/shared/types.ts', 'src/shared/brand.ts',
+        'src/renderer/App.tsx', 'src/renderer/styles/tokens.css',
+        'src/renderer/components/ChatView.tsx', 'src/renderer/components/ChatComposer.tsx',
+        'src/renderer/components/CommandPalette.tsx', 'src/renderer/components/SessionInspector.tsx',
+        'src/renderer/chat/attach/mentions.ts', 'src/renderer/chat/attach/AttachPicker.tsx',
+        'src/renderer/assets/screenshot-empty-state.png',
+      ],
+      truncated: false,
+      source: 'git',
+      tookMs: 14,
+    }),
     connectMcpServer: async () => null,
     disconnectMcpServer: async () => null,
     mcpInventory: async () => ({ tools: [], resources: [], prompts: [] }),
@@ -91,6 +132,22 @@ const api: Record<string, unknown> = new Proxy(
       reset: false, cursor: 0, found: false, complete: true, updatedAt: Date.now(),
     }),
     closeChat: () => {},
+    // The control row's readings. The harness has no pty and no Claude settings
+    // file, so the only truthful answer is that nothing could be read — which
+    // is exactly the state worth being able to look at, because "Unknown" is
+    // what the row must show rather than a plausible default.
+    readAgentControls: async () => ({
+      model: { value: null, label: null, source: null },
+      effort: { value: null, label: null, source: null },
+      fast: { value: null, label: null, source: null },
+      permission: { value: null, label: null, source: null },
+      live: false,
+    }),
+    applyAgentControl: async () => ({
+      ok: false,
+      message: 'The harness has no terminal to type into, so nothing was changed.',
+      reading: { value: null, label: null, source: null },
+    }),
     browserSessionInfo: async () => ({ partition: 'persist:terminaldeck-browser', persistent: true }),
     listBrowsers: async () => ({ browsers: [] }),
     // Per-tab isolation. The Proxy's fallback would resolve these to null, and
