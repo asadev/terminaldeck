@@ -1,0 +1,290 @@
+/* ============================================================================
+   Terminal Deck — deferred stylesheet.
+
+   Everything needed to paint the top of a page is inlined in each document's
+   <head>. This file carries the rest: tables, code, lists, the footer, print
+   and motion preferences. It is loaded without blocking the render.
+
+   Colour values come from src/renderer/styles/tokens.css. The two text greys
+   that differ from the app are noted where they are declared, in the critical
+   block — they were darkened (light) and lightened (dark) so small text clears
+   WCAG AA 4.5:1 against the page background.
+   ============================================================================ */
+
+/* ------------------------------------------------------------- prose ----- */
+
+.prose h2 {
+  margin: 3.5rem 0 0.75rem;
+  font-size: 1.375rem;
+  letter-spacing: -0.01em;
+}
+
+.prose h3 {
+  margin: 2.25rem 0 0.5rem;
+  font-size: 1.0625rem;
+}
+
+.prose h2 + p,
+.prose h3 + p {
+  margin-top: 0;
+}
+
+.prose p,
+.prose li {
+  max-width: 68ch;
+}
+
+.prose ul,
+.prose ol {
+  margin: 1rem 0;
+  padding-left: 1.25rem;
+}
+
+.prose li {
+  margin: 0.4rem 0;
+}
+
+.prose li::marker {
+  color: var(--text-muted);
+}
+
+/* ------------------------------------------------------------- code ------ */
+
+code {
+  font-family: var(--font-mono);
+  font-size: 0.875em;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 0.1em 0.35em;
+}
+
+pre {
+  margin: 1.25rem 0;
+  padding: 0.875rem 1rem;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow-x: auto;
+  font-size: 0.875rem;
+  line-height: 1.65;
+}
+
+pre code {
+  background: none;
+  border: 0;
+  padding: 0;
+  font-size: inherit;
+}
+
+pre .c {
+  color: var(--text-muted);
+}
+
+/* ------------------------------------------------------------ tables ----- */
+
+.table-scroll {
+  overflow-x: auto;
+  margin: 1.25rem 0;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  min-width: 26rem;
+  font-size: 0.9375rem;
+}
+
+caption {
+  text-align: left;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  padding-bottom: 0.5rem;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 0.5rem 0.875rem 0.5rem 0;
+  border-bottom: 1px solid var(--border-subtle);
+  vertical-align: top;
+}
+
+th {
+  font-weight: 600;
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-bottom-color: var(--border);
+}
+
+kbd {
+  font-family: var(--font-mono);
+  font-size: 0.8125em;
+  white-space: nowrap;
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 0.1em 0.4em;
+}
+
+/* ------------------------------------------------------- status legend --- */
+
+.legend {
+  list-style: none;
+  margin: 1.25rem 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.5rem;
+}
+
+.legend li {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.9375rem;
+  margin: 0;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.dot-working {
+  background: var(--status-working);
+}
+.dot-waiting {
+  background: var(--status-waiting);
+}
+.dot-input {
+  background: var(--status-input);
+}
+.dot-completed {
+  background: var(--status-completed);
+}
+.dot-idle {
+  background: var(--status-idle);
+}
+
+/* ---------------------------------------------------------- checklist ---- */
+
+.checklist {
+  list-style: none;
+  margin: 1rem 0;
+  padding: 0;
+}
+
+.checklist li {
+  position: relative;
+  padding-left: 1.75rem;
+  margin: 0.5rem 0;
+}
+
+.checklist li::before {
+  position: absolute;
+  left: 0;
+  top: 0;
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  line-height: 1.7;
+}
+
+.checklist .done::before {
+  content: "done";
+  content: "\2713";
+  color: var(--status-completed);
+  font-size: 0.9375rem;
+}
+
+.checklist .todo::before {
+  content: "\2022";
+  color: var(--text-muted);
+  font-size: 1.125rem;
+  line-height: 1.4;
+}
+
+/* --------------------------------------------------------------- note ---- */
+
+.note {
+  margin: 1.5rem 0;
+  padding: 0.875rem 1rem;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  font-size: 0.9375rem;
+  color: var(--text-secondary);
+}
+
+.note strong {
+  color: var(--text-primary);
+}
+
+.note :first-child {
+  margin-top: 0;
+}
+.note :last-child {
+  margin-bottom: 0;
+}
+
+/* ------------------------------------------------------------- footer ---- */
+
+.site-footer {
+  margin-top: 5rem;
+  border-top: 1px solid var(--border);
+  padding: 2rem 0 3rem;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+}
+
+.site-footer nav ul {
+  list-style: none;
+  margin: 0 0 1rem;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.25rem;
+}
+
+.site-footer p {
+  margin: 0.35rem 0;
+  max-width: 68ch;
+}
+
+/* -------------------------------------------------------------- print ---- */
+
+@media print {
+  .site-header,
+  .skip-link,
+  .site-footer nav {
+    display: none;
+  }
+
+  a[href^="http"]::after {
+    content: " (" attr(href) ")";
+    font-size: 0.8em;
+    color: #555;
+  }
+
+  body {
+    background: #fff;
+    color: #000;
+  }
+}
+
+/* ------------------------------------------------------------- motion ---- */
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

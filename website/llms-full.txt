@@ -1,0 +1,550 @@
+# Terminal Deck
+
+> Terminal Deck is a free, MIT-licensed desktop application for macOS that runs AI coding-agent sessions — Claude Code, Codex CLI and Gemini CLI — in a single window. Each session gets a tab with a live status dot classified from what is drawn on that session's terminal screen, and cost, token use and context-window pressure are read from Claude Code's own JSONL transcripts. It is at version 0.1.0 and runs from source; there is no packaged installer yet. It has no account, no telemetry and no analytics.
+
+This file is every page of https://terminaldeck.dev as one markdown document.
+Version 0.1.0. Built by Asad Iqbal. MIT licensed.
+Repository: https://github.com/asadev/terminaldeck
+
+---
+
+# Home
+
+Source: https://terminaldeck.dev/
+
+## Run your coding agents on one deck
+
+Terminal Deck is a macOS desktop app for Claude Code, Codex CLI and Gemini CLI.
+Run several sessions side by side, see at a glance which ones are working and
+which are waiting on you, and know what they cost.
+
+**Where this is up to.** Version 0.1.0. It runs on macOS from source — there is
+no packaged installer, no auto-update and no signed build yet.
+
+## What Terminal Deck is
+
+Terminal Deck is a free, MIT-licensed desktop application for macOS that runs AI
+coding-agent sessions — Claude Code, Codex CLI and Gemini CLI — in a single
+window. Each session gets a tab with a live status dot classified from what is
+actually drawn on that session's terminal screen, so working, waiting and
+needs-input never look the same. Cost, token use and context-window pressure are
+read from Claude Code's own JSONL transcripts rather than scraped from terminal
+output. Alongside the terminals it carries a chat view of a session's
+conversation with a composer, an embedded browser whose element inspector turns a
+clicked element into a CSS selector for the agent, a git panel, a file tree,
+full-text search across past transcripts, a GitHub panel, an MCP inspector, hook
+management, AI-readiness scoring, isolated agent profiles, a swarm view and a
+settings window. It is built by Asad Iqbal. At version 0.1.0 it is run from
+source; there is no packaged download yet. Nothing it does leaves the machine —
+there is no account, no telemetry and no analytics.
+
+## Why
+
+Running agents in bare terminal tabs falls apart quickly. You lose track of which
+session is mid-thought and which has been sitting on a question for ten minutes,
+you have no idea what you have spent, and there is nothing between an agent and
+your files when it decides to do something drastic.
+
+## What works today
+
+- **Sessions in tabs.** Several sessions per project, each with its own terminal.
+  Scrollback survives switching away and coming back.
+- **Status at a glance.** Every tab carries a dot: working, waiting, needs input
+  or exited. It is classified in the main process, so background tabs stay
+  accurate.
+- **Chat view.** The same session, read as a conversation — prompts and replies,
+  none of the tool plumbing. The composer types into the session, so the terminal
+  agrees.
+- **Cost and context.** Spend per session, project and day, read from Claude
+  Code's transcripts. Cache reads and the two cache-write rates are priced
+  separately.
+- **Session inspector.** `⌘⇧I` opens a timeline, a cost breakdown, tool-usage
+  stats and a context meter for the focused session.
+- **Embedded browser.** Load a page in a tab, click an element, and its CSS
+  selector and text go to the agent as context. Guest pages stay isolated from
+  the app.
+- **Project workspace.** Git panel, file tree and viewer, quick open, a command
+  palette, and a GitHub panel driven by the `gh` CLI.
+- **Agent profiles.** Separate logins side by side. Each profile gets its own
+  `CLAUDE_CONFIG_DIR`, so work and personal accounts never mix.
+- **Swarm and splits.** `⌘\` shows every running session in one grid. Panes split
+  right and down with focus routing.
+
+## What the status dots mean
+
+Agent CLIs are full-screen programs that repaint by moving the cursor, so the
+tail of the output stream tells you nothing about the bottom of the screen. Each
+session therefore feeds a background terminal emulator, and the status is read
+from that emulator's viewport — what a human would see.
+
+- Working — the agent is thinking or running a tool
+- Waiting — the prompt is back, nothing is running
+- Needs input — a question is on screen and blocking
+- Exited — the process is gone
+
+## One decision worth knowing
+
+Sessions run with the login shell's `PATH`. A GUI app on macOS inherits a minimal
+environment and genuinely cannot see `claude`, so the path is resolved once by
+asking the login shell, and every session inherits it. This is the difference
+between the app working and the app insisting you have not installed anything.
+
+## Requirements
+
+- macOS. Linux and Windows are not yet exercised.
+- Node 22 or newer.
+- At least one agent CLI installed and authenticated — Claude Code, Codex CLI or
+  Gemini CLI. A plain shell also works if you just want the tabs.
+
+## Running it
+
+```
+npm install
+npm run dev
+```
+
+## Licence
+
+MIT. Free, and free to fork. Built by Asad Iqbal.
+
+---
+
+# Features
+
+Source: https://terminaldeck.dev/features.html
+
+Everything below is in the app today. What is not built yet has its own section
+at the bottom.
+
+## Sessions and status
+
+A project holds as many sessions as you want, each one a real process in its own
+terminal. Tabs live in the window header; scrollback is replayed when you switch
+back, so leaving a tab does not lose what happened while you were away. Sessions
+can be started with Claude Code, Codex CLI, Gemini CLI or a plain shell, chosen
+per session, per project or globally.
+
+Every tab carries a status dot. The classification does not read the output
+stream — agent CLIs repaint by moving the cursor, so the tail of the stream has
+no relationship to the bottom of the screen. Each session instead feeds a
+headless terminal emulator in the main process and the status is read from that
+emulator's viewport, which means background tabs are classified as accurately as
+the visible one. The four states are working, waiting, needs input and exited.
+
+Around that: unread indicators when output arrives on a background tab, desktop
+notifications and sounds when a session finishes or needs you, session titles
+derived from the conversation rather than the folder name, and `⌘⇧T` to continue
+a project's last conversation.
+
+## Chat mode
+
+The same session, read as a conversation. Chat mode reads Claude Code's own
+transcript and shows only what a person said and what the agent said back — tool
+calls, usage blocks and compaction markers are thrown away, because hiding them
+is the entire point of the view.
+
+The rules for what counts as a typed prompt were measured against the transcripts
+on a real machine rather than assumed. A `user` line is only a prompt when its
+content is a string; the array form is almost always tool results, and rendering
+those turns the agent's own output into fake user messages.
+
+The composer at the bottom writes to the session's terminal exactly as if you had
+typed there, because that is where the agent is listening. There is no second
+channel to keep in sync, and a message sent from chat appears in the terminal
+view too.
+
+## Cost and context
+
+Claude Code writes JSONL transcripts under `~/.claude/projects/`. That is the
+source for all of this — nothing is scraped from terminal output. A watcher tails
+the file per session and the numbers follow: spend per session, per project and
+per day, token counts, and how full the context window is with a warning when it
+bloats.
+
+Cache traffic is priced properly. A cache read is a tenth of the input rate, a
+five-minute cache write is 1.25×, and a one-hour write — which is what Claude
+Code actually writes — is 2×. Charging every write at the five-minute rate
+under-reports a long session's spend by 37.5% on the cached portion.
+
+## Inspector, search and alerts
+
+- **Session inspector** (`⌘⇧I`). A timeline of the session, a cost breakdown,
+  tool-usage statistics and a context meter.
+- **Transcript search.** Full-text search across past transcripts — this project
+  or every project — returning ranked results with highlighted snippets.
+- **Smart alerts.** Missing tools, context bloat, session health. Built around
+  one rule: a brand-new project must be silent.
+
+## The project workspace
+
+- **Git panel.** Branch, dirty files and diffs, kept current by a watcher.
+- **File tree and viewer.** Browse the project and read files with syntax
+  highlighting.
+- **Quick open and palette.** `⌘P` for files, `⌘K` for commands, both
+  fuzzy-matched.
+- **GitHub panel.** Open pull requests, open issues and the unread notification
+  count, through the `gh` CLI,
+  with unread badges. "Not logged in" and "no GitHub remote" never look the same.
+- **AI readiness score.** Does the project have a CLAUDE.md, a README, tests,
+  lint, typecheck, a gitignore and a clean git state — with one-click fixes. A
+  committed `.env` caps the score below every band.
+- **`.deckignore`.** One list of what the app should not look at, honoured by the
+  tree, quick open, search and the watchers, with gitignore semantics.
+
+## Dashboard and board
+
+Each project gets a drag-and-drop widget grid — sessions, cost, git, GitHub, AI
+readiness and the Kanban board — and a Kanban board of its own with search and
+tag filtering. A card can start or resume a session, and moves to Done when that
+session completes.
+
+## Many sessions at once
+
+- **Swarm view** (`⌘\`) puts every running session in one grid, sized so each
+  cell is still wide enough to read a prompt.
+- **Agent profiles.** Each profile gets its own `CLAUDE_CONFIG_DIR`, which makes
+  it a separate login with separate history and transcripts. Set per session, per
+  project or globally.
+
+Profile isolation was checked against the real CLI, not assumed. Credentials live
+in the macOS Keychain under a service name derived from the config directory, so
+a second login cannot overwrite the first one's token — and deleting a profile's
+folder does not log it out.
+
+## The embedded browser
+
+A browser tab lives in the same window as the sessions. Load a page, turn on
+inspect, click an element, and the app hands the agent a CSS selector, a label
+and one line of context.
+
+The guest page is untrusted, so it only reports facts about the clicked element —
+tag, id, whether that id is unique, position among its siblings. Every judgement
+about which selector wins and what is safe to paste into a terminal happens on
+the trusted side, where it is tested against hostile input rather than hoped
+about.
+
+The browser also carries a device bar that resizes the real Chromium view rather
+than scaling a screenshot, so a 390px phone frame is a 390px viewport and media
+queries actually fire; a step recorder that turns what you did into a readable
+flow you can send to the agent; per-tab session isolation; and an import of your
+existing Chrome configuration.
+
+## Integrations
+
+- **MCP inspector.** Reads your own Claude Code MCP configuration rather than
+  keeping a second list, connects to servers, and lists and calls their tools
+  from a generated form.
+- **Provider hooks.** Hooks installed into each CLI's real settings file, tagged
+  `terminaldeck-hook`. Nothing is ever removed for merely looking like ours — a
+  machine running another tool keeps its own hooks.
+- **Settings window.** Eleven sections: general, appearance, notifications,
+  agents, setup, browser, shortcuts, profiles, advanced, help and about. Themes
+  apply live, terminals included.
+
+## Not built yet
+
+- P2P session sharing
+- Auto-updating from our own releases
+- Translations — the app is English only
+- Code signing and notarisation. The `.dmg` itself is built; nothing signs it.
+- Split panes. The layout code and the `⌘D` / `⌘⇧S` / `⌘⇧W` chords exist in the
+  repository, but nothing in the app renders the split view, so it cannot be
+  reached.
+- A tested Intel build — one is produced by the same command and has never been
+  launched — and anything at all on Linux or Windows.
+
+---
+
+# Docs
+
+Source: https://terminaldeck.dev/docs/
+
+Terminal Deck is at version 0.1.0. `npm run dist:mac` packages it into an
+unsigned `.dmg` and `.zip` for arm64 and x64; there is no published, signed
+installer, so most people run it from source in development mode.
+
+## Requirements
+
+- **macOS.** Linux and Windows are not yet exercised — parts of the app depend on
+  macOS behaviour, notably how agent logins are stored.
+- **Node 22 or newer.**
+- **At least one agent CLI, installed and authenticated.** Claude Code, Codex CLI
+  or Gemini CLI. Terminal Deck starts the CLI you already have; it does not ship
+  or proxy one, and it never sees your API keys.
+
+A plain shell also works as a session type if you only want the tabs, the status
+dots and the workspace panels.
+
+## Running it
+
+```
+git clone https://github.com/asadev/terminaldeck.git
+cd terminaldeck
+npm install
+npm run dev
+```
+
+`npm run dev` starts Electron with the renderer hot-reloading. Changes to the
+main process need a restart; renderer changes do not.
+
+```
+npm test          # vitest
+npm run typecheck # both tsconfigs
+npm run build     # production bundle
+```
+
+**Do not run `npm run build` while `npm run dev` is serving.** They share the
+`out/` directory, and the build overwrites what dev is running.
+
+## First run
+
+1. Open a project with `⌘O`. Projects are remembered between launches.
+2. Start a session with `⌘T`, choosing the agent for this session. The default
+   comes from the project, then from your preferences.
+3. Watch the tab's dot. Working, waiting, needs input and exited are the four
+   states, and they are read from what the session actually draws on screen.
+4. Open the settings window with `⌘,`. The Setup section reports which CLIs it
+   found.
+
+## Keyboard map
+
+Every binding is in the app's own shortcut sheet, which opens with `⌘/`.
+
+Sessions and projects:
+
+| Action | Keys |
+|---|---|
+| New session | `⌘T` |
+| Resume the last session here | `⌘⇧T` |
+| Close session | `⌘W` |
+| Jump to a session tab | `⌘1`–`⌘9` |
+| Next session | `⌃Tab` |
+| Previous session | `⌃⇧Tab` |
+| Open a project | `⌘O` |
+| Quick open a file | `⌘P` or `⌘⇧O` |
+| Command palette | `⌘K` or `⌘⇧P` |
+
+Panels and layout:
+
+| Action | Keys |
+|---|---|
+| Task board | `⌘⇧B` |
+| Project dashboard | `⌘⇧D` |
+| File tree | `⌘⇧E` |
+| Git panel | `⌘⇧G` |
+| Session inspector | `⌘⇧I` |
+| Swarm view | `⌘\` |
+| Toggle the sidebar | `⌘B` |
+| Preferences | `⌘,` |
+| Keyboard shortcuts | `⌘/` |
+
+Inside a terminal:
+
+| Action | Keys |
+|---|---|
+| Find in the terminal | `⌘F` |
+| Clear the terminal | `⌘⇧K` |
+| Copy the selection | `⌘⇧C` |
+| Interrupt the agent (passes through) | `⌃C` |
+| Stop what the agent is doing (passes through) | `Esc` |
+
+## Where it keeps things
+
+- **App state** — your projects, preferences and window bounds live in
+  `state.json` in the app's user-data directory, written atomically.
+- **Transcripts** — Terminal Deck does not write them. It reads the ones Claude
+  Code already keeps under `~/.claude/projects/`, and that is where cost,
+  context, search and chat mode all come from.
+- **Profiles** — each agent profile is a directory that becomes that session's
+  `CLAUDE_CONFIG_DIR`. Credentials stay in the macOS Keychain, not in the
+  directory, so deleting a profile folder does not log it out.
+- **Hook backups** — before a hook is written into a CLI's settings, the original
+  is copied into `~/.terminaldeck/hook-backups/`.
+
+## When it cannot find your agent
+
+The most common problem, and it is not your installation. A GUI app on macOS
+inherits a minimal `PATH` — it does not run your shell profile — so an app
+launched from Finder genuinely cannot see `claude`, `codex` or `gh` even though
+your terminal can.
+
+Terminal Deck handles this by asking your login shell for its `PATH` once at
+startup and giving that to every session it spawns. If a CLI still is not found,
+check that it is on the `PATH` your login shell exports rather than one set by an
+interactive-only rc file, and look at the Setup section of the settings window,
+which reports what it found.
+
+## Verifying your own changes
+
+If you are working on the app itself, `npm run typecheck` and `npm test` both
+pass while the UI is visibly broken — that has happened, twice. The renderer can
+also be mounted in a plain browser against a stubbed preload, which is the check
+that has actually caught real defects:
+
+```
+npx vite --config .harness/vite.config.ts
+```
+
+It serves on port 5199.
+
+---
+
+# Roadmap
+
+Source: https://terminaldeck.dev/roadmap.html
+
+Eight phases. Seven are finished; the eighth is what stands between the current
+state and something you can download and double-click.
+
+## Done
+
+**1 · Foundation** — Electron, React and TypeScript built with electron-vite;
+process ownership with scrollback replayed across tab switches; a provider layer
+that detects Claude, Codex and Gemini using the login-shell `PATH`; sidebar, tab
+bar, status dots and empty state; design tokens in dark and light with
+self-hosted open-licensed fonts; an atomic JSON store; a content-security policy
+set from the main process.
+
+**2 · Session intelligence** — status detection in the main process so unrendered
+tabs stay accurate; a provider picker per session, project and global default;
+session resume; preferences and live re-theming that recolours terminals without
+a restart; desktop notifications and sounds; session titles derived from the
+task; unread indicators.
+
+**3 · Cost, context and telemetry** — transcript watcher; cost tracking per
+session, project and day; token and context-window monitoring with a bloat
+warning; the session inspector; deep search across past transcripts; smart
+alerts.
+
+**4 · Project workspace** — git status watcher and git panel; file tree and
+viewer with syntax highlighting; quick open and command palette; GitHub
+integration through `gh`; AI readiness score with one-click fixes; `.deckignore`.
+
+**5 · Dashboard and board** — a customisable project overview on a drag-and-drop
+widget grid; widgets for readiness, kanban, sessions, cost, git and GitHub; a
+Kanban board per project with search and tag filtering; board and session linked,
+so a card spawns or resumes a session.
+
+**6 · Many sessions at once** — swarm mode; multiple agent profiles with
+isolated logins; the full keymap and a shortcut reference sheet. Split panes were
+listed here and are not done: the layout code exists but nothing renders it.
+
+**7 · Integrations** — hooks installed into each provider's settings, namespaced
+so they never collide with another tool's; MCP client and inspector; embedded
+browser with element inspect; Chrome configuration import.
+
+## Not done
+
+**8 · Ship**
+
+- **Code signing and notarisation.** Packaging itself is done — `npm run
+  dist:mac` writes a `.dmg` and a `.zip` for arm64 and x64 — but `identity: null`
+  is set deliberately, so nothing is signed and Gatekeeper needs the right-click
+  step.
+- **A tested Intel build.** The x64 artefact has never been launched.
+- **Split panes** — layout code in the repository, rendered nowhere.
+- **Auto-updates** pointed at our own releases. The library is present; nothing
+  calls it yet.
+- **Peer-to-peer session sharing** — read-only or read-write, with PIN auth. The
+  single biggest remaining feature, and the only one that would need
+  infrastructure.
+- **Translations.** The app is English only.
+- **Icon and brand assets.**
+
+Linux and Windows are not on this list because they are not scheduled. The app
+has only ever been run and verified on macOS.
+
+## Known follow-ups
+
+- The chunked transcript reader is written three times over — once each for cost,
+  insights and search. All three are tested and working, so lifting them into one
+  helper carries regression risk for no user-facing gain, and it waits.
+- Escape-to-close on dialogs is correct in code but has never been confirmed by a
+  real keypress, because synthetic key events were not delivered during testing.
+
+## Open questions
+
+- The name is provisional. It lives in one file, so changing it is one edit.
+- Whether peer-to-peer sharing is wanted at all.
+
+---
+
+# Privacy
+
+Source: https://terminaldeck.dev/privacy.html
+
+Terminal Deck has no account, no sign-in, no telemetry and no analytics. It has
+no server of its own to send anything to. Everything below is a description of
+the code, not a promise about it.
+
+## The app
+
+### What it reads
+
+- **Agent transcripts.** Claude Code writes JSONL transcripts under
+  `~/.claude/projects/`. Terminal Deck reads them — that is where cost, context
+  use, search results, session insights and chat mode all come from. It reads
+  them; it does not copy or upload them.
+- **Your project folder**, for the file tree, the file viewer, quick open and the
+  readiness checks.
+- **Git state**, by running `git`.
+- **GitHub data**, by running the `gh` CLI you have already authenticated.
+  Terminal Deck does not hold a GitHub token.
+- **Your MCP configuration**, so the inspector lists the servers you already
+  configured rather than keeping a second list.
+
+### What it writes
+
+- Projects, preferences and window bounds, in a `state.json` inside the app's own
+  user-data directory.
+- Board cards and dashboard layouts, per project.
+- Hooks, into each agent CLI's real settings file — always tagged
+  `terminaldeck-hook`, and never removing an entry that is not ours. The original
+  file is backed up to `~/.terminaldeck/hook-backups/` first.
+
+### What it sends
+
+Nothing, on its own. There is no analytics SDK in the dependency list, no crash
+reporter, and no update check — the auto-updater is listed as a dependency but
+nothing calls it yet.
+
+The network traffic you will see comes from things you started:
+
+- **The agent CLIs.** Claude Code, Codex CLI and Gemini CLI talk to their own
+  vendors under their own terms. Terminal Deck starts them as ordinary processes
+  and never sees or stores your API keys — those stay in the CLI's own
+  configuration and, on macOS, in the Keychain.
+- **The embedded browser**, which loads the pages you ask it to. Guest pages run
+  in an isolated session and can only report facts about a clicked element back
+  to the app; they cannot reach into it. Typing something that is not a URL into
+  the address bar searches DuckDuckGo.
+- **`git` and `gh`**, when you use the git or GitHub panels.
+
+### Support bundles
+
+A diagnostics bundle exists to be pasted into an issue, which makes it the single
+most likely place for a credential to escape. Everything in one passes through a
+redactor first: known secret literals, then structure — private-key blocks,
+credentials inside URLs, `Authorization` headers, assignments whose key says the
+value is a secret — then known token prefixes, then an entropy sweep for long,
+dense strings that carry no other meaning. Ambiguous strings are redacted rather
+than kept, on the grounds that losing information is cheap and leaking one is
+not. Nothing is sent anywhere; the bundle is yours to share or not.
+
+## This website
+
+terminaldeck.dev is static HTML and CSS. It sets no cookies, stores nothing in
+your browser, runs no analytics, and makes no requests to any other host — the
+two typefaces are served from this domain, and there is no embedded video, no
+comment widget, no tag manager and no font CDN. There is nothing here to consent
+to, which is why you were not asked.
+
+If the site is served from GitHub Pages or a similar host, that host will see the
+ordinary request information any web server sees. That is between you and them;
+it does not reach us.
+
+## Checking any of this
+
+All of it is verifiable rather than trusted: read the source, or watch the app's
+network traffic. If a claim on this page turns out not to match the code, the
+claim is the bug.

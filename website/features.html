@@ -1,0 +1,409 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Features — everything Terminal Deck does today</title>
+<meta name="description" content="A feature-by-feature account of Terminal Deck: session tabs and status, chat mode, cost tracking, search, the embedded browser, profiles, MCP, hooks and settings.">
+<link rel="canonical" href="https://terminaldeck.dev/features.html">
+<meta name="author" content="Asad Iqbal">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#191919" media="(prefers-color-scheme: dark)">
+
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="Terminal Deck">
+<meta property="og:url" content="https://terminaldeck.dev/features.html">
+<meta property="og:title" content="Features — everything Terminal Deck does today">
+<meta property="og:description" content="Session tabs and status, chat mode, cost and context tracking, transcript search, the embedded browser, agent profiles, MCP, hooks and settings.">
+<meta property="og:image" content="https://terminaldeck.dev/assets/og.png">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Terminal Deck: run your coding agents on one deck. Four session rows with working, waiting, needs input and done status dots.">
+<meta property="og:locale" content="en_GB">
+
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Features — everything Terminal Deck does today">
+<meta name="twitter:description" content="Session tabs and status, chat mode, cost and context tracking, transcript search, the embedded browser, agent profiles, MCP, hooks and settings.">
+<meta name="twitter:image" content="https://terminaldeck.dev/assets/og.png">
+<meta name="twitter:image:alt" content="Terminal Deck: run your coding agents on one deck. Four session rows with working, waiting, needs input and done status dots.">
+
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="assets/logo-512.png">
+<link rel="preload" href="assets/fonts/hanken-grotesk.woff2" as="font" type="font/woff2" crossorigin>
+
+<style>
+/* Critical CSS. Values from src/renderer/styles/tokens.css. Two greys differ
+   from the app and say so: they were adjusted so small text clears WCAG AA. */
+@font-face{font-family:'Hanken Grotesk';font-style:normal;font-weight:400 700;font-display:swap;src:url(assets/fonts/hanken-grotesk.woff2) format('woff2')}
+@font-face{font-family:'JetBrains Mono';font-style:normal;font-weight:400 500;font-display:swap;src:url(assets/fonts/jetbrains-mono.woff2) format('woff2')}
+:root{color-scheme:light dark;
+--bg-primary:#fff;--bg-secondary:#f7f7f5;--bg-tertiary:#f1f1ef;--bg-hover:rgba(55,53,47,.06);
+--text-primary:#37352f;
+--text-secondary:#6b6a66;/* app #787774 is 4.48:1 on white — darkened to 5.4:1 */
+--text-muted:#757470;/* app #9b9a97 is 2.8:1 — darkened to 4.7:1 */
+--link:#1b6fc4;/* app --accent-dim; --accent is 3.9:1 on white, too low for body text */
+--accent:#2383e2;--accent-soft:rgba(35,131,226,.09);
+--border:rgba(55,53,47,.09);--border-subtle:rgba(55,53,47,.055);--border-strong:rgba(55,53,47,.16);
+--status-working:#337ea9;--status-waiting:#cb912f;--status-input:#d9730d;--status-completed:#448361;--status-idle:#9b9a97;
+--radius-sm:4px;--radius-md:6px;--radius-lg:10px;
+--font-ui:'Hanken Grotesk',-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
+--font-mono:'JetBrains Mono','SF Mono',Menlo,monospace}
+@media(prefers-color-scheme:dark){:root{
+--bg-primary:#191919;--bg-secondary:#202020;--bg-tertiary:#252525;--bg-hover:rgba(255,255,255,.055);
+--text-primary:#d4d4d4;--text-secondary:#9b9b9b;
+--text-muted:#8a8a8a;/* app #6f6f6f is 3.5:1 on #191919 — lightened to 5.1:1 */
+--link:#529cca;--accent:#529cca;--accent-soft:rgba(82,156,202,.14);
+--border:rgba(255,255,255,.094);--border-subtle:rgba(255,255,255,.055);--border-strong:rgba(255,255,255,.16);
+--status-working:#529cca;--status-waiting:#c9a227;--status-input:#d9730d;--status-completed:#4dab9a;--status-idle:#6f6f6f}}
+*,*::before,*::after{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg-primary);color:var(--text-primary);font-family:var(--font-ui);font-size:17px;line-height:1.65;-webkit-font-smoothing:antialiased}
+h1,h2,h3{line-height:1.25;font-weight:700;color:var(--text-primary)}
+p{margin:1rem 0;max-width:68ch}
+a{color:var(--link);text-decoration:underline;text-underline-offset:2px;text-decoration-thickness:1px}
+a:hover{text-decoration-thickness:2px}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:var(--radius-sm)}
+img,svg{max-width:100%;height:auto}
+.wrap{width:100%;max-width:56rem;margin:0 auto;padding:0 1.5rem}
+.skip-link{position:absolute;left:-9999px;background:var(--bg-primary);color:var(--text-primary);padding:.6rem 1rem;border:1px solid var(--border-strong);border-radius:var(--radius-md);z-index:10;text-decoration:none}
+.skip-link:focus{left:1rem;top:1rem}
+.site-header{border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--bg-primary);z-index:5}
+.site-header .wrap{display:flex;align-items:center;justify-content:space-between;gap:1rem;min-height:56px;flex-wrap:wrap}
+.wordmark{display:flex;align-items:center;gap:.55rem;font-family:var(--font-mono);font-size:.8125rem;font-weight:500;letter-spacing:.09em;text-transform:uppercase;color:var(--text-primary);text-decoration:none}
+.site-header nav ul{list-style:none;display:flex;gap:1.25rem;margin:0;padding:0;font-size:.9375rem}
+.site-header nav a{color:var(--text-secondary);text-decoration:none}
+.site-header nav a:hover,.site-header nav a[aria-current=page]{color:var(--text-primary);text-decoration:underline;text-underline-offset:3px}
+main{padding:3rem 0 0}
+h1{font-size:2.5rem;letter-spacing:-.03em;margin:0 0 1rem}
+.lede{font-size:1.1875rem;color:var(--text-secondary);max-width:60ch;margin:0 0 1.5rem}
+.summary{border:1px solid var(--border);border-radius:var(--radius-lg);padding:1.25rem 1.5rem;background:var(--bg-secondary);margin:2rem 0}
+.summary h2{font-size:.8125rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-secondary);margin:0 0 .5rem;font-weight:600}
+.summary p{margin:0;max-width:none}
+.grid{display:grid;gap:1rem;grid-template-columns:repeat(auto-fit,minmax(15rem,1fr));margin:1.5rem 0;padding:0;list-style:none}
+.card{border:1px solid var(--border);border-radius:var(--radius-md);padding:1rem 1.125rem;background:var(--bg-primary)}
+.card h3{margin:0 0 .35rem;font-size:1rem}
+.card p{margin:0;font-size:.9375rem;color:var(--text-secondary);max-width:none}
+.breadcrumb{font-size:.875rem;color:var(--text-secondary);margin:0 0 1.25rem}
+.breadcrumb ol{list-style:none;display:flex;flex-wrap:wrap;gap:.4rem;margin:0;padding:0}
+.breadcrumb li+li::before{content:"/";margin-right:.4rem;color:var(--text-muted)}
+.breadcrumb a{color:var(--text-secondary)}
+@media(max-width:34rem){h1{font-size:2rem}body{font-size:16px}main{padding-top:2rem}}
+</style>
+
+<link rel="preload" href="styles.css" as="style" onload="this.onload=null;this.rel='stylesheet'">
+<noscript><link rel="stylesheet" href="styles.css"></noscript>
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "Organization",
+      "@id": "https://terminaldeck.dev/#organization",
+      "name": "Terminal Deck",
+      "url": "https://terminaldeck.dev/",
+      "logo": {
+        "@type": "ImageObject",
+        "url": "https://terminaldeck.dev/assets/logo-512.png",
+        "width": 512,
+        "height": 512
+      },
+      "founder": { "@type": "Person", "name": "Asad Iqbal" }
+    },
+    {
+      "@type": "BreadcrumbList",
+      "@id": "https://terminaldeck.dev/features.html#breadcrumb",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "position": 1,
+          "name": "Terminal Deck",
+          "item": "https://terminaldeck.dev/"
+        },
+        {
+          "@type": "ListItem",
+          "position": 2,
+          "name": "Features",
+          "item": "https://terminaldeck.dev/features.html"
+        }
+      ]
+    },
+    {
+      "@type": "WebPage",
+      "@id": "https://terminaldeck.dev/features.html#webpage",
+      "url": "https://terminaldeck.dev/features.html",
+      "name": "Features — everything Terminal Deck does today",
+      "description": "A feature-by-feature account of Terminal Deck: session tabs and status, chat mode, cost tracking, search, the embedded browser, profiles, MCP, hooks and settings.",
+      "inLanguage": "en-GB",
+      "isPartOf": { "@id": "https://terminaldeck.dev/#website" },
+      "about": { "@id": "https://terminaldeck.dev/#app" },
+      "breadcrumb": { "@id": "https://terminaldeck.dev/features.html#breadcrumb" },
+      "publisher": { "@id": "https://terminaldeck.dev/#organization" }
+    }
+  ]
+}
+</script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="wordmark" href="index.html" aria-label="Terminal Deck — home">
+      <img src="favicon.svg" alt="" width="20" height="20" aria-hidden="true">
+      Terminal&nbsp;Deck
+    </a>
+    <nav aria-label="Primary">
+      <ul>
+        <li><a href="features.html" aria-current="page">Features</a></li>
+        <li><a href="docs/index.html">Docs</a></li>
+        <li><a href="download.html">Download</a></li>
+        <li><a href="changelog.html">Changelog</a></li>
+        <li><a href="https://github.com/asadev/terminaldeck">GitHub</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+
+<main id="main" class="wrap prose">
+
+  <nav class="breadcrumb" aria-label="Breadcrumb">
+    <ol>
+      <li><a href="index.html">Terminal Deck</a></li>
+      <li aria-current="page">Features</li>
+    </ol>
+  </nav>
+
+  <h1>Features</h1>
+
+  <p class="lede">Everything below is in the app today. What is not built yet has
+  its own section at the bottom, and the <a href="roadmap.html">roadmap</a> keeps
+  the full list.</p>
+
+  <h2>Sessions and status</h2>
+
+  <p>A project holds as many sessions as you want, each one a real process in its
+  own terminal. Tabs live in the window header; scrollback is replayed when you
+  switch back, so leaving a tab does not lose what happened while you were away.
+  Sessions can be started with Claude Code, Codex CLI, Gemini CLI or a plain
+  shell, chosen per session, per project or globally.</p>
+
+  <p>Every tab carries a status dot. The classification does not read the output
+  stream — agent CLIs repaint by moving the cursor, so the tail of the stream has
+  no relationship to the bottom of the screen. Each session instead feeds a
+  headless terminal emulator in the main process and the status is read from that
+  emulator's viewport, which means background tabs are classified as accurately as
+  the visible one.</p>
+
+  <ul class="legend">
+    <li><span class="dot dot-working" aria-hidden="true"></span> Working</li>
+    <li><span class="dot dot-waiting" aria-hidden="true"></span> Waiting</li>
+    <li><span class="dot dot-input" aria-hidden="true"></span> Needs input</li>
+    <li><span class="dot dot-idle" aria-hidden="true"></span> Exited</li>
+  </ul>
+
+  <p>Around that: unread indicators when output arrives on a background tab,
+  desktop notifications and sounds when a session finishes or needs you, session
+  titles derived from the conversation rather than the folder name, and
+  <kbd>⌘⇧T</kbd> to continue a project's last conversation.</p>
+
+  <h2>Chat mode</h2>
+
+  <p>The same session, read as a conversation. Chat mode reads Claude Code's own
+  transcript and shows only what a person said and what the agent said back —
+  tool calls, usage blocks and compaction markers are thrown away, because hiding
+  them is the entire point of the view.</p>
+
+  <p>The rules for what counts as a typed prompt were measured against the
+  transcripts on a real machine rather than assumed. A <code>user</code> line is
+  only a prompt when its content is a string; the array form is almost always tool
+  results, and rendering those turns the agent's own output into fake user
+  messages.</p>
+
+  <p>The composer at the bottom writes to the session's terminal exactly as if you
+  had typed there, because that is where the agent is listening. There is no
+  second channel to keep in sync, and a message sent from chat appears in the
+  terminal view too.</p>
+
+  <h2>Cost and context</h2>
+
+  <p>Claude Code writes JSONL transcripts under <code>~/.claude/projects/</code>.
+  That is the source for all of this — nothing is scraped from terminal output.
+  A watcher tails the file per session and the numbers follow: spend per session,
+  per project and per day, token counts, and how full the context window is with a
+  warning when it bloats.</p>
+
+  <p>Cache traffic is priced properly. A cache read is a tenth of the input rate, a
+  five-minute cache write is 1.25×, and a one-hour write — which is what Claude
+  Code actually writes — is 2×. Charging every write at the five-minute rate
+  under-reports a long session's spend by 37.5% on the cached portion.</p>
+
+  <h2>Inspector, search and alerts</h2>
+
+  <ul class="grid">
+    <li class="card">
+      <h3>Session inspector</h3>
+      <p><kbd>⌘⇧I</kbd>. A timeline of the session, a cost breakdown, tool-usage
+      statistics and a context meter.</p>
+    </li>
+    <li class="card">
+      <h3>Transcript search</h3>
+      <p>Full-text search across past transcripts — this project or every project —
+      returning ranked results with highlighted snippets.</p>
+    </li>
+    <li class="card">
+      <h3>Smart alerts</h3>
+      <p>Missing tools, context bloat, session health. Built around one rule: a
+      brand-new project must be silent.</p>
+    </li>
+  </ul>
+
+  <h2>The project workspace</h2>
+
+  <ul class="grid">
+    <li class="card">
+      <h3>Git panel</h3>
+      <p>Branch, dirty files and diffs, kept current by a watcher.</p>
+    </li>
+    <li class="card">
+      <h3>File tree and viewer</h3>
+      <p>Browse the project and read files with syntax highlighting.</p>
+    </li>
+    <li class="card">
+      <h3>Quick open and palette</h3>
+      <p><kbd>⌘P</kbd> for files, <kbd>⌘K</kbd> for commands, both fuzzy-matched.</p>
+    </li>
+    <li class="card">
+      <h3>GitHub panel</h3>
+      <p>Open pull requests, open issues and the repository's unread notification
+      count, through the <code>gh</code> CLI. "Not logged in" and "no GitHub
+      remote" never look the same.</p>
+    </li>
+    <li class="card">
+      <h3>AI readiness score</h3>
+      <p>Does the project have a CLAUDE.md, a README, tests, lint, typecheck, a
+      gitignore and a clean git state — with one-click fixes. A committed
+      <code>.env</code> caps the score below every band.</p>
+    </li>
+    <li class="card">
+      <h3><code>.deckignore</code></h3>
+      <p>One list of what the app should not look at, honoured by the tree, quick
+      open, search and the watchers, with gitignore semantics.</p>
+    </li>
+  </ul>
+
+  <h2>Dashboard and board</h2>
+
+  <p>Each project gets a drag-and-drop widget grid — sessions, cost, git, GitHub,
+  AI readiness and the Kanban board — and a Kanban board of its own with search
+  and tag filtering. A card can start or resume a session, and moves to Done when
+  that session completes.</p>
+
+  <h2>Many sessions at once</h2>
+
+  <ul class="grid">
+    <li class="card">
+      <h3>Swarm view</h3>
+      <p><kbd>⌘\</kbd> puts every running session in one grid, sized so each cell is
+      still wide enough to read a prompt.</p>
+    </li>
+    <li class="card">
+      <h3>Agent profiles</h3>
+      <p>Each profile gets its own <code>CLAUDE_CONFIG_DIR</code>, which makes it a
+      separate login with separate history and transcripts. Set per session, per
+      project or globally.</p>
+    </li>
+  </ul>
+
+  <p class="note">Profile isolation was checked against the real CLI, not assumed.
+  Credentials live in the macOS Keychain under a service name derived from the
+  config directory, so a second login cannot overwrite the first one's token — and
+  deleting a profile's folder does not log it out.</p>
+
+  <h2>The embedded browser</h2>
+
+  <p>A browser tab lives in the same window as the sessions. Load a page, turn on
+  inspect, click an element, and the app hands the agent a CSS selector, a label
+  and one line of context.</p>
+
+  <p>The guest page is untrusted, so it only reports facts about the clicked
+  element — tag, id, whether that id is unique, position among its siblings. Every
+  judgement about which selector wins and what is safe to paste into a terminal
+  happens on the trusted side, where it is tested against hostile input rather
+  than hoped about.</p>
+
+  <p>The browser also carries a device bar that resizes the real Chromium view
+  rather than scaling a screenshot, so a 390px phone frame is a 390px viewport and
+  media queries actually fire; a step recorder that turns what you did into a
+  readable flow you can send to the agent; per-tab session isolation; and an
+  import of your existing Chrome configuration.</p>
+
+  <h2>Integrations</h2>
+
+  <ul class="grid">
+    <li class="card">
+      <h3>MCP inspector</h3>
+      <p>Reads your own Claude Code MCP configuration rather than keeping a second
+      list, connects to servers, and lists and calls their tools from a generated
+      form.</p>
+    </li>
+    <li class="card">
+      <h3>Provider hooks</h3>
+      <p>Hooks installed into each CLI's real settings file, tagged
+      <code>terminaldeck-hook</code>. Nothing is ever removed for merely looking
+      like ours — a machine running another tool keeps its own hooks.</p>
+    </li>
+    <li class="card">
+      <h3>Settings window</h3>
+      <p>Eleven sections: general, appearance, notifications, agents, setup,
+      browser, shortcuts, profiles, advanced, help and about. Themes apply live,
+      terminals included.</p>
+    </li>
+  </ul>
+
+  <h2>Not built yet</h2>
+
+  <p>Named here so nothing above has to be read hopefully:</p>
+
+  <ul class="checklist">
+    <li class="todo">P2P session sharing</li>
+    <li class="todo">Auto-updating from our own releases</li>
+    <li class="todo">Translations — the app is English only</li>
+    <li class="todo">Code signing and notarisation. The <code>.dmg</code> itself is
+    built; it is unsigned, so macOS needs the right-click step on first
+    launch.</li>
+    <li class="todo"><strong>Split panes.</strong> The layout code and the
+    <kbd>⌘D</kbd> / <kbd>⌘⇧S</kbd> / <kbd>⌘⇧W</kbd> chords exist in the
+    repository, but nothing renders the split view — there is no way to reach it
+    in the app.</li>
+    <li class="todo">Linux and Windows, which are not yet exercised</li>
+  </ul>
+
+  <p><a href="roadmap.html">See the roadmap →</a></p>
+
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <nav aria-label="Footer">
+      <ul>
+        <li><a href="index.html">Home</a></li>
+        <li><a href="features.html" aria-current="page">Features</a></li>
+        <li><a href="docs/index.html">Docs</a></li>
+        <li><a href="download.html">Download</a></li>
+        <li><a href="changelog.html">Changelog</a></li>
+        <li><a href="roadmap.html">Roadmap</a></li>
+        <li><a href="about.html">About</a></li>
+        <li><a href="security.html">Security</a></li>
+        <li><a href="privacy.html">Privacy</a></li>
+        <li><a href="terms.html">Terms</a></li>
+        <li><a href="llms.txt">llms.txt</a></li>
+        <li><a href="https://github.com/asadev/terminaldeck">Source</a></li>
+      </ul>
+    </nav>
+    <p>Terminal Deck 0.1.0 — MIT licensed. Built by Asad Iqbal.</p>
+  </div>
+</footer>
+</body>
+</html>

@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Roadmap — what is built and what is left</title>
+<meta name="description" content="The honest state of Terminal Deck: seven phases finished, one to go. Sharing, auto-updates, translations and a signed build are still open, and this page says so.">
+<link rel="canonical" href="https://terminaldeck.dev/roadmap.html">
+<meta name="author" content="Asad Iqbal">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#191919" media="(prefers-color-scheme: dark)">
+
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="Terminal Deck">
+<meta property="og:url" content="https://terminaldeck.dev/roadmap.html">
+<meta property="og:title" content="Roadmap — what is built and what is left">
+<meta property="og:description" content="Seven phases finished, one to go. Sharing, auto-updates, translations and a signed build are still open, and this page says so.">
+<meta property="og:image" content="https://terminaldeck.dev/assets/og.png">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Terminal Deck: run your coding agents on one deck. Four session rows with working, waiting, needs input and done status dots.">
+<meta property="og:locale" content="en_GB">
+
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Roadmap — what is built and what is left">
+<meta name="twitter:description" content="Seven phases finished, one to go. Sharing, auto-updates, translations and a signed build are still open, and this page says so.">
+<meta name="twitter:image" content="https://terminaldeck.dev/assets/og.png">
+<meta name="twitter:image:alt" content="Terminal Deck: run your coding agents on one deck. Four session rows with working, waiting, needs input and done status dots.">
+
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="assets/logo-512.png">
+<link rel="preload" href="assets/fonts/hanken-grotesk.woff2" as="font" type="font/woff2" crossorigin>
+
+<style>
+/* Critical CSS. Values from src/renderer/styles/tokens.css. Two greys differ
+   from the app and say so: they were adjusted so small text clears WCAG AA. */
+@font-face{font-family:'Hanken Grotesk';font-style:normal;font-weight:400 700;font-display:swap;src:url(assets/fonts/hanken-grotesk.woff2) format('woff2')}
+@font-face{font-family:'JetBrains Mono';font-style:normal;font-weight:400 500;font-display:swap;src:url(assets/fonts/jetbrains-mono.woff2) format('woff2')}
+:root{color-scheme:light dark;
+--bg-primary:#fff;--bg-secondary:#f7f7f5;--bg-tertiary:#f1f1ef;--bg-hover:rgba(55,53,47,.06);
+--text-primary:#37352f;
+--text-secondary:#6b6a66;/* app #787774 is 4.48:1 on white — darkened to 5.4:1 */
+--text-muted:#757470;/* app #9b9a97 is 2.8:1 — darkened to 4.7:1 */
+--link:#1b6fc4;/* app --accent-dim; --accent is 3.9:1 on white, too low for body text */
+--accent:#2383e2;--accent-soft:rgba(35,131,226,.09);
+--border:rgba(55,53,47,.09);--border-subtle:rgba(55,53,47,.055);--border-strong:rgba(55,53,47,.16);
+--status-working:#337ea9;--status-waiting:#cb912f;--status-input:#d9730d;--status-completed:#448361;--status-idle:#9b9a97;
+--radius-sm:4px;--radius-md:6px;--radius-lg:10px;
+--font-ui:'Hanken Grotesk',-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
+--font-mono:'JetBrains Mono','SF Mono',Menlo,monospace}
+@media(prefers-color-scheme:dark){:root{
+--bg-primary:#191919;--bg-secondary:#202020;--bg-tertiary:#252525;--bg-hover:rgba(255,255,255,.055);
+--text-primary:#d4d4d4;--text-secondary:#9b9b9b;
+--text-muted:#8a8a8a;/* app #6f6f6f is 3.5:1 on #191919 — lightened to 5.1:1 */
+--link:#529cca;--accent:#529cca;--accent-soft:rgba(82,156,202,.14);
+--border:rgba(255,255,255,.094);--border-subtle:rgba(255,255,255,.055);--border-strong:rgba(255,255,255,.16);
+--status-working:#529cca;--status-waiting:#c9a227;--status-input:#d9730d;--status-completed:#4dab9a;--status-idle:#6f6f6f}}
+*,*::before,*::after{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg-primary);color:var(--text-primary);font-family:var(--font-ui);font-size:17px;line-height:1.65;-webkit-font-smoothing:antialiased}
+h1,h2,h3{line-height:1.25;font-weight:700;color:var(--text-primary)}
+p{margin:1rem 0;max-width:68ch}
+a{color:var(--link);text-decoration:underline;text-underline-offset:2px;text-decoration-thickness:1px}
+a:hover{text-decoration-thickness:2px}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:var(--radius-sm)}
+img,svg{max-width:100%;height:auto}
+.wrap{width:100%;max-width:56rem;margin:0 auto;padding:0 1.5rem}
+.skip-link{position:absolute;left:-9999px;background:var(--bg-primary);color:var(--text-primary);padding:.6rem 1rem;border:1px solid var(--border-strong);border-radius:var(--radius-md);z-index:10;text-decoration:none}
+.skip-link:focus{left:1rem;top:1rem}
+.site-header{border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--bg-primary);z-index:5}
+.site-header .wrap{display:flex;align-items:center;justify-content:space-between;gap:1rem;min-height:56px;flex-wrap:wrap}
+.wordmark{display:flex;align-items:center;gap:.55rem;font-family:var(--font-mono);font-size:.8125rem;font-weight:500;letter-spacing:.09em;text-transform:uppercase;color:var(--text-primary);text-decoration:none}
+.site-header nav ul{list-style:none;display:flex;gap:1.25rem;margin:0;padding:0;font-size:.9375rem}
+.site-header nav a{color:var(--text-secondary);text-decoration:none}
+.site-header nav a:hover,.site-header nav a[aria-current=page]{color:var(--text-primary);text-decoration:underline;text-underline-offset:3px}
+main{padding:3rem 0 0}
+h1{font-size:2.5rem;letter-spacing:-.03em;margin:0 0 1rem}
+.lede{font-size:1.1875rem;color:var(--text-secondary);max-width:60ch;margin:0 0 1.5rem}
+.summary{border:1px solid var(--border);border-radius:var(--radius-lg);padding:1.25rem 1.5rem;background:var(--bg-secondary);margin:2rem 0}
+.summary h2{font-size:.8125rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-secondary);margin:0 0 .5rem;font-weight:600}
+.summary p{margin:0;max-width:none}
+.grid{display:grid;gap:1rem;grid-template-columns:repeat(auto-fit,minmax(15rem,1fr));margin:1.5rem 0;padding:0;list-style:none}
+.card{border:1px solid var(--border);border-radius:var(--radius-md);padding:1rem 1.125rem;background:var(--bg-primary)}
+.card h3{margin:0 0 .35rem;font-size:1rem}
+.card p{margin:0;font-size:.9375rem;color:var(--text-secondary);max-width:none}
+.breadcrumb{font-size:.875rem;color:var(--text-secondary);margin:0 0 1.25rem}
+.breadcrumb ol{list-style:none;display:flex;flex-wrap:wrap;gap:.4rem;margin:0;padding:0}
+.breadcrumb li+li::before{content:"/";margin-right:.4rem;color:var(--text-muted)}
+.breadcrumb a{color:var(--text-secondary)}
+@media(max-width:34rem){h1{font-size:2rem}body{font-size:16px}main{padding-top:2rem}}
+</style>
+
+<link rel="preload" href="styles.css" as="style" onload="this.onload=null;this.rel='stylesheet'">
+<noscript><link rel="stylesheet" href="styles.css"></noscript>
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "Organization",
+      "@id": "https://terminaldeck.dev/#organization",
+      "name": "Terminal Deck",
+      "url": "https://terminaldeck.dev/",
+      "logo": {
+        "@type": "ImageObject",
+        "url": "https://terminaldeck.dev/assets/logo-512.png",
+        "width": 512,
+        "height": 512
+      },
+      "founder": { "@type": "Person", "name": "Asad Iqbal" }
+    },
+    {
+      "@type": "BreadcrumbList",
+      "@id": "https://terminaldeck.dev/roadmap.html#breadcrumb",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "position": 1,
+          "name": "Terminal Deck",
+          "item": "https://terminaldeck.dev/"
+        },
+        {
+          "@type": "ListItem",
+          "position": 2,
+          "name": "Roadmap",
+          "item": "https://terminaldeck.dev/roadmap.html"
+        }
+      ]
+    },
+    {
+      "@type": "WebPage",
+      "@id": "https://terminaldeck.dev/roadmap.html#webpage",
+      "url": "https://terminaldeck.dev/roadmap.html",
+      "name": "Roadmap — what is built and what is left",
+      "description": "The honest state of Terminal Deck: seven phases finished, one to go. Sharing, auto-updates, translations and a signed build are still open, and this page says so.",
+      "inLanguage": "en-GB",
+      "isPartOf": { "@id": "https://terminaldeck.dev/#website" },
+      "about": { "@id": "https://terminaldeck.dev/#app" },
+      "breadcrumb": { "@id": "https://terminaldeck.dev/roadmap.html#breadcrumb" },
+      "publisher": { "@id": "https://terminaldeck.dev/#organization" }
+    }
+  ]
+}
+</script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="wordmark" href="index.html" aria-label="Terminal Deck — home">
+      <img src="favicon.svg" alt="" width="20" height="20" aria-hidden="true">
+      Terminal&nbsp;Deck
+    </a>
+    <nav aria-label="Primary">
+      <ul>
+        <li><a href="features.html">Features</a></li>
+        <li><a href="docs/index.html">Docs</a></li>
+        <li><a href="download.html">Download</a></li>
+        <li><a href="changelog.html">Changelog</a></li>
+        <li><a href="https://github.com/asadev/terminaldeck">GitHub</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+
+<main id="main" class="wrap prose">
+
+  <nav class="breadcrumb" aria-label="Breadcrumb">
+    <ol>
+      <li><a href="index.html">Terminal Deck</a></li>
+      <li aria-current="page">Roadmap</li>
+    </ol>
+  </nav>
+
+  <h1>Roadmap</h1>
+
+  <p class="lede">Eight phases. Seven are essentially finished — one item has been
+  moved back out of phase 6 after an audit found it unreachable — and the eighth
+  is what stands between an unsigned disk image and one macOS will open without
+  an argument.</p>
+
+  <h2>Done</h2>
+
+  <h3>1 · Foundation</h3>
+  <ul class="checklist">
+    <li class="done">Electron, React and TypeScript, built with electron-vite</li>
+    <li class="done">Process ownership, with scrollback replayed across tab switches</li>
+    <li class="done">Provider layer — Claude, Codex and Gemini detection, login-shell <code>PATH</code></li>
+    <li class="done">Sidebar, tab bar, status dots, empty state</li>
+    <li class="done">Design tokens in dark and light, self-hosted open-licensed fonts</li>
+    <li class="done">Atomic JSON store; projects and window bounds persist</li>
+    <li class="done">Content-security policy set from the main process</li>
+  </ul>
+
+  <h3>2 · Session intelligence</h3>
+  <ul class="checklist">
+    <li class="done">Status detection in the main process, so unrendered tabs stay accurate</li>
+    <li class="done">Provider picker — per session, per project, global default</li>
+    <li class="done">Session resume</li>
+    <li class="done">Preferences, and live re-theming that recolours terminals without a restart</li>
+    <li class="done">Desktop notifications and sounds</li>
+    <li class="done">Session titles derived from the task; unread indicators</li>
+  </ul>
+
+  <h3>3 · Cost, context and telemetry</h3>
+  <ul class="checklist">
+    <li class="done">Transcript watcher</li>
+    <li class="done">Cost tracking per session, project and day</li>
+    <li class="done">Token and context-window monitoring with a bloat warning</li>
+    <li class="done">Session inspector — timeline, cost breakdown, tool-usage statistics</li>
+    <li class="done">Deep search across past transcripts</li>
+    <li class="done">Smart alerts for missing tools, context bloat and session health</li>
+  </ul>
+
+  <h3>4 · Project workspace</h3>
+  <ul class="checklist">
+    <li class="done">Git status watcher and git panel</li>
+    <li class="done">File tree and viewer with syntax highlighting</li>
+    <li class="done">Quick open and command palette</li>
+    <li class="done">GitHub integration through <code>gh</code></li>
+    <li class="done">AI readiness score with one-click fixes</li>
+    <li class="done"><code>.deckignore</code>, honoured by the tree, search and watchers</li>
+  </ul>
+
+  <h3>5 · Dashboard and board</h3>
+  <ul class="checklist">
+    <li class="done">Customisable project overview on a drag-and-drop widget grid</li>
+    <li class="done">Widgets for readiness, kanban, sessions, cost, git and GitHub</li>
+    <li class="done">Kanban board per project, with search and tag filtering</li>
+    <li class="done">Board and session linked — a card spawns or resumes a session</li>
+  </ul>
+
+  <h3>6 · Many sessions at once</h3>
+  <ul class="checklist">
+    <li class="done">Swarm mode</li>
+    <li class="done">Multiple agent profiles with isolated logins</li>
+    <li class="done">Full keymap and a shortcut reference sheet</li>
+  </ul>
+
+  <h3>7 · Integrations</h3>
+  <ul class="checklist">
+    <li class="done">Hooks installed into each provider's settings, namespaced so they never collide with another tool's</li>
+    <li class="done">MCP client and inspector</li>
+    <li class="done">Embedded browser with element inspect</li>
+    <li class="done">Chrome configuration import</li>
+  </ul>
+
+  <h2>Not done</h2>
+
+  <h3>8 · Ship</h3>
+  <ul class="checklist">
+    <li class="todo"><strong>Code signing and notarisation.</strong> The packaging itself is done — <code>npm run dist:mac</code> writes a <code>.dmg</code> and a <code>.zip</code> for arm64 and x64 — but <code>identity: null</code> is set deliberately, so nothing is signed and Gatekeeper needs the right-click step.</li>
+    <li class="todo"><strong>A tested Intel build.</strong> The x64 artefact is produced by the same command and has never been launched.</li>
+    <li class="todo"><strong>Split panes</strong> — the layout code and the <code>⌘D</code> / <code>⌘⇧S</code> / <code>⌘⇧W</code> chords exist in the repository, but nothing in the app renders the split view, so it cannot be reached. Listed under Done until this audit; it was not true.</li>
+    <li class="todo"><strong>Auto-updates</strong> pointed at our own releases. The library is present; nothing calls it yet.</li>
+    <li class="todo"><strong>Peer-to-peer session sharing</strong> — read-only or read-write, with PIN auth. The single biggest remaining feature, and the only one that would need infrastructure.</li>
+    <li class="todo"><strong>Translations.</strong> The app is English only.</li>
+  </ul>
+
+  <p class="note">Linux and Windows are not on this list because they are not
+  scheduled — electron-builder has no target configured for either. The app has
+  only ever been run on macOS.</p>
+
+  <h2>Known follow-ups</h2>
+
+  <p>Two things are tracked in the repository as debts rather than features:</p>
+
+  <ul>
+    <li>The chunked transcript reader is written three times over — once each for
+    cost, insights and search. All three are tested and working, so lifting them
+    into one helper carries regression risk for no user-facing gain, and it waits.</li>
+    <li>Escape-to-close on dialogs is correct in code but has never been confirmed
+    by a real keypress, because synthetic key events were not delivered during
+    testing.</li>
+  </ul>
+
+  <h2>Open questions</h2>
+
+  <ul>
+    <li>The name is provisional. It lives in one file, so changing it is one edit.</li>
+    <li>Whether peer-to-peer sharing is wanted at all.</li>
+  </ul>
+
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <nav aria-label="Footer">
+      <ul>
+        <li><a href="index.html">Home</a></li>
+        <li><a href="features.html">Features</a></li>
+        <li><a href="docs/index.html">Docs</a></li>
+        <li><a href="download.html">Download</a></li>
+        <li><a href="changelog.html">Changelog</a></li>
+        <li><a href="roadmap.html" aria-current="page">Roadmap</a></li>
+        <li><a href="about.html">About</a></li>
+        <li><a href="security.html">Security</a></li>
+        <li><a href="privacy.html">Privacy</a></li>
+        <li><a href="terms.html">Terms</a></li>
+        <li><a href="llms.txt">llms.txt</a></li>
+        <li><a href="https://github.com/asadev/terminaldeck">Source</a></li>
+      </ul>
+    </nav>
+    <p>Terminal Deck 0.1.0 — MIT licensed. Built by Asad Iqbal.</p>
+  </div>
+</footer>
+</body>
+</html>
