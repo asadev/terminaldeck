@@ -29,6 +29,7 @@ import { registerBrowserSessionIpc } from './browser-session'
 import { registerBrowserViewIpc } from './browser-view'
 import { registerDiagnosticsIpc } from './diagnostics'
 import { registerLogIpc } from './app-log'
+import { traceIpc } from './ipc-trace'
 import type { SessionStatus } from '../shared/types'
 
 const isDev = !!process.env.ELECTRON_RENDERER_URL
@@ -149,6 +150,9 @@ function createWindow(): void {
 }
 
 function registerIpc(): void {
+  // Installed first so it wraps every handler registered below.
+  traceIpc(ipcMain, ['browser', 'git:', 'mcp:', 'hooks:'])
+
   ipcMain.handle('brand:get', () => ({ name: BRAND.name, tagline: BRAND.tagline }))
 
   ipcMain.handle('project:pick', async () => {
