@@ -50,8 +50,8 @@ data source for all of this — no scraping of terminal output.
 - [x] **Cost tracking** — spend per session / project / day
 - [x] **Token + context-window monitoring** with a bloat warning
 - [x] **Session inspector** (⌘⇧I) — timeline, cost breakdown, tool-usage stats
-- [ ] **Deep session search** across past transcripts
-- [ ] **Smart alerts** — missing tools, context bloat, session health
+- [x] **Deep session search** across past transcripts
+- [x] **Smart alerts** — missing tools, context bloat, session health
 
 ## Phase 4 — Project workspace
 
@@ -61,32 +61,32 @@ data source for all of this — no scraping of terminal output.
 - [x] **GitHub integration** via `gh` — PRs, issues, discussions, unread badges
 - [x] **AI Readiness score** — does the project have CLAUDE.md, tests, lint,
       typecheck, a clean git state — with one-click fixes
-- [ ] **Ignore file** (`.pawlignore`) honoured by tree, search and watchers
+- [x] **Ignore file** (`.pawlignore`) honoured by tree, search and watchers
 
 ## Phase 5 — Dashboard and board
 
 - [x] **Customisable project overview** — drag-and-drop widget grid (gridstack)
 - [x] **Widgets** — AI Readiness, Kanban, Sessions, Team, Provider Tools, GitHub
 - [x] **Kanban board** — per project, drag-drop, search, tag filter
-- [ ] **Board ↔ session link** — a card spawns or resumes a session; the card
+- [x] **Board ↔ session link** — a card spawns or resumes a session; the card
       moves to Done when that session completes
 
 ## Phase 6 — Multi-session power features
 
 - [x] **Swarm mode** — grid view of every running session (⌘\)
 - [x] **Split panes** with focus routing
-- [ ] **Multiple Claude profiles** — isolated `CLAUDE_CONFIG_DIR` per profile so
+- [x] **Multiple Claude profiles** — isolated `CLAUDE_CONFIG_DIR` per profile so
       work and personal logins never mix; per-session / per-project / global default
-- [ ] **Full keymap** + shortcut reference sheet
+- [x] **Full keymap** + shortcut reference sheet
 
 ## Phase 7 — Integrations
 
-- [ ] **Hooks** installed into each provider's settings, namespaced `pawl-hook`
+- [x] **Hooks** installed into each provider's settings, namespaced `pawl-hook`
       so they never collide with Vibeyard's on the same machine
-- [ ] **MCP client** + inspector, add/edit servers
-- [ ] **Embedded browser tab** — load a URL, inspect elements, send the selector
+- [x] **MCP client** + inspector, add/edit servers
+- [x] **Embedded browser tab** — load a URL, inspect elements, send the selector
       and text back to the agent as context
-- [ ] **Chrome import** — pull existing config
+- [x] **Chrome import** — pull existing config
 
 ## Phase 8 — Ship
 
