@@ -63,7 +63,7 @@ export class PtyManager {
       },
     })
 
-    const activity = new ActivityTracker(id, this.onStatus)
+    const activity = new ActivityTracker(id, this.onStatus, input.cols, input.rows)
     const session: Session = { meta, proc, scrollback: [], activity }
     this.sessions.set(id, session)
 
@@ -90,6 +90,9 @@ export class PtyManager {
   resize(id: string, cols: number, rows: number): void {
     const s = this.sessions.get(id)
     if (!s || s.meta.exitCode !== null) return
+    // The shadow terminal must track the real one, or its viewport is the
+    // wrong shape and status is read from the wrong lines.
+    s.activity.resize(cols, rows)
     try {
       s.proc.resize(Math.max(cols, 1), Math.max(rows, 1))
     } catch {

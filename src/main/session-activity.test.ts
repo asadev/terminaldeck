@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest'
-import { classify, stripAnsi } from './session-activity'
+import { describe, expect, it, vi } from 'vitest'
+import { ActivityTracker, classify, stripAnsi } from './session-activity'
 
 describe('stripAnsi', () => {
   it('removes colour codes', () => {
@@ -60,5 +60,78 @@ describe('classify', () => {
 
   it('still blocks when the question is the last thing on screen', () => {
     expect(classify('Writing files…\nDo you want to proceed? (y/n)', false)).toBe('input')
+  })
+
+  /**
+   * Fixture captured from a real `claude` process rendered through a headless
+   * terminal. Two assumptions failed against it: the prompt glyph is ❯ (U+276F),
+   * not >, and a rule plus a permissions hint are drawn BELOW the prompt, so it
+   * is never the last line on screen.
+   */
+  it('recognises a real idle Claude Code prompt as waiting', () => {
+    const screen = [
+      '╰──────────────────────────────────────────────────────╯',
+      '',
+      '        ✦ ultracode · xhigh effort + dynamic workflows',
+      '─────────────────────────────────────────── ultracode ─',
+      '❯ ',
+      '───────────────────────────────────────────────────────',
+      '',
+      '  ⏵⏵ bypass permissions on (shift+tab to cycle)',
+    ].join('\n')
+    expect(classify(screen, false)).toBe('waiting')
+  })
+
+  it('recognises the real trust-folder prompt as needing input', () => {
+    const screen = [
+      'Accessing workspace:',
+      '',
+      '/Users/apple/Projects/pawl',
+      '',
+      'Claude Code will be able to read, edit, and execute files here.',
+      '',
+      '❯ 1. Yes, I trust this folder',
+      '  2. No, exit',
+      '',
+      'Enter to confirm · Esc to cancel',
+    ].join('\n')
+    expect(classify(screen, false)).toBe('input')
+  })
+})
+
+describe('ActivityTracker', () => {
+  /**
+   * Regression: agent CLIs repaint via cursor positioning, so the end of the
+   * byte stream is not the bottom of the screen. Scanning the raw stream left
+   * Claude's visible "1. Yes / 2. No" prompt classified as idle in the real
+   * app. The tracker feeds a headless terminal and reads its viewport instead.
+   */
+  it('classifies from the rendered screen, not the raw stream order', async () => {
+    vi.useFakeTimers()
+    const seen: string[] = []
+    const tracker = new ActivityTracker('t', (_id, s) => seen.push(s), 80, 24)
+
+    // Draw the prompt, then jump the cursor back to the top and overwrite a
+    // line — so the question is on screen but is NOT at the end of the stream.
+    tracker.push('\x1b[2J\x1b[H') // clear + home
+    tracker.push('Accessing workspace:\r\n\r\n')
+    tracker.push('\x1b[32m❯ 1. Yes, I trust this folder\x1b[0m\r\n')
+    tracker.push('  2. No, exit\r\n')
+    tracker.push('\x1b[1;1H\x1b[KAccessing workspace:') // repaint line 1 last
+
+    await vi.advanceTimersByTimeAsync(1000)
+    vi.useRealTimers()
+
+    expect(seen.at(-1)).toBe('input')
+    tracker.dispose()
+  })
+
+  it('reports exit as terminal state', () => {
+    const seen: string[] = []
+    const tracker = new ActivityTracker('t', (_id, s) => seen.push(s))
+    tracker.push('hello')
+    tracker.markExited()
+    expect(seen.at(-1)).toBe('exited')
+    tracker.dispose()
   })
 })

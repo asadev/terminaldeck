@@ -1,3 +1,4 @@
+import { Terminal } from '@xterm/headless'
 import type { SessionStatus } from '../shared/types'
 
 /** Strip ANSI escapes, OSC sequences and carriage returns so patterns match
@@ -37,13 +38,19 @@ const NEEDS_INPUT = [
   /overwrite\?/i,
 ]
 
-/** Ready and waiting for a prompt. */
+/**
+ * Ready and waiting for a prompt.
+ *
+ * Verified against real captured output: Claude Code draws its prompt as a
+ * bare `❯` (U+276F) — not `>` — and then renders a horizontal rule and a
+ * permissions hint BELOW it. So the prompt is never the final line, which is
+ * why this is matched across a small window rather than at the very end.
+ */
 const WAITING = [
-  /│\s*>\s*$/m,
+  /^\s*❯\s*$/m, // Claude Code, empty prompt
+  /^\s*│\s*>\s*│?\s*$/m, // boxed prompt styles
   /^\s*>\s*$/m,
-  /╭─+╮[\s\S]*│\s*>/m,
-  /\$\s*$/,
-  /%\s*$/,
+  /^.*[%$#]\s*$/m, // shell prompts
 ]
 
 function matchesAny(patterns: RegExp[], text: string): boolean {
@@ -74,30 +81,37 @@ export function classify(tail: string, exited: boolean): SessionStatus {
   // frequently still on screen above an in-flight response.
   if (matchesAny(WORKING, lastLines(text, 12))) return 'working'
 
-  // A prompt sitting at the very end means it is ready for you, regardless of
-  // what was asked earlier in the buffer.
-  const recent = lastLines(text, 3)
+  // An empty prompt near the bottom means it is ready for you, regardless of
+  // what was asked earlier. Six lines because agent CLIs draw a rule and a
+  // status hint beneath the prompt itself.
+  const recent = lastLines(text, 6)
   if (matchesAny(WAITING, recent)) return 'waiting'
 
   // Only then does an unanswered question count as blocking.
-  if (matchesAny(NEEDS_INPUT, lastLines(text, 8))) return 'input'
+  if (matchesAny(NEEDS_INPUT, lastLines(text, 10))) return 'input'
 
   return 'idle'
 }
 
-const TAIL_CHARS = 4000
 const SETTLE_MS = 700
 
 /**
  * Watches one session's output and reports status transitions.
  *
- * While bytes are arriving the session is "working". Once output settles for
- * SETTLE_MS the tail is classified, which is what distinguishes "waiting for
- * you" from "still thinking" — a distinction you cannot make from a single
- * chunk, because both look identical mid-stream.
+ * It maintains a real (headless) terminal rather than scanning the raw byte
+ * stream. Agent CLIs are full-screen TUIs that repaint using cursor-positioning
+ * escapes, so the tail of the *stream* bears no relation to what is on the
+ * *screen* — verified in the running app, where Claude's "1. Yes / 2. No"
+ * prompt was plainly visible yet never appeared at the end of the stream.
+ * Feeding an emulator and reading its viewport is the only way to ask
+ * "what does the user actually see right now?".
+ *
+ * While bytes arrive the session is "working". Once output settles for
+ * SETTLE_MS the screen is classified — mid-stream, "still thinking" and
+ * "waiting for you" are indistinguishable, so the pause is the signal.
  */
 export class ActivityTracker {
-  private tail = ''
+  private term: Terminal
   private status: SessionStatus = 'idle'
   private timer: NodeJS.Timeout | undefined
   private exited = false
@@ -105,15 +119,41 @@ export class ActivityTracker {
   constructor(
     private readonly id: string,
     private readonly onChange: (id: string, status: SessionStatus) => void,
-  ) {}
+    cols = 100,
+    rows = 30,
+  ) {
+    this.term = new Terminal({ cols, rows, allowProposedApi: true, scrollback: 200 })
+  }
 
   push(chunk: string): void {
     if (this.exited) return
-    this.tail = (this.tail + chunk).slice(-TAIL_CHARS)
+    this.term.write(chunk)
     this.set('working')
 
     clearTimeout(this.timer)
-    this.timer = setTimeout(() => this.set(classify(this.tail, false)), SETTLE_MS)
+    this.timer = setTimeout(() => {
+      // Flush pending writes before reading, or the viewport lags the output.
+      this.term.write('', () => this.set(classify(this.screen(), false)))
+    }, SETTLE_MS)
+  }
+
+  resize(cols: number, rows: number): void {
+    try {
+      this.term.resize(Math.max(cols, 1), Math.max(rows, 1))
+    } catch {
+      /* ignore invalid dimensions during teardown */
+    }
+  }
+
+  /** The visible viewport, as the user sees it. */
+  private screen(): string {
+    const buf = this.term.buffer.active
+    const lines: string[] = []
+    for (let y = 0; y < this.term.rows; y++) {
+      const line = buf.getLine(buf.viewportY + y)
+      if (line) lines.push(line.translateToString(true))
+    }
+    return lines.join('\n')
   }
 
   markExited(): void {
@@ -124,6 +164,7 @@ export class ActivityTracker {
 
   dispose(): void {
     clearTimeout(this.timer)
+    this.term.dispose()
   }
 
   private set(next: SessionStatus): void {
