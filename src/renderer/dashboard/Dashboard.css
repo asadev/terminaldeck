@@ -1,0 +1,585 @@
+/* ============================================================================
+   Project dashboard — gridstack shell plus the widget chrome.
+   Colour comes only from tokens.css; the locals below are geometry, so a
+   density change is one edit rather than thirty.
+
+   gridstack ships its own stylesheet for positioning (imported by
+   Dashboard.tsx). Everything here is either app skin on top of it, or the few
+   overrides needed to make its placeholder and resize handles look like the
+   rest of Pawl instead of the library default.
+   ============================================================================ */
+
+.dashboard {
+  --widget-pad: 12px;
+  --widget-head: 34px;
+
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+/* ------------------------------------------------------------------- bar -- */
+
+.dashboard-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  padding: 10px var(--widget-pad);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.dashboard-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.dashboard-hint {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+.dashboard-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  padding: 5px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease;
+}
+
+.dashboard-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+
+.dashboard-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.dashboard-btn.ghost {
+  background: none;
+  color: var(--text-secondary);
+}
+
+/* ------------------------------------------------------------------ grid -- */
+
+.dashboard-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 4px;
+}
+
+.dashboard-grid {
+  /* gridstack positions children absolutely against this box; it must not
+     collapse or the first widget lands outside the scroll area. */
+  min-height: 100%;
+}
+
+.dashboard-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 100%;
+  padding: 40px 20px;
+  text-align: center;
+}
+
+.dashboard-empty-title {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.dashboard-empty-detail {
+  margin: 0 0 6px;
+  max-width: 42ch;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* --------------------------------------------------------------- widgets -- */
+
+.widget {
+  display: flex;
+  flex-direction: column;
+  /* gridstack sets the box; the tile fills whatever it was given. */
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+  /* Own stacking context, so a widget's own scrollbar and sticky header never
+     paint over a neighbour mid-drag. */
+  isolation: isolate;
+  overflow: hidden;
+}
+
+.grid-stack-item.ui-draggable-dragging .widget {
+  border-color: var(--border-strong);
+  box-shadow: 0 12px 28px rgb(0 0 0 / 0.28);
+}
+
+.widget-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  height: var(--widget-head);
+  padding: 0 8px 0 var(--widget-pad);
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-tertiary);
+  cursor: grab;
+  user-select: none;
+}
+
+.widget-head:active {
+  cursor: grabbing;
+}
+
+.widget-head:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.widget-title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.widget-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  /* Hidden until the widget is hovered or something inside it has focus, so
+     the header stays quiet, but never hidden from keyboards. */
+  opacity: 0;
+  transition: opacity 120ms ease, background-color 120ms ease, color 120ms ease;
+}
+
+.widget:hover .widget-remove,
+.widget-remove:focus-visible {
+  opacity: 1;
+}
+
+.widget-remove:hover {
+  background: var(--bg-hover);
+  color: var(--color-critical);
+}
+
+.widget-remove:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.widget-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--widget-pad);
+}
+
+/* -------------------------------------------------------- widget content -- */
+
+.widget-message {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 4px 0;
+}
+
+.widget-message-title {
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.widget-message.muted .widget-message-title {
+  color: var(--text-secondary);
+}
+
+.widget-message.error .widget-message-title {
+  color: var(--color-critical);
+}
+
+.widget-message-detail {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 1.55;
+  /* Channel names and git errors are long and unbreakable. */
+  overflow-wrap: anywhere;
+}
+
+.widget-message-action {
+  margin-top: 2px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.widget-message-action:hover {
+  background: var(--bg-hover);
+}
+
+.widget-message-action:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.widget-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  margin-bottom: 10px;
+}
+
+.widget-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.widget-stat-value {
+  font-size: 16px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+.widget-stat-value.warn {
+  color: var(--color-warning);
+}
+
+.widget-stat-value.crit {
+  color: var(--color-critical);
+}
+
+.widget-stat-label {
+  color: var(--text-muted);
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.widget-note {
+  margin: 8px 0 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.widget-note.mono,
+.widget-row-main.mono,
+.widget-row-side.mono {
+  font-family: var(--font-mono);
+}
+
+.widget-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.widget-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 4px 6px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.widget-row.static,
+.widget-row:disabled {
+  cursor: default;
+}
+
+.widget-row:not(.static):not(:disabled):hover {
+  background: var(--bg-hover);
+}
+
+.widget-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.widget-row-main {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.widget-row-side {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.widget-branch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.widget-branch-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.widget-branch-sync {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.widget-code {
+  flex-shrink: 0;
+  width: 15px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-align: center;
+}
+
+.widget-code.staged {
+  color: var(--status-completed);
+}
+
+.widget-code.unstaged {
+  color: var(--color-warning);
+}
+
+.widget-code.conflicted {
+  color: var(--color-critical);
+}
+
+/* Readiness check state. Filled = met, hollow = outstanding — shape carries the
+   meaning as well as colour, and the status word is spelled out beside it. */
+.widget-check {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border: 1.5px solid var(--text-muted);
+  border-radius: 50%;
+}
+
+.widget-check.pass {
+  border-color: var(--status-completed);
+  background: var(--status-completed);
+}
+
+.widget-check.warn {
+  border-color: var(--color-warning);
+  background: var(--color-warning);
+}
+
+.widget-check.fail {
+  border-color: var(--color-critical);
+}
+
+.widget-check.skip {
+  opacity: 0.4;
+}
+
+.widget-meter {
+  margin-top: 2px;
+}
+
+.widget-meter-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 4px;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+}
+
+.widget-meter-head .widget-stat-value {
+  font-size: 11.5px;
+}
+
+.widget-meter-track {
+  height: 5px;
+  border-radius: 3px;
+  background: var(--bg-tertiary);
+  overflow: hidden;
+}
+
+.widget-meter-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--accent);
+  transition: width 200ms ease;
+}
+
+.widget-meter-fill.warn {
+  background: var(--color-warning);
+}
+
+.widget-meter-fill.crit {
+  background: var(--color-critical);
+}
+
+/* ---------------------------------------------------------------- picker -- */
+
+.widget-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.widget-picker-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  padding: 9px 11px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 150ms ease, border-color 150ms ease;
+}
+
+.widget-picker-item:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--border);
+}
+
+.widget-picker-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.widget-picker-item:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.widget-picker-name {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.widget-picker-detail {
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.widget-picker-tag {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* ------------------------------------------------- gridstack re-skinning -- */
+
+/* The drop target shown under a dragged widget. gridstack's default is a flat
+   black wash, which is invisible on a dark theme. */
+.dashboard-grid > .grid-stack-placeholder > .placeholder-content {
+  border: 1px dashed var(--accent);
+  border-radius: var(--radius-lg);
+  background: var(--accent-soft);
+}
+
+/* Its resize grips are 1px glyphs by default. Give the south-east one a real
+   target and draw it as a corner rather than a character. */
+.dashboard-grid > .grid-stack-item > .ui-resizable-se {
+  right: 3px;
+  bottom: 3px;
+  width: 14px;
+  height: 14px;
+  border-right: 2px solid var(--text-muted);
+  border-bottom: 2px solid var(--text-muted);
+  border-bottom-right-radius: 4px;
+  opacity: 0;
+  transform: none;
+  transition: opacity 120ms ease;
+}
+
+.dashboard-grid > .grid-stack-item:hover > .ui-resizable-se {
+  opacity: 0.8;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .widget-meter-fill,
+  .dashboard-btn,
+  .widget-remove {
+    transition: none;
+  }
+}

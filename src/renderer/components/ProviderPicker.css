@@ -1,0 +1,190 @@
+/* ============================================================================
+   Provider picker — one selectable card per agent, plus the resume toggle.
+
+   Cards rather than a <select>: an unavailable provider has to explain itself,
+   and a two-line reason with an install command does not fit in an option row.
+   ============================================================================ */
+
+.picker {
+  padding-top: 6px;
+}
+
+/* The folder name is already in the dialog's description, so a long path may
+   lose its tail — that is the part the user needs least. `direction: rtl`
+   would keep the tail instead, but it also drags a leading `/` to the far end,
+   which makes an absolute path read as nonsense. */
+.picker-path {
+  margin: 0 0 12px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.picker-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* ------------------------------------------------------------------ card -- */
+
+.picker-option {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.picker-option:hover[data-available='true'] {
+  background: var(--bg-hover);
+  border-color: var(--border);
+}
+
+.picker-option[data-selected='true'] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* Dimmed, but still legible: the reason it is dimmed is written inside it. */
+.picker-option[data-available='false'] {
+  cursor: default;
+  background: transparent;
+  border-style: dashed;
+}
+
+/* Covers the card so the whole thing is the hit target, and stays focusable —
+   only its native rendering is hidden. */
+.picker-option input,
+.picker-resume input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: inherit;
+}
+
+.picker-mark {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  margin-top: 2px;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 50%;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.picker-option[data-selected='true'] .picker-mark {
+  border-color: var(--accent);
+  /* An inset ring rather than a child element: one box-shadow draws the dot. */
+  box-shadow: inset 0 0 0 3px var(--accent);
+}
+
+.picker-option[data-available='false'] .picker-mark {
+  border-style: dashed;
+  border-color: var(--text-muted);
+}
+
+.picker-option input:focus-visible ~ .picker-mark,
+.picker-resume input:focus-visible ~ .picker-mark {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ------------------------------------------------------------------ text -- */
+
+.picker-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.picker-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 550;
+  color: var(--text-primary);
+}
+
+.picker-option[data-available='false'] .picker-label {
+  color: var(--text-secondary);
+}
+
+.picker-tag {
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 550;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.picker-hint {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.picker-install {
+  margin-top: 2px;
+  padding: 4px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+  /* Long install lines scroll rather than widening the dialog. */
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+/* ---------------------------------------------------------------- resume -- */
+
+.picker-resume {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-subtle);
+  cursor: pointer;
+}
+
+.picker-resume[data-enabled='false'] {
+  cursor: default;
+  opacity: 0.55;
+}
+
+/* The checkbox keeps its native rendering — a tick is a tick, and restyling it
+   would only add a second control language to the same dialog. */
+.picker-resume input {
+  position: static;
+  inset: auto;
+  width: 14px;
+  height: 14px;
+  margin-top: 2px;
+  opacity: 1;
+  flex-shrink: 0;
+  accent-color: var(--accent);
+}
+
+.picker-resume .picker-label {
+  font-weight: 500;
+}

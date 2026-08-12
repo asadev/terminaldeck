@@ -1,0 +1,160 @@
+/* ============================================================================
+   Swarm mode — every running session on screen at once.
+   Colour comes only from tokens.css; the locals below are geometry.
+   ============================================================================ */
+
+.swarm-grid {
+  --swarm-gap: 6px;
+  --swarm-head: 24px;
+  --swarm-ring: 1px;
+  /* How far an unfocused cell recedes. Enough to make the focused one obvious
+     at a glance, not so far that the others become unreadable — the whole
+     point of the mode is watching them all. Measured against a rendered grid:
+     below ~0.4 the scrim is invisible on a dark surface. */
+  --swarm-dim: 0.55;
+
+  display: grid;
+  gap: var(--swarm-gap);
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  padding: var(--swarm-gap);
+  overflow: hidden;
+  background: var(--bg-primary);
+}
+
+.swarm-grid-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ----------------------------------------------------------------- cells -- */
+
+.swarm-cell {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  /* Inset ring, so focus never nudges the grid by a pixel. */
+  box-shadow: inset 0 0 0 var(--swarm-ring) var(--pane-unfocus);
+  transition: box-shadow 120ms ease;
+}
+
+.swarm-cell[data-focused='true'] {
+  box-shadow: inset 0 0 0 var(--swarm-ring) var(--pane-focus);
+}
+
+.swarm-cell-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  height: var(--swarm-head);
+  padding: 0 8px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 11px;
+  text-align: left;
+  transition: color 120ms ease, background 120ms ease;
+}
+
+.swarm-cell[data-focused='true'] .swarm-cell-head {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.swarm-cell-head:hover {
+  color: var(--text-primary);
+}
+
+.swarm-cell-head:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.swarm-cell-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Positioned so an absolutely-filled child (the terminal host) stays inside
+   the cell and below the head. */
+.swarm-cell-body {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Everything that is not the focused session recedes behind a scrim of the
+   page background — it dims in the dark theme and washes out in the light one.
+   The scrim covers the body only: the title and status dot stay at full
+   contrast, because reading status across all of them at once is the entire
+   reason for this mode. */
+.swarm-cell:not([data-focused='true']) .swarm-cell-body::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  background: var(--bg-primary);
+  opacity: var(--swarm-dim);
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+/* A white scrim flattens text faster than a black one, so the light theme
+   needs less of it to say the same thing. */
+[data-theme='light'] .swarm-grid {
+  --swarm-dim: 0.45;
+}
+
+/* ------------------------------------------------- leftover grid slots -- */
+
+.swarm-spare {
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  min-height: 0;
+  border: 1px dashed var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+
+.swarm-spare-add {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  color: var(--text-muted);
+  transition: border-color 120ms ease, color 120ms ease, background 120ms ease;
+}
+
+.swarm-spare-add:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--text-primary);
+}
+
+.swarm-spare-add:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .swarm-cell,
+  .swarm-cell-head,
+  .swarm-cell-body::after,
+  .swarm-spare-add {
+    transition: none;
+  }
+}

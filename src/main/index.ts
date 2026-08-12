@@ -10,6 +10,10 @@ import { registerGitIpc, stopAllGitWatches } from './git'
 import { registerFsIpc } from './fs-tree'
 import { registerSearchIpc } from './file-search'
 import { registerBoardIpc } from './board-store'
+import { registerInsightsIpc } from './session-insights'
+import { registerGitHubIpc } from './github'
+import { registerReadinessIpc } from './readiness'
+import { registerDashboardIpc } from './dashboard-store'
 
 const isDev = !!process.env.ELECTRON_RENDERER_URL
 
@@ -146,6 +150,10 @@ function registerIpc(): void {
   registerSearchIpc(ipcMain, {
     isAllowedRoot: (root) => store().getProjects().some((p) => p.path === root),
   })
+  registerInsightsIpc(ipcMain)
+  registerGitHubIpc(ipcMain)
+  registerReadinessIpc(ipcMain)
+  registerDashboardIpc(ipcMain)
 
   ipcMain.handle('session:create', async (_e, input: CreateSessionInput) => {
     const path = await loginPath()

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { StoreProvider, useStore } from './state/store'
 import { PreferencesModal } from './components/PreferencesModal'
+import { SessionInspector } from './components/SessionInspector'
 import { applyStoredTheme } from './theme'
 import { TitleBar } from './components/TitleBar'
 import { Sidebar } from './components/Sidebar'
@@ -34,6 +35,10 @@ function Workspace() {
   }, [addProject])
 
   const [prefsOpen, setPrefsOpen] = useState(false)
+  const [inspectorOpen, setInspectorOpen] = useState(false)
+
+  const activeProjectPath =
+    sessions.find((s) => s.id === activeSessionId)?.projectPath ?? projects[0]?.path ?? null
 
   // Single subscription for every session's status, rather than one per
   // terminal — the main process classifies, the renderer just reflects.
@@ -102,6 +107,12 @@ function Workspace() {
         setPrefsOpen(true)
         return
       }
+      // Shift+I arrives as 'I' on macOS, so match case-insensitively.
+      if (e.shiftKey && (e.key === 'i' || e.key === 'I')) {
+        e.preventDefault()
+        setInspectorOpen(true)
+        return
+      }
       // Cmd+1..9 jumps straight to a tab.
       const n = Number(e.key)
       if (Number.isInteger(n) && n >= 1 && n <= 9 && sessions[n - 1]) {
@@ -140,6 +151,12 @@ function Workspace() {
         </main>
       </div>
       <PreferencesModal open={prefsOpen} onClose={() => setPrefsOpen(false)} />
+      <SessionInspector
+        open={inspectorOpen}
+        onClose={() => setInspectorOpen(false)}
+        cwd={activeProjectPath}
+        sessionTitle={sessions.find((s) => s.id === activeSessionId)?.title}
+      />
     </div>
   )
 }

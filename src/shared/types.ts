@@ -97,6 +97,22 @@ export interface PawlApi {
 
   loadBoard(projectPath: string): Promise<unknown>
   saveBoard(projectPath: string, board: unknown): Promise<void>
+
+  getSessionInsights(transcriptPath: string): Promise<unknown>
+  getLatestSessionInsights(cwd: string): Promise<unknown>
+  listSessionInsights(cwd: string): Promise<unknown>
+
+  githubOverview(cwd: string): Promise<unknown>
+  githubRefresh(cwd: string): Promise<unknown>
+  githubRepo(cwd: string): Promise<unknown>
+  clearGitHubCache(cwd?: string): Promise<void>
+
+  scanReadiness(projectPath: string): Promise<unknown>
+  applyReadinessFix(projectPath: string, checkId: string): Promise<unknown>
+
+  loadDashboard(projectPath: string): Promise<unknown>
+  saveDashboard(projectPath: string, layout: unknown): Promise<void>
+  clearDashboard(projectPath: string): Promise<void>
 }
 
 declare global {

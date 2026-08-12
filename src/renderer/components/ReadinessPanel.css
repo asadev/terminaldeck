@@ -1,0 +1,365 @@
+/* ============================================================================
+   AI readiness — score ring over a worklist of checks.
+   Band colours alias the foundation tokens, so a theme swap moves this panel
+   with everything else.
+   ============================================================================ */
+
+.readiness {
+  --readiness-pass: var(--status-completed);
+  --readiness-warn: var(--color-warning);
+  --readiness-fail: var(--color-critical);
+  --readiness-skip: var(--text-muted);
+
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 16px 24px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+/* ------------------------------------------------------------------ head -- */
+
+.readiness-head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-shrink: 0;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.readiness-headline {
+  flex: 1;
+  min-width: 0;
+}
+
+.readiness-heading {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.readiness-band {
+  margin: 2px 0 0;
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+}
+
+.readiness-band[data-band='at-risk'] {
+  color: var(--readiness-fail);
+}
+
+.readiness-summary {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.readiness-rescan {
+  flex-shrink: 0;
+  align-self: flex-start;
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  font-size: 12px;
+  color: var(--text-secondary);
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.readiness-rescan:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.readiness-rescan:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* ------------------------------------------------------------------ ring -- */
+
+.readiness-ring {
+  position: relative;
+  flex-shrink: 0;
+  width: 84px;
+  height: 84px;
+  /* Band colour drives the arc, so the number and the ring never disagree. */
+  --ring-color: var(--accent);
+}
+
+.readiness-ring[data-band='strong'] {
+  --ring-color: var(--readiness-pass);
+}
+.readiness-ring[data-band='fair'] {
+  --ring-color: var(--accent);
+}
+.readiness-ring[data-band='weak'] {
+  --ring-color: var(--readiness-warn);
+}
+.readiness-ring[data-band='at-risk'] {
+  --ring-color: var(--readiness-fail);
+}
+
+.readiness-ring svg {
+  display: block;
+  /* Start the arc at twelve o'clock rather than three. */
+  transform: rotate(-90deg);
+}
+
+.readiness-ring-track {
+  fill: none;
+  stroke: var(--border);
+  stroke-width: 7;
+}
+
+.readiness-ring-arc {
+  fill: none;
+  stroke: var(--ring-color);
+  stroke-width: 7;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 420ms ease, stroke 200ms ease;
+}
+
+.readiness-ring-value {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-family: var(--font-mono);
+  font-size: 21px;
+  font-weight: 500;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --------------------------------------------------------------- banners -- */
+
+.readiness-error,
+.readiness-cap {
+  margin: 12px 0 0;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--readiness-fail);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.readiness-cap strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.readiness-empty {
+  margin: 0;
+  padding: 24px 0;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+/* ------------------------------------------------------------------ rows -- */
+
+.readiness-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.readiness-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 2px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.readiness-row:last-child {
+  border-bottom: none;
+}
+
+/* The gate reads as a banner, not a row, when it is not passing. */
+.readiness-row[data-gate][data-status='fail'],
+.readiness-row[data-gate][data-status='warn'] {
+  margin: 8px 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--readiness-fail);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+}
+
+.readiness-glyph {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.readiness-row[data-status='pass'] .readiness-glyph {
+  background: color-mix(in srgb, var(--readiness-pass) 18%, transparent);
+  color: var(--readiness-pass);
+}
+.readiness-row[data-status='warn'] .readiness-glyph {
+  background: color-mix(in srgb, var(--readiness-warn) 20%, transparent);
+  color: var(--readiness-warn);
+}
+.readiness-row[data-status='fail'] .readiness-glyph {
+  background: color-mix(in srgb, var(--readiness-fail) 20%, transparent);
+  color: var(--readiness-fail);
+}
+.readiness-row[data-status='skip'] .readiness-glyph {
+  background: var(--bg-hover);
+  color: var(--readiness-skip);
+}
+
+.readiness-row-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.readiness-row-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.readiness-title {
+  font-size: 13px;
+  font-weight: 550;
+  color: var(--text-primary);
+}
+
+.readiness-status-label {
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.readiness-row[data-status='skip'] .readiness-title {
+  color: var(--text-secondary);
+}
+
+.readiness-gate-tag {
+  padding: 1px 6px;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--readiness-fail) 16%, transparent);
+  color: var(--readiness-fail);
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+}
+
+.readiness-detail {
+  margin: 3px 0 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+
+.readiness-row[data-status='pass'] .readiness-detail,
+.readiness-row[data-status='skip'] .readiness-detail {
+  color: var(--text-muted);
+}
+
+/* What a fix will do, shown while it waits for a second confirmation. */
+.readiness-fix-description {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+
+.readiness-result {
+  margin: 8px 0 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--readiness-warn);
+}
+
+.readiness-result[data-ok='true'] {
+  color: var(--readiness-pass);
+}
+
+/* --------------------------------------------------------------- actions -- */
+
+.readiness-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  padding-top: 1px;
+}
+
+.readiness-fix,
+.readiness-cancel {
+  padding: 5px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  font-size: 11.5px;
+  white-space: nowrap;
+  color: var(--text-secondary);
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.readiness-fix:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.readiness-fix:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* Confirming a destructive fix is the one moment this panel raises its voice. */
+.readiness-fix[data-confirming] {
+  border-color: transparent;
+  background: var(--readiness-fail);
+  color: var(--accent-fg);
+}
+
+.readiness-fix[data-confirming]:hover:not(:disabled) {
+  border-color: transparent;
+  background: var(--readiness-fail);
+  color: var(--accent-fg);
+  filter: brightness(1.08);
+}
+
+.readiness-cancel {
+  border-color: transparent;
+  background: none;
+  color: var(--text-muted);
+}
+
+.readiness-cancel:hover {
+  color: var(--text-primary);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .readiness-ring-arc {
+    transition: none;
+  }
+}

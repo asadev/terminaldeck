@@ -1,0 +1,548 @@
+/* ============================================================================
+   Session inspector — hero stats, tab strip, and the four detail panels.
+   Every colour is a token; the only local values are the two chart alphas,
+   which are shading rather than palette.
+   ============================================================================ */
+
+/* The shell caps at 560px, which is a two-column table's worth of room short.
+   Widened from here rather than by adding a size to Modal.tsx, so the dialog
+   shell stays owned by whoever wrote it. */
+.modal-panel:has(.session-inspector) {
+  width: 880px;
+  /* Held tall so switching tabs does not resize the dialog under the pointer,
+     but not pinned to 100% — the loading and empty states would be a very
+     large box holding one sentence. */
+  min-height: min(700px, 100%);
+}
+
+.session-inspector {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  font-size: 12.5px;
+  color: var(--text-primary);
+}
+
+/* ---------------------------------------------------------------- hero row */
+
+.si-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
+  gap: 8px;
+}
+
+.si-stats-hero {
+  padding-top: 6px;
+}
+
+.si-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 9px 11px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.si-stat-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.si-stat-value {
+  font-family: var(--font-mono);
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+/* ------------------------------------------------------------------- tabs */
+
+.si-tabs {
+  display: flex;
+  gap: 2px;
+  padding-bottom: 1px;
+  border-bottom: 1px solid var(--border-subtle);
+  /* The tools table and the timeline both run to several thousand pixels.
+     Pinned to the top of the scrolling modal body so switching tabs never
+     means scrolling back up first. The negative offsets cancel the body's own
+     top padding, which would otherwise show a sliver of row above the strip. */
+  position: sticky;
+  top: -4px;
+  z-index: 1;
+  margin: 0 -18px;
+  padding: 4px 18px 1px;
+  background: var(--bg-secondary);
+}
+
+.si-tab {
+  position: relative;
+  padding: 7px 13px;
+  font-size: 12.5px;
+  font-weight: 550;
+  color: var(--text-secondary);
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  transition: color 120ms ease, background 120ms ease;
+}
+
+.si-tab:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.si-tab[aria-selected='true'] {
+  color: var(--text-primary);
+}
+
+/* Sits on the strip's own border so the active tab reads as connected to the
+   panel below it. */
+.si-tab[aria-selected='true']::after {
+  content: '';
+  position: absolute;
+  inset: auto 0 -1px;
+  height: 2px;
+  background: var(--accent);
+  border-radius: 2px 2px 0 0;
+}
+
+.si-panel {
+  min-height: 200px;
+}
+
+.si-panel:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+  border-radius: var(--radius-sm);
+}
+
+.si-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.si-sections h3 {
+  margin: 0 0 8px;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/* ---------------------------------------------------------------- timeline */
+
+.si-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.si-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.si-row {
+  display: grid;
+  grid-template-columns: 30px 1fr auto;
+  gap: 10px;
+  align-items: start;
+  padding: 9px 11px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+
+/* A sub-agent runs in its own context, so it is set apart rather than read as
+   part of the main thread's run of turns. */
+.si-row[data-sidechain] {
+  border-left: 2px solid var(--accent-dim);
+}
+
+.si-row-index {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: right;
+  padding-top: 2px;
+}
+
+.si-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.si-row-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+
+.si-row-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.si-row-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin: 0;
+}
+
+.si-row-facts > div {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+}
+
+.si-row-facts dt {
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+
+.si-row-facts dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+
+.si-row-cost {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.si-row-money {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.si-row-context {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+
+.si-row-context[data-level='warning'] {
+  color: var(--color-warning);
+}
+
+.si-row-context[data-level='critical'] {
+  color: var(--color-critical);
+}
+
+.si-compaction {
+  margin: 6px 0 6px 40px;
+  padding: 6px 10px;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  background: var(--accent-soft);
+  border-radius: var(--radius-sm);
+}
+
+.si-more {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+.si-more-btn {
+  padding: 4px 11px;
+  font-size: 11.5px;
+  font-weight: 550;
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.si-more-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+
+/* ------------------------------------------------------------------ chips */
+
+.si-chip,
+.si-tool-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 1.55;
+  background: var(--bg-hover);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+}
+
+.si-chip-accent {
+  background: var(--accent-soft);
+  border-color: transparent;
+  color: var(--accent);
+}
+
+.si-chip-quiet {
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.si-tool-chip {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+th .si-chip {
+  margin-left: 6px;
+}
+
+/* ----------------------------------------------------------------- tables */
+
+.si-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.si-table th,
+.si-table td {
+  padding: 6px 8px;
+  text-align: left;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.si-table thead th {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  /* Parked directly under the pinned tab strip. The tools table runs to fifty
+     rows, and a column of bare numbers with no header above it is unreadable.
+     Measured, not guessed: the strip renders 37px tall and sticks at -4px. */
+  position: sticky;
+  top: 33px;
+  z-index: 1;
+  background: var(--bg-secondary);
+}
+
+.si-table tbody th {
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.si-table tbody tr:last-child th,
+.si-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.si-num {
+  font-family: var(--font-mono);
+  text-align: right;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.si-num[data-bad] {
+  color: var(--color-critical);
+}
+
+.si-bar-cell {
+  width: 110px;
+}
+
+.si-muted {
+  color: var(--text-muted);
+}
+
+/* ----------------------------------------------------------------- meters */
+
+.si-meter {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--bg-hover);
+  overflow: hidden;
+}
+
+.si-meter-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 180ms ease;
+}
+
+.si-meter[data-level='warning'] .si-meter-fill {
+  background: var(--color-warning);
+}
+
+.si-meter[data-level='critical'] .si-meter-fill {
+  background: var(--color-critical);
+}
+
+.si-context-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 7px;
+}
+
+.si-context-percent {
+  font-family: var(--font-mono);
+  font-size: 22px;
+  font-weight: 500;
+}
+
+.si-context-percent[data-level='warning'] {
+  color: var(--color-warning);
+}
+
+.si-context-percent[data-level='critical'] {
+  color: var(--color-critical);
+}
+
+/* ------------------------------------------------------------------ chart */
+
+.si-chart {
+  margin: 0;
+}
+
+.si-chart svg {
+  display: block;
+  width: 100%;
+  height: 64px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.si-chart-line {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+}
+
+.si-chart-area {
+  fill: var(--accent-soft);
+  stroke: none;
+}
+
+.si-chart figcaption {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* ------------------------------------------------------------------ lists */
+
+.si-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.si-list li {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 5px 9px;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-sm);
+}
+
+.si-list-lead {
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+}
+
+.si-list-trail {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+}
+
+.si-warnings {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.si-warnings li {
+  padding: 8px 11px;
+  font-size: 11.5px;
+  border-radius: var(--radius-sm);
+  border-left: 2px solid var(--color-warning);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+}
+
+.si-warnings li[data-level='critical'] {
+  border-left-color: var(--color-critical);
+}
+
+/* ------------------------------------------------------------------- misc */
+
+.si-note {
+  margin: 8px 0 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.si-warn {
+  color: var(--color-warning);
+}
+
+.si-empty {
+  margin: 0;
+  padding: 26px 0;
+  text-align: center;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+.si-footer-note {
+  margin-right: auto;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .si-meter-fill {
+    transition: none;
+  }
+}

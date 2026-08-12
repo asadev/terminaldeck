@@ -105,6 +105,37 @@ const api = {
   loadBoard: (projectPath: string): Promise<unknown> => ipcRenderer.invoke('board:load', projectPath),
   saveBoard: (projectPath: string, board: unknown): Promise<void> =>
     ipcRenderer.invoke('board:save', projectPath, board),
+
+  /* -------------------------------------------------------- inspector -- */
+
+  getSessionInsights: (transcriptPath: string): Promise<unknown> =>
+    ipcRenderer.invoke('insights:session', transcriptPath),
+  getLatestSessionInsights: (cwd: string): Promise<unknown> =>
+    ipcRenderer.invoke('insights:latest', cwd),
+  listSessionInsights: (cwd: string): Promise<unknown> => ipcRenderer.invoke('insights:list', cwd),
+
+  /* ----------------------------------------------------------- github -- */
+
+  githubOverview: (cwd: string): Promise<unknown> => ipcRenderer.invoke('github:overview', cwd),
+  githubRefresh: (cwd: string): Promise<unknown> => ipcRenderer.invoke('github:refresh', cwd),
+  githubRepo: (cwd: string): Promise<unknown> => ipcRenderer.invoke('github:repo', cwd),
+  clearGitHubCache: (cwd?: string): Promise<void> => ipcRenderer.invoke('github:clear-cache', cwd),
+
+  /* -------------------------------------------------------- readiness -- */
+
+  scanReadiness: (projectPath: string): Promise<unknown> =>
+    ipcRenderer.invoke('readiness:scan', projectPath),
+  applyReadinessFix: (projectPath: string, checkId: string): Promise<unknown> =>
+    ipcRenderer.invoke('readiness:fix', projectPath, checkId),
+
+  /* -------------------------------------------------------- dashboard -- */
+
+  loadDashboard: (projectPath: string): Promise<unknown> =>
+    ipcRenderer.invoke('dashboard:load', projectPath),
+  saveDashboard: (projectPath: string, layout: unknown): Promise<void> =>
+    ipcRenderer.invoke('dashboard:save', projectPath, layout),
+  clearDashboard: (projectPath: string): Promise<void> =>
+    ipcRenderer.invoke('dashboard:clear', projectPath),
 }
 
 contextBridge.exposeInMainWorld('pawl', api)

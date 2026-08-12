@@ -1,0 +1,134 @@
+/* ============================================================================
+   Split panes.
+   Colour comes only from tokens.css. The locals below are geometry, so the
+   whole grid's density is one edit rather than a dozen.
+   ============================================================================ */
+
+.split-view {
+  --pane-divider: 3px;
+  --pane-divider-hit: 9px;
+  --pane-ring: 1px;
+
+  position: relative;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg-primary);
+}
+
+.split-view-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Direct child of the view fills it; nested nodes fill their grid cell. */
+.split-view > .pane-split,
+.split-view > .pane-leaf {
+  height: 100%;
+}
+
+/* ---------------------------------------------------------------- splits -- */
+
+.pane-split {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  /* Grid tracks are set inline from the node's ratio — the geometry lives in
+     the tree, not in a class, so a restored layout renders at its saved size. */
+}
+
+/* -------------------------------------------------------------- dividers -- */
+
+/* --border rather than --border-subtle: a divider nobody can see is a divider
+   nobody can find to drag, and the cursor change only helps once you are on it. */
+.pane-divider {
+  position: relative;
+  background: var(--border);
+  touch-action: none;
+  transition: background 120ms ease;
+}
+
+.pane-split[data-direction='horizontal'] > .pane-divider {
+  cursor: col-resize;
+}
+
+.pane-split[data-direction='vertical'] > .pane-divider {
+  cursor: row-resize;
+}
+
+/* The visible bar stays hairline-thin; the grab area is widened with a
+   pseudo-element so the pointer does not have to be surgical. */
+.pane-divider::after {
+  content: '';
+  position: absolute;
+  z-index: 2;
+}
+
+.pane-split[data-direction='horizontal'] > .pane-divider::after {
+  top: 0;
+  bottom: 0;
+  left: calc((var(--pane-divider-hit) - var(--pane-divider)) / -2);
+  width: var(--pane-divider-hit);
+}
+
+.pane-split[data-direction='vertical'] > .pane-divider::after {
+  left: 0;
+  right: 0;
+  top: calc((var(--pane-divider-hit) - var(--pane-divider)) / -2);
+  height: var(--pane-divider-hit);
+}
+
+.pane-divider:hover,
+.pane-divider[data-dragging='true'] {
+  background: var(--accent);
+}
+
+.pane-divider:focus-visible {
+  outline: none;
+  background: var(--accent);
+}
+
+/* ----------------------------------------------------------------- panes -- */
+
+.pane-leaf {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  /* An inset ring rather than a border: the focused pane must not resize the
+     unfocused ones by a pixel every time focus moves. */
+  box-shadow: inset 0 0 0 var(--pane-ring) var(--pane-unfocus);
+  transition: box-shadow 120ms ease;
+}
+
+.pane-leaf[data-focused='true'] {
+  box-shadow: inset 0 0 0 var(--pane-ring) var(--pane-focus);
+  z-index: 1;
+}
+
+/* A single pane is not a split, so the ring is noise — the window edge is
+   already the boundary. */
+.split-view > .pane-leaf {
+  box-shadow: none;
+}
+
+/* Positioned so an absolutely-filled child (the terminal host) sits inside
+   the ring rather than painting over it. */
+.pane-leaf-body {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pane-leaf,
+  .pane-divider {
+    transition: none;
+  }
+}
