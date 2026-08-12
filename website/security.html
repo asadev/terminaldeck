@@ -35,579 +35,66 @@
 
     <link rel="icon" href="assets/favicon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="assets/logo-512.png" />
+    <link rel="stylesheet" href="assets/site.css" />
     <!-- No font preload: `crossorigin` is required for a font preload to be
          usable, and it fails the CORS check on a file:// origin. The @font-face
          in the stylesheet loads the same file with no error either way. -->
-    <style>
-/* Critical half of assets/site.css (tokens, reset, header, hero,
-   buttons), inlined so the first paint needs no network. The rest
-   of the sheet loads without blocking, below. */
-/* ============================================================================
-   terminaldeck.dev — one stylesheet for the whole site.
 
-   THE PAGE SHELL
-   --------------
-   Every page is a hand-written static HTML file. No framework, no build step,
-   no external request of any kind (fonts are self-hosted next to this file).
-   Copy this skeleton exactly; the only things that change per page are the
-   title, the description, the `aria-current` on the nav, and — for pages in a
-   subfolder — the `../` in front of every href.
-
-     <!doctype html>
-     <html lang="en">
-       <head>
-         <meta charset="utf-8" />
-         <meta name="viewport" content="width=device-width, initial-scale=1" />
-         <title>Page name — Terminal Deck</title>
-         <meta name="description" content="One sentence." />
-         <link rel="icon" href="assets/favicon.svg" type="image/svg+xml" />
-         <link rel="stylesheet" href="assets/site.css" />
-       </head>
-       <body>
-         <a class="skip-link" href="#main">Skip to content</a>
-         <header class="site-head"> …copy from index.html verbatim… </header>
-         <main id="main"> …page content… </main>
-         <footer class="site-foot"> …copy from index.html verbatim… </footer>
-       </body>
-     </html>
-
-   Paths are RELATIVE on purpose: the site has to open by double-clicking
-   index.html from the filesystem AND deploy unchanged to GitHub Pages or
-   Vercel. A leading slash breaks the first case, so never use one.
-   A page one level down (docs/index.html) uses `../assets/site.css`,
-   `../index.html`, `../download.html`, `../changelog.html`. That resolves the
-   same whether the page is served as /docs/index.html or /docs/.
-
-   THE BLOCKS THIS STYLESHEET PROVIDES
-   -----------------------------------
-     .wrap                page-width container (64rem), used inside every band
-     .prose               reading column (44rem) for long text
-     .site-head / .nav    sticky header, hairline underneath
-     .hero                first band on a page: h1 + .lede + .cta-row
-     .lede                one-sentence intro, larger than body text
-     .cta-row             row of buttons; wraps on narrow screens
-     .btn                 base button; add .btn-primary or .btn-quiet
-     .band                a vertical section; add .band-alt for a tinted one
-     .band-head           h2 + optional .band-blurb
-     .feature             one feature: h3 + prose + optional .detail list
-     .cards / .card       equal grid of small blocks
-     .detail              key/value list (dt/dd) for concrete specifics
-     .steps               numbered <ol> for install steps
-     .note                callout; add .note-warn for the amber one
-     .keys / kbd          shortcut table and key caps
-     .code                <pre> block; scrolls sideways, never the page
-     .legend / .dot       status-dot legend, using the app's status colours
-     .table-scroll        wrap any wide table in this
-     .stack               vertical rhythm helper (gap between children)
-     .site-foot           footer
-
-   COLOUR
-   ------
-   Values are lifted from src/renderer/styles/tokens.css so the site and the
-   app are literally the same palette. Three web-only tokens are marked
-   `site-only`, each because the app's own value misses WCAG AA on a web page:
-
-     --text-quiet   all secondary prose and small links. The app's
-                    --text-secondary (#787774) is 4.48:1 on white — just under
-                    the 4.5 needed — so light mode darkens it to #6b6966
-                    (5.5:1). Dark mode keeps the app's #9b9b9b, already 6.3:1.
-     --link         --accent (#2383e2) is 3.9:1 on white, so links take
-                    --accent-dim in light. Dark keeps --accent.
-     --btn-bg/fg    the primary button is neutral ink, not blue — partly for
-                    contrast, mostly because the one blue in this palette means
-                    "link or focus" and a filled blue button would spend it.
-
-   Everything else — surfaces, borders, radii, status dots, both fonts — is the
-   app's value unchanged. Run the contrast check again if you touch any of it.
-   ============================================================================ */
-
-/* --------------------------------------------------------------- fonts -- */
-
-@font-face {
-  font-family: 'Hanken Grotesk';
-  font-style: normal;
-  font-weight: 400 700;
-  font-display: swap;
-  src: url('assets/fonts/hanken-grotesk.woff2') format('woff2');
-}
-@font-face {
-  font-family: 'JetBrains Mono';
-  font-style: normal;
-  font-weight: 400 500;
-  font-display: swap;
-  src: url('assets/fonts/jetbrains-mono.woff2') format('woff2');
-}
-
-/* -------------------------------------------------------------- tokens -- */
-
-:root {
-  /* Tells the browser to theme scrollbars and form controls both ways. */
-  color-scheme: light dark;
-
-  --bg-primary: #ffffff;
-  --bg-secondary: #f7f7f5;
-  --bg-tertiary: #f1f1ef;
-  --bg-hover: rgba(55, 53, 47, 0.06);
-  --bg-active: rgba(55, 53, 47, 0.09);
-
-  --text-primary: #37352f;
-  --text-secondary: #787774;
-  --text-muted: #9b9a97;
-  /* site-only: AA-safe secondary ink for prose. */
-  --text-quiet: #6b6966;
-
-  --accent: #2383e2;
-  --accent-dim: #1b6fc4;
-  --accent-soft: rgba(35, 131, 226, 0.09);
-  --accent-fg: #ffffff;
-  /* site-only: link colour that clears 4.5:1 on the page background. */
-  --link: var(--accent-dim);
-
-  --border: rgba(55, 53, 47, 0.09);
-  --border-subtle: rgba(55, 53, 47, 0.055);
-  --border-strong: rgba(55, 53, 47, 0.16);
-
-  --status-working: #337ea9;
-  --status-waiting: #cb912f;
-  --status-input: #d9730d;
-  --status-completed: #448361;
-  --status-idle: #9b9a97;
-
-  --color-warning: #cb912f;
-  --color-critical: #d44c47;
-
-  --shadow-sm: 0 1px 2px rgba(15, 15, 15, 0.06), 0 2px 4px rgba(15, 15, 15, 0.04);
-
-  /* site-only: neutral primary button, so blue stays a link colour. */
-  --btn-bg: #37352f;
-  --btn-fg: #ffffff;
-
-  --font-ui: 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-  --font-mono: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
-
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 10px;
-
-  --wrap: 64rem;
-  --prose: 44rem;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg-primary: #191919;
-    --bg-secondary: #202020;
-    --bg-tertiary: #252525;
-    --bg-hover: rgba(255, 255, 255, 0.055);
-    --bg-active: rgba(255, 255, 255, 0.085);
-
-    --text-primary: #d4d4d4;
-    --text-secondary: #9b9b9b;
-    --text-muted: #6f6f6f;
-    --text-quiet: #9b9b9b; /* 6.3:1 on #191919 — no adjustment needed */
-
-    --accent: #529cca;
-    --accent-dim: #3f87b4;
-    --accent-soft: rgba(82, 156, 202, 0.14);
-    --link: var(--accent);
-
-    --border: rgba(255, 255, 255, 0.094);
-    --border-subtle: rgba(255, 255, 255, 0.055);
-    --border-strong: rgba(255, 255, 255, 0.16);
-
-    --status-working: #529cca;
-    --status-waiting: #c9a227;
-    --status-input: #d9730d;
-    --status-completed: #4dab9a;
-    --status-idle: #6f6f6f;
-
-    --color-warning: #c9a227;
-    --color-critical: #ff7369;
-
-    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
-
-    --btn-bg: #d4d4d4;
-    --btn-fg: #191919;
-  }
-}
-
-/* --------------------------------------------------------------- reset -- */
-
-*,
-*::before,
-*::after {
-  box-sizing: border-box;
-}
-
-html {
-  -webkit-text-size-adjust: 100%;
-  scroll-behavior: smooth;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  html {
-    scroll-behavior: auto;
-  }
-  * {
-    transition-duration: 0.01ms !important;
-  }
-}
-
-body {
-  margin: 0;
-  background: var(--bg-primary);
-  color: var(--text-primary);
-  font-family: var(--font-ui);
-  font-size: 1rem;
-  line-height: 1.65;
-  -webkit-font-smoothing: antialiased;
-  text-rendering: optimizeLegibility;
-}
-
-img,
-svg {
-  max-width: 100%;
-  height: auto;
-}
-
-h1,
-h2,
-h3,
-h4 {
-  margin: 0;
-  line-height: 1.25;
-  font-weight: 600;
-  letter-spacing: -0.011em;
-  text-wrap: balance;
-}
-
-p,
-ul,
-ol,
-dl,
-pre,
-table,
-figure {
-  margin: 0;
-}
-
-a {
-  color: var(--link);
-  text-decoration: underline;
-  text-underline-offset: 0.18em;
-  text-decoration-thickness: 1px;
-}
-
-a:hover {
-  text-decoration-thickness: 2px;
-}
-
-:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-  border-radius: var(--radius-sm);
-}
-
-code,
-kbd,
-pre,
-samp {
-  font-family: var(--font-mono);
-  font-size: 0.875em;
-}
-
-hr {
-  border: 0;
-  border-top: 1px solid var(--border);
-  margin: 0;
-}
-
-/* ------------------------------------------------------------- helpers -- */
-
-.wrap {
-  width: 100%;
-  max-width: var(--wrap);
-  margin: 0 auto;
-  padding: 0 1.5rem;
-}
-
-.prose {
-  max-width: var(--prose);
-}
-
-.prose p + p,
-.prose p + ul,
-.prose ul + p {
-  margin-top: 0.9rem;
-}
-
-.stack > * + * {
-  margin-top: 1rem;
-}
-
-.skip-link {
-  position: absolute;
-  left: -9999px;
-  top: 0;
-  z-index: 20;
-  background: var(--bg-primary);
-  color: var(--text-primary);
-  padding: 0.6rem 1rem;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
-  text-decoration: none;
-}
-
-.skip-link:focus {
-  left: 1rem;
-  top: 1rem;
-}
-
-.small {
-  font-size: 0.875rem;
-  color: var(--text-quiet);
-}
-
-.mono {
-  font-family: var(--font-mono);
-}
-
-/* -------------------------------------------------------------- header -- */
-
-.site-head {
-  position: sticky;
-  top: 0;
-  z-index: 10;
-  background: color-mix(in srgb, var(--bg-primary) 88%, transparent);
-  backdrop-filter: saturate(1.4) blur(8px);
-  border-bottom: 1px solid var(--border);
-}
-
-@supports not (backdrop-filter: blur(1px)) {
-  .site-head {
-    background: var(--bg-primary);
-  }
-}
-
-.site-head .wrap {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.5rem 1.5rem;
-  min-height: 3.5rem;
-  padding-top: 0.5rem;
-  padding-bottom: 0.5rem;
-}
-
-.brand {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
-  font-weight: 600;
-  font-size: 0.95rem;
-  letter-spacing: -0.01em;
-  color: var(--text-primary);
-  text-decoration: none;
-  margin-right: auto;
-}
-
-.brand:hover {
-  text-decoration: none;
-}
-
-.brand-mark {
-  display: block;
-  color: var(--text-quiet);
-}
-
-.nav {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.25rem 0.5rem;
-  font-size: 0.9rem;
-}
-
-.nav a {
-  display: inline-block;
-  padding: 0.3rem 0.55rem;
-  border-radius: var(--radius-sm);
-  color: var(--text-quiet);
-  text-decoration: none;
-}
-
-.nav a:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
-}
-
-.nav a[aria-current='page'] {
-  color: var(--text-primary);
-  background: var(--bg-active);
-}
-
-/* --------------------------------------------------------------- bands -- */
-
-.band {
-  padding: 4rem 0;
-  border-top: 1px solid var(--border);
-}
-
-.band-alt {
-  background: var(--bg-secondary);
-}
-
-.band-tight {
-  padding: 2.5rem 0;
-}
-
-.band-head {
-  max-width: var(--prose);
-  margin-bottom: 2rem;
-}
-
-.band-head h2 {
-  font-size: 1.5rem;
-}
-
-.band-blurb {
-  margin-top: 0.6rem;
-  color: var(--text-quiet);
-}
-
-.eyebrow {
-  font-size: 0.75rem;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--text-quiet);
-  margin-bottom: 0.75rem;
-}
-
-/* ---------------------------------------------------------------- hero -- */
-
-.hero {
-  padding: 5rem 0 3.5rem;
-  border-top: 0;
-}
-
-.hero h1 {
-  font-size: clamp(2.1rem, 1.5rem + 2.6vw, 3.25rem);
-  letter-spacing: -0.025em;
-  max-width: 20ch;
-}
-
-.lede {
-  margin-top: 1.25rem;
-  max-width: 58ch;
-  font-size: 1.125rem;
-  color: var(--text-primary);
-}
-
-.hero-who {
-  margin-top: 0.9rem;
-  max-width: 58ch;
-  color: var(--text-quiet);
-}
-
-.cta-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.75rem;
-  margin-top: 2rem;
-}
-
-.cta-note {
-  margin-top: 1rem;
-  font-size: 0.85rem;
-  color: var(--text-quiet);
-}
-
-/* ------------------------------------------------------------- buttons -- */
-
-.btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.6rem 1.05rem;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
-  background: var(--bg-primary);
-  color: var(--text-primary);
-  font: inherit;
-  font-size: 0.95rem;
-  font-weight: 500;
-  text-decoration: none;
-  cursor: pointer;
-}
-
-.btn:hover {
-  background: var(--bg-hover);
-  text-decoration: none;
-}
-
-.btn-primary {
-  background: var(--btn-bg);
-  border-color: var(--btn-bg);
-  color: var(--btn-fg);
-}
-
-.btn-primary:hover {
-  background: var(--btn-bg);
-  opacity: 0.88;
-}
-
-.btn-quiet {
-  border-color: transparent;
-  background: transparent;
-  color: var(--text-quiet);
-}
-
-.btn-quiet:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
-}
-</style>
-
-<link rel="preload" href="assets/site.css" as="style" onload="this.onload=null;this.rel='stylesheet'">
-<noscript><link rel="stylesheet" href="assets/site.css"></noscript>
 
     <script type="application/ld+json">
-      {
-        "@context": "https://schema.org",
-        "@graph": [
-          {
-            "@type": "WebPage",
-            "url": "https://terminaldeck.dev/security.html",
-            "name": "Security — posture, limits, and how to report a vulnerability",
-            "description": "Terminal Deck's security posture stated against the source: context isolation, a strict production CSP, a sandboxed untrusted browser guest, a loopback-only hook endpoint with a per-run token, and secrets redacted from diagnostics.",
-            "inLanguage": "en-GB",
-            "author": {
-              "@type": "Person",
-              "name": "Asad Iqbal"
-            }
-          },
-          {
-            "@type": "BreadcrumbList",
-            "itemListElement": [
-              {
-                "@type": "ListItem",
-                "position": 1,
-                "name": "Terminal Deck",
-                "item": "https://terminaldeck.dev/"
-              },
-              {
-                "@type": "ListItem",
-                "position": 2,
-                "name": "Security",
-                "item": "https://terminaldeck.dev/security.html"
-              }
-            ]
-          }
-        ]
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "Organization",
+      "@id": "https://terminaldeck.dev/#organization",
+      "name": "Terminal Deck",
+      "url": "https://terminaldeck.dev/",
+      "logo": {
+        "@type": "ImageObject",
+        "url": "https://terminaldeck.dev/assets/logo-512.png",
+        "width": 512,
+        "height": 512
+      },
+      "founder": {
+        "@type": "Person",
+        "name": "Asad Iqbal"
       }
-    </script>
+    },
+    {
+      "@type": "WebPage",
+      "url": "https://terminaldeck.dev/security.html",
+      "name": "Security — posture, limits, and how to report a vulnerability",
+      "description": "Terminal Deck's security posture stated against the source: context isolation, a strict production CSP, a sandboxed untrusted browser guest, a loopback-only hook endpoint with a per-run token, and secrets redacted from diagnostics.",
+      "inLanguage": "en-GB",
+      "author": {
+        "@type": "Person",
+        "name": "Asad Iqbal"
+      },
+      "publisher": {
+        "@id": "https://terminaldeck.dev/#organization"
+      }
+    },
+    {
+      "@type": "BreadcrumbList",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "position": 1,
+          "name": "Terminal Deck",
+          "item": "https://terminaldeck.dev/"
+        },
+        {
+          "@type": "ListItem",
+          "position": 2,
+          "name": "Security",
+          "item": "https://terminaldeck.dev/security.html"
+        }
+      ]
+    }
+  ]
+}
+</script>
   </head>
   <body>
     <a class="skip-link" href="#main">Skip to content</a>

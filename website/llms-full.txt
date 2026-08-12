@@ -188,8 +188,9 @@ under-reports a long session's spend by 37.5% on the cached portion.
 - **AI readiness score.** Does the project have a CLAUDE.md, a README, tests,
   lint, typecheck, a gitignore and a clean git state — with one-click fixes. A
   committed `.env` caps the score below every band.
-- **`.deckignore`.** One list of what the app should not look at, honoured by the
-  tree, quick open, search and the watchers, with gitignore semantics.
+- **`.deckignore`.** One list of what the file tree should not look at, with
+  gitignore semantics. Quick open has its own built-in list of skipped
+  directories and does not read it.
 
 ## Dashboard and board
 

@@ -31,12 +31,17 @@ function reading(value: string | null, label: string | null, source: string | nu
 /** The four states the row can be in, as the main process would report them. */
 const SCENES: Array<{ title: string; note: string; readings: Record<string, unknown> }> = [
   {
-    title: 'Everything read',
-    note: 'permission from the footer, model from the last reply, effort from Claude settings',
+    title: 'Everything that can be read, read',
+    // Fast is unknown here rather than "Off", and that is the truthful scene on
+    // this machine: the CLI keeps fast mode outside settings.json, so until the
+    // session itself says "Fast mode ON/OFF" there is nothing to read. A
+    // fixture showing "Off · from Claude settings" made the harness look
+    // healthier than the product.
+    note: 'permission from the footer, model from the last reply, effort from Claude settings — fast has no source yet',
     readings: {
       model: reading('claude-opus-5[1m]', 'Opus 5 · 1M', 'transcript'),
       effort: reading('ultracode', 'Ultracode', 'settings'),
-      fast: reading('off', 'Off', 'settings'),
+      fast: reading(null, null, null),
       permission: reading('bypass', 'Bypass', 'screen'),
       live: true,
     },
@@ -69,7 +74,7 @@ const SCENES: Array<{ title: string; note: string; readings: Record<string, unkn
     readings: {
       model: reading('claude-sonnet-4-6', 'Sonnet 4.6', 'transcript'),
       effort: reading('xhigh', 'Extra high', 'settings'),
-      fast: reading('off', 'Off', 'settings'),
+      fast: reading(null, null, null),
       permission: reading(null, null, null),
       live: false,
     },

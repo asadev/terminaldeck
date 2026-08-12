@@ -11,7 +11,7 @@
  */
 export const BRAND = {
   /** Display name, shown in the UI and window title. */
-  name: 'Deck',
+  name: 'Terminal Deck',
   /** Lowercase slug used for folders, npm name, CLI command. */
   id: 'terminaldeck',
   /** macOS bundle identifier. */

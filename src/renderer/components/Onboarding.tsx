@@ -64,7 +64,7 @@ export function Onboarding({ onContinue, onOpenProject }: Props) {
       <div className="onboarding-inner">
         <h1>Welcome to {BRAND.name}</h1>
         <p className="onboarding-lede">
-          Deck runs coding agents in real terminals. It never sees your logins — each agent signs
+          {BRAND.name} runs coding agents in real terminals. It never sees your logins — each agent signs
           you in itself, inside the session.
         </p>
 
