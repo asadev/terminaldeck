@@ -256,14 +256,14 @@ describe('revealing a screenshot', () => {
   it('refuses a path outside the screenshot directory', () => {
     revealed.length = 0
     invoke('browser-view:reveal', '/etc/passwd')
-    invoke('browser-view:reveal', '/tmp/Pictures/Pawl/../../../etc/passwd')
+    invoke('browser-view:reveal', '/tmp/Pictures/Deck/../../../etc/passwd')
     invoke('browser-view:reveal', 42)
     expect(revealed).toEqual([])
   })
 
   it('reveals one of our own captures', () => {
     revealed.length = 0
-    invoke('browser-view:reveal', '/tmp/Pawl/example.com-20260812-163045.png')
+    invoke('browser-view:reveal', '/tmp/Deck/example.com-20260812-163045.png')
     expect(revealed).toHaveLength(1)
   })
 })

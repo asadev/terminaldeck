@@ -87,17 +87,17 @@ function Workspace() {
     null
 
   useEffect(() => {
-    const off = window.pawl.onSessionStatus((id, status) => setSessionStatus(id, status))
+    const off = window.deck.onSessionStatus((id, status) => setSessionStatus(id, status))
     return off
   }, [setSessionStatus])
 
   useEffect(() => {
-    void window.pawl.getPreferences().then((p) => applyStoredTheme(p.theme))
+    void window.deck.getPreferences().then((p) => applyStoredTheme(p.theme))
   }, [])
 
   useEffect(() => {
     let cancelled = false
-    void window.pawl.listProjects().then((saved) => {
+    void window.deck.listProjects().then((saved) => {
       if (cancelled) return
       for (const p of saved) addProject(p.path)
     })
@@ -109,18 +109,18 @@ function Workspace() {
   // Show the first-run screen only when no agent is usable. Someone with a
   // working setup should never be made to click through a welcome screen.
   useEffect(() => {
-    void window.pawl
+    void window.deck
       .checkPrerequisites()
       .then((p) => setNeedsOnboarding(!(p as { canRunSessions: boolean }).canRunSessions))
       .catch(() => setNeedsOnboarding(false))
   }, [])
 
   const openProject = useCallback(async () => {
-    const path = await window.pawl.pickProjectFolder()
+    const path = await window.deck.pickProjectFolder()
     if (!path) return
     addProject(path)
-    void window.pawl.addProject(path)
-    const meta = await window.pawl.createSession({ cwd: path, cols: 100, rows: 30 })
+    void window.deck.addProject(path)
+    const meta = await window.deck.createSession({ cwd: path, cols: 100, rows: 30 })
     addSession(meta)
     setOnboardingDone(true)
     setActiveTabId(meta.id)
@@ -128,7 +128,7 @@ function Workspace() {
 
   const newSessionIn = useCallback(
     async (path: string, resume = false) => {
-      const meta = await window.pawl.createSession({ cwd: path, cols: 100, rows: 30, resume })
+      const meta = await window.deck.createSession({ cwd: path, cols: 100, rows: 30, resume })
       addSession(meta)
       setActiveTabId(meta.id)
     },
@@ -156,7 +156,7 @@ function Workspace() {
       const tab = tabs.find((t) => t.id === id)
       const following = nextActiveId(tabs, id)
       if (tab?.kind === 'session') {
-        void window.pawl.killSession(id)
+        void window.deck.killSession(id)
         removeSession(id)
       } else {
         setExtraTabs((prev) => prev.filter((t) => t.id !== id))
@@ -168,7 +168,7 @@ function Workspace() {
 
   const closeSession = useCallback(
     async (id: string) => {
-      await window.pawl.killSession(id)
+      await window.deck.killSession(id)
       removeSession(id)
     },
     [removeSession],
@@ -211,7 +211,7 @@ function Workspace() {
   // Menu items dispatch the same commands the palette runs, so a menu entry
   // and its shortcut can never drift apart.
   useEffect(() => {
-    return window.pawl.onMenuCommand((command) => {
+    return window.deck.onMenuCommand((command) => {
       const run = commands.find((c) => c.id === command)
       if (run) {
         void run.run()
@@ -347,7 +347,7 @@ function Workspace() {
               key={tab.id}
               visible={tab.id === activeTab.id && !anyModalOpen}
               onSendToAgent={(context) => {
-                if (activeSessionId) window.pawl.writeToSession(activeSessionId, context)
+                if (activeSessionId) window.deck.writeToSession(activeSessionId, context)
               }}
             />
           ))}
@@ -366,7 +366,7 @@ function Workspace() {
                     // Written to the session's own terminal: chat mode is a
                     // different view of the same session, not a second channel,
                     // so a reply typed here also appears in the terminal view.
-                    window.pawl.writeToSession(session.id, `${text}\r`)
+                    window.deck.writeToSession(session.id, `${text}\r`)
                   }}
                 />
               ) : null}
@@ -432,7 +432,7 @@ function Workspace() {
         onClose={() => setNewSessionOpen(false)}
         onStart={async (request) => {
           setNewSessionOpen(false)
-          const meta = await window.pawl.createSession(request)
+          const meta = await window.deck.createSession(request)
           addSession(meta)
           setActiveTabId(meta.id)
         }}

@@ -55,7 +55,7 @@ const SAVE_DEBOUNCE_MS = 400
  * in-memory board instead of throwing on mount.
  */
 function windowBridge(): BoardBridge | null {
-  const api = (globalThis as unknown as { pawl?: Record<string, unknown> }).pawl
+  const api = (globalThis as unknown as { deck?: Record<string, unknown> }).deck
   const load = api?.loadBoard
   const save = api?.saveBoard
   if (typeof load !== 'function' || typeof save !== 'function') return null

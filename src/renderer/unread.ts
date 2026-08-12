@@ -181,7 +181,7 @@ export class UnreadTracker {
     return { ids: this.ids(), count: this.unread.size }
   }
 
-  /** Returns an unsubscribe function, matching the `window.pawl.on*` convention. */
+  /** Returns an unsubscribe function, matching the `window.deck.on*` convention. */
   subscribe(listener: UnreadListener): () => void {
     this.listeners.add(listener)
     return () => {

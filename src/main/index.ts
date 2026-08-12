@@ -19,7 +19,7 @@ import { registerDashboardIpc } from './dashboard-store'
 import { registerSessionSearchIpc } from './session-search'
 import { registerAlertsIpc } from './alerts'
 import { registerProfilesIpc, getState as profilesState, resolveProfile, sessionEnv } from './profiles'
-import { registerPawlignoreIpc } from './pawlignore'
+import { registerDeckignoreIpc } from './deckignore'
 import { registerHooksIpc } from './hooks'
 import { registerHookServer, stopHookServer } from './hook-server'
 import { registerMcpIpc } from './mcp-client'
@@ -197,7 +197,7 @@ function registerIpc(): void {
   registerDashboardIpc(ipcMain)
   registerSessionSearchIpc(ipcMain)
   registerProfilesIpc(ipcMain)
-  registerPawlignoreIpc(ipcMain)
+  registerDeckignoreIpc(ipcMain)
   registerHooksIpc(ipcMain)
   registerMcpIpc(ipcMain)
   registerBrowserIpc(ipcMain)

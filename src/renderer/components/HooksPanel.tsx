@@ -46,7 +46,7 @@ export interface HooksBridge {
 }
 
 export interface HooksPanelProps {
-  /** Injectable for tests; defaults to the preload bridge on `window.pawl`. */
+  /** Injectable for tests; defaults to the preload bridge on `window.deck`. */
   bridge?: HooksBridge
 }
 
@@ -60,7 +60,7 @@ const BRIDGE_METHODS = ['hooksStatus', 'installHooks', 'removeHooks', 'hookServe
  */
 function resolveBridge(): HooksBridge | null {
   if (typeof window === 'undefined') return null
-  const host = (window as unknown as { pawl?: Record<string, unknown> }).pawl
+  const host = (window as unknown as { deck?: Record<string, unknown> }).deck
   if (!host) return null
   return BRIDGE_METHODS.every((name) => typeof host[name] === 'function')
     ? (host as unknown as HooksBridge)

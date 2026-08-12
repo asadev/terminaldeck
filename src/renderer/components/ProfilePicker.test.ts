@@ -26,7 +26,7 @@ function view(overrides: Partial<ProfileView> = {}): ProfileView {
   return {
     id: 'work',
     name: 'Work',
-    configDir: '/u/Library/Application Support/pawl/profiles/work',
+    configDir: '/u/Library/Application Support/terminaldeck/profiles/work',
     system: false,
     color: '--accent',
     lastUsedAt: null,
@@ -201,18 +201,18 @@ describe('isolationNotice', () => {
 
 describe('profileBridge', () => {
   afterEach(() => {
-    delete (globalThis as { pawl?: unknown }).pawl
+    delete (globalThis as { deck?: unknown }).deck
   })
 
   it('is null until the preload bridge exposes the profile methods', () => {
     expect(profileBridge()).toBeNull()
-    ;(globalThis as { pawl?: unknown }).pawl = {}
+    ;(globalThis as { deck?: unknown }).deck = {}
     expect(profileBridge()).toBeNull()
   })
 
   it('is available once listProfiles is wired', () => {
     const api = { listProfiles: () => Promise.resolve({}) }
-    ;(globalThis as { pawl?: unknown }).pawl = api
+    ;(globalThis as { deck?: unknown }).deck = api
     expect(profileBridge()).toBe(api)
   })
 })

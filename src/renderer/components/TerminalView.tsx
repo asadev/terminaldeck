@@ -54,7 +54,7 @@ export function TerminalView({ sessionId, visible }: Props) {
     const syncSize = () => {
       try {
         fit.fit()
-        window.pawl.resizeSession(sessionId, term.cols, term.rows)
+        window.deck.resizeSession(sessionId, term.cols, term.rows)
       } catch {
         /* element not laid out yet */
       }
@@ -66,18 +66,18 @@ export function TerminalView({ sessionId, visible }: Props) {
 
     // Status is classified in the main process, which sees output for every
     // session including ones whose terminal isn't currently rendered.
-    const offData = window.pawl.onSessionData((id, data) => {
+    const offData = window.deck.onSessionData((id, data) => {
       if (id === sessionId) term.write(data)
     })
 
-    const offExit = window.pawl.onSessionExit((id) => {
+    const offExit = window.deck.onSessionExit((id) => {
       if (id === sessionId) term.write('\r\n\x1b[2m[process exited]\x1b[0m\r\n')
     })
 
-    const inputDisposable = term.onData((data) => window.pawl.writeToSession(sessionId, data))
+    const inputDisposable = term.onData((data) => window.deck.writeToSession(sessionId, data))
 
     // Restore anything printed before this component mounted.
-    void window.pawl.getScrollback(sessionId).then((buf) => {
+    void window.deck.getScrollback(sessionId).then((buf) => {
       if (buf) term.write(buf)
     })
 
@@ -99,7 +99,7 @@ export function TerminalView({ sessionId, visible }: Props) {
       try {
         fitRef.current?.fit()
         const term = termRef.current
-        if (term) window.pawl.resizeSession(sessionId, term.cols, term.rows)
+        if (term) window.deck.resizeSession(sessionId, term.cols, term.rows)
         term?.focus()
       } catch {
         /* not laid out */

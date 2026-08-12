@@ -42,21 +42,21 @@ const TEST_ATTRS = [
 const ATTR_KEYS = ['aria-label', 'alt', 'placeholder', 'title', 'role', 'type', 'name', 'href']
 
 /**
- * Defines `pawlDescribeElement(el)` returning a `parseCapture`-shaped payload,
- * plus `pawlFlatten(value, max)` for one-off strings. Both are `var`-scoped
+ * Defines `terminaldeckDescribeElement(el)` returning a `parseCapture`-shaped payload,
+ * plus `terminaldeckFlatten(value, max)` for one-off strings. Both are `var`-scoped
  * functions, so this snippet must be embedded inside the consuming script's own
  * IIFE rather than at top level, where it would leak into the isolated world's
  * globals and be visible to any other script sharing that world.
  */
 export const GUEST_DOM_HELPERS_SOURCE = `
-  var PAWL_TEST_ATTRS = ${JSON.stringify(TEST_ATTRS)}
-  var PAWL_ATTR_KEYS = ${JSON.stringify(ATTR_KEYS)}
-  var PAWL_MAX_DEPTH = 64
-  var PAWL_MAX_TEXT = 300
-  var PAWL_MAX_ATTR = 300
-  var PAWL_MAX_IDENT = 200
+  var TERMINALDECK_TEST_ATTRS = ${JSON.stringify(TEST_ATTRS)}
+  var TERMINALDECK_ATTR_KEYS = ${JSON.stringify(ATTR_KEYS)}
+  var TERMINALDECK_MAX_DEPTH = 64
+  var TERMINALDECK_MAX_TEXT = 300
+  var TERMINALDECK_MAX_ATTR = 300
+  var TERMINALDECK_MAX_IDENT = 200
 
-  function pawlFlatten(value, max) {
+  function terminaldeckFlatten(value, max) {
     if (typeof value !== 'string') return ''
     // Cut first, collapse second. textContent on a real page is megabytes, and
     // an unbounded collapse would hang the page on the very interaction being
@@ -66,11 +66,11 @@ export const GUEST_DOM_HELPERS_SOURCE = `
     return flat.length > max ? flat.slice(0, max) : flat
   }
 
-  function pawlPrintable(value) {
+  function terminaldeckPrintable(value) {
     return !/[\\u0000-\\u001f\\u007f]/.test(value)
   }
 
-  function pawlUnique(selector) {
+  function terminaldeckUnique(selector) {
     try {
       return document.querySelectorAll(selector).length === 1
     } catch (err) {
@@ -78,26 +78,26 @@ export const GUEST_DOM_HELPERS_SOURCE = `
     }
   }
 
-  function pawlCssString(value) {
+  function terminaldeckCssString(value) {
     return '"' + value.replace(/\\\\/g, '\\\\\\\\').replace(/"/g, '\\\\"') + '"'
   }
 
-  function pawlDescribe(el) {
+  function terminaldeckDescribe(el) {
     var d = { tag: typeof el.localName === 'string' ? el.localName : '' }
 
     var id = el.getAttribute('id')
-    if (typeof id === 'string' && id !== '' && id.length <= PAWL_MAX_IDENT && pawlPrintable(id)) {
+    if (typeof id === 'string' && id !== '' && id.length <= TERMINALDECK_MAX_IDENT && terminaldeckPrintable(id)) {
       d.id = id
-      d.idUnique = pawlUnique('#' + CSS.escape(id))
+      d.idUnique = terminaldeckUnique('#' + CSS.escape(id))
     }
 
-    for (var i = 0; i < PAWL_TEST_ATTRS.length; i++) {
-      var name = PAWL_TEST_ATTRS[i]
+    for (var i = 0; i < TERMINALDECK_TEST_ATTRS.length; i++) {
+      var name = TERMINALDECK_TEST_ATTRS[i]
       var value = el.getAttribute(name)
-      if (typeof value === 'string' && value !== '' && value.length <= PAWL_MAX_IDENT && pawlPrintable(value)) {
+      if (typeof value === 'string' && value !== '' && value.length <= TERMINALDECK_MAX_IDENT && terminaldeckPrintable(value)) {
         d.testAttr = name
         d.testValue = value
-        d.testUnique = pawlUnique('[' + name + '=' + pawlCssString(value) + ']')
+        d.testUnique = terminaldeckUnique('[' + name + '=' + terminaldeckCssString(value) + ']')
         break
       }
     }
@@ -124,7 +124,7 @@ export const GUEST_DOM_HELPERS_SOURCE = `
     return d
   }
 
-  function pawlSecretField(el) {
+  function terminaldeckSecretField(el) {
     // The property wins where it exists — a page can set input.type without
     // touching the attribute — and the attribute covers the fake-DOM case.
     var type = typeof el.type === 'string' && el.type !== '' ? el.type : el.getAttribute('type')
@@ -139,36 +139,36 @@ export const GUEST_DOM_HELPERS_SOURCE = `
     return kind === 'password' || kind === 'file'
   }
 
-  function pawlAttributes(el) {
+  function terminaldeckAttributes(el) {
     var out = {}
-    for (var i = 0; i < PAWL_ATTR_KEYS.length; i++) {
-      var name = PAWL_ATTR_KEYS[i]
+    for (var i = 0; i < TERMINALDECK_ATTR_KEYS.length; i++) {
+      var name = TERMINALDECK_ATTR_KEYS[i]
       var value = el.getAttribute(name)
-      if (typeof value === 'string' && value !== '') out[name] = pawlFlatten(value, PAWL_MAX_ATTR)
+      if (typeof value === 'string' && value !== '') out[name] = terminaldeckFlatten(value, TERMINALDECK_MAX_ATTR)
     }
     // What a control currently holds, which its attribute does not track. Never
     // for a password or file field: that value would be shown in the step list
     // and pasted into a prompt that is written to disk.
-    if (typeof el.value === 'string' && el.value !== '' && !pawlSecretField(el)) {
-      out.value = pawlFlatten(el.value, PAWL_MAX_ATTR)
+    if (typeof el.value === 'string' && el.value !== '' && !terminaldeckSecretField(el)) {
+      out.value = terminaldeckFlatten(el.value, TERMINALDECK_MAX_ATTR)
     }
     return out
   }
 
-  function pawlDescribeElement(el) {
+  function terminaldeckDescribeElement(el) {
     var path = []
     var node = el
     var depth = 0
-    while (node && node.nodeType === 1 && depth < PAWL_MAX_DEPTH) {
-      path.push(pawlDescribe(node))
+    while (node && node.nodeType === 1 && depth < TERMINALDECK_MAX_DEPTH) {
+      path.push(terminaldeckDescribe(node))
       node = node.parentElement
       depth++
     }
     return {
       v: 1,
       path: path,
-      text: pawlFlatten(el.textContent, PAWL_MAX_TEXT),
-      attributes: pawlAttributes(el)
+      text: terminaldeckFlatten(el.textContent, TERMINALDECK_MAX_TEXT),
+      attributes: terminaldeckAttributes(el)
     }
   }
 `

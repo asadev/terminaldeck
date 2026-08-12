@@ -64,9 +64,9 @@ const noopBridge: BrowserBridge = {
   onBrowserProgress: () => () => undefined,
   onBrowserRecording: () => () => undefined,
   browserSessionInfo: async () => ({
-    partition: 'persist:pawl-browser',
+    partition: 'persist:terminaldeck-browser',
     persistent: true,
-    storagePath: '/tmp/Partitions/pawl-browser',
+    storagePath: '/tmp/Partitions/terminaldeck-browser',
     storageExists: true,
     cookieCount: 0,
     domainCount: 0,
@@ -83,8 +83,8 @@ describe('the bridge contract', () => {
     delete (globalThis as { window?: unknown }).window
   })
 
-  const withPawl = (pawl: unknown): void => {
-    ;(globalThis as { window?: unknown }).window = { pawl }
+  const withDeck = (deck: unknown): void => {
+    ;(globalThis as { window?: unknown }).window = { deck }
   }
 
   it('lists every method of the bridge interface', () => {
@@ -102,14 +102,14 @@ describe('the bridge contract', () => {
       for (const method of all) {
         if (method !== absent) partial[method] = () => undefined
       }
-      withPawl(partial)
+      withDeck(partial)
       expect(resolveBrowserBridge(), `a bridge without ${absent} was accepted`).toBeNull()
       expect(missingBridgeMethods(partial)).toEqual([absent])
     }
   })
 
   it('accepts a complete bridge and reports nothing missing', () => {
-    withPawl(noopBridge)
+    withDeck(noopBridge)
     expect(resolveBrowserBridge()).not.toBeNull()
     expect(missingBridgeMethods(noopBridge)).toEqual([])
   })
@@ -117,7 +117,7 @@ describe('the bridge contract', () => {
   it('treats a preload that exposed nothing as everything missing', () => {
     expect(missingBridgeMethods(undefined)).toEqual([...BRIDGE_METHODS])
     expect(missingBridgeMethods(null)).toEqual([...BRIDGE_METHODS])
-    withPawl(undefined)
+    withDeck(undefined)
     expect(resolveBrowserBridge()).toBeNull()
   })
 })

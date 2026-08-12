@@ -52,7 +52,7 @@ let context: HookContext
 const ENDPOINT = { port: 51234, token: 'a'.repeat(48) }
 
 beforeEach(() => {
-  root = join(tmpdir(), `pawl-hooks-test-${process.pid}-${Math.random().toString(36).slice(2)}`)
+  root = join(tmpdir(), `terminaldeck-hooks-test-${process.pid}-${Math.random().toString(36).slice(2)}`)
   mkdirSync(root, { recursive: true })
   context = { home: root, backupDir: join(root, 'backups'), endpoint: ENDPOINT }
 })
@@ -148,7 +148,7 @@ describe('ownership', () => {
   it('cannot be broken out of by a value that carries a quote', async () => {
     const command = hookCommand('claude', 'Stop', {
       port: 9,
-      token: "x'; touch /tmp/pawl-hook-injection; echo '",
+      token: "x'; touch /tmp/terminaldeck-hook-injection; echo '",
     })
     // The probe goes on its own line: the command ends with a shell comment, so
     // anything appended after it on the same line is never reached.
@@ -161,7 +161,7 @@ describe('ownership', () => {
     await new Promise((resolve) => child.on('close', resolve))
 
     expect(stdout.trim()).toBe('DONE')
-    expect(() => statSync('/tmp/pawl-hook-injection')).toThrow()
+    expect(() => statSync('/tmp/terminaldeck-hook-injection')).toThrow()
   })
 })
 

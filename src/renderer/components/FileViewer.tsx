@@ -16,9 +16,9 @@ interface FsBridge {
 }
 
 function readFile(root: string, relPath: string): Promise<FileRead> {
-  const api = (window as unknown as { pawl?: Partial<FsBridge> }).pawl
+  const api = (window as unknown as { deck?: Partial<FsBridge> }).deck
   if (!api?.readFile) {
-    return Promise.reject(new Error('preload bridge is missing pawl.readFile'))
+    return Promise.reject(new Error('preload bridge is missing terminaldeck.readFile'))
   }
   return api.readFile(root, relPath)
 }

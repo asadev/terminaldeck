@@ -225,7 +225,7 @@ export function looksSecret(candidate: string): boolean {
  * a run of path segments is glued into one long candidate: a bundle's PATH
  * entries and every log line naming a file turned into `[redacted]` the moment
  * the path was 32 characters long and contained a digit anywhere — so
- * `/usr/local/lib/node_modules/pawl/dist/index2` came out as nothing at all.
+ * `/usr/local/lib/node_modules/terminaldeck/dist/index2` came out as nothing at all.
  * That is the failure this module says it exists to avoid; a bundle full of
  * holes still looks like a bundle, so nothing signals it.
  *

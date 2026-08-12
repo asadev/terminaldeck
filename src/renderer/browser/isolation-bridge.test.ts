@@ -10,13 +10,13 @@ describe('resolveIsolationApi', () => {
 
   it('calls through the host so a method on a prototype keeps its `this`', async () => {
     class Preload {
-      readonly minted = 'pawl-tab-from-this'
+      readonly minted = 'terminaldeck-tab-from-this'
       async browserIsolationKey(): Promise<string> {
         return this.minted
       }
     }
     const api = resolveIsolationApi(new Preload())
-    await expect(api.browserIsolationKey?.()).resolves.toBe('pawl-tab-from-this')
+    await expect(api.browserIsolationKey?.()).resolves.toBe('terminaldeck-tab-from-this')
   })
 
   it('is empty rather than throwing when there is no bridge at all', () => {
@@ -36,7 +36,7 @@ describe('isolationAvailable', () => {
 
 describe('asIsolationKey', () => {
   it('accepts a minted key', () => {
-    expect(asIsolationKey('pawl-tab-1111')).toBe('pawl-tab-1111')
+    expect(asIsolationKey('terminaldeck-tab-1111')).toBe('terminaldeck-tab-1111')
   })
 
   it('refuses anything that would silently produce a shared tab', () => {
@@ -45,6 +45,6 @@ describe('asIsolationKey', () => {
     expect(asIsolationKey(null)).toBeNull()
     expect(asIsolationKey('')).toBeNull()
     expect(asIsolationKey(42)).toBeNull()
-    expect(asIsolationKey('persist:pawl-browser')).toBeNull()
+    expect(asIsolationKey('persist:terminaldeck-browser')).toBeNull()
   })
 })

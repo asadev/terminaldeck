@@ -279,7 +279,7 @@ export function resolveSettingsBridge(host?: unknown): SettingsBridge {
     host ??
     (typeof window === 'undefined'
       ? undefined
-      : (window as unknown as { pawl?: unknown }).pawl)
+      : (window as unknown as { deck?: unknown }).deck)
 
   if (typeof source !== 'object' || source === null) return {}
   const record = source as Record<string, unknown>

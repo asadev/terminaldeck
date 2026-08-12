@@ -373,7 +373,7 @@ describe('titleFromFirstPrompt', () => {
 describe('initialSessionTitle', () => {
   function request(overrides: Partial<SpawnRequest> = {}): SpawnRequest {
     return {
-      cwd: '/Users/apple/Projects/pawl',
+      cwd: '/Users/apple/Projects/terminaldeck',
       provider: 'claude',
       resume: false,
       profileId: 'system',
@@ -393,7 +393,7 @@ describe('initialSessionTitle', () => {
   })
 
   it('falls back to the folder name, exactly as the tab bar already does', () => {
-    expect(initialSessionTitle(request())).toEqual({ title: 'pawl', source: 'folder' })
+    expect(initialSessionTitle(request())).toEqual({ title: 'terminaldeck', source: 'folder' })
   })
 
   it('never hands back a blank label for a session with no cwd', () => {

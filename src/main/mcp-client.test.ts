@@ -184,7 +184,7 @@ describe('readJsonFile', () => {
   let dir: string
 
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'pawl-mcp-'))
+    dir = mkdtempSync(join(tmpdir(), 'terminaldeck-mcp-'))
   })
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true })

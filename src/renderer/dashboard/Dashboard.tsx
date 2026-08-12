@@ -62,7 +62,7 @@ export interface DashboardProps {
  * in-memory arrangement instead of throwing on mount.
  */
 function windowBridge(): DashboardBridge | null {
-  const api = (globalThis as unknown as { pawl?: Record<string, unknown> }).pawl
+  const api = (globalThis as unknown as { deck?: Record<string, unknown> }).deck
   const load = api?.loadDashboard
   const save = api?.saveDashboard
   if (typeof load !== 'function' || typeof save !== 'function') return null

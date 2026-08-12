@@ -983,7 +983,7 @@ describe('gh arguments', () => {
  */
 describe('resolveRepo', () => {
   async function repoWith(remotes: Array<[string, string]>): Promise<string> {
-    const dir = await mkdtemp(join(tmpdir(), 'pawl-gh-'))
+    const dir = await mkdtemp(join(tmpdir(), 'terminaldeck-gh-'))
     await run('git', ['init', '-q'], { cwd: dir })
     for (const [name, url] of remotes) {
       await run('git', ['remote', 'add', name, url], { cwd: dir })
@@ -999,12 +999,12 @@ describe('resolveRepo', () => {
   })
 
   it('reports a folder that no longer exists as such, not as a missing git', async () => {
-    const result = (await resolveRepo(join(tmpdir(), 'pawl-gone-0000'))) as GitHubFailure
+    const result = (await resolveRepo(join(tmpdir(), 'terminaldeck-gone-0000'))) as GitHubFailure
     expect(result.kind).toBe('no-such-folder')
   })
 
   it('reports a plain folder as not a repository', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'pawl-plain-'))
+    const dir = await mkdtemp(join(tmpdir(), 'terminaldeck-plain-'))
     try {
       const result = (await resolveRepo(dir)) as GitHubFailure
       expect(result.kind).toBe('not-a-repo')

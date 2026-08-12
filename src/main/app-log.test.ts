@@ -14,14 +14,14 @@ vi.mock('electron', async () => {
   const { tmpdir: tmp } = await import('node:os')
   const { join: j } = await import('node:path')
   return {
-    app: { getPath: () => j(tmp(), `pawl-app-log-test-${process.pid}`, 'userData') },
+    app: { getPath: () => j(tmp(), `terminaldeck-app-log-test-${process.pid}`, 'userData') },
     shell: { openPath: async () => '' },
   }
 })
 
 const { AppLog, createAppLog, formatLine } = await import('./app-log')
 
-const ROOT = join(tmpdir(), `pawl-app-log-test-${process.pid}`)
+const ROOT = join(tmpdir(), `terminaldeck-app-log-test-${process.pid}`)
 
 beforeEach(() => {
   rmSync(ROOT, { recursive: true, force: true })

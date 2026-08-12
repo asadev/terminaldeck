@@ -71,7 +71,7 @@ const BRIDGE_METHODS = [
 
 export function resolveDebugBridge(): DebugBridge | null {
   if (typeof window === 'undefined') return null
-  const host = (window as unknown as { pawl?: Record<string, unknown> }).pawl
+  const host = (window as unknown as { deck?: Record<string, unknown> }).deck
   if (!host) return null
   return BRIDGE_METHODS.every((name) => typeof host[name] === 'function')
     ? (host as unknown as DebugBridge)
@@ -339,7 +339,7 @@ export interface DebugPanelProps {
    * — a preference, a launch flag — and this component should just obey.
    */
   enabled?: boolean
-  /** Injectable for tests; defaults to the preload bridge on `window.pawl`. */
+  /** Injectable for tests; defaults to the preload bridge on `window.deck`. */
   bridge?: DebugBridge | null
   /** Off in tests, where there is nothing to poll. */
   live?: boolean

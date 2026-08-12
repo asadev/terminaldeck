@@ -237,7 +237,7 @@ function result(board: BoardState, links: LinkRegistry, effects: LinkEffect[] = 
 /**
  * Finish a link without moving the card.
  *
- * Also clears the card's `sessionId`: a Pawl session id is a handle on a live
+ * Also clears the card's `sessionId`: a Deck session id is a handle on a live
  * process, so once that process is gone the id points at nothing and the chip
  * on the card would be a button that cannot do anything. The registry keeps the
  * id so the outcome can still be explained.

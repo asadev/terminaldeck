@@ -11,9 +11,9 @@ import {
   loadProjectIgnore,
   MAX_CACHED_PROJECTS,
   MAX_IGNORE_BYTES,
-  PAWLIGNORE_FILE,
+  TERMINALDECKIGNORE_FILE,
   type ProjectIgnore,
-} from './pawlignore'
+} from './deckignore'
 
 /**
  * The expectations below are not reasoned out — they were produced by running
@@ -32,7 +32,7 @@ import {
 let root: string
 
 beforeAll(async () => {
-  root = await mkdtemp(join(tmpdir(), 'pawl-ignore-'))
+  root = await mkdtemp(join(tmpdir(), 'terminaldeck-ignore-'))
 })
 
 afterAll(async () => {
@@ -99,11 +99,11 @@ const CASES: Array<[path: string, isDir: boolean, ignored: boolean]> = [
   ['docs/draft', false, true],
 ]
 
-describe('.pawlignore matches what git would', () => {
+describe('.deckignore matches what git would', () => {
   let ignore: ProjectIgnore
 
   beforeAll(async () => {
-    ignore = await ignoreFor(await project({ [PAWLIGNORE_FILE]: RULES }))
+    ignore = await ignoreFor(await project({ [TERMINALDECKIGNORE_FILE]: RULES }))
   })
 
   it.each(CASES)('%s (isDir=%s) → ignored=%s', (path, isDir, ignored) => {
@@ -115,11 +115,11 @@ describe('.pawlignore matches what git would', () => {
 
 describe('explanations', () => {
   it('names the rule and line that hid a file', async () => {
-    const ignore = await ignoreFor(await project({ [PAWLIGNORE_FILE]: '# notes\n*.log\ntmp/\n' }))
+    const ignore = await ignoreFor(await project({ [TERMINALDECKIGNORE_FILE]: '# notes\n*.log\ntmp/\n' }))
     const why = explainPath(ignore, 'debug.log', false)
 
     expect(why.ignored).toBe(true)
-    expect(why.rule).toMatchObject({ source: '*.log', file: PAWLIGNORE_FILE, line: 2, negated: false })
+    expect(why.rule).toMatchObject({ source: '*.log', file: TERMINALDECKIGNORE_FILE, line: 2, negated: false })
     expect(why.viaAncestor).toBeNull()
   })
 
@@ -127,7 +127,7 @@ describe('explanations', () => {
     // The user writes `!logs/important.log`, sees the file still hidden, and
     // has no way to know why without being told the directory is the problem.
     const ignore = await ignoreFor(
-      await project({ [PAWLIGNORE_FILE]: 'logs/\n!logs/important.log\n' }),
+      await project({ [TERMINALDECKIGNORE_FILE]: 'logs/\n!logs/important.log\n' }),
     )
     const why = explainPath(ignore, 'logs/important.log', false)
 
@@ -137,7 +137,7 @@ describe('explanations', () => {
   })
 
   it('reports a negation as the deciding rule when it wins', async () => {
-    const ignore = await ignoreFor(await project({ [PAWLIGNORE_FILE]: '*.tmp\n!vital.tmp\n' }))
+    const ignore = await ignoreFor(await project({ [TERMINALDECKIGNORE_FILE]: '*.tmp\n!vital.tmp\n' }))
     const why = explainPath(ignore, 'vital.tmp', false)
 
     expect(why.ignored).toBe(false)
@@ -145,7 +145,7 @@ describe('explanations', () => {
   })
 
   it('says nothing matched when nothing did', async () => {
-    const ignore = await ignoreFor(await project({ [PAWLIGNORE_FILE]: '*.log\n' }))
+    const ignore = await ignoreFor(await project({ [TERMINALDECKIGNORE_FILE]: '*.log\n' }))
     expect(explainPath(ignore, 'src/main.ts', false)).toMatchObject({
       ignored: false,
       rule: null,
@@ -154,7 +154,7 @@ describe('explanations', () => {
   })
 
   it('marks node_modules as hidden by the app rather than by a rule', async () => {
-    const ignore = await ignoreFor(await project({ [PAWLIGNORE_FILE]: '!node_modules\n' }))
+    const ignore = await ignoreFor(await project({ [TERMINALDECKIGNORE_FILE]: '!node_modules\n' }))
     const why = explainPath(ignore, 'node_modules/react/index.js', false)
 
     // A user cannot un-ignore these, and a blank explanation would read as a bug.
@@ -162,7 +162,7 @@ describe('explanations', () => {
   })
 
   it('treats the root itself as never ignored', async () => {
-    const ignore = await ignoreFor(await project({ [PAWLIGNORE_FILE]: '*\n' }))
+    const ignore = await ignoreFor(await project({ [TERMINALDECKIGNORE_FILE]: '*\n' }))
     expect(verdict(ignore, '', true)).toBe(false)
   })
 })
@@ -170,33 +170,33 @@ describe('explanations', () => {
 /* ------------------------------------------------------------- ordering -- */
 
 describe('merging with .gitignore', () => {
-  it('lets .pawlignore re-include something .gitignore hides', async () => {
-    const dir = await project({ '.gitignore': 'dist/*\n', [PAWLIGNORE_FILE]: '!dist/preview.html\n' })
+  it('lets .deckignore re-include something .gitignore hides', async () => {
+    const dir = await project({ '.gitignore': 'dist/*\n', [TERMINALDECKIGNORE_FILE]: '!dist/preview.html\n' })
     const ignore = await ignoreFor(dir)
 
     expect(verdict(ignore, 'dist/bundle.js', false)).toBe(true)
     expect(verdict(ignore, 'dist/preview.html', false)).toBe(false)
   })
 
-  it('lets .pawlignore hide something .gitignore explicitly kept', async () => {
+  it('lets .deckignore hide something .gitignore explicitly kept', async () => {
     // Last file wins, so the app's own list has the final say.
-    const dir = await project({ '.gitignore': '*.env\n!local.env\n', [PAWLIGNORE_FILE]: 'local.env\n' })
+    const dir = await project({ '.gitignore': '*.env\n!local.env\n', [TERMINALDECKIGNORE_FILE]: 'local.env\n' })
     const ignore = await ignoreFor(dir)
 
     expect(verdict(ignore, 'local.env', false)).toBe(true)
-    expect(explainPath(ignore, 'local.env', false).rule?.file).toBe(PAWLIGNORE_FILE)
+    expect(explainPath(ignore, 'local.env', false).rule?.file).toBe(TERMINALDECKIGNORE_FILE)
   })
 
-  it('reads .gitignore alone when there is no .pawlignore', async () => {
+  it('reads .gitignore alone when there is no .deckignore', async () => {
     const ignore = await ignoreFor(await project({ '.gitignore': 'coverage/\n' }))
 
     expect(verdict(ignore, 'coverage', true)).toBe(true)
-    expect(ignore.sources.find((s) => s.file === PAWLIGNORE_FILE)?.present).toBe(false)
+    expect(ignore.sources.find((s) => s.file === TERMINALDECKIGNORE_FILE)?.present).toBe(false)
     expect(ignore.sources.find((s) => s.file === '.gitignore')?.ruleCount).toBe(1)
   })
 
-  it('can be asked for .pawlignore on its own', async () => {
-    const dir = await project({ '.gitignore': 'secret.txt\n', [PAWLIGNORE_FILE]: '*.log\n' })
+  it('can be asked for .deckignore on its own', async () => {
+    const dir = await project({ '.gitignore': 'secret.txt\n', [TERMINALDECKIGNORE_FILE]: '*.log\n' })
     const ignore = await loadProjectIgnore(dir, { includeGitignore: false })
 
     expect(verdict(ignore, 'secret.txt', false)).toBe(false)
@@ -216,33 +216,33 @@ describe('merging with .gitignore', () => {
 
 describe('cache', () => {
   it('recompiles after the file is edited', async () => {
-    const dir = await project({ [PAWLIGNORE_FILE]: 'target/\n' })
+    const dir = await project({ [TERMINALDECKIGNORE_FILE]: 'target/\n' })
     expect((await ignoreFor(dir)).matches('target', true)).toBe(true)
 
     // mtime has millisecond resolution; a same-millisecond rewrite of the same
     // length would leave the stamp unchanged and serve the stale matcher.
     await new Promise((resolve) => setTimeout(resolve, 15))
-    await writeFile(join(dir, PAWLIGNORE_FILE), '# target is welcome again\n', 'utf8')
+    await writeFile(join(dir, TERMINALDECKIGNORE_FILE), '# target is welcome again\n', 'utf8')
 
     expect((await ignoreFor(dir)).matches('target', true)).toBe(false)
   })
 
-  it('notices a .pawlignore that appears after the first read', async () => {
+  it('notices a .deckignore that appears after the first read', async () => {
     const dir = await project({})
     expect((await ignoreFor(dir)).matches('notes.md', false)).toBe(false)
 
-    await writeFile(join(dir, PAWLIGNORE_FILE), 'notes.md\n', 'utf8')
+    await writeFile(join(dir, TERMINALDECKIGNORE_FILE), 'notes.md\n', 'utf8')
 
     expect((await ignoreFor(dir)).matches('notes.md', false)).toBe(true)
   })
 
   it('returns the same compiled object while nothing changes', async () => {
-    const dir = await project({ [PAWLIGNORE_FILE]: '*.log\n' })
+    const dir = await project({ [TERMINALDECKIGNORE_FILE]: '*.log\n' })
     expect(await ignoreFor(dir)).toBe(await ignoreFor(dir))
   })
 
   it('drops everything when invalidated without a root', async () => {
-    const dir = await project({ [PAWLIGNORE_FILE]: '*.log\n' })
+    const dir = await project({ [TERMINALDECKIGNORE_FILE]: '*.log\n' })
     const first = await ignoreFor(dir)
     invalidateIgnoreCache()
     expect(await ignoreFor(dir)).not.toBe(first)
@@ -251,7 +251,7 @@ describe('cache', () => {
   it('shares one compile between callers that arrive together', async () => {
     // Regression: the tree expands several directories at once and each call
     // used to read and recompile the same two files independently.
-    const dir = await project({ [PAWLIGNORE_FILE]: '*.log\n' })
+    const dir = await project({ [TERMINALDECKIGNORE_FILE]: '*.log\n' })
     invalidateIgnoreCache(dir)
 
     const [a, b, c] = await Promise.all([ignoreFor(dir), ignoreFor(dir), ignoreFor(dir)])
@@ -261,9 +261,9 @@ describe('cache', () => {
 
   it('keeps the two option variants apart instead of evicting each other', async () => {
     // Regression: one slot per root meant a caller wanting the merged list and
-    // one wanting .pawlignore alone recompiled on every single call, and each
+    // one wanting .deckignore alone recompiled on every single call, and each
     // could be served the other's matcher.
-    const dir = await project({ '.gitignore': 'secret.txt\n', [PAWLIGNORE_FILE]: '*.log\n' })
+    const dir = await project({ '.gitignore': 'secret.txt\n', [TERMINALDECKIGNORE_FILE]: '*.log\n' })
 
     const merged = await ignoreFor(dir)
     const alone = await ignoreFor(dir, { includeGitignore: false })
@@ -276,7 +276,7 @@ describe('cache', () => {
   })
 
   it('invalidating a root drops both of its variants', async () => {
-    const dir = await project({ [PAWLIGNORE_FILE]: '*.log\n' })
+    const dir = await project({ [TERMINALDECKIGNORE_FILE]: '*.log\n' })
     const merged = await ignoreFor(dir)
     const alone = await ignoreFor(dir, { includeGitignore: false })
 
@@ -290,7 +290,7 @@ describe('cache', () => {
     // Regression: the map only ever grew. The IPC guard naming which roots are
     // legal is optional, so an unbounded map keyed by caller-supplied paths is
     // a leak with a remote trigger.
-    const dir = await project({ [PAWLIGNORE_FILE]: '*.log\n' })
+    const dir = await project({ [TERMINALDECKIGNORE_FILE]: '*.log\n' })
     const first = await ignoreFor(dir)
 
     // Roots that do not exist still occupy a slot: absent ignore files compile
@@ -304,7 +304,7 @@ describe('cache', () => {
   })
 
   it('keeps a root that is still being used', async () => {
-    const dir = await project({ [PAWLIGNORE_FILE]: '*.log\n' })
+    const dir = await project({ [TERMINALDECKIGNORE_FILE]: '*.log\n' })
     let live = await ignoreFor(dir)
 
     for (let n = 0; n < MAX_CACHED_PROJECTS - 2; n++) {
@@ -324,9 +324,9 @@ describe('malformed and hostile files', () => {
     // One regex per line, evaluated against every path in the tree — a
     // generated file here would make the tree unusable rather than tidy.
     const huge = `${'#'.repeat(MAX_IGNORE_BYTES)}\n*.log\n`
-    const ignore = await ignoreFor(await project({ [PAWLIGNORE_FILE]: huge }))
+    const ignore = await ignoreFor(await project({ [TERMINALDECKIGNORE_FILE]: huge }))
 
-    expect(ignore.sources.find((s) => s.file === PAWLIGNORE_FILE)?.skipped).toBe('too-large')
+    expect(ignore.sources.find((s) => s.file === TERMINALDECKIGNORE_FILE)?.skipped).toBe('too-large')
     expect(verdict(ignore, 'a.log', false)).toBe(false)
   })
 
@@ -340,8 +340,8 @@ describe('malformed and hostile files', () => {
     const exact = padding + rule
     expect(Buffer.byteLength(exact, 'utf8')).toBe(MAX_IGNORE_BYTES)
 
-    const ignore = await ignoreFor(await project({ [PAWLIGNORE_FILE]: exact }))
-    expect(ignore.sources.find((s) => s.file === PAWLIGNORE_FILE)?.skipped).toBeNull()
+    const ignore = await ignoreFor(await project({ [TERMINALDECKIGNORE_FILE]: exact }))
+    expect(ignore.sources.find((s) => s.file === TERMINALDECKIGNORE_FILE)?.skipped).toBeNull()
     expect(verdict(ignore, 'a.log', false)).toBe(true)
   })
 
@@ -349,33 +349,33 @@ describe('malformed and hostile files', () => {
     const over = `${'#'.repeat(MAX_IGNORE_BYTES)}\n`
     expect(Buffer.byteLength(over, 'utf8')).toBe(MAX_IGNORE_BYTES + 1)
 
-    const ignore = await ignoreFor(await project({ [PAWLIGNORE_FILE]: over }))
-    expect(ignore.sources.find((s) => s.file === PAWLIGNORE_FILE)?.skipped).toBe('too-large')
+    const ignore = await ignoreFor(await project({ [TERMINALDECKIGNORE_FILE]: over }))
+    expect(ignore.sources.find((s) => s.file === TERMINALDECKIGNORE_FILE)?.skipped).toBe('too-large')
   })
 
   it('reads an empty ignore file without complaint', async () => {
     // Zero bytes means a zero-length read, which is the one case a read loop
     // can spin on forever if it waits for progress that never comes.
-    const ignore = await ignoreFor(await project({ [PAWLIGNORE_FILE]: '' }))
+    const ignore = await ignoreFor(await project({ [TERMINALDECKIGNORE_FILE]: '' }))
     expect(ignore.rules).toEqual([])
-    expect(ignore.sources.find((s) => s.file === PAWLIGNORE_FILE)?.present).toBe(true)
+    expect(ignore.sources.find((s) => s.file === TERMINALDECKIGNORE_FILE)?.present).toBe(true)
   })
 
   it('keeps line numbers right when blanks and comments are dropped', async () => {
     const ignore = await ignoreFor(
-      await project({ [PAWLIGNORE_FILE]: '\n# a comment\n\n*.bak\n' }),
+      await project({ [TERMINALDECKIGNORE_FILE]: '\n# a comment\n\n*.bak\n' }),
     )
     expect(explainPath(ignore, 'x.bak', false).rule?.line).toBe(4)
   })
 
   it('handles CRLF line endings', async () => {
-    const ignore = await ignoreFor(await project({ [PAWLIGNORE_FILE]: '*.log\r\ntmp/\r\n' }))
+    const ignore = await ignoreFor(await project({ [TERMINALDECKIGNORE_FILE]: '*.log\r\ntmp/\r\n' }))
     expect(verdict(ignore, 'a.log', false)).toBe(true)
     expect(verdict(ignore, 'tmp', true)).toBe(true)
   })
 
   it.skipIf(process.platform === 'win32')(
-    'does not hang on a .pawlignore that is a named pipe',
+    'does not hang on a .deckignore that is a named pipe',
     async () => {
       // `open` on a FIFO blocks until someone opens the write end, so reading
       // one would leave this promise pending for the life of the process and
@@ -383,7 +383,7 @@ describe('malformed and hostile files', () => {
       // timeout is the only way to observe the failure.
       const dir = await project({})
       const { execFileSync } = await import('node:child_process')
-      execFileSync('mkfifo', [join(dir, PAWLIGNORE_FILE)])
+      execFileSync('mkfifo', [join(dir, TERMINALDECKIGNORE_FILE)])
       invalidateIgnoreCache(dir)
 
       const ignore = await Promise.race([
@@ -394,15 +394,15 @@ describe('malformed and hostile files', () => {
       ])
 
       expect(ignore.rules).toEqual([])
-      expect(ignore.sources.find((s) => s.file === PAWLIGNORE_FILE)?.present).toBe(false)
+      expect(ignore.sources.find((s) => s.file === TERMINALDECKIGNORE_FILE)?.present).toBe(false)
     },
     10_000,
   )
 
-  it('treats a directory named .pawlignore as absent rather than throwing', async () => {
+  it('treats a directory named .deckignore as absent rather than throwing', async () => {
     const dir = await project({})
     const { mkdir } = await import('node:fs/promises')
-    await mkdir(join(dir, PAWLIGNORE_FILE))
+    await mkdir(join(dir, TERMINALDECKIGNORE_FILE))
     invalidateIgnoreCache(dir)
 
     const ignore = await ignoreFor(dir)
@@ -414,7 +414,7 @@ describe('malformed and hostile files', () => {
 
 describe('consumer filters', () => {
   it('gives a walk the two predicates it needs, with isDir set correctly', async () => {
-    const ignore = await ignoreFor(await project({ [PAWLIGNORE_FILE]: 'vendor/\n*.min.js\n' }))
+    const ignore = await ignoreFor(await project({ [TERMINALDECKIGNORE_FILE]: 'vendor/\n*.min.js\n' }))
     const filters = createWalkFilters(ignore)
 
     expect(filters.skipDir('vendor')).toBe(true)
@@ -425,10 +425,10 @@ describe('consumer filters', () => {
     expect(filters.keepFile('src/app.min.js')).toBe(false)
   })
 
-  it('filters a git file list, which knows nothing about .pawlignore', async () => {
-    // `git ls-files` already applied .gitignore, so anything a .pawlignore
+  it('filters a git file list, which knows nothing about .deckignore', async () => {
+    // `git ls-files` already applied .gitignore, so anything a .deckignore
     // rule covers comes back tracked and has to be dropped here.
-    const dir = await project({ [PAWLIGNORE_FILE]: 'docs/\n*.snap\n' })
+    const dir = await project({ [TERMINALDECKIGNORE_FILE]: 'docs/\n*.snap\n' })
     const kept = await filterIgnoredFiles(dir, [
       'src/app.ts',
       'docs/readme.md',

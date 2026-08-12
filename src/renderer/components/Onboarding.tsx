@@ -32,7 +32,7 @@ const STATE_LABEL: Record<ToolStatus['state'], string> = {
 /**
  * First-run screen.
  *
- * Pawl runs the agent CLIs as real subprocesses — it never handles anyone's
+ * Deck runs the agent CLIs as real subprocesses — it never handles anyone's
  * credentials. That is good for security but means a new user with nothing
  * installed would otherwise open the app, press ⌘T, and watch a shell appear
  * with no explanation. This screen is the explanation.
@@ -44,7 +44,7 @@ export function Onboarding({ onContinue, onOpenProject }: Props) {
   const check = async () => {
     setChecking(true)
     try {
-      const result = (await window.pawl.checkPrerequisites()) as Prerequisites
+      const result = (await window.deck.checkPrerequisites()) as Prerequisites
       setPrereq(result)
     } finally {
       setChecking(false)
@@ -61,9 +61,9 @@ export function Onboarding({ onContinue, onOpenProject }: Props) {
   return (
     <div className="onboarding">
       <div className="onboarding-inner">
-        <h1>Welcome to Pawl</h1>
+        <h1>Welcome to Deck</h1>
         <p className="onboarding-lede">
-          Pawl runs coding agents in real terminals. It never sees your logins — each agent signs
+          Deck runs coding agents in real terminals. It never sees your logins — each agent signs
           you in itself, inside the session.
         </p>
 

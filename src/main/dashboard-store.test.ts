@@ -20,17 +20,17 @@ import {
  * layout as opaque JSON, and `tsconfig.node` cannot see `src/renderer` anyway.
  */
 
-const USER_DATA = join(tmpdir(), `pawl-dashboard-store-test-${process.pid}`)
+const USER_DATA = join(tmpdir(), `terminaldeck-dashboard-store-test-${process.pid}`)
 
 vi.mock('electron', async () => {
   const { tmpdir: tmp } = await import('node:os')
   const { join: j } = await import('node:path')
-  return { app: { getPath: () => j(tmp(), `pawl-dashboard-store-test-${process.pid}`) } }
+  return { app: { getPath: () => j(tmp(), `terminaldeck-dashboard-store-test-${process.pid}`) } }
 })
 
 afterAll(() => rmSync(USER_DATA, { recursive: true, force: true }))
 
-const PROJECT = '/Users/asad/Projects/pawl'
+const PROJECT = '/Users/asad/Projects/terminaldeck'
 
 function layout(widgetId = 'a'): Record<string, unknown> {
   return {
@@ -43,8 +43,8 @@ function layout(widgetId = 'a'): Record<string, unknown> {
 
 describe('dashboardFileName', () => {
   it('identifies a project the same way however its path is spelled', () => {
-    expect(dashboardFileName('/Users/asad/Projects/pawl/')).toBe(dashboardFileName(PROJECT))
-    expect(dashboardFileName('/Users/asad/Projects/./pawl')).toBe(dashboardFileName(PROJECT))
+    expect(dashboardFileName('/Users/asad/Projects/terminaldeck/')).toBe(dashboardFileName(PROJECT))
+    expect(dashboardFileName('/Users/asad/Projects/./terminaldeck')).toBe(dashboardFileName(PROJECT))
   })
 
   it('keeps same-named folders in different trees apart', () => {
@@ -92,8 +92,8 @@ describe('saveDashboard', () => {
   })
 
   it('rejects a relative project path', () => {
-    expect(() => saveDashboard('projects/pawl', layout())).toThrow(/absolute/)
-    expect(() => loadDashboard('projects/pawl')).toThrow(/absolute/)
+    expect(() => saveDashboard('projects/terminaldeck', layout())).toThrow(/absolute/)
+    expect(() => loadDashboard('projects/terminaldeck')).toThrow(/absolute/)
   })
 
   it('leaves no temp file behind', () => {

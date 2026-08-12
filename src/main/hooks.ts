@@ -2,7 +2,7 @@
  * Provider hooks — installing our own callbacks into each agent CLI's real
  * settings file.
  *
- * Every hook entry we write ends with the shell comment `# pawl-hook`, and that
+ * Every hook entry we write ends with the shell comment `# terminaldeck-hook`, and that
  * marker is the *only* thing that makes an entry ours. Nothing is ever removed
  * because it looks like ours, sits where ours would sit, or points at our port:
  * a machine that also runs Vibeyard has 26 hooks in the same file tagged
@@ -441,7 +441,7 @@ export function backupPathFor(context: HookContext, id: HookProviderId): string 
  *
  * `wx` is what makes "the first time" true: a later backup would capture a file
  * we had already modified, which is exactly the copy that is no use to anybody
- * trying to get back to how things were before Pawl arrived.
+ * trying to get back to how things were before Deck arrived.
  */
 function backupOnce(context: HookContext, id: HookProviderId, file: string): string | null {
   const target = backupPathFor(context, id)

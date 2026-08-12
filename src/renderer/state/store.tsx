@@ -54,10 +54,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setProjects((prev) => prev.filter((p) => p.path !== path))
     setSessions((prev) => {
       // Kill the processes too, or they linger with no way to reach them.
-      for (const s of prev.filter((x) => x.projectPath === path)) void window.pawl.killSession(s.id)
+      for (const s of prev.filter((x) => x.projectPath === path)) void window.deck.killSession(s.id)
       return prev.filter((s) => s.projectPath !== path)
     })
-    void window.pawl.removeProject(path)
+    void window.deck.removeProject(path)
   }, [])
 
   const addSession = useCallback((meta: SessionMeta) => {

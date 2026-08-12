@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { PanelId } from './panels'
 
-const WIDTH_KEY = 'pawl.dock.width'
-const COLLAPSED_KEY = 'pawl.dock.collapsed'
-const PANEL_KEY = 'pawl.dock.panel'
+const WIDTH_KEY = 'deck.dock.width'
+const COLLAPSED_KEY = 'deck.dock.collapsed'
+const PANEL_KEY = 'deck.dock.panel'
 const MIN = 240
 const MAX = 560
 

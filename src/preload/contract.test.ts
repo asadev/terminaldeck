@@ -15,7 +15,7 @@ import { describe, expect, it } from 'vitest'
  *     but the preload called them with `ipcRenderer.invoke`. invoke only routes
  *     to `handle`, so every call rejected — the browser view was created and
  *     loaded pages that were never positioned or shown.
- *  3. `PawlApi` kept declaring methods the preload had stopped exposing.
+ *  3. `DeckApi` kept declaring methods the preload had stopped exposing.
  *
  * These are string-matching problems across three files, which is exactly what
  * a test can check and a compiler cannot.
@@ -96,9 +96,9 @@ describe('renderer → preload contract', () => {
     expect(missing).toEqual([])
   })
 
-  it('PawlApi does not declare methods the preload no longer exposes', () => {
+  it('DeckApi does not declare methods the preload no longer exposes', () => {
     const api = read('shared/types.ts')
-    const block = api.slice(api.indexOf('interface PawlApi'))
+    const block = api.slice(api.indexOf('interface DeckApi'))
     const declared = [...block.matchAll(/^\s{2}([a-zA-Z][A-Za-z0-9_]*)\s*\(/gm)].map((m) => m[1])
     expect(declared.filter((name) => !exposed.has(name))).toEqual([])
   })

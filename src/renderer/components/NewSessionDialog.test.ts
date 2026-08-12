@@ -56,10 +56,10 @@ function hostileStorage(): Storage {
 describe('parseRecentProjects', () => {
   it('turns the stored list into rows with folder names', () => {
     const projects = parseRecentProjects([
-      { path: '/Users/apple/Projects/pawl', lastOpenedAt: 2 },
+      { path: '/Users/apple/Projects/terminaldeck', lastOpenedAt: 2 },
       { path: '/Users/apple/Projects/mookhayo', lastOpenedAt: 5 },
     ])
-    expect(projects.map((p) => p.name)).toEqual(['mookhayo', 'pawl'])
+    expect(projects.map((p) => p.name)).toEqual(['mookhayo', 'terminaldeck'])
   })
 
   it('puts the most recently opened first', () => {

@@ -70,7 +70,7 @@ describe('help content', () => {
 
   it('never hardcodes the product name — copy uses the placeholder', () => {
     const raw = JSON.stringify(HELP_TOPICS)
-    expect(raw).not.toContain('Pawl')
+    expect(raw).not.toContain('Deck')
     expect(raw).toContain('{app}')
   })
 })

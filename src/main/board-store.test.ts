@@ -14,17 +14,17 @@ import { boardFileName, boardFilePath, loadBoard, saveBoard } from './board-stor
  * board as opaque JSON, and `tsconfig.node` cannot see `src/renderer` anyway.
  */
 
-const USER_DATA = join(tmpdir(), `pawl-board-store-test-${process.pid}`)
+const USER_DATA = join(tmpdir(), `terminaldeck-board-store-test-${process.pid}`)
 
 vi.mock('electron', async () => {
   const { tmpdir: tmp } = await import('node:os')
   const { join: j } = await import('node:path')
-  return { app: { getPath: () => j(tmp(), `pawl-board-store-test-${process.pid}`) } }
+  return { app: { getPath: () => j(tmp(), `terminaldeck-board-store-test-${process.pid}`) } }
 })
 
 afterAll(() => rmSync(USER_DATA, { recursive: true, force: true }))
 
-const PROJECT = '/Users/asad/Projects/pawl'
+const PROJECT = '/Users/asad/Projects/terminaldeck'
 
 function board(cardTitle = 'A'): Record<string, unknown> {
   return {
@@ -49,8 +49,8 @@ describe('boardFileName', () => {
     const canonical = boardFileName(PROJECT)
     expect(boardFileName(`${PROJECT}/`)).toBe(canonical)
     expect(boardFileName(`${PROJECT}/.`)).toBe(canonical)
-    expect(boardFileName('/Users/asad/Projects/../Projects/pawl')).toBe(canonical)
-    expect(boardFileName('/Users/asad//Projects//pawl')).toBe(canonical)
+    expect(boardFileName('/Users/asad/Projects/../Projects/terminaldeck')).toBe(canonical)
+    expect(boardFileName('/Users/asad//Projects//terminaldeck')).toBe(canonical)
   })
 
   it('still separates same-named folders in different trees', () => {
@@ -67,7 +67,7 @@ describe('boardFileName', () => {
   })
 
   it('keeps a readable prefix for a normal project', () => {
-    expect(boardFileName(PROJECT).startsWith('pawl-')).toBe(true)
+    expect(boardFileName(PROJECT).startsWith('terminaldeck-')).toBe(true)
   })
 })
 

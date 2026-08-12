@@ -11,7 +11,7 @@ export function EmptyState({ onOpenProject }: Props) {
           <path d="M12 19h8" strokeWidth="1.6" strokeLinecap="round" />
         </svg>
       </div>
-      <h1>Pawl</h1>
+      <h1>Deck</h1>
       <p>Run and watch your Claude sessions.</p>
       <button type="button" className="btn-primary" onClick={onOpenProject}>
         Open a project

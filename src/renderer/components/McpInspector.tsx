@@ -109,7 +109,7 @@ export interface McpBridge {
 export interface McpInspectorProps {
   /** Absolute path of the open project, so project- and local-scope servers appear. */
   projectPath?: string | null
-  /** Injectable for tests; defaults to the preload bridge on `window.pawl`. */
+  /** Injectable for tests; defaults to the preload bridge on `window.deck`. */
   bridge?: McpBridge
 }
 
@@ -131,7 +131,7 @@ const BRIDGE_METHODS = [
 function resolveBridge(): McpBridge | null {
   // Tests render this to static markup, where there is no window at all.
   if (typeof window === 'undefined') return null
-  const host = (window as unknown as { pawl?: Record<string, unknown> }).pawl
+  const host = (window as unknown as { deck?: Record<string, unknown> }).deck
   if (!host) return null
   if (BRIDGE_METHODS.some((method) => typeof host[method] !== 'function')) return null
   return host as unknown as McpBridge

@@ -15,7 +15,7 @@ describe('encodeProjectPath', () => {
   // ~/.claude/projects and the `cwd` recorded inside that transcript.
   it('replaces separators with hyphens', () => {
     expect(encodeProjectPath('/Users/apple/ClaudeAsad')).toBe('-Users-apple-ClaudeAsad')
-    expect(encodeProjectPath('/Users/apple/Projects/pawl')).toBe('-Users-apple-Projects-pawl')
+    expect(encodeProjectPath('/Users/apple/Projects/terminaldeck')).toBe('-Users-apple-Projects-terminaldeck')
   })
 
   it('collapses a dot-directory into a double hyphen', () => {

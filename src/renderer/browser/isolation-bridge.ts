@@ -39,7 +39,7 @@ const ISOLATION_METHODS: ReadonlyArray<keyof IsolationBridgeMethods> = [
  */
 export function resolveIsolationApi(host?: unknown): IsolationApi {
   const source =
-    host ?? (typeof window === 'undefined' ? undefined : (window as unknown as { pawl?: unknown }).pawl)
+    host ?? (typeof window === 'undefined' ? undefined : (window as unknown as { deck?: unknown }).deck)
   if (typeof source !== 'object' || source === null) return {}
 
   const record = source as Record<string, unknown>

@@ -63,7 +63,7 @@ export interface BrowserWorkspaceProps {
   showTabs?: boolean
   /** Receives a single line for the agent. Absent means no session is focused. */
   onSendToAgent?: (text: string) => void
-  /** Injectable for tests; defaults to the preload bridge on `window.pawl`. */
+  /** Injectable for tests; defaults to the preload bridge on `window.deck`. */
   bridge?: BrowserBridge
   /**
    * Per-tab isolation, which is optional rather than required.
@@ -74,7 +74,7 @@ export interface BrowserWorkspaceProps {
   isolation?: IsolationApi
 }
 
-const HOME_KEY = 'pawl.browser.home'
+const HOME_KEY = 'terminaldeck.browser.home'
 const DEFAULT_HOME = 'http://localhost:3000'
 
 const EMPTY_RECORDING: RecordingState = {
@@ -184,7 +184,7 @@ export function BrowserWorkspace({
   const api = useMemo(() => bridge ?? resolveBrowserBridge(), [bridge])
   const iso = useMemo(() => isolation ?? resolveIsolationApi(), [isolation])
   const missing = useMemo(
-    () => (bridge ? [] : missingBridgeMethods(typeof window === 'undefined' ? null : (window as unknown as { pawl?: unknown }).pawl)),
+    () => (bridge ? [] : missingBridgeMethods(typeof window === 'undefined' ? null : (window as unknown as { deck?: unknown }).deck)),
     [bridge],
   )
 

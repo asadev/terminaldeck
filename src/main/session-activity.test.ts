@@ -86,7 +86,7 @@ describe('classify', () => {
     const screen = [
       'Accessing workspace:',
       '',
-      '/Users/apple/Projects/pawl',
+      '/Users/apple/Projects/terminaldeck',
       '',
       'Claude Code will be able to read, edit, and execute files here.',
       '',

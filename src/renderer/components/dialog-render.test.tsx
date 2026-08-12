@@ -43,7 +43,7 @@ const noop = (): void => {}
 
 describe('NewSessionDialog', () => {
   const html = renderToStaticMarkup(
-    <NewSessionDialog open projectPath="/Users/apple/Projects/pawl" onClose={noop} onStart={noop} />,
+    <NewSessionDialog open projectPath="/Users/apple/Projects/terminaldeck" onClose={noop} onStart={noop} />,
   )
 
   it('paints before any bridge has answered', () => {

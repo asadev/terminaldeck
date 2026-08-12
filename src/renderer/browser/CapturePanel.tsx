@@ -16,7 +16,7 @@ export function describeLabelSource(source: LabelSource): string {
 /**
  * Flatten anything on its way to the agent.
  *
- * Pawl types this into a PTY running a coding CLI, where a newline submits the
+ * Deck types this into a PTY running a coding CLI, where a newline submits the
  * prompt — a two-line message would send the first line as the whole
  * instruction. The main process already guarantees this for the context half;
  * this covers what the user typed into the instruction field.

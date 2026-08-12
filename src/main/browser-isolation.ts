@@ -7,13 +7,13 @@ import { writeRecordPreload } from './browser-record-preload'
  *
  * ## What "isolated" has to mean to be worth having
  *
- * Every tab in this app has always shared one `persist:pawl-browser` partition,
+ * Every tab in this app has always shared one `persist:terminaldeck-browser` partition,
  * which is what makes a login survive a restart. That is the right default and
  * the wrong one for two jobs the browser panel exists to do: signing into the
  * same dev app as a second user, and looking at a page without the cookies just
  * imported from Chrome following you into it.
  *
- * So an isolated tab gets a partition of its own, named `pawl-tab-<uuid>` with
+ * So an isolated tab gets a partition of its own, named `terminaldeck-tab-<uuid>` with
  * **no `persist:` prefix**. That prefix is the entire difference between a
  * partition Electron writes to `<userData>/Partitions/<name>` and one that lives
  * in memory and is gone when the process ends. Isolation that left a directory
@@ -24,8 +24,8 @@ import { writeRecordPreload } from './browser-record-preload'
  *
  * All four of those claims were checked on Electron 41.10.5 rather than taken
  * from the docs, because the whole feature is worthless if any of them is
- * wrong: `persist:pawl-browser` reports `isPersistent()` true, a bare
- * `pawl-tab-<uuid>` reports false with a null storage path, the same name hands
+ * wrong: `persist:terminaldeck-browser` reports `isPersistent()` true, a bare
+ * `terminaldeck-tab-<uuid>` reports false with a null storage path, the same name hands
  * back the identical object while a different one does not, and a cookie
  * written into one isolated partition is invisible to both the other isolated
  * partition and the shared one.
@@ -47,7 +47,7 @@ import { writeRecordPreload } from './browser-record-preload'
  */
 
 /** No `persist:` — that is what keeps an isolated tab's data in memory only. */
-export const ISOLATED_PREFIX = 'pawl-tab-'
+export const ISOLATED_PREFIX = 'terminaldeck-tab-'
 
 /** Partitions handed out this run, so they can be recognised and disposed. */
 const sessions = new Map<string, Session>()

@@ -1,5 +1,5 @@
 /**
- * `.pawlignore` — one list of what this app should not look at, shared by the
+ * `.deckignore` — one list of what this app should not look at, shared by the
  * file tree, quick open and the watchers.
  *
  * The pattern engine is not written here. `fs-tree.ts` already has one, and it
@@ -12,14 +12,14 @@
  *
  * What this module adds is everything around the matcher: finding the files,
  * caching the compiled result until they change, merging `.gitignore` with
- * `.pawlignore` in the right order, explaining *which* rule hid something, and
+ * `.deckignore` in the right order, explaining *which* rule hid something, and
  * handing consumers filters in the shape each of them needs.
  *
  * Ordering matters and is the reason both files are merged here rather than
- * separately: rules are evaluated last-match-wins, so `.pawlignore` is
+ * separately: rules are evaluated last-match-wins, so `.deckignore` is
  * appended after `.gitignore` and can re-include something git hides —
- * `!dist/preview.html` in `.pawlignore` works even though `.gitignore` has
- * `dist/`. The reverse would make `.pawlignore` unable to override anything.
+ * `!dist/preview.html` in `.deckignore` works even though `.gitignore` has
+ * `dist/`. The reverse would make `.deckignore` unable to override anything.
  */
 
 import { constants } from 'node:fs'
@@ -36,11 +36,11 @@ import {
 
 /* ---------------------------------------------------------------- types -- */
 
-export const PAWLIGNORE_FILE = '.pawlignore'
+export const TERMINALDECKIGNORE_FILE = '.deckignore'
 export const GITIGNORE_FILE = '.gitignore'
 
-/** Later files win, so `.pawlignore` can negate a `.gitignore` rule. */
-export const IGNORE_FILE_ORDER: readonly string[] = [GITIGNORE_FILE, PAWLIGNORE_FILE]
+/** Later files win, so `.deckignore` can negate a `.gitignore` rule. */
+export const IGNORE_FILE_ORDER: readonly string[] = [GITIGNORE_FILE, TERMINALDECKIGNORE_FILE]
 
 /**
  * A hand-written ignore file is a few hundred bytes. Anything past this is a
@@ -52,7 +52,7 @@ export const MAX_IGNORE_BYTES = 256 * 1024
 /** A rule plus which file it came from, so an explanation can name the file. */
 export interface TaggedRule {
   rule: IgnoreRule
-  /** File name, e.g. `.pawlignore`. */
+  /** File name, e.g. `.deckignore`. */
   file: string
   /** 1-based line number within that file. */
   line: number
@@ -99,7 +99,7 @@ async function readIgnoreFile(
     // passed the cap is then not the size that gets allocated.
     //
     // Opened non-blocking because `open` on a FIFO waits for a writer, and a
-    // `.pawlignore` that is a named pipe would otherwise hang this promise for
+    // `.deckignore` that is a named pipe would otherwise hang this promise for
     // good, taking the file tree and quick open down with it. O_NONBLOCK is
     // POSIX-only; on Windows it is undefined and the flag falls away.
     handle = await open(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0))
@@ -152,7 +152,7 @@ export async function loadProjectIgnore(
 ): Promise<ProjectIgnore> {
   const resolved = resolve(root)
   const files =
-    options.includeGitignore === false ? [PAWLIGNORE_FILE] : [...IGNORE_FILE_ORDER]
+    options.includeGitignore === false ? [TERMINALDECKIGNORE_FILE] : [...IGNORE_FILE_ORDER]
 
   const loaded = await Promise.all(files.map((file) => readIgnoreFile(resolved, file)))
   // Concatenated in file order — the whole point of the ordering is that a
@@ -187,7 +187,7 @@ export const MAX_CACHED_PROJECTS = 64
 
 /**
  * Keyed by root *and* option, because the two variants compile different rules.
- * A single slot per root meant a caller asking for `.pawlignore` alone and one
+ * A single slot per root meant a caller asking for `.deckignore` alone and one
  * asking for the merged list evicted each other on every call.
  */
 function cacheKey(root: string, includeGitignore: boolean): string {
@@ -222,7 +222,7 @@ async function ignoreStamp(root: string, files: readonly string[]): Promise<stri
 export async function ignoreFor(root: string, options: IgnoreOptions = {}): Promise<ProjectIgnore> {
   const resolved = resolve(root)
   const includeGitignore = options.includeGitignore !== false
-  const files = includeGitignore ? IGNORE_FILE_ORDER : [PAWLIGNORE_FILE]
+  const files = includeGitignore ? IGNORE_FILE_ORDER : [TERMINALDECKIGNORE_FILE]
   const stamp = await ignoreStamp(resolved, files)
   const key = cacheKey(resolved, includeGitignore)
 
@@ -266,7 +266,7 @@ export function invalidateIgnoreCache(root?: string): void {
     cache.clear()
     return
   }
-  // Both variants: dropping only the merged one left a stale `.pawlignore`-only
+  // Both variants: dropping only the merged one left a stale `.deckignore`-only
   // matcher behind for whichever consumer asked for that shape.
   const resolved = resolve(root)
   cache.delete(cacheKey(resolved, true))
@@ -372,8 +372,8 @@ export function createWalkFilters(ignore: ProjectIgnore): WalkFilters {
  * Drop ignored paths from a list of files, e.g. the output of `git ls-files`.
  *
  * Used for the git fast path in quick open: git already applied `.gitignore`,
- * but it has never heard of `.pawlignore`, so tracked files matching a
- * `.pawlignore` rule come back and have to be filtered here.
+ * but it has never heard of `.deckignore`, so tracked files matching a
+ * `.deckignore` rule come back and have to be filtered here.
  */
 export async function filterIgnoredFiles(
   root: string,
@@ -408,15 +408,15 @@ export interface IgnoreOverview {
 
 /**
  * Wire the ignore channels. Call once from `registerIpc()`:
- * `registerPawlignoreIpc(ipcMain, { isAllowedRoot })`.
+ * `registerDeckignoreIpc(ipcMain, { isAllowedRoot })`.
  *
  * Channels:
- * - `pawlignore:overview` (root) → {@link IgnoreOverview}
- * - `pawlignore:explain` (root, relPath, isDir) → {@link IgnoreExplanation}
- * - `pawlignore:filter` (root, paths) → kept paths
- * - `pawlignore:invalidate` (root?) → void
+ * - `deckignore:overview` (root) → {@link IgnoreOverview}
+ * - `deckignore:explain` (root, relPath, isDir) → {@link IgnoreExplanation}
+ * - `deckignore:filter` (root, paths) → kept paths
+ * - `deckignore:invalidate` (root?) → void
  */
-export function registerPawlignoreIpc(
+export function registerDeckignoreIpc(
   ipcMain: IpcMain,
   options: RegisterIgnoreOptions = {},
 ): void {
@@ -429,7 +429,7 @@ export function registerPawlignoreIpc(
   }
 
   ipcMain.handle(
-    'pawlignore:overview',
+    'deckignore:overview',
     async (_e: IpcMainInvokeEvent, root: unknown): Promise<IgnoreOverview> => {
       const ignore = await ignoreFor(guard(requireString(root, 'root')))
       return { root: ignore.root, sources: ignore.sources, ruleCount: ignore.rules.length }
@@ -437,7 +437,7 @@ export function registerPawlignoreIpc(
   )
 
   ipcMain.handle(
-    'pawlignore:explain',
+    'deckignore:explain',
     async (_e: IpcMainInvokeEvent, root: unknown, relPath: unknown, isDir: unknown) => {
       const ignore = await ignoreFor(guard(requireString(root, 'root')))
       return explainPath(ignore, requireString(relPath, 'relPath'), isDir === true)
@@ -445,7 +445,7 @@ export function registerPawlignoreIpc(
   )
 
   ipcMain.handle(
-    'pawlignore:filter',
+    'deckignore:filter',
     async (_e: IpcMainInvokeEvent, root: unknown, paths: unknown): Promise<string[]> => {
       if (!Array.isArray(paths)) throw new TypeError('paths must be an array')
       const files = paths.filter((entry): entry is string => typeof entry === 'string')
@@ -453,7 +453,7 @@ export function registerPawlignoreIpc(
     },
   )
 
-  ipcMain.handle('pawlignore:invalidate', (_e: IpcMainInvokeEvent, root: unknown) => {
+  ipcMain.handle('deckignore:invalidate', (_e: IpcMainInvokeEvent, root: unknown) => {
     invalidateIgnoreCache(typeof root === 'string' ? root : undefined)
   })
 }

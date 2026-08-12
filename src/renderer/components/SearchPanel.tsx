@@ -84,7 +84,7 @@ export interface SearchPanelProps {
   projectPath: string
   /** Opens a hit — the session inspector is the natural destination. */
   onOpenHit?: (hit: SearchHit) => void
-  /** Injectable for tests; defaults to the preload bridge on `window.pawl`. */
+  /** Injectable for tests; defaults to the preload bridge on `window.deck`. */
   bridge?: SearchBridge
   /** Prefilled query, e.g. from a right-click "search for this". */
   initialQuery?: string
@@ -99,7 +99,7 @@ export interface SearchPanelProps {
 function resolveBridge(): SearchBridge | null {
   // Tests render this to static markup, where there is no window at all.
   if (typeof window === 'undefined') return null
-  const host = (window as unknown as { pawl?: Partial<SearchBridge> }).pawl
+  const host = (window as unknown as { deck?: Partial<SearchBridge> }).deck
   if (!host || typeof host.searchSessions !== 'function') return null
   return host as SearchBridge
 }

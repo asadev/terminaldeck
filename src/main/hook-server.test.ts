@@ -94,17 +94,17 @@ describe('toHookEvent', () => {
     const event = toHookEvent(
       'claude',
       'PostToolUse',
-      'pawl-session-1',
+      'terminaldeck-session-1',
       JSON.stringify({
         session_id: 'abc-123',
         transcript_path: '/Users/a/.claude/projects/x.jsonl',
-        cwd: '/Users/a/Projects/pawl',
+        cwd: '/Users/a/Projects/terminaldeck',
         tool_name: 'Edit',
       }),
     )
     expect(event.cliSessionId).toBe('abc-123')
-    expect(event.sessionId).toBe('pawl-session-1')
-    expect(event.cwd).toBe('/Users/a/Projects/pawl')
+    expect(event.sessionId).toBe('terminaldeck-session-1')
+    expect(event.cwd).toBe('/Users/a/Projects/terminaldeck')
     expect(event.toolName).toBe('Edit')
   })
 

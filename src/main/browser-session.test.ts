@@ -11,7 +11,7 @@ let stored: Array<{ name: string; domain: string; value: string; session?: boole
 
 const fakeSession = {
   isPersistent: () => true,
-  getStoragePath: () => '/tmp/Partitions/pawl-browser',
+  getStoragePath: () => '/tmp/Partitions/terminaldeck-browser',
   getCacheSize: async () => 4096,
   clearCache: async () => undefined,
   clearStorageData: async (options: unknown) => {
@@ -31,7 +31,7 @@ const fakeSession = {
 // The module imports electron for its IPC half. Nothing runs at module scope,
 // so a shell is enough to let the pure exports be imported and tested.
 vi.mock('electron', () => ({
-  app: { getPath: () => mkdtempSync(join(tmpdir(), 'pawl-session-test-')) },
+  app: { getPath: () => mkdtempSync(join(tmpdir(), 'terminaldeck-session-test-')) },
   session: { fromPartition: () => fakeSession },
 }))
 

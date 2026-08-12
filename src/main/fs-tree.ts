@@ -49,7 +49,7 @@ export function isAlwaysIgnored(name: string): boolean {
   return ALWAYS_IGNORED.has(name)
 }
 
-const IGNORE_FILES = ['.gitignore', '.pawlignore']
+const IGNORE_FILES = ['.gitignore', '.deckignore']
 
 const BINARY_SNIFF_BYTES = 8192
 

@@ -233,7 +233,7 @@ function boot(build: (body: FakeElement) => void): Harness {
       handler(null, enabled)
     },
     overlay: () =>
-      documentElement.children.find((c) => c.getAttribute('data-pawl-inspector') !== null),
+      documentElement.children.find((c) => c.getAttribute('data-terminaldeck-inspector') !== null),
   }
 }
 
@@ -520,7 +520,7 @@ describe('guest preload capture', () => {
 })
 
 describe('writeGuestPreload', () => {
-  const root = mkdtempSync(join(tmpdir(), 'pawl-guest-preload-'))
+  const root = mkdtempSync(join(tmpdir(), 'terminaldeck-guest-preload-'))
   afterAll(() => rmSync(root, { recursive: true, force: true }))
 
   it('writes the script and returns its path', () => {

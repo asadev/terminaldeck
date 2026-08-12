@@ -1,4 +1,4 @@
-# Pawl — Build Plan
+# Terminal Deck — Build Plan
 
 Target: full feature parity with Vibeyard, built fresh.
 Reference scope: 27 feature areas, ~36,400 lines of non-test TypeScript, 258 files.
@@ -61,7 +61,7 @@ data source for all of this — no scraping of terminal output.
 - [x] **GitHub integration** via `gh` — PRs, issues, discussions, unread badges
 - [x] **AI Readiness score** — does the project have CLAUDE.md, tests, lint,
       typecheck, a clean git state — with one-click fixes
-- [x] **Ignore file** (`.pawlignore`) honoured by tree, search and watchers
+- [x] **Ignore file** (`.deckignore`) honoured by tree, search and watchers
 
 ## Phase 5 — Dashboard and board
 
@@ -81,7 +81,7 @@ data source for all of this — no scraping of terminal output.
 
 ## Phase 7 — Integrations
 
-- [x] **Hooks** installed into each provider's settings, namespaced `pawl-hook`
+- [x] **Hooks** installed into each provider's settings, namespaced `terminaldeck-hook`
       so they never collide with Vibeyard's on the same machine
 - [x] **MCP client** + inspector, add/edit servers
 - [x] **Embedded browser tab** — load a URL, inspect elements, send the selector
@@ -108,7 +108,7 @@ is something worth sharing and updating.
 
 ## Open questions for Asad
 
-- Final name (currently `Pawl`, isolated in `src/shared/brand.ts`)
+- Final name (currently `Terminal Deck`, isolated in `src/shared/brand.ts`)
 - Whether to publish, and if so whether to credit Vibeyard as prior art
 - Whether P2P sharing is wanted at all — it is the single biggest feature and
   the only one needing infrastructure

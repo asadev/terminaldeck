@@ -37,7 +37,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 describe('TranscriptWatcher against a live file', () => {
   it('picks up appends incrementally', async () => {
-    const config = mkdtempSync(join(tmpdir(), 'pawl-cost-'))
+    const config = mkdtempSync(join(tmpdir(), 'terminaldeck-cost-'))
     const cwd = '/fake/project'
     const dir = join(config, 'projects', encodeProjectPath(cwd))
     mkdirSync(dir, { recursive: true })
@@ -88,7 +88,7 @@ describe('TranscriptWatcher against a live file', () => {
     // at today's rates and the headline number disagreed with the sessions
     // listed underneath it. This session ran after Sonnet 5's introductory rate
     // ended, so pricing it "now" would charge the wrong card.
-    const config = mkdtempSync(join(tmpdir(), 'pawl-cost-sum-'))
+    const config = mkdtempSync(join(tmpdir(), 'terminaldeck-cost-sum-'))
     const cwd = '/fake/project'
     const dir = join(config, 'projects', encodeProjectPath(cwd))
     mkdirSync(dir, { recursive: true })
@@ -114,7 +114,7 @@ describe('TranscriptWatcher against a live file', () => {
     // Regression: `maxSessions` was only applied to the initial scan, so a
     // watcher left running on a busy project accumulated a tail and an
     // aggregator — each holding every request id it had ever seen — forever.
-    const config = mkdtempSync(join(tmpdir(), 'pawl-cost-cap-'))
+    const config = mkdtempSync(join(tmpdir(), 'terminaldeck-cost-cap-'))
     const cwd = '/fake/project'
     const dir = join(config, 'projects', encodeProjectPath(cwd))
     mkdirSync(dir, { recursive: true })
@@ -147,7 +147,7 @@ describe('TranscriptWatcher against a live file', () => {
   }, 10_000)
 
   it('survives a project that has never been opened in Claude Code', async () => {
-    const config = mkdtempSync(join(tmpdir(), 'pawl-cost-empty-'))
+    const config = mkdtempSync(join(tmpdir(), 'terminaldeck-cost-empty-'))
     const updates: ProjectSummary[] = []
     const watcher = new TranscriptWatcher({
       cwd: '/nowhere/at/all',

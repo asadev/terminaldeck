@@ -166,16 +166,16 @@ const api = {
   setDefaultProfile: (id: string): Promise<void> => ipcRenderer.invoke('profiles:set-default', id),
   profileStatus: (id: string): Promise<unknown> => ipcRenderer.invoke('profiles:status', id),
 
-  /* ------------------------------------------------------ pawlignore -- */
+  /* ------------------------------------------------------ deckignore -- */
 
   ignoreOverview: (root: string): Promise<unknown> =>
-    ipcRenderer.invoke('pawlignore:overview', root),
+    ipcRenderer.invoke('deckignore:overview', root),
   ignoreFilter: (root: string, paths: string[]): Promise<unknown> =>
-    ipcRenderer.invoke('pawlignore:filter', root, paths),
+    ipcRenderer.invoke('deckignore:filter', root, paths),
   ignoreExplain: (root: string, path: string): Promise<unknown> =>
-    ipcRenderer.invoke('pawlignore:explain', root, path),
+    ipcRenderer.invoke('deckignore:explain', root, path),
   invalidateIgnore: (root: string): Promise<void> =>
-    ipcRenderer.invoke('pawlignore:invalidate', root),
+    ipcRenderer.invoke('deckignore:invalidate', root),
 
   /* ----------------------------------------------------------- hooks -- */
 
@@ -372,6 +372,6 @@ const api = {
     ipcRenderer.invoke('chrome-import:scan', browserId),
 }
 
-contextBridge.exposeInMainWorld('pawl', api)
+contextBridge.exposeInMainWorld('deck', api)
 
-export type PawlBridge = typeof api
+export type DeckBridge = typeof api

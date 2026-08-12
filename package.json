@@ -1,9 +1,12 @@
 {
-  "name": "pawl",
+  "name": "terminaldeck",
   "version": "0.1.0",
-  "description": "A desktop workspace for running Claude Code sessions",
+  "description": "Run your coding agents on one deck \u2014 sessions, browsers, cost and context in a single window.",
   "main": "./out/main/index.js",
-  "author": "Asad Iqbal",
+  "author": {
+    "name": "Asad Iqbal",
+    "url": "https://terminaldeck.dev"
+  },
   "license": "MIT",
   "private": true,
   "scripts": {
@@ -48,5 +51,23 @@
     "typescript": "^5.7.2",
     "vite": "^7.0.0",
     "vitest": "^4.1.10"
-  }
+  },
+  "productName": "Terminal Deck",
+  "homepage": "https://terminaldeck.dev",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/asadev/terminaldeck.git"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "ai-agents",
+    "terminal",
+    "ide",
+    "electron",
+    "codex",
+    "gemini",
+    "coding-agent",
+    "developer-tools"
+  ]
 }

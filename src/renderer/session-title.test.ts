@@ -29,7 +29,7 @@ const userPrompt = (content: unknown, extra: Record<string, unknown> = {}): stri
     type: 'user',
     message: { role: 'user', content },
     promptSource: 'sdk',
-    cwd: '/Users/apple/Projects/pawl',
+    cwd: '/Users/apple/Projects/terminaldeck',
     sessionId: 's1',
     ...extra,
   })
@@ -197,11 +197,11 @@ describe('isUsableTitle', () => {
 
 describe('folderName', () => {
   it('takes the last segment', () => {
-    expect(folderName('/Users/apple/Projects/pawl')).toBe('pawl')
+    expect(folderName('/Users/apple/Projects/terminaldeck')).toBe('terminaldeck')
   })
 
   it('tolerates a trailing slash', () => {
-    expect(folderName('/Users/apple/Projects/pawl/')).toBe('pawl')
+    expect(folderName('/Users/apple/Projects/terminaldeck/')).toBe('terminaldeck')
   })
 
   it('falls back to the whole string when there is no segment', () => {
@@ -378,10 +378,10 @@ describe('titleFromOutput', () => {
 })
 
 describe('deriveSessionTitle', () => {
-  const cwd = '/Users/apple/Projects/pawl'
+  const cwd = '/Users/apple/Projects/terminaldeck'
 
   it('falls back to the folder name with nothing to go on', () => {
-    expect(deriveSessionTitle({ cwd })).toEqual({ title: 'pawl', source: 'folder' })
+    expect(deriveSessionTitle({ cwd })).toEqual({ title: 'terminaldeck', source: 'folder' })
   })
 
   it('lets an explicit rename beat every other source', () => {
@@ -433,7 +433,7 @@ describe('deriveSessionTitle', () => {
   })
 
   it('ignores a rename that is only whitespace', () => {
-    expect(deriveSessionTitle({ cwd, userTitle: '   ' })).toEqual({ title: 'pawl', source: 'folder' })
+    expect(deriveSessionTitle({ cwd, userTitle: '   ' })).toEqual({ title: 'terminaldeck', source: 'folder' })
   })
 
   it('falls back rather than showing junk a source produced', () => {
@@ -442,7 +442,7 @@ describe('deriveSessionTitle', () => {
       cwd,
       transcriptLines: [userPrompt('<command-name>/clear</command-name>')],
     })
-    expect(result).toEqual({ title: 'pawl', source: 'folder' })
+    expect(result).toEqual({ title: 'terminaldeck', source: 'folder' })
   })
 
   // REGRESSION: `folderName('')` is `''`, so a session restored with a missing

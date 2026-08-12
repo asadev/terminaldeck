@@ -814,7 +814,7 @@ export function SessionInspector({ open, onClose, cwd, transcriptPath, sessionTi
   const [nonce, setNonce] = useState(0)
 
   const load = useCallback(async (): Promise<LoadState> => {
-    const bridge = window.pawl as unknown as InsightsBridge | undefined
+    const bridge = window.deck as unknown as InsightsBridge | undefined
     if (!bridge?.getSessionInsights && !bridge?.getLatestSessionInsights) {
       return { status: 'error', message: 'The insights bridge is not wired up in this build.' }
     }

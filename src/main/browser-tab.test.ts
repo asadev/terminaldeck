@@ -17,7 +17,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 /** Computed inside `vi.hoisted` because the electron mock is hoisted above it. */
 const USER_DATA = vi.hoisted(() => {
   const base = (process.env.TMPDIR ?? '/tmp').replace(/\/+$/, '')
-  return `${base}/pawl-browser-tab-test-${process.pid}`
+  return `${base}/terminaldeck-browser-tab-test-${process.pid}`
 })
 
 /** Set before a create when the test wants the load to abort. */

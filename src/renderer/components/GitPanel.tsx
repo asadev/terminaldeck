@@ -81,7 +81,7 @@ export interface GitPanelProps {
   onSelectFile?(file: GitFile): void
   /** Path of the row to highlight, when the host is showing a diff beside it. */
   selectedPath?: string | null
-  /** Injectable for tests; defaults to the preload bridge on `window.pawl`. */
+  /** Injectable for tests; defaults to the preload bridge on `window.deck`. */
   bridge?: GitBridge
 }
 
@@ -93,7 +93,7 @@ export interface GitPanelProps {
  * before those methods exist.
  */
 function resolveBridge(): GitBridge | null {
-  const host = (window as unknown as { pawl?: Partial<GitBridge> }).pawl
+  const host = (window as unknown as { deck?: Partial<GitBridge> }).deck
   if (
     !host ||
     typeof host.watchGit !== 'function' ||

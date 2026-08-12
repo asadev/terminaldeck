@@ -1,5 +1,5 @@
-appId: com.asadiqbal.pawl
-productName: Pawl
+appId: dev.terminaldeck.app
+productName: Terminal Deck
 directories:
   output: release
   buildResources: build

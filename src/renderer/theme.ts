@@ -48,7 +48,7 @@ export interface ThemeController {
   getResolved(): ResolvedTheme
   /** Writes the attribute, notifies subscribers, and returns what is now painted. */
   setPreference(preference: ThemePreference): ResolvedTheme
-  /** Returns an unsubscribe function, matching the window.pawl.on* convention. */
+  /** Returns an unsubscribe function, matching the window.deck.on* convention. */
   subscribe(listener: ThemeListener): () => void
   /** Detach the OS listener and drop subscribers. */
   destroy(): void

@@ -407,7 +407,7 @@ export function matchesAbout(query: string): boolean {
  */
 export function resolveHelpBridge(): HelpBridge | null {
   if (typeof window === 'undefined') return null
-  const host = (window as unknown as { pawl?: Record<string, unknown> }).pawl
+  const host = (window as unknown as { deck?: Record<string, unknown> }).deck
   if (!host || typeof host.about !== 'function') return null
   return host as unknown as HelpBridge
 }
@@ -564,7 +564,7 @@ export function AboutCard({ info, onCopy }: { info: AboutInfo | null; onCopy?: (
 /* ----------------------------------------------------------------- panel -- */
 
 export interface HelpPanelProps {
-  /** Injectable for tests; defaults to the preload bridge on `window.pawl`. */
+  /** Injectable for tests; defaults to the preload bridge on `window.deck`. */
   bridge?: HelpBridge | null
   isMac?: boolean
   initialSection?: HelpSectionId

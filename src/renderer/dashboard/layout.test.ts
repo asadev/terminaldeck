@@ -30,7 +30,7 @@ import {
   type WidgetType,
 } from './layout'
 
-const PROJECT = '/Users/asad/Projects/pawl'
+const PROJECT = '/Users/asad/Projects/terminaldeck'
 
 /** Build a layout from explicit rectangles, bypassing the placement search. */
 function seed(rects: Array<[string, WidgetType, number, number, number, number]>): DashboardLayout {

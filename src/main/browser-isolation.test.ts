@@ -63,7 +63,7 @@ function fakeSession(partition: string): FakeSession {
 }
 
 vi.mock('electron', () => ({
-  app: { getPath: () => mkdtempSync(join(tmpdir(), 'pawl-isolation-test-')) },
+  app: { getPath: () => mkdtempSync(join(tmpdir(), 'terminaldeck-isolation-test-')) },
   session: { fromPartition: (partition: string) => fakeSession(partition) },
 }))
 
@@ -99,7 +99,7 @@ describe('isolation keys', () => {
   it('refuses a key the renderer made up', () => {
     // A partition name is a string Electron creates *anything* for, including a
     // persistent one, so nothing off the wire is taken at face value.
-    expect(isIsolationKey('persist:pawl-browser')).toBe(false)
+    expect(isIsolationKey('persist:terminaldeck-browser')).toBe(false)
     expect(isIsolationKey(`persist:${ISOLATED_PREFIX}whatever`)).toBe(false)
     expect(isIsolationKey(`${ISOLATED_PREFIX}not-a-uuid`)).toBe(false)
     expect(isIsolationKey(`${ISOLATED_PREFIX}${'0'.repeat(36)}`)).toBe(false)
@@ -115,7 +115,7 @@ describe('isolatedSession', () => {
   it('returns null when no key was asked for, so the caller falls back to shared', () => {
     expect(isolatedSession(undefined)).toBeNull()
     expect(isolatedSession(null)).toBeNull()
-    expect(isolatedSession('persist:pawl-browser')).toBeNull()
+    expect(isolatedSession('persist:terminaldeck-browser')).toBeNull()
   })
 
   it('gives one session per key and reuses it for the same tab', () => {
@@ -187,7 +187,7 @@ describe('disposal', () => {
   })
 
   it('ignores a key it never handed out', async () => {
-    await expect(disposeIsolatedSession('persist:pawl-browser')).resolves.toBeUndefined()
+    await expect(disposeIsolatedSession('persist:terminaldeck-browser')).resolves.toBeUndefined()
     await expect(disposeIsolatedSession(newIsolationKey())).resolves.toBeUndefined()
   })
 

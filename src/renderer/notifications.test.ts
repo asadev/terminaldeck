@@ -102,14 +102,14 @@ describe('decide', () => {
 
 describe('notificationText', () => {
   it('heads with the project and says what happened', () => {
-    expect(notificationText('completed', { title: 'ship the picker', project: 'pawl' })).toEqual({
-      title: 'pawl',
+    expect(notificationText('completed', { title: 'ship the picker', project: 'terminaldeck' })).toEqual({
+      title: 'terminaldeck',
       body: 'ship the picker finished',
     })
   })
 
   it('phrases input as a request', () => {
-    expect(notificationText('input', { title: 'ship the picker', project: 'pawl' }).body).toBe(
+    expect(notificationText('input', { title: 'ship the picker', project: 'terminaldeck' }).body).toBe(
       'ship the picker needs your input',
     )
   })
@@ -169,11 +169,11 @@ describe('SessionNotifier', () => {
   it('fires once for a background session that finishes', () => {
     const notifier = new SessionNotifier(h.host, { viewing: { activeSessionId: 'a', windowFocused: true } })
 
-    notifier.observe('b', 'working', { title: 'the task', project: 'pawl' })
-    notifier.observe('b', 'completed', { title: 'the task', project: 'pawl' })
+    notifier.observe('b', 'working', { title: 'the task', project: 'terminaldeck' })
+    notifier.observe('b', 'completed', { title: 'the task', project: 'terminaldeck' })
 
     expect(h.fired).toEqual([
-      { sessionId: 'b', status: 'completed', title: 'pawl', body: 'the task finished' },
+      { sessionId: 'b', status: 'completed', title: 'terminaldeck', body: 'the task finished' },
     ])
   })
 

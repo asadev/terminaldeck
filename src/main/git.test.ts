@@ -249,7 +249,7 @@ describe('applyStats', () => {
 
 describe('readGitStatus', () => {
   it('reports a folder with no repository instead of throwing', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'pawl-git-'))
+    const dir = await mkdtemp(join(tmpdir(), 'terminaldeck-git-'))
     try {
       const result = await readGitStatus(dir)
       expect(result.repo).toBe(false)
@@ -260,7 +260,7 @@ describe('readGitStatus', () => {
   }, 20000)
 
   it('reports a folder that does not exist', async () => {
-    const result = await readGitStatus(join(tmpdir(), 'pawl-does-not-exist-9f3a'))
+    const result = await readGitStatus(join(tmpdir(), 'terminaldeck-does-not-exist-9f3a'))
     expect(result.repo).toBe(false)
     if (!result.repo) expect(result.reason).toBe('no-such-folder')
   })
@@ -316,7 +316,7 @@ const HAS_GIT = await run('git', ['--version']).then(
 
 /** A repository on disk with one committed file. */
 async function makeRepo(): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), 'pawl-git-repo-'))
+  const dir = await mkdtemp(join(tmpdir(), 'terminaldeck-git-repo-'))
   await run('git', ['init', '-q', '-b', 'main', '.'], { cwd: dir })
   await run('git', ['config', 'user.email', 'test@example.com'], { cwd: dir })
   await run('git', ['config', 'user.name', 'Test'], { cwd: dir })
@@ -334,7 +334,7 @@ describe.skipIf(!HAS_GIT)('readFileDiff', () => {
    */
   it('refuses to diff a path that escapes the repository', async () => {
     const dir = await makeRepo()
-    const secret = join(tmpdir(), `pawl-secret-${Date.now()}.txt`)
+    const secret = join(tmpdir(), `terminaldeck-secret-${Date.now()}.txt`)
     await writeFile(secret, 'BEGIN OPENSSH PRIVATE KEY\n')
     try {
       const escape = relative(dir, secret)
@@ -406,7 +406,7 @@ describe('git watches', () => {
    * the first unmount from freezing the second panel on stale status.
    */
   it('keeps polling until every panel on a folder has unwatched', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'pawl-watch-'))
+    const dir = await mkdtemp(join(tmpdir(), 'terminaldeck-watch-'))
     const { ipcMain, invoke, sent } = fakeIpc()
     registerGitIpc(ipcMain)
     const event = { sender: fakeSender(101) }

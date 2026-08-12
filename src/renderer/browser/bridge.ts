@@ -202,7 +202,7 @@ export const BRIDGE_METHODS = [
   'browserClearCache',
 ] as const satisfies readonly (keyof BrowserBridge)[]
 
-/** Which of them `window.pawl` is not offering. Empty means fully wired. */
+/** Which of them `window.deck` is not offering. Empty means fully wired. */
 export function missingBridgeMethods(host: unknown): string[] {
   if (typeof host !== 'object' || host === null) return [...BRIDGE_METHODS]
   const record = host as Record<string, unknown>
@@ -210,7 +210,7 @@ export function missingBridgeMethods(host: unknown): string[] {
 }
 
 /**
- * Read `window.pawl` defensively.
+ * Read `window.deck` defensively.
  *
  * The workspace is wired into the preload separately from being rendered, so it
  * has to explain itself rather than crash when it mounts against a bridge that
@@ -219,7 +219,7 @@ export function missingBridgeMethods(host: unknown): string[] {
  */
 export function resolveBrowserBridge(): BrowserBridge | null {
   if (typeof window === 'undefined') return null
-  const host = (window as unknown as { pawl?: unknown }).pawl
+  const host = (window as unknown as { deck?: unknown }).deck
   if (!host || missingBridgeMethods(host).length > 0) return null
   return host as BrowserBridge
 }

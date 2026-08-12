@@ -43,12 +43,12 @@ import {
  * module must never be able to remove it, however mangled its state file gets.
  */
 
-const USER_DATA = join(tmpdir(), `pawl-profiles-test-${process.pid}`)
+const USER_DATA = join(tmpdir(), `terminaldeck-profiles-test-${process.pid}`)
 
 vi.mock('electron', async () => {
   const { tmpdir: tmp } = await import('node:os')
   const { join: j } = await import('node:path')
-  return { app: { getPath: () => j(tmp(), `pawl-profiles-test-${process.pid}`) } }
+  return { app: { getPath: () => j(tmp(), `terminaldeck-profiles-test-${process.pid}`) } }
 })
 
 beforeEach(() => {
@@ -238,10 +238,10 @@ describe('sessionEnv', () => {
 describe('profileTranscriptDir', () => {
   it('points at the profile config dir, not the default install', () => {
     const p = profile('work')
-    const dir = profileTranscriptDir(p, '/Users/asad/Projects/pawl')
+    const dir = profileTranscriptDir(p, '/Users/asad/Projects/terminaldeck')
     // Claude Code writes transcripts to <configDir>/projects/<encoded-cwd>,
     // so a profiled session's cost data is not under ~/.claude at all.
-    expect(dir).toBe(join(p.configDir, 'projects', '-Users-asad-Projects-pawl'))
+    expect(dir).toBe(join(p.configDir, 'projects', '-Users-asad-Projects-terminaldeck'))
   })
 })
 

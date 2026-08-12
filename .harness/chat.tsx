@@ -76,9 +76,9 @@ const MESSAGES: ChatMessage[] = [
 
 function update(messages: ChatMessage[]): ChatUpdate {
   return {
-    transcriptPath: '/Users/apple/.claude/projects/-Users-apple-Projects-pawl/harness.jsonl',
+    transcriptPath: '/Users/apple/.claude/projects/-Users-apple-Projects-terminaldeck/harness.jsonl',
     sessionId: 'harness',
-    cwd: '/Users/apple/Projects/pawl',
+    cwd: '/Users/apple/Projects/terminaldeck',
     messages,
     reset: true,
     cursor: 0,
@@ -200,7 +200,7 @@ function Harness() {
       ) : null}
       <div style={{ flex: 1, minHeight: 0 }}>
         {mode === 'chat' ? (
-          <ChatView cwd="/Users/apple/Projects/pawl" refreshMs={0} bridge={pickBridge()} />
+          <ChatView cwd="/Users/apple/Projects/terminaldeck" refreshMs={0} bridge={pickBridge()} />
         ) : (
           <div style={{ padding: 24, color: 'var(--text-muted)', font: '13px var(--font-ui)' }}>
             (the terminal lives here in the real app)

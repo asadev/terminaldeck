@@ -41,7 +41,7 @@ describe('resolveOmnibox — URLs', () => {
   })
 
   it('takes a dev hostname that is not a real TLD', () => {
-    expect(url('pawl.test')).toBe('http://pawl.test/')
+    expect(url('terminaldeck.test')).toBe('http://terminaldeck.test/')
     expect(url('printer.local')).toBe('http://printer.local/')
   })
 
@@ -99,13 +99,13 @@ describe('resolveOmnibox — searches', () => {
   })
 
   it('takes a different search engine', () => {
-    const result = resolveOmnibox('pawl', 'https://example.com/find?query=%s')
-    expect(result.kind === 'search' && result.url).toBe('https://example.com/find?query=pawl')
+    const result = resolveOmnibox('terminaldeck', 'https://example.com/find?query=%s')
+    expect(result.kind === 'search' && result.url).toBe('https://example.com/find?query=terminaldeck')
   })
 
   it('appends the query when a template has no placeholder', () => {
-    const result = resolveOmnibox('pawl', 'https://example.com/?q=')
-    expect(result.kind === 'search' && result.url).toBe('https://example.com/?q=pawl')
+    const result = resolveOmnibox('terminaldeck', 'https://example.com/?q=')
+    expect(result.kind === 'search' && result.url).toBe('https://example.com/?q=terminaldeck')
   })
 })
 

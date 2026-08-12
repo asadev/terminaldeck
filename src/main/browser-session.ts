@@ -13,7 +13,7 @@ import { writeRecordPreload } from './browser-record-preload'
  * on Electron 41.10.5, a cookie and a `localStorage` entry written by one app
  * process were both still there for a second, freshly launched process reading
  * the same partition — `isPersistent()` true, storage path
- * `<userData>/Partitions/pawl-browser`. The per-origin zoom factor persisted
+ * `<userData>/Partitions/terminaldeck-browser`. The per-origin zoom factor persisted
  * too, which is why zoom is not restored by hand anywhere in this feature.
  *
  * One thing that check also settled: cookies can still be in memory when a
@@ -36,7 +36,7 @@ import { writeRecordPreload } from './browser-record-preload'
  */
 
 /** Must equal `GUEST_PARTITION` in `browser-tab.ts`. */
-export const GUEST_PARTITION = 'persist:pawl-browser'
+export const GUEST_PARTITION = 'persist:terminaldeck-browser'
 
 /* ------------------------------------------------------------------ types -- */
 

@@ -6,7 +6,7 @@
    gridstack ships its own stylesheet for positioning (imported by
    Dashboard.tsx). Everything here is either app skin on top of it, or the few
    overrides needed to make its placeholder and resize handles look like the
-   rest of Pawl instead of the library default.
+   rest of Terminal Deck instead of the library default.
    ============================================================================ */
 
 .dashboard {

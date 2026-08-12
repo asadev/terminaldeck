@@ -16,7 +16,7 @@ import {
  */
 
 const sessions: SwarmSession[] = [
-  { id: 's1', title: 'pawl', status: 'working' },
+  { id: 's1', title: 'terminaldeck', status: 'working' },
   { id: 's2', title: 'science-locus', status: 'input' },
   { id: 's3', title: 'engineerings-pk', status: 'idle' },
 ]

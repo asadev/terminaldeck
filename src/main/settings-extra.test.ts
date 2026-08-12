@@ -27,7 +27,7 @@ import {
  * interrupted halfway. The happy path is one line.
  */
 
-const USER_DATA = join(tmpdir(), `pawl-settings-test-${process.pid}`)
+const USER_DATA = join(tmpdir(), `terminaldeck-settings-test-${process.pid}`)
 const FILE = join(USER_DATA, 'settings.json')
 
 const cleared = { count: 0 }
@@ -35,7 +35,7 @@ const cleared = { count: 0 }
 vi.mock('electron', async () => {
   const { tmpdir: tmp } = await import('node:os')
   const { join: j } = await import('node:path')
-  const root = j(tmp(), `pawl-settings-test-${process.pid}`)
+  const root = j(tmp(), `terminaldeck-settings-test-${process.pid}`)
   return {
     app: {
       getPath: (name: string) => (name === 'logs' ? j(root, 'Logs') : root),
@@ -235,11 +235,11 @@ describe('clearBrowserDataIfNotPersisting', () => {
 
 describe('repositoryUrl', () => {
   it('normalises the shapes npm allows', () => {
-    expect(repositoryUrl('asadev/pawl')).toBe('https://github.com/asadev/pawl')
-    expect(repositoryUrl({ type: 'git', url: 'git+https://github.com/asadev/pawl.git' })).toBe(
-      'https://github.com/asadev/pawl',
+    expect(repositoryUrl('asadev/terminaldeck')).toBe('https://github.com/asadev/terminaldeck')
+    expect(repositoryUrl({ type: 'git', url: 'git+https://github.com/asadev/terminaldeck.git' })).toBe(
+      'https://github.com/asadev/terminaldeck',
     )
-    expect(repositoryUrl('git@github.com:asadev/pawl.git')).toBe('https://github.com/asadev/pawl')
+    expect(repositoryUrl('git@github.com:asadev/terminaldeck.git')).toBe('https://github.com/asadev/terminaldeck')
   })
 
   it('returns null rather than inventing a URL', () => {

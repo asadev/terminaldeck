@@ -145,14 +145,14 @@ describe('HookRow', () => {
   it('shows the backup location once one exists', () => {
     const html = renderToStaticMarkup(
       <HookRow
-        status={status({ state: 'complete', backupPath: '/Users/a/.pawl/hook-backups/claude.bak' })}
+        status={status({ state: 'complete', backupPath: '/Users/a/.terminaldeck/hook-backups/claude.bak' })}
         busy={false}
         result={null}
         onInstall={noop}
         onRemove={noop}
       />,
     )
-    expect(html).toContain('/Users/a/.pawl/hook-backups/claude.bak')
+    expect(html).toContain('/Users/a/.terminaldeck/hook-backups/claude.bak')
     expect(html).toContain('Remove')
   })
 

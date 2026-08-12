@@ -67,7 +67,7 @@ function insightsFor(partial: Partial<SessionInsights> = {}): SessionInsights {
   return {
     sessionId: 'sess-1',
     transcriptPath: '/tmp/sess-1.jsonl',
-    cwd: '/Users/apple/Projects/pawl',
+    cwd: '/Users/apple/Projects/terminaldeck',
     startedAt: T0,
     lastActivityAt: T0 + 60_000,
     durationMs: 60_000,

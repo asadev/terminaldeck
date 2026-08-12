@@ -84,7 +84,7 @@ function memoryStore(): Storage | null {
  *
  * Guarded the way `ProfilePicker` and `CloseSessionConfirm` guard theirs, and
  * for a sharper reason here: these calls live in an effect. A renderer whose
- * preload failed to load has no `window.pawl` at all, so reaching straight
+ * preload failed to load has no `window.deck` at all, so reaching straight
  * through it throws synchronously *during* the effect — React unmounts the
  * tree, and the dialog that would have explained the problem is the thing that
  * vanishes. Each call is also checked individually, because a partially wired
@@ -98,7 +98,7 @@ interface StartBridge {
 }
 
 function startBridge(): Partial<StartBridge> | null {
-  return (globalThis as { pawl?: Partial<StartBridge> }).pawl ?? null
+  return (globalThis as { deck?: Partial<StartBridge> }).deck ?? null
 }
 
 /** Last choice per project, or nothing at all if the blob is unusable. */

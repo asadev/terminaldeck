@@ -36,8 +36,8 @@ function snippet(text: string, ranges: Array<[number, number]>): Snippet {
 function hit(overrides: Partial<SearchHit> & { sessionId: string }): SearchHit {
   return {
     transcriptPath: `/tmp/${overrides.sessionId}.jsonl`,
-    cwd: '/Users/apple/Projects/pawl',
-    projectName: 'pawl',
+    cwd: '/Users/apple/Projects/terminaldeck',
+    projectName: 'terminaldeck',
     at: NOW - 60_000,
     role: 'user',
     isSidechain: false,
@@ -217,12 +217,12 @@ describe('cancelQuietly', () => {
 
 describe('SearchPanel', () => {
   it('explains itself when the bridge is missing rather than rendering an empty box', () => {
-    const markup = renderToStaticMarkup(<SearchPanel projectPath="/Users/apple/Projects/pawl" />)
+    const markup = renderToStaticMarkup(<SearchPanel projectPath="/Users/apple/Projects/terminaldeck" />)
     expect(markup).toContain('not connected to the main process')
   })
 
   it('exposes the scope and filter toggles as pressed-state buttons', () => {
-    const markup = renderToStaticMarkup(<SearchPanel projectPath="/Users/apple/Projects/pawl" />)
+    const markup = renderToStaticMarkup(<SearchPanel projectPath="/Users/apple/Projects/terminaldeck" />)
     expect(markup).toContain('aria-label="Search past sessions"')
     expect(markup).toContain('aria-pressed="true"')
     expect(markup).toContain('This project')

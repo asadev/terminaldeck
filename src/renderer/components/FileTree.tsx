@@ -36,9 +36,9 @@ interface FsBridge {
 }
 
 function listDir(root: string, relDir: string, showIgnored: boolean): Promise<DirListing> {
-  const api = (window as unknown as { pawl?: Partial<FsBridge> }).pawl
+  const api = (window as unknown as { deck?: Partial<FsBridge> }).deck
   if (!api?.listDir) {
-    return Promise.reject(new Error('preload bridge is missing pawl.listDir'))
+    return Promise.reject(new Error('preload bridge is missing terminaldeck.listDir'))
   }
   return api.listDir(root, relDir, { showIgnored })
 }

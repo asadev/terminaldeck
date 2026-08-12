@@ -42,7 +42,7 @@ interface ProfileBridge {
 }
 
 export function profileBridge(): Partial<ProfileBridge> | null {
-  const api = (globalThis as { pawl?: Partial<ProfileBridge> }).pawl
+  const api = (globalThis as { deck?: Partial<ProfileBridge> }).deck
   return api && typeof api.listProfiles === 'function' ? api : null
 }
 

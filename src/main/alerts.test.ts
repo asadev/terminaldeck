@@ -37,7 +37,7 @@ const WINDOW = 200_000
 /** An input with nothing in it — the state a folder added a second ago is in. */
 function emptyInput(overrides: Partial<AlertInput> = {}): AlertInput {
   return {
-    projectPath: '/Users/apple/Projects/pawl',
+    projectPath: '/Users/apple/Projects/terminaldeck',
     now: NOW,
     sessions: [],
     providersInUse: [],
@@ -480,7 +480,7 @@ describe('collectAlertInput', () => {
     project: string,
     files: Array<{ name: string; body: string; mode?: number }>,
   ): Promise<string> {
-    const config = await mkdtemp(join(tmpdir(), 'pawl-alerts-'))
+    const config = await mkdtemp(join(tmpdir(), 'terminaldeck-alerts-'))
     temps.push(config)
     const dir = join(config, 'projects', encodeProjectPath(project))
     await mkdir(dir, { recursive: true })
@@ -539,7 +539,7 @@ describe('collectAlertInput', () => {
   }, 30_000)
 
   it('stays quiet for a project with no transcripts at all', async () => {
-    const config = await mkdtemp(join(tmpdir(), 'pawl-alerts-'))
+    const config = await mkdtemp(join(tmpdir(), 'terminaldeck-alerts-'))
     temps.push(config)
     await mkdir(join(config, 'projects'), { recursive: true })
 

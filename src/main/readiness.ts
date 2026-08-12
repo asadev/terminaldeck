@@ -1188,7 +1188,7 @@ npm-debug.log*
 ${SECRET_IGNORE_PATTERNS.join('\n')}
 `
 
-const PAWL_BLOCK_HEADER = '# added by Pawl — AI readiness'
+const TERMINALDECK_BLOCK_HEADER = '# added by Deck — AI readiness'
 
 /** Paths per `git rm` invocation, to stay well inside the OS argument limit. */
 const RM_BATCH = 100
@@ -1308,13 +1308,13 @@ async function appendIgnorePatterns(root: string, patterns: string[]): Promise<R
   if (block.length === 0) return refuse('.gitignore already covers all of these — nothing was changed.')
 
   if (existing === null) {
-    return createFile(root, '.gitignore', `${PAWL_BLOCK_HEADER}\n${block.join('\n')}\n`)
+    return createFile(root, '.gitignore', `${TERMINALDECK_BLOCK_HEADER}\n${block.join('\n')}\n`)
   }
 
   const separator = existing.endsWith('\n') ? '' : '\n'
   await writeFile(
     safeJoin(root, '.gitignore'),
-    `${existing}${separator}\n${PAWL_BLOCK_HEADER}\n${block.join('\n')}\n`,
+    `${existing}${separator}\n${TERMINALDECK_BLOCK_HEADER}\n${block.join('\n')}\n`,
     'utf8',
   )
   return ok(`Added ${block.length} pattern${block.length === 1 ? '' : 's'} to .gitignore.`, ['.gitignore'])

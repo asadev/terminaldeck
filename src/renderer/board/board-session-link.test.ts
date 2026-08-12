@@ -18,7 +18,7 @@ import {
   type SessionLink,
 } from './board-session-link'
 
-const PROJECT = '/Users/asad/Projects/pawl'
+const PROJECT = '/Users/asad/Projects/terminaldeck'
 const T0 = 1_700_000_000_000
 
 function seed(cards: Array<{ id: string; column?: ColumnId; sessionId?: string }>): BoardState {

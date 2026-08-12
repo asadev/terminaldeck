@@ -61,7 +61,7 @@ describe('isIgnoredPath', () => {
 
 describe('isPlausibleProjectRoot', () => {
   it('accepts a normal project folder', () => {
-    expect(isPlausibleProjectRoot('/Users/someone/Projects/pawl')).toBe(true)
+    expect(isPlausibleProjectRoot('/Users/someone/Projects/terminaldeck')).toBe(true)
   })
 
   it('rejects the filesystem root', () => {
@@ -82,7 +82,7 @@ describe('walkProjectFiles', () => {
   const roots: string[] = []
 
   async function fixture(): Promise<string> {
-    const root = await mkdtemp(join(tmpdir(), 'pawl-search-'))
+    const root = await mkdtemp(join(tmpdir(), 'terminaldeck-search-'))
     roots.push(root)
     await mkdir(join(root, 'src', 'deep', 'deeper'), { recursive: true })
     await mkdir(join(root, 'node_modules', 'react'), { recursive: true })
@@ -167,14 +167,14 @@ describe('walkProjectFiles', () => {
   })
 
   it('survives a directory it cannot read', async () => {
-    const { files } = await walkProjectFiles(join(tmpdir(), 'pawl-does-not-exist-at-all'))
+    const { files } = await walkProjectFiles(join(tmpdir(), 'terminaldeck-does-not-exist-at-all'))
     expect(files).toEqual([])
   })
 })
 
 describe('listProjectFiles', () => {
   it('falls back to the walk when git cannot answer', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'pawl-nogit-'))
+    const root = await mkdtemp(join(tmpdir(), 'terminaldeck-nogit-'))
     try {
       await writeFile(join(root, 'a.ts'), '')
       const list = await listProjectFiles(root, { disableGit: true })
@@ -217,7 +217,7 @@ describe('registerSearchIpc', () => {
   }
 
   async function project(...files: string[]): Promise<string> {
-    const root = await mkdtemp(join(tmpdir(), 'pawl-ipc-'))
+    const root = await mkdtemp(join(tmpdir(), 'terminaldeck-ipc-'))
     roots.push(root)
     for (const file of files) await writeFile(join(root, file), '')
     return root
@@ -244,7 +244,7 @@ describe('registerSearchIpc', () => {
     expect(await search({ root: '' })).toEqual({ ok: false, error: 'invalid-root' })
     expect(await search({ root: 42 })).toEqual({ ok: false, error: 'invalid-root' })
     expect(await search(undefined)).toEqual({ ok: false, error: 'invalid-root' })
-    expect(await search({ root: join(tmpdir(), 'pawl-not-a-directory-at-all') })).toEqual({
+    expect(await search({ root: join(tmpdir(), 'terminaldeck-not-a-directory-at-all') })).toEqual({
       ok: false,
       error: 'invalid-root',
     })

@@ -39,7 +39,7 @@ const run = promisify(execFile)
 const created: string[] = []
 
 async function tempProject(): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), 'pawl-readiness-'))
+  const dir = await mkdtemp(join(tmpdir(), 'terminaldeck-readiness-'))
   created.push(dir)
   return dir
 }

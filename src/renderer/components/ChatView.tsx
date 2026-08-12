@@ -66,7 +66,7 @@ export interface ChatViewProps {
   transcriptPath?: string
   /** Poll interval while the session is live. 0 disables it. Defaults to 2s. */
   refreshMs?: number
-  /** Injectable for tests; defaults to the preload bridge on `window.pawl`. */
+  /** Injectable for tests; defaults to the preload bridge on `window.deck`. */
   bridge?: ChatBridge
 }
 
@@ -207,7 +207,7 @@ export function dayBreak(at: number, previousAt: number): string | null {
  */
 function resolveBridge(): ChatBridge | null {
   if (typeof window === 'undefined') return null
-  const host = (window as unknown as { pawl?: Partial<ChatBridge> }).pawl
+  const host = (window as unknown as { deck?: Partial<ChatBridge> }).deck
   if (!host || typeof host.loadChat !== 'function' || typeof host.tailChat !== 'function') return null
   return host as ChatBridge
 }

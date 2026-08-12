@@ -55,7 +55,7 @@ export interface ReadinessBridge {
 export interface ReadinessPanelProps {
   /** Absolute path of the project to score. */
   projectPath: string
-  /** Injectable for tests; defaults to the preload bridge on `window.pawl`. */
+  /** Injectable for tests; defaults to the preload bridge on `window.deck`. */
   bridge?: ReadinessBridge
 }
 
@@ -68,7 +68,7 @@ export interface ReadinessPanelProps {
 function resolveBridge(): ReadinessBridge | null {
   // Tests render this to static markup, where there is no window at all.
   if (typeof window === 'undefined') return null
-  const host = (window as unknown as { pawl?: Partial<ReadinessBridge> }).pawl
+  const host = (window as unknown as { deck?: Partial<ReadinessBridge> }).deck
   if (!host || typeof host.scanReadiness !== 'function' || typeof host.applyReadinessFix !== 'function') {
     return null
   }

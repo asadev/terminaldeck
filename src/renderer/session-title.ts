@@ -2,7 +2,7 @@
  * Deriving a meaningful tab title for a session.
  *
  * A folder name is a poor label: three tabs on the same repo all read
- * `pawl`, and none of them says what the agent is actually doing. This module
+ * `terminaldeck`, and none of them says what the agent is actually doing. This module
  * turns whatever evidence exists — a title the CLI wrote, the first prompt of
  * the conversation, the terminal's own output — into one short line, and falls
  * back to the folder name only when nothing better is available.

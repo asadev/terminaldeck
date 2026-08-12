@@ -61,7 +61,7 @@ function fakeDatabase(rows: unknown[]): { open: () => ReadonlyDatabase; closed: 
 }
 
 beforeAll(() => {
-  root = mkdtempSync(join(tmpdir(), 'pawl-chrome-test-'))
+  root = mkdtempSync(join(tmpdir(), 'terminaldeck-chrome-test-'))
   const profilePath = join(root, 'Default')
   mkdirSync(join(profilePath, 'Sessions'), { recursive: true })
 
@@ -77,7 +77,7 @@ beforeAll(() => {
           children: [
             {
               type: 'url',
-              name: 'Pawl dev',
+              name: 'Deck dev',
               url: 'http://localhost:5173/dashboard',
               date_added: String(chromeTime(VISIT_MS)),
             },
@@ -283,7 +283,7 @@ describe('collectBookmarkUrls', () => {
     ])
     expect(byUrl.get('http://localhost:5173/dashboard')?.folder).toBe('Bookmarks bar')
     expect(byUrl.get('http://127.0.0.1:8787/health')?.folder).toBe('Bookmarks bar/Work')
-    expect(byUrl.get('http://localhost:5173/dashboard')?.title).toBe('Pawl dev')
+    expect(byUrl.get('http://localhost:5173/dashboard')?.title).toBe('Deck dev')
     expect(byUrl.get('http://localhost:5173/dashboard')?.addedAt).toBe(VISIT_MS)
     // No date_added on that one, and an invented time would be worse than none.
     expect(byUrl.get('http://127.0.0.1:8787/health')?.addedAt).toBeNull()
@@ -401,7 +401,7 @@ describe('readHistoryRows', () => {
       return { prepare: () => ({ all: () => [] }), close: () => {} }
     })
     expect(opened).not.toBe(source)
-    expect(opened).toContain('pawl-browser-')
+    expect(opened).toContain('terminaldeck-browser-')
   })
 })
 
@@ -409,7 +409,7 @@ describe('scanProfile', () => {
   const rows = [
     {
       url: 'http://localhost:5173/dashboard',
-      title: 'Pawl dev',
+      title: 'Deck dev',
       last_visit_time: chromeTime(VISIT_MS),
       visit_count: 12,
     },
@@ -518,11 +518,11 @@ describe('dedupeUrls', () => {
     const merged = dedupeUrls([
       hit({ source: 'session', approximate: true }),
       hit({ source: 'history', lastSeen: VISIT_MS }),
-      hit({ source: 'bookmark', title: 'Pawl dev' }),
+      hit({ source: 'bookmark', title: 'Deck dev' }),
     ])
     expect(merged).toHaveLength(1)
     expect(merged[0].source).toBe('bookmark')
-    expect(merged[0].title).toBe('Pawl dev')
+    expect(merged[0].title).toBe('Deck dev')
     // The bookmark had no time; the history sighting supplies one.
     expect(merged[0].lastSeen).toBe(VISIT_MS)
     // Something firsthand saw it, so it is no longer a guess.
@@ -535,21 +535,21 @@ describe('dedupeUrls', () => {
     // fold a no-op in exactly the order a profile is really scanned in
     // (bookmarks first, then history, which is the only source with a time).
     const bookmarkFirst = dedupeUrls([
-      hit({ source: 'bookmark', title: 'Pawl dev' }),
+      hit({ source: 'bookmark', title: 'Deck dev' }),
       hit({ source: 'history', lastSeen: VISIT_MS, title: 'localhost:3000' }),
     ])
     expect(bookmarkFirst).toHaveLength(1)
     expect(bookmarkFirst[0].source).toBe('bookmark')
-    expect(bookmarkFirst[0].title).toBe('Pawl dev')
+    expect(bookmarkFirst[0].title).toBe('Deck dev')
     expect(bookmarkFirst[0].lastSeen).toBe(VISIT_MS)
 
     // The same three sightings in the opposite order must agree exactly.
     const reversed = dedupeUrls([
-      hit({ source: 'bookmark', title: 'Pawl dev' }),
+      hit({ source: 'bookmark', title: 'Deck dev' }),
       hit({ source: 'history', lastSeen: VISIT_MS }),
       hit({ source: 'session', approximate: true }),
     ])
-    expect(reversed[0].title).toBe('Pawl dev')
+    expect(reversed[0].title).toBe('Deck dev')
     expect(reversed[0].lastSeen).toBe(VISIT_MS)
     expect(reversed[0].approximate).toBeUndefined()
   })

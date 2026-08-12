@@ -1,6 +1,6 @@
 /**
  * Chrome import — find the local dev URLs already sitting in a Chromium
- * browser's profile, so they can be opened in a Pawl browser tab instead of
+ * browser's profile, so they can be opened in a Deck browser tab instead of
  * being retyped.
  *
  * Strictly read-only. Nothing here ever writes into another application's
@@ -582,7 +582,7 @@ const DB_SIDECARS = ['-journal', '-wal', '-shm']
  * a database the browser is mid-transaction on.
  */
 export function snapshotDatabase(source: string): { file: string; dispose(): void } {
-  const dir = mkdtempSync(join(tmpdir(), 'pawl-browser-'))
+  const dir = mkdtempSync(join(tmpdir(), 'terminaldeck-browser-'))
   const file = join(dir, 'db.sqlite')
   const dispose = () => rmSync(dir, { recursive: true, force: true })
 

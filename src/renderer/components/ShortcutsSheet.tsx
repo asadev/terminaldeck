@@ -124,7 +124,7 @@ export function ShortcutsList({
                     <span className="sheet-label">
                       {binding.label}
                       {binding.passthrough && (
-                        <span className="sheet-flag" title="Pawl never intercepts this">
+                        <span className="sheet-flag" title="Deck never intercepts this">
                           passes through
                         </span>
                       )}

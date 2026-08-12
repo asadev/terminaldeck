@@ -8,17 +8,17 @@
  */
 export const BRAND = {
   /** Display name, shown in the UI and window title. */
-  name: 'Pawl',
+  name: 'Deck',
   /** Lowercase slug used for folders, npm name, CLI command. */
-  id: 'pawl',
+  id: 'terminaldeck',
   /** macOS bundle identifier. */
-  bundleId: 'com.asadiqbal.pawl',
+  bundleId: 'dev.terminaldeck.app',
   /** Per-project config directory created inside a user's project. */
-  projectConfigDir: '.pawl',
+  projectConfigDir: '.terminaldeck',
   /** Env var injected into each spawned session. */
-  sessionEnvVar: 'PAWL_SESSION_ID',
+  sessionEnvVar: 'TERMINALDECK_SESSION_ID',
   /** One-line description. */
-  tagline: 'Run and watch your Claude sessions',
+  tagline: 'Run your coding agents on one deck',
 } as const
 
 export type Brand = typeof BRAND

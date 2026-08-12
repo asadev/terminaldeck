@@ -107,7 +107,7 @@ interface FileSearchBridge {
  */
 function fileSearchBridge(): FileSearchBridge | null {
   if (typeof window === 'undefined') return null
-  const api = (window as unknown as { pawl?: Partial<FileSearchBridge> }).pawl
+  const api = (window as unknown as { deck?: Partial<FileSearchBridge> }).deck
   return api && typeof api.searchProjectFiles === 'function' ? (api as FileSearchBridge) : null
 }
 

@@ -53,7 +53,7 @@ export interface PersistedProject {
   lastOpenedAt: number
 }
 
-export interface PawlApi {
+export interface DeckApi {
   getBrand(): Promise<BrandInfo>
   detectProviders(): Promise<Record<ProviderId, boolean>>
   listProjects(): Promise<PersistedProject[]>
@@ -139,6 +139,6 @@ export interface PawlApi {
 
 declare global {
   interface Window {
-    pawl: PawlApi
+    deck: DeckApi
   }
 }

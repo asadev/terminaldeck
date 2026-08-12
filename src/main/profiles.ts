@@ -211,7 +211,7 @@ export function isProtectedDir(configDir: string): boolean {
  * something to select and the resolution chain always terminates.
  *
  * Its `configDir` comes from `claudeConfigDir()` rather than a hardcoded
- * `~/.claude`: if Pawl itself was launched with `CLAUDE_CONFIG_DIR` set, that
+ * `~/.claude`: if Deck itself was launched with `CLAUDE_CONFIG_DIR` set, that
  * *is* the user's install, and sessions inherit the same variable.
  */
 export function systemProfile(): Profile {

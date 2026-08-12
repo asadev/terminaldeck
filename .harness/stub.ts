@@ -1,8 +1,8 @@
 /** A plausible preload bridge so the real App can render outside Electron. */
 const noop = () => () => {}
 const sessions = [
-  { id: 's1', cwd: '/Users/apple/Projects/pawl', title: 'pawl', provider: 'claude', exitCode: null, createdAt: Date.now() },
-  { id: 's2', cwd: '/Users/apple/Projects/pawl', title: 'pawl', provider: 'claude', exitCode: null, createdAt: Date.now() },
+  { id: 's1', cwd: '/Users/apple/Projects/terminaldeck', title: 'terminaldeck', provider: 'claude', exitCode: null, createdAt: Date.now() },
+  { id: 's2', cwd: '/Users/apple/Projects/terminaldeck', title: 'terminaldeck', provider: 'claude', exitCode: null, createdAt: Date.now() },
 ]
 /** Mirrors `BrowserTabState` in `src/main/browser-tab.ts` — every field of it. */
 const browserTabState = {
@@ -18,14 +18,14 @@ const browserTabState = {
 }
 const api: Record<string, unknown> = new Proxy(
   {
-    getBrand: async () => ({ name: 'Pawl', tagline: 'Run and watch your Claude sessions' }),
+    getBrand: async () => ({ name: 'Deck', tagline: 'Run and watch your Claude sessions' }),
     getPreferences: async () => ({ theme: 'dark', defaultProvider: 'claude', restoreSessions: true, notifyOnComplete: true }),
     setPreferences: async (p: unknown) => p,
     getSettings: async () => ({}),
     setSettings: async (p: unknown) => p,
-    settingsPaths: async () => ({ settings: '~/Library/Application Support/pawl/settings.json' }),
-    appAbout: async () => ({ name: 'Pawl', version: '0.1.0' }),
-    listProjects: async () => [{ path: '/Users/apple/Projects/pawl', lastOpenedAt: Date.now() }],
+    settingsPaths: async () => ({ settings: '~/Library/Application Support/terminaldeck/settings.json' }),
+    appAbout: async () => ({ name: 'Deck', version: '0.1.0' }),
+    listProjects: async () => [{ path: '/Users/apple/Projects/terminaldeck', lastOpenedAt: Date.now() }],
     checkPrerequisites: async () => ({
       canRunSessions: true,
       needsLogin: false,
@@ -91,13 +91,13 @@ const api: Record<string, unknown> = new Proxy(
       reset: false, cursor: 0, found: false, complete: true, updatedAt: Date.now(),
     }),
     closeChat: () => {},
-    browserSessionInfo: async () => ({ partition: 'persist:pawl-browser', persistent: true }),
+    browserSessionInfo: async () => ({ partition: 'persist:terminaldeck-browser', persistent: true }),
     listBrowsers: async () => ({ browsers: [] }),
     // Per-tab isolation. The Proxy's fallback would resolve these to null, and
     // a null key is indistinguishable from "this build cannot do it" — so the
     // toggle would appear and then refuse to work, which is a bug the harness
     // would be inventing rather than finding.
-    browserIsolationKey: async () => `pawl-tab-${crypto.randomUUID()}`,
+    browserIsolationKey: async () => `terminaldeck-tab-${crypto.randomUUID()}`,
     browserIsolationDispose: async () => {},
     // Cookie import. Deliberately the "nothing found" answer rather than a
     // fabricated success: a stub that pretends to import cookies would make the
@@ -129,5 +129,5 @@ const api: Record<string, unknown> = new Proxy(
       t[k] ?? (k.startsWith('on') ? () => () => {} : async () => null),
   },
 )
-;(globalThis as unknown as { pawl: unknown }).pawl = api
+;(globalThis as unknown as { terminaldeck: unknown }).deck = api
 export {}

@@ -153,7 +153,7 @@ export function ProviderPicker({ open, projectPath, defaultProvider, onClose, on
     setResume(false)
     setSelected(defaultProvider ?? 'claude')
 
-    void window.pawl.detectProviders().then(
+    void window.deck.detectProviders().then(
       (found) => {
         if (!cancelled) setDetected(found)
       },

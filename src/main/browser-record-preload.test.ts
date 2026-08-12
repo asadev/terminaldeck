@@ -222,7 +222,7 @@ function boot(build: (body: FakeElement) => void): Harness {
       handler(null, options)
     },
     badge: () =>
-      descendants(documentElement).find((el) => el.getAttribute('data-pawl-recording') !== null),
+      descendants(documentElement).find((el) => el.getAttribute('data-terminaldeck-recording') !== null),
   }
 }
 
@@ -310,7 +310,7 @@ describe('while recording', () => {
     // The inspector swallows clicks so the user can point at an element without
     // driving the page; those clicks are not part of any flow.
     const overlay = new FakeElement('div')
-    overlay.setAttribute('data-pawl-inspector', '')
+    overlay.setAttribute('data-terminaldeck-inspector', '')
     h.documentElement.appendChild(overlay)
     h.fire('click', { target: h.body.children[0] })
     expect(steps(h)).toEqual([])

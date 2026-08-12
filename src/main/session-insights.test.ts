@@ -68,7 +68,7 @@ function assistantLine(input: AssistantInput): string {
     uuid: `${input.id}-${input.offset}`,
     requestId: `req_${input.id}`,
     sessionId: 'sess-1',
-    cwd: '/Users/apple/Projects/pawl',
+    cwd: '/Users/apple/Projects/terminaldeck',
     isSidechain: input.sidechain ?? false,
     timestamp: iso(input.offset),
     message: {
@@ -148,7 +148,7 @@ describe('parseInsightLine', () => {
       stopReason: 'end_turn',
     })
     expect(line?.at).toBe(T0)
-    expect(line?.cwd).toBe('/Users/apple/Projects/pawl')
+    expect(line?.cwd).toBe('/Users/apple/Projects/terminaldeck')
   })
 
   it('reads a tool call and its result', () => {
@@ -867,7 +867,7 @@ describe('readInsightLines', () => {
   })
 
   async function fixture(contents: string): Promise<string> {
-    const dir = await mkdtemp(join(tmpdir(), 'pawl-insights-'))
+    const dir = await mkdtemp(join(tmpdir(), 'terminaldeck-insights-'))
     dirs.push(dir)
     const path = join(dir, 'sess-1.jsonl')
     await writeFile(path, contents, 'utf8')
@@ -887,7 +887,7 @@ describe('readInsightLines', () => {
     expect(insights.requests).toBe(2)
     expect(insights.sessionId).toBe('sess-1')
     expect(insights.transcriptPath).toBe(path)
-    expect(insights.cwd).toBe('/Users/apple/Projects/pawl')
+    expect(insights.cwd).toBe('/Users/apple/Projects/terminaldeck')
     expect(insights.tools[0]).toMatchObject({ name: 'Bash', calls: 1, totalMs: 3000 })
   })
 
@@ -917,7 +917,7 @@ describe('readInsightLines', () => {
     // `open(dir, 'r')` succeeds on macOS and Linux and only fails at the first
     // `read()`. A directory named `<x>.jsonl` inside the transcript store
     // passes the IPC path check, so this reached the renderer as a raw errno.
-    const dir = await mkdtemp(join(tmpdir(), 'pawl-insights-'))
+    const dir = await mkdtemp(join(tmpdir(), 'terminaldeck-insights-'))
     dirs.push(dir)
     const asTranscript = join(dir, 'looks-like-one.jsonl')
     await mkdir(asTranscript)

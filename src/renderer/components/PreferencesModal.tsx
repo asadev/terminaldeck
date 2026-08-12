@@ -129,7 +129,7 @@ export function PreferencesModal({ open, onClose, onChange }: Props) {
     setLoaded(false)
     setInstalled(null)
 
-    void window.pawl.getPreferences().then(
+    void window.deck.getPreferences().then(
       (stored) => {
         if (cancelled) return
         const next = normalizePreferences(stored)
@@ -150,7 +150,7 @@ export function PreferencesModal({ open, onClose, onChange }: Props) {
 
     // Providers that are not on PATH are still listed, but cannot be chosen:
     // picking one would silently fall back to a plain shell at spawn time.
-    void window.pawl.detectProviders().then(
+    void window.deck.detectProviders().then(
       (found) => {
         if (!cancelled) setInstalled(installedProviders(found))
       },
@@ -168,7 +168,7 @@ export function PreferencesModal({ open, onClose, onChange }: Props) {
   const save = useCallback(
     (patch: Partial<Preferences>) => {
       setPreferences((prev) => ({ ...prev, ...patch }))
-      void window.pawl.setPreferences(patch).then(
+      void window.deck.setPreferences(patch).then(
         (saved) => onChange?.(normalizePreferences(saved)),
         () => setError('Could not save that change — it may not survive a restart.'),
       )

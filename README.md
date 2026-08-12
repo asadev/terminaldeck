@@ -1,4 +1,4 @@
-# Pawl
+# Terminal Deck
 
 A desktop workspace for running AI coding agents.
 

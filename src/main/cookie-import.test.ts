@@ -34,7 +34,7 @@ const fakeSession = {
 }
 
 vi.mock('electron', () => ({
-  app: { getPath: () => mkdtempSync(join(tmpdir(), 'pawl-cookie-test-')) },
+  app: { getPath: () => mkdtempSync(join(tmpdir(), 'terminaldeck-cookie-test-')) },
   session: { fromPartition: () => fakeSession },
 }))
 

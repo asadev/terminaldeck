@@ -54,7 +54,7 @@ export interface AlertsPanelProps {
   projectPath: string
   /** Invoked when the user takes an alert's action. */
   onAction?: (action: AlertAction, alert: Alert) => void
-  /** Injectable for tests; defaults to the preload bridge on `window.pawl`. */
+  /** Injectable for tests; defaults to the preload bridge on `window.deck`. */
   bridge?: AlertsBridge
   /** Re-scan interval. 0 disables it. Defaults to 60s. */
   refreshMs?: number
@@ -69,7 +69,7 @@ export interface AlertsPanelProps {
 function resolveBridge(): AlertsBridge | null {
   // Tests render this to static markup, where there is no window at all.
   if (typeof window === 'undefined') return null
-  const host = (window as unknown as { pawl?: Partial<AlertsBridge> }).pawl
+  const host = (window as unknown as { deck?: Partial<AlertsBridge> }).deck
   if (!host || typeof host.projectAlerts !== 'function') return null
   return host as AlertsBridge
 }

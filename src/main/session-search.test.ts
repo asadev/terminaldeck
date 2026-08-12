@@ -20,7 +20,7 @@ import {
 
 /* ------------------------------------------------------------------ setup -- */
 
-const PROJECT = '/Users/apple/Projects/pawl'
+const PROJECT = '/Users/apple/Projects/terminaldeck'
 const OTHER_PROJECT = '/Users/apple/Projects/other'
 const NOW = Date.parse('2026-08-12T12:00:00.000Z')
 
@@ -32,7 +32,7 @@ afterAll(async () => {
 
 /** A config dir laid out exactly like `~/.claude`, so the real locator is exercised. */
 async function makeConfigDir(): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), 'pawl-session-search-'))
+  const dir = await mkdtemp(join(tmpdir(), 'terminaldeck-session-search-'))
   temps.push(dir)
   await mkdir(join(dir, 'projects'), { recursive: true })
   return dir

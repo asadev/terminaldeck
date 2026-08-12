@@ -81,7 +81,7 @@ interface PreferenceBridge {
 }
 
 function preferenceBridge(): PreferenceBridge | null {
-  const api = (globalThis as { pawl?: Partial<PreferenceBridge> }).pawl
+  const api = (globalThis as { deck?: Partial<PreferenceBridge> }).deck
   if (!api || typeof api.getSettings !== 'function' || typeof api.setSettings !== 'function') {
     return null
   }

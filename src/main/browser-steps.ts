@@ -286,7 +286,7 @@ export function formatFlow(steps: RecordedStep[]): string {
 /**
  * The whole flow on one line, for handing to an agent.
  *
- * Single line by construction, like `composeAgentContext`: Pawl types this into
+ * Single line by construction, like `composeAgentContext`: Deck types this into
  * a PTY running a coding CLI, where a newline submits — a multi-line flow would
  * send `1. Go to…` as the entire instruction.
  */

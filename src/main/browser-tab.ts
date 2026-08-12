@@ -94,9 +94,9 @@ interface BrowserTab {
 
 /**
  * Separate from the app's own session so guest cookies, storage and — most
- * importantly — response headers are handled independently of Pawl's.
+ * importantly — response headers are handled independently of Deck's.
  */
-const GUEST_PARTITION = 'persist:pawl-browser'
+const GUEST_PARTITION = 'persist:terminaldeck-browser'
 
 const tabs = new Map<string, BrowserTab>()
 const watchedHosts = new WeakSet<WebContents>()

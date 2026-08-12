@@ -29,7 +29,7 @@ function seed(
   doing: string[] = [],
   done: string[] = [],
 ): BoardState {
-  let state = createBoard('/Users/asad/Projects/pawl')
+  let state = createBoard('/Users/asad/Projects/terminaldeck')
   const fill = (ids: string[], columnId: ColumnId) => {
     for (const id of ids) {
       state = addCard(state, { id, title: id.toUpperCase(), columnId, createdAt: 1 })

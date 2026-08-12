@@ -1,6 +1,6 @@
 # CLAUDE.md — working in this repo
 
-Pawl is an Electron desktop app for running AI coding-agent sessions.
+Terminal Deck is an Electron desktop app for running AI coding-agent sessions.
 Read [ROADMAP.md](ROADMAP.md) before starting anything — it tracks all 8 phases.
 
 ## Run & verify
@@ -25,7 +25,7 @@ this repo. Reading it to learn *what* a feature does or *what values* it uses
 code, components, CSS blocks or assets is not, because that pulls its licence and
 copyright notice permanently into this repo. Write every line here.
 
-**The name lives in one place.** `src/shared/brand.ts`. Never hardcode "Pawl"
+**The name lives in one place.** `src/shared/brand.ts`. Never hardcode "Terminal Deck"
 anywhere else.
 
 **Verify against real data.** This codebase has repeatedly been wrong in ways

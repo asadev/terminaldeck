@@ -36,7 +36,7 @@ function report(alerts: Alert[]): AlertReport {
   const counts = { critical: 0, warning: 0, info: 0 }
   for (const item of alerts) counts[item.severity] += 1
   return {
-    projectPath: '/Users/apple/Projects/pawl',
+    projectPath: '/Users/apple/Projects/terminaldeck',
     alerts,
     counts,
     worst: alerts[0]?.severity ?? null,
@@ -129,7 +129,7 @@ describe('AlertsPanel', () => {
     // is asserted through `summarize` above; here the panel must at least not
     // claim something is wrong.
     const markup = renderToStaticMarkup(
-      <AlertsPanel projectPath="/Users/apple/Projects/pawl" bridge={quiet} />,
+      <AlertsPanel projectPath="/Users/apple/Projects/terminaldeck" bridge={quiet} />,
     )
     expect(markup).toContain('Checking…')
     expect(markup).not.toContain('Nothing needs')
@@ -137,13 +137,13 @@ describe('AlertsPanel', () => {
   })
 
   it('explains itself when the bridge is missing', () => {
-    const markup = renderToStaticMarkup(<AlertsPanel projectPath="/Users/apple/Projects/pawl" />)
+    const markup = renderToStaticMarkup(<AlertsPanel projectPath="/Users/apple/Projects/terminaldeck" />)
     expect(markup).toContain('not connected to the main process')
   })
 
   it('labels itself for assistive tech', () => {
     const markup = renderToStaticMarkup(
-      <AlertsPanel projectPath="/Users/apple/Projects/pawl" bridge={quiet} />,
+      <AlertsPanel projectPath="/Users/apple/Projects/terminaldeck" bridge={quiet} />,
     )
     expect(markup).toContain('aria-label="Project alerts"')
   })

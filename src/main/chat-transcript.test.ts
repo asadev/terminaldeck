@@ -26,7 +26,7 @@ function line(overrides: Record<string, unknown>): string {
     parentUuid: null,
     isSidechain: false,
     userType: 'external',
-    cwd: '/Users/apple/Projects/pawl',
+    cwd: '/Users/apple/Projects/terminaldeck',
     sessionId: SESSION,
     version: '2.1.209',
     gitBranch: 'main',
@@ -279,7 +279,7 @@ describe('dedupe and collapsing', () => {
   it('deduplicates a reply replayed under the same message.id', async () => {
     // Compaction replays part of the conversation, so the same line arrives
     // twice — 49 duplicate uuids in one sweep of this machine's transcripts.
-    const dir = await mkdtemp(join(tmpdir(), 'pawl-chat-'))
+    const dir = await mkdtemp(join(tmpdir(), 'terminaldeck-chat-'))
     const path = join(dir, `${SESSION}.jsonl`)
     const once = reply('Only once.', { uuid: 'u-dup' }, { id: 'msg_dup' })
     await writeFile(path, [prompt('hi'), once, once, once].join('\n') + '\n')
@@ -316,7 +316,7 @@ describe('incremental tailing', () => {
   })
 
   async function fixture(contents: string): Promise<string> {
-    const dir = await mkdtemp(join(tmpdir(), 'pawl-chat-'))
+    const dir = await mkdtemp(join(tmpdir(), 'terminaldeck-chat-'))
     dirs.push(dir)
     const path = join(dir, `${SESSION}.jsonl`)
     await writeFile(path, contents)

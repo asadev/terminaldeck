@@ -381,7 +381,7 @@ export function parseCapture(raw: unknown, url: string): ElementCapture | null {
 /**
  * The one line that goes into the agent's prompt.
  *
- * Single line by construction. Pawl types this into a PTY running a coding
+ * Single line by construction. Deck types this into a PTY running a coding
  * agent, and in every one of those CLIs a newline submits — a multi-line
  * context string would send the first line as the whole instruction.
  */

@@ -35,7 +35,7 @@ type BridgeFn = (...args: unknown[]) => unknown
  * missing method at mount would stay broken for the life of the window.
  */
 function bridgeMethod(name: string): BridgeFn | null {
-  const api = (globalThis as { pawl?: Record<string, unknown> }).pawl
+  const api = (globalThis as { deck?: Record<string, unknown> }).deck
   if (!api) return null
   const fn = api[name]
   return typeof fn === 'function' ? (fn as BridgeFn) : null

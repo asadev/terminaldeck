@@ -110,7 +110,7 @@ describe('ignore matcher', () => {
 })
 
 describe('traversal guard', () => {
-  const root = resolve('/projects/pawl')
+  const root = resolve('/projects/terminaldeck')
 
   it('accepts the root itself and anything beneath it', () => {
     expect(isWithinRoot(root, root)).toBe(true)
@@ -118,7 +118,7 @@ describe('traversal guard', () => {
   })
 
   it('rejects siblings and ancestors', () => {
-    expect(isWithinRoot(root, resolve('/projects/pawl-other'))).toBe(false)
+    expect(isWithinRoot(root, resolve('/projects/terminaldeck-other'))).toBe(false)
     expect(isWithinRoot(root, resolve('/projects'))).toBe(false)
     expect(isWithinRoot(root, resolve('/'))).toBe(false)
   })
@@ -168,7 +168,7 @@ describe('listDirectory', () => {
   let root = ''
 
   beforeAll(async () => {
-    root = await mkdtemp(join(tmpdir(), 'pawl-fs-'))
+    root = await mkdtemp(join(tmpdir(), 'terminaldeck-fs-'))
     await mkdir(join(root, 'src'))
     await mkdir(join(root, 'node_modules/react'), { recursive: true })
     await mkdir(join(root, 'dist'))
@@ -306,7 +306,7 @@ describe('listDirectory and readTextFile edges', () => {
   let root = ''
 
   beforeAll(async () => {
-    root = await mkdtemp(join(tmpdir(), 'pawl-fs-edge-'))
+    root = await mkdtemp(join(tmpdir(), 'terminaldeck-fs-edge-'))
   })
 
   afterAll(async () => {

@@ -115,7 +115,7 @@ export interface GitHubBridge {
 export interface GitHubPanelProps {
   /** Absolute path of the project folder to report on. */
   cwd: string
-  /** Injectable for tests; defaults to the preload bridge on `window.pawl`. */
+  /** Injectable for tests; defaults to the preload bridge on `window.deck`. */
   bridge?: GitHubBridge
   /** Injectable for tests, so rendered ages do not drift with the clock. */
   now?: number
@@ -128,7 +128,7 @@ export type Tab = 'pulls' | 'issues'
 /* ---------------------------------------------------------------- helpers -- */
 
 function resolveBridge(): GitHubBridge | null {
-  const host = (window as unknown as { pawl?: Partial<GitHubBridge> }).pawl
+  const host = (window as unknown as { deck?: Partial<GitHubBridge> }).deck
   if (!host || typeof host.githubOverview !== 'function' || typeof host.githubRefresh !== 'function') {
     return null
   }
