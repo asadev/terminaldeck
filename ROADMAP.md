@@ -34,8 +34,8 @@ Turns a terminal multiplexer into something that understands agents.
       12 tests; verified against a real PTY.
 - [ ] **Provider picker** — per-session choice, per-project default, global default
 - [ ] **Session resume** — `claude --continue`, `codex resume --last`
-- [ ] **Preferences modal** — theme, default provider, notifications, restore-on-launch
-- [ ] **Live re-theming** — terminals recolour without restart
+- [x] **Preferences modal** — theme, default provider, notifications, restore-on-launch
+- [x] **Live re-theming** — terminals recolour without restart
 - [ ] **Desktop notifications + sounds** on completion / input needed
 - [ ] **Session titles** — derive from the task rather than the folder name
 - [ ] **Unread indicators** — output arrived on a background tab
@@ -45,18 +45,18 @@ Turns a terminal multiplexer into something that understands agents.
 Claude Code writes JSONL transcripts under `~/.claude/projects/`. That is the
 data source for all of this — no scraping of terminal output.
 
-- [ ] **Transcript watcher** — tail the JSONL per session
-- [ ] **Cost tracking** — spend per session / project / day
-- [ ] **Token + context-window monitoring** with a bloat warning
+- [x] **Transcript watcher** — tail the JSONL per session
+- [x] **Cost tracking** — spend per session / project / day
+- [x] **Token + context-window monitoring** with a bloat warning
 - [ ] **Session inspector** (⌘⇧I) — timeline, cost breakdown, tool-usage stats
 - [ ] **Deep session search** across past transcripts
 - [ ] **Smart alerts** — missing tools, context bloat, session health
 
 ## Phase 4 — Project workspace
 
-- [ ] **Git status watcher** + git panel (branch, dirty files, diff view)
-- [ ] **File tree** + file viewer with syntax highlighting
-- [ ] **Quick open** (⌘P) and command palette (⌘K)
+- [x] **Git status watcher** + git panel (branch, dirty files, diff view)
+- [x] **File tree** + file viewer with syntax highlighting
+- [x] **Quick open** (⌘P) and command palette (⌘K)
 - [ ] **GitHub integration** via `gh` — PRs, issues, discussions, unread badges
 - [ ] **AI Readiness score** — does the project have CLAUDE.md, tests, lint,
       typecheck, a clean git state — with one-click fixes
@@ -66,7 +66,7 @@ data source for all of this — no scraping of terminal output.
 
 - [ ] **Customisable project overview** — drag-and-drop widget grid (gridstack)
 - [ ] **Widgets** — AI Readiness, Kanban, Sessions, Team, Provider Tools, GitHub
-- [ ] **Kanban board** — per project, drag-drop, search, tag filter
+- [x] **Kanban board** — per project, drag-drop, search, tag filter
 - [ ] **Board ↔ session link** — a card spawns or resumes a session; the card
       moves to Done when that session completes
 
