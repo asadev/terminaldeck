@@ -66,9 +66,10 @@ export interface PawlApi {
   getScrollback(id: string): Promise<string>
   killSession(id: string): Promise<void>
   listSessions(): Promise<SessionMeta[]>
-  /** Both listeners return an unsubscribe function. */
+  /** Listeners all return an unsubscribe function. */
   onSessionData(cb: (id: string, data: string) => void): () => void
   onSessionExit(cb: (id: string, exitCode: number) => void): () => void
+  onSessionStatus(cb: (id: string, status: SessionStatus) => void): () => void
 }
 
 declare global {

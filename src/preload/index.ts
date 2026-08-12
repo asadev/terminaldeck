@@ -49,6 +49,12 @@ const api = {
     ipcRenderer.on('session:exit', handler)
     return () => ipcRenderer.off('session:exit', handler)
   },
+
+  onSessionStatus: (cb: (id: string, status: string) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, id: string, status: string) => cb(id, status)
+    ipcRenderer.on('session:status', handler)
+    return () => ipcRenderer.off('session:status', handler)
+  },
 }
 
 contextBridge.exposeInMainWorld('pawl', api)

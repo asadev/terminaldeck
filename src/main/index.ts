@@ -41,6 +41,7 @@ function send(channel: string, ...args: unknown[]): void {
 const ptys = new PtyManager(
   (id, data) => send('session:data', id, data),
   (id, exitCode) => send('session:exit', id, exitCode),
+  (id, status) => send('session:status', id, status),
 )
 
 function createWindow(): void {

@@ -2,7 +2,8 @@ import { randomUUID } from 'node:crypto'
 import { basename } from 'node:path'
 import * as pty from 'node-pty'
 import { BRAND } from '../shared/brand'
-import type { CreateSessionInput, ProviderId, SessionMeta } from '../shared/types'
+import type { CreateSessionInput, ProviderId, SessionMeta, SessionStatus } from '../shared/types'
+import { ActivityTracker } from './session-activity'
 
 /** Fully resolved launch instruction, decided by the caller. */
 export interface SpawnSpec {
@@ -17,6 +18,7 @@ interface Session {
   proc: pty.IPty
   /** Rolling buffer so a tab can be re-rendered after switching away. */
   scrollback: string[]
+  activity: ActivityTracker
 }
 
 const SCROLLBACK_LIMIT = 4000
@@ -31,6 +33,7 @@ export class PtyManager {
   constructor(
     private readonly onData: (id: string, data: string) => void,
     private readonly onExit: (id: string, exitCode: number) => void,
+    private readonly onStatus: (id: string, status: SessionStatus) => void,
   ) {}
 
   create(input: CreateSessionInput, spawnSpec: SpawnSpec): SessionMeta {
@@ -60,17 +63,20 @@ export class PtyManager {
       },
     })
 
-    const session: Session = { meta, proc, scrollback: [] }
+    const activity = new ActivityTracker(id, this.onStatus)
+    const session: Session = { meta, proc, scrollback: [], activity }
     this.sessions.set(id, session)
 
     proc.onData((data) => {
       session.scrollback.push(data)
       if (session.scrollback.length > SCROLLBACK_LIMIT) session.scrollback.shift()
+      activity.push(data)
       this.onData(id, data)
     })
 
     proc.onExit(({ exitCode }) => {
       session.meta.exitCode = exitCode
+      activity.markExited()
       this.onExit(id, exitCode)
     })
 
@@ -99,6 +105,7 @@ export class PtyManager {
   kill(id: string): void {
     const s = this.sessions.get(id)
     if (!s) return
+    s.activity.dispose()
     try {
       s.proc.kill()
     } catch {

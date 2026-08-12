@@ -2,12 +2,10 @@ import { useEffect, useRef } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
-import type { SessionStatus } from '@shared/types'
 
 interface Props {
   sessionId: string
   visible: boolean
-  onStatusChange(status: SessionStatus): void
 }
 
 /** Reads a CSS custom property so the terminal follows the app theme. */
@@ -20,12 +18,10 @@ function token(name: string, fallback: string): string {
  * One xterm instance per session. The element stays mounted when the tab is
  * hidden (display:none) so scrollback and cursor position survive tab switches.
  */
-export function TerminalView({ sessionId, visible, onStatusChange }: Props) {
+export function TerminalView({ sessionId, visible }: Props) {
   const hostRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
-  const statusRef = useRef(onStatusChange)
-  statusRef.current = onStatusChange
 
   useEffect(() => {
     const host = hostRef.current
@@ -68,16 +64,14 @@ export function TerminalView({ sessionId, visible, onStatusChange }: Props) {
     const ro = new ResizeObserver(syncSize)
     ro.observe(host)
 
+    // Status is classified in the main process, which sees output for every
+    // session including ones whose terminal isn't currently rendered.
     const offData = window.pawl.onSessionData((id, data) => {
-      if (id !== sessionId) return
-      term.write(data)
-      statusRef.current('working')
+      if (id === sessionId) term.write(data)
     })
 
     const offExit = window.pawl.onSessionExit((id) => {
-      if (id !== sessionId) return
-      term.write('\r\n\x1b[2m[process exited]\x1b[0m\r\n')
-      statusRef.current('exited')
+      if (id === sessionId) term.write('\r\n\x1b[2m[process exited]\x1b[0m\r\n')
     })
 
     const inputDisposable = term.onData((data) => window.pawl.writeToSession(sessionId, data))

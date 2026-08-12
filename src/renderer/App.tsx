@@ -31,6 +31,13 @@ function Workspace() {
     }
   }, [addProject])
 
+  // Single subscription for every session's status, rather than one per
+  // terminal — the main process classifies, the renderer just reflects.
+  useEffect(() => {
+    const off = window.pawl.onSessionStatus((id, status) => setSessionStatus(id, status))
+    return off
+  }, [setSessionStatus])
+
   const openProject = useCallback(async () => {
     const path = await window.pawl.pickProjectFolder()
     if (!path) return
@@ -110,12 +117,7 @@ function Workspace() {
               <EmptyState onOpenProject={openProject} />
             ) : (
               sessions.map((s) => (
-                <TerminalView
-                  key={s.id}
-                  sessionId={s.id}
-                  visible={s.id === activeSessionId}
-                  onStatusChange={(status) => setSessionStatus(s.id, status)}
-                />
+                <TerminalView key={s.id} sessionId={s.id} visible={s.id === activeSessionId} />
               ))
             )}
           </div>
