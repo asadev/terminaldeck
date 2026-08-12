@@ -20,7 +20,25 @@
  * | `/plan`            | `Enabled plan mode`                                              |
  * | shift+tab          | footer moves auto → manual → accept edits → plan → bypass → auto |
  *
- * That last row is the important one. `/permissions` does **not** set the mode —
+ * A later pass checked the same claims a second way, against the strings and
+ * branches inside the shipped binary (`claude 2.1.228`), because one observed
+ * run only shows the branch that happened to be taken. That pass found three
+ * things a single run could not:
+ *
+ *   - `/effort auto` answers `Effort level set to auto`, not `Set effort level
+ *     to auto`. The words are in the other order, so the Auto option was never
+ *     confirmed and reported failure on a change that had been made.
+ *   - the "saved as your default" clause is one arm of a branch — the other is
+ *     `for this session only`, and `/effort ultracode` always takes it. Scope
+ *     is now quoted from the reply instead of asserted.
+ *   - a model can be refused four ways, only one of which is `not found`.
+ *
+ * It also confirmed what was already here: the mode ring really is
+ * manual → accept edits → plan → bypass → auto → manual (with stops dropping
+ * out when unavailable), nothing in it ever returns `dontAsk`, `\x1b[Z` is what
+ * the CLI's key parser reads as shift+tab, and `\r` is what it reads as return.
+ *
+ * That last row of the table is the important one. `/permissions` does **not** set the mode —
  * driving it opens a rules browser with Allow/Ask/Deny/Workspace tabs, and the
  * command's own description is "Manage allow and deny tool permission rules".
  * The only in-session way to change the mode is the shift+tab cycle, so this
@@ -201,32 +219,87 @@ export function readPermissionMode(screen: string): PermissionModeId | null {
 }
 
 /**
- * The model named by the CLI's own confirmation line, if one is on screen.
+ * How far the CLI said a change reaches. It prints this itself, in the same
+ * line as the confirmation, and it is a branch rather than a constant:
  *
- * Both wordings appear: `Set model to X and saved as …` after a change, and
- * `Kept model as X` after cancelling the picker. Everything up to the first
- * ` and saved` is the display name, which is why the capture stops there —
- * `Opus 5 (1M context) (default)` contains parentheses and spaces and would
- * not survive a tighter pattern.
+ *   `Set model to X` + (` and saved as your default for new sessions` | ` for this session only`)
+ *   `Set effort level to X` + (` (saved as your default for new sessions)` | ` (this session only)`)
+ *
+ * Both alternatives are in the shipped binary. So the scope is read, never
+ * assumed — the UI has no business claiming "saved as your default" when the
+ * CLI just said "for this session only".
  */
-export function readModelFromScreen(screen: string): string | null {
-  const text = lines(screen).join('\n')
-  const matches = [...text.matchAll(/(?:Set model to|Kept model as)\s+(.+?)(?:\s+and saved\b|$)/gim)]
-  const last = matches[matches.length - 1]
-  return last ? last[1].trim() || null : null
+export type ConfirmationScope = 'default' | 'session'
+
+function scopeOf(tail: string): ConfirmationScope | null {
+  // Model says "and saved as your default …"; effort says "(saved as your
+  // default …)". Matching the model's leading "and" silently lost every effort
+  // confirmation, so the shared part is what is matched.
+  if (/saved as your default for new sessions/i.test(tail)) return 'default'
+  if (/(?:^|\W)(?:\()?(?:for )?this session only/i.test(tail)) return 'session'
+  return null
+}
+
+export const SCOPE_TEXT: Record<ConfirmationScope, string> = {
+  default: 'saved as your default for new sessions',
+  session: 'this session only',
 }
 
 /**
- * The effort level named by the CLI's confirmation line.
+ * The model named by the CLI's own confirmation line, and how far it reaches.
  *
- * `Set effort level to xhigh (saved as your default for new sessions): Deeper…`
- * — the level is the bare word before the parenthesis or colon.
+ * Both wordings appear: `Set model to X and saved as …` after a change, and
+ * `Kept model as X` after cancelling the picker. The name stops at whichever
+ * scope clause follows it — `and saved …` or `for this session only`. Stopping
+ * only at `and saved` (an earlier draft) swallowed the second clause and put
+ * "Sonnet 5 for this session only" on the button as if that were a model name.
+ *
+ * The name itself keeps its parentheses and spaces, because
+ * `Opus 5 (1M context) (default)` is a real answer and a tighter pattern loses
+ * the part that distinguishes Default from Opus.
  */
-export function readEffortFromScreen(screen: string): string | null {
+export function readModelConfirmation(screen: string): { name: string; scope: ConfirmationScope | null } | null {
   const text = lines(screen).join('\n')
-  const matches = [...text.matchAll(/Set effort level to\s+([a-z]+)/gi)]
+  const matches = [
+    ...text.matchAll(/(?:Set model to|Kept model as)\s+(.+?)(?:\s+and saved\b|\s+for this session only\b|$)([^\n]*)/gim),
+  ]
   const last = matches[matches.length - 1]
-  return last ? last[1].toLowerCase() : null
+  if (!last) return null
+  const name = last[1].trim()
+  if (name === '') return null
+  return { name, scope: scopeOf(`${last[0]}`) }
+}
+
+export function readModelFromScreen(screen: string): string | null {
+  return readModelConfirmation(screen)?.name ?? null
+}
+
+/**
+ * The effort level named by the CLI's confirmation line, and how far it reaches.
+ *
+ * Two wordings, both taken from the binary rather than from one observed run:
+ *
+ *   `Set effort level to xhigh (saved as your default for new sessions): Deeper…`
+ *   `Set effort level to ultracode (this session only): xhigh + dynamic workflow…`
+ *   `Effort level set to auto (this session only)`
+ *
+ * That third one is the reason this function exists in this shape. `/effort auto`
+ * does **not** answer "Set effort level to auto" — the words are in the other
+ * order — so a pattern built only from the first wording never confirms Auto,
+ * and the Auto option sat there timing out and reporting failure on a change
+ * that had in fact been made.
+ */
+export function readEffortConfirmation(screen: string): { level: string; scope: ConfirmationScope | null } | null {
+  const text = lines(screen).join('\n')
+  const matches = [...text.matchAll(/(?:Set effort level to\s+([a-z]+)|Effort level set to\s+(auto))([^\n]*)/gi)]
+  const last = matches[matches.length - 1]
+  if (!last) return null
+  const level = (last[1] ?? last[2]).toLowerCase()
+  return { level, scope: scopeOf(last[0]) }
+}
+
+export function readEffortFromScreen(screen: string): string | null {
+  return readEffortConfirmation(screen)?.level ?? null
 }
 
 /**
@@ -254,15 +327,31 @@ export function readFastFromScreen(screen: string): ControlReading | null {
   return { value: on ? 'on' : 'off', label: on ? 'On' : 'Off', source: 'screen' }
 }
 
-/** The CLI's reply to a slash command we just typed, if it has landed yet. */
+/**
+ * The CLI's reply to a slash command we just typed, if it has landed yet.
+ *
+ * Every pattern is a string the shipped binary can actually print. The list is
+ * longer than the obvious one because a refusal this app does not recognise is
+ * not harmless: `applyControl` then waits out its whole timeout and reports
+ * "the CLI has not answered yet", which is a worse lie than the refusal itself.
+ * `Model 'x' not found` is only one of four ways a model can be turned down.
+ */
 export function readCommandError(screen: string): string | null {
   const text = lines(screen).join('\n')
   const patterns = [
-    /Model '[^']*' not found/i,
+    /Model '[^']*' not found[^\n]*/i,
+    /Model '[^']*' is not in the list of available models/i,
+    /Model '[^']*' is restricted by your organization's settings[^\n]*/i,
+    /Failed to validate model:[^\n]*/i,
     /Invalid argument:[^\n]*/i,
     /Unknown model '[^']*'/i,
     /Fast mode unavailable:[^\n]*/i,
     /Failed to set effort level:[^\n]*/i,
+    /Effort '[^']*' exceeds your organization's limit[^\n]*/i,
+    /Ultracode [^\n]*Valid options are:[^\n]*/i,
+    // Both of these say the change was accepted and then overridden, so they
+    // are failures from the user's point of view even though they read calmly.
+    /(?:Cleared effort from settings|Effort set to auto for this session), but CLAUDE_CODE_EFFORT_LEVEL=[^\n]*/i,
     /Not applied:[^\n]*/i,
   ]
   for (const pattern of patterns) {
@@ -306,8 +395,24 @@ export function effortFromSettings(settings: Record<string, unknown>): ControlRe
   return { value: known.id, label: known.label, source: 'settings' }
 }
 
-/** Fast mode as persisted: "when true, fast mode is enabled; when absent or false, off". */
+/**
+ * Fast mode, only if `settings.json` actually says.
+ *
+ * An earlier version treated a missing key as "off" and still stamped the
+ * reading `source: 'settings'`, so the row said "Fast · Off — from Claude
+ * settings" on a machine whose settings file has no `fastMode` key at all, and
+ * said the same thing when the file was missing or unparseable, since
+ * `readClaudeSettings` turns every failure into `{}`. That is the exact failure
+ * this feature is supposed to prevent: a confident value nothing was read for.
+ *
+ * It matters here more than it looks. Checked against the shipped CLI, the only
+ * write it makes to `fastMode` in user settings is a *clear* (`fastMode: void 0`)
+ * when an organisation turns the feature off; the enabled state lives in its own
+ * store. So the honest answer, absent the key, is that we do not know — and the
+ * screen is what settles it, the moment the session says "Fast mode ON/OFF".
+ */
 export function fastFromSettings(settings: Record<string, unknown>): ControlReading {
+  if (typeof settings.fastMode !== 'boolean') return { value: null, label: null, source: null }
   const on = settings.fastMode === true
   return { value: on ? 'on' : 'off', label: on ? 'On' : 'Off', source: 'settings' }
 }
@@ -583,9 +688,9 @@ export async function applyControl(access: SessionAccess, request: ApplyRequest)
     sendCommand(access, sessionId, `/model ${value}`)
     const answer = await waitForScreen(access, sessionId, COMMAND_TIMEOUT_MS, (screen) => {
       const failure = readCommandError(screen)
-      if (failure) return { ok: false, text: failure }
-      const now = readModelFromScreen(screen)
-      return now && now !== before ? { ok: true, text: now } : null
+      if (failure) return { ok: false, text: failure, scope: null as ConfirmationScope | null }
+      const now = readModelConfirmation(screen)
+      return now && now.name !== before ? { ok: true, text: now.name, scope: now.scope } : null
     })
     if (!answer) {
       return {
@@ -597,7 +702,10 @@ export async function applyControl(access: SessionAccess, request: ApplyRequest)
     if (!answer.ok) return { ok: false, message: answer.text, reading: await currentModel(access, sessionId, cwd) }
     return {
       ok: true,
-      message: `Model is now ${answer.text}.`,
+      // The scope is quoted from the CLI, not asserted: it decides per call
+      // between "saved as your default for new sessions" and "for this session
+      // only", and saying the wrong one is a lie about the user's config.
+      message: `Model is now ${answer.text}${answer.scope ? ` — ${SCOPE_TEXT[answer.scope]}.` : '.'}`,
       reading: { value: answer.text, label: answer.text, source: 'screen' },
     }
   }
@@ -609,9 +717,9 @@ export async function applyControl(access: SessionAccess, request: ApplyRequest)
     sendCommand(access, sessionId, `/effort ${value}`)
     const answer = await waitForScreen(access, sessionId, COMMAND_TIMEOUT_MS, (screen) => {
       const failure = readCommandError(screen)
-      if (failure) return { ok: false, text: failure }
-      const now = readEffortFromScreen(screen)
-      return now === value ? { ok: true, text: now } : null
+      if (failure) return { ok: false, text: failure, scope: null as ConfirmationScope | null }
+      const now = readEffortConfirmation(screen)
+      return now && now.level === value ? { ok: true, text: now.level, scope: now.scope } : null
     })
     const known = EFFORT_LEVELS.find((level) => level.id === value)
     if (!answer) {
@@ -624,7 +732,9 @@ export async function applyControl(access: SessionAccess, request: ApplyRequest)
     if (!answer.ok) return { ok: false, message: answer.text, reading: effortFromSettings(await readClaudeSettings()) }
     return {
       ok: true,
-      message: `Effort is now ${known ? known.label : value}. The CLI also saves this as the default for new sessions.`,
+      // Not "and saved as your default" — the CLI prints one of two scopes and
+      // ultracode is always the session-only one. Quote it or say nothing.
+      message: `Effort is now ${known ? known.label : value}${answer.scope ? ` — ${SCOPE_TEXT[answer.scope]}.` : '.'}`,
       reading: { value, label: known ? known.label : value, source: 'screen' },
     }
   }
@@ -638,7 +748,10 @@ export async function applyControl(access: SessionAccess, request: ApplyRequest)
     if (!answer) {
       return {
         ok: false,
-        message: 'Typed /fast but the CLI has not answered yet — it may be mid-turn.',
+        // The CLI only announces fast mode when it *changes* it, so silence
+        // genuinely has two readings and this says both rather than picking
+        // the flattering one.
+        message: `Typed /fast ${value} but the CLI printed nothing — it announces fast mode only when the setting changes, so it was either already ${value} or it is mid-turn.`,
         reading: fastFromSettings(await readClaudeSettings()),
       }
     }

@@ -42,12 +42,27 @@ describe('what the row is allowed to offer', () => {
 })
 
 describe('how far a change reaches', () => {
-  it('says permission is session-only and effort is not', () => {
-    // The CLI persists effort and model ("saved as your default for new
-    // sessions") but logs that a runtime permission mode is session-scoped.
+  it('states the one scope the CLI states flatly', () => {
+    // "setMode … is session-scoped; not persisting as defaultMode" — the CLI's
+    // own words, and it has no other answer for a runtime mode change.
     expect(reachOf('permission')).toMatch(/session only/i)
-    expect(reachOf('effort')).toMatch(/default for new sessions/i)
-    expect(reachOf('model')).toMatch(/default for new sessions/i)
+  })
+
+  it('does not promise "saved as your default" for the two controls that branch', () => {
+    // The binary composes `Set model to X` + (" and saved as your default for
+    // new sessions" | " for this session only"), and effort the same way —
+    // ultracode only ever takes the session-only arm. Asserting the first arm
+    // was a scope claim nothing had read.
+    for (const control of ['model', 'effort'] as const) {
+      const reach = reachOf(control)
+      expect(reach).not.toBeNull()
+      expect(reach).not.toMatch(/^This session, and saved/i)
+      expect(reach).toMatch(/if the CLI says so/i)
+    }
+  })
+
+  it('says nothing at all about fast mode, which announces no scope', () => {
+    expect(reachOf('fast')).toBeNull()
   })
 })
 

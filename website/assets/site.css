@@ -232,11 +232,19 @@ samp {
   overflow-wrap: anywhere;
 }
 
-/* A <pre> is the one place a break is wrong: it would silently rewrite the
-   command someone is about to paste. It scrolls sideways instead. */
+/* Two places a break is wrong. A <pre> would silently rewrite the command
+   someone is about to paste. And a path in a table cell — `~/.claude/settings
+   .json` snapped across three lines — is harder to read than the sideways
+   scroll `.table-scroll` already provides. Both scroll instead of breaking. */
 pre,
 pre code {
   overflow-wrap: normal;
+}
+
+.table-scroll td code,
+.table-scroll th code {
+  overflow-wrap: normal;
+  white-space: nowrap;
 }
 
 img,

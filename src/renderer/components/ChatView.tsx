@@ -3,6 +3,7 @@ import { Marked, type Renderer, type Tokens } from 'marked'
 import DOMPurify from 'dompurify'
 import { ChatComposer } from './ChatComposer'
 import { AgentControls } from '../chat/controls/AgentControls'
+import { UsageStrip } from '../chat/usage'
 import './ChatView.css'
 
 /**
@@ -283,10 +284,78 @@ export function ChatEmpty({ state }: { state: 'loading' | 'no-transcript' | 'sil
   )
 }
 
+/* ---------------------------------------------------------- live session id -- */
+
+/** Just enough of `SessionMeta` to pick one out, mirrored rather than imported. */
+interface LiveSession {
+  id: string
+  cwd: string
+  exitCode: number | null
+}
+
+/**
+ * The id of the pty this conversation is a view of.
+ *
+ * `sessionId` is the authority whenever a caller knows it. `App` does not pass
+ * it — it renders this view straight from a session record and threads only the
+ * project path — so without a fallback the control row underneath spends its
+ * whole life telling someone who has a session open to open a session, and
+ * nothing under it can be changed. That is the "renders but does nothing"
+ * failure, arrived at through a missing prop rather than a missing handler.
+ *
+ * So the id is resolved by asking the main process which sessions are live and
+ * taking the one whose cwd is this project. Exactly one match counts: two
+ * sessions in the same folder are two different terminals, and a slash command
+ * typed into the wrong one is a real change made in the wrong place. Ambiguity
+ * therefore resolves to "no id", and the row disables itself and says so.
+ *
+ * Not derived from the transcript's own `sessionId`, which is the agent's id
+ * for the conversation and means nothing to the pty registry.
+ */
+function useLiveSessionId(cwd: string | null, provided: string | undefined): string | undefined {
+  const [found, setFound] = useState<string | undefined>(undefined)
+
+  useEffect(() => {
+    if (provided || !cwd) {
+      setFound(undefined)
+      return
+    }
+    // `globalThis`, not `window`: this component is rendered to a string in its
+    // own tests, where there is no window to read.
+    const deck = (globalThis as { deck?: { listSessions?: () => Promise<unknown> } }).deck
+    if (typeof deck?.listSessions !== 'function') return
+
+    let alive = true
+    const look = async (): Promise<void> => {
+      try {
+        const answer = await deck.listSessions?.()
+        if (!alive || !Array.isArray(answer)) return
+        const live = (answer as LiveSession[]).filter(
+          (session) => session && session.cwd === cwd && session.exitCode === null,
+        )
+        setFound(live.length === 1 ? live[0].id : undefined)
+      } catch {
+        // Leave it unresolved; the row says "not running" rather than guessing.
+      }
+    }
+    void look()
+    // Sessions come and go while this view is mounted, and the row is only
+    // useful when it tracks that.
+    const timer = setInterval(() => void look(), 4000)
+    return () => {
+      alive = false
+      clearInterval(timer)
+    }
+  }, [cwd, provided])
+
+  return provided ?? found
+}
+
 /* ---------------------------------------------------------------- the view -- */
 
 export function ChatView({ cwd, sessionId, onSend, transcriptPath, refreshMs = 2000, bridge }: ChatViewProps) {
   const resolved = bridge ?? resolveBridge()
+  const liveSessionId = useLiveSessionId(cwd, sessionId)
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [found, setFound] = useState<boolean | null>(null)
   const [path, setPath] = useState('')
@@ -435,7 +504,10 @@ export function ChatView({ cwd, sessionId, onSend, transcriptPath, refreshMs = 2
       <ChatComposer onSend={onSend} cwd={cwd} />
       {/* Under the composer, in the CLI's own order of importance: what is
           answering, how hard it thinks, and what it may do without asking. */}
-      <AgentControls sessionId={sessionId} cwd={cwd} />
+      <AgentControls sessionId={liveSessionId} cwd={cwd} />
+      {/* Last line: what this has cost and how close the context is to full.
+          It sits below the controls because it reports rather than asks. */}
+      <UsageStrip cwd={cwd} sessionId={sessionId} />
     </div>
   )
 }

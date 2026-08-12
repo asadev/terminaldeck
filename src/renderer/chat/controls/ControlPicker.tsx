@@ -7,8 +7,9 @@ interface Props {
   name: string
   reading: ControlReading | undefined
   options: ControlOption[]
-  /** Printed at the foot of the menu: how far a change reaches. */
-  reach: string
+  /** Printed at the foot of the menu: how far a change reaches, or null when
+   *  that is not something this app has any grounds to state. */
+  reach: string | null
   busy: boolean
   disabled: boolean
   /** Why the control cannot be used, when that is known. Shown instead of the menu. */
@@ -113,7 +114,7 @@ export function ControlPicker({ name, reading, options, reach, busy, disabled, b
           <p className="ac-reach">
             <span className="ac-reach-now">Now: {value}</span>
             <span className="ac-reach-source">{note}</span>
-            <span className="ac-reach-scope">{reach}</span>
+            {reach ? <span className="ac-reach-scope">{reach}</span> : null}
           </p>
         </div>
       ) : null}

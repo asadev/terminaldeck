@@ -175,9 +175,15 @@ export function AgentControls({ sessionId, cwd }: Props) {
   }
 
   if (!sessionId) {
+    // Not "open a session": the caller resolves the session by project folder,
+    // so this state is reached both with none open and with two open in the
+    // same folder — and telling someone staring at a running session to open
+    // one is its own small lie.
     return (
       <div className="agent-controls agent-controls-idle">
-        <span className="ac-idle">Open a session to change its model, effort or permissions.</span>
+        <span className="ac-idle">
+          These type into a running session, and there is no single live session for this folder to type into.
+        </span>
       </div>
     )
   }

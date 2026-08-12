@@ -61,7 +61,10 @@ export const EFFORT_OPTIONS: ControlOption[] = [
   { id: 'high', label: 'High', hint: 'Comprehensive, with testing and docs' },
   { id: 'xhigh', label: 'Extra high', hint: 'Deeper reasoning than high' },
   { id: 'max', label: 'Max', hint: 'Deepest reasoning available' },
-  { id: 'ultracode', label: 'Ultracode', hint: 'Extra high plus dynamic workflows' },
+  // "this session only" is not a guess: the CLI has no other answer for
+  // ultracode — `Set effort level to ultracode (this session only): xhigh +
+  // dynamic workflow orchestration` is the whole of it, with no branch.
+  { id: 'ultracode', label: 'Ultracode', hint: 'Extra high plus dynamic workflows · this session only' },
 ]
 
 /**
@@ -96,18 +99,29 @@ export function optionsFor(control: ControlId): ControlOption[] {
 }
 
 /**
- * How far a change reaches. Shown on the menu because it is invisible otherwise
- * and it is the thing most likely to surprise someone.
+ * How far a change reaches — or `null` where we cannot say, in which case the
+ * menu prints nothing rather than a comfortable guess.
  *
- * Verified from the CLI's own confirmations: `/effort xhigh` answered "saved as
- * your default for new sessions" and `/model sonnet` answered "and saved as
- * your default for new sessions", while the permission cycle is session-only —
- * the CLI logs "setMode is session-scoped; not persisting as defaultMode".
+ * Permission is the only flat answer, and it is the CLI's own: it logs
+ * "setMode … is session-scoped; not persisting as defaultMode".
+ *
+ * Model and effort are **branches**, not constants. The binary builds its
+ * confirmation as `Set model to X` + (` and saved as your default for new
+ * sessions` | ` for this session only`), and effort the same way in
+ * parentheses. An earlier version of this function stated the first arm as
+ * fact for both, which was wrong every time the CLI took the second — and
+ * always wrong for ultracode, whose reply has no branch at all and is only
+ * ever "(this session only)". So the menu now says the CLI decides, and
+ * `applyControl` quotes the arm the CLI actually printed.
+ *
+ * Fast mode returns null: `/fast` announces on/off but says nothing about
+ * scope, and the CLI keeps that flag outside `settings.json`, so any scope
+ * sentence here would be invented.
  */
-export function reachOf(control: ControlId): string {
+export function reachOf(control: ControlId): string | null {
   if (control === 'permission') return 'This session only'
-  if (control === 'fast') return 'This session, and saved as the default'
-  return 'This session, and saved as the default for new sessions'
+  if (control === 'fast') return null
+  return 'This session — and your default too, if the CLI says so when it confirms'
 }
 
 /** The short caption under a control's value, naming where the value came from. */
