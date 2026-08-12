@@ -1,0 +1,413 @@
+/* ============================================================================
+   Kanban board — per project.
+   Colour comes only from tokens.css; the locals below are geometry, so a
+   density change is one edit rather than thirty.
+   ============================================================================ */
+
+.board {
+  --board-column-width: 268px;
+  --board-gap: 12px;
+  --board-pad: 12px;
+
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  user-select: none;
+}
+
+/* ------------------------------------------------------------ filter bar -- */
+
+.board-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+  padding: 10px var(--board-pad);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.board-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 240px;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  color: var(--text-muted);
+  transition: border-color 150ms ease, color 150ms ease;
+}
+
+.board-search:focus-within {
+  border-color: var(--accent);
+  color: var(--text-secondary);
+}
+
+.board-search svg {
+  flex-shrink: 0;
+}
+
+.board-search input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: none;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12.5px;
+}
+
+.board-search input::placeholder {
+  color: var(--text-muted);
+}
+
+/* Chrome draws its own clear button, which collides with the field's border. */
+.board-search input::-webkit-search-cancel-button {
+  appearance: none;
+}
+
+.board-tags {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.tag-chip {
+  padding: 2px 9px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.6;
+  transition: border-color 150ms ease, color 150ms ease, background 150ms ease;
+}
+
+.tag-chip:hover {
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+}
+
+.tag-chip.on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--text-primary);
+}
+
+.board-clear {
+  margin-left: auto;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: 11.5px;
+  transition: background 150ms ease, color 150ms ease;
+}
+
+.board-clear:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+/* --------------------------------------------------------------- columns -- */
+
+.board-columns {
+  flex: 1;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--board-gap);
+  min-height: 0;
+  padding: var(--board-pad);
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.board-column {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  width: var(--board-column-width);
+  max-height: 100%;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+}
+
+.column-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  padding: 11px 12px 9px;
+}
+
+.column-head h2 {
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.column-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--status-idle);
+}
+
+.column-dot.doing {
+  background: var(--status-working);
+}
+
+.column-dot.done {
+  background: var(--status-completed);
+}
+
+.column-count {
+  margin-left: auto;
+  min-width: 20px;
+  padding: 1px 7px;
+  border-radius: 20px;
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+  font-size: 11px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.column-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 60px;
+  padding: 0 8px 8px;
+  overflow-y: auto;
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+  transition: background 150ms ease;
+}
+
+/* Whole-column feedback while a card hovers it, so the target is never a guess. */
+.column-body.over {
+  background: var(--accent-soft);
+}
+
+.column-empty {
+  margin: 6px 4px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+/* ----------------------------------------------------------------- cards -- */
+
+.card-slot {
+  position: relative;
+}
+
+.drop-line {
+  height: 2px;
+  margin: 2px 0;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+.card {
+  padding: 10px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  cursor: grab;
+  transition: border-color 150ms ease, background 150ms ease;
+}
+
+.card:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+}
+
+.card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.card.dragging {
+  opacity: 0.4;
+  border-color: var(--accent);
+  cursor: grabbing;
+}
+
+.card.editing {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-color: var(--accent);
+  background: var(--bg-tertiary);
+  cursor: default;
+}
+
+.card-top {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.card-title {
+  flex: 1;
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.card-remove {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  border-radius: 4px;
+  color: var(--text-muted);
+  opacity: 0;
+  transition: opacity 150ms ease, background 150ms ease, color 150ms ease;
+}
+
+.card:hover .card-remove,
+.card:focus-within .card-remove {
+  opacity: 1;
+}
+
+.card-remove:hover {
+  background: var(--bg-secondary);
+  color: var(--color-critical);
+}
+
+.card-notes {
+  margin: 5px 0 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.card-meta {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.card-tag {
+  padding: 1px 7px;
+  border-radius: 20px;
+  background: var(--accent-soft);
+  color: var(--text-secondary);
+  font-size: 10px;
+  line-height: 1.7;
+}
+
+.card-session {
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  line-height: 1.7;
+}
+
+/* --------------------------------------------------- editors + composer -- */
+
+.card-input,
+.card-notes-input,
+.composer input {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+  transition: border-color 150ms ease;
+}
+
+.card-input:focus,
+.card-notes-input:focus,
+.composer input:focus {
+  border-color: var(--accent);
+}
+
+.card-notes-input {
+  resize: vertical;
+  line-height: 1.45;
+}
+
+.card-edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.btn-small {
+  padding: 4px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: 11.5px;
+  font-weight: 550;
+  transition: background 150ms ease;
+}
+
+.btn-small:hover {
+  background: var(--accent-dim);
+}
+
+.btn-ghost {
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  transition: background 150ms ease, color 150ms ease;
+}
+
+.btn-ghost:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.composer {
+  padding-top: 2px;
+}
+
+.composer-open {
+  margin-top: 2px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: 11.5px;
+  text-align: left;
+  transition: background 150ms ease, color 150ms ease;
+}
+
+.composer-open:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .board *,
+  .board *::before,
+  .board *::after {
+    transition: none;
+  }
+}

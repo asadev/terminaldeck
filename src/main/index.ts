@@ -5,6 +5,11 @@ import type { CreateSessionInput } from '../shared/types'
 import { PtyManager } from './pty-manager'
 import { detectProviders, loginPath, PROVIDERS } from './providers'
 import { store, type Preferences } from './store'
+import { registerCostIpc } from './cost-ipc'
+import { registerGitIpc, stopAllGitWatches } from './git'
+import { registerFsIpc } from './fs-tree'
+import { registerSearchIpc } from './file-search'
+import { registerBoardIpc } from './board-store'
 
 const isDev = !!process.env.ELECTRON_RENDERER_URL
 
@@ -131,6 +136,17 @@ function registerIpc(): void {
   ipcMain.handle('prefs:get', () => store().getPreferences())
   ipcMain.handle('prefs:set', (_e, patch: Partial<Preferences>) => store().setPreferences(patch))
 
+  // Feature modules own their own channels; each registers in one line.
+  registerCostIpc(ipcMain)
+  registerGitIpc(ipcMain)
+  registerFsIpc(ipcMain)
+  registerBoardIpc(ipcMain)
+  // Restricting search to known projects stops any folder that merely looks
+  // like a project from being enumerated over IPC.
+  registerSearchIpc(ipcMain, {
+    isAllowedRoot: (root) => store().getProjects().some((p) => p.path === root),
+  })
+
   ipcMain.handle('session:create', async (_e, input: CreateSessionInput) => {
     const path = await loginPath()
     const available = await detectProviders()
@@ -172,4 +188,7 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
 
-app.on('before-quit', () => ptys.killAll())
+app.on('before-quit', () => {
+  ptys.killAll()
+  stopAllGitWatches()
+})

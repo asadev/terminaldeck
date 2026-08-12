@@ -1,0 +1,261 @@
+/* ============================================================================
+   Git panel
+   Status colours are aliased from the foundation tokens rather than restated,
+   so a theme swap in tokens.css moves this panel with everything else.
+   ============================================================================ */
+
+.git-panel {
+  --git-added: var(--status-completed);
+  --git-modified: var(--status-waiting);
+  --git-deleted: var(--color-critical);
+  --git-renamed: var(--accent);
+  --git-untracked: var(--text-muted);
+  --git-conflicted: var(--status-input);
+  --git-row-height: 24px;
+
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 12px;
+  user-select: none;
+}
+
+/* ----------------------------------------------------------------- head -- */
+
+.git-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  height: var(--tabbar-height);
+  padding: 0 8px 0 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.git-head-icon {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.git-branch {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* A detached HEAD is a state worth noticing before you commit into it. */
+.git-branch[data-detached='true'] {
+  color: var(--color-warning);
+  font-weight: 550;
+}
+
+.git-track {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+
+.git-head-spacer {
+  flex: 1;
+}
+
+.git-count {
+  flex-shrink: 0;
+  min-width: 18px;
+  padding: 1px 6px;
+  border-radius: 9px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  text-align: center;
+}
+
+.git-refresh {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.git-refresh:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.git-refresh svg {
+  display: block;
+}
+
+/* --------------------------------------------------------------- groups -- */
+
+.git-groups {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px 6px 12px;
+}
+
+.git-group + .git-group {
+  margin-top: 10px;
+}
+
+.git-group-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+}
+
+.git-group-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.git-group-count {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.git-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* ------------------------------------------------------------------ row -- */
+
+.git-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  height: var(--git-row-height);
+  padding: 0 8px 0 6px;
+  border-radius: var(--radius-sm);
+  text-align: left;
+  color: var(--text-secondary);
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.git-row:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.git-row[data-selected='true'] {
+  background: var(--accent-soft);
+  color: var(--text-primary);
+}
+
+.git-row:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.git-code {
+  flex-shrink: 0;
+  width: 16px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.git-code[data-kind='added'] {
+  color: var(--git-added);
+}
+.git-code[data-kind='modified'] {
+  color: var(--git-modified);
+}
+.git-code[data-kind='deleted'] {
+  color: var(--git-deleted);
+}
+.git-code[data-kind='renamed'],
+.git-code[data-kind='copied'],
+.git-code[data-kind='typechange'] {
+  color: var(--git-renamed);
+}
+.git-code[data-kind='untracked'] {
+  color: var(--git-untracked);
+}
+
+/* Conflicts get the widest letter pair, and the loudest colour. */
+.git-code[data-kind='conflicted'] {
+  width: 22px;
+  color: var(--git-conflicted);
+}
+
+.git-name {
+  flex-shrink: 0;
+  max-width: 55%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The directory trails the filename and gives up its width first — the name
+   is what you scan for, the folder is only there to disambiguate. */
+.git-dir {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.git-stat {
+  display: flex;
+  flex-shrink: 0;
+  gap: 5px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+
+.git-plus {
+  color: var(--git-added);
+}
+
+.git-minus {
+  color: var(--git-deleted);
+}
+
+.git-binary {
+  color: var(--text-muted);
+}
+
+/* Reads as a note, not a row: there is nothing here to click. */
+.git-overflow {
+  height: var(--git-row-height);
+  padding: 0 8px 0 29px;
+  line-height: var(--git-row-height);
+  font-size: 11px;
+  font-style: italic;
+  color: var(--text-muted);
+}
+
+/* -------------------------------------------------------------- messages -- */
+
+.git-message {
+  margin: 0;
+  padding: 14px 12px;
+  color: var(--text-muted);
+  font-size: 12px;
+}

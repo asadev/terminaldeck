@@ -1,0 +1,125 @@
+/* ============================================================================
+   File viewer — read-only source with a line-number gutter.
+   Colours from tokens.css only.
+   ============================================================================ */
+
+.file-viewer {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+.file-viewer-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  height: var(--tabbar-height);
+  padding: 0 12px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+}
+
+/* min-width:0 lets the name shrink; without it the automatic minimum size of a
+   flex item keeps the header at full width, so the ellipsis never fires and a
+   long filename shoves the line count off the end of the bar. */
+.file-viewer-name {
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 550;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-viewer-badge {
+  flex: none;
+  padding: 1px 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.03em;
+}
+
+.file-viewer-meta {
+  margin-left: auto;
+  flex: none;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.file-viewer-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  outline: none;
+}
+
+.file-viewer-body:focus-visible {
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+/* min-width keeps the row as wide as the widest code line, so the sticky
+   gutter still covers the full height while scrolling sideways. */
+.file-viewer-doc {
+  display: flex;
+  align-items: flex-start;
+  min-width: min-content;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.55;
+  tab-size: 2;
+}
+
+.file-viewer-gutter,
+.file-viewer-code {
+  margin: 0;
+  padding: 10px 0;
+  font: inherit;
+  white-space: pre;
+}
+
+.file-viewer-gutter {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  flex: none;
+  padding-right: 12px;
+  padding-left: 14px;
+  border-right: 1px solid var(--border-subtle);
+  background: var(--bg-secondary);
+  color: var(--text-muted);
+  text-align: right;
+  user-select: none;
+}
+
+.file-viewer-code {
+  flex: none;
+  padding-right: 20px;
+  padding-left: 14px;
+  color: var(--text-primary);
+}
+
+.file-viewer-code code {
+  font: inherit;
+}
+
+.file-viewer-notice {
+  max-width: 46ch;
+  margin: 0;
+  padding: 22px 20px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.file-viewer-notice.error {
+  color: var(--color-critical);
+}

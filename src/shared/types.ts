@@ -70,6 +70,33 @@ export interface PawlApi {
   onSessionData(cb: (id: string, data: string) => void): () => void
   onSessionExit(cb: (id: string, exitCode: number) => void): () => void
   onSessionStatus(cb: (id: string, status: SessionStatus) => void): () => void
+
+  // Feature modules. These cross the bridge as `unknown` and each consumer
+  // narrows to its own module's types — the main-process modules own those
+  // definitions, and duplicating them here would let the two drift apart.
+  getProjectCost(cwd: string): Promise<unknown>
+  getSessionCost(transcriptPath: string): Promise<unknown>
+  listSessionTranscripts(cwd: string): Promise<unknown>
+  watchProjectCost(cwd: string): Promise<unknown>
+  unwatchProjectCost(cwd: string): Promise<void>
+  getModelPricing(model: string): Promise<unknown>
+  formatCost(value: number): Promise<string>
+  onCostUpdate(cb: (summary: unknown) => void): () => void
+
+  gitStatus(cwd: string): Promise<unknown>
+  gitDiff(cwd: string, path: string, options?: { staged?: boolean; untracked?: boolean }): Promise<string>
+  watchGit(cwd: string): Promise<unknown>
+  unwatchGit(cwd: string): void
+  onGitStatus(cb: (cwd: string, status: unknown) => void): () => void
+
+  listDir(root: string, relDir: string, options?: { showIgnored?: boolean }): Promise<unknown>
+  readFile(root: string, relPath: string): Promise<unknown>
+  searchProjectFiles(request: { root: string; refresh?: boolean; limit?: number }): Promise<unknown>
+  cancelProjectFileSearch(): Promise<void>
+  invalidateProjectFiles(root?: string): Promise<void>
+
+  loadBoard(projectPath: string): Promise<unknown>
+  saveBoard(projectPath: string, board: unknown): Promise<void>
 }
 
 declare global {

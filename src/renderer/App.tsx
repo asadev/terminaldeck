@@ -1,5 +1,7 @@
-import { useCallback, useEffect } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { StoreProvider, useStore } from './state/store'
+import { PreferencesModal } from './components/PreferencesModal'
+import { applyStoredTheme } from './theme'
 import { TitleBar } from './components/TitleBar'
 import { Sidebar } from './components/Sidebar'
 import { TabBar } from './components/TabBar'
@@ -31,12 +33,19 @@ function Workspace() {
     }
   }, [addProject])
 
+  const [prefsOpen, setPrefsOpen] = useState(false)
+
   // Single subscription for every session's status, rather than one per
   // terminal — the main process classifies, the renderer just reflects.
   useEffect(() => {
     const off = window.pawl.onSessionStatus((id, status) => setSessionStatus(id, status))
     return off
   }, [setSessionStatus])
+
+  // Apply the saved theme before the user sees anything.
+  useEffect(() => {
+    void window.pawl.getPreferences().then((p) => applyStoredTheme(p.theme))
+  }, [])
 
   const openProject = useCallback(async () => {
     const path = await window.pawl.pickProjectFolder()
@@ -86,6 +95,11 @@ function Workspace() {
         void openProject()
         return
       }
+      if (e.key === ',') {
+        e.preventDefault()
+        setPrefsOpen(true)
+        return
+      }
       // Cmd+1..9 jumps straight to a tab.
       const n = Number(e.key)
       if (Number.isInteger(n) && n >= 1 && n <= 9 && sessions[n - 1]) {
@@ -123,6 +137,7 @@ function Workspace() {
           </div>
         </main>
       </div>
+      <PreferencesModal open={prefsOpen} onClose={() => setPrefsOpen(false)} />
     </div>
   )
 }

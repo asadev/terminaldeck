@@ -55,6 +55,56 @@ const api = {
     ipcRenderer.on('session:status', handler)
     return () => ipcRenderer.off('session:status', handler)
   },
+
+  /* ------------------------------------------------------------ cost -- */
+
+  getProjectCost: (cwd: string): Promise<unknown> => ipcRenderer.invoke('cost:project', cwd),
+  getSessionCost: (transcriptPath: string): Promise<unknown> =>
+    ipcRenderer.invoke('cost:session', transcriptPath),
+  listSessionTranscripts: (cwd: string): Promise<unknown> => ipcRenderer.invoke('cost:sessions', cwd),
+  watchProjectCost: (cwd: string): Promise<unknown> => ipcRenderer.invoke('cost:watch', cwd),
+  unwatchProjectCost: (cwd: string): Promise<void> => ipcRenderer.invoke('cost:unwatch', cwd),
+  getModelPricing: (model: string): Promise<unknown> => ipcRenderer.invoke('cost:pricing', model),
+  formatCost: (value: number): Promise<string> => ipcRenderer.invoke('cost:format', value),
+  onCostUpdate: (cb: (summary: unknown) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, summary: unknown) => cb(summary)
+    ipcRenderer.on('cost:update', handler)
+    return () => ipcRenderer.off('cost:update', handler)
+  },
+
+  /* ------------------------------------------------------------- git -- */
+
+  gitStatus: (cwd: string): Promise<unknown> => ipcRenderer.invoke('git:status', cwd),
+  gitDiff: (cwd: string, path: string, options?: { staged?: boolean; untracked?: boolean }): Promise<string> =>
+    ipcRenderer.invoke('git:diff', cwd, path, options ?? {}),
+  watchGit: (cwd: string): Promise<unknown> => ipcRenderer.invoke('git:watch', cwd),
+  unwatchGit: (cwd: string): void => {
+    ipcRenderer.send('git:unwatch', cwd)
+  },
+  onGitStatus: (cb: (cwd: string, status: unknown) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, cwd: string, status: unknown) => cb(cwd, status)
+    ipcRenderer.on('git:status-changed', handler)
+    return () => ipcRenderer.off('git:status-changed', handler)
+  },
+
+  /* -------------------------------------------------------- files -- */
+
+  listDir: (root: string, relDir: string, options?: { showIgnored?: boolean }): Promise<unknown> =>
+    ipcRenderer.invoke('fs:list', root, relDir, options ?? {}),
+  readFile: (root: string, relPath: string): Promise<unknown> =>
+    ipcRenderer.invoke('fs:read', root, relPath),
+
+  searchProjectFiles: (request: { root: string; refresh?: boolean; limit?: number }): Promise<unknown> =>
+    ipcRenderer.invoke('search:files', request),
+  cancelProjectFileSearch: (): Promise<void> => ipcRenderer.invoke('search:cancel'),
+  invalidateProjectFiles: (root?: string): Promise<void> =>
+    ipcRenderer.invoke('search:invalidate', root),
+
+  /* ------------------------------------------------------------ board -- */
+
+  loadBoard: (projectPath: string): Promise<unknown> => ipcRenderer.invoke('board:load', projectPath),
+  saveBoard: (projectPath: string, board: unknown): Promise<void> =>
+    ipcRenderer.invoke('board:save', projectPath, board),
 }
 
 contextBridge.exposeInMainWorld('pawl', api)

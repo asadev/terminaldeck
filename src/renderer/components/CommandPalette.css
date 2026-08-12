@@ -1,0 +1,257 @@
+/* ============================================================================
+   Command palette / quick open
+
+   Every colour derives from a foundation token, including the scrim and the
+   shadow: `color-mix` against an existing surface keeps both themes correct
+   without hardcoding a black that would be invisible on the light one.
+   ============================================================================ */
+
+:root,
+[data-theme='dark'] {
+  --palette-scrim: color-mix(in srgb, var(--bg-primary) 72%, transparent);
+  --palette-shadow: color-mix(in srgb, var(--bg-primary) 78%, transparent);
+}
+
+[data-theme='light'] {
+  --palette-scrim: color-mix(in srgb, var(--text-primary) 26%, transparent);
+  --palette-shadow: color-mix(in srgb, var(--text-primary) 20%, transparent);
+}
+
+.palette-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  justify-content: center;
+  /* Without this the panel inherits `stretch` and is always 62vh tall, with a
+     dead slab of empty surface under a three-row result list. */
+  align-items: flex-start;
+  /* Sits high in the window: the list grows downward into empty space rather
+     than pushing the field around as results arrive. */
+  padding: 12vh 16px 16px;
+  background: var(--palette-scrim);
+  backdrop-filter: blur(3px);
+  animation: palette-fade 110ms ease-out;
+}
+
+.palette {
+  display: flex;
+  flex-direction: column;
+  width: min(640px, 100%);
+  max-height: 62vh;
+  overflow: hidden;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 24px 64px var(--palette-shadow);
+  animation: palette-rise 130ms cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+
+/* ----------------------------------------------------------------- field -- */
+
+.palette-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  padding: 0 14px;
+  height: 48px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.palette-glyph {
+  display: grid;
+  place-items: center;
+  color: var(--text-muted);
+}
+
+.palette-input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: none;
+  outline: none;
+  background: none;
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: 14.5px;
+}
+
+.palette-input::placeholder {
+  color: var(--text-muted);
+}
+
+.palette-count {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ------------------------------------------------------------------ list -- */
+
+.palette-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+}
+
+.palette-list:empty {
+  display: none;
+}
+
+.palette-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.palette-row.is-active {
+  background: var(--accent-soft);
+  color: var(--text-primary);
+  /* An inset rail rather than a border, so the row never shifts by a pixel
+     when selection moves. */
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.palette-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+/* Only a filename yields space to the path beside it. A command title has
+   nothing to its right but its shortcut, so it may use the whole row. */
+.palette-name:has(+ .palette-dir) {
+  flex-shrink: 0;
+  max-width: 62%;
+}
+
+.palette-dir {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  /* A long path loses its head, not its tail: `…/components/primitives/` is
+     what tells two files of the same name apart, so the ellipsis belongs at
+     the front. `direction: rtl` is what moves it there. */
+  direction: rtl;
+  text-align: left;
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+/* The path is wrapped in exactly one element, which is then forced back to
+   left-to-right. It has to be one: sibling ltr runs inside an rtl box are each
+   placed right-to-left, which renders a highlighted path as `itives/ prim ui/`.
+   A bare text node is no good either — rtl reorders its trailing slash. */
+.palette-dir-text {
+  direction: ltr;
+  unicode-bidi: embed;
+}
+
+.palette-group {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+.palette-group::after {
+  content: '›';
+  margin-left: 6px;
+}
+
+.palette-shortcut {
+  margin-left: auto;
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
+
+.palette-hit {
+  background: none;
+  color: var(--accent);
+  font-weight: 650;
+}
+
+.palette-row.is-active .palette-hit {
+  color: var(--accent);
+}
+
+/* ---------------------------------------------------------------- states -- */
+
+.palette-empty {
+  margin: 0;
+  padding: 18px 16px 20px;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  text-align: center;
+}
+
+.palette-footer {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-shrink: 0;
+  padding: 7px 14px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.palette-footer kbd {
+  margin-right: 3px;
+}
+
+.palette-footer-hint {
+  margin-left: auto;
+}
+
+/* Announced, never shown — the visible list is the sighted equivalent. */
+.palette-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------------------- animation -- */
+
+@keyframes palette-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes palette-rise {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.99);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .palette-backdrop,
+  .palette {
+    animation: none;
+  }
+}
