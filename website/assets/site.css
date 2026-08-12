@@ -1069,6 +1069,86 @@ kbd {
   margin-top: 0.9rem;
 }
 
+/* ---------------------------------------------------------- flow page -- */
+
+/* A plain long-form page — h2/h3 and prose straight down the column, no bands.
+   The reset zeroes every margin, so a page that opts out of `.band` has to be
+   given its rhythm back explicitly or it renders as one wall of text. Used by
+   the features and roadmap pages, which are lists rather than a pitch. */
+
+/* padding-top/bottom, never the shorthand: `.page` is worn alongside `.wrap`,
+   whose `padding: 0 1.5rem` is the only thing keeping text off the left edge on
+   a phone. A shorthand here wins on source order and zeroes it. */
+.page {
+  padding-top: 2.5rem;
+  padding-bottom: 4rem;
+}
+
+.page > .breadcrumb {
+  margin-bottom: 1.25rem;
+}
+
+.page h1 {
+  font-size: clamp(1.9rem, 1.4rem + 1.8vw, 2.5rem);
+  letter-spacing: -0.025em;
+  margin-bottom: 0.75rem;
+}
+
+.page > .lede {
+  margin: 0 0 2rem;
+  max-width: 58ch;
+  font-size: 1.125rem;
+  color: var(--text-quiet);
+}
+
+.page h2 {
+  font-size: 1.375rem;
+  margin: 2.75rem 0 0.85rem;
+  padding-top: 2rem;
+  border-top: 1px solid var(--border);
+}
+
+.page h2:first-of-type {
+  margin-top: 2rem;
+}
+
+.page h3 {
+  font-size: 1rem;
+  margin: 1.75rem 0 0.6rem;
+}
+
+.page p,
+.page ul,
+.page ol,
+.page dl,
+.page .note,
+.page .table-scroll {
+  max-width: var(--prose);
+}
+
+.page p + p,
+.page p + ul,
+.page p + ol,
+.page ul + p,
+.page ol + p,
+.page p + .note,
+.page .note + p,
+.page .cards + p,
+.page p + .cards,
+.page .legend + p,
+.page p + .legend {
+  margin-top: 0.9rem;
+}
+
+.page .cards,
+.page .note {
+  margin-top: 1.25rem;
+}
+
+.page .cards {
+  max-width: none;
+}
+
 /* ----------------------------------------------------------- changelog -- */
 
 .release {

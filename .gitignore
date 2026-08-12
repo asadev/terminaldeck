@@ -50,3 +50,6 @@ npm-debug.log*
 
 # Windows
 Thumbs.db
+
+# Local notes on references consulted; never published (see CLAUDE.md).
+REFERENCES.local.md

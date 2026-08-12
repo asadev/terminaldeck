@@ -18,12 +18,14 @@ and the build clobbers what dev is running.
 
 ## Ground rules
 
-**Never copy from the reference.** `/Users/apple/Projects/_reference/vibeyard-ref`
-is a competitor's MIT-licensed app kept for reference only, deliberately outside
-this repo. Reading it to learn *what* a feature does or *what values* it uses
-(sizes, timings, thresholds) is fine — those are not copyrightable. Copying its
-code, components, CSS blocks or assets is not, because that pulls its licence and
-copyright notice permanently into this repo. Write every line here.
+**Never copy from a reference implementation.** Reading another tool to learn
+*what* a feature does, or *what values* it settled on (sizes, timings,
+thresholds), is fine — those are facts, not expression, and not copyrightable.
+Copying its code, components, CSS blocks or assets is not, because that pulls
+its licence and copyright notice permanently into this repo, which is exactly
+what building fresh was meant to avoid. Every line here is written here.
+Specific references consulted are listed in `REFERENCES.local.md`, which is
+gitignored and stays on this machine.
 
 **The name lives in one place.** `src/shared/brand.ts`. Never hardcode "Terminal Deck"
 anywhere else.

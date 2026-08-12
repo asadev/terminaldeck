@@ -1,7 +1,7 @@
 # Terminal Deck — Build Plan
 
-Target: full feature parity with Vibeyard, built fresh.
-Reference scope: 27 feature areas, ~36,400 lines of non-test TypeScript, 258 files.
+Target: a complete desktop workspace for AI coding agents — 27 feature areas,
+roughly 36,000 lines of non-test TypeScript. Every line written for this repo.
 
 **Ground rule:** features and functional values (dimensions, colours, timings,
 behaviour) are matched freely — they aren't copyrightable. Their components, CSS
@@ -109,7 +109,6 @@ is something worth sharing and updating.
 ## Open questions for Asad
 
 - Final name (currently `Terminal Deck`, isolated in `src/shared/brand.ts`)
-- Whether to publish, and if so whether to credit Vibeyard as prior art
 - Whether P2P sharing is wanted at all — it is the single biggest feature and
   the only one needing infrastructure
 
