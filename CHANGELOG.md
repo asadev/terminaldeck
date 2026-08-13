@@ -10,6 +10,27 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+## [0.1.1] — 2026-08-13
+
+### Added
+
+- Updates install from inside the app. It reads the release feed, verifies the
+  archive's sha512, and swaps the bundle — none of which needs Squirrel, which
+  refuses unsigned builds. The old app is moved aside, not deleted, and moved
+  back if the new one fails to land.
+- Remote access over your own tailnet: pair a phone by QR, approve it on the
+  Mac, and attach to a running session from it. TLS is terminated by
+  `tailscale serve`; the app's own listener is loopback-only.
+- A start page for new browser tabs, listing the dev servers actually
+  listening, instead of guessing `localhost:3000`.
+- Windows packaging, built natively in CI. Not yet run on Windows.
+
+### Fixed
+
+- Sessions no longer inherit a parent agent run's environment, which disabled
+  transcript saving and left chat mode and cost tracking blank.
+- Four panels printed their own name under the dock's.
+
 ## [0.1.0] — 2026-08-12
 
 First cut. macOS 12+, Apple silicon, unsigned.
