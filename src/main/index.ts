@@ -327,10 +327,20 @@ function registerIpc(): void {
       projectPath: input.cwd,
     })
 
+    // `spec.spawn`, not `spec.bin`. They are the same thing on macOS and are
+    // not on Windows, where the name that answers a PATH lookup for an
+    // npm-installed agent CLI is a `.cmd` shim and `CreateProcess` will not run
+    // a batch file. Spawning `bin` there failed with a bare "File not found:"
+    // and a tab that died with no message — observed on Windows 11, which is
+    // what this comment replaces a guess with. `providers.ts` has carried the
+    // launchable form in `spawn` the whole time, unread.
     return ptys.create(input, {
       provider,
-      command: spec.bin,
-      args: input.resume && spec.resumeArgs.length > 0 ? spec.resumeArgs : spec.args,
+      command: spec.spawn.command,
+      args:
+        input.resume && spec.spawn.resumeArgs.length > 0
+          ? spec.spawn.resumeArgs
+          : spec.spawn.args,
       path,
       env: sessionEnv(profile, provider),
     })
