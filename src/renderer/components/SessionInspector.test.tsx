@@ -5,6 +5,7 @@ import {
   CostTab,
   TimelineTab,
   ToolsTab,
+  describeSource,
   downsample,
   formatPercent,
   isoOrUndefined,
@@ -312,5 +313,39 @@ describe('formatPercent', () => {
     expect(formatPercent(Number.POSITIVE_INFINITY)).toBe('—')
     expect(formatPercent(42.44)).toBe('42.4%')
     expect(formatPercent(104.2)).toBe('104.2%')
+  })
+})
+
+describe('describeSource', () => {
+  const read = { sessionId: '8ae018a8-ee80-4a6d-b960-19ffdb1f50a7', startedAt: Date.parse('2026-08-13T11:31:19Z') }
+
+  /**
+   * The dialog names the file it read, not just the tab it was opened from.
+   *
+   * Nothing links a terminal to a transcript with certainty, so the heading has
+   * to be checkable: the run that found this bug attributed a stranger's 143
+   * requests to an eight-minute-old tab, and there was no way to tell from the
+   * screen that a different conversation was on it.
+   */
+  it('names the transcript and when its conversation began', () => {
+    const text = describeSource('terminaldeck', read, 'session')
+    expect(text).toContain('terminaldeck')
+    expect(text).toContain('transcript 8ae018a8')
+    expect(text).toContain('started')
+  })
+
+  it('says when the transcript is only the folder’s newest', () => {
+    expect(describeSource(undefined, read, 'project')).toContain('newest transcript in this folder')
+  })
+
+  it('says when it is a continued conversation, which predates the tab by design', () => {
+    expect(describeSource('terminaldeck', read, 'resumed')).toContain('continued transcript')
+  })
+
+  it('falls back to the tab name while there is nothing read yet', () => {
+    expect(describeSource('terminaldeck', null, null)).toBe(
+      'terminaldeck — from its Claude Code transcript',
+    )
+    expect(describeSource(undefined, null, null)).toBeUndefined()
   })
 })

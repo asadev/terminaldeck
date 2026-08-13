@@ -72,6 +72,56 @@ function release(bridge: UsageBridge, cwd: string): void {
   watching.set(cwd, count - 1)
 }
 
+/**
+ * "A transcript in this project just changed", for anything that is not the
+ * usage strip.
+ *
+ * `cost:watch` is named after what it was built for, but what it *is* is the
+ * only real file watcher this app has over a project's transcripts: a
+ * `fs.watch` on the transcript directory, debounced 300 ms, pushing on every
+ * append. Anything in the renderer that used to ask "has the transcript grown?"
+ * on a timer can subscribe to that instead and be both cheaper and faster — a
+ * 2-second poll is 43,200 questions a day, nearly all of them answered "no",
+ * and still up to two seconds behind when the answer is yes.
+ *
+ * It lives beside `useUsage` rather than in a module of its own because the
+ * refcount above has to be *the* refcount: `cost:unwatch` is honoured per
+ * window, not per caller, so a second tally over the same channel would have
+ * the first unmount switch off the watcher the other subscriber is still using.
+ *
+ * Returns whether it is actually watching. False means the bridge has no cost
+ * channel — an unwired build, or a harness stub — and the caller has to fall
+ * back rather than sit silently on stale content.
+ */
+export function useTranscriptChanges(cwd: string | null, onChange: () => void): boolean {
+  const [bridge] = useState<UsageBridge | null>(() => resolveUsageBridge())
+  const latest = useRef(onChange)
+  latest.current = onChange
+
+  useEffect(() => {
+    if (!bridge || !cwd) return
+    let mounted = true
+
+    const off = bridge.onCostUpdate((payload) => {
+      // The push carries every watched project, so a second panel on another
+      // folder must not make this one re-read.
+      const next = readProjectSummary(payload)
+      if (mounted && next && sameProject(next.cwd, cwd)) latest.current()
+    })
+
+    retain(cwd)
+    void bridge.watchProjectCost(cwd).catch(() => {})
+
+    return () => {
+      mounted = false
+      off()
+      release(bridge, cwd)
+    }
+  }, [bridge, cwd])
+
+  return bridge !== null && cwd !== null
+}
+
 export interface UsageState {
   summary: ProjectSummary | null
   plan: PlanLimitSnapshot | null

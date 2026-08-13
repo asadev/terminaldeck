@@ -1,5 +1,12 @@
 /* ============================================================================
-   AI readiness — score ring over a worklist of checks.
+   AI readiness — a score, and the worklist behind it.
+
+   Two columns now that there is room for two: the score stands on its own at
+   the left, the checks run down the right. Nothing is boxed. A check is a row,
+   and rows are told apart by the space between them; the only ones that take a
+   fill are the ones holding the score down, because that is a fact about the
+   project rather than a decoration.
+
    Band colours alias the foundation tokens, so a theme swap moves this panel
    with everything else.
    ============================================================================ */
@@ -10,46 +17,52 @@
   --readiness-fail: var(--color-critical);
   --readiness-skip: var(--text-muted);
 
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: minmax(13rem, 17rem) minmax(0, 1fr);
+  /* Column gap only. The right-hand column is three separate elements — two
+     banners and the list — so a row gap would space them by grid row, and the
+     score column spanning those rows would then push the list down the page by
+     its own height. They carry their own margins instead. */
+  column-gap: var(--sp-10);
+  align-items: start;
   min-height: 0;
-  overflow-y: auto;
-  padding: 16px 16px 24px;
-  background: var(--bg-secondary);
+  max-width: 82rem;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--t-body);
 }
 
 /* ------------------------------------------------------------------ head -- */
 
+/* The score column. It was a horizontal bar with a rule under it; a rule that
+   spans the window to separate a number from a list is a line doing work that
+   a column of white space does better. */
+/* Spans every row the other column can produce — an error, a cap and the list
+   — so the list starts level with the score instead of below it. */
 .readiness-head {
+  grid-column: 1;
+  grid-row: 1 / span 3;
   display: flex;
-  align-items: center;
-  gap: 16px;
-  flex-shrink: 0;
-  padding-bottom: 16px;
-  border-bottom: 1px solid var(--border-subtle);
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-4);
 }
 
 .readiness-headline {
-  flex: 1;
   min-width: 0;
 }
 
 .readiness-heading {
   margin: 0;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--text-secondary);
+  font-size: var(--t-footnote);
+  font-weight: var(--w-semibold);
+  color: var(--text-muted);
 }
 
 .readiness-band {
-  margin: 2px 0 0;
-  font-size: 18px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
+  margin: 0;
+  font-size: var(--t-title2);
+  font-weight: var(--w-semibold);
+  letter-spacing: var(--t-title2-ls);
   color: var(--text-primary);
 }
 
@@ -58,30 +71,32 @@
 }
 
 .readiness-summary {
-  margin: 2px 0 0;
-  font-size: 12px;
+  margin: var(--sp-1) 0 0;
+  font-size: var(--t-body);
   color: var(--text-secondary);
 }
 
 .readiness-rescan {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex-shrink: 0;
-  align-self: flex-start;
-  padding: 5px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-tertiary);
-  font-size: 12px;
-  color: var(--text-secondary);
-  transition: background 120ms ease, color 120ms ease;
+  height: var(--control-h);
+  padding: 0 var(--sp-4);
+  border-radius: var(--radius-md);
+  background: var(--fill-tertiary);
+  font-size: var(--t-body);
+  font-weight: var(--w-medium);
+  color: var(--text-primary);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
 
 .readiness-rescan:hover:not(:disabled) {
-  background: var(--bg-hover);
-  color: var(--text-primary);
+  background: var(--fill-secondary);
 }
 
 .readiness-rescan:disabled {
-  opacity: 0.55;
+  opacity: 0.5;
   cursor: default;
 }
 
@@ -97,11 +112,11 @@
 .readiness-ring {
   position: relative;
   flex-shrink: 0;
-  width: 84px;
-  height: 84px;
+  width: calc(var(--sp-16) + var(--sp-12));
+  height: calc(var(--sp-16) + var(--sp-12));
   /* Band colour drives the arc, so the number and the ring never disagree.
      The bands read from the status palette rather than the accent: this is a
-     score, and an 84px blue ring is the loudest thing on the panel. */
+     score, and the arc is the largest thing on the page. */
   --ring-color: var(--status-idle);
 }
 
@@ -120,59 +135,66 @@
 
 .readiness-ring svg {
   display: block;
+  width: 100%;
+  height: 100%;
   /* Start the arc at twelve o'clock rather than three. */
   transform: rotate(-90deg);
 }
 
 .readiness-ring-track {
   fill: none;
-  stroke: var(--border);
-  stroke-width: 7;
+  stroke: var(--fill-tertiary);
+  stroke-width: 5;
 }
 
 .readiness-ring-arc {
   fill: none;
   stroke: var(--ring-color);
-  stroke-width: 7;
+  stroke-width: 5;
   stroke-linecap: round;
-  transition: stroke-dashoffset 420ms ease, stroke 200ms ease;
+  transition: stroke-dashoffset var(--dur-slow) var(--ease-emphasis), stroke var(--dur) var(--ease);
 }
 
+/* The number is the headline of the page, so it is set like one. */
 .readiness-ring-value {
   position: absolute;
   inset: 0;
   display: grid;
   place-items: center;
-  font-family: var(--font-mono);
-  font-size: 21px;
-  font-weight: 500;
+  font-family: var(--font-display);
+  font-size: var(--t-largetitle);
+  font-weight: var(--w-semibold);
+  letter-spacing: var(--t-largetitle-ls);
   color: var(--text-primary);
   font-variant-numeric: tabular-nums;
 }
 
 /* --------------------------------------------------------------- banners -- */
 
+/* A wash rather than an outline: the message is already red, and a border
+   around red text is the second time the same thing is said. */
 .readiness-error,
 .readiness-cap {
-  margin: 12px 0 0;
-  padding: 9px 11px;
-  border: 1px solid var(--border);
-  border-left: 2px solid var(--readiness-fail);
-  border-radius: var(--radius-sm);
-  background: var(--bg-tertiary);
-  font-size: 12px;
-  line-height: 1.5;
+  grid-column: 2;
+  margin: 0 0 var(--sp-5);
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--readiness-fail) 10%, transparent);
+  max-width: 78ch;
+  font-size: var(--t-body);
+  line-height: var(--lh-body);
   color: var(--text-secondary);
 }
 
 .readiness-cap strong {
   color: var(--text-primary);
-  font-weight: 600;
+  font-weight: var(--w-semibold);
 }
 
 .readiness-empty {
-  margin: 0;
-  padding: 24px 0;
+  grid-column: 1 / -1;
+  max-width: 34rem;
+  margin: 12vh auto 0;
   text-align: center;
   color: var(--text-secondary);
 }
@@ -180,6 +202,10 @@
 /* ------------------------------------------------------------------ rows -- */
 
 .readiness-list {
+  grid-column: 2;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-05);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -188,36 +214,27 @@
 .readiness-row {
   display: flex;
   align-items: flex-start;
-  gap: 10px;
-  padding: 12px 2px;
-  border-bottom: 1px solid var(--border-subtle);
+  gap: var(--sp-3);
+  padding: var(--sp-3);
+  border-radius: var(--radius-md);
 }
 
-.readiness-row:last-child {
-  border-bottom: none;
-}
-
-/* The gate reads as a banner, not a row, when it is not passing. */
+/* The gate is the one row that changes the score for every other row, so when
+   it is unclean it takes a wash. Still no border: the tint is the emphasis. */
 .readiness-row[data-gate][data-status='fail'],
 .readiness-row[data-gate][data-status='warn'] {
-  margin: 8px 0;
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-left: 2px solid var(--readiness-fail);
-  border-radius: var(--radius-sm);
-  background: var(--bg-tertiary);
+  background: color-mix(in srgb, var(--readiness-fail) 9%, transparent);
 }
 
 .readiness-glyph {
   display: grid;
   place-items: center;
   flex-shrink: 0;
-  width: 18px;
-  height: 18px;
-  margin-top: 1px;
-  border-radius: 50%;
-  font-size: 11px;
-  font-weight: 700;
+  width: var(--sp-5);
+  height: var(--sp-5);
+  border-radius: var(--radius-pill);
+  font-size: var(--t-footnote);
+  font-weight: var(--w-bold);
   line-height: 1;
 }
 
@@ -234,7 +251,7 @@
   color: var(--readiness-fail);
 }
 .readiness-row[data-status='skip'] .readiness-glyph {
-  background: var(--bg-hover);
+  background: var(--fill-tertiary);
   color: var(--readiness-skip);
 }
 
@@ -247,20 +264,20 @@
   display: flex;
   align-items: baseline;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: var(--sp-2);
 }
 
 .readiness-title {
-  font-size: 13px;
-  font-weight: 550;
+  font-size: var(--t-body);
+  font-weight: var(--w-medium);
   color: var(--text-primary);
 }
 
+/* Sentence case. Tracked-out capitals are a Notion idiom, and this is the same
+   word the glyph beside it already carries. */
 .readiness-status-label {
-  font-size: 10.5px;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--text-secondary);
+  font-size: var(--t-footnote);
+  color: var(--text-muted);
 }
 
 .readiness-row[data-status='skip'] .readiness-title {
@@ -268,41 +285,37 @@
 }
 
 .readiness-gate-tag {
-  padding: 1px 6px;
-  border-radius: var(--radius-sm);
+  padding: 0 var(--sp-15);
+  border-radius: var(--radius-pill);
   background: color-mix(in srgb, var(--readiness-fail) 16%, transparent);
   color: var(--readiness-fail);
-  font-size: 10.5px;
-  letter-spacing: 0.02em;
+  font-size: var(--t-footnote);
 }
 
 .readiness-detail {
-  margin: 3px 0 0;
-  font-size: 12px;
-  line-height: 1.55;
-  color: var(--text-secondary);
-}
-
-.readiness-row[data-status='pass'] .readiness-detail,
-.readiness-row[data-status='skip'] .readiness-detail {
+  max-width: 74ch;
+  margin: var(--sp-1) 0 0;
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
   color: var(--text-secondary);
 }
 
 /* What a fix will do, shown while it waits for a second confirmation. */
 .readiness-fix-description {
-  margin: 8px 0 0;
-  padding: 8px 10px;
-  border-radius: var(--radius-sm);
-  background: var(--bg-primary);
-  font-size: 11.5px;
-  line-height: 1.55;
+  max-width: 74ch;
+  margin: var(--sp-2) 0 0;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-md);
+  background: var(--fill-quaternary);
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
   color: var(--text-secondary);
 }
 
 .readiness-result {
-  margin: 8px 0 0;
-  font-size: 11.5px;
-  line-height: 1.5;
+  margin: var(--sp-2) 0 0;
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
   color: var(--readiness-warn);
 }
 
@@ -315,60 +328,81 @@
 .readiness-actions {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--sp-1);
   flex-shrink: 0;
-  padding-top: 1px;
 }
 
 .readiness-fix,
 .readiness-cancel {
-  padding: 5px 11px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-tertiary);
-  font-size: 11.5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: var(--control-h);
+  padding: 0 var(--sp-3);
+  border-radius: var(--radius-md);
+  background: var(--fill-tertiary);
+  font-size: var(--t-callout);
+  font-weight: var(--w-medium);
   white-space: nowrap;
-  color: var(--text-secondary);
-  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+  color: var(--text-primary);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
 
 .readiness-fix:hover:not(:disabled) {
-  border-color: var(--border-strong);
-  background: var(--bg-hover);
-  color: var(--text-primary);
+  background: var(--fill-secondary);
 }
 
 .readiness-fix:disabled {
-  opacity: 0.55;
+  opacity: 0.5;
   cursor: default;
 }
 
 /* Confirming a destructive fix is the one moment this panel raises its voice. */
 .readiness-fix[data-confirming] {
-  border-color: transparent;
   background: var(--readiness-fail);
   color: var(--accent-fg);
 }
 
 .readiness-fix[data-confirming]:hover:not(:disabled) {
-  border-color: transparent;
   background: var(--readiness-fail);
   color: var(--accent-fg);
   filter: brightness(1.08);
 }
 
 .readiness-cancel {
-  border-color: transparent;
   background: none;
   color: var(--text-secondary);
 }
 
 .readiness-cancel:hover {
+  background: var(--fill-quaternary);
   color: var(--text-primary);
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .readiness-ring-arc {
-    transition: none;
+/* One column below the width where two would leave the checks in a gutter. The
+   threshold counts the sidebar and the page's own padding, not just the grid:
+   at a 1000px window the checks column was 350px wide and every detail line
+   broke after four words. */
+@media (max-width: 1180px) {
+  .readiness {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .readiness-head {
+    grid-row: auto;
+    flex-direction: row;
+    align-items: center;
+    gap: var(--sp-5);
+    margin-bottom: var(--sp-6);
+  }
+
+  .readiness-headline {
+    flex: 1;
+  }
+
+  .readiness-error,
+  .readiness-cap,
+  .readiness-list {
+    grid-column: 1;
   }
 }

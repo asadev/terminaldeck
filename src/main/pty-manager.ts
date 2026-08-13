@@ -49,6 +49,12 @@ export class PtyManager {
       provider: spawnSpec.provider,
       exitCode: null,
       createdAt: Date.now(),
+      // Read off the request rather than the spawn spec: `resumeArgs` is empty
+      // for providers with no resume flag, so the spec cannot say whether the
+      // user asked to continue — and a continued session writes into a
+      // transcript older than itself, which is the one case where "started
+      // before this tab did" stops meaning "not this tab's".
+      resumed: input.resume === true,
     }
 
     const proc = pty.spawn(spawnSpec.command, spawnSpec.args, {

@@ -1,5 +1,5 @@
 import type { RemoteSession } from './protocol'
-import type { SessionAccess, SessionHandle } from './server'
+import type { CreateOutcome, CreateRequest, SessionAccess, SessionHandle } from './server'
 
 /**
  * Lets more than one watcher follow the same session.
@@ -22,6 +22,14 @@ export interface PtySource {
   write(id: string, data: string): void
   resize(id: string, cols: number, rows: number): void
   scrollback(id: string): string
+  /**
+   * Start a session, or say why not. Absent when this host has no PTY layer.
+   *
+   * Its absence is what stops the desktop advertising the `create` capability —
+   * see `SessionAccess.create` — so it is optional here too rather than a
+   * method that exists and always refuses.
+   */
+  create?(request: CreateRequest): Promise<CreateOutcome>
 }
 
 interface Listener {
@@ -36,7 +44,22 @@ export class SessionFanout implements SessionAccess {
   /** Last status seen per session, so a late attach knows the state. */
   private readonly status = new Map<string, string>()
 
-  constructor(private readonly ptys: PtySource) {}
+  /**
+   * Present only when the source can start a session, and that is deliberate.
+   *
+   * `server.ts` decides whether to advertise the `create` capability by asking
+   * whether this method exists. A class method always exists, so declaring it
+   * on the prototype and having it refuse would advertise a button on every
+   * host — including the ones with no terminals at all. Assigned here instead,
+   * so the answer to "can this desktop start a session" is one fact rather than
+   * two that have to be kept in step.
+   */
+  readonly create?: (request: CreateRequest) => Promise<CreateOutcome>
+
+  constructor(private readonly ptys: PtySource) {
+    const start = ptys.create
+    if (start) this.create = (request) => start(request)
+  }
 
   /* ----------------------------------------------------- from PtyManager -- */
 

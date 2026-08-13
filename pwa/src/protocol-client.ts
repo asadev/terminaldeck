@@ -25,6 +25,7 @@
 
 import {
   MAX_INPUT_BYTES,
+  PROTOCOL_ERROR_CODES,
   PROTOCOL_VERSION,
   type ClientMessage,
   type DeviceDescriptor,
@@ -116,18 +117,37 @@ export function decodeLastActivity(value: unknown): number | null {
   return typeof at === 'number' && Number.isFinite(at) && at > 0 ? at : null
 }
 
-const ERROR_CODES: readonly ProtocolErrorCode[] = [
-  'bad-message',
-  'unauthenticated',
-  'unauthorized',
-  'unknown-session',
-  'too-large',
-  'version',
-]
+/**
+ * What the desktop says it can do beyond protocol v1.
+ *
+ * Absent means "v1 only" rather than "unknown", so the answer is an empty list
+ * and never a null: a client that cannot tell the two apart ends up guessing at
+ * a feature instead of hiding it. Malformed entries are dropped rather than
+ * failing the whole `welcome`, for the same reason one bad session row does not
+ * discard a session list.
+ *
+ * Nothing in this browser client acts on it yet. The port-tunnelling capability
+ * needs a listening socket on the phone, which a web page cannot have — that is
+ * a native-app feature and this decoder only has to not choke on it.
+ */
+function capabilities(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return value.filter((entry): entry is string => typeof entry === 'string' && entry.length > 0 && entry.length <= 32)
+}
 
+/**
+ * The codes, from the desktop's own module rather than written out again here.
+ *
+ * This list used to be a copy, and a copy of a wire vocabulary is a copy that
+ * goes stale silently: a code added on the desktop does not fail to compile
+ * here, it makes this client answer `error with an unknown code` and throw away
+ * the sentence the user needed to read.
+ */
 function errorCode(value: unknown): ProtocolErrorCode | null {
   const code = str(value)
-  return code !== null && (ERROR_CODES as readonly string[]).includes(code) ? (code as ProtocolErrorCode) : null
+  return code !== null && (PROTOCOL_ERROR_CODES as readonly string[]).includes(code)
+    ? (code as ProtocolErrorCode)
+    : null
 }
 
 /** The only door inbound text comes through, mirroring `parseClientMessage`. */
@@ -156,7 +176,15 @@ export function decodeServerMessage(raw: string): DecodeResult {
       if (token === null && parsed.token !== null) return { ok: false, reason: 'welcome without a token field' }
       return {
         ok: true,
-        message: { t: 'welcome', protocol, deviceId, deviceName, token, sessions: list.sessions },
+        message: {
+          t: 'welcome',
+          protocol,
+          deviceId,
+          deviceName,
+          token,
+          sessions: list.sessions,
+          capabilities: capabilities(parsed.capabilities),
+        },
         activity: list.activity,
       }
     }

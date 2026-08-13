@@ -46,8 +46,14 @@ const SEAMS: Array<{ file: string; child: string; props: string[]; why: string }
   {
     file: 'renderer/App.tsx',
     child: 'ChatView',
-    props: ['cwd', 'sessionId'],
-    why: 'without sessionId the controls row and usage strip render their empty state',
+    props: ['cwd', 'session', 'sessionId'],
+    why: 'without sessionId the controls row and usage strip render their empty state, and without session the pane reads whatever transcript in the folder was written last',
+  },
+  {
+    file: 'renderer/App.tsx',
+    child: 'SessionInspector',
+    props: ['cwd', 'session', 'sessionTitle'],
+    why: 'without session it reports the folder’s newest transcript under this session’s name — including one belonging to a claude this app never started',
   },
   {
     file: 'renderer/components/ChatView.tsx',
@@ -75,6 +81,12 @@ const SEAMS: Array<{ file: string; child: string; props: string[]; why: string }
   },
   {
     file: 'renderer/App.tsx',
+    child: 'BrowserWorkspace',
+    props: ['visible', 'parkPage'],
+    why: 'visible hides the whole panel per tab; parkPage hides only the native pages under a dialog',
+  },
+  {
+    file: 'renderer/App.tsx',
     child: 'UpdateBanner',
     props: [],
     // It takes no required props on purpose — it resolves its own bridge, and
@@ -97,4 +109,84 @@ describe('components that are built are also wired', () => {
       }
     })
   }
+})
+
+/**
+ * A session started from a paired phone has to arrive, and has to arrive
+ * quietly.
+ *
+ * Both halves shipped broken once. The main process broadcast `session:created`
+ * and the preload exposed `onSessionCreated`, and nothing in the renderer
+ * listened — a real pty ran on this Mac with no row anywhere in the window.
+ * The obvious repair is worse than the bug: `addSession` sets the active
+ * session, so subscribing without `focus: false` means answering a message on
+ * your phone yanks the Mac out of whatever terminal you were typing into.
+ *
+ * Static, like the table above, and asserted on the source for the same reason
+ * — this project has no DOM to mount an effect in.
+ */
+describe('a session started from a phone appears without stealing focus', () => {
+  const app = read('renderer/App.tsx')
+
+  it('subscribes to session:created', () => {
+    expect(
+      app,
+      'nothing in the renderer listens for onSessionCreated — a session started from a paired ' +
+        'phone runs a real pty on this Mac and never appears in the window',
+    ).toMatch(/window\.deck\.onSessionCreated\(/)
+  })
+
+  it('adds the session without focus', () => {
+    // The whole subscription, from the call through to its closing brace.
+    const at = app.indexOf('window.deck.onSessionCreated(')
+    const body = app.slice(at, at + 400)
+    expect(body).toMatch(/addSession\([^)]*\{[^}]*focus:\s*false/)
+  })
+
+  it('badges the new row rather than switching to it', () => {
+    const at = app.indexOf('window.deck.onSessionCreated(')
+    expect(
+      app.slice(at, at + 400),
+      'an arrival with no focus and no badge is an arrival nobody can see',
+    ).toMatch(/unread\.recordOutput\(/)
+  })
+})
+
+/** The value of `<Name prop={...}>`, or null. Brace-aware, like `openingTag`. */
+function propExpression(tag: string, prop: string): string | null {
+  const at = tag.search(new RegExp(`[\\s{]${prop}=\\{`))
+  if (at < 0) return null
+  const from = tag.indexOf('{', at)
+  let depth = 0
+  for (let i = from; i < tag.length; i++) {
+    if (tag[i] === '{') depth++
+    else if (tag[i] === '}' && --depth === 0) return tag.slice(from + 1, i)
+  }
+  return null
+}
+
+/**
+ * Two different questions that were once one prop.
+ *
+ * `visible` used to mean "this tab is on screen AND no dialog is open", which
+ * forced a choice between two wrong screens: park the pages for a dialog and
+ * the panel keeps painting over other tabs, or hide the panel for a dialog and
+ * the workspace blanks out behind it. Folding the modal flag back into
+ * `visible` brings one of those back.
+ */
+describe('the browser panel is hidden per tab, parked per dialog', () => {
+  const tag = openingTag(read('renderer/App.tsx'), 'BrowserWorkspace') ?? ''
+
+  it('decides visibility from the tab alone', () => {
+    const visible = propExpression(tag, 'visible')
+    expect(visible, '<BrowserWorkspace> has no visible={...}').not.toBeNull()
+    expect(visible).toMatch(/activeTab/)
+    expect(visible, 'a dialog is not a tab switch — that belongs in parkPage').not.toMatch(
+      /Modal|Open\b/,
+    )
+  })
+
+  it('parks the pages for whatever dialog is open', () => {
+    expect(propExpression(tag, 'parkPage')).toMatch(/Modal/)
+  })
 })

@@ -1,68 +1,46 @@
 /* ============================================================================
-   Terminal ⇄ Chat segmented toggle.
+   Terminal ⇄ Chat — a macOS segmented control.
 
-   Notion's own segmented controls are a recessed track with a raised active
-   pill: the surface tells you which half is live, so no colour has to. The
-   accent stays out of it — this is a mode, not a selection.
+   A recessed track with a raised, shadowed pill on the selected half. That
+   shape is Apple's, and it is doing the whole job here: no colour is involved,
+   because this is a mode, not a selection.
    ============================================================================ */
-
-/* Optional host row for the toggle, so App.tsx needs no inline styles to place
-   it above the session panes. */
-.chat-toggle-bar {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  flex: 0 0 auto;
-  gap: 10px;
-  padding: 6px 12px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-secondary);
-}
 
 .chat-toggle {
   display: inline-flex;
-  gap: 2px;
+  gap: 1px;
   padding: 2px;
   border-radius: var(--radius-md);
-  background: var(--bg-tertiary);
-  /* Sits over a terminal, so it needs its own edge to read against black. */
-  border: 1px solid var(--border-subtle);
+  background: var(--fill-tertiary);
 }
 
 .ct-option {
   appearance: none;
   border: 0;
   border-radius: var(--radius-sm);
-  padding: 3px 12px;
+  padding: 0 var(--sp-3);
+  height: 24px;
   background: transparent;
   color: var(--text-secondary);
   font-family: var(--font-ui);
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 1.5;
+  font-size: var(--t-callout);
+  font-weight: var(--w-medium);
   cursor: pointer;
   white-space: nowrap;
-  transition: background 90ms ease, color 90ms ease;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
 
 .ct-option:hover {
-  background: var(--bg-hover);
   color: var(--text-primary);
 }
 
+/* The raised half. In light it lifts to white; in dark the track is the darker
+   surface and the pill is the lighter one, so "raised" still means "lighter". */
 .ct-on,
 .ct-on:hover {
   background: var(--bg-primary);
   color: var(--text-primary);
   box-shadow: var(--shadow-sm);
-}
-
-/* The raised pill has to be *lighter* than its track to read as raised, and in
-   the dark palette `--bg-primary` is the darkest surface there is — rendered
-   side by side, the selected half looked punched into the toolbar rather than
-   sitting on top of it. Swapping the two roles keeps one idiom in both themes. */
-[data-theme='dark'] .chat-toggle {
-  background: var(--bg-primary);
 }
 
 [data-theme='dark'] .ct-on,

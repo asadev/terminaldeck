@@ -1,26 +1,31 @@
 /* ============================================================================
    Usage strip — what the session cost and how close it is to its limits.
 
-   It sits between the conversation and the composer, so it has to read as part
-   of the chrome rather than as a panel: one hairline, the composer's surface,
-   labels in the muted grey and numbers in the mono face. Colour appears only
-   where it carries meaning — a context or plan figure past a threshold — and
-   the blue is left alone, because in this app the blue means focus.
+   The last line of the pane, and it reports rather than asks, so it is drawn as
+   metadata: no rule above it, no panel behind it, no box around anything in it.
+   Labels in the muted grey, numbers in the mono face, and colour only where it
+   carries meaning — a context or plan figure past a threshold. The accent is
+   left alone, because in this app the accent means focus.
    ============================================================================ */
 
 .usage-strip {
   flex-shrink: 0;
-  padding: 6px 14px 7px;
-  border-top: 1px solid var(--border-subtle);
-  background: var(--bg-secondary);
+  /* Held to the same measure and axis as the conversation and the composer. */
+  box-sizing: border-box;
+  width: 100%;
+  max-width: calc(var(--content-measure) + var(--sp-6) * 2);
+  align-self: center;
+  margin-inline: auto;
+  padding: 0 var(--sp-6) var(--sp-3);
+  background: var(--bg-primary);
   font-family: var(--font-ui);
-  font-size: 11.5px;
-  line-height: 1.45;
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
   color: var(--text-secondary);
 }
 
 .usage-strip-empty {
-  padding: 7px 14px;
+  padding: 0 var(--sp-6) var(--sp-3);
 }
 
 .us-items {
@@ -28,14 +33,15 @@
   flex-wrap: wrap;
   align-items: center;
   /* Column gap wider than row gap: wrapped rows should read as one block. */
-  gap: 3px 18px;
+  gap: var(--sp-05) var(--sp-5);
 }
 
 .us-item {
   display: flex;
   align-items: baseline;
-  gap: 6px;
+  gap: var(--sp-15);
   min-width: 0;
+  max-width: 100%;
 }
 
 /* Context, tokens and the plan each carry a second value. In a narrow pane that
@@ -53,9 +59,10 @@
 
 .us-value {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--t-footnote);
   color: var(--text-primary);
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 .us-value[data-level='warning'] {
@@ -67,6 +74,11 @@
 }
 
 .us-sub {
+  /* A flex child's default `min-width: auto` refuses to shrink below its own
+     text, which is how the reset time came to run off the right edge instead of
+     trailing off. Both are needed for the ellipsis below to ever appear. */
+  flex: 0 1 auto;
+  min-width: 0;
   max-width: 100%;
   overflow: hidden;
   color: var(--text-muted);
@@ -86,15 +98,16 @@
 
 /* ------------------------------------------------------------------ meter */
 
+/* The one piece of data visualisation here, so it keeps its colour. */
 .us-meter {
   display: inline-block;
   position: relative;
   top: 1px;
-  width: 84px;
+  width: 72px;
   height: 4px;
   flex-shrink: 0;
-  border-radius: var(--radius-sm);
-  background: var(--bg-active);
+  border-radius: var(--radius-pill);
+  background: var(--fill-secondary);
   overflow: hidden;
 }
 
@@ -103,7 +116,7 @@
   height: 100%;
   border-radius: inherit;
   background: var(--status-working);
-  transition: width 180ms ease;
+  transition: width var(--dur) var(--ease);
 }
 
 .us-meter[data-level='warning'] .us-meter-fill {
@@ -116,13 +129,12 @@
 
 /* Occupancy past 100%: real, and the one number in the strip worth a badge. */
 .us-flag {
-  padding: 0 5px;
-  border-radius: var(--radius-sm);
-  background: var(--bg-active);
+  padding: 0 var(--sp-15);
+  border-radius: var(--radius-pill);
+  background: var(--fill-tertiary);
   color: var(--color-critical);
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  font-size: var(--t-caption);
+  letter-spacing: var(--t-caption-ls);
 }
 
 /* ------------------------------------------------------------------- plan */
@@ -130,13 +142,13 @@
 .us-plan-limit {
   display: inline-flex;
   align-items: baseline;
-  gap: 4px;
+  gap: var(--sp-1);
 }
 
 /* Three limits in a row need more air between them than between a name and its
    number, or "Session 5% Week 80%" reads as one run-on figure. */
 .us-plan-limit + .us-plan-limit {
-  margin-left: 6px;
+  margin-left: var(--sp-15);
 }
 
 .us-plan-name {
@@ -144,16 +156,19 @@
   white-space: nowrap;
 }
 
+/* A quiet text target, not a bordered button: nothing in this line is an
+   action until you point at it. */
 .us-refresh {
-  padding: 1px 7px;
+  height: var(--control-h-sm);
+  padding: 0 var(--sp-2);
   cursor: pointer;
-  border: 1px solid var(--border);
+  border: 0;
   border-radius: var(--radius-sm);
-  background: var(--bg-primary);
+  background: none;
   color: var(--text-secondary);
   font-family: var(--font-ui);
-  font-size: 11px;
-  transition: background 120ms ease, color 120ms ease;
+  font-size: var(--t-footnote);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
 
 .us-refresh:hover:not(:disabled) {
@@ -168,7 +183,7 @@
 
 .us-refresh:focus-visible {
   outline: 2px solid var(--accent);
-  outline-offset: 1px;
+  outline-offset: -2px;
 }
 
 /* ------------------------------------------------------------------ notes */
@@ -176,9 +191,9 @@
 .us-notes {
   display: flex;
   flex-wrap: wrap;
-  gap: 2px 14px;
-  margin-top: 3px;
-  font-size: 11px;
+  gap: var(--sp-05) var(--sp-4);
+  margin: var(--sp-05) 0 0;
+  font-size: var(--t-footnote);
   color: var(--text-muted);
 }
 
@@ -188,10 +203,4 @@
 
 .us-note[data-tone='critical'] {
   color: var(--color-critical);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .us-meter-fill {
-    transition: none;
-  }
 }

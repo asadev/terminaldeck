@@ -1,13 +1,22 @@
 import { describe, expect, it } from 'vitest'
 import {
+  CAPABILITIES,
   CLOSE,
   MAX_COLS,
   MAX_INPUT_BYTES,
   MAX_MESSAGE_BYTES,
+  MAX_NET_DATA_CHARS,
   MAX_ROWS,
   MIN_COLS,
   MIN_ROWS,
+  MAX_CWD_BYTES,
+  MAX_UPLOAD_BYTES,
+  MAX_UPLOAD_DATA_CHARS,
+  MAX_UPLOAD_NAME_BYTES,
+  NET_WINDOW_BYTES,
+  SHA256_HEX_LENGTH,
   OUTPUT_CHUNK_BYTES,
+  PROTOCOL_ERROR_CODES,
   PROTOCOL_VERSION,
   chunkOutput,
   parseClientMessage,
@@ -49,6 +58,18 @@ const CLIENT_TYPES: Record<ClientMessage['t'], true> = {
   input: true,
   resize: true,
   ping: true,
+  create: true,
+  ports: true,
+  'tunnel.open': true,
+  'tunnel.close': true,
+  'net.open': true,
+  'net.data': true,
+  'net.ack': true,
+  'net.close': true,
+  'upload.begin': true,
+  'upload.data': true,
+  'upload.end': true,
+  'upload.cancel': true,
 }
 
 /** Same guard for the other direction. */
@@ -62,6 +83,17 @@ const SERVER_TYPES: Record<ServerMessage['t'], true> = {
   exit: true,
   error: true,
   pong: true,
+  created: true,
+  ports: true,
+  'tunnel.opened': true,
+  'tunnel.closed': true,
+  'net.data': true,
+  'net.ack': true,
+  'net.close': true,
+  'upload.ready': true,
+  'upload.ack': true,
+  'upload.done': true,
+  'upload.failed': true,
 }
 
 const VALID_CLIENT: ClientMessage[] = [
@@ -73,6 +105,21 @@ const VALID_CLIENT: ClientMessage[] = [
   { t: 'input', id: SESSION_ID, data: 'git status\r' },
   { t: 'resize', id: SESSION_ID, cols: 120, rows: 40 },
   { t: 'ping' },
+  { t: 'create' },
+  { t: 'create', cwd: '/Users/apple/Projects/terminaldeck' },
+  { t: 'create', cols: 80, rows: 24 },
+  { t: 'create', cwd: '/Users/apple/Projects/terminaldeck', cols: 100, rows: 30 },
+  { t: 'ports' },
+  { t: 'tunnel.open', id: 'tun-1', port: 3000 },
+  { t: 'tunnel.close', id: 'tun-1' },
+  { t: 'net.open', ch: 'c1', tunnel: 'tun-1' },
+  { t: 'net.data', ch: 'c1', data: Buffer.from('GET / HTTP/1.1\r\n\r\n').toString('base64') },
+  { t: 'net.ack', ch: 'c1', bytes: 1448 },
+  { t: 'net.close', ch: 'c1' },
+  { t: 'upload.begin', id: 'up-1', name: 'IMG_4823.HEIC', size: 3_145_728 },
+  { t: 'upload.data', id: 'up-1', data: Buffer.from([0xff, 0xd8, 0xff, 0xe0]).toString('base64') },
+  { t: 'upload.end', id: 'up-1', sha256: 'e'.repeat(SHA256_HEX_LENGTH) },
+  { t: 'upload.cancel', id: 'up-1' },
 ]
 
 const SESSION: RemoteSession = {
@@ -85,8 +132,22 @@ const SESSION: RemoteSession = {
 }
 
 const VALID_SERVER: ServerMessage[] = [
-  { t: 'welcome', protocol: PROTOCOL_VERSION, deviceId: 'dev-1', deviceName: 'iPhone', token: null, sessions: [SESSION] },
+  {
+    t: 'welcome',
+    protocol: PROTOCOL_VERSION,
+    deviceId: 'dev-1',
+    deviceName: 'iPhone',
+    token: null,
+    sessions: [SESSION],
+    capabilities: CAPABILITIES,
+  },
   { t: 'sessions', sessions: [] },
+  { t: 'ports', ports: [{ port: 3000, process: 'node', guessed: false }] },
+  { t: 'tunnel.opened', id: 'tun-1', port: 3000 },
+  { t: 'tunnel.closed', id: 'tun-1', message: 'Stopped from the Mac.' },
+  { t: 'net.data', ch: 'c1', data: Buffer.from('HTTP/1.1 200 OK\r\n\r\n').toString('base64') },
+  { t: 'net.ack', ch: 'c1', bytes: 19 },
+  { t: 'net.close', ch: 'c1' },
   { t: 'attached', id: SESSION_ID },
   { t: 'detached', id: SESSION_ID },
   { t: 'output', id: SESSION_ID, data: '\u001b[2K\rready ❯ ' },
@@ -95,16 +156,25 @@ const VALID_SERVER: ServerMessage[] = [
   { t: 'exit', id: SESSION_ID, exitCode: 130 },
   { t: 'error', code: 'unknown-session', message: 'That session is not open.' },
   { t: 'pong' },
+  { t: 'created', session: SESSION },
+  { t: 'upload.ready', id: 'up-1', path: '/Users/apple/Downloads/Terminal Deck/IMG_4823.HEIC' },
+  { t: 'upload.ack', id: 'up-1', bytes: 24 * 1024 },
+  {
+    t: 'upload.done',
+    id: 'up-1',
+    path: '/Users/apple/Downloads/Terminal Deck/IMG_4823.HEIC',
+    bytes: 3_145_728,
+    sha256: 'e'.repeat(SHA256_HEX_LENGTH),
+  },
+  { t: 'upload.failed', id: 'up-1', message: 'Cancelled on the phone.' },
 ]
 
-const ERROR_CODES: ProtocolErrorCode[] = [
-  'bad-message',
-  'unauthenticated',
-  'unauthorized',
-  'unknown-session',
-  'too-large',
-  'version',
-]
+/**
+ * Taken from the module rather than restated, which is the whole point of it
+ * being a value: three clients validate an inbound code against a copy of this
+ * list, and a test with its own copy would be a fourth place to forget.
+ */
+const ERROR_CODES: readonly ProtocolErrorCode[] = PROTOCOL_ERROR_CODES
 
 function accepted(frame: unknown, label = 'frame'): ClientMessage {
   const result = parseClientMessage(frame)
@@ -198,7 +268,12 @@ describe('the type tag', () => {
   })
 
   it('refuses a verb this desktop does not implement', () => {
-    for (const t of ['kill', 'exec', 'spawn', 'create', 'welcome', 'output', 'HELLO', 'Attach', '']) {
+    // `new` and `session.create` are in this list on purpose: they are the two
+    // shapes the phone clients invented against their own stand-ins before any
+    // desktop could serve one. Exactly one of the three spellings is the
+    // protocol, and it is `create`; the other two are refused like any other
+    // verb nobody agreed on.
+    for (const t of ['kill', 'exec', 'spawn', 'new', 'session.create', 'welcome', 'output', 'HELLO', 'Attach', '']) {
       expect(refused({ t }, t).code).toBe('bad-message')
     }
   })
@@ -637,5 +712,276 @@ describe('chunkOutput', () => {
   it('keeps a code point whole even when it alone exceeds the budget', () => {
     // Nothing else is possible: the alternative is emitting half a character.
     expect(chunkOutput('😀😀', 2)).toEqual(['😀', '😀'])
+  })
+})
+
+/**
+ * The `localhost` verbs.
+ *
+ * These carry two things nothing else in this protocol does: a port, which is a
+ * number that decides what a socket connects to, and base64, which is a decoder
+ * that does not fail. `Buffer.from(x, 'base64')` silently skips bytes it does
+ * not recognise and returns a short buffer, so a corrupted frame would arrive at
+ * the dev server as a truncated request rather than as an error — which reads,
+ * to whoever is debugging it, as the dev server being broken.
+ */
+describe('localhost tunnels', () => {
+  it('refuses a port that is not a port', () => {
+    for (const port of [0, -1, 65_536, 1.5, NaN, Infinity, '3000', null, undefined, true]) {
+      expect(refused({ t: 'tunnel.open', id: 'tun-1', port }, JSON.stringify(port)).code).toBe('bad-message')
+    }
+  })
+
+  it('accepts the ends of the port range', () => {
+    for (const port of [1, 80, 3000, 65_535]) {
+      const message = accepted({ t: 'tunnel.open', id: 'tun-1', port }, String(port))
+      expect(message).toEqual({ t: 'tunnel.open', id: 'tun-1', port })
+    }
+  })
+
+  it('shape-checks the channel and tunnel ids like every other id', () => {
+    for (const value of ['', '../etc/passwd', 'a b', '-leading', 'x'.repeat(65), 7, null]) {
+      const label = JSON.stringify(value)
+      expect(refused({ t: 'net.open', ch: value, tunnel: 'tun-1' }, label).code).toBe('bad-message')
+      expect(refused({ t: 'net.open', ch: 'c1', tunnel: value }, label).code).toBe('bad-message')
+      expect(refused({ t: 'net.data', ch: value, data: '' }, label).code).toBe('bad-message')
+      expect(refused({ t: 'net.close', ch: value }, label).code).toBe('bad-message')
+      expect(refused({ t: 'tunnel.close', id: value }, label).code).toBe('bad-message')
+    }
+  })
+
+  it('refuses payloads that are not base64, rather than decoding what it can', () => {
+    for (const data of ['not base64!', 'AAA', 'AA=A', 'QUJD\n', '☃', 12, null, undefined]) {
+      expect(refused({ t: 'net.data', ch: 'c1', data }, JSON.stringify(data)).code).toBe('bad-message')
+    }
+  })
+
+  it('accepts real base64, padding included', () => {
+    for (const text of ['', 'A', 'AB', 'ABC', 'GET / HTTP/1.1\r\nHost: localhost:3000\r\n\r\n']) {
+      const data = Buffer.from(text).toString('base64')
+      const message = accepted({ t: 'net.data', ch: 'c1', data }, JSON.stringify(text))
+      expect(message).toEqual({ t: 'net.data', ch: 'c1', data })
+      expect(Buffer.from(data, 'base64').toString()).toBe(text)
+    }
+  })
+
+  it('caps a chunk at the encoded length of the raw limit', () => {
+    const atCap = 'A'.repeat(MAX_NET_DATA_CHARS)
+    expect(accepted({ t: 'net.data', ch: 'c1', data: atCap })).toEqual({
+      t: 'net.data',
+      ch: 'c1',
+      data: atCap,
+    })
+    // Four more characters, so it is still valid base64 and only the size is wrong.
+    expect(refused({ t: 'net.data', ch: 'c1', data: 'A'.repeat(MAX_NET_DATA_CHARS + 4) }).code).toBe('too-large')
+  })
+
+  it('refuses an acknowledgement of more than a whole window', () => {
+    // An ack larger than anything that can be in flight is either a bug or an
+    // attempt to unblock a paused reader by claiming progress that never
+    // happened, and there is no reason to tell the two apart.
+    for (const bytes of [0, -1, 1.5, NaN, NET_WINDOW_BYTES + 1, '100', null]) {
+      expect(refused({ t: 'net.ack', ch: 'c1', bytes }, JSON.stringify(bytes)).code).toBe('bad-message')
+    }
+    expect(accepted({ t: 'net.ack', ch: 'c1', bytes: NET_WINDOW_BYTES })).toEqual({
+      t: 'net.ack',
+      ch: 'c1',
+      bytes: NET_WINDOW_BYTES,
+    })
+  })
+
+  it('reads the payload once, so a getter cannot swap it after the size check', () => {
+    let reads = 0
+    const frame = {
+      t: 'net.data',
+      ch: 'c1',
+      get data(): string {
+        reads += 1
+        return reads === 1 ? 'QUJD' : 'A'.repeat(MAX_NET_DATA_CHARS + 4)
+      },
+    }
+    const message = accepted(frame)
+    expect(message).toEqual({ t: 'net.data', ch: 'c1', data: 'QUJD' })
+  })
+})
+
+describe('create', () => {
+  it('accepts a request that names nothing at all', () => {
+    // The common case, and the whole reason every field is optional: a phone
+    // that knows nothing about the Mac can still start work on it.
+    expect(accepted({ t: 'create' })).toEqual({ t: 'create' })
+  })
+
+  it('refuses a folder that is not a usable string', () => {
+    for (const cwd of ['', 7, null, true, {}, []]) {
+      expect(refused({ t: 'create', cwd }, JSON.stringify(cwd)).code).toBe('bad-message')
+    }
+  })
+
+  it('refuses a control byte in a path rather than stripping it', () => {
+    // A path is compared against a list and then handed to a process.
+    // Stripping would turn a hostile value into a *different* legal-looking
+    // path, which is the worse failure — unlike a device name, which is only
+    // ever read. Built from char codes rather than written literally: a raw
+    // control byte in source is invisible in every diff and every editor.
+    for (const code of [0x00, 0x09, 0x0a, 0x0d, 0x1b, 0x7f, 0x9b]) {
+      const cwd = `/tmp/a${String.fromCharCode(code)}b`
+      expect(refused({ t: 'create', cwd }, `U+${code.toString(16)}`).code).toBe('bad-message')
+    }
+    // A space is not a control byte, and plenty of real folders have one.
+    const spaced = '/Users/apple/My Projects'
+    expect(accepted({ t: 'create', cwd: spaced })).toEqual({ t: 'create', cwd: spaced })
+  })
+
+  it('caps the path in bytes, not characters', () => {
+    const atCap = `/${'a'.repeat(MAX_CWD_BYTES - 1)}`
+    expect(accepted({ t: 'create', cwd: atCap })).toEqual({ t: 'create', cwd: atCap })
+    expect(refused({ t: 'create', cwd: `${atCap}a` }).code).toBe('too-large')
+    // 512 emoji are 1,024 UTF-16 units and 2,048 UTF-8 bytes; a length check
+    // alone would wave this through at twice the cap.
+    expect(refused({ t: 'create', cwd: '\u{1f600}'.repeat(MAX_CWD_BYTES / 2) }).code).toBe('too-large')
+  })
+
+  it('takes both sizes or neither, never one', () => {
+    expect(refused({ t: 'create', cols: 80 }).code).toBe('bad-message')
+    expect(refused({ t: 'create', rows: 24 }).code).toBe('bad-message')
+    expect(accepted({ t: 'create', cols: 80, rows: 24 })).toEqual({ t: 'create', cols: 80, rows: 24 })
+  })
+
+  it('holds a size to the same range an attach is held to', () => {
+    for (const [cols, rows] of [
+      [MIN_COLS - 1, 24],
+      [MAX_COLS + 1, 24],
+      [80, MIN_ROWS - 1],
+      [80, MAX_ROWS + 1],
+      [NaN, 24],
+      [80, Infinity],
+      [80.5, 24],
+    ]) {
+      expect(refused({ t: 'create', cols, rows }, `${cols}x${rows}`).code).toBe('bad-message')
+    }
+  })
+
+  it('does not decide whether the Mac will use the folder', () => {
+    // Shape only. A path that satisfies this parser is a plausible path and
+    // nothing more — `session-create.ts` answers whether this desktop offers
+    // it, against the desktop's real project list.
+    const cwd = '/definitely/not/a/folder/on/this/machine'
+    expect(accepted({ t: 'create', cwd })).toEqual({ t: 'create', cwd })
+  })
+
+  it('reads the folder once, so a getter cannot swap it after the checks', () => {
+    let reads = 0
+    const frame = {
+      t: 'create',
+      get cwd(): string {
+        reads += 1
+        return reads === 1 ? '/tmp/ok' : `/${'x'.repeat(MAX_CWD_BYTES)}`
+      },
+    }
+    expect(accepted(frame)).toEqual({ t: 'create', cwd: '/tmp/ok' })
+  })
+})
+
+describe('upload', () => {
+  const begin = (patch: Record<string, unknown>): Record<string, unknown> => ({
+    t: 'upload.begin',
+    id: 'up-1',
+    name: 'photo.jpg',
+    size: 1024,
+    ...patch,
+  })
+
+  it('refuses a name that is missing, empty or oversized', () => {
+    refused(begin({ name: undefined }), 'no name')
+    refused(begin({ name: '' }), 'empty name')
+    refused(begin({ name: 42 }), 'numeric name')
+    expect(refused(begin({ name: 'a'.repeat(MAX_UPLOAD_NAME_BYTES + 1) }), 'long name').code).toBe('too-large')
+  })
+
+  it('counts the name in bytes, so an emoji name is not four times the cap', () => {
+    // 64 four-byte code points are 256 bytes and 128 UTF-16 units. A length
+    // check would wave this through and the file would be unopenable.
+    expect(refused(begin({ name: '🙂'.repeat(64) }), 'emoji name').code).toBe('too-large')
+    expect(accepted(begin({ name: '🙂'.repeat(63) }), 'emoji name just under')).toMatchObject({
+      name: '🙂'.repeat(63),
+    })
+  })
+
+  it('refuses a control byte in a name rather than stripping it', () => {
+    // Stripping would turn a hostile value into a *different* legal-looking
+    // name, which is the worse failure — the same argument `create.cwd` makes.
+    for (const name of ['pho\u0000to.jpg', 'photo\n.jpg', 'photo\u001b[2J.jpg']) {
+      expect(refused(begin({ name }), name).code).toBe('bad-message')
+    }
+  })
+
+  it('does not decide what the name becomes on disk', () => {
+    // Shape only. `safeName` in `uploads.ts` is what reduces this to one path
+    // component, against a real directory. A parser that answered the question
+    // would be the most dangerous kind of wrong.
+    const name = '../../etc/passwd'
+    expect(accepted(begin({ name }))).toEqual({ t: 'upload.begin', id: 'up-1', name, size: 1024 })
+  })
+
+  it('refuses a size that is zero, negative, fractional or past the ceiling', () => {
+    for (const size of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, null, '1024', MAX_UPLOAD_BYTES + 1]) {
+      refused(begin({ size }), `size ${String(size)}`)
+    }
+    expect(accepted(begin({ size: MAX_UPLOAD_BYTES }))).toMatchObject({ size: MAX_UPLOAD_BYTES })
+  })
+
+  it('refuses payload that is not base64, rather than decoding what it can', () => {
+    // Same rule as `net.data`, and for a sharper reason: a chunk `Buffer` half
+    // decoded is a byte missing from the middle of somebody's video.
+    for (const data of ['not base64!', 'AAA', 'AA=A', 'AAAA\n', 12, null]) {
+      refused({ t: 'upload.data', id: 'up-1', data }, `data ${String(data)}`)
+    }
+  })
+
+  it('caps a chunk at the encoded length of the raw limit', () => {
+    const fits = 'A'.repeat(MAX_UPLOAD_DATA_CHARS)
+    expect(accepted({ t: 'upload.data', id: 'up-1', data: fits })).toMatchObject({ data: fits })
+    expect(refused({ t: 'upload.data', id: 'up-1', data: 'A'.repeat(MAX_UPLOAD_DATA_CHARS + 4) }).code).toBe(
+      'too-large',
+    )
+  })
+
+  it('insists on a whole hex digest and lower-cases it', () => {
+    const digest = 'AB'.repeat(SHA256_HEX_LENGTH / 2)
+    expect(accepted({ t: 'upload.end', id: 'up-1', sha256: digest })).toEqual({
+      t: 'upload.end',
+      id: 'up-1',
+      // Lower-cased here so the comparison against `digest('hex')` can be `===`.
+      sha256: digest.toLowerCase(),
+    })
+    for (const bad of ['', 'z'.repeat(SHA256_HEX_LENGTH), 'a'.repeat(SHA256_HEX_LENGTH - 1), 42, null]) {
+      refused({ t: 'upload.end', id: 'up-1', sha256: bad }, `digest ${String(bad)}`)
+    }
+  })
+
+  it('shape-checks the upload id like every other id', () => {
+    for (const frame of [
+      { t: 'upload.begin', id: '../x', name: 'a.jpg', size: 1 },
+      { t: 'upload.data', id: '', data: 'AAAA' },
+      { t: 'upload.end', id: 'a b', sha256: 'a'.repeat(SHA256_HEX_LENGTH) },
+      { t: 'upload.cancel', id: 42 },
+    ]) {
+      refused(frame, String(frame.t))
+    }
+  })
+
+  it('reads the name once, so a getter cannot swap it after the checks', () => {
+    let reads = 0
+    const frame = {
+      t: 'upload.begin',
+      id: 'up-1',
+      size: 1024,
+      get name(): string {
+        reads += 1
+        return reads === 1 ? 'photo.jpg' : 'x'.repeat(MAX_UPLOAD_NAME_BYTES + 1)
+      },
+    }
+    expect(accepted(frame)).toMatchObject({ name: 'photo.jpg' })
   })
 })

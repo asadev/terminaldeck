@@ -7,7 +7,17 @@
  * coffee-shop network would otherwise get a terminal on this machine. So the
  * address is not configurable and is never guessed: it is read from the running
  * Tailscale daemon, it must be inside `100.64.0.0/10`, and when the daemon
- * cannot answer, nothing starts.
+ * cannot answer, no socket is opened.
+ *
+ * ## This is the fast path, not the only path
+ *
+ * Every "not ready" answer below used to stop remote access altogether. It no
+ * longer does: `relay-client.ts` reaches this Mac by dialling out, so a machine
+ * with no Tailscale is still reachable — one extra hop, through a service that
+ * cannot read what it carries. Nothing here changes because of that, because
+ * the relay never asks this module anything. What changed is how the answers are
+ * read: `server.ts` reports them as `directReason`, a note about a faster route,
+ * rather than as the reason the feature is off. The sentences below say so.
  *
  * ## Why the DNS name matters more than the IP
  *
@@ -142,7 +152,7 @@ export type TailnetStatus = TailnetReady | TailnetNotReady
  */
 const MAC_REASONS: Record<TailnetBlockedState, string> = {
   'not-installed':
-    'Tailscale is not installed on this Mac. Your phone connects over the tailnet, so there is no address to listen on without it — install it from https://tailscale.com/download, sign in, then try again.',
+    'Tailscale is not installed on this Mac, so there is no tailnet address to listen on. Your phone can still reach this Mac through the relay; the tailnet is the faster, direct route. To use it, install Tailscale from https://tailscale.com/download, sign in, then try again.',
   'not-running':
     'Tailscale is installed but its background service is not answering. Open Tailscale from your Applications folder to start it, then try again.',
   'logged-out':
@@ -167,7 +177,7 @@ const MAC_REASONS: Record<TailnetBlockedState, string> = {
  */
 const WINDOWS_REASONS: Record<TailnetBlockedState, string> = {
   'not-installed':
-    'Tailscale is not installed on this PC. Your phone connects over the tailnet, so there is no address to listen on without it — install it from https://tailscale.com/download, sign in, then try again.',
+    'Tailscale is not installed on this PC, so there is no tailnet address to listen on. Your phone can still reach this PC through the relay; the tailnet is the faster, direct route. To use it, install Tailscale from https://tailscale.com/download, sign in, then try again.',
   'not-running':
     'Tailscale is installed but its background service is not answering. Open Tailscale from the Start menu, or run `net start Tailscale` in an administrator terminal, then try again.',
   'logged-out':

@@ -2,38 +2,43 @@
    Close confirmation.
 
    Deliberately plain — a warning that shouts is a warning that gets clicked
-   through. The only colour is on the destructive button, and only there so the
-   two footer actions cannot be told apart by position alone.
+   through. Nothing is boxed and nothing is ruled off; the only colour is on
+   the destructive button, and only there so the two footer actions cannot be
+   told apart by position alone.
    ============================================================================ */
+
+:root {
+  --close-confirm-check: 14px;
+}
 
 .close-confirm {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding-top: 6px;
+  gap: var(--sp-2);
+  padding-top: var(--sp-1);
 }
 
 .close-confirm-headline {
   margin: 0;
-  font-size: 13px;
-  font-weight: 550;
+  font-size: var(--t-body);
+  font-weight: var(--w-medium);
   color: var(--text-primary);
 }
 
 .close-confirm-detail {
   margin: 0;
-  font-size: 12px;
-  line-height: 1.5;
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
   color: var(--text-secondary);
 }
 
+/* Separated by space, not by a rule: one line above one checkbox was a divider
+   drawn for the sake of drawing one. */
 .close-confirm-suppress {
   display: flex;
   align-items: flex-start;
-  gap: 10px;
-  margin-top: 6px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border-subtle);
+  gap: var(--sp-3);
+  margin-top: var(--sp-4);
   cursor: pointer;
 }
 
@@ -41,22 +46,22 @@
    introduce a second control language. */
 .close-confirm-suppress input {
   flex-shrink: 0;
-  width: 14px;
-  height: 14px;
-  margin-top: 1px;
+  width: var(--close-confirm-check);
+  height: var(--close-confirm-check);
+  margin: var(--sp-05) 0 0;
   accent-color: var(--accent);
 }
 
 .close-confirm-suppress-text {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--sp-05);
   min-width: 0;
 }
 
 .close-confirm-suppress-label {
-  font-size: 12.5px;
-  font-weight: 550;
+  font-size: var(--t-callout);
+  font-weight: var(--w-medium);
   color: var(--text-primary);
 }
 
@@ -68,8 +73,8 @@
    work in progress. */
 .modal-btn.danger {
   background: var(--color-critical);
-  border-color: var(--color-critical);
-  color: var(--accent-fg);
+  color: var(--text-onaccent);
+  box-shadow: var(--shadow-sm);
 }
 
 .modal-btn.danger:hover:not(:disabled) {
@@ -77,10 +82,9 @@
      second hue — noted for tokens.css. */
   filter: brightness(0.92);
   background: var(--color-critical);
-  border-color: var(--color-critical);
 }
 
 .modal-btn.danger:disabled {
-  opacity: 0.6;
+  opacity: 0.45;
   cursor: default;
 }

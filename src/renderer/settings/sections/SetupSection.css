@@ -2,8 +2,9 @@
    Setup — the tool list, the probe lines and the hook blocks.
 
    Only what this section adds: the rows, paths, notices and buttons are the
-   shared classes in SettingsWindow.css. Every colour is a token; the literal
-   values here are geometry.
+   shared classes in SettingsWindow.css, so they follow that file when it
+   changes. Every value here is a token; nothing is boxed that a fill and a
+   corner can hold on its own.
 
    Kept in its own file rather than appended to SettingsWindow.css so that a
    section can be added without touching a file other sections are being edited
@@ -14,9 +15,9 @@
    gives, so nothing here is the only carrier of meaning. */
 .setup-mark {
   flex-shrink: 0;
-  width: 14px;
-  font-size: 11px;
-  line-height: 1.2;
+  width: var(--sp-4);
+  font-size: var(--t-footnote);
+  line-height: var(--lh-tight);
   text-align: center;
   color: var(--status-idle);
 }
@@ -36,40 +37,47 @@
 }
 
 /* What the shell actually said. Mono because it is a command's output, not
-   prose, and selectable because the next thing a person does is paste it. */
+   prose, and selectable because the next thing a person does is paste it. It
+   sits inside a tinted list row, so it lifts to the page colour rather than
+   tinting a tint. */
 .setup-probe {
   display: block;
-  margin-top: 3px;
-  padding: 4px 7px;
-  border: 1px solid var(--border-subtle);
+  margin-top: var(--sp-1);
+  padding: var(--sp-15) var(--sp-2);
+  border: none;
   border-radius: var(--radius-sm);
-  background: var(--bg-tertiary);
+  background: var(--bg-primary);
   font-family: var(--font-mono);
-  font-size: 11px;
-  line-height: 1.45;
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
   color: var(--text-secondary);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   user-select: text;
 }
 
+/* In dark the page colour is the darker surface, so "lifted" has to be the
+   lighter one — the same move the segmented control makes. */
+[data-theme='dark'] .setup-probe {
+  background: var(--bg-tertiary);
+}
+
 /* ------------------------------------------------------------------ hooks -- */
 
 .setup-endpoint {
-  margin: 8px 0 0;
-  font-size: 11.5px;
-  line-height: 1.5;
+  margin: var(--sp-3) 0 0;
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
   color: var(--text-secondary);
-  max-width: 62ch;
 }
 
 .setup-endpoint::before {
   content: '';
   display: inline-block;
-  width: 6px;
-  height: 6px;
-  margin-right: 7px;
-  border-radius: 999px;
+  width: var(--settings-dot, 7px);
+  height: var(--settings-dot, 7px);
+  margin-right: var(--sp-2);
+  border-radius: var(--radius-pill);
   vertical-align: 1px;
   background: var(--status-idle);
 }
@@ -78,11 +86,13 @@
   background: var(--status-completed);
 }
 
+/* One soft block per CLI. No border: the fill and the corner already say where
+   it starts and stops. */
 .setup-hooks {
-  margin-top: 10px;
-  padding: 10px 11px;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
+  margin-top: var(--sp-3);
+  padding: var(--sp-4);
+  border: none;
+  border-radius: var(--radius-lg);
   background: var(--bg-secondary);
 }
 
@@ -90,28 +100,35 @@
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--sp-3);
 }
 
 .setup-hooks-name {
-  font-size: 13px;
-  font-weight: 550;
+  font-size: var(--t-body);
+  font-weight: var(--w-medium);
   color: var(--text-primary);
 }
 
 .setup-hooks .settings-path {
   display: block;
-  margin-top: 2px;
+  margin-top: var(--sp-05);
 }
 
 .setup-hooks .settings-tool-note {
   display: block;
-  margin: 6px 0 0;
-  max-width: 62ch;
+  margin: var(--sp-2) 0 0;
 }
 
-.setup-hooks .settings-actions {
-  margin: 10px 0 0;
+/* Inside a tinted block a tinted notice disappears into it, so it lifts to the
+   page colour instead. */
+.setup-hooks .settings-notice[data-tone='warn'],
+.setup-hooks .settings-notice[data-tone='error'] {
+  background: var(--bg-primary);
+}
+
+[data-theme='dark'] .setup-hooks .settings-notice[data-tone='warn'],
+[data-theme='dark'] .setup-hooks .settings-notice[data-tone='error'] {
+  background: var(--bg-tertiary);
 }
 
 /* The events, in the order the CLI fires them. Wrapping rather than scrolling:
@@ -119,21 +136,21 @@
 .setup-events {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px 14px;
+  gap: var(--sp-1) var(--sp-4);
   list-style: none;
-  margin: 8px 0 0;
+  margin: var(--sp-2) 0 0;
   padding: 0;
 }
 
 .setup-event {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: var(--sp-1);
 }
 
 .setup-event-name {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--t-footnote);
   color: var(--text-secondary);
 }
 
@@ -160,6 +177,6 @@
 }
 
 [data-density='compact'] .setup-hooks {
-  margin-top: 8px;
-  padding: 8px 9px;
+  margin-top: var(--sp-2);
+  padding: var(--sp-3);
 }

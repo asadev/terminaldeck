@@ -19,8 +19,11 @@ Everything else sits on this.
 - [x] Electron 41 + React 19 + TypeScript, electron-vite
 - [x] `PtyManager` — process ownership, scrollback replay across tab switches
 - [x] Provider layer — Claude / Codex / Gemini detection, login-shell PATH
-- [x] Sidebar (projects → sessions), tab bar, status dots, empty state
-- [x] Design tokens, dark + light, self-hosted open-licensed fonts
+- [x] One sidebar — projects → sessions, the ten project views, and Settings in
+      the bottom-left corner — plus status dots and an empty state. (The icon
+      rail, the panel drawer and the title-bar tab strip it replaced are gone.)
+- [x] Design tokens on Apple's HIG — system type scale, 8pt spacing, macOS
+      control metrics, liquid-glass materials, dark + light both first-class
 - [x] JSON store, atomic writes, projects + window bounds persist
 - [x] CSP from main process — strict in prod, dev-permissive
 - [x] Visual verification pass — screenshotted running, a live Claude session
@@ -45,8 +48,10 @@ Turns a terminal multiplexer into something that understands agents.
 - [ ] **Session titles** — derive from the task rather than the folder name.
       `pty-manager.ts` hardcodes `title: basename(cwd)`; `CreateSessionInput`
       has no title field
-- [ ] **Unread indicators** — output arrived on a background tab.
-      `renderer/unread.ts` has no importers
+- [x] **Unread indicators** — output on a session nobody is looking at puts a
+      dot on its sidebar row. `UnreadTracker` is subscribed to `session:data`
+      in `App.tsx`; the same dot is how a session started from a phone
+      announces itself without stealing the focused tab.
 
 ## Phase 3 — Cost, context and telemetry
 

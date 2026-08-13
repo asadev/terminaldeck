@@ -1,20 +1,19 @@
 /* ============================================================================
-   Modal shell — scrim, panel, header/body/footer bands, action buttons.
+   Modal shell — scrim, sheet, and the page-sized variant.
 
-   Every colour derives from a foundation token. tokens.css has no scrim token,
-   so the scrim is mixed from an existing one rather than invented: the dark
-   theme dims towards its own page background, and the light theme darkens
-   towards its ink. A hardcoded black would be wrong on the light theme, where
-   Notion's overlay is a soft grey wash rather than a blackout.
+   Apple's sheet: it slides up a few points, it wears the same glass as the
+   chrome, and the scrim behind it is a blur rather than a blackout. Three
+   sizes — `md` and `lg` are dialogs; `page` is a full-window surface for
+   something you sit in rather than answer, which is what Settings is.
    ============================================================================ */
 
 :root,
 [data-theme='light'] {
-  --modal-scrim: color-mix(in srgb, var(--text-primary) 28%, transparent);
+  --modal-scrim: color-mix(in srgb, var(--text-primary) 22%, transparent);
 }
 
 [data-theme='dark'] {
-  --modal-scrim: color-mix(in srgb, var(--bg-primary) 68%, transparent);
+  --modal-scrim: color-mix(in srgb, #000 52%, transparent);
 }
 
 .modal-overlay {
@@ -27,26 +26,92 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 40px 24px;
+  padding: var(--sp-10) var(--sp-6);
   background: var(--modal-scrim);
-  animation: modal-scrim-in 120ms ease;
+  -webkit-backdrop-filter: blur(3px);
+  backdrop-filter: blur(3px);
+  animation: modal-scrim-in var(--dur-fast) var(--ease);
 }
 
 .modal-panel {
   display: flex;
   flex-direction: column;
-  width: 440px;
+  width: 460px;
   max-width: 100%;
   max-height: 100%;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-md);
-  animation: modal-panel-in 140ms cubic-bezier(0.2, 0.7, 0.3, 1);
+  border-radius: var(--radius-xl);
+  /* The same glass as the sidebar and the toolbar, one step more opaque:
+     a sheet has to be readable over whatever it covers. */
+  background-color: var(--material-bg-strong);
+  background-image: var(--material-sheen);
+  -webkit-backdrop-filter: var(--material-filter);
+  backdrop-filter: var(--material-filter);
+  box-shadow: var(--shadow-lg), inset 0 1px 0 var(--material-edge);
+  animation: modal-panel-in var(--dur) var(--ease-emphasis);
 }
 
 .modal-panel[data-size='lg'] {
-  width: 560px;
+  width: 620px;
+}
+
+/* --------------------------------------------------------------- a page -- */
+
+/* Not a dialog. It fills the window, it has no scrim margin and no corners,
+   and it is where Settings lives — the way Claude and ChatGPT do it. */
+.modal-overlay:has(> .modal-panel[data-size='page']) {
+  padding: 0;
+  background: transparent;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+.modal-panel[data-size='page'] {
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  border-radius: 0;
+  background-color: var(--bg-primary);
+  background-image: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  box-shadow: none;
+  animation: modal-page-in var(--dur) var(--ease-emphasis);
+}
+
+.modal-panel[data-size='page'] > .modal-header {
+  /* Clears the traffic lights, and drags the window like any other toolbar. */
+  height: var(--toolbar-h);
+  align-items: center;
+  padding: 0 var(--sp-4) 0 82px;
+  background-color: var(--material-bg);
+  background-image: var(--material-sheen);
+  -webkit-backdrop-filter: var(--material-filter);
+  backdrop-filter: var(--material-filter);
+  box-shadow: inset 0 -1px 0 var(--border-subtle);
+  -webkit-app-region: drag;
+}
+
+.modal-panel[data-size='page'] > .modal-header .modal-close,
+.modal-panel[data-size='page'] > .modal-header .modal-heading {
+  -webkit-app-region: no-drag;
+}
+
+.modal-panel[data-size='page'] > .modal-header .modal-title {
+  font-size: var(--t-title3);
+}
+
+.modal-panel[data-size='page'] > .modal-header .modal-description {
+  display: none;
+}
+
+.modal-panel[data-size='page'] > .modal-body {
+  padding: 0;
+  overflow: hidden;
+}
+
+.modal-panel[data-size='page'] > .modal-footer {
+  padding: var(--sp-2) var(--sp-4);
+  background: var(--bg-secondary);
 }
 
 /* The panel takes focus on open; it is a container, so no ring for it. */
@@ -65,9 +130,8 @@
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
-  padding: 16px 18px 12px;
-  border-bottom: 1px solid var(--border-subtle);
+  gap: var(--sp-3);
+  padding: var(--sp-5) var(--sp-5) var(--sp-3);
 }
 
 .modal-heading {
@@ -76,15 +140,16 @@
 
 .modal-title {
   margin: 0;
-  font-size: 15px;
-  font-weight: 650;
-  letter-spacing: -0.01em;
+  font-size: var(--t-title2);
+  font-weight: var(--w-semibold);
+  letter-spacing: var(--t-title2-ls);
   color: var(--text-primary);
 }
 
 .modal-description {
-  margin: 3px 0 0;
-  font-size: 12px;
+  margin: var(--sp-1) 0 0;
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
   color: var(--text-secondary);
 }
 
@@ -92,15 +157,16 @@
   display: grid;
   place-items: center;
   flex-shrink: 0;
-  width: 24px;
-  height: 24px;
-  border-radius: var(--radius-sm);
-  color: var(--text-muted);
-  transition: background 120ms ease, color 120ms ease;
+  width: var(--control-h);
+  height: var(--control-h);
+  border-radius: var(--radius-pill);
+  background: var(--fill-quaternary);
+  color: var(--text-secondary);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
 
 .modal-close:hover {
-  background: var(--bg-hover);
+  background: var(--fill-secondary);
   color: var(--text-primary);
 }
 
@@ -114,43 +180,50 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 4px 18px 18px;
+  padding: 0 var(--sp-5) var(--sp-5);
 }
 
 .modal-footer {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 8px;
-  padding: 12px 18px;
-  border-top: 1px solid var(--border-subtle);
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-5) var(--sp-4);
 }
 
+/* macOS push button: 28px tall, 8px radius, quiet fill, no border. */
 .modal-btn {
-  padding: 6px 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: var(--control-h);
+  padding: 0 var(--sp-4);
   border-radius: var(--radius-sm);
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border);
+  background: var(--fill-tertiary);
+  border: none;
   color: var(--text-primary);
-  font-size: 12.5px;
-  font-weight: 550;
-  transition: background 120ms ease, border-color 120ms ease;
+  font-size: var(--t-callout);
+  font-weight: var(--w-medium);
+  transition: background var(--dur-fast) var(--ease), opacity var(--dur-fast) var(--ease);
 }
 
 .modal-btn:hover {
-  background: var(--bg-hover);
-  border-color: var(--border-strong);
+  background: var(--fill-secondary);
+}
+
+.modal-btn[disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .modal-btn.primary {
   background: var(--accent);
-  border-color: var(--accent);
   color: var(--accent-fg);
+  box-shadow: var(--shadow-sm);
 }
 
 .modal-btn.primary:hover {
   background: var(--accent-dim);
-  border-color: var(--accent-dim);
 }
 
 /* ------------------------------------------------------------- animation -- */
@@ -164,7 +237,14 @@
 @keyframes modal-panel-in {
   from {
     opacity: 0;
-    transform: translateY(8px) scale(0.98);
+    transform: translateY(10px) scale(0.985);
+  }
+}
+
+@keyframes modal-page-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
   }
 }
 

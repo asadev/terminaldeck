@@ -1,10 +1,29 @@
 /* ============================================================================
    Terminal Deck — foundation tokens
 
-   Notion-style: near-neutral surfaces, warm-grey text, hairline dividers, and
-   colour used only where it carries meaning. There is no decorative accent —
-   the single blue appears on selection and focus and nowhere else. Status
-   colours are deliberately muted so a row of them never looks like a warning.
+   Apple's design language, in a warm palette.
+
+   Three ideas, and everything below is one of them:
+
+   1. **Apple HIG structure.** The system typeface, macOS's type scale (13pt
+      body, 17pt title, 22pt large title), an 8pt spacing rhythm with 4pt
+      half-steps, macOS control heights, continuous-feeling corner radii, and
+      the two easing curves Apple animates with. Nothing here is invented where
+      Apple has already decided.
+
+   2. **A warm, quiet palette.** Near-neutral paper in the light theme and warm
+      charcoal in the dark one, with a single clay accent. There is no second
+      colour in the chrome: selection, focus and the one primary button share
+      the accent, and everything else is ink on paper. Status colours stay
+      meaningful — green is done, amber is waiting, red is wrong — but they are
+      desaturated so a column of them reads as information rather than alarm.
+
+   3. **Material, not boxes.** Separation comes from a translucent surface
+      catching light, not from a hairline around every region. The `--material`
+      tokens are a real glass recipe — a blur, a saturation lift and a top-down
+      sheen — so a floating surface still looks like glass when there is nothing
+      behind it to blur. Borders exist, but the rule is: reach for space first,
+      then a tint, and only then a line.
    ============================================================================ */
 
 @font-face {
@@ -26,98 +45,247 @@
 
 :root,
 [data-theme='light'] {
+  color-scheme: light;
+
+  /* Paper, warmed a few degrees off pure grey. --bg-primary is the content
+     canvas; --bg-secondary is the app ground the sidebar sits on. */
   --bg-primary: #ffffff;
-  --bg-secondary: #f7f7f5;
-  --bg-tertiary: #f1f1ef;
-  --bg-hover: rgba(55, 53, 47, 0.06);
-  --bg-active: rgba(55, 53, 47, 0.09);
+  --bg-secondary: #f6f5f1;
+  --bg-tertiary: #efeee9;
+  --bg-sunken: #eae8e2;
 
-  --text-primary: #37352f;
-  --text-secondary: #787774;
-  --text-muted: #9b9a97;
+  /* Apple's system fills: a tint of the ink, never a named grey, so a control
+     sits on any surface without knowing which one it is. */
+  --bg-hover: rgba(58, 53, 45, 0.055);
+  --bg-active: rgba(58, 53, 45, 0.09);
+  --fill-quaternary: rgba(58, 53, 45, 0.045);
+  --fill-tertiary: rgba(58, 53, 45, 0.075);
+  --fill-secondary: rgba(58, 53, 45, 0.11);
 
-  /* One blue, used only for selection and focus. */
-  --accent: #2383e2;
-  --accent-dim: #1b6fc4;
-  --accent-soft: rgba(35, 131, 226, 0.09);
+  --text-primary: #23211d;
+  /* Both cleared against --bg-secondary, not just against white: a sidebar
+     label is the darkest surface these ever sit on. secondary ≈ 5.7:1,
+     muted ≈ 3.8:1. The previous muted grey landed at 2.6:1 there, which is
+     why the old sheet had a comment forbidding its use on headings. */
+  --text-secondary: #63605a;
+  --text-muted: #7d776e;
+  --text-onaccent: #ffffff;
+
+  /* One clay, and it does three jobs: selection, focus and the primary action.
+     Dark enough on paper to be read as text (5.2:1), which is why it is not
+     the brand's brighter orange here. */
+  --accent: #b4552f;
+  --accent-dim: #97431f;
+  --accent-soft: rgba(180, 85, 47, 0.1);
+  --accent-line: rgba(180, 85, 47, 0.28);
   --accent-fg: #ffffff;
 
-  --border: rgba(55, 53, 47, 0.09);
-  --border-subtle: rgba(55, 53, 47, 0.055);
-  --border-strong: rgba(55, 53, 47, 0.16);
+  --border: rgba(58, 53, 45, 0.1);
+  --border-subtle: rgba(58, 53, 45, 0.055);
+  --border-strong: rgba(58, 53, 45, 0.18);
 
-  /* Muted so a column of dots reads as information, not alarm. */
-  --status-working: #337ea9;
-  --status-waiting: #cb912f;
-  --status-input: #d9730d;
-  --status-completed: #448361;
-  --status-idle: #9b9a97;
+  /* Meaningful, not loud. Each one clears 4.5:1 on paper. */
+  --status-working: #1667c8;
+  --status-waiting: #a9690a;
+  --status-input: #c04a12;
+  --status-completed: #1c7a4f;
+  --status-idle: #7d776e;
 
-  --color-warning: #cb912f;
-  --color-critical: #d44c47;
+  --color-info: #1667c8;
+  --color-warning: #a9690a;
+  --color-critical: #bd3a2c;
+  --color-positive: #1c7a4f;
 
   --tab-active: #ffffff;
-  --tab-inactive: #f7f7f5;
+  --tab-inactive: #f6f5f1;
   --pane-focus: var(--accent);
   --pane-unfocus: var(--border);
 
-  --shadow-sm: 0 1px 2px rgba(15, 15, 15, 0.06), 0 2px 4px rgba(15, 15, 15, 0.04);
-  --shadow-md: 0 2px 4px rgba(15, 15, 15, 0.06), 0 8px 20px rgba(15, 15, 15, 0.09);
+  /* Ink on a filled status badge. White in both appearances, the way Apple's
+     red count badges are — `--text-onaccent` goes dark in the dark theme,
+     which is right on a clay button and unreadable on a red pill. */
+  --badge-fg: #ffffff;
+
+  /* Liquid glass. The sheen is the part that matters: opacity alone over an
+     empty area just reads as flat paint (see rule 6.2 in the build rules). */
+  --material-bg: rgba(249, 248, 244, 0.72);
+  --material-bg-strong: rgba(252, 251, 248, 0.86);
+  --material-sheen: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.72) 0%,
+    rgba(255, 255, 255, 0.26) 42%,
+    rgba(255, 255, 255, 0.06) 100%
+  );
+  --material-edge: rgba(255, 255, 255, 0.7);
+  --material-hairline: rgba(58, 53, 45, 0.09);
+  --material-filter: saturate(180%) blur(24px);
+
+  --shadow-sm: 0 1px 1px rgba(30, 27, 22, 0.04), 0 1px 3px rgba(30, 27, 22, 0.06);
+  --shadow-md: 0 2px 6px rgba(30, 27, 22, 0.06), 0 12px 28px rgba(30, 27, 22, 0.1);
+  --shadow-lg: 0 8px 20px rgba(30, 27, 22, 0.1), 0 30px 60px rgba(30, 27, 22, 0.16);
 }
 
 /* -------------------------------------------------------------- dark -- */
 
 [data-theme='dark'] {
-  --bg-primary: #191919;
-  --bg-secondary: #202020;
-  --bg-tertiary: #252525;
-  --bg-hover: rgba(255, 255, 255, 0.055);
-  --bg-active: rgba(255, 255, 255, 0.085);
+  color-scheme: dark;
 
-  --text-primary: #d4d4d4;
-  --text-secondary: #9b9b9b;
-  --text-muted: #6f6f6f;
+  --bg-primary: #1c1b19;
+  --bg-secondary: #232220;
+  --bg-tertiary: #2a2926;
+  --bg-sunken: #151413;
 
-  --accent: #529cca;
-  --accent-dim: #3f87b4;
-  --accent-soft: rgba(82, 156, 202, 0.14);
-  --accent-fg: #ffffff;
+  --bg-hover: rgba(255, 250, 240, 0.055);
+  --bg-active: rgba(255, 250, 240, 0.095);
+  --fill-quaternary: rgba(255, 250, 240, 0.04);
+  --fill-tertiary: rgba(255, 250, 240, 0.07);
+  --fill-secondary: rgba(255, 250, 240, 0.11);
 
-  --border: rgba(255, 255, 255, 0.094);
-  --border-subtle: rgba(255, 255, 255, 0.055);
-  --border-strong: rgba(255, 255, 255, 0.16);
+  --text-primary: #edeae3;
+  --text-secondary: #a8a399;
+  /* ≈4.5:1 on --bg-primary. Quiet, but still a label rather than a ghost. */
+  --text-muted: #857f74;
+  --text-onaccent: #23140c;
 
-  --status-working: #529cca;
-  --status-waiting: #c9a227;
-  --status-input: #d9730d;
-  --status-completed: #4dab9a;
-  --status-idle: #6f6f6f;
+  /* The brand clay, which is legible on charcoal where the light theme's
+     deeper shade would go muddy. Filled buttons take dark ink for the same
+     reason Apple's dark-mode tinted controls do. */
+  --accent: #d97757;
+  --accent-dim: #e28d71;
+  --accent-soft: rgba(217, 119, 87, 0.16);
+  --accent-line: rgba(217, 119, 87, 0.4);
+  --accent-fg: #23140c;
 
-  --color-warning: #c9a227;
-  --color-critical: #ff7369;
+  --border: rgba(255, 250, 240, 0.09);
+  --border-subtle: rgba(255, 250, 240, 0.05);
+  --border-strong: rgba(255, 250, 240, 0.17);
 
-  --tab-active: #191919;
-  --tab-inactive: #202020;
+  --status-working: #64a6e8;
+  --status-waiting: #ddb04a;
+  --status-input: #ef8b58;
+  --status-completed: #5fbf95;
+  --status-idle: #857f74;
 
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
+  --color-info: #64a6e8;
+  --color-warning: #ddb04a;
+  --color-critical: #ff6f60;
+  --color-positive: #5fbf95;
+
+  --tab-active: #1c1b19;
+  --tab-inactive: #232220;
+  --badge-fg: #ffffff;
+
+  --material-bg: rgba(36, 35, 32, 0.68);
+  --material-bg-strong: rgba(40, 39, 36, 0.88);
+  --material-sheen: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.085) 0%,
+    rgba(255, 255, 255, 0.028) 45%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  --material-edge: rgba(255, 255, 255, 0.11);
+  --material-hairline: rgba(0, 0, 0, 0.5);
+  --material-filter: saturate(170%) blur(26px);
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.36);
+  --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.58);
 }
 
 /* ------------------------------------------------------------ shared -- */
 
 :root {
-  --font-ui: 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-  --font-mono: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+  /* The system typeface *is* the Apple design language. Hanken Grotesk stays
+     behind it for platforms with no SF, and keeps its own token for the two
+     places a display face earns its keep. */
+  --font-ui: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, 'Hanken Grotesk',
+    'Segoe UI', sans-serif;
+  --font-display: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui,
+    'Hanken Grotesk', sans-serif;
+  --font-mono: 'SF Mono', 'JetBrains Mono', Menlo, monospace;
 
-  /* Notion's radii are small and consistent. */
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 10px;
+  /* macOS type scale. Sizes are the HIG's; the tracking is what makes SF sit
+     right at each of them — tighter as the size grows. */
+  --t-largetitle: 26px;
+  --t-largetitle-ls: -0.022em;
+  --t-title1: 22px;
+  --t-title1-ls: -0.019em;
+  --t-title2: 17px;
+  --t-title2-ls: -0.014em;
+  --t-title3: 15px;
+  --t-title3-ls: -0.01em;
+  --t-headline: 13px;
+  --t-body: 13px;
+  --t-callout: 12px;
+  --t-subhead: 11.5px;
+  --t-footnote: 11px;
+  --t-caption: 10.5px;
+  --t-caption-ls: 0.005em;
 
-  --sidebar-width: 300px;
-  --sidebar-min: 240px;
-  --sidebar-max: 560px;
-  --titlebar-height: 38px;
-  --tabbar-height: 36px;
+  --lh-tight: 1.25;
+  --lh-body: 1.5;
+  --lh-loose: 1.65;
+
+  --w-regular: 400;
+  --w-medium: 500;
+  --w-semibold: 590;
+  --w-bold: 700;
+
+  /* 8pt rhythm, 4pt half-steps, 2pt for optical nudges only. */
+  --sp-05: 2px;
+  --sp-1: 4px;
+  --sp-15: 6px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+  --sp-10: 40px;
+  --sp-12: 48px;
+  --sp-16: 64px;
+
+  /* Apple's radii are larger than they look, and they scale with the surface:
+     a 28px control is 7, a card is 10, a sheet is 14, a window is 18. */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-2xl: 20px;
+  --radius-pill: 999px;
+
+  /* macOS control metrics. */
+  --control-h-sm: 22px;
+  --control-h: 28px;
+  --control-h-lg: 34px;
+  --row-h: 30px;
+  --icon-btn: 26px;
+
+  /* Two curves. `--ease` is Apple's standard ease-out; `--ease-emphasis` is the
+     flat-then-settle curve their sheets and popovers move on. */
+  --ease: cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  --ease-emphasis: cubic-bezier(0.32, 0.72, 0, 1);
+  --dur-fast: 120ms;
+  --dur: 200ms;
+  --dur-slow: 320ms;
+
+  /* Layout. --titlebar-height is the traffic-light gutter at the top of the
+     sidebar; --toolbar-h is the unified toolbar over the content. */
+  --sidebar-width: 264px;
+  --sidebar-min: 220px;
+  --sidebar-max: 380px;
+  --titlebar-height: 44px;
+  --toolbar-h: 48px;
+  --tabbar-height: 38px;
   --rail-width: 44px;
+  --content-measure: 720px;
+}
+
+/* One place decides how long anything moves for. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-fast: 0.01ms;
+    --dur: 0.01ms;
+    --dur-slow: 0.01ms;
+  }
 }

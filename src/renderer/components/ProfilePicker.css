@@ -7,36 +7,43 @@
 
    Rows are a grid rather than a flex row so the remove control and the inline
    confirmation can occupy the same cell and swap without the name shifting
-   sideways underneath them.
+   sideways underneath them. They carry no outline: a hover fill and, for the
+   chosen one, the accent tint is the whole of their chrome.
    ============================================================================ */
+
+:root {
+  /* The profile's colour disc, and the tick at the foot of the dialog. */
+  --profiles-dot-size: 10px;
+  --profiles-check: 14px;
+}
 
 .profiles {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding-top: 6px;
+  gap: var(--sp-3);
+  padding-top: var(--sp-1);
 }
 
 .profiles-notice,
 .profiles-empty {
   margin: 0;
-  padding: 8px 10px;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
-  background: var(--bg-tertiary);
-  font-size: 11.5px;
-  line-height: 1.45;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-md);
+  background: var(--fill-quaternary);
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
   color: var(--text-secondary);
 }
 
+/* A tint, not a red frame: the sentence inside already carries the alarm. */
 .profiles-error {
   margin: 0;
-  padding: 8px 10px;
-  border: 1px solid var(--color-critical);
-  border-radius: var(--radius-sm);
-  font-size: 11.5px;
-  line-height: 1.45;
-  color: var(--color-critical);
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--color-critical) 12%, transparent);
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
+  color: var(--text-primary);
 }
 
 /* ------------------------------------------------------------------ list -- */
@@ -44,29 +51,27 @@
 .profiles-list {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--sp-05);
 }
 
 .profiles-row {
   display: grid;
   grid-template-columns: 1fr auto;
   align-items: center;
-  gap: 8px;
-  padding: 9px 12px;
-  border: 1px solid var(--border-subtle);
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border: none;
   border-radius: var(--radius-md);
-  background: var(--bg-tertiary);
-  transition: background 120ms ease, border-color 120ms ease;
+  background: transparent;
+  transition: background var(--dur-fast) var(--ease);
 }
 
 .profiles-row:hover {
   background: var(--bg-hover);
-  border-color: var(--border);
 }
 
 .profiles-row[data-selected='true'] {
-  border-color: var(--border-strong);
-  background: var(--bg-active);
+  background: var(--accent-soft);
 }
 
 /* The label covers the row so the whole thing is the hit target; the radio
@@ -75,7 +80,7 @@
   position: relative;
   display: flex;
   align-items: flex-start;
-  gap: 10px;
+  gap: var(--sp-3);
   min-width: 0;
   cursor: pointer;
 }
@@ -90,24 +95,21 @@
   cursor: inherit;
 }
 
-/* Colour comes from the profile record as a token name, applied inline. A ring
-   rather than a filled disc when unselected, so the colour reads as an
-   identifier and the selection state stays the row's job. */
+/* Colour comes from the profile record as a token name, applied inline. Dimmed
+   until chosen, so the colour reads as an identifier and the selection state
+   stays the row's job. */
 .profiles-dot {
   flex-shrink: 0;
-  width: 10px;
-  height: 10px;
-  margin-top: 4px;
-  border-radius: 50%;
+  width: var(--profiles-dot-size);
+  height: var(--profiles-dot-size);
+  margin-top: var(--sp-1);
+  border-radius: var(--radius-pill);
   opacity: 0.55;
-  transition: opacity 120ms ease, box-shadow 120ms ease;
+  transition: opacity var(--dur-fast) var(--ease);
 }
 
-/* The dot's own colour comes from the profile record, so the selected halo has
-   to be neutral or the two colours fight. */
 .profiles-row[data-selected='true'] .profiles-dot {
   opacity: 1;
-  box-shadow: 0 0 0 3px var(--bg-active);
 }
 
 .profiles-option input:focus-visible ~ .profiles-dot {
@@ -118,22 +120,22 @@
 .profiles-text {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--sp-05);
   min-width: 0;
 }
 
 .profiles-name {
   display: flex;
   align-items: center;
-  gap: 7px;
-  font-size: 13px;
-  font-weight: 550;
+  gap: var(--sp-2);
+  font-size: var(--t-body);
+  font-weight: var(--w-medium);
   color: var(--text-primary);
 }
 
 .profiles-hint {
-  font-size: 11.5px;
-  line-height: 1.45;
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
   color: var(--text-secondary);
 }
 
@@ -141,7 +143,7 @@
    is the last thing that may be dimmed below AA. */
 .profiles-path {
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--t-caption);
   color: var(--text-secondary);
   /* A long path loses its tail rather than widening the dialog; the full value
      is on the title attribute. */
@@ -151,31 +153,31 @@
 }
 
 .profiles-badge {
-  padding: 1px 6px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  font-size: 9.5px;
-  font-weight: 550;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
-  color: var(--text-secondary);
+  padding: 0 var(--sp-15);
+  border-radius: var(--radius-pill);
+  background: var(--fill-tertiary);
+  font-size: var(--t-caption);
+  font-weight: var(--w-medium);
+  color: var(--text-muted);
 }
 
 /* ---------------------------------------------------------------- remove -- */
 
 .profiles-remove {
-  padding: 3px 9px;
-  border: 1px solid transparent;
+  height: var(--control-h-sm);
+  padding: 0 var(--sp-2);
+  border: none;
   border-radius: var(--radius-sm);
   background: transparent;
   font-family: inherit;
-  font-size: 11px;
+  font-size: var(--t-footnote);
   color: var(--text-secondary);
   cursor: pointer;
   /* Revealed on hover or keyboard focus: destructive, and not what the dialog
-     is for. `:focus-within` keeps it reachable by tab. */
+     is for. `:focus-visible` keeps it reachable by tab. */
   opacity: 0;
-  transition: opacity 120ms ease, color 120ms ease, border-color 120ms ease;
+  transition: opacity var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
 }
 
 .profiles-remove:focus-visible,
@@ -192,7 +194,7 @@
 }
 
 .profiles-remove:hover {
-  border-color: var(--color-critical);
+  background: color-mix(in srgb, var(--color-critical) 12%, transparent);
   color: var(--color-critical);
 }
 
@@ -200,118 +202,101 @@
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: var(--sp-15);
   justify-content: flex-end;
 }
 
 .profiles-confirm-text {
-  font-size: 11px;
+  font-size: var(--t-footnote);
   color: var(--text-secondary);
 }
 
-.profiles-confirm-btn {
-  padding: 3px 9px;
-  border: 1px solid var(--border);
+/* The small push buttons in this dialog are fills at the small control height,
+   which is what the rest of the app's secondary buttons are. */
+.profiles-confirm-btn,
+.profiles-add,
+.profiles-new-btn {
+  height: var(--control-h-sm);
+  padding: 0 var(--sp-3);
+  border: none;
   border-radius: var(--radius-sm);
-  background: var(--bg-secondary);
+  background: var(--fill-tertiary);
   font-family: inherit;
-  font-size: 11px;
+  font-size: var(--t-footnote);
+  font-weight: var(--w-medium);
   color: var(--text-secondary);
   cursor: pointer;
-  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
 
-.profiles-confirm-btn:hover {
-  background: var(--bg-hover);
+.profiles-confirm-btn:hover,
+.profiles-add:hover,
+.profiles-new-btn:hover {
+  background: var(--fill-secondary);
   color: var(--text-primary);
 }
 
 .profiles-confirm-btn.danger:hover {
-  border-color: var(--color-critical);
+  background: color-mix(in srgb, var(--color-critical) 12%, transparent);
   color: var(--color-critical);
 }
 
 /* ------------------------------------------------------------------- new -- */
 
+/* A standing action rather than a row control, so it takes the normal control
+   height the dialog's other buttons do. */
 .profiles-add {
   align-self: flex-start;
-  padding: 5px 11px;
-  border: 1px dashed var(--border-strong);
-  border-radius: var(--radius-sm);
-  background: transparent;
-  font-family: inherit;
-  font-size: 11.5px;
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition: border-color 120ms ease, color 120ms ease;
-}
-
-.profiles-add:hover {
-  border-color: var(--border-strong);
-  background: var(--bg-hover);
-  color: var(--text-primary);
+  height: var(--control-h);
+  font-size: var(--t-callout);
 }
 
 .profiles-new {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 10px 12px;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
-  background: var(--bg-secondary);
+  gap: var(--sp-15);
+  padding: var(--sp-3);
+  border-radius: var(--radius-lg);
+  background: var(--fill-quaternary);
 }
 
 .profiles-new-label {
-  font-size: 11px;
-  font-weight: 550;
-  color: var(--text-secondary);
+  font-size: var(--t-footnote);
+  font-weight: var(--w-semibold);
+  color: var(--text-muted);
 }
 
 .profiles-new-row {
   display: flex;
-  gap: 6px;
+  gap: var(--sp-15);
 }
 
 .profiles-input {
   flex: 1;
   min-width: 0;
-  padding: 5px 9px;
-  border: 1px solid var(--border);
+  height: var(--control-h);
+  padding: 0 var(--sp-3);
+  border: none;
   border-radius: var(--radius-sm);
   background: var(--bg-primary);
   font-family: inherit;
-  font-size: 12.5px;
+  font-size: var(--t-callout);
   color: var(--text-primary);
 }
 
 .profiles-input:focus-visible {
-  outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-soft);
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
-.profiles-new-btn {
-  padding: 5px 11px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-tertiary);
-  font-family: inherit;
-  font-size: 11.5px;
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition: background 120ms ease, color 120ms ease;
-}
-
-.profiles-new-btn:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
+.profiles-new-row .profiles-new-btn {
+  height: var(--control-h);
 }
 
 .profiles-new-hint {
   margin: 0;
-  font-size: 11px;
-  line-height: 1.45;
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
   color: var(--text-secondary);
 }
 
@@ -320,10 +305,8 @@
 .profiles-remember {
   display: flex;
   align-items: flex-start;
-  gap: 10px;
-  margin-top: 4px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border-subtle);
+  gap: var(--sp-3);
+  margin-top: var(--sp-2);
   cursor: pointer;
 }
 
@@ -331,12 +314,12 @@
    add a second control language to one dialog. */
 .profiles-remember input {
   flex-shrink: 0;
-  width: 14px;
-  height: 14px;
-  margin-top: 2px;
+  width: var(--profiles-check);
+  height: var(--profiles-check);
+  margin: var(--sp-05) 0 0;
   accent-color: var(--accent);
 }
 
 .profiles-remember .profiles-name {
-  font-weight: 500;
+  font-weight: var(--w-regular);
 }

@@ -1,0 +1,18 @@
+# Gradle / Android build output
+.gradle/
+build/
+local.properties
+*.iml
+.idea/
+.cxx/
+captures/
+.DS_Store
+
+# The release signing key and its passphrase. A signing key in git is a signing key everyone has.
+keystore/
+keystore.properties
+
+# Bundles and identities the verification rig writes. Nothing here is source: `tools/dev-host.cjs`
+# rebuilds the bundles from src/ and relay/ on every run, and `dev-host-identity.json` holds a
+# stand-in Mac's private key.
+tools/.gen/

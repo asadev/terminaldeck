@@ -1,31 +1,64 @@
+/* ============================================================================
+   Composer — one field, the way Mail and Messages draw one.
+
+   Not a bordered bar with a bordered box and a bordered toolbar inside it: the
+   whole row *is* the field. It carries a single soft outline and a corner, the
+   plus and the microphone live inside it as ghosts, and the send button is the
+   only filled thing in the view.
+   ============================================================================ */
+
 .chat-composer {
   position: relative;
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
-  padding: 10px 14px 12px;
-  border-top: 1px solid var(--border);
-  background: var(--bg-secondary);
+  /* Same measure and same axis as the conversation above it, so the pane reads
+     as one document instead of a narrow column with a full-bleed bar under it. */
+  box-sizing: border-box;
+  width: 100%;
+  max-width: calc(var(--content-measure) + var(--sp-6) * 2);
+  align-self: center;
+  margin-inline: auto;
+  padding: var(--sp-2) var(--sp-6) var(--sp-3);
+  background: var(--bg-primary);
 }
 
+/* The field itself. */
 .cc-row {
   display: flex;
   align-items: flex-end;
-  gap: 6px;
+  gap: var(--sp-1);
+  padding: var(--sp-15);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--bg-primary);
+  transition: border-color var(--dur-fast) var(--ease);
+}
+
+.cc-row:hover {
+  border-color: var(--border-strong);
+}
+
+/* Focus rings the whole field rather than the textarea inside it — the border
+   is the field's edge, so that is where the ring belongs. */
+.cc-row:has(.cc-input:focus-visible) {
+  border-color: transparent;
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .cc-input {
   flex: 1;
   min-width: 0;
-  min-height: 34px;
-  padding: 8px 11px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-primary);
+  min-height: var(--control-h);
+  max-height: 40vh;
+  padding: var(--sp-1) var(--sp-2);
+  border: 0;
+  background: none;
   color: var(--text-primary);
   font-family: var(--font-ui);
-  font-size: 13px;
-  line-height: 1.5;
+  font-size: var(--t-body);
+  line-height: var(--lh-body);
   resize: none;
   overflow-y: auto;
 }
@@ -34,10 +67,10 @@
   color: var(--text-muted);
 }
 
+/* The ring is drawn by the row above; a second one inside it would read as two
+   controls. */
 .cc-input:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -1px;
-  border-color: transparent;
+  outline: none;
 }
 
 .cc-input:disabled {
@@ -45,19 +78,19 @@
   cursor: not-allowed;
 }
 
-/* The quiet controls either side of the box: plus and microphone. They are
+/* The quiet controls either side of the text: plus and microphone. They are
    ghosts until hovered, so the filled send button stays the only thing in this
    row that looks like an action. */
 .cc-tool {
   display: grid;
   place-items: center;
-  width: 34px;
-  height: 34px;
+  width: var(--control-h);
+  height: var(--control-h);
   flex-shrink: 0;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-pill);
   background: none;
   color: var(--text-secondary);
-  transition: background 120ms ease, color 120ms ease;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
 
 .cc-tool:hover:not(:disabled) {
@@ -88,21 +121,27 @@
 .cc-send {
   display: grid;
   place-items: center;
-  width: 34px;
-  height: 34px;
+  width: var(--control-h);
+  height: var(--control-h);
   flex-shrink: 0;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-pill);
   background: var(--accent);
   color: var(--accent-fg);
-  transition: background 120ms ease, opacity 120ms ease;
+  transition: background var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
 }
 
 .cc-send:hover:not(:disabled) {
   background: var(--accent-dim);
 }
 
+.cc-send:active:not(:disabled) {
+  transform: scale(0.94);
+}
+
+/* Nothing to send yet: it recedes into the field rather than sitting there as
+   a dimmed accent, which reads as broken. */
 .cc-send:disabled {
-  background: var(--bg-active);
+  background: var(--fill-tertiary);
   color: var(--text-muted);
   cursor: not-allowed;
 }

@@ -1,17 +1,21 @@
-/* Remote access.
+/* ============================================================================
+   Remote access.
 
    Only what the shared settings controls do not already cover: the QR figure,
-   the pairing layout, and the device and connection rows. Everything else on
-   this panel is a `settings-*` class, so it keeps matching the rest of the
-   window when that changes.
+   the pairing layout, and the device, connection and tunnel rows. Everything
+   else on this panel is a `settings-*` class, so it keeps matching the rest of
+   the window when that changes.
 
-   The one place this file deliberately ignores the theme is the QR code — see
-   below. */
+   Nothing here is boxed. A group of rows is one soft fill with space between
+   the rows; a status is a word in a meaningful colour rather than an outline
+   around one. The one place this file deliberately ignores the theme is the QR
+   code — see below.
+   ============================================================================ */
 
 /* ------------------------------------------------------------- addresses -- */
 
 .remote-url {
-  margin: 8px 0;
+  margin: var(--sp-2) 0;
   overflow-wrap: anywhere;
 }
 
@@ -19,10 +23,110 @@
    occasionally copied. A proportional font makes rn/m and l/1 arguments. */
 .remote-url code {
   font-family: var(--font-mono);
-  font-size: 12px;
-  line-height: 1.6;
+  font-size: var(--t-callout);
+  line-height: var(--lh-loose);
   color: var(--text-primary);
   user-select: text;
+}
+
+/* ---------------------------------------------------------------- paths -- */
+
+/* The two ways in. Drawn as two rows rather than one verdict because they fail
+   independently: a Mac signed out of Tailscale is not a Mac that has lost
+   remote access, and one combined light would say it had. */
+
+.remote-paths {
+  list-style: none;
+  margin: var(--sp-2) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.remote-path {
+  padding: var(--sp-3) var(--sp-4);
+  border: none;
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+}
+
+/* Nothing here is clickable, so nothing here reacts to a pointer. */
+.remote-path-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+
+.remote-path-name {
+  font-size: var(--t-body);
+  font-weight: var(--w-medium);
+  color: var(--text-primary);
+}
+
+.remote-path-blurb,
+.remote-path-note {
+  margin: var(--sp-1) 0 0;
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+  color: var(--text-secondary);
+}
+
+/* The state, and the one thing on this panel most likely to be believed without
+   being read. It is drawn from `connected` alone — never from "we asked it to
+   start" — so the three tones mean exactly three things. The colour is on the
+   word; the chip is a neutral fill, because an outline in a status colour reads
+   as a control you can press. */
+.remote-pill {
+  flex-shrink: 0;
+  padding: 1px var(--sp-2);
+  border: none;
+  border-radius: var(--radius-pill);
+  background: var(--fill-tertiary);
+  font-size: var(--t-footnote);
+  font-weight: var(--w-semibold);
+  color: var(--text-muted);
+}
+
+.remote-pill[data-state='ok'] {
+  color: var(--status-completed);
+}
+
+/* Amber rather than red: a relay that is retrying is a wait, not a fault. */
+.remote-pill[data-state='down'] {
+  color: var(--color-warning);
+}
+
+/* A path that is not up recedes, so the one that works is what the eye lands
+   on first. */
+.remote-path[data-state='down'],
+.remote-path[data-state='off'] {
+  background: var(--fill-quaternary);
+}
+
+/* A label and a value, aligned down a column so the host id and the fingerprint
+   read as one block instead of two sentences. */
+.remote-fact {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-3);
+  margin: var(--sp-15) 0 0;
+}
+
+.remote-fact-label {
+  flex-shrink: 0;
+  width: 88px;
+  font-size: var(--t-footnote);
+  color: var(--text-muted);
+}
+
+.remote-fact-value {
+  font-family: var(--font-mono);
+  font-size: var(--t-callout);
+  color: var(--text-primary);
+  user-select: text;
+  overflow-wrap: anywhere;
 }
 
 /* ------------------------------------------------------------------- QR -- */
@@ -31,13 +135,19 @@
   display: flex;
   flex-wrap: wrap;
   align-items: flex-start;
-  gap: 18px;
-  margin: 10px 0 4px;
+  gap: var(--sp-5);
+  margin: var(--sp-3) 0 var(--sp-1);
 }
 
 .remote-pairing-side {
   flex: 1;
   min-width: 220px;
+}
+
+/* The note explaining the chosen path is a caption for the buttons above it,
+   not for the countdown below — without this they read as one paragraph. */
+.remote-pairing-side .remote-path-note {
+  margin: 0 0 var(--sp-3);
 }
 
 /* Black on white in both themes, on purpose.
@@ -47,17 +157,24 @@
    entire job is to be photographed — so it does not participate in dark mode.
    `crispEdges` in the markup stops the browser antialiasing module edges into
    grey, which is what turns a code that reads at arm's length into one that
-   needs three tries. */
-/* 224px is not decoration: a pairing URL runs to about ninety bytes, which is a
-   45×45 symbol, and this keeps every module four screen pixels wide. Smaller
-   than that and a phone held at arm's length starts needing a second try. */
+   needs three tries.
+
+   260px is not decoration, and it grew when the relay arrived. A tailnet link is
+   about ninety bytes and draws a 41×41 symbol; a relay link carries a host id, a
+   32-byte key and the token as well, which measures 181 bytes and draws a 57×57
+   one — 65 modules across with the quiet zone. At 260px that is four screen
+   pixels per module, which is what the old size gave the smaller code.
+
+   A soft shadow rather than a hairline: on paper the white plate needs an edge,
+   and depth is how the rest of this app draws one. */
 .remote-qr {
-  width: 224px;
-  height: 224px;
+  width: 260px;
+  height: 260px;
   max-width: 100%;
   flex-shrink: 0;
+  border: none;
   border-radius: var(--radius-md);
-  border: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
 }
 
 .remote-qr-paper {
@@ -69,9 +186,9 @@
 }
 
 .remote-countdown {
-  margin: 0 0 6px;
+  margin: 0 0 var(--sp-15);
   font-family: var(--font-ui);
-  font-size: 12.5px;
+  font-size: var(--t-callout);
   font-variant-numeric: tabular-nums;
   color: var(--text-primary);
 }
@@ -81,42 +198,137 @@
   color: var(--text-muted);
 }
 
+/* --------------------------------------------------------- the choice --- */
+
+/* Which way the code points. A segmented control rather than a dropdown: there
+   are two options, both are one word long, and the current one has to be
+   readable without opening anything. Same recessed track and raised pill as
+   the terminal/chat toggle — this is a mode, not a selection, so no colour is
+   involved. */
+.remote-choice {
+  display: inline-flex;
+  gap: 1px;
+  margin: 0 0 var(--sp-2);
+  padding: var(--sp-05);
+  border: none;
+  border-radius: var(--radius-md);
+  background: var(--fill-tertiary);
+}
+
+.remote-choice-btn {
+  appearance: none;
+  height: 24px;
+  padding: 0 var(--sp-3);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font-family: var(--font-ui);
+  font-size: var(--t-callout);
+  font-weight: var(--w-medium);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.remote-choice-btn:hover {
+  color: var(--text-primary);
+}
+
+.remote-choice-btn[aria-pressed='true'],
+.remote-choice-btn[aria-pressed='true']:hover {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-sm);
+}
+
+[data-theme='dark'] .remote-choice-btn[aria-pressed='true'],
+[data-theme='dark'] .remote-choice-btn[aria-pressed='true']:hover {
+  background: var(--bg-tertiary);
+}
+
+.remote-choice-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* --------------------------------------------------- the fingerprint ---- */
+
+/* The one check a person can make with their eyes, so it is given the room to
+   be compared character by character rather than glanced at. */
+.remote-check {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin: var(--sp-3) 0;
+  padding: var(--sp-3) var(--sp-4);
+  border: none;
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+}
+
+.remote-check-label {
+  font-size: var(--t-footnote);
+  font-weight: var(--w-semibold);
+  letter-spacing: normal;
+  text-transform: none;
+  color: var(--text-muted);
+}
+
+.remote-check-note {
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+  color: var(--text-secondary);
+}
+
+/* Tabular and spaced: this is read out loud and compared against a phone held
+   in the other hand. */
+.remote-fingerprint {
+  font-family: var(--font-mono);
+  font-size: var(--t-callout);
+  letter-spacing: 0.06em;
+  color: var(--text-primary);
+  user-select: text;
+  overflow-wrap: anywhere;
+}
+
 /* ----------------------------------------------------- devices and links -- */
 
+/* One soft block per list, and the space inside a row is what separates it from
+   the next one. */
 .remote-list {
   list-style: none;
-  margin: 6px 0 0;
-  padding: 0;
+  margin: var(--sp-2) 0 0;
+  padding: var(--sp-1) 0;
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
 }
 
 .remote-row {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 9px 0;
-  border-bottom: 1px solid var(--border-subtle);
-}
-
-.remote-row:last-child {
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-4);
   border-bottom: none;
 }
 
 .remote-row-text {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--sp-05);
   flex: 1;
   min-width: 0;
 }
 
 .remote-row-name {
-  font-size: 13px;
-  font-weight: 500;
+  font-size: var(--t-body);
+  font-weight: var(--w-medium);
   color: var(--text-primary);
 }
 
 .remote-row-note {
-  font-size: 11.5px;
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
   color: var(--text-secondary);
 }
 
@@ -130,7 +342,7 @@
 .remote-state {
   flex-shrink: 0;
   width: 96px;
-  font-size: 11.5px;
+  font-size: var(--t-footnote);
   color: var(--text-muted);
 }
 
@@ -141,32 +353,43 @@
 /* ------------------------------------------------------------- attached -- */
 
 /* The one loud thing on the panel. Something typing into this machine right now
-   should not look like another row of settings, so it gets the label, the dot
-   and the tinted background — the only place in this file that uses colour to
-   mean anything. */
+   should not look like another row of settings, so it lifts off the block it
+   sits in and keeps the label and the pulsing dot — the only place in this file
+   that uses colour to mean anything.
+
+   A phone with pages open on this Mac's ports needs a second line, and the row
+   is a single flex line ending in Disconnect, so it wraps: the tunnel list
+   simply takes a line of its own. */
 .remote-row-live {
-  padding: 9px 10px;
-  margin-bottom: 6px;
-  border: 1px solid var(--border);
+  flex-wrap: wrap;
+  margin: 0 var(--sp-2);
+  padding: var(--sp-3);
+  border: none;
   border-radius: var(--radius-md);
+  background: var(--bg-primary);
+}
+
+/* In dark the page colour is the darker surface, so "lifted" has to be the
+   lighter one — the same move the segmented control makes. */
+[data-theme='dark'] .remote-row-live {
   background: var(--bg-tertiary);
 }
 
 .remote-live {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--sp-15);
   flex-shrink: 0;
   width: 96px;
-  font-size: 11.5px;
-  font-weight: 600;
+  font-size: var(--t-footnote);
+  font-weight: var(--w-semibold);
   color: var(--status-working);
 }
 
 .remote-live-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 999px;
+  width: var(--settings-dot, 7px);
+  height: var(--settings-dot, 7px);
+  border-radius: var(--radius-pill);
   background: var(--status-working);
   animation: remote-pulse 2s ease-in-out infinite;
 }
@@ -186,4 +409,82 @@
   .remote-live-dot {
     animation: none;
   }
+}
+
+/* -------------------------------------------------------------- tunnels -- */
+
+/* Pages a phone has open on this Mac's ports, nested inside its attached row.
+
+   `flex-basis: 100%` is what puts them on their own line inside that row rather
+   than as a fourth column squeezed against Disconnect. Space, not a rule, is
+   what holds them apart from the row above — a line inside a card that is
+   already inside a block is the third fence in a row. */
+.remote-tunnels {
+  flex-basis: 100%;
+  /* `flex-basis: 100%` is not enough on its own. A flex item also keeps
+     `min-width: auto`, which is its *content's* minimum — so this list sized
+     itself to the widest port row and overflowed the card rather than the text
+     inside it ellipsising, pushing Stop out past the right edge. */
+  min-width: 0;
+  list-style: none;
+  margin: var(--sp-2) 0 0;
+  padding: 0;
+  border-top: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.remote-tunnel {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+
+/* `min-width: 0` on both, or the flex default of `auto` lets a long line push
+   the Stop button off the right edge instead of ellipsizing. */
+.remote-tunnel-text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-05);
+  flex: 1;
+  min-width: 0;
+}
+
+.remote-tunnel-name {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+/* The port is the whole point of the row, so it is the one thing given a chip:
+   monospace, full-contrast, and lifted off the row behind it by a fill. */
+.remote-tunnel-port {
+  flex-shrink: 0;
+  padding: 1px var(--sp-15);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--fill-tertiary);
+  font-family: var(--font-mono);
+  font-size: var(--t-callout);
+  color: var(--text-primary);
+  user-select: text;
+}
+
+/* And on the ellipsised text itself, for the same reason: every flex ancestor
+   between it and the card has to be allowed to shrink, or the widest one wins
+   and the ellipsis never appears. */
+.remote-tunnel-what,
+.remote-tunnel .remote-row-note {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.remote-tunnel-what {
+  font-size: var(--t-callout);
+  color: var(--text-secondary);
 }

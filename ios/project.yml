@@ -1,0 +1,179 @@
+# XcodeGen spec. `ios/TerminalDeck.xcodeproj` is generated from this file and is
+# not committed — regenerate with `xcodegen generate` from `ios/`.
+#
+# The project file is generated rather than committed because a .pbxproj is the
+# one file in an Xcode repo that no two people can edit at once: it carries
+# random 24-hex identities for every file and settles conflicts by corrupting
+# itself. This spec is 60 readable lines instead.
+
+name: TerminalDeck
+
+options:
+  bundleIdPrefix: dev.terminaldeck
+  # iOS 17, not 18. SwiftTerm itself only needs 14; what pins this is
+  # `@Observable`, `NavigationStack` and `ContentUnavailableView`, all of which
+  # arrived in 17 and all of which this app uses. Going to 18 would buy nothing
+  # and would drop the iPhone XS/XR generation for no feature.
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+  generateEmptyDirectories: false
+
+packages:
+  SwiftTerm:
+    url: https://github.com/migueldeicaza/SwiftTerm
+    # The tag is `v1.18.0`; SPM normalises the prefix away.
+    exactVersion: 1.18.0
+
+settings:
+  base:
+    # Swift 5 language mode, deliberately. SwiftTerm is a UIKit library with no
+    # `Sendable` annotations and its own manifest declares `swiftLanguageVersions:
+    # [.v5]`; compiling this app in Swift 6 mode turns every touch of a
+    # `TerminalView` from a callback into a concurrency error in someone else's
+    # library. The compiler is still 6.x — only the language mode is 5.
+    SWIFT_VERSION: "5.0"
+    # Automatic signing, and no provisioning profile is named anywhere in this
+    # repository on purpose. A profile is machine-and-account state, not source:
+    # it expires, it is tied to one team's certificates, and the one that would
+    # be checked in today is for a different product. `xcodebuild` creates and
+    # renews the right one on demand when it is passed `-allowProvisioningUpdates`
+    # together with an App Store Connect key — which is exactly what
+    # `scripts/ios/release.sh` does. Nothing in the Simulator path needs any of it.
+    DEVELOPMENT_TEAM: 6U4VNX5W87
+    CODE_SIGN_STYLE: Automatic
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    SWIFT_TREAT_WARNINGS_AS_ERRORS: NO
+    ENABLE_MODULE_VERIFIER: NO
+
+targets:
+  TerminalDeck:
+    type: application
+    platform: iOS
+    sources:
+      - path: TerminalDeck
+    dependencies:
+      - package: SwiftTerm
+        product: SwiftTerm
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.terminaldeck.ios
+        PRODUCT_NAME: TerminalDeck
+        INFOPLIST_FILE: Support/Info.plist
+        # Both of these are defaults for a local build and are overridden on the
+        # xcodebuild command line by `scripts/ios/release.sh`, which takes the
+        # marketing version from package.json — the desktop app and the phone
+        # app ship the same version number — and the build number from the
+        # clock. Editing them here changes what a hand-run `xcodebuild archive`
+        # stamps and nothing that reaches App Store Connect.
+        #
+        # Kept in step with package.json by `scripts/ios/preflight.sh`, which
+        # fails if the two disagree.
+        MARKETING_VERSION: "0.1.2"
+        CURRENT_PROJECT_VERSION: "1"
+        # 1 = iPhone only, and the asymmetry in Apple's rules is the whole
+        # reason. A device family can be *added* to a shipped app whenever the
+        # layout is ready for it; it cannot be taken away — App Store Connect
+        # rejects a build that drops a family an earlier build supported. iPad
+        # here is adaptive because SwiftUI made it so, not because anyone has
+        # designed or tested a terminal for a 13-inch canvas, and shipping it
+        # would mean owning iPad screenshots, iPad review and iPad bug reports
+        # from the first upload with no way back. Ship the phone; add the iPad
+        # when someone has actually looked at it on one.
+        TARGETED_DEVICE_FAMILY: "1"
+        SUPPORTS_MACCATALYST: NO
+        # The name of the icon set in TerminalDeck/Assets.xcassets. Without it
+        # `actool` compiles the catalogue but does not mark an icon as *the*
+        # app icon, the built Info.plist gets no CFBundleIconName, and the
+        # upload is rejected for a missing icon after the archive has already
+        # succeeded. Regenerate the art with `node scripts/ios/icon.mjs`.
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        # No signing identity is needed to run in the Simulator, and requiring
+        # one would make `xcodebuild -destination 'platform=iOS Simulator'` fail
+        # on a machine that has never downloaded a provisioning profile.
+        CODE_SIGNING_ALLOWED: YES
+      configs:
+        Debug:
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
+        Release:
+          # Manual signing for device builds, and it has to live here on the app
+          # target rather than on the command line.
+          #
+          # Two things were tried first and both failed for reasons worth
+          # recording. Passing these as `xcodebuild` arguments applies them to
+          # *every* target in the build, and SPM's generated resource bundle
+          # refuses one outright: "SwiftTerm_SwiftTerm does not support
+          # provisioning profiles". And automatic signing with
+          # `-allowProvisioningUpdates` asks Apple for an iOS App *Development*
+          # profile, which needs a registered device — "Your team has no devices
+          # from which to generate a provisioning profile" — when what TestFlight
+          # actually wants is an App Store profile, which needs none.
+          #
+          # So the App Store profile is created directly through the App Store
+          # Connect API (see credentials/apple-appstore.md) and named here. The
+          # `[sdk=iphoneos*]` qualifier keeps it off Simulator builds, which sign
+          # with nothing and must keep working on a machine that has never
+          # downloaded a profile.
+          CODE_SIGN_STYLE: Manual
+          "CODE_SIGN_IDENTITY[sdk=iphoneos*]": Apple Distribution
+          "PROVISIONING_PROFILE_SPECIFIER[sdk=iphoneos*]": Terminal Deck iOS App Store
+
+  TerminalDeckTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests
+    dependencies:
+      - target: TerminalDeck
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.terminaldeck.ios.tests
+        GENERATE_INFOPLIST_FILE: YES
+
+  # Taps, and only taps. The unit tests cover the wire and the crypto without a
+  # simulator; what they cannot cover is whether the pairing field accepts a
+  # link, whether the accessory row's keys reach a shell, and whether the New
+  # Session button appears only when the far end offers it. Those need a finger,
+  # and this target is the finger. It runs against `ios/Harness/run.sh host`,
+  # which is passed in as TD_PAIRING_URI — there is no fixture behind it.
+  TerminalDeckUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: UITests
+    dependencies:
+      - target: TerminalDeck
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.terminaldeck.ios.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: TerminalDeck
+
+schemes:
+  TerminalDeck:
+    build:
+      targets:
+        TerminalDeck: all
+        TerminalDeckTests: [test]
+        TerminalDeckUITests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - TerminalDeckTests
+        # In the scheme so `-only-testing:TerminalDeckUITests` can select it —
+        # a target that is not in the test action cannot be run by name at all.
+        # It needs a relay and a desktop on the machine, so every case skips
+        # itself when TD_PAIRING_URI is unset rather than failing on a laptop
+        # with nothing listening:
+        #   ios/Harness/run.sh host --approve-after 6000 --log-input &
+        #   xcodebuild test -only-testing:TerminalDeckUITests …
+        #     TEST_RUNNER_TD_PAIRING_URI="$(cat ios/Harness/.build/pairing.txt)"
+        - TerminalDeckUITests
+    # Stated rather than left to default, because the release pipeline archives
+    # by scheme name and the configuration an archive is built in decides
+    # whether the thing uploaded to TestFlight is optimised or not.
+    archive:
+      config: Release

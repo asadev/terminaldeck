@@ -3,7 +3,9 @@ import { Marked, type Renderer, type Tokens } from 'marked'
 import DOMPurify from 'dompurify'
 import { ChatComposer } from './ChatComposer'
 import { AgentControls } from '../chat/controls/AgentControls'
-import { UsageStrip } from '../chat/usage'
+import { UsageStrip, useTranscriptChanges } from '../chat/usage'
+import { useEvery } from '../schedule'
+import { useSessionTranscript, type SessionScope } from '../session-transcript'
 import './ChatView.css'
 
 /**
@@ -57,8 +59,17 @@ export interface ChatBridge {
 }
 
 export interface ChatViewProps {
-  /** Project folder; its newest transcript is the live session. */
+  /** Project folder holding the transcripts. */
   cwd: string | null
+  /**
+   * The session this conversation is a view of.
+   *
+   * Without it the pane is a view of the *folder*, and it showed the folder's
+   * most recently written transcript — which, with a `claude` running in the
+   * same folder outside the app, was somebody else's conversation entirely.
+   * See `session-transcript.ts`.
+   */
+  session?: SessionScope | null
   /**
    * The live session behind this conversation. Needed by the control row, which
    * changes model, effort and permissions by typing into that session's
@@ -254,7 +265,15 @@ export function ChatBubble({ message, heading }: { message: ChatMessage; heading
 
 /* ------------------------------------------------------------ empty states -- */
 
-export function ChatEmpty({ state }: { state: 'loading' | 'no-transcript' | 'silent' | 'no-project' | 'unwired' }) {
+export type ChatEmptyState =
+  | 'loading'
+  | 'no-transcript'
+  | 'no-session-transcript'
+  | 'silent'
+  | 'no-project'
+  | 'unwired'
+
+export function ChatEmpty({ state }: { state: ChatEmptyState }) {
   const copy: Record<typeof state, { title: string; detail: string }> = {
     loading: { title: 'Reading the transcript…', detail: '' },
     'no-project': {
@@ -265,6 +284,14 @@ export function ChatEmpty({ state }: { state: 'loading' | 'no-transcript' | 'sil
       title: 'No transcript for this project yet',
       detail:
         'Claude Code writes one when a session runs. Send a first message in the terminal and it will appear here.',
+    },
+    // Deliberately not "no transcript for this project": there may well be
+    // several, and one of them may be being written to right now by a `claude`
+    // this app did not start. None of them are this session's.
+    'no-session-transcript': {
+      title: 'Nothing from this session yet',
+      detail:
+        'Claude Code writes a transcript once a session makes its first request. Send a first message in the terminal and it will appear here.',
     },
     silent: {
       title: 'Nothing said yet',
@@ -294,6 +321,28 @@ interface LiveSession {
 }
 
 /**
+ * The three session pushes, read off `window.deck` as loosely as the list is.
+ *
+ * All optional: a build that has not wired one of them loses freshness on that
+ * path, not the pane.
+ */
+interface SessionEvents {
+  listSessions?: () => Promise<unknown>
+  onSessionData?: (cb: (id: string, data: string) => void) => () => void
+  onSessionExit?: (cb: (id: string, exitCode: number) => void) => () => void
+  onSessionStatus?: (cb: (id: string, status: string) => void) => () => void
+}
+
+/**
+ * How long to wait after a session event before re-listing.
+ *
+ * Not a poll — a coalescing delay inside an event handler. A session starting
+ * fires a status and its first output within a few milliseconds of each other,
+ * and re-listing once for the pair is the whole point.
+ */
+const RESOLVE_COALESCE_MS = 250
+
+/**
  * The id of the pty this conversation is a view of.
  *
  * `sessionId` is the authority whenever a caller knows it. `App` does not pass
@@ -311,6 +360,15 @@ interface LiveSession {
  *
  * Not derived from the transcript's own `sessionId`, which is the agent's id
  * for the conversation and means nothing to the pty registry.
+ *
+ * ## Why this does not poll
+ *
+ * It used to re-list every four seconds, which is 21,600 identical answers a
+ * day for a set that changes when the user opens or closes a terminal. The main
+ * process already says when that happens: `session:exit` is a death, and a
+ * birth is the first `session:data` or `session:status` carrying an id this
+ * hook has not seen before. Ids already accounted for are ignored, so the
+ * constant output of the session in front of the user costs nothing here.
  */
 function useLiveSessionId(cwd: string | null, provided: string | undefined): string | undefined {
   const [found, setFound] = useState<string | undefined>(undefined)
@@ -322,29 +380,68 @@ function useLiveSessionId(cwd: string | null, provided: string | undefined): str
     }
     // `globalThis`, not `window`: this component is rendered to a string in its
     // own tests, where there is no window to read.
-    const deck = (globalThis as { deck?: { listSessions?: () => Promise<unknown> } }).deck
+    const deck = (globalThis as { deck?: SessionEvents }).deck
     if (typeof deck?.listSessions !== 'function') return
 
     let alive = true
+    let queued: ReturnType<typeof setTimeout> | null = null
+    /**
+     * Every id this hook has heard of, from a list or from an event.
+     *
+     * Added to and never rebuilt. Rebuilding it from each list looks tidier and
+     * is a bug: an id that produces output but does not appear in the list —
+     * a session that died between the event and the read, one belonging to
+     * another window — would be forgotten every time and re-trigger on its
+     * next chunk, which is a re-list per burst of output from something that
+     * will never be found.
+     */
+    const known = new Set<string>()
+
     const look = async (): Promise<void> => {
       try {
         const answer = await deck.listSessions?.()
         if (!alive || !Array.isArray(answer)) return
-        const live = (answer as LiveSession[]).filter(
-          (session) => session && session.cwd === cwd && session.exitCode === null,
+        const sessions = (answer as LiveSession[]).filter((session) => session != null)
+        for (const session of sessions) known.add(session.id)
+        const live = sessions.filter(
+          (session) => session.cwd === cwd && session.exitCode === null,
         )
         setFound(live.length === 1 ? live[0].id : undefined)
       } catch {
         // Leave it unresolved; the row says "not running" rather than guessing.
       }
     }
+
+    const soon = (): void => {
+      if (queued !== null) return
+      queued = setTimeout(() => {
+        queued = null
+        void look()
+      }, RESOLVE_COALESCE_MS)
+    }
+
+    /** A session this hook has never heard of is a session that just started. */
+    const sighting = (id: string): void => {
+      if (known.has(id)) return
+      known.add(id)
+      soon()
+    }
+
     void look()
-    // Sessions come and go while this view is mounted, and the row is only
-    // useful when it tracks that.
-    const timer = setInterval(() => void look(), 4000)
+
+    const offData = deck.onSessionData?.((id) => sighting(id))
+    const offStatus = deck.onSessionStatus?.((id) => sighting(id))
+    const offExit = deck.onSessionExit?.((id) => {
+      known.delete(id)
+      soon()
+    })
+
     return () => {
       alive = false
-      clearInterval(timer)
+      if (queued !== null) clearTimeout(queued)
+      offData?.()
+      offStatus?.()
+      offExit?.()
     }
   }, [cwd, provided])
 
@@ -353,9 +450,21 @@ function useLiveSessionId(cwd: string | null, provided: string | undefined): str
 
 /* ---------------------------------------------------------------- the view -- */
 
-export function ChatView({ cwd, sessionId, onSend, transcriptPath, refreshMs = 2000, bridge }: ChatViewProps) {
+export function ChatView({
+  cwd,
+  session,
+  sessionId,
+  onSend,
+  transcriptPath,
+  refreshMs = 2000,
+  bridge,
+}: ChatViewProps) {
   const resolved = bridge ?? resolveBridge()
   const liveSessionId = useLiveSessionId(cwd, sessionId)
+  // Scoped to the session when there is one. An explicit path always wins.
+  const scoped = session != null && !transcriptPath
+  const lookup = useSessionTranscript(scoped ? cwd : null, session ?? null)
+  const ownPath = lookup.status === 'ready' ? lookup.choice.path : null
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [found, setFound] = useState<boolean | null>(null)
   const [path, setPath] = useState('')
@@ -365,12 +474,28 @@ export function ChatView({ cwd, sessionId, onSend, transcriptPath, refreshMs = 2
   /** Held in a ref, not state: it changes on every scroll frame. */
   const stickRef = useRef(true)
   const pathRef = useRef('')
+  /** So a tail that lands after this pane closed does not write to a dead tree. */
+  const mountedRef = useRef(true)
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
 
+  /**
+   * What to ask the reader for.
+   *
+   * A scoped view never falls back to `cwd`: "the newest transcript in this
+   * folder" is precisely the answer that put another session's conversation in
+   * this pane, so with no transcript of its own it asks for nothing and says so.
+   */
+  const target = transcriptPath ?? (scoped ? ownPath : null)
   const request = useMemo<ChatRequest>(
-    () => (transcriptPath ? { transcriptPath } : cwd ? { cwd } : {}),
-    [cwd, transcriptPath],
+    () => (target ? { transcriptPath: target } : !scoped && cwd ? { cwd } : {}),
+    [cwd, scoped, target],
   )
-  const key = transcriptPath ?? cwd ?? ''
+  const key = target ?? (scoped ? '' : cwd ?? '')
 
   /**
    * Fold an answer in, defensively.
@@ -416,31 +541,50 @@ export function ChatView({ cwd, sessionId, onSend, transcriptPath, refreshMs = 2
     }
   }, [resolved, key, request, apply])
 
-  // Poll rather than subscribe: a chat view is open on one session at a time and
-  // a 2s tail of the appended bytes is cheaper than another push channel and its
-  // watcher. `tailChat` returns nothing at all when the file has not grown.
-  useEffect(() => {
-    if (!resolved || key === '' || refreshMs <= 0) return
-    let live = true
-    let busy = false
-    const timer = setInterval(() => {
-      if (busy) return
-      busy = true
-      void resolved
-        .tailChat(request)
-        .then((update) => {
-          if (live && update && (update.messages?.length > 0 || update.reset)) apply(update)
-        })
-        .catch(() => {})
-        .finally(() => {
-          busy = false
-        })
-    }, refreshMs)
-    return () => {
-      live = false
-      clearInterval(timer)
-    }
-  }, [resolved, key, request, refreshMs, apply])
+  /**
+   * Read whatever the agent has appended since the last read.
+   *
+   * Guarded against overlapping itself: a tail that outlives its own trigger
+   * must not have a second stacked on top of it, because both would read the
+   * same bytes and the dedup happens in the main process.
+   */
+  const tailing = useRef(false)
+  const tail = useCallback(() => {
+    if (!resolved || key === '' || tailing.current) return
+    tailing.current = true
+    void resolved
+      .tailChat(request)
+      .then((update) => {
+        if (mountedRef.current && update && (update.messages?.length > 0 || update.reset)) {
+          apply(update)
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        tailing.current = false
+      })
+  }, [resolved, key, request, apply])
+
+  /**
+   * Subscribe rather than poll: the transcript is a file, and the main process
+   * is already watching the directory it lives in.
+   *
+   * This pane used to ask `tailChat` every two seconds — 43,200 IPC round trips
+   * a day, almost all of them answering "nothing new", and still up to two
+   * seconds late when there was. `cost:watch` puts an `fs.watch` on the
+   * project's transcript directory and pushes on every append, so riding it
+   * costs nothing while the agent is quiet and arrives within its 300 ms
+   * debounce while it is talking.
+   */
+  const watched = useTranscriptChanges(key === '' ? null : cwd, tail)
+
+  /**
+   * The fallback, for a build with no cost channel or a pane opened on a
+   * transcript outside any project — there is no watcher to ride, and the only
+   * honest alternative to a stale pane is to look. On the shared tick, so it is
+   * not a wake-up of its own, and off entirely while the window is hidden.
+   */
+  useEvery(!watched && resolved && key !== '' && refreshMs > 0 ? refreshMs : null, tail)
 
   const jump = useCallback(() => {
     const host = scrollRef.current
@@ -468,8 +612,9 @@ export function ChatView({ cwd, sessionId, onSend, transcriptPath, refreshMs = 2
     if (stickRef.current) setBehind(false)
   }, [])
 
-  const state: 'loading' | 'no-transcript' | 'silent' | 'no-project' | 'unwired' | null =
+  const state: ChatEmptyState | null =
     !resolved ? 'unwired'
+    : scoped && !target ? (lookup.status === 'loading' ? 'loading' : 'no-session-transcript')
     : key === '' ? 'no-project'
     : found === null ? 'loading'
     : found === false ? 'no-transcript'
@@ -506,8 +651,13 @@ export function ChatView({ cwd, sessionId, onSend, transcriptPath, refreshMs = 2
           answering, how hard it thinks, and what it may do without asking. */}
       <AgentControls sessionId={liveSessionId} cwd={cwd} />
       {/* Last line: what this has cost and how close the context is to full.
-          It sits below the controls because it reports rather than asks. */}
-      <UsageStrip cwd={cwd} sessionId={sessionId} />
+          It sits below the controls because it reports rather than asks.
+
+          The transcript goes with it. Without one the strip falls back to the
+          project's most recently active session, which is how a tab that had
+          never been prompted came to report a "Session" spend of $48 and a
+          context 47% full — both belonging to somebody else's conversation. */}
+      <UsageStrip cwd={cwd} transcriptPath={target ?? undefined} sessionId={sessionId} />
     </div>
   )
 }

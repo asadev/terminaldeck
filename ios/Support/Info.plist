@@ -1,0 +1,163 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<!-- One of the four places the product name is spelled out; see Brand.swift. -->
+	<key>CFBundleDisplayName</key>
+	<string>Terminal Deck</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+
+	<!-- This bundle is an iOS app and requires iOS to run. Xcode writes this
+	     key into the Info.plist it generates for an iOS app target; a target
+	     that supplies its own file, as this one does, has to say it itself. -->
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+
+	<!-- The icon set in TerminalDeck/Assets.xcassets, named again here on
+	     purpose. `actool` does write this key, but it writes it *nested*, at
+	     CFBundleIcons > CFBundlePrimaryIcon > CFBundleIconName, and the App
+	     Store validator reads the top level — a bundle without it is rejected
+	     after upload as ITMS-90713, "a value for the Info.plist key
+	     CFBundleIconName is missing". The two copies say the same thing;
+	     preflight.sh checks the built app for both. -->
+	<key>CFBundleIconName</key>
+	<string>AppIcon</string>
+
+	<!-- Without this the app runs letterboxed in a compatibility mode and the
+	     terminal is measured against the wrong screen size. -->
+	<key>UILaunchScreen</key>
+	<dict/>
+
+	<!-- A terminal is white-on-black whatever the phone is set to; declaring it
+	     stops the system chrome from arriving in light mode around a dark app. -->
+	<key>UIUserInterfaceStyle</key>
+	<string>Dark</string>
+
+	<key>UIApplicationSupportsIndirectInputEvents</key>
+	<true/>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<!-- There is no `~ipad` variant because the binary is iPhone-only:
+	     TARGETED_DEVICE_FAMILY is 1. See project.yml for why, and add both back
+	     together on the day the layout has actually been looked at on an iPad. -->
+
+	<!-- The desktop opens a session on the phone by handing the OS a link, the
+	     same way it hands one to the browser for the PWA. `Deeplink.swift` is
+	     the only thing that reads these. -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>CFBundleURLName</key>
+			<string>dev.terminaldeck.ios.session</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>terminaldeck</string>
+			</array>
+		</dict>
+	</array>
+
+	<!-- Pairing reads a QR code off the Mac's screen. Absent until now because
+	     there was no camera code to describe; `Screens/QRScanner.swift` is the
+	     only thing that opens the camera and it does nothing else with it. -->
+	<key>NSCameraUsageDescription</key>
+	<string>Terminal Deck uses the camera once, to read the pairing code shown on your Mac.</string>
+
+	<!-- Required before this app may reach an address on the local subnet, which
+	     it now can: a pairing code may name a relay on a LAN, and the desktop's
+	     own listener is often on one. A tailnet address is not the local network
+	     for this purpose; a 192.168.x.x one is. `NSBonjourServices` is still
+	     absent because nothing here discovers anything — the address always
+	     comes from a pairing code a person scanned. -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Terminal Deck connects to the Mac you paired with, which may be on this network.</string>
+
+	<!-- App Transport Security, for one address and one address only.
+
+	     The localhost feature serves the Mac's dev server from a listener inside
+	     this app on the phone's own loopback, and points a WKWebView at
+	     `http://127.0.0.1:<port>/`. That is plain HTTP, so ATS blocks it without
+	     a declaration — and it is plain HTTP on purpose: the alternative is a
+	     custom URL scheme, which loses same-origin fetch, cookies, service
+	     workers and WebSockets, and a dev server without WebSockets has no hot
+	     reload, which is the entire reason to look at one from a phone.
+
+	     Scoped rather than switched off. `NSAllowsArbitraryLoads` would exempt
+	     every host in the world and has to be justified at review;
+	     `NSAllowsLocalNetworking` plus an exception for the loopback literal
+	     exempts an address that cannot leave the device. Nothing here weakens
+	     the connection to the Mac: that is a WebSocket to a relay or a tailnet
+	     name, it is sealed end to end by Crypto/SealedChannel.swift, and it does
+	     not travel through any of these keys.
+
+	     `127.0.0.1` is listed as a literal because that is what the web view is
+	     asked to load. `localhost` is not listed and must not be: a name goes
+	     through a resolver, and an exception on a name is an exception on
+	     whatever that resolver decides it means. -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+		<key>NSExceptionDomains</key>
+		<dict>
+			<key>127.0.0.1</key>
+			<dict>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+				<key>NSIncludesSubdomains</key>
+				<false/>
+			</dict>
+		</dict>
+	</dict>
+
+	<!-- Export compliance. There is deliberately NO `ITSAppUsesNonExemptEncryption`
+	     key here, and the absence is load-bearing. Do not add one back; the
+	     long version is in README.md under "Export compliance".
+
+	     The key does not mean "does this app encrypt". It means "does this app
+	     use encryption that is **not exempt**", and those are different
+	     questions. `Crypto/SealedChannel.swift` is a Noise IK channel — X25519,
+	     ChaCha20-Poly1305, HKDF-SHA256, all via CryptoKit — which is real
+	     cryptography and also entirely standard primitives, so it is exempt.
+
+	     An earlier version of this file set `true`, reasoning that the sealed
+	     channel goes beyond what the OS performs. Sound about the app, wrong
+	     about the key. `true` makes altool demand an
+	     `ITSEncryptionExportComplianceCode`, and the upload dies with **90592**
+	     — "the export compliance key value [] ... doesn't match" — the `[]`
+	     being a code that was never issued and cannot be.
+
+	     App Store Connect's own three-step questionnaire was answered honestly
+	     for this app (standard algorithms beyond Apple's — yes; proprietary —
+	     no; France — no) and Apple's verbatim reply was "you don't need to
+	     upload any documents". No documents, no code, so `true` can never
+	     succeed and `false` would contradict the questionnaire. Leaving the key
+	     out lets the per-build answer stand; `scripts/ios/testflight.mjs` sets
+	     it over the API after each upload.
+
+	     Two things that still do *not* count, so the line stays sharp: holding
+	     a credential in the Keychain (the Keychain is the operating system), and
+	     the desktop's scrypt hashing of device credentials (authentication, and
+	     a different binary in any case). -->
+</dict>
+</plist>

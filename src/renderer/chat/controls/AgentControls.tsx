@@ -44,8 +44,28 @@ interface ApplyResult {
   reading: ControlsReading['model']
 }
 
-/** How often to re-read while the row is on screen. */
-const REFRESH_MS = 4000
+/**
+ * How long the session has to stop printing before the row re-reads.
+ *
+ * Not a poll — a quiet-period after an event. Every value on this row is
+ * scraped off the session's own screen, so it cannot change without the pty
+ * producing output, and `session:data` says exactly when that happens. What it
+ * does *not* say is when the CLI has finished repainting: reading in the middle
+ * of a streaming reply gets a half-drawn footer. So the read waits out a pause,
+ * which during a long answer means one read when it ends rather than one every
+ * four seconds all the way through it.
+ */
+const SETTLE_MS = 400
+
+/**
+ * The pty output channel, read off `window.deck` as loosely as the rest.
+ *
+ * Optional: a build without it falls back to the read this row does on mount,
+ * which is still the truth, just not a live one.
+ */
+interface SessionDataEvents {
+  onSessionData?: (cb: (id: string, data: string) => void) => () => void
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -138,13 +158,39 @@ export function AgentControls({ sessionId, cwd }: Props) {
   useEffect(() => {
     if (!wired) return
     void refresh()
-    // The permission footer changes when the user presses shift+tab in the
-    // terminal view, and the model changes when they type /model there. Chat
-    // mode is a different view of the same session, so the row has to keep
-    // looking rather than trusting what it last set.
-    const timer = setInterval(() => void refresh(), REFRESH_MS)
-    return () => clearInterval(timer)
   }, [wired, refresh])
+
+  /**
+   * Re-read when the session prints something, not on a clock.
+   *
+   * The permission footer changes when the user presses shift+tab in the
+   * terminal view, and the model changes when they type `/model` there. Chat
+   * mode is a different view of the same session, so the row cannot trust what
+   * it last set — but neither of those can happen without the pty echoing it,
+   * and `session:data` carries that. The old 4-second re-read asked 21,600
+   * times a day for a value that changes a handful of times; this asks once per
+   * pause in the output, and none at all while the session is idle.
+   */
+  useEffect(() => {
+    if (!wired || !sessionId) return
+    const deck = (globalThis as unknown as { deck?: SessionDataEvents }).deck
+    if (typeof deck?.onSessionData !== 'function') return
+
+    let settle: ReturnType<typeof setTimeout> | null = null
+    const off = deck.onSessionData((id) => {
+      if (id !== sessionId) return
+      if (settle !== null) clearTimeout(settle)
+      settle = setTimeout(() => {
+        settle = null
+        void refresh()
+      }, SETTLE_MS)
+    })
+
+    return () => {
+      if (settle !== null) clearTimeout(settle)
+      off()
+    }
+  }, [wired, sessionId, refresh])
 
   const pick = useCallback(
     async (control: ControlId, value: string): Promise<void> => {

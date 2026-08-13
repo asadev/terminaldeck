@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { panelSpec } from '../shell/panels'
+import { PageEmpty } from './PageEmpty'
 import './GitPanel.css'
 
 /* ------------------------------------------------------------------ types -- */
@@ -130,6 +132,14 @@ const UNAVAILABLE_COPY: Record<GitUnavailableReason, string> = {
   error: 'git could not read this folder.',
 }
 
+/** The same four states as a heading: what is wrong, before why. */
+const UNAVAILABLE_TITLE: Record<GitUnavailableReason, string> = {
+  'not-a-repo': 'Nothing to track here',
+  'git-missing': 'git is not installed',
+  'no-such-folder': 'That folder is gone',
+  error: 'Source control is unavailable',
+}
+
 interface Group {
   key: GitFileGroup
   label: string
@@ -235,9 +245,9 @@ export function GitPanel({ cwd, onSelectFile, selectedPath, bridge }: GitPanelPr
   if (!status || !status.repo) {
     return (
       <section className="git-panel" aria-label="Git status">
-        <p className="git-message">
+        <PageEmpty icon={panelSpec('git').icon} title={UNAVAILABLE_TITLE[status?.reason ?? 'error']}>
           {status ? UNAVAILABLE_COPY[status.reason] : UNAVAILABLE_COPY.error}
-        </p>
+        </PageEmpty>
       </section>
     )
   }

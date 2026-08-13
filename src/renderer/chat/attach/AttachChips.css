@@ -1,26 +1,27 @@
-/* Attachments riding along with the next message. */
+/* Attachments riding along with the next message: pills above the field, in the
+   system fill rather than an outlined box each. */
 
 .at-chips {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 5px;
-  padding: 0 0 7px;
+  gap: var(--sp-15);
+  padding: 0 var(--sp-2) var(--sp-2);
 }
 
 .at-chip {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  max-width: 220px;
-  padding: 2px 3px 2px 7px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-tertiary);
+  gap: var(--sp-15);
+  max-width: 240px;
+  height: var(--control-h-sm);
+  padding: 0 var(--sp-1) 0 var(--sp-2);
+  border-radius: var(--radius-pill);
+  background: var(--fill-tertiary);
   color: var(--text-primary);
   font-family: var(--font-ui);
-  font-size: 12px;
-  line-height: 1.6;
+  font-size: var(--t-callout);
+  line-height: var(--lh-tight);
 }
 
 /* The kind is carried by a glyph, not by colour: a row of coloured chips reads
@@ -29,7 +30,7 @@
   flex-shrink: 0;
   color: var(--text-muted);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--t-caption);
 }
 
 .at-chip-name {
@@ -41,16 +42,17 @@
 .at-chip-x {
   display: grid;
   place-items: center;
-  width: 16px;
-  height: 16px;
+  width: var(--sp-4);
+  height: var(--sp-4);
   flex-shrink: 0;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-pill);
   background: none;
   color: var(--text-muted);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
 
 .at-chip-x:hover {
-  background: var(--bg-active);
+  background: var(--fill-secondary);
   color: var(--text-primary);
 }
 
@@ -62,5 +64,5 @@
 .at-chips-notice {
   color: var(--color-warning);
   font-family: var(--font-ui);
-  font-size: 11.5px;
+  font-size: var(--t-footnote);
 }

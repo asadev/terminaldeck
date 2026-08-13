@@ -35,7 +35,30 @@ describe('decoding what the desktop sends', () => {
       deviceName: 'iPhone',
       token: 'dev-1.c2VjcmV0',
       sessions: [session],
+      // Absent from the frame above, and read as "protocol v1 only" rather than
+      // as unknown — which is what every desktop older than the capability
+      // field is in fact telling us.
+      capabilities: [],
     })
+  })
+
+  it('reads the capabilities a newer desktop advertises, and ignores nonsense in the list', () => {
+    const result = decodeServerMessage(welcome({ capabilities: ['localhost', '', 42, null, 'x'.repeat(64)] }))
+    expect(result.ok).toBe(true)
+    if (result.ok && result.message.t === 'welcome') {
+      expect(result.message.capabilities).toEqual(['localhost'])
+    }
+  })
+
+  it('does not fail a welcome whose capabilities are the wrong shape entirely', () => {
+    // A field this client has only just learned about must not be able to cost
+    // it the connection: an older or stranger desktop that sends a string here
+    // is still a desktop whose sessions are worth listing.
+    for (const capabilities of ['localhost', 7, null, {}]) {
+      const result = decodeServerMessage(welcome({ capabilities }))
+      expect(result.ok, JSON.stringify(capabilities)).toBe(true)
+      if (result.ok && result.message.t === 'welcome') expect(result.message.capabilities).toEqual([])
+    }
   })
 
   it('accepts a welcome whose token is null — that means "you already have one"', () => {

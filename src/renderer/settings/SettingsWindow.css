@@ -1,50 +1,83 @@
 /* ============================================================================
-   Settings — a narrow section list, one panel, hairline dividers.
+   Settings — a full-window page, the way macOS System Settings is one.
 
-   Every colour is a token from tokens.css. The only literal values here are
-   geometry: widths, gaps and the two durations. Colour carries meaning in this
-   window and nowhere else — a status dot, a selected row, a destructive button.
+   Two panes and no dialog. A quiet rail of sections on the app ground, and a
+   reading column on the paper beside it. Everything that used to be separated
+   by a hairline is separated by space or by a soft fill instead: a run of rows
+   is one rounded block of `--bg-secondary` with nothing drawn between the rows,
+   a section is a heading and a gap, and the only line left in the window is the
+   one the Modal shell draws under its own header.
+
+   Colour carries meaning here and nowhere else — a status dot, the selected
+   rail row, the one destructive button.
    ============================================================================ */
 
-/* The Modal owns its two widths (440 / 560) and this window needs a third.
-   Modal.tsx is off-limits while several agents are working in parallel, so the
-   panel is widened from here by matching on what it contains. The tidy version
-   is a `size="xl"` in Modal.tsx — see the handoff. */
-.modal-panel:has(.settings) {
-  width: 880px;
-  height: min(660px, 100%);
+:root,
+[data-theme='light'] {
+  /* A switch knob is white on macOS in both appearances, which is why it is a
+     token of its own rather than a text or surface colour. */
+  --switch-knob: #ffffff;
+  --switch-knob-shadow: 0 0 0 0.5px rgba(30, 27, 22, 0.06), 0 1px 2px rgba(30, 27, 22, 0.24);
 }
 
+[data-theme='dark'] {
+  --switch-knob: #ffffff;
+  --switch-knob-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+
+:root {
+  /* Geometry this window owns. macOS's switch is 38×22 with an 18pt knob; the
+     rail is a sidebar, so it takes the sidebar's minimum width. */
+  --settings-rail: 220px;
+  --switch-w: 38px;
+  --switch-h: 22px;
+  --switch-knob-size: 18px;
+  --settings-dot: 7px;
+  --settings-code-max: 280px;
+  --settings-fact-label: 108px;
+}
+
+/* ---------------------------------------------------------------- layout -- */
+
+/* The Modal's `page` size hands over a body with no padding and no scroll, so
+   the two panes own their own scrolling and the page never scrolls as a whole. */
 .settings {
   display: grid;
-  grid-template-columns: 168px minmax(0, 1fr);
-  gap: 0;
-  align-items: start;
-  min-height: 100%;
+  grid-template-columns: var(--settings-rail) minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
 }
 
-/* ------------------------------------------------------------------- nav -- */
+/* ------------------------------------------------------------------ rail -- */
 
 .settings-nav {
   display: flex;
   flex-direction: column;
-  gap: 1px;
-  /* The body scrolls, not the list — a section list that scrolled away would
-     leave the user with no way back without scrolling up first. */
-  position: sticky;
-  top: 0;
-  padding: 2px 10px 12px 0;
-  border-right: 1px solid var(--border-subtle);
+  gap: var(--sp-05);
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--sp-4) var(--sp-2) var(--sp-6);
+  background: var(--bg-secondary);
 }
 
 .settings-nav-item {
-  padding: 5px 9px;
-  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  height: var(--row-h);
+  padding: 0 var(--sp-3);
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
   text-align: left;
-  font-size: 13px;
-  font-weight: 450;
+  font-family: var(--font-ui);
+  font-size: var(--t-body);
+  font-weight: var(--w-regular);
   color: var(--text-secondary);
-  transition: background 100ms ease, color 100ms ease;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
 
 .settings-nav-item:hover {
@@ -55,14 +88,33 @@
 .settings-nav-item[aria-selected='true'] {
   background: var(--bg-active);
   color: var(--text-primary);
-  font-weight: 550;
+  font-weight: var(--w-medium);
+}
+
+.settings-nav-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
 /* ----------------------------------------------------------------- panel -- */
 
 .settings-panel {
   min-width: 0;
-  padding: 0 2px 8px 20px;
+  min-height: 0;
+  overflow-y: auto;
+  /* One measure, centred in whatever room is left. Held to the left it put a
+     720px column against the window's left edge with 500px of blank paper
+     beside it — System Settings centres its column, and so does this. The
+     gutter never drops below --sp-10, so a narrow window is unchanged. */
+  padding-block: var(--sp-8) var(--sp-12);
+  padding-inline: max(var(--sp-10), calc((100% - var(--content-measure)) / 2));
+  background: var(--bg-primary);
+}
+
+/* A settings row whose control is 900px from its label is a row nobody reads
+   across, so the measure is enforced on the blocks as well as the gutter. */
+.settings-panel > * {
+  max-width: var(--content-measure);
 }
 
 .settings-panel:focus {
@@ -75,86 +127,133 @@
   opacity: 0.72;
 }
 
+/* --------------------------------------------------------------- heading -- */
+
 .settings-head {
-  margin-bottom: 14px;
+  margin: 0 0 var(--sp-6);
 }
 
 .settings-head-title {
   margin: 0;
-  font-size: 14px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
+  font-family: var(--font-display);
+  font-size: var(--t-title2);
+  font-weight: var(--w-semibold);
+  letter-spacing: var(--t-title2-ls);
   color: var(--text-primary);
 }
 
 .settings-head-blurb {
-  margin: 3px 0 0;
-  font-size: 12px;
+  margin: var(--sp-1) 0 0;
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
   color: var(--text-secondary);
 }
 
+/* A group is a gap and a small quiet label. Sentence case, because a tracked-out
+   uppercase caption is a Notion idiom and this window is not one. */
 .settings-group {
-  margin-top: 20px;
-  padding-top: 14px;
-  border-top: 1px solid var(--border-subtle);
+  margin-top: var(--sp-8);
 }
 
 .settings-group-title {
-  margin: 0 0 8px;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  margin: 0 0 var(--sp-2);
+  font-size: var(--t-footnote);
+  font-weight: var(--w-semibold);
+  letter-spacing: normal;
+  text-transform: none;
   color: var(--text-muted);
 }
 
 .settings-prose {
-  margin: 8px 0;
-  font-size: 12.5px;
-  line-height: 1.55;
+  margin: var(--sp-3) 0;
+  font-size: var(--t-callout);
+  line-height: var(--lh-loose);
   color: var(--text-secondary);
-  max-width: 62ch;
 }
 
 /* ------------------------------------------------------------------ rows -- */
 
-.settings-item {
-  border-bottom: 1px solid var(--border-subtle);
+/* A run of rows is one block, not a stack of ruled lines. The corners are only
+   drawn where the run starts and stops, so consecutive rows read as a single
+   inset group and the space inside each row is the only separation between
+   them.
+
+   A bare `<Row>` — one placed by hand rather than generated from the schema —
+   has no `.settings-item` around it, so it is named here too. Only the ones
+   that are not already inside an item, or the fill would be painted twice. */
+:is(
+    .settings-item,
+    .settings-fact,
+    .settings-group > .settings-row,
+    .settings-panel > .settings-row
+  ) {
+  background: var(--bg-secondary);
+  border-radius: var(--radius-lg);
 }
 
-.settings-item:last-child {
-  border-bottom: none;
+:is(
+    .settings-item,
+    .settings-fact,
+    .settings-group > .settings-row,
+    .settings-panel > .settings-row
+  )
+  + :is(
+    .settings-item,
+    .settings-fact,
+    .settings-group > .settings-row,
+    .settings-panel > .settings-row
+  ) {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+:is(
+    .settings-item,
+    .settings-fact,
+    .settings-group > .settings-row,
+    .settings-panel > .settings-row
+  ):has(
+    + :is(
+        .settings-item,
+        .settings-fact,
+        .settings-group > .settings-row,
+        .settings-panel > .settings-row
+      )
+  ) {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
 }
 
 .settings-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 20px;
-  padding: 10px 0;
+  gap: var(--sp-6);
+  min-height: var(--control-h-lg);
+  padding: var(--sp-3) var(--sp-4);
 }
 
 .settings-row-text {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--sp-05);
   min-width: 0;
 }
 
 .settings-label {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 13px;
-  font-weight: 500;
+  gap: var(--sp-15);
+  font-size: var(--t-body);
+  font-weight: var(--w-medium);
   color: var(--text-primary);
 }
 
 .settings-help {
-  font-size: 11.5px;
-  line-height: 1.45;
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
   color: var(--text-secondary);
-  max-width: 58ch;
+  max-width: 56ch;
 }
 
 .settings-row-control {
@@ -165,12 +264,15 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
-  padding: 0 0 10px;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-4) var(--sp-3);
 }
 
 /* -------------------------------------------------------------- controls -- */
 
+/* macOS's switch: a capsule with a white knob that carries a soft shadow, the
+   accent when on and a system fill when off. No border — the fill is the
+   affordance. */
 .settings-switch {
   display: inline-flex;
   cursor: pointer;
@@ -186,36 +288,36 @@
 
 .settings-switch-track {
   display: block;
-  width: 30px;
-  height: 18px;
-  padding: 2px;
-  border-radius: 999px;
-  background: var(--bg-active);
-  border: 1px solid var(--border);
-  transition: background 120ms ease, border-color 120ms ease;
+  box-sizing: border-box;
+  width: var(--switch-w);
+  height: var(--switch-h);
+  padding: var(--sp-05);
+  border: none;
+  border-radius: var(--radius-pill);
+  background: var(--fill-secondary);
+  transition: background var(--dur) var(--ease);
 }
 
 .settings-switch-thumb {
   display: block;
-  width: 12px;
-  height: 12px;
-  border-radius: 999px;
-  background: var(--text-secondary);
-  transition: transform 120ms ease, background 120ms ease;
+  width: var(--switch-knob-size);
+  height: var(--switch-knob-size);
+  border-radius: var(--radius-pill);
+  background: var(--switch-knob);
+  box-shadow: var(--switch-knob-shadow);
+  transition: transform var(--dur) var(--ease-emphasis);
 }
 
 .settings-switch input:checked + .settings-switch-track {
   background: var(--accent);
-  border-color: var(--accent);
 }
 
 .settings-switch input:checked + .settings-switch-track .settings-switch-thumb {
-  background: var(--accent-fg);
-  transform: translateX(12px);
+  transform: translateX(calc(var(--switch-w) - var(--switch-knob-size) - var(--sp-1)));
 }
 
 .settings-switch input:disabled + .settings-switch-track {
-  opacity: 0.5;
+  opacity: 0.45;
 }
 
 .settings-switch input:focus-visible + .settings-switch-track {
@@ -223,95 +325,132 @@
   outline-offset: 2px;
 }
 
+/* A pop-up button. The chevron is drawn rather than fetched — the CSP forbids
+   remote assets, and this is two borders and a rotation. */
 .settings-select-wrap {
+  position: relative;
   display: inline-flex;
+}
+
+.settings-select-wrap::after {
+  content: '';
+  position: absolute;
+  right: var(--sp-3);
+  top: 50%;
+  width: 5px;
+  height: 5px;
+  border-right: 1.5px solid var(--text-muted);
+  border-bottom: 1.5px solid var(--text-muted);
+  transform: translateY(-70%) rotate(45deg);
+  pointer-events: none;
 }
 
 .settings-select,
 .settings-input {
-  min-width: 120px;
-  padding: 4px 8px;
-  border: 1px solid var(--border);
+  box-sizing: border-box;
+  height: var(--control-h);
+  min-width: 148px;
+  padding: 0 var(--sp-3);
+  border: none;
   border-radius: var(--radius-sm);
-  background: var(--bg-primary);
+  background: var(--fill-tertiary);
   color: var(--text-primary);
   font-family: var(--font-ui);
-  font-size: 12.5px;
+  font-size: var(--t-callout);
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.settings-select {
+  appearance: none;
+  padding-right: var(--sp-8);
+  cursor: pointer;
 }
 
 .settings-input.wide {
-  min-width: 240px;
+  min-width: 260px;
 }
 
-.settings-select:hover,
-.settings-input:hover {
-  border-color: var(--border-strong);
+.settings-select:hover:not(:disabled),
+.settings-input:hover:not(:disabled) {
+  background: var(--fill-secondary);
 }
 
 .settings-select:disabled,
 .settings-input:disabled {
-  opacity: 0.55;
+  opacity: 0.45;
+  cursor: default;
+}
+
+.settings-select:focus-visible,
+.settings-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .settings-number {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--sp-2);
 }
 
 .settings-number .settings-input {
-  min-width: 72px;
+  min-width: 84px;
 }
 
 .settings-unit {
-  font-size: 11.5px;
+  font-size: var(--t-footnote);
   color: var(--text-muted);
 }
 
+/* macOS push button: 28pt tall, quiet fill, no border. */
 .settings-btn {
-  padding: 4px 10px;
-  border: 1px solid var(--border);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: var(--control-h);
+  padding: 0 var(--sp-3);
+  border: none;
   border-radius: var(--radius-sm);
-  background: var(--bg-primary);
+  background: var(--fill-tertiary);
   color: var(--text-primary);
-  font-size: 12px;
-  font-weight: 500;
-  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+  font-family: var(--font-ui);
+  font-size: var(--t-callout);
+  font-weight: var(--w-medium);
+  white-space: nowrap;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease),
+    opacity var(--dur-fast) var(--ease);
 }
 
 .settings-btn:hover:not(:disabled) {
-  background: var(--bg-hover);
-  border-color: var(--border-strong);
+  background: var(--fill-secondary);
 }
 
 .settings-btn:disabled {
-  opacity: 0.5;
+  opacity: 0.45;
   cursor: default;
 }
 
 .settings-btn[data-tone='primary'] {
   background: var(--accent);
-  border-color: var(--accent);
   color: var(--accent-fg);
+  box-shadow: var(--shadow-sm);
 }
 
 .settings-btn[data-tone='primary']:hover:not(:disabled) {
   background: var(--accent-dim);
-  border-color: var(--accent-dim);
 }
 
 .settings-btn[data-tone='danger'] {
   color: var(--color-critical);
-  border-color: var(--border);
 }
 
 .settings-btn[data-tone='danger']:hover:not(:disabled) {
-  border-color: var(--color-critical);
-  background: var(--bg-hover);
+  background: var(--fill-secondary);
 }
 
 .settings-link,
 .settings-inline-btn {
+  border: none;
   color: var(--accent);
   font-size: inherit;
   text-decoration: underline;
@@ -321,7 +460,9 @@
 
 .settings-inline-btn {
   padding: 0;
-  font-weight: 500;
+  font-family: var(--font-ui);
+  font-weight: var(--w-medium);
+  cursor: pointer;
 }
 
 .settings-actions,
@@ -329,25 +470,31 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
-  margin: 8px 0;
+  gap: var(--sp-2);
+  margin: var(--sp-3) 0 0;
 }
 
 /* -------------------------------------------------------------- messages -- */
 
+/* An explanation is a sentence, so it is set as one. Only a warning or an error
+   earns a surface of its own, and the dot is what says which. */
 .settings-notice {
-  margin: 10px 0 0;
-  padding: 8px 10px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border-subtle);
-  background: var(--bg-tertiary);
-  font-size: 12px;
-  line-height: 1.5;
+  /* Space below as well as above: a notice with a surface sits directly against
+     the row block that follows it otherwise, and the two read as one. */
+  margin: var(--sp-3) 0;
+  padding: 0;
+  border: none;
+  background: none;
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
   color: var(--text-secondary);
 }
 
-.settings-notice[data-tone='warn'] {
-  border-color: var(--border);
+.settings-notice[data-tone='warn'],
+.settings-notice[data-tone='error'] {
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
   color: var(--text-primary);
 }
 
@@ -355,10 +502,10 @@
 .settings-notice[data-tone='error']::before {
   content: '';
   display: inline-block;
-  width: 6px;
-  height: 6px;
-  margin-right: 7px;
-  border-radius: 999px;
+  width: var(--settings-dot);
+  height: var(--settings-dot);
+  margin-right: var(--sp-2);
+  border-radius: var(--radius-pill);
   vertical-align: 1px;
   background: var(--color-warning);
 }
@@ -371,19 +518,20 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
-  margin: 8px 0;
-  padding: 9px 10px;
-  border: 1px solid var(--border);
+  gap: var(--sp-2);
+  margin: var(--sp-3) 0;
+  padding: var(--sp-3) var(--sp-4);
+  border: none;
   border-radius: var(--radius-md);
-  background: var(--bg-tertiary);
-  font-size: 12.5px;
+  background: var(--bg-secondary);
+  font-size: var(--t-callout);
   color: var(--text-primary);
 }
 
 .settings-status {
   flex: 1;
-  font-size: 11.5px;
+  min-width: 0;
+  font-size: var(--t-footnote);
   color: var(--text-muted);
 }
 
@@ -392,44 +540,52 @@
 }
 
 .settings-badge {
-  padding: 1px 6px;
-  border-radius: var(--radius-sm);
+  padding: 1px var(--sp-15);
+  border-radius: var(--radius-pill);
   background: var(--accent-soft);
   color: var(--accent);
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
+  font-size: var(--t-caption);
+  font-weight: var(--w-semibold);
+  letter-spacing: var(--t-caption-ls);
 }
 
 .settings-badge.quiet {
-  background: var(--bg-active);
-  color: var(--text-muted);
+  background: var(--fill-secondary);
+  color: var(--text-secondary);
 }
 
 /* ----------------------------------------------------------------- lists -- */
 
+/* Same shape as a run of rows: one soft block, and space between the entries
+   instead of a rule under each. */
 .settings-tools,
 .settings-urls,
 .settings-profiles,
 .settings-paths {
   list-style: none;
-  margin: 0;
-  padding: 0;
+  margin: var(--sp-2) 0 0;
+  padding: var(--sp-1) 0;
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+}
+
+/* A list with nothing in it is not a very short block — it is nothing. Without
+   this, an empty paths list drew an 8px bar under its heading. */
+.settings-tools:empty,
+.settings-urls:empty,
+.settings-profiles:empty,
+.settings-paths:empty {
+  display: none;
 }
 
 .settings-tool,
 .settings-url,
-.settings-path-row {
+.settings-path-row,
+.settings-profile {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px 0;
-  border-bottom: 1px solid var(--border-subtle);
-}
-
-.settings-tool:last-child,
-.settings-url:last-child,
-.settings-path-row:last-child {
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-4);
   border-bottom: none;
 }
 
@@ -438,16 +594,16 @@
 .settings-path-main {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--sp-05);
   flex: 1;
   min-width: 0;
 }
 
 .settings-tool-dot {
-  width: 7px;
-  height: 7px;
+  width: var(--settings-dot);
+  height: var(--settings-dot);
   flex-shrink: 0;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--status-idle);
 }
 
@@ -466,33 +622,34 @@
 .settings-tool-name {
   display: flex;
   align-items: baseline;
-  gap: 8px;
-  font-size: 13px;
-  font-weight: 500;
+  gap: var(--sp-2);
+  font-size: var(--t-body);
+  font-weight: var(--w-medium);
   color: var(--text-primary);
 }
 
 .settings-tool-version {
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--t-caption);
   color: var(--text-muted);
 }
 
 .settings-tool-note,
 .settings-url-note {
-  font-size: 11.5px;
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
   color: var(--text-secondary);
 }
 
 .settings-tool-state {
   flex-shrink: 0;
-  font-size: 11.5px;
+  font-size: var(--t-footnote);
   color: var(--text-muted);
 }
 
 .settings-url-address {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--t-callout);
   color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -502,29 +659,20 @@
 /* -------------------------------------------------------------- profiles -- */
 
 .settings-profile {
-  display: flex;
   flex-wrap: wrap;
-  align-items: center;
-  gap: 10px;
-  padding: 9px 0;
-  border-bottom: 1px solid var(--border-subtle);
-}
-
-.settings-profile:last-child {
-  border-bottom: none;
 }
 
 .settings-profile-dot {
-  width: 8px;
-  height: 8px;
+  width: var(--sp-2);
+  height: var(--sp-2);
   flex-shrink: 0;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
 }
 
 .settings-profile-main {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--sp-05);
   flex: 1;
   min-width: 0;
 }
@@ -532,31 +680,32 @@
 .settings-profile-name {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 13px;
-  font-weight: 500;
+  gap: var(--sp-15);
+  font-size: var(--t-body);
+  font-weight: var(--w-medium);
   color: var(--text-primary);
 }
 
 .settings-profile-path {
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--t-caption);
   color: var(--text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.settings-profile-actions {
+.settings-profile-actions,
+.settings-path-actions {
   display: flex;
-  gap: 6px;
+  gap: var(--sp-15);
   flex-shrink: 0;
 }
 
 .settings-inline-form {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--sp-15);
   flex: 1;
 }
 
@@ -564,68 +713,68 @@
 
 .settings-path {
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--t-caption);
   color: var(--text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.settings-path-actions {
-  display: flex;
-  gap: 6px;
-  flex-shrink: 0;
-}
-
+/* Output, not chrome: it lifts off the block it sits in rather than being boxed
+   inside it. */
 .settings-code {
-  margin: 8px 0 0;
-  padding: 10px;
-  max-height: 260px;
+  margin: var(--sp-2) 0 0;
+  padding: var(--sp-3) var(--sp-4);
+  max-height: var(--settings-code-max);
   overflow: auto;
-  border: 1px solid var(--border-subtle);
+  border: none;
   border-radius: var(--radius-md);
-  background: var(--bg-tertiary);
+  background: var(--bg-secondary);
   font-family: var(--font-mono);
-  font-size: 11px;
-  line-height: 1.5;
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
   color: var(--text-secondary);
 }
 
 .settings-about {
-  padding: 4px 0 10px;
+  padding: 0 0 var(--sp-2);
 }
 
+/* Smaller than the section title above it: this is the page's content, not its
+   name, and a 22pt product name under a 17pt "About" inverts the hierarchy. */
 .settings-about-name {
   margin: 0;
-  font-size: 18px;
-  font-weight: 650;
-  letter-spacing: -0.02em;
+  font-family: var(--font-display);
+  font-size: var(--t-title3);
+  font-weight: var(--w-semibold);
+  letter-spacing: var(--t-title3-ls);
   color: var(--text-primary);
 }
 
 .settings-about-tagline {
-  margin: 2px 0 0;
-  font-size: 12.5px;
+  margin: var(--sp-1) 0 0;
+  font-size: var(--t-callout);
   color: var(--text-secondary);
 }
 
 .settings-about-version {
-  margin: 6px 0 0;
+  margin: var(--sp-2) 0 0;
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: var(--t-footnote);
   color: var(--text-muted);
 }
 
 .settings-fact {
   display: flex;
   align-items: baseline;
-  gap: 12px;
-  padding: 5px 0;
-  font-size: 12.5px;
+  gap: var(--sp-4);
+  padding: var(--sp-2) var(--sp-4);
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
 }
 
 .settings-fact-label {
-  width: 96px;
+  width: var(--settings-fact-label);
   flex-shrink: 0;
   color: var(--text-muted);
 }
@@ -638,16 +787,24 @@
 
 /* --------------------------------------------------------- font preview -- */
 
+/* It sits inside a `--bg-secondary` row, so it lifts off it rather than tinting
+   again — a tint on a tint is a box by another name. In light the lift is the
+   page colour; in dark the page is the darker surface, so "raised" has to mean
+   the lighter one instead. Same move as the segmented control. */
 .settings-font-preview {
   width: 100%;
-  padding: 9px 11px;
-  border: 1px solid var(--border-subtle);
+  padding: var(--sp-2) var(--sp-3);
+  border: none;
   border-radius: var(--radius-md);
-  background: var(--bg-tertiary);
+  background: var(--bg-primary);
   color: var(--text-secondary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+[data-theme='dark'] .settings-font-preview {
+  background: var(--bg-tertiary);
 }
 
 .settings-font-prompt {
@@ -657,64 +814,76 @@
 /* -------------------------------------------------------------- density -- */
 
 [data-density='compact'] .settings-row {
-  padding: 6px 0;
+  padding: var(--sp-2) var(--sp-4);
 }
 
 [data-density='compact'] .settings-group {
-  margin-top: 14px;
-  padding-top: 10px;
+  margin-top: var(--sp-6);
+}
+
+[data-density='compact'] .settings-panel {
+  padding: var(--sp-6) var(--sp-8) var(--sp-8);
 }
 
 [data-density='compact'] .settings-tool,
 [data-density='compact'] .settings-url,
 [data-density='compact'] .settings-profile,
 [data-density='compact'] .settings-path-row {
-  padding: 5px 0;
+  padding: var(--sp-15) var(--sp-4);
 }
 
-/* ------------------------------------------------------------------ help -- */
+/* ------------------------------------------------- borrowed panels -- */
 
-/* The Help section renders the very same panel the ⌘? dialog does. That panel's
-   search field is styled to bleed into the modal body's own 18px side padding,
-   which this pane does not have — left as it was, the field's background ran
-   under the section list. Cancelled from here rather than by forking
-   HelpPanel.css: one copy of the help, two frames around it.
+/* The Help section renders the very same panel the ⌘? dialog does; the panel's
+   own stylesheet keeps its search field self-contained, so nothing has to be
+   cancelled here. */
+.settings-panel > .help {
+  max-width: var(--content-measure);
+}
 
-   Only the horizontal bleed is cancelled. `top` is deliberately left alone:
-   the scrollport both frames share is `.modal-body`, whose 4px top padding is
-   exactly what HelpPanel.css's `top: -4px` subtracts, so the field parks flush
-   with the top of the scroll area. Overriding it to 0 parked the field 4px
-   lower, which left a 4px band of the previous topic scrolling in the gap
-   above it and pushed the field's lower edge 3px over `.help-nav`'s own sticky
-   offset, clipping the first section in the list. */
-.settings-panel .help-search {
-  margin: 0;
-  padding: 8px 0;
+/* The Shortcuts section renders the ⌘/ sheet's list, and that sheet's search
+   strip is full-bleed and sticky against a modal body with 20px of side padding
+   and none on top — neither of which is true of this pane, so the strip spilled
+   20px past the measure on each side and pinned below this pane's own top
+   padding with rows scrolling in the gap above it. Cancelled from here rather
+   than by forking the sheet: one copy of the shortcut table, two frames around
+   it. The tidy fix is for ShortcutsSheet.css to stop measuring its parent —
+   see the handoff. */
+.settings-panel .sheet-search {
+  position: static;
+  box-sizing: border-box;
+  height: var(--control-h);
+  margin: 0 0 var(--sp-5);
+  padding: 0 var(--sp-3);
+  border-radius: var(--radius-sm);
+  background: var(--fill-tertiary);
+}
+
+.settings-panel .sheet-input {
+  height: 100%;
 }
 
 /* ------------------------------------------------------------ responsive -- */
 
-/* Below this the two columns stop fitting side by side inside the panel. */
-@media (max-width: 900px) {
-  .modal-panel:has(.settings) {
-    width: 100%;
-  }
-
+/* Below this the rail and a readable column stop fitting side by side, so the
+   rail becomes a strip along the top. */
+@media (max-width: 760px) {
   .settings {
     grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
   }
 
   .settings-nav {
-    position: static;
     flex-direction: row;
-    flex-wrap: wrap;
-    padding: 0 0 10px;
-    border-right: none;
-    border-bottom: 1px solid var(--border-subtle);
+    flex-wrap: nowrap;
+    gap: var(--sp-1);
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: var(--sp-2) var(--sp-3);
   }
 
   .settings-panel {
-    padding: 12px 2px 8px;
+    padding: var(--sp-6) var(--sp-4) var(--sp-8);
   }
 }
 

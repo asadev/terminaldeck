@@ -1,12 +1,20 @@
 /* ============================================================================
-   Provider picker — one selectable card per agent, plus the resume toggle.
+   Provider picker — one selectable row per agent, plus the resume toggle.
 
-   Cards rather than a <select>: an unavailable provider has to explain itself,
+   Rows rather than a <select>: an unavailable provider has to explain itself,
    and a two-line reason with an install command does not fit in an option row.
+   They are rows and not cards, though — a fill on hover, the accent tint when
+   chosen, and no outline around any of them.
    ============================================================================ */
 
+:root {
+  /* The radio's dot and the resume tick, which are the same size on purpose:
+     one control metric for every mark in this dialog. */
+  --picker-mark: 14px;
+}
+
 .picker {
-  padding-top: 6px;
+  padding-top: var(--sp-1);
 }
 
 /* The folder name is already in the dialog's description, so a long path may
@@ -14,10 +22,10 @@
    would keep the tail instead, but it also drags a leading `/` to the far end,
    which makes an absolute path read as nonsense. */
 .picker-path {
-  margin: 0 0 12px;
+  margin: 0 0 var(--sp-3);
   font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--text-secondary);
+  font-size: var(--t-footnote);
+  color: var(--text-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -26,45 +34,42 @@
 .picker-list {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--sp-05);
 }
 
-/* ------------------------------------------------------------------ card -- */
+/* ------------------------------------------------------------------- row -- */
 
 .picker-option {
   position: relative;
   display: flex;
   align-items: flex-start;
-  gap: 10px;
-  padding: 10px 12px;
-  border: 1px solid var(--border-subtle);
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  border: none;
   border-radius: var(--radius-md);
-  background: var(--bg-tertiary);
+  background: transparent;
   cursor: pointer;
-  transition: background 120ms ease, border-color 120ms ease;
+  transition: background var(--dur-fast) var(--ease);
 }
 
 .picker-option:hover[data-available='true'] {
   background: var(--bg-hover);
-  border-color: var(--border);
 }
 
-/* The card goes grey like every other selected row in the app; the radio mark
-   inside keeps the accent, because that dot is the control's own state and it
-   has to agree with the native checkbox sitting under this list. */
+/* The accent tint, matching every other radio list in the app. The mark inside
+   keeps the accent too, because that dot is the control's own state and it has
+   to agree with the native checkbox sitting under this list. */
 .picker-option[data-selected='true'] {
-  border-color: var(--border-strong);
-  background: var(--bg-active);
+  background: var(--accent-soft);
 }
 
 /* Dimmed, but still legible: the reason it is dimmed is written inside it. */
 .picker-option[data-available='false'] {
   cursor: default;
   background: transparent;
-  border-style: dashed;
 }
 
-/* Covers the card so the whole thing is the hit target, and stays focusable —
+/* Covers the row so the whole thing is the hit target, and stays focusable —
    only its native rendering is hidden. */
 .picker-option input,
 .picker-resume input {
@@ -79,12 +84,12 @@
 
 .picker-mark {
   flex-shrink: 0;
-  width: 14px;
-  height: 14px;
-  margin-top: 2px;
+  width: var(--picker-mark);
+  height: var(--picker-mark);
+  margin-top: var(--sp-05);
   border: 1.5px solid var(--border-strong);
-  border-radius: 50%;
-  transition: border-color 120ms ease, box-shadow 120ms ease;
+  border-radius: var(--radius-pill);
+  transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
 }
 
 .picker-option[data-selected='true'] .picker-mark {
@@ -94,8 +99,7 @@
 }
 
 .picker-option[data-available='false'] .picker-mark {
-  border-style: dashed;
-  border-color: var(--text-muted);
+  border-color: var(--border);
 }
 
 .picker-option input:focus-visible ~ .picker-mark,
@@ -109,16 +113,16 @@
 .picker-text {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: var(--sp-05);
   min-width: 0;
 }
 
 .picker-label {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  font-weight: 550;
+  gap: var(--sp-2);
+  font-size: var(--t-body);
+  font-weight: var(--w-medium);
   color: var(--text-primary);
 }
 
@@ -127,30 +131,27 @@
 }
 
 .picker-tag {
-  padding: 1px 6px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  font-size: 10px;
-  font-weight: 550;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
-  color: var(--text-secondary);
+  padding: 0 var(--sp-15);
+  border-radius: var(--radius-pill);
+  background: var(--fill-tertiary);
+  font-size: var(--t-caption);
+  font-weight: var(--w-medium);
+  color: var(--text-muted);
 }
 
 .picker-hint {
-  font-size: 11.5px;
-  line-height: 1.45;
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
   color: var(--text-secondary);
 }
 
 .picker-install {
-  margin-top: 2px;
-  padding: 4px 8px;
-  border: 1px solid var(--border-subtle);
+  margin-top: var(--sp-1);
+  padding: var(--sp-1) var(--sp-2);
   border-radius: var(--radius-sm);
-  background: var(--bg-secondary);
+  background: var(--fill-quaternary);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--t-footnote);
   color: var(--text-secondary);
   /* Long install lines scroll rather than widening the dialog. */
   overflow-x: auto;
@@ -159,14 +160,15 @@
 
 /* ---------------------------------------------------------------- resume -- */
 
+/* Space above it, not a rule: it is the last thing in the panel and reads as
+   separate because of the gap, not because of a line. */
 .picker-resume {
   position: relative;
   display: flex;
   align-items: flex-start;
-  gap: 10px;
-  margin-top: 14px;
-  padding-top: 14px;
-  border-top: 1px solid var(--border-subtle);
+  gap: var(--sp-3);
+  margin-top: var(--sp-5);
+  padding: 0 var(--sp-3);
   cursor: pointer;
 }
 
@@ -180,14 +182,14 @@
 .picker-resume input {
   position: static;
   inset: auto;
-  width: 14px;
-  height: 14px;
-  margin-top: 2px;
+  width: var(--picker-mark);
+  height: var(--picker-mark);
+  margin-top: var(--sp-05);
   opacity: 1;
   flex-shrink: 0;
   accent-color: var(--accent);
 }
 
 .picker-resume .picker-label {
-  font-weight: 500;
+  font-weight: var(--w-regular);
 }

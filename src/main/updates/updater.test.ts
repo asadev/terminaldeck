@@ -5,7 +5,6 @@ import {
   LAUNCH_DELAY_MS,
   MAX_NOTES_LENGTH,
   MIN_AUTOMATIC_INTERVAL_MS,
-  RECHECK_INTERVAL_MS,
   UPDATE_STATE_CHANNEL,
   codeSignaturePath,
   createUpdateController,
@@ -18,6 +17,7 @@ import {
   type UpdateState,
   type UpdaterLike,
 } from './updater'
+import type { FocusSource } from './window-focus'
 
 /**
  * These tests are about the promises the panel makes on this module's behalf.
@@ -193,11 +193,44 @@ function progress(percent: number, bytesPerSecond = 1_000_000): ProgressInfo {
  */
 const MEASURED_RATES = [1_000_000, 1_010_400, 1_003_991, 1_009_112]
 
+/**
+ * A window coming to the front, under the test's control.
+ *
+ * This is what replaced the recurring timer, so it is what the scheduling tests
+ * drive. `subscribed` is asserted as well as `fire`, because "stop() drops the
+ * subscription" is the half of the contract a leak hides in: a controller that
+ * kept listening after `before-quit` would go on checking for a window that is
+ * on its way out.
+ */
+interface FakeFocus {
+  fire(): void
+  readonly subscribed: number
+}
+
+function fakeFocus(): { focus: FakeFocus; source: FocusSource } {
+  const listeners = new Set<() => void>()
+  return {
+    focus: {
+      fire: () => {
+        for (const listener of [...listeners]) listener()
+      },
+      get subscribed(): number {
+        return listeners.size
+      },
+    },
+    source: (listener) => {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
+  }
+}
+
 interface Harness {
   updater: FakeUpdater
   pushed: UpdateState[]
   controller: ReturnType<typeof createUpdateController>
   clock: { value: number }
+  focus: FakeFocus
 }
 
 function harness(options: { environment?: UpdateEnvironment; files?: Set<string> } = {}): Harness {
@@ -205,6 +238,7 @@ function harness(options: { environment?: UpdateEnvironment; files?: Set<string>
   const pushed: UpdateState[] = []
   const clock = { value: 1_000_000 }
   const files = options.files ?? SUPPORTED_FILES
+  const { focus, source } = fakeFocus()
   const controller = createUpdateController({
     updater,
     environment: options.environment ?? supportedEnvironment(),
@@ -214,8 +248,9 @@ function harness(options: { environment?: UpdateEnvironment; files?: Set<string>
     },
     fileExists: (path) => files.has(path),
     now: () => clock.value,
+    onFocus: source,
   })
-  return { updater, pushed, controller, clock }
+  return { updater, pushed, controller, clock, focus }
 }
 
 afterEach(() => {
@@ -317,12 +352,15 @@ describe('an unsupported build', () => {
     expect(controller.state().phase).not.toBe('error')
   })
 
-  it('never checks, downloads, installs or arms a timer', async () => {
+  it('never checks, downloads, installs, arms a timer or subscribes', async () => {
     vi.useFakeTimers()
-    const { controller, updater } = harness({ files: unsignedFiles })
+    const { controller, updater, focus } = harness({ files: unsignedFiles })
 
     controller.start()
-    await vi.advanceTimersByTimeAsync(RECHECK_INTERVAL_MS * 3)
+    await vi.advanceTimersByTimeAsync(LAUNCH_DELAY_MS * 3)
+    // Not even a listener: nothing here can be woken by a window.
+    expect(focus.subscribed).toBe(0)
+    focus.fire()
 
     expect(await controller.check()).toEqual(controller.state())
     expect(await controller.download()).toEqual(controller.state())
@@ -631,15 +669,17 @@ describe('nothing happens without an explicit call', () => {
 
   it('a staged update installs only on the explicit call', async () => {
     vi.useFakeTimers()
-    const { controller, updater } = harness()
+    const { controller, updater, focus } = harness()
     updater.onCheck = () => updater.emitAvailable(info('0.2.0'))
     await controller.check()
     updater.onDownload = () => updater.emitDownloaded(downloaded('0.2.0'))
     await controller.download()
 
     controller.start()
-    // Time passing is not consent.
-    await vi.advanceTimersByTimeAsync(RECHECK_INTERVAL_MS * 5)
+    // Neither time passing nor coming back to the window is consent.
+    await vi.advanceTimersByTimeAsync(LAUNCH_DELAY_MS * 5)
+    focus.fire()
+    focus.fire()
     expect(updater.calls.quitAndInstall).toBe(0)
 
     controller.installNow()
@@ -720,7 +760,25 @@ describe('scheduling', () => {
     controller.stop()
   })
 
-  it('checks again on the recurring interval', async () => {
+  it('checks again when the user comes back to the window', async () => {
+    vi.useFakeTimers()
+    const { controller, updater, clock, focus } = harness()
+    updater.onCheck = () => updater.emitNotAvailable(info('0.1.0'))
+
+    controller.start()
+    await vi.advanceTimersByTimeAsync(LAUNCH_DELAY_MS)
+    expect(updater.calls.check).toBe(1)
+
+    // The clock has to move past the rate limit; the point of the test is that
+    // nothing but the event is needed after that.
+    clock.value += MIN_AUTOMATIC_INTERVAL_MS
+    focus.fire()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(updater.calls.check).toBe(2)
+    controller.stop()
+  })
+
+  it('arms no recurring timer at all — time alone never checks again', async () => {
     vi.useFakeTimers()
     const { controller, updater, clock } = harness()
     updater.onCheck = () => updater.emitNotAvailable(info('0.1.0'))
@@ -729,10 +787,38 @@ describe('scheduling', () => {
     await vi.advanceTimersByTimeAsync(LAUNCH_DELAY_MS)
     expect(updater.calls.check).toBe(1)
 
-    // The injected clock has to move too: the rate limit is measured with it,
-    // not with the timer wheel.
-    clock.value += RECHECK_INTERVAL_MS
-    await vi.advanceTimersByTimeAsync(RECHECK_INTERVAL_MS)
+    // A week of an app nobody touched. The old interval would have made
+    // twenty-eight requests across this; an app in the background makes none.
+    clock.value += 7 * 24 * 60 * 60 * 1000
+    await vi.advanceTimersByTimeAsync(7 * 24 * 60 * 60 * 1000)
+    expect(updater.calls.check).toBe(1)
+    controller.stop()
+  })
+
+  it('rate limits a window that is focused over and over', async () => {
+    vi.useFakeTimers()
+    const { controller, updater, clock, focus } = harness()
+    updater.onCheck = () => updater.emitNotAvailable(info('0.1.0'))
+
+    controller.start()
+    await vi.advanceTimersByTimeAsync(LAUNCH_DELAY_MS)
+    expect(updater.calls.check).toBe(1)
+
+    // Alt-tabbing between two windows is not a reason to hammer someone
+    // else's API. This is the whole safety net under an event this cheap:
+    // twenty returns across twenty minutes buy exactly nothing.
+    for (let press = 0; press < 20; press++) {
+      clock.value += 60_000
+      focus.fire()
+      await vi.advanceTimersByTimeAsync(0)
+    }
+    expect(updater.calls.check).toBe(1)
+
+    // And the first one past the floor does check, so the limit is a limit and
+    // not an off switch.
+    clock.value += MIN_AUTOMATIC_INTERVAL_MS
+    focus.fire()
+    await vi.advanceTimersByTimeAsync(0)
     expect(updater.calls.check).toBe(2)
     controller.stop()
   })
@@ -765,26 +851,71 @@ describe('scheduling', () => {
     expect(updater.calls.check).toBe(3)
   })
 
-  it('stop() disarms both timers', async () => {
+  it('stop() disarms the launch check and drops the subscription', async () => {
     vi.useFakeTimers()
-    const { controller, updater } = harness()
+    const { controller, updater, clock, focus } = harness()
 
     controller.start()
+    expect(focus.subscribed).toBe(1)
     controller.stop()
-    await vi.advanceTimersByTimeAsync(LAUNCH_DELAY_MS + RECHECK_INTERVAL_MS * 2)
+    expect(focus.subscribed).toBe(0)
+
+    await vi.advanceTimersByTimeAsync(LAUNCH_DELAY_MS * 2)
+    clock.value += MIN_AUTOMATIC_INTERVAL_MS
+    focus.fire()
+    await vi.advanceTimersByTimeAsync(0)
 
     expect(updater.calls.check).toBe(0)
   })
 
-  it('start() twice does not arm two sets of timers', async () => {
+  it('start() twice does not arm two timers or subscribe twice', async () => {
     vi.useFakeTimers()
-    const { controller, updater } = harness()
+    const { controller, updater, clock, focus } = harness()
 
     controller.start()
     controller.start()
     await vi.advanceTimersByTimeAsync(LAUNCH_DELAY_MS)
 
     expect(updater.calls.check).toBe(1)
+    expect(focus.subscribed).toBe(1)
+
+    // One listener means one check, not two — a double subscription would be
+    // invisible except through the rate limit, which would hide it entirely.
+    clock.value += MIN_AUTOMATIC_INTERVAL_MS
+    focus.fire()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(updater.calls.check).toBe(2)
+    controller.stop()
+  })
+
+  it('a focus during a download does not interrupt it', async () => {
+    vi.useFakeTimers()
+    const { controller, updater, clock, focus } = harness()
+    updater.onCheck = () => updater.emitAvailable(info('0.2.0'))
+    await controller.check()
+
+    let release = (): void => undefined
+    updater.downloadGate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    updater.onDownload = () => updater.emitProgress(progress(50))
+
+    controller.start()
+    const running = controller.download()
+    await Promise.resolve()
+
+    const before = updater.calls.check
+    clock.value += MIN_AUTOMATIC_INTERVAL_MS
+    focus.fire()
+    await vi.advanceTimersByTimeAsync(0)
+
+    // Replacing a progress bar someone is watching with "checking" is the one
+    // thing the window coming forward must never do.
+    expect(updater.calls.check).toBe(before)
+    expect(controller.state().phase).toBe('downloading')
+
+    release()
+    await running
     controller.stop()
   })
 })
@@ -963,8 +1094,29 @@ describe('registerUpdateIpc', () => {
       fileExists: (path) => SUPPORTED_FILES.has(path),
     })
 
-    await vi.advanceTimersByTimeAsync(LAUNCH_DELAY_MS + RECHECK_INTERVAL_MS)
+    await vi.advanceTimersByTimeAsync(LAUNCH_DELAY_MS * 4)
     expect(updater.calls.quitAndInstall).toBe(0)
     expect(updater.calls.download).toBe(0)
+  })
+
+  it('falls back to the Electron focus event without being handed one', async () => {
+    // No `onFocus` in the deps, which is how `src/main/index.ts` calls it. The
+    // default reaches for `electron`, and here there is no Electron to reach —
+    // so the promise inside `appWindowFocus` has to resolve to a subscription
+    // to nothing rather than throw, and `stop()` has to be safe to call
+    // against it. Both are silent failures if they break.
+    const { ipcMain } = fakeIpcMain()
+    const updater = new FakeUpdater()
+    controller = registerUpdateIpc(ipcMain, {
+      updater,
+      environment: supportedEnvironment(),
+      broadcast: () => undefined,
+      fileExists: (path) => SUPPORTED_FILES.has(path),
+    })
+
+    // Let the dynamic import settle before the launch check runs on top of it.
+    await vi.advanceTimersByTimeAsync(LAUNCH_DELAY_MS)
+    expect(updater.calls.check).toBe(1)
+    expect(() => controller?.stop()).not.toThrow()
   })
 })

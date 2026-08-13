@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it } from 'vitest'
 import { BrowserWorkspace } from './BrowserWorkspace'
@@ -164,6 +166,46 @@ describe('the wired panel', () => {
 
   it('starts on the element panel with an instruction rather than emptiness', () => {
     expect(html).toContain('Turn on Inspect')
+  })
+})
+
+/**
+ * The panel that would not go away.
+ *
+ * Driving the packaged app found a session tab that rendered the browser
+ * forever, and browser chrome ghosting over a *different* tab's terminal. One
+ * cause: `visible` only parked the native pages, so the panel's own HTML — the
+ * toolbar, the stage, the bottom panels — kept painting on every tab. It is a
+ * full-height in-flow block in `.panes`, so it showed through the terminal's
+ * padding gutter and pushed that session's chat view a whole pane below the
+ * fold.
+ *
+ * Both halves are checked. The attribute alone hides nothing without the rule,
+ * and the rule matches nothing without the attribute.
+ */
+describe('a panel whose tab is not on screen', () => {
+  it('marks itself hidden rather than only parking its pages', () => {
+    const html = renderToStaticMarkup(<BrowserWorkspace bridge={noopBridge} visible={false} />)
+    expect(html).toContain('data-visible="false"')
+  })
+
+  it('stays on screen when a dialog only parks the pages', () => {
+    // A modal is not a tab switch: the pages have to go under it, the panel
+    // behind it must not, or the workspace blanks out behind every dialog.
+    const html = renderToStaticMarkup(<BrowserWorkspace bridge={noopBridge} visible parkPage />)
+    expect(html).toContain('data-visible="true"')
+  })
+
+  it('marks the unwired panel too, which is a whole panel like any other', () => {
+    const html = renderToStaticMarkup(<BrowserWorkspace visible={false} />)
+    expect(html).toContain('data-visible="false"')
+  })
+
+  it('has the stylesheet rule that makes the attribute mean something', () => {
+    const css = readFileSync(join(__dirname, 'BrowserWorkspace.css'), 'utf8')
+    const rule = /\.bw\[data-visible='false'\]\s*\{([^}]*)\}/.exec(css)
+    expect(rule, ".bw[data-visible='false'] has no rule, so the flag hides nothing").not.toBeNull()
+    expect(rule?.[1]).toMatch(/display:\s*none/)
   })
 })
 

@@ -81,6 +81,7 @@
 import { existsSync } from 'node:fs'
 import type { IpcMain } from 'electron'
 import type { ProgressInfo, UpdateDownloadedEvent, UpdateInfo } from 'electron-updater'
+import { appWindowFocus, type FocusSource } from './window-focus'
 
 /* ------------------------------------------------------------------ state -- */
 
@@ -183,6 +184,14 @@ export interface UpdaterDeps {
   /** Injected so a test can describe a bundle without creating one on disk. */
   fileExists?: (path: string) => boolean
   now?: () => number
+  /**
+   * What counts as "the user came back", and how to stop listening.
+   *
+   * Defaults to Electron's `browser-window-focus`. Injected so the tests can
+   * drive the trigger by hand, and so a caller with a better signal — a single
+   * window it already tracks, say — can supply that instead.
+   */
+  onFocus?: FocusSource
 }
 
 /* ---------------------------------------------------------------- support -- */
@@ -327,8 +336,28 @@ export function readSizeBytes(info: UpdateInfo): number | null {
  */
 export const LAUNCH_DELAY_MS = 20_000
 
-/** The automatic cadence after that first check. */
-export const RECHECK_INTERVAL_MS = 6 * 60 * 60 * 1000
+/**
+ * What replaced the recurring check, and why there is no longer an interval.
+ *
+ * The old arrangement was a 6-hour `setInterval` that ran for as long as the
+ * app did, whether or not anybody was using it. The thing it was really trying
+ * to approximate is "has a release appeared since this user last paid
+ * attention", and Electron reports the second half of that directly: a window
+ * coming to the front is the moment a new version becomes worth knowing about,
+ * and it is also the only moment the user could act on one.
+ *
+ * So the checks are now: once on launch, and whenever the app is brought
+ * forward — both real events, neither of them a clock. A machine left running
+ * over a weekend with the app in the background makes no requests at all, and
+ * the first thing that happens when its owner comes back is a check, rather
+ * than the panel showing whatever the last tick found some hours ago.
+ *
+ * {@link MIN_AUTOMATIC_INTERVAL_MS} is what makes this safe: focus is a cheap
+ * event and a user alt-tabbing between two windows would otherwise hammer
+ * someone else's API. It was already there for the timers, and it does the
+ * whole job here.
+ */
+export const RECHECK_TRIGGER = 'browser-window-focus'
 
 /**
  * The floor no *automatic* check may go below, whatever the timers do.
@@ -399,9 +428,9 @@ export interface UpdateController {
   download(): Promise<UpdateState>
   /** Install what is already staged. The only caller of quitAndInstall. */
   installNow(): Promise<UpdateState>
-  /** Arm the launch check and the recurring one. Returns immediately. */
+  /** Arm the launch check and subscribe to {@link RECHECK_TRIGGER}. Returns immediately. */
   start(): void
-  /** Disarm the timers. Call from `before-quit`. */
+  /** Disarm the launch check and drop the subscription. Call from `before-quit`. */
   stop(): void
 }
 
@@ -448,7 +477,7 @@ export function createUpdateController(deps: UpdaterDeps): UpdateController {
   let lastSignature = signature(current)
   let lastCheckStartedAt = 0
   let launchTimer: ReturnType<typeof setTimeout> | null = null
-  let recheckTimer: ReturnType<typeof setInterval> | null = null
+  let unfocus: (() => void) | null = null
 
   /** The version the panel is currently talking about, for phases that need it. */
   let pendingVersion: string | null = null
@@ -658,23 +687,23 @@ export function createUpdateController(deps: UpdaterDeps): UpdateController {
   }
 
   function start(): void {
-    // An unsupported build arms nothing. There is no timer, no request, and no
-    // way for a check to happen by accident.
+    // An unsupported build arms nothing. There is no timer, no subscription, no
+    // request, and no way for a check to happen by accident.
     if (read().phase === 'unsupported') return
-    if (launchTimer !== null || recheckTimer !== null) return
+    if (launchTimer !== null || unfocus !== null) return
 
     launchTimer = setTimeout(() => {
       launchTimer = null
       void check({ automatic: true })
     }, LAUNCH_DELAY_MS)
-    // Neither timer may hold the process open — an update check is never a
-    // reason for the app to refuse to exit.
+    // The one timer here may not hold the process open — an update check is
+    // never a reason for the app to refuse to exit.
     launchTimer.unref?.()
 
-    recheckTimer = setInterval(() => {
+    // Everything after that first check is event-driven; see RECHECK_TRIGGER.
+    unfocus = (deps.onFocus ?? appWindowFocus)(() => {
       void check({ automatic: true })
-    }, RECHECK_INTERVAL_MS)
-    recheckTimer.unref?.()
+    })
   }
 
   function stop(): void {
@@ -682,9 +711,9 @@ export function createUpdateController(deps: UpdaterDeps): UpdateController {
       clearTimeout(launchTimer)
       launchTimer = null
     }
-    if (recheckTimer !== null) {
-      clearInterval(recheckTimer)
-      recheckTimer = null
+    if (unfocus !== null) {
+      unfocus()
+      unfocus = null
     }
   }
 

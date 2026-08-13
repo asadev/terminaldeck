@@ -25,7 +25,15 @@ interface StoreValue {
   activeSessionId: string | null
   addProject(path: string): Project
   removeProject(path: string): void
-  addSession(meta: SessionMeta): void
+  /**
+   * Add a session to the list.
+   *
+   * `focus` defaults to true because the usual caller is the click that just
+   * created it. A session this window did not ask for — one started from a
+   * phone — passes false: it must appear, but it must not pull the user out of
+   * whatever they were typing into.
+   */
+  addSession(meta: SessionMeta, options?: { focus?: boolean }): void
   removeSession(id: string): void
   setActiveSession(id: string | null): void
   setSessionStatus(id: string, status: SessionStatus): void
@@ -60,10 +68,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     void window.deck.removeProject(path)
   }, [])
 
-  const addSession = useCallback((meta: SessionMeta) => {
+  const addSession = useCallback((meta: SessionMeta, options?: { focus?: boolean }) => {
     const session: Session = { ...meta, projectPath: meta.cwd, status: 'idle' }
-    setSessions((prev) => [...prev, session])
-    setActiveSessionId(meta.id)
+    // Idempotent: `session:created` and this window's own `createSession` can
+    // both name the same session if the main process ever broadcasts more
+    // widely, and two rows for one pty is worse than a missed one.
+    setSessions((prev) => (prev.some((s) => s.id === meta.id) ? prev : [...prev, session]))
+    if (options?.focus !== false) setActiveSessionId(meta.id)
   }, [])
 
   const removeSession = useCallback((id: string) => {

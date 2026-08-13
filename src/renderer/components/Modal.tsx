@@ -23,7 +23,12 @@ interface Props {
   children: ReactNode
   /** Right-aligned action row. Omit for a dialog with no actions. */
   footer?: ReactNode
-  size?: 'md' | 'lg'
+  /**
+   * `md` and `lg` are dialogs. `page` fills the window with no scrim and no
+   * corners — for a surface you sit in rather than answer, which is what
+   * Settings is.
+   */
+  size?: 'md' | 'lg' | 'page'
 }
 
 /**

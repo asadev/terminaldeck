@@ -1,3 +1,11 @@
+/* ============================================================================
+   Terminal Deck — the base layer
+
+   Element defaults, the handful of shapes shared across every screen, and
+   nothing else. The shell lives in shell/shell.css; each view keeps its own
+   stylesheet. What is here is what would otherwise be repeated forty times.
+   ============================================================================ */
+
 *,
 *::before,
 *::after {
@@ -16,8 +24,14 @@ body {
   background: var(--bg-primary);
   color: var(--text-primary);
   font-family: var(--font-ui);
-  font-size: 13px;
+  font-size: var(--t-body);
+  line-height: var(--lh-body);
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /* SF's optical sizing and default figures. Tabular numbers are asked for
+     locally, where columns of them line up. */
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
 }
 
 button {
@@ -25,94 +39,51 @@ button {
   color: inherit;
   background: none;
   border: none;
+  padding: 0;
   cursor: pointer;
 }
 
-/* ---------------------------------------------------------------- shell -- */
-
-.app {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
+h1,
+h2,
+h3,
+h4 {
+  font-weight: var(--w-semibold);
+  letter-spacing: var(--t-title3-ls);
 }
 
-.titlebar {
-  display: flex;
-  align-items: stretch;
-  height: var(--titlebar-height);
-  flex-shrink: 0;
-  background: var(--bg-secondary);
-  border-bottom: 1px solid var(--border);
+input,
+textarea,
+select {
+  font-family: inherit;
 }
 
-/* Only the leftover space drags — a drag region over the tabs would swallow
-   their clicks. */
-.titlebar-drag {
-  flex: 1;
-  min-width: 24px;
-  height: 100%;
-  -webkit-app-region: drag;
+/* The platform controls the app has not replaced — checkboxes, radios, sliders,
+   progress bars — take the app's accent rather than the OS blue, so a raw
+   control sitting in a row of styled ones does not look like a different app. */
+input[type='checkbox'],
+input[type='radio'],
+input[type='range'],
+progress {
+  accent-color: var(--accent);
 }
 
-.app-body {
-  flex: 1;
-  display: flex;
-  min-height: 0;
-}
+/* ------------------------------------------------------------- controls -- */
 
-/* -------------------------------------------------------------- sidebar -- */
-
-.sidebar {
-  width: var(--sidebar-width);
-  min-width: var(--sidebar-min);
-  max-width: var(--sidebar-max);
-  flex-shrink: 0;
-  background: var(--bg-secondary);
-  border-right: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
-  user-select: none;
-}
-
-.sidebar-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 14px 14px 10px;
-  gap: 10px;
-}
-
-/* --text-secondary, not --text-muted: muted lands at 2.5:1 on --bg-secondary in
-   the light theme, and this is a heading rather than a placeholder. The same
-   swap is made on every uppercase section label in the app. */
-.sidebar-title {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--text-secondary);
-}
-
-.sidebar-scroll {
-  flex: 1;
-  overflow-y: auto;
-  padding: 0 8px 12px;
-}
-
-.sidebar-empty {
-  margin: 8px 6px;
-  color: var(--text-secondary);
-  font-size: 12px;
+/* One focus idiom for the whole app: a 2px accent ring. It is the only thing
+   besides selection the accent is allowed to do. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .icon-btn {
   display: grid;
   place-items: center;
-  width: 24px;
-  height: 24px;
+  width: var(--icon-btn);
+  height: var(--icon-btn);
   border-radius: var(--radius-sm);
   color: var(--text-secondary);
-  transition: background 120ms ease, color 120ms ease;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
 
 .icon-btn:hover {
@@ -120,106 +91,51 @@ button {
   color: var(--text-primary);
 }
 
-/* One focus idiom for the whole app: a 2px --accent outline. It is the only
-   thing besides text selection the blue is allowed to do. */
-.icon-btn:focus-visible,
-.session-item:focus-visible,
-.tab-close:focus-visible,
-.btn-primary:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-
-.tab:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
-}
-
 .icon-btn.small {
-  width: 20px;
-  height: 20px;
+  width: 22px;
+  height: 22px;
 }
 
 .icon-btn svg {
   display: block;
 }
 
-/* ------------------------------------------------------------- projects -- */
-
-.project-group {
-  margin-bottom: 10px;
-}
-
-.project-row {
-  display: flex;
+/* The one filled button in the product. macOS control height, macOS radius. */
+.btn-primary {
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-  padding: 5px 8px;
+  justify-content: center;
+  height: var(--control-h-lg);
+  padding: 0 var(--sp-4);
+  border-radius: var(--radius-md);
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: var(--t-body);
+  font-weight: var(--w-medium);
+  box-shadow: var(--shadow-sm);
+  transition: background var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
+}
+
+.btn-primary:hover {
+  background: var(--accent-dim);
+}
+
+.btn-primary:active {
+  transform: scale(0.985);
+}
+
+kbd {
+  display: inline-block;
+  min-width: 18px;
+  padding: 1px 5px;
   border-radius: var(--radius-sm);
-}
-
-.project-row:hover {
-  background: var(--bg-hover);
-}
-
-.project-name {
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--text-primary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.project-actions {
-  display: flex;
-  gap: 2px;
-  opacity: 0;
-  transition: opacity 120ms ease;
-}
-
-.project-row:hover .project-actions,
-.project-row:focus-within .project-actions {
-  opacity: 1;
-}
-
-.session-list {
-  list-style: none;
-  margin: 2px 0 0;
-  padding: 0 0 0 8px;
-}
-
-.session-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 5px 8px;
-  border-radius: var(--radius-sm);
+  background: var(--fill-tertiary);
   color: var(--text-secondary);
-  text-align: left;
-  transition: background 120ms ease, color 120ms ease;
-}
-
-.session-item:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
-}
-
-/* Selected rows are grey, not blue, everywhere in the app: --bg-active is a
-   step past --bg-hover, so a selected row still reads as selected when the
-   pointer is somewhere else. The blue is reserved for focus. */
-.session-item.active {
-  background: var(--bg-active);
-  color: var(--text-primary);
-}
-
-.session-label {
-  font-size: 12px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  font-family: var(--font-ui);
+  font-size: var(--t-caption);
+  font-weight: var(--w-medium);
+  text-align: center;
+  line-height: 1.5;
 }
 
 /* ----------------------------------------------------------- status dot -- */
@@ -234,7 +150,7 @@ button {
 
 .status-dot[data-status='working'] {
   background: var(--status-working);
-  animation: pulse 1.4s ease-in-out infinite;
+  animation: pulse 1.6s var(--ease) infinite;
 }
 .status-dot[data-status='waiting'] {
   background: var(--status-waiting);
@@ -265,106 +181,15 @@ button {
   }
 }
 
-/* ------------------------------------------------------------ workspace -- */
-
-.workspace {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  background: var(--bg-primary);
-}
-
-.tabbar {
-  height: var(--tabbar-height);
-  flex-shrink: 0;
-  display: flex;
-  align-items: stretch;
-  background: var(--bg-secondary);
-  border-bottom: 1px solid var(--border);
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-
-.tabbar::-webkit-scrollbar {
-  display: none;
-}
-
-.tab {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 10px 0 12px;
-  min-width: 132px;
-  max-width: 220px;
-  background: var(--tab-inactive);
-  border-right: 1px solid var(--border-subtle);
-  color: var(--text-secondary);
-  cursor: pointer;
-  user-select: none;
-}
-
-.tab:hover {
-  background: var(--bg-hover);
-}
-
-/* The lifted surface does most of the work; the rule underneath is ink rather
-   than colour, because which tab is open is not a focus state. */
-.tab.active {
-  background: var(--tab-active);
-  color: var(--text-primary);
-  box-shadow: inset 0 -2px 0 var(--text-primary);
-}
-
-.tab-label {
-  flex: 1;
-  font-size: 12px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* This number is the tab's ⌘-shortcut, so it has to be readable, not decorative. */
-.tab-index {
-  color: var(--text-secondary);
-}
-
-.tab-close {
-  display: grid;
-  place-items: center;
-  width: 18px;
-  height: 18px;
-  border-radius: var(--radius-sm);
-  color: var(--text-muted);
-  opacity: 0;
-  transition: opacity 120ms ease, background 120ms ease;
-}
-
-.tab:hover .tab-close,
-.tab.active .tab-close {
-  opacity: 1;
-}
-
-.tab-close:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
-}
-
 /* ------------------------------------------------------------- terminal -- */
-
-.panes {
-  flex: 1;
-  position: relative;
-  min-height: 0;
-}
 
 .terminal-host {
   position: absolute;
   inset: 0;
-  padding: 8px 10px;
+  padding: var(--sp-3) var(--sp-4);
 }
 
-/* Hidden tabs stay mounted so scrollback and cursor state survive switching. */
+/* Hidden views stay mounted so scrollback and cursor state survive switching. */
 .terminal-host[data-visible='false'] {
   display: none;
 }
@@ -377,78 +202,77 @@ button {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 10px;
+  gap: var(--sp-2);
   text-align: center;
   color: var(--text-secondary);
 }
 
-/* An icon is not a meaning-carrying colour, so it takes a text token. */
 .empty-mark {
   color: var(--text-muted);
-  margin-bottom: 2px;
+  margin-bottom: var(--sp-1);
+  opacity: 0.7;
 }
 
 .empty-state h1 {
   margin: 0;
-  font-size: 22px;
-  font-weight: 650;
-  letter-spacing: -0.01em;
+  font-family: var(--font-display);
+  font-size: var(--t-largetitle);
+  font-weight: var(--w-bold);
+  letter-spacing: var(--t-largetitle-ls);
   color: var(--text-primary);
 }
 
 .empty-state p {
   margin: 0;
-  font-size: 13px;
+  font-size: var(--t-body);
 }
 
-.btn-primary {
-  margin-top: 10px;
-  padding: 8px 18px;
-  border-radius: var(--radius-md);
-  background: var(--accent);
-  color: var(--accent-fg);
-  font-size: 13px;
-  font-weight: 550;
-  transition: background 120ms ease;
-}
-
-.btn-primary:hover {
-  background: var(--accent-dim);
+.empty-state .btn-primary {
+  margin-top: var(--sp-4);
 }
 
 .empty-hint {
-  margin-top: 14px;
-  font-size: 11.5px;
-  color: var(--text-secondary);
+  margin-top: var(--sp-5) !important;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  font-size: var(--t-callout);
+  color: var(--text-muted);
 }
 
-kbd {
-  display: inline-block;
-  padding: 1px 5px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-tertiary);
-  font-family: var(--font-mono);
-  font-size: 10.5px;
+/* -------------------------------------------------------------- surface -- */
+
+/* Every floating surface — dialog, popover, menu, tooltip — wears the same
+   glass, so the product reads as one piece. Anything that opens over the app
+   should carry this class or copy these four declarations. */
+.surface-material {
+  background-color: var(--material-bg-strong);
+  background-image: var(--material-sheen);
+  -webkit-backdrop-filter: var(--material-filter);
+  backdrop-filter: var(--material-filter);
+  border: 1px solid var(--material-hairline);
+  box-shadow: var(--shadow-lg), inset 0 1px 0 var(--material-edge);
 }
 
-/* The one other place the blue is allowed: the selection the OS draws. */
 ::selection {
   background: var(--accent-soft);
 }
 
-/* -------------------------------------------------------------- scroll -- */
+/* --------------------------------------------------------------- scroll -- */
 
+/* Overlay scrollbars, the way macOS draws them: nothing until you scroll. */
 ::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: 11px;
+  height: 11px;
 }
 
-/* A scrollbar thumb is a capsule by definition rather than a box on the radius
-   scale, so 999px here is a shape, not a magic number. */
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
 ::-webkit-scrollbar-thumb {
   background: var(--border-strong);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   border: 3px solid transparent;
   background-clip: content-box;
 }
@@ -458,28 +282,34 @@ kbd {
   background-clip: content-box;
 }
 
-/* A contained failure: the panel says what broke instead of the window going
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* ---------------------------------------------------------------- error -- */
+
+/* A contained failure: the view says what broke instead of the window going
    blank, and offers a way back without a restart. */
 .panel-error {
-  padding: 16px 14px;
+  padding: var(--sp-5) var(--sp-4);
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 8px;
+  gap: var(--sp-2);
 }
 
 .panel-error-title {
   margin: 0;
-  font-size: 12.5px;
-  font-weight: 600;
+  font-size: var(--t-headline);
+  font-weight: var(--w-semibold);
   color: var(--text-primary);
 }
 
 .panel-error-detail {
   margin: 0;
   font-family: var(--font-mono);
-  font-size: 11px;
-  line-height: 1.5;
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
   color: var(--text-secondary);
   word-break: break-word;
 }

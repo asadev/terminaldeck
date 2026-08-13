@@ -1,0 +1,197 @@
+{
+  "generator": "android/tools/gen-sealed-fixtures.cjs against src/shared/sealed.ts",
+  "noiseName": "Noise_IK_25519_ChaChaPoly_SHA256",
+  "sealedVersion": 1,
+  "keys": {
+    "macStaticPrivate": "78573662415d246385d4659b81a7782f591d9afa367389a2d281b7ac17fec953",
+    "macStaticPublic": "4a60148e5b997d165af9f1c9dca4c6e4ab5b392f832ccbac98d1916fb099f709",
+    "devicePrivate": "3aceeb33e54cdf1d67dbd1d61b56c631ab605d3d5feb22483803da3939b7293b",
+    "devicePublic": "c6f81e4050c1131839c71b72edaacb799b4985d403d71c52ca877f804337a351",
+    "initiatorEphemeralPrivate": "e8443ade5c5e8bc9c072e940bc59a23dc342109080cb2ee4eeed4f52e8a61e04",
+    "initiatorEphemeralPublic": "1aaaca7662ab93b4a073bd0611965ca191c7a1f1b6f487e916aa60e1ba0f7b51",
+    "responderEphemeralPrivate": "b9af45fc45dcbbd5fc8304f2dc2d793b37f051a0399abd5083461b51666d4a71",
+    "responderEphemeralPublic": "841afe1115a570fb7e11ceb6f06602001e7dbbf27d09626ba442a89bda5f3e4b"
+  },
+  "handshake": {
+    "message": "1aaaca7662ab93b4a073bd0611965ca191c7a1f1b6f487e916aa60e1ba0f7b51eefe7b12d02a7ab4220f8199ac417158821f3fe34cc072606ff446ef74a24263c581befc612a3bc7bf162065926c8ad8",
+    "reply": "841afe1115a570fb7e11ceb6f06602001e7dbbf27d09626ba442a89bda5f3e4b2c36463cc81b81f51c17a7e7d3c9f145",
+    "k1": "e7e5623b290e741d19527227da719d4722f7661c9a1aadd1eb36cca6bf3c8939",
+    "k2": "0eca29f38c548409f2038ae8b0e42322e86ad74053c9c9d45060eae176294362",
+    "binding": "540b1481147aa2e12a7ff04b8fd0ad9947b1b68e2cac35dc4ba23f19c512ac25"
+  },
+  "relayWire": {
+    "sealedVersion": 1,
+    "noiseMessageBytes": 80,
+    "noiseReplyBytes": 48,
+    "handshakeOpenBytes": 81,
+    "handshakeReplyBytes": 49,
+    "framedMessage": "011aaaca7662ab93b4a073bd0611965ca191c7a1f1b6f487e916aa60e1ba0f7b51eefe7b12d02a7ab4220f8199ac417158821f3fe34cc072606ff446ef74a24263c581befc612a3bc7bf162065926c8ad8",
+    "framedReply": "01841afe1115a570fb7e11ceb6f06602001e7dbbf27d09626ba442a89bda5f3e4b2c36463cc81b81f51c17a7e7d3c9f145"
+  },
+  "frameCount": 513,
+  "initiatorToResponder": [
+    {
+      "counter": 0,
+      "plaintext": "{\"t\":\"ping\"}",
+      "frame": "cd6072841b6c26724c5e01af9231b3c54b4b9c9059560f355a1ab25e"
+    },
+    {
+      "counter": 1,
+      "plaintext": "",
+      "frame": "a5144728b743aff3f87a440c8d4038e9"
+    },
+    {
+      "counter": 2,
+      "plaintext": "initiator · 端末 · éüñ · 🚀 · xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "frame": "ad38b7efc69b55cc03f578dff20e5f71aa3018d8217b007748ee93465a23f585cbd1eae12f59b4bc6d4d9124ff6f6557734ff7381b5c2233c95565ec1fb3c6d8cfb13d28013a99f435a3bf46e78e2631888b987a0046fc3de4c0ff875f905a35ea"
+    },
+    {
+      "counter": 255,
+      "plaintext": "initiator:255",
+      "frame": "f459e5111de543eede2a96945d17965e3b1ba265d4de633bfa4d8a53d2"
+    },
+    {
+      "counter": 256,
+      "plaintext": "initiator:256",
+      "frame": "5006630154e4de97a18f61f40a5ab067f4cce3a998dd5b9774f4e6f179"
+    },
+    {
+      "counter": 257,
+      "plaintext": "initiator:257",
+      "frame": "286ce2d13705ea7a20fb5b7141c5d13df81ed4a5294e529a3445d738d2"
+    },
+    {
+      "counter": 511,
+      "plaintext": "initiator:511",
+      "frame": "01bd7d71ce16d1d5cbe63eb726bec49a2a44d648f4b341f0196d5aa9cd"
+    },
+    {
+      "counter": 512,
+      "plaintext": "initiator:512",
+      "frame": "458bd5bb07ca4dd9457a2f07e4cd1212f9e3d70d6445053e47db728e89"
+    }
+  ],
+  "responderToInitiator": [
+    {
+      "counter": 0,
+      "plaintext": "{\"t\":\"ping\"}",
+      "frame": "d8b8b923dd1ba8d6613ab23ec1c8111c864fa003e71172275fbaa493"
+    },
+    {
+      "counter": 1,
+      "plaintext": "",
+      "frame": "a66179d26f0b0e4dce9a7f70b7efad94"
+    },
+    {
+      "counter": 2,
+      "plaintext": "responder · 端末 · éüñ · 🚀 · xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "frame": "79d5f5183cb570a4713e418a867cb1493ab00f67a2f74ddf6c0deccf77edf863569f1b0ef2110ea930661b2b4bc676adb0a948f88cb9793a94b96e4fbda239ecb402e02316b4482cff621a059be1ee21e4c1b3cc01c50a07a8adecd3d7388b0d13"
+    },
+    {
+      "counter": 255,
+      "plaintext": "responder:255",
+      "frame": "42952b90bd67bc1f8c0516a2a977af93fb011fa567b39181a8281d6676"
+    },
+    {
+      "counter": 256,
+      "plaintext": "responder:256",
+      "frame": "d5fad7ea0b16055d81df79bbd42c72433f18c5cc14c6251069a9ad9a6c"
+    },
+    {
+      "counter": 257,
+      "plaintext": "responder:257",
+      "frame": "437bdd503233a8cb380e32aeab67d6e43ae4cba792ac7250981d96265f"
+    },
+    {
+      "counter": 511,
+      "plaintext": "responder:511",
+      "frame": "cdfc5cf8330b4334d449885835862b37b73c78a309ae9ff35eea3c23af"
+    },
+    {
+      "counter": 512,
+      "plaintext": "responder:512",
+      "frame": "83f9e390367374f6407f596b1116041755b0915b1fea81a6b16126c538"
+    }
+  ],
+  "dhVectors": [
+    {
+      "label": "es",
+      "privateKey": "e8443ade5c5e8bc9c072e940bc59a23dc342109080cb2ee4eeed4f52e8a61e04",
+      "publicKey": "4a60148e5b997d165af9f1c9dca4c6e4ab5b392f832ccbac98d1916fb099f709",
+      "shared": "b5196238a9e40f95da8cef5051e6500446b4956eb52a4ecae797d290d8680e54"
+    },
+    {
+      "label": "ss",
+      "privateKey": "3aceeb33e54cdf1d67dbd1d61b56c631ab605d3d5feb22483803da3939b7293b",
+      "publicKey": "4a60148e5b997d165af9f1c9dca4c6e4ab5b392f832ccbac98d1916fb099f709",
+      "shared": "e62333e310249d34cd3b7de1796f56792176168dbc141c2ae146287bc44ed46e"
+    },
+    {
+      "label": "ee",
+      "privateKey": "e8443ade5c5e8bc9c072e940bc59a23dc342109080cb2ee4eeed4f52e8a61e04",
+      "publicKey": "841afe1115a570fb7e11ceb6f06602001e7dbbf27d09626ba442a89bda5f3e4b",
+      "shared": "237e4f96aeb92fcb2426f9b1059ab90cf905a7cbb912964eb300b0acd069e570"
+    },
+    {
+      "label": "se",
+      "privateKey": "3aceeb33e54cdf1d67dbd1d61b56c631ab605d3d5feb22483803da3939b7293b",
+      "publicKey": "841afe1115a570fb7e11ceb6f06602001e7dbbf27d09626ba442a89bda5f3e4b",
+      "shared": "18ed3090e13aefd30ad0a63240572aa31b291c7ec3df05a6b038a823db553f7f"
+    }
+  ],
+  "lowOrder": [
+    {
+      "publicKey": "0000000000000000000000000000000000000000000000000000000000000000",
+      "rejected": true,
+      "shared": null
+    },
+    {
+      "publicKey": "0100000000000000000000000000000000000000000000000000000000000000",
+      "rejected": true,
+      "shared": null
+    },
+    {
+      "publicKey": "e0eb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd866205165f49b800",
+      "rejected": true,
+      "shared": null
+    },
+    {
+      "publicKey": "5f9c95bca3508c24b1d0b1559c83ef5b04445cc4581c8e86d8224eddd09f1157",
+      "rejected": true,
+      "shared": null
+    },
+    {
+      "publicKey": "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+      "rejected": true,
+      "shared": null
+    },
+    {
+      "publicKey": "edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+      "rejected": true,
+      "shared": null
+    },
+    {
+      "publicKey": "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+      "rejected": true,
+      "shared": null
+    }
+  ],
+  "fingerprints": [
+    {
+      "publicKey": "4a60148e5b997d165af9f1c9dca4c6e4ab5b392f832ccbac98d1916fb099f709",
+      "fingerprint": "LRV8-QYJM-NYAX-HYR4-D58M-K8GR"
+    },
+    {
+      "publicKey": "c6f81e4050c1131839c71b72edaacb799b4985d403d71c52ca877f804337a351",
+      "fingerprint": "BQTB-VLCX-3DM3-WTQ7-W8GB-K64Z"
+    },
+    {
+      "publicKey": "0000000000000000000000000000000000000000000000000000000000000000",
+      "fingerprint": "74DW-S6WU-QWXB-3M5J-AFH6-R7RP"
+    },
+    {
+      "publicKey": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "fingerprint": "97W4-6SQB-B2SK-G4MM-SENZ-86EH"
+    }
+  ]
+}

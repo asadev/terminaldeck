@@ -44,6 +44,11 @@ coverage/
 *.log
 npm-debug.log*
 
+# Where `scripts/remote-host.sh` keeps its bundle, this Mac's relay identity and
+# the trust store it pairs phones into. Machine state, and one of those files is
+# a private key.
+.harness/.remote-host/
+
 # Editors
 .vscode/
 .idea/

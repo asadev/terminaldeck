@@ -2,70 +2,85 @@
    MCP inspector — configured servers, what each one offers, and a form built
    from a tool's own schema.
 
-   Layout is a single scrolling column of disclosure rows rather than a
-   master/detail split: the panel is often docked narrow, and a detail pane at
-   that width shows one tool name and no schema.
+   This is the densest surface in the app, and it used to be the narrowest: a
+   single scrolling column of disclosure rows, because a detail pane in a 300px
+   drawer shows one tool name and no schema. With the window it gets columns —
+   tools lay out two or three abreast, and a schema form puts its scalar fields
+   side by side — and it loses the nesting. A server was a card, holding a tool
+   that was a card, holding a `pre` that was a card. Now a server is a row, an
+   open server is a tint, and the only outlines left are on the inputs, which
+   are the one thing that has to look like something you can type into.
    ============================================================================ */
 
 .mcp {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  overflow-y: auto;
-  padding: 16px 16px 24px;
-  background: var(--bg-secondary);
+  max-width: 96rem;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--t-body);
 }
 
 /* ------------------------------------------------------------------ head -- */
 
 .mcp-head {
   display: flex;
-  align-items: flex-start;
-  gap: 16px;
+  align-items: center;
+  gap: var(--sp-6);
   flex-shrink: 0;
-  padding-bottom: 14px;
-  border-bottom: 1px solid var(--border-subtle);
+  min-height: var(--control-h-lg);
+  margin-bottom: var(--sp-5);
 }
 
 .mcp-heading {
   margin: 0;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--text-secondary);
+  font-size: var(--t-footnote);
+  font-weight: var(--w-semibold);
+  color: var(--text-muted);
 }
 
 .mcp-subheading {
-  margin: 3px 0 0;
-  max-width: 52ch;
-  font-size: 12px;
+  margin: 0;
+  max-width: 64ch;
+  font-size: var(--t-body);
+  line-height: var(--lh-body);
   color: var(--text-secondary);
+}
+
+.mcp-head > div {
+  flex: 1;
+  min-width: 0;
 }
 
 .mcp-refresh,
 .mcp-server-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex-shrink: 0;
-  padding: 4px 11px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-tertiary);
+  height: var(--control-h);
+  padding: 0 var(--sp-3);
+  border-radius: var(--radius-md);
+  background: var(--fill-tertiary);
   font-family: inherit;
-  font-size: 12px;
-  color: var(--text-secondary);
-  transition: background 120ms ease, color 120ms ease;
+  font-size: var(--t-callout);
+  font-weight: var(--w-medium);
+  color: var(--text-primary);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.mcp-refresh {
+  font-size: var(--t-body);
 }
 
 .mcp-refresh:hover:not(:disabled),
 .mcp-server-action:hover:not(:disabled) {
-  background: var(--bg-hover);
-  color: var(--text-primary);
+  background: var(--fill-secondary);
 }
 
 .mcp-refresh:disabled {
-  opacity: 0.55;
+  opacity: 0.5;
+  cursor: default;
 }
 
 /* This panel is almost entirely buttons and disclosure rows; one rule keeps
@@ -78,26 +93,40 @@
 .mcp-array-add:focus-visible,
 .mcp-array-remove:focus-visible,
 .mcp-run:focus-visible,
+.mcp-input:focus-visible,
+.mcp-checkbox:focus-visible,
 .mcp-details > summary:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
+  border-radius: var(--radius-sm);
 }
 
 /* --------------------------------------------------------------- messages -- */
 
 .mcp-empty,
 .mcp-note {
-  margin: 10px 0 0;
+  margin: var(--sp-3) 0 0;
   color: var(--text-secondary);
 }
 
+/* Nothing configured is a page state, not a footnote: it says so in the middle
+   of the window, the way every other empty state in the app does. */
+.mcp > .mcp-empty {
+  max-width: 34rem;
+  margin: 10vh auto 0;
+  font-size: var(--t-body);
+  line-height: var(--lh-body);
+  text-align: center;
+}
+
 .mcp-error {
-  margin: 8px 0 0;
-  padding: 7px 10px;
-  border: 1px solid var(--color-critical);
-  border-radius: var(--radius-sm);
-  background: var(--bg-tertiary);
+  margin: var(--sp-2) 0 0;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--color-critical) 10%, transparent);
   color: var(--color-critical);
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
   overflow-wrap: anywhere;
 }
 
@@ -112,27 +141,32 @@
 }
 
 .mcp-servers {
-  margin-top: 12px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--sp-05);
 }
 
+/* A row, not a card. The one that is open takes a tint so you can see which
+   half of the page belongs to it. */
 .mcp-server {
-  padding: 10px 12px;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
-  background: var(--bg-primary);
+  padding: var(--sp-3);
+  border-radius: var(--radius-lg);
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.mcp-server[data-open='false']:hover {
+  background: var(--bg-hover);
 }
 
 .mcp-server[data-open='true'] {
-  border-color: var(--border);
+  background: var(--bg-secondary);
+  padding-bottom: var(--sp-5);
 }
 
 .mcp-server-head {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--sp-2);
 }
 
 .mcp-server-toggle {
@@ -140,18 +174,18 @@
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--sp-2);
   padding: 0;
   border: 0;
   background: none;
   font-family: inherit;
-  font-size: 12px;
+  font-size: var(--t-body);
   color: var(--text-secondary);
   text-align: left;
 }
 
 .mcp-server-name {
-  font-weight: 600;
+  font-weight: var(--w-semibold);
   color: var(--text-primary);
   white-space: nowrap;
 }
@@ -159,7 +193,9 @@
 .mcp-server-state {
   margin-left: auto;
   flex-shrink: 0;
-  color: var(--text-secondary);
+  padding-left: var(--sp-4);
+  font-size: var(--t-callout);
+  color: var(--text-muted);
 }
 
 /* Status dot. Colours alias the session tokens so a connected MCP server and a
@@ -168,7 +204,7 @@
   flex-shrink: 0;
   width: 7px;
   height: 7px;
-  border-radius: 50%;
+  border-radius: var(--radius-pill);
   background: var(--status-idle);
 }
 
@@ -187,44 +223,54 @@
 
 .mcp-tag {
   flex-shrink: 0;
-  padding: 1px 6px;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
-  font-size: 10px;
-  letter-spacing: 0.03em;
+  padding: 0 var(--sp-15);
+  border-radius: var(--radius-pill);
+  background: var(--fill-quaternary);
+  font-size: var(--t-caption);
+  letter-spacing: var(--t-caption-ls);
   color: var(--text-secondary);
 }
 
 /* Where a server is configured is a fact about it, not a warning and not a
-   selection — so it is stated in ink and a firmer edge, not in colour. */
+   selection — so it is stated in a firmer fill, not in colour. */
 .mcp-tag[data-scope='project'],
 .mcp-tag[data-scope='local'] {
-  border-color: var(--border-strong);
+  background: var(--fill-secondary);
   color: var(--text-primary);
 }
 
 .mcp-tag[data-warn='true'] {
-  border-color: var(--color-warning);
+  background: color-mix(in srgb, var(--color-warning) 18%, transparent);
   color: var(--color-warning);
 }
 
-/* The command is the one thing that identifies a server; it has to be read. */
+/* The command is the one thing that identifies a server; it has to be read. It
+   sits under the name, indented to it. */
 .mcp-server-command {
-  margin: 6px 0 0;
+  margin: var(--sp-1) 0 0;
+  padding-left: var(--sp-4);
   font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--text-secondary);
+  font-size: var(--t-footnote);
+  color: var(--text-muted);
   overflow-wrap: anywhere;
 }
 
+.mcp-server > .mcp-note,
+.mcp-server > .mcp-error {
+  margin-left: var(--sp-4);
+  max-width: 78ch;
+}
+
+/* Space, not a rule: the tint behind an open server already says where its
+   detail begins. */
 .mcp-server-body {
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border-subtle);
+  margin-top: var(--sp-5);
+  padding-left: var(--sp-4);
 }
 
 .mcp-meta {
   margin: 0;
+  font-size: var(--t-callout);
   color: var(--text-secondary);
 }
 
@@ -233,54 +279,59 @@
 }
 
 .mcp-instructions {
-  margin: 6px 0 0;
-  padding: 7px 10px;
-  border-left: 2px solid var(--border-strong);
-  background: var(--bg-tertiary);
+  max-width: 84ch;
+  margin: var(--sp-3) 0 0;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-md);
+  background: var(--fill-quaternary);
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
   color: var(--text-secondary);
 }
 
 /* ------------------------------------------------------------------ tabs -- */
 
+/* Three words and a refresh. The bordered strip this replaced drew a rule
+   across the window to separate a three-way switch from what it switches. */
 .mcp-tabs {
   display: flex;
   align-items: center;
-  gap: 4px;
-  margin-top: 12px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid var(--border-subtle);
+  gap: var(--sp-1);
+  margin-top: var(--sp-5);
 }
 
 .mcp-tab {
   display: flex;
   align-items: center;
-  gap: 5px;
-  padding: 4px 10px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
+  gap: var(--sp-15);
+  height: var(--control-h-sm);
+  padding: 0 var(--sp-3);
+  border: 0;
+  border-radius: var(--radius-pill);
   background: none;
   font-family: inherit;
-  font-size: 12px;
+  font-size: var(--t-callout);
+  font-weight: var(--w-medium);
   color: var(--text-secondary);
   text-transform: capitalize;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
 
 .mcp-tab:hover {
+  background: var(--fill-quaternary);
   color: var(--text-primary);
 }
 
 .mcp-tab[aria-selected='true'] {
-  border-color: var(--border);
-  background: var(--bg-tertiary);
+  background: var(--fill-secondary);
   color: var(--text-primary);
 }
 
 .mcp-count {
-  padding: 0 5px;
-  border-radius: var(--radius-sm);
-  background: var(--bg-hover);
-  font-size: 10px;
-  color: var(--text-secondary);
+  font-size: var(--t-caption);
+  font-weight: var(--w-regular);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
 }
 
 .mcp-tabs .mcp-server-action {
@@ -289,44 +340,49 @@
 
 /* ----------------------------------------------------------------- items -- */
 
+/* Tools two or three abreast — a single column of one-line rows was a drawer's
+   answer to a drawer's width. An open tool takes the whole row back, because
+   its form and its result need it. */
 .mcp-items {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin-top: 8px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(24rem, 1fr));
+  gap: var(--sp-05) var(--sp-6);
+  margin-top: var(--sp-3);
 }
 
 .mcp-item {
-  border-radius: var(--radius-sm);
+  min-width: 0;
+  border-radius: var(--radius-md);
 }
 
-/* An open tool is marked with a rule and a lift, not a heavier fill: the fill
-   would have to be `--bg-tertiary` to read in dark, and that is the same
-   surface the inputs use, so every field inside would lose its edge. */
+.mcp-items > .mcp-note,
 .mcp-item[data-open='true'] {
-  margin: 4px 0;
-  border: 1px solid var(--border-subtle);
-  background: var(--bg-secondary);
+  grid-column: 1 / -1;
 }
 
-.mcp-item[data-open='true'] > .mcp-item-head {
-  border-bottom: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+/* An open tool is marked by the surface it stands on. Everything inside it
+   works in tints of the ink, so nothing needs an edge of its own. */
+.mcp-item[data-open='true'] {
+  margin: var(--sp-2) 0;
+  padding-bottom: var(--sp-2);
+  background: var(--bg-primary);
 }
 
 .mcp-item-head {
   display: flex;
   align-items: baseline;
-  gap: 8px;
+  gap: var(--sp-2);
   width: 100%;
-  padding: 6px 8px;
+  min-width: 0;
+  padding: var(--sp-15) var(--sp-2);
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: none;
   font-family: inherit;
-  font-size: 12px;
+  font-size: var(--t-callout);
   color: var(--text-secondary);
   text-align: left;
+  transition: background var(--dur-fast) var(--ease);
 }
 
 button.mcp-item-head:hover {
@@ -335,6 +391,10 @@ button.mcp-item-head:hover {
 
 .mcp-item-name {
   flex-shrink: 0;
+  max-width: 26ch;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   font-family: var(--font-mono);
   color: var(--text-primary);
 }
@@ -350,24 +410,27 @@ button.mcp-item-head:hover {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-  color: var(--text-secondary);
+  color: var(--text-muted);
 }
 
 .mcp-item-body {
-  padding: 4px 8px 12px;
+  padding: var(--sp-2) var(--sp-2) var(--sp-3);
 }
 
 .mcp-item-description {
-  margin: 0 0 10px;
-  max-width: 68ch;
+  max-width: 84ch;
+  margin: 0 0 var(--sp-4);
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
   color: var(--text-secondary);
 }
 
 .mcp-args {
-  margin: 6px 0 8px 8px;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--sp-05);
+  margin: var(--sp-1) 0 var(--sp-2) var(--sp-4);
+  font-size: var(--t-callout);
   color: var(--text-muted);
 }
 
@@ -379,7 +442,8 @@ button.mcp-item-head:hover {
 /* --------------------------------------------------------------- details -- */
 
 .mcp-details {
-  margin-top: 8px;
+  margin-top: var(--sp-3);
+  font-size: var(--t-callout);
 }
 
 .mcp-details > summary {
@@ -391,40 +455,56 @@ button.mcp-item-head:hover {
   color: var(--text-primary);
 }
 
+/* A tint of the ink rather than a panel: this sits inside an open tool, which
+   already sits inside an open server, and a third edge is one too many. */
 .mcp-pre {
-  margin: 6px 0 0;
-  padding: 8px 10px;
-  max-height: 320px;
+  margin: var(--sp-2) 0 0;
+  padding: var(--sp-3);
+  max-height: 22rem;
   overflow: auto;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
-  background: var(--bg-tertiary);
+  border-radius: var(--radius-md);
+  background: var(--fill-quaternary);
   font-family: var(--font-mono);
-  font-size: 11px;
-  line-height: 1.5;
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
   color: var(--text-secondary);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  user-select: text;
 }
 
 /* ------------------------------------------------------------------ form -- */
 
+/* Scalar fields side by side; anything with a body of its own — an object, an
+   array, a JSON box — takes the full width. */
 .mcp-form {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  margin-bottom: 12px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(20rem, 1fr));
+  gap: var(--sp-4) var(--sp-6);
+  /* Bottom-aligned, so the inputs across a row sit on one line whether or not
+     the field above them declared a description. */
+  align-items: end;
+  margin-bottom: var(--sp-4);
+}
+
+.mcp-form-note,
+.mcp-form > .mcp-field[data-kind='object'],
+.mcp-form > .mcp-field[data-kind='array'],
+.mcp-form > .mcp-field[data-kind='json'] {
+  grid-column: 1 / -1;
 }
 
 .mcp-form-note {
   margin: 0;
+  font-size: var(--t-callout);
   color: var(--text-secondary);
 }
 
 .mcp-field {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--sp-1);
+  min-width: 0;
 }
 
 /* A checkbox beside its label reads better than one stacked under it. */
@@ -432,18 +512,18 @@ button.mcp-item-head:hover {
   flex-direction: row-reverse;
   align-items: center;
   justify-content: flex-end;
-  gap: 8px;
+  gap: var(--sp-2);
 }
 
 .mcp-field-label {
   display: flex;
   align-items: baseline;
-  gap: 6px;
+  gap: var(--sp-15);
 }
 
 .mcp-field-name {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--t-footnote);
   color: var(--text-primary);
 }
 
@@ -452,43 +532,46 @@ button.mcp-item-head:hover {
 }
 
 .mcp-field-type {
-  font-size: 10px;
-  letter-spacing: 0.03em;
-  color: var(--text-secondary);
+  font-size: var(--t-caption);
+  letter-spacing: var(--t-caption-ls);
+  color: var(--text-muted);
 }
 
 .mcp-field-description {
-  margin: 0;
   max-width: 68ch;
-  font-size: 11px;
+  margin: 0;
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
   color: var(--text-secondary);
 }
 
 .mcp-field-error {
   margin: 0;
-  font-size: 11px;
+  font-size: var(--t-footnote);
   color: var(--color-critical);
 }
 
+/* The one place an outline is still the right answer: a field has to look like
+   something you can type into. */
 .mcp-input {
   width: 100%;
-  padding: 5px 8px;
+  height: var(--control-h);
+  padding: 0 var(--sp-2);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  background: var(--bg-tertiary);
+  background: var(--bg-primary);
   font-family: inherit;
-  font-size: 12px;
+  font-size: var(--t-body);
   color: var(--text-primary);
+  transition: border-color var(--dur-fast) var(--ease);
 }
 
-.mcp-input:focus-visible {
-  outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-soft);
+.mcp-input:hover:not(:disabled) {
+  border-color: var(--border-strong);
 }
 
 .mcp-input:disabled {
-  opacity: 0.55;
+  opacity: 0.5;
 }
 
 .mcp-input[aria-invalid='true'] {
@@ -496,66 +579,78 @@ button.mcp-item-head:hover {
 }
 
 .mcp-input-json {
+  height: auto;
+  min-height: 5rem;
+  padding: var(--sp-2);
   font-family: var(--font-mono);
-  font-size: 11px;
-  line-height: 1.5;
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
   resize: vertical;
 }
 
 .mcp-checkbox {
-  width: 14px;
-  height: 14px;
+  width: var(--sp-4);
+  height: var(--sp-4);
   accent-color: var(--accent);
 }
 
+/* One hairline for one job: it says how deep in the schema you are, which no
+   amount of space says on its own. */
 .mcp-nested {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding-left: 10px;
+  gap: var(--sp-4);
+  padding-left: var(--sp-3);
   border-left: 1px solid var(--border-subtle);
 }
 
 .mcp-array {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--sp-1);
 }
 
 .mcp-array-row {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--sp-15);
 }
 
 .mcp-array-remove {
+  display: grid;
+  place-items: center;
   flex-shrink: 0;
-  width: 24px;
-  height: 24px;
-  border: 1px solid var(--border);
+  width: var(--icon-btn);
+  height: var(--icon-btn);
+  border: 0;
   border-radius: var(--radius-sm);
-  background: var(--bg-tertiary);
+  background: var(--fill-quaternary);
   font-family: inherit;
-  font-size: 13px;
+  font-size: var(--t-title3);
   line-height: 1;
   color: var(--text-secondary);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
 
 .mcp-array-remove:hover:not(:disabled),
 .mcp-array-add:hover:not(:disabled) {
-  background: var(--bg-hover);
+  background: var(--fill-secondary);
   color: var(--text-primary);
 }
 
 .mcp-array-add {
   align-self: flex-start;
-  padding: 3px 9px;
-  border: 1px dashed var(--border);
-  border-radius: var(--radius-sm);
-  background: none;
+  display: inline-flex;
+  align-items: center;
+  height: var(--control-h-sm);
+  padding: 0 var(--sp-3);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--fill-quaternary);
   font-family: inherit;
-  font-size: 11px;
+  font-size: var(--t-callout);
   color: var(--text-secondary);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
 
 /* ------------------------------------------------------------------- run -- */
@@ -563,37 +658,47 @@ button.mcp-item-head:hover {
 .mcp-run-row {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--sp-3);
   flex-wrap: wrap;
 }
 
+/* The one filled button on the page. */
 .mcp-run {
-  padding: 5px 14px;
-  border: 1px solid var(--accent);
-  border-radius: var(--radius-sm);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: var(--control-h);
+  padding: 0 var(--sp-4);
+  border: 0;
+  border-radius: var(--radius-md);
   background: var(--accent);
   font-family: inherit;
-  font-size: 12px;
-  font-weight: 600;
+  font-size: var(--t-body);
+  font-weight: var(--w-medium);
   color: var(--accent-fg);
+  box-shadow: var(--shadow-sm);
+  transition: background var(--dur-fast) var(--ease);
 }
 
 .mcp-run:hover:not(:disabled) {
   background: var(--accent-dim);
-  border-color: var(--accent-dim);
 }
 
 .mcp-run:disabled {
   opacity: 0.5;
+  box-shadow: none;
 }
 
 .mcp-run-hint {
-  color: var(--text-secondary);
+  font-size: var(--t-callout);
+  color: var(--text-muted);
 }
 
+/* The one line left in this file that is not around an input: it is the result
+   saying whether the call worked, which is the whole point of pressing Run. */
 .mcp-result {
-  margin-top: 10px;
-  padding-left: 10px;
+  margin-top: var(--sp-4);
+  padding-left: var(--sp-3);
   border-left: 2px solid var(--status-completed);
 }
 
@@ -604,5 +709,6 @@ button.mcp-item-head:hover {
 .mcp-result-error {
   margin: 0;
   color: var(--color-critical);
+  font-size: var(--t-callout);
   overflow-wrap: anywhere;
 }

@@ -1,4 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useEvery } from '../schedule'
+import { panelSpec } from '../shell/panels'
+import { PageEmpty } from './PageEmpty'
 import './AlertsPanel.css'
 
 /* ------------------------------------------------------------------ types -- */
@@ -204,6 +207,24 @@ export function AlertRow({
 
 /* ------------------------------------------------------------------ panel -- */
 
+/**
+ * How often to rescan, and why this one cannot be an event.
+ *
+ * Most of what this panel reports has a push behind it — a transcript that
+ * grew, a working tree that changed — but two of the rules do not, and they are
+ * the two worth interrupting for. `BLOCKED_WARNING_MS` and
+ * `BLOCKED_CRITICAL_MS` in `src/main/alerts.ts` turn a session that asked a
+ * question into an alert after ten minutes and a louder one after forty-five,
+ * and a session sitting on an unanswered question is by definition a session
+ * that is not doing anything. Nothing happens. No file changes, no process
+ * writes, no channel fires — the alert comes into existence purely because time
+ * passed, and the only thing that can notice that is a clock.
+ *
+ * A minute is a tenth of the finest threshold, so the alert is never more than
+ * that late. It runs on the shared tick rather than an interval of its own, and
+ * the shared tick does not run at all behind a hidden window — an alert nobody
+ * is looking at can wait for the moment they look.
+ */
 const DEFAULT_REFRESH_MS = 60_000
 
 export function AlertsPanel({ projectPath, onAction, bridge, refreshMs }: AlertsPanelProps) {
@@ -246,43 +267,54 @@ export function AlertsPanel({ projectPath, onAction, bridge, refreshMs }: Alerts
     return () => gate.invalidate()
   }, [gate, scan])
 
-  useEffect(() => {
-    const interval = refreshMs ?? DEFAULT_REFRESH_MS
-    if (interval <= 0) return
-    const timer = setInterval(() => {
-      // A scan that outlasts its own interval must not have another stacked on
-      // top of it — each one reads every transcript in the project.
-      if (!gate.isBusy()) void scan()
-    }, interval)
-    return () => clearInterval(timer)
-  }, [gate, scan, refreshMs])
+  const interval = refreshMs ?? DEFAULT_REFRESH_MS
+  useEvery(interval > 0 ? interval : null, () => {
+    // A scan that outlasts its own period must not have another stacked on top
+    // of it — each one reads every transcript in the project.
+    if (!gate.isBusy()) void scan()
+  })
 
   const groups = useMemo(() => (report ? groupAlerts(report.alerts) : []), [report])
 
+  /* A quiet project is the state this panel is in most of the time, and it
+     used to be shown twice: a summary line pinned to the top-left corner and a
+     second sentence saying the same thing ten viewport-percent below it. When
+     there is nothing to list there is nothing to head, so the page is one
+     composed empty state and the rescan button moves into it. */
+  const quiet = host && report !== null && report.alerts.length === 0 && !error
+
   return (
     <section className="alerts" aria-label="Project alerts">
-      <header className="alerts-head">
-        <div className="alerts-headline">
-          <p className="alerts-summary" data-worst={report?.worst ?? 'none'}>
-            {error ?? summarize(report)}
-          </p>
-        </div>
-        <button
-          type="button"
-          className="alerts-rescan"
-          onClick={() => void scan()}
-          disabled={busy || !host}
-        >
-          {busy ? 'Checking…' : 'Check again'}
-        </button>
-      </header>
+      {!quiet && (
+        <header className="alerts-head">
+          <div className="alerts-headline">
+            <p className="alerts-summary" data-worst={report?.worst ?? 'none'}>
+              {error ?? summarize(report)}
+            </p>
+          </div>
+          <button
+            type="button"
+            className="alerts-rescan"
+            onClick={() => void scan()}
+            disabled={busy || !host}
+          >
+            {busy ? 'Checking…' : 'Check again'}
+          </button>
+        </header>
+      )}
 
       {!host ? (
-        <p className="alerts-empty">Alerts are not connected to the main process yet.</p>
-      ) : report && report.alerts.length === 0 ? (
-        <p className="alerts-empty">
+        <PageEmpty icon={panelSpec('alerts').icon} title="Alerts are not available here">
+          Alerts are not connected to the main process yet.
+        </PageEmpty>
+      ) : quiet ? (
+        <PageEmpty
+          icon={panelSpec('alerts').icon}
+          title={summarize(report)}
+          action={{ label: busy ? 'Checking…' : 'Check again', onClick: () => void scan(), busy }}
+        >
           Context is healthy, nothing is blocked, and the tools this project uses are installed.
-        </p>
+        </PageEmpty>
       ) : (
         groups.map((group) => (
           <section className="alerts-group" key={group.severity} data-severity={group.severity}>

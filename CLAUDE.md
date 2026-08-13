@@ -65,6 +65,31 @@ instructions. This has run twice with zero conflicts.
 Comments explain *why*, not *what*. Co-locate tests as `*.test.ts`.
 Use the CSS variables in `src/renderer/styles/tokens.css` — never raw hex.
 
+## Design
+
+The UI follows **Apple's HIG**, in a warm palette. `src/renderer/styles/tokens.css`
+is the whole system and is commented; read it before writing any CSS.
+
+- Every size, colour, radius, spacing, duration and easing comes from a token.
+  Type is `--t-*` (macOS scale), spacing is `--sp-*` (8pt with 4pt half-steps),
+  motion is `var(--dur…) var(--ease…)`.
+- **Separate with space, then with a tint, and only then with a line.** The user
+  asked for this in those words: "a lot of separations is not a good idea, it's
+  not Apple style." A list of rows needs no rule between rows; a section needs no
+  `border-top`; a card is a fill with a radius, not an outline.
+- The shell is **one sidebar and one toolbar**. `shell/Sidebar.tsx` lists what is
+  open, the ten project views, and Settings in the bottom-left;
+  `shell/WindowToolbar.tsx` names the current view and holds its actions. There
+  is no icon rail, no panel drawer and no tab strip — those were four pieces of
+  chrome answering one question.
+- Every floating surface (dialog, popover, menu, tooltip) wears the same glass:
+  `--material-bg*` + `--material-sheen` + `--material-filter`. Transparency alone
+  is not glass; the sheen is what makes it read as glass over an empty area.
+- One accent, `--accent`, for selection, focus and the single primary button.
+  Data keeps its meaningful colours (`--status-*`, `--color-*`) — never neutralise
+  a chart.
+- Both themes are first-class. Never define a colour only inside `[data-theme='dark']`.
+
 ## Verifying the UI without Electron
 
 `.harness/` mounts the real `App` in a plain browser with a stubbed preload:

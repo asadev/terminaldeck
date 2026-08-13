@@ -1,11 +1,12 @@
 /* ============================================================================
    Chat view — a session read as a conversation.
 
-   A reading surface, so the rules are a document's rules: one measure-limited
-   column, generous leading, and no colour doing decorative work. The two
-   speakers are told apart by label and by a hairline rule on the user's turn,
-   not by tinted bubbles — a page of alternating colour blocks is harder to read
-   than a page of text, which is the only thing this panel is for.
+   Apple Mail's reading pane, not a chat client's stack of cards. There is no
+   border on a message, no rule between turns and no line under a section: the
+   turns are told apart by the space between them, by a small quiet label, and —
+   for the user's own turn, which you scan back through to find where an
+   instruction started — by one very light fill. Everything else is ink on
+   paper, in one measure-limited column with generous leading.
    ============================================================================ */
 
 .chat-view {
@@ -24,34 +25,37 @@
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 28px 24px 40px;
+  padding: var(--sp-8) var(--sp-6) var(--sp-10);
 }
 
-/* 68ch is about 11 words a line — the span an eye tracks without losing its
-   place. The panel is often 900px+ wide, where full-bleed text is unreadable. */
+/* One column, centred, capped at the reading measure. The pane is often 900px+
+   wide, where full-bleed text loses its place between lines. The composer, the
+   control row and the usage strip below all cap themselves to the same measure
+   and centre on the same axis, so the pane reads as one document rather than a
+   narrow column with a full-bleed toolbar bolted under it. */
 .cv-column {
-  max-width: 68ch;
+  max-width: var(--content-measure);
   margin: 0 auto;
 }
 
 /* ----------------------------------------------------------------- message */
 
+/* Space is the only separator. A message carries no box, no rule and no card. */
 .cv-message {
-  padding: 2px 0 22px;
+  padding: 0 0 var(--sp-6);
 }
 
 .cv-meta {
   display: flex;
   align-items: baseline;
-  gap: 8px;
-  margin-bottom: 6px;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-15);
 }
 
+/* Sentence case, not tracked-out capitals: a speaker's name is a name. */
 .cv-who {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  font-size: var(--t-footnote);
+  font-weight: var(--w-semibold);
   color: var(--text-secondary);
 }
 
@@ -60,24 +64,29 @@
 }
 
 .cv-time {
-  font-size: 11px;
+  font-size: var(--t-footnote);
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }
 
 .cv-body {
-  font-size: 14px;
-  line-height: 1.65;
+  font-size: var(--t-body);
+  line-height: var(--lh-loose);
   color: var(--text-primary);
   overflow-wrap: anywhere;
 }
 
-/* The user's turn gets a rule and a tint rather than a bubble: it marks where a
-   new instruction starts when you are scanning back through a long session. */
+/* The one place a role is given a surface of its own, and it is a tint rather
+   than a line or a bubble — enough to find where you last spoke, not enough to
+   turn the column into alternating blocks of colour. */
 .cv-you .cv-body {
-  border-left: 2px solid var(--border-strong);
-  padding: 2px 0 2px 14px;
-  color: var(--text-secondary);
+  /* Pulled out by exactly its own padding, so the words line up with the "You"
+     above them and with the agent's paragraphs — the fill sits behind the
+     column rather than indenting it. */
+  margin: 0 calc(var(--sp-3) * -1);
+  padding: var(--sp-3);
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
 }
 
 /* A typed prompt is not markup, so its newlines are all the structure it has. */
@@ -94,7 +103,7 @@
 .cv-rich ul,
 .cv-rich ol,
 .cv-rich blockquote {
-  margin: 0 0 12px;
+  margin: 0 0 var(--sp-3);
 }
 
 .cv-rich h1,
@@ -105,90 +114,105 @@
 .cv-rich h6 {
   /* Headings inside a reply are structure, not titles — a model writing `##`
      should not out-shout the app's own chrome. */
-  font-size: 14px;
-  font-weight: 600;
-  line-height: 1.4;
-  margin: 20px 0 8px;
+  font-size: var(--t-headline);
+  font-weight: var(--w-semibold);
+  line-height: var(--lh-tight);
+  letter-spacing: var(--t-title3-ls);
+  margin: var(--sp-6) 0 var(--sp-2);
   color: var(--text-primary);
 }
 
 .cv-rich ul,
 .cv-rich ol {
-  padding-left: 22px;
+  padding-left: var(--sp-5);
 }
 
 .cv-rich li {
-  margin-bottom: 4px;
+  margin-bottom: var(--sp-1);
 }
 
+/* The quote marker is the one hairline that survives: it is what makes the
+   passage a quotation rather than a paragraph. */
 .cv-rich blockquote {
   border-left: 2px solid var(--border);
-  padding-left: 14px;
+  padding-left: var(--sp-4);
   color: var(--text-secondary);
 }
 
 .cv-rich hr {
   border: 0;
   border-top: 1px solid var(--border-subtle);
-  margin: 20px 0;
+  margin: var(--sp-6) 0;
 }
 
+/* A tint of the ink rather than a named grey, so inline code reads the same on
+   the page and inside the user's filled turn. */
 .cv-rich code {
   font-family: var(--font-mono);
   font-size: 0.86em;
-  background: var(--bg-tertiary);
+  background: var(--fill-tertiary);
   border-radius: var(--radius-sm);
-  padding: 1px 4px;
+  padding: 1px var(--sp-1);
 }
 
 .cv-rich table {
   width: 100%;
   border-collapse: collapse;
-  margin: 0 0 12px;
-  font-size: 13px;
+  margin: 0 0 var(--sp-3);
+  font-size: var(--t-callout);
   display: block;
   /* Tables are the one thing that can be wider than the measure; it scrolls
      inside itself rather than widening the column. */
   overflow-x: auto;
 }
 
+/* Rows, not cells: a grid of boxes is the loudest thing markdown can produce,
+   and the columns are already aligned. One hairline under each row is enough. */
 .cv-rich th,
 .cv-rich td {
-  border: 1px solid var(--border-subtle);
-  padding: 5px 8px;
+  border: 0;
+  border-bottom: 1px solid var(--border-subtle);
+  padding: var(--sp-15) var(--sp-3) var(--sp-15) 0;
   text-align: left;
 }
 
+.cv-rich tr:last-child td {
+  border-bottom: 0;
+}
+
 .cv-rich th {
-  font-weight: 600;
-  background: var(--bg-secondary);
+  font-weight: var(--w-semibold);
+  color: var(--text-secondary);
 }
 
 /* A link keeps its text and loses its href — see the renderer in ChatView.tsx.
    Dotted rather than solid so it never reads as clickable, which it is not. */
 .cv-link {
-  border-bottom: 1px dotted var(--border-strong);
+  text-decoration: underline dotted;
+  text-decoration-color: var(--border-strong);
+  text-underline-offset: 2px;
   cursor: help;
 }
 
 /* ------------------------------------------------------------- code, folded */
 
+/* A fill and a corner, no outline. */
 .cv-code {
-  margin: 0 0 12px;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
+  margin: 0 0 var(--sp-3);
+  border-radius: var(--radius-lg);
   background: var(--bg-secondary);
   overflow: hidden;
 }
 
 .cv-code > summary {
   cursor: pointer;
-  padding: 5px 10px;
+  padding: var(--sp-15) var(--sp-3);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--t-footnote);
   color: var(--text-muted);
   list-style: none;
   user-select: none;
+  transition: color var(--dur-fast) var(--ease);
 }
 
 .cv-code > summary::-webkit-details-marker { display: none; }
@@ -196,17 +220,17 @@
 .cv-code > summary::before {
   content: '▸';
   display: inline-block;
-  width: 12px;
+  width: var(--sp-3);
   color: var(--text-muted);
 }
 
 .cv-code[open] > summary::before { content: '▾'; }
-.cv-code > summary:hover { background: var(--bg-hover); color: var(--text-secondary); }
+.cv-code > summary:hover { color: var(--text-primary); }
+.cv-code > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
 .cv-code pre {
   margin: 0;
-  padding: 10px 12px;
-  border-top: 1px solid var(--border-subtle);
+  padding: 0 var(--sp-3) var(--sp-3);
   /* Bounded: opening a 400-line block should not turn the reading view into a
      file viewer, which is what the terminal tab is already for. */
   max-height: 320px;
@@ -216,8 +240,8 @@
 .cv-code code {
   background: none;
   padding: 0;
-  font-size: 12px;
-  line-height: 1.55;
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
   color: var(--text-secondary);
   /* Wrapped, not scrolled sideways. Rendering a real block showed the right
      third of every line cut off behind a horizontal scrollbar nobody would
@@ -230,29 +254,21 @@
 
 /* ---------------------------------------------------------------- day break */
 
+/* Messages' own idiom: a small centred date with air around it. The two rules
+   that used to run out of it either side were drawing the eye to a date. */
 .cv-day {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin: 10px 0 22px;
+  margin: var(--sp-4) 0 var(--sp-6);
   color: var(--text-muted);
-  font-size: 11px;
-}
-
-.cv-day::before,
-.cv-day::after {
-  content: '';
-  flex: 1;
-  border-top: 1px solid var(--border-subtle);
+  font-size: var(--t-footnote);
+  font-weight: var(--w-medium);
+  text-align: center;
 }
 
 /* --------------------------------------------------------------- furniture */
 
 .cv-source {
-  margin: 16px 0 0;
-  padding-top: 14px;
-  border-top: 1px solid var(--border-subtle);
-  font-size: 11px;
+  margin: var(--sp-6) 0 0;
+  font-size: var(--t-footnote);
   color: var(--text-muted);
   text-align: center;
 }
@@ -264,37 +280,43 @@
 }
 
 .cv-empty-title {
-  margin: 0 0 6px;
-  font-size: 14px;
-  font-weight: 600;
+  margin: 0 0 var(--sp-15);
+  font-size: var(--t-title3);
+  font-weight: var(--w-semibold);
+  letter-spacing: var(--t-title3-ls);
   color: var(--text-primary);
 }
 
 .cv-empty-detail {
   margin: 0;
-  font-size: 13px;
-  line-height: 1.6;
+  font-size: var(--t-body);
+  line-height: var(--lh-body);
   color: var(--text-secondary);
 }
 
-/* The one place the accent is allowed: it is a focus target the user is being
-   pointed at, which is what the blue means everywhere else in the app. */
+/* A floating surface, so it wears the app's glass — and the accent is earned
+   here: it is the one thing in this view the user is being pointed at. */
 .cv-jump {
   position: absolute;
   left: 50%;
-  bottom: 18px;
+  bottom: var(--sp-5);
   transform: translateX(-50%);
-  padding: 6px 14px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--bg-primary);
+  height: var(--control-h);
+  padding: 0 var(--sp-4);
+  border-radius: var(--radius-pill);
   color: var(--accent);
   font-family: var(--font-ui);
-  font-size: 12px;
-  font-weight: 500;
+  font-size: var(--t-callout);
+  font-weight: var(--w-medium);
   cursor: pointer;
-  box-shadow: var(--shadow-md);
+  background-color: var(--material-bg-strong);
+  background-image: var(--material-sheen);
+  -webkit-backdrop-filter: var(--material-filter);
+  backdrop-filter: var(--material-filter);
+  border: 1px solid var(--material-hairline);
+  box-shadow: var(--shadow-lg), inset 0 1px 0 var(--material-edge);
+  transition: transform var(--dur-fast) var(--ease);
 }
 
-.cv-jump:hover { background: var(--bg-hover); }
+.cv-jump:active { transform: translateX(-50%) scale(0.985); }
 .cv-jump:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

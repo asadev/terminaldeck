@@ -1,0 +1,78 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Terminal Deck — Encryption Self-Classification</title>
+<style>
+  @page { margin: 22mm; }
+  body { font: 11.5pt/1.55 -apple-system, "Helvetica Neue", Arial, sans-serif; color: #111; }
+  h1 { font-size: 17pt; margin: 0 0 2pt; }
+  .sub { color: #555; margin: 0 0 20pt; font-size: 10pt; }
+  h2 { font-size: 12pt; margin: 18pt 0 6pt; border-bottom: 1px solid #ddd; padding-bottom: 3pt; }
+  table { border-collapse: collapse; width: 100%; margin: 6pt 0; font-size: 10.5pt; }
+  th, td { text-align: left; vertical-align: top; padding: 4pt 8pt 4pt 0; }
+  th { width: 34%; font-weight: 600; color: #333; }
+  code { font: 10pt "SF Mono", Menlo, monospace; }
+  ul { margin: 4pt 0 4pt 16pt; padding: 0; }
+  li { margin: 2pt 0; }
+  .foot { margin-top: 22pt; font-size: 9.5pt; color: #666; border-top: 1px solid #ddd; padding-top: 8pt; }
+</style>
+
+<h1>Terminal Deck for iOS — Encryption Self-Classification Statement</h1>
+<p class="sub">
+  Asad Iqbal · Apple Developer Team 6U4VNX5W87 · Bundle ID <code>dev.terminaldeck.ios</code>
+</p>
+
+<h2>1. Product</h2>
+<table>
+  <tr><th>Application</th><td>Terminal Deck (iOS)</td></tr>
+  <tr><th>Function</th><td>A remote client for terminal sessions running on the user's own computer. The app displays those sessions and sends the user's keystrokes to them.</td></tr>
+  <tr><th>Distribution</th><td>Apple App Store / TestFlight. Generally available to the public, sold or provided at retail without restriction, and designed for installation by the user without further support from the supplier.</td></tr>
+</table>
+
+<h2>2. Classification</h2>
+<table>
+  <tr><th>ECCN</th><td><strong>5D992.c</strong></td></tr>
+  <tr><th>Authority</th><td>Self-classification as a mass market item under the Cryptography Note (Note 3 to Category 5, Part 2 of the Commerce Control List) and 15 CFR 740.17(b)(1).</td></tr>
+  <tr><th>Non-standard cryptography</th><td><strong>None.</strong> The product implements no proprietary or unpublished cryptographic algorithm. Every primitive it uses is a published international standard, listed in section 3.</td></tr>
+  <tr><th>CCATS</th><td>Not applicable. A classification request is not required for mass market items using only standard cryptography.</td></tr>
+</table>
+
+<h2>3. Cryptographic functionality</h2>
+<p>
+  The application establishes an authenticated, end-to-end encrypted channel between the
+  user's phone and the user's own computer. Its purpose is confidentiality of the user's own
+  terminal session as it crosses an untrusted relay; the relay carries ciphertext and holds
+  no key.
+</p>
+<table>
+  <tr><th>Key agreement</th><td>X25519 elliptic-curve Diffie–Hellman — RFC 7748, 128-bit security level (255-bit curve)</td></tr>
+  <tr><th>Handshake</th><td>Noise Protocol Framework, pattern IK (public specification, noiseprotocol.org)</td></tr>
+  <tr><th>Encryption</th><td>ChaCha20-Poly1305 AEAD — RFC 8439, 256-bit key</td></tr>
+  <tr><th>Key derivation</th><td>HKDF-SHA256 — RFC 5869, RFC 6234</td></tr>
+  <tr><th>Hash</th><td>SHA-256 — FIPS 180-4</td></tr>
+  <tr><th>Transport security</th><td>TLS as provided by the operating system</td></tr>
+  <tr><th>Implementation</th><td>Apple CryptoKit (the operating system's own cryptographic library). No cryptographic algorithm is implemented from scratch by this product.</td></tr>
+</table>
+
+<h2>4. What the product does not do</h2>
+<ul>
+  <li>It contains no proprietary, secret or non-standard cryptographic algorithm.</li>
+  <li>It provides no cryptographic functionality to other applications; there is no API, SDK, library or toolkit exposed to third parties.</li>
+  <li>It is not "cryptanalytic", does not perform key escrow or key recovery, and has no open cryptographic interface.</li>
+  <li>Its cryptography cannot be modified, extended or reconfigured by the user.</li>
+  <li>It is not designed or modified for government end-users, military use, or any specialised application.</li>
+</ul>
+
+<h2>5. Reporting</h2>
+<p>
+  The applicant acknowledges the annual self-classification reporting obligation associated
+  with License Exception ENC 740.17(b)(1), including the requirement to submit a report in
+  CSV format to <code>crypt@bis.doc.gov</code> and <code>enc@nsa.gov</code> by 1 February
+  covering items exported during the preceding calendar year, to the extent that obligation
+  applies to this item.
+</p>
+
+<p class="foot">
+  Prepared for submission to Apple in support of the App Store Connect App Encryption
+  Documentation requirement for <code>dev.terminaldeck.ios</code>.
+  <br>Contact: asadiqbalonline@gmail.com · https://terminaldeck.dev
+</p>

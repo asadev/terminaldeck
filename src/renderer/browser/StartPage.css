@@ -1,87 +1,124 @@
-/* The start page sits inside .bw-stage, where the native browser view is
-   normally painted. The view is hidden while this shows, so this is the only
-   thing on the rectangle. */
+/* ============================================================================
+   The start page — what a new tab shows before it has a URL.
+
+   It sits inside `.bw-stage`, where the native browser view is normally
+   painted. The view is hidden while this shows, so this is the only thing on
+   the rectangle, and it can afford to be generous: one column, centred, a large
+   quiet heading and a short list of the dev servers that are actually running.
+
+   The list never invents a row. If nothing is listening the page says so in a
+   sentence — guessing `localhost:3000` is how this panel used to open on
+   Chrome's error page.
+   ============================================================================ */
+
 .bw-start {
   position: absolute;
   inset: 0;
   display: grid;
   place-items: center;
-  background: var(--bg-primary);
   overflow: auto;
+  padding: var(--sp-12) var(--sp-6);
+  background: var(--bg-primary);
 }
 
 .bw-start-inner {
   width: min(30rem, 100%);
-  padding: 24px;
 }
 
 .bw-start-title {
-  margin: 0 0 6px;
-  font-size: 15px;
-  font-weight: 600;
+  margin: 0 0 var(--sp-2);
+  font-family: var(--font-display);
+  font-size: var(--t-title1);
+  font-weight: var(--w-semibold);
+  letter-spacing: var(--t-title1-ls);
+  line-height: var(--lh-tight);
   color: var(--text-primary);
+  text-align: center;
 }
 
 .bw-start-note {
-  margin: 0 0 14px;
-  font-size: 12.5px;
-  line-height: 1.5;
+  margin: 0 0 var(--sp-6);
+  font-size: var(--t-body);
+  line-height: var(--lh-body);
   color: var(--text-secondary);
+  text-align: center;
+  text-wrap: pretty;
 }
 
 .bw-start-list {
   list-style: none;
-  margin: 0 0 14px;
+  margin: 0 0 var(--sp-6);
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--sp-1);
 }
 
+/* A soft card, not a bordered row: the fill is the whole edge it needs.
+
+   Centred rather than baseline-aligned. On a baseline the pill's own line box
+   sets the row's height, so the one row carrying a "port only" tag stood a few
+   pixels taller than the rest and the stack of cards read as uneven. */
 .bw-start-port {
   display: flex;
-  align-items: baseline;
-  gap: 10px;
+  align-items: center;
+  gap: var(--sp-3);
   width: 100%;
-  padding: 8px 10px;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  text-align: left;
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--radius-lg);
+  background: var(--fill-quaternary);
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: var(--t-body);
+  text-align: left;
+  transition: background var(--dur-fast) var(--ease);
 }
 
 .bw-start-port:hover {
-  background: var(--bg-hover);
+  background: var(--fill-tertiary);
 }
 
 .bw-start-port-num {
+  flex-shrink: 0;
   font-family: var(--font-mono);
+  font-size: var(--t-headline);
+  font-weight: var(--w-medium);
   font-variant-numeric: tabular-nums;
 }
 
 .bw-start-port-cmd {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--t-callout);
 }
 
+/* Said plainly rather than shouted: this row is a port that answered with no
+   process behind it, which is the least useful kind. */
 .bw-start-port-tag {
+  flex-shrink: 0;
   margin-left: auto;
-  padding: 1px 6px;
-  border-radius: 999px;
-  background: var(--bg-hover);
-  color: var(--text-secondary);
-  font-size: 11px;
+  padding: 0 var(--sp-2);
+  border-radius: var(--radius-pill);
+  background: var(--fill-tertiary);
+  color: var(--text-muted);
+  font-size: var(--t-footnote);
+  line-height: 18px;
 }
 
 .bw-start-refresh {
-  padding: 5px 10px;
+  display: block;
+  height: var(--control-h);
+  margin: 0 auto;
+  padding: 0 var(--sp-4);
   border-radius: var(--radius-sm);
-  background: var(--bg-hover);
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--t-callout);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
 
 .bw-start-refresh:hover {
+  background: var(--bg-hover);
   color: var(--text-primary);
 }
