@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
-import { dirname, join, relative, resolve } from 'node:path'
+import { dirname, join, relative, resolve, sep } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 /**
@@ -45,6 +45,19 @@ const KNOWN_UNREACHABLE: Record<string, string> = {
 const SOURCE = /\.tsx?$/
 const isTest = (p: string): boolean => /\.(test|spec)\.tsx?$/.test(p)
 
+/**
+ * A repository path, spelled the way the allowlist below spells one.
+ *
+ * `relative` answers in the host's separator, so on Windows every module came
+ * back as `src\renderer\unread.ts` — which matches no key in
+ * `KNOWN_UNREACHABLE` and reported all nine allowed modules as new orphans
+ * (observed on Windows 11). The keys stay `/`-separated because that is how
+ * this repository writes a path everywhere else, including the entry list above.
+ */
+function repoPath(absolute: string): string {
+  return relative(ROOT, absolute).split(sep).join('/')
+}
+
 function walk(dir: string, out: string[] = []): string[] {
   for (const name of readdirSync(dir)) {
     const full = join(dir, name)
@@ -63,8 +76,13 @@ function resolveSpec(spec: string, from: string): string | null {
   else if (spec.startsWith('.')) base = resolve(dirname(from), spec)
   else return null
 
-  for (const ext of ['.ts', '.tsx', '/index.ts', '/index.tsx', '']) {
-    const candidate = base + ext
+  // The directory candidates go through `join` rather than string concatenation.
+  // `base + '/index.ts'` is a path `existsSync` happily accepts on Windows and
+  // that `walk` can never produce, because `walk` builds with `join` and gets a
+  // backslash — so a module reached only through its `index` was in `seen`
+  // under one spelling and looked for under another, and reported itself an
+  // orphan. `src/renderer/chat/usage/index.ts` did exactly that.
+  for (const candidate of [`${base}.ts`, `${base}.tsx`, join(base, 'index.ts'), join(base, 'index.tsx'), base]) {
     if (candidate && existsSync(candidate) && SOURCE.test(candidate)) return candidate
   }
   return null
@@ -95,7 +113,7 @@ describe('every module is reachable from an entry point', () => {
 
     const orphans = walk(join(ROOT, 'src'))
       .filter((f) => !seen.has(f))
-      .map((f) => relative(ROOT, f))
+      .map(repoPath)
       .filter((f) => !(f in KNOWN_UNREACHABLE))
       .sort()
 

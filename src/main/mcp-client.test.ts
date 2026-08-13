@@ -1,6 +1,6 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve, sep } from 'node:path'
 import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -30,6 +30,17 @@ import {
  * over a fake transport, so the SDK's own handshake, capability gating and
  * request timeouts are genuinely exercised — only the child process is faked.
  */
+
+/**
+ * The open project, absolute on whichever platform is running.
+ *
+ * `~/.claude.json` keys its `projects` map by absolute path and the product
+ * looks entries up through `resolve`, so a fixture keyed on a literal
+ * `/work/app` only matches on POSIX — on Windows the lookup resolves to
+ * `C:\work\app` and the project scope came back empty.
+ */
+const PROJECT = resolve('/work/app')
+const OTHER_PROJECT = resolve('/work/other')
 
 /* ------------------------------------------------------------- fake server -- */
 
@@ -349,10 +360,14 @@ describe('project approval gates', () => {
   })
 
   it('reads gates from settings and from the project entry, keyed on the resolved path', () => {
+    // The key is the *resolved* path and the lookup is given the same path with
+    // a trailing separator, which is the whole claim. Both are built from
+    // `PROJECT` so the fixture is absolute on the platform running this:
+    // `/work/app` resolves to `C:\work\app` on Windows, which matched no key.
     const gates = readProjectGates(
-      { projects: { '/work/app': { enabledMcpjsonServers: ['a'], disabledMcpjsonServers: ['b'] } } },
+      { projects: { [PROJECT]: { enabledMcpjsonServers: ['a'], disabledMcpjsonServers: ['b'] } } },
       { enableAllProjectMcpServers: true },
-      '/work/app/',
+      `${PROJECT}${sep}`,
     )
     expect(gates).toEqual({ enabled: ['a'], disabled: ['b'], enableAll: true })
   })
@@ -381,12 +396,12 @@ describe('collectServersFrom', () => {
   const claudeJson = {
     mcpServers: { higgsfield: { type: 'http', url: 'https://mcp.example.ai/mcp' } },
     projects: {
-      '/work/app': {
+      [PROJECT]: {
         mcpServers: { scratch: { command: 'node', args: ['local.js'] } },
         enabledMcpjsonServers: ['shared'],
         disabledMcpjsonServers: [],
       },
-      '/work/other': { mcpServers: { elsewhere: { command: 'node' } } },
+      [OTHER_PROJECT]: { mcpServers: { elsewhere: { command: 'node' } } },
     },
   }
 
@@ -395,7 +410,7 @@ describe('collectServersFrom', () => {
       claudeJson,
       settings: {},
       projectMcpJson: { mcpServers: { shared: { command: 'uvx', args: ['thing'] } } },
-      projectPath: '/work/app',
+      projectPath: PROJECT,
       claudeJsonPath: '/home/u/.claude.json',
       projectMcpJsonPath: '/work/app/.mcp.json',
       env: {},
@@ -415,7 +430,7 @@ describe('collectServersFrom', () => {
       claudeJson,
       settings: {},
       projectMcpJson: null,
-      projectPath: '/work/app',
+      projectPath: PROJECT,
       claudeJsonPath: '/home/u/.claude.json',
       projectMcpJsonPath: '/work/app/.mcp.json',
       env: {},
@@ -442,7 +457,7 @@ describe('collectServersFrom', () => {
         claudeJson: null,
         settings: null,
         projectMcpJson: null,
-        projectPath: '/work/app',
+        projectPath: PROJECT,
         claudeJsonPath: '/home/u/.claude.json',
         projectMcpJsonPath: '/work/app/.mcp.json',
         env: {},

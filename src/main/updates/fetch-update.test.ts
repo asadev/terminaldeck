@@ -51,6 +51,21 @@ const run = promisify(execFile)
  * cannot collide, and it is removed at the end.
  */
 
+/**
+ * Everything below the pure parsers needs a real `.app` and a real archive, and
+ * both are built with `/usr/bin/ditto` — Apple's own archiver, which is the
+ * point of the module rather than an implementation detail of the fixture (see
+ * its header). There is no Windows stand-in worth substituting: the thing under
+ * test is a macOS bundle, and `fetchUpdate` refuses every platform but darwin
+ * before it opens a socket.
+ *
+ * So the fixture build and its dependants are gated on darwin. Without the
+ * gate, `spawn('/usr/bin/ditto')` fails ENOENT in `beforeAll` on Windows and
+ * takes the whole file down with it — including the parser tests, which are
+ * plain string work and run anywhere.
+ */
+const MAC = process.platform === 'darwin'
+
 /* -------------------------------------------------------------- fixtures -- */
 
 const ROOT = join(tmpdir(), `terminaldeck-fetch-update-${process.pid}`)
@@ -126,6 +141,7 @@ async function zipDirectory(parent: string, name: string, destination: string): 
 }
 
 beforeAll(async () => {
+  if (!MAC) return
   await rm(ROOT, { recursive: true, force: true })
   await mkdir(FIXTURES, { recursive: true })
 
@@ -145,6 +161,7 @@ afterAll(async () => {
 })
 
 beforeEach(async () => {
+  if (!MAC) return
   // Each test starts from an empty userData so "already staged" is only ever
   // true because the test under way put it there.
   await rm(USER_DATA, { recursive: true, force: true })
@@ -437,7 +454,7 @@ describe('decodeSha512', () => {
   })
 })
 
-describe('verifyArchive', () => {
+describe.skipIf(!MAC)('verifyArchive', () => {
   it('names the length when the length is wrong, and the digest when only the digest is', async () => {
     const path = join(FIXTURES, 'verify.bin')
     await writeFile(path, appZip)
@@ -464,7 +481,7 @@ describe('verifyArchive', () => {
 
 /* ---------------------------------------------------------------- bundles -- */
 
-describe('inspectBundle', () => {
+describe.skipIf(!MAC)('inspectBundle', () => {
   it('accepts a real bundle and reads its executable and version', async () => {
     const dir = join(FIXTURES, 'inspect-ok')
     await rm(dir, { recursive: true, force: true })
@@ -507,7 +524,7 @@ describe('inspectBundle', () => {
 
 /* ------------------------------------------------------------- fetchUpdate -- */
 
-describe('fetchUpdate', () => {
+describe.skipIf(!MAC)('fetchUpdate', () => {
   it('downloads, verifies and unpacks a real archive into a real bundle', async () => {
     const net = goodNetwork()
     const result = await fetchUpdate(options(net))
@@ -910,8 +927,18 @@ describe('fetchUpdate', () => {
     expect(result.message).toContain(String(MAX_FEED_BYTES))
   })
 
-  it('does not pretend to work off macOS', async () => {
-    const net = goodNetwork()
+})
+
+/**
+ * Outside the block above on purpose: this is the one `fetchUpdate` case that
+ * has to run *everywhere*, and it is the only one that can, because the refusal
+ * happens before the feed is read and so needs no fixture behind it. An empty
+ * network is enough, and it makes "nothing was requested" mean something
+ * stronger than it would against a network with routes in it.
+ */
+describe('fetchUpdate off macOS', () => {
+  it('does not pretend to work', async () => {
+    const net = network({})
     const result = await fetchUpdate(options(net, { platform: 'win32' }))
 
     expect(result).toMatchObject({ ok: false, reason: 'unsupported-platform' })
@@ -921,7 +948,7 @@ describe('fetchUpdate', () => {
 })
 
 describe('stagedBundlePath', () => {
-  it('is null before anything is staged and the bundle afterwards', async () => {
+  it.skipIf(!MAC)('is null before anything is staged and the bundle afterwards', async () => {
     expect(await stagedBundlePath(APP_VERSION, USER_DATA)).toBeNull()
 
     const net = goodNetwork()
@@ -944,7 +971,7 @@ describe('stagedBundlePath', () => {
    * application and then deletes the backup. A tree with no record of a finished
    * extraction has to come back as null, however well-formed it looks.
    */
-  it('refuses a bundle that no completed extraction vouches for', async () => {
+  it.skipIf(!MAC)('refuses a bundle that no completed extraction vouches for', async () => {
     const net = goodNetwork()
     const result = await fetchUpdate(options(net))
     expect(result.ok).toBe(true)

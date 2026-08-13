@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto'
 import { createServer, request, type Server } from 'node:http'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve, sep } from 'node:path'
 import type { AddressInfo, Socket } from 'node:net'
 import { afterEach, describe, expect, it } from 'vitest'
 import { CLOSE, PROTOCOL_VERSION, type RemoteSession, type ServerMessage } from './protocol'
@@ -933,7 +933,17 @@ describe('the static files', () => {
 })
 
 describe('resolveStaticPath', () => {
+  /**
+   * The web root, and the same directory as this platform names it.
+   *
+   * `resolveStaticPath` answers in resolved, host-shaped paths, so `/srv/pwa`
+   * on Windows is `C:\srv\pwa` — the containment check there compares
+   * backslashed absolute paths, and comparing them against a literal
+   * `/srv/pwa/` prefix said "outside the root" for every answer, including the
+   * ordinary asset. `ROOT` is what goes in; `RESOLVED` is what comes back.
+   */
   const root = '/srv/pwa'
+  const RESOLVED = resolve(root)
 
   it('keeps traversal inside the root', () => {
     // Encoded and plain are the same request once decoded, so both are checked
@@ -945,10 +955,23 @@ describe('resolveStaticPath', () => {
     // `/secret.key`, not to `../secret.key`. The property that matters is not
     // which answer comes back but that no answer ever names a file outside the
     // PWA directory.
-    for (const attempt of ['/../../etc/passwd', '/%2e%2e%2f%2e%2e%2fetc/passwd', '/assets/../../secret.key']) {
+    //
+    // The backslash forms are here because on Windows they are separators, not
+    // filename characters: `\..\..\etc\passwd` is a traversal attempt there and
+    // an oddly-named file on POSIX. Both platforms have to keep it inside, and
+    // both are checked on both — the request arrives over HTTP from a phone,
+    // which is free to spell it either way regardless of which OS receives it.
+    for (const attempt of [
+      '/../../etc/passwd',
+      '/%2e%2e%2f%2e%2e%2fetc/passwd',
+      '/assets/../../secret.key',
+      '/..\\..\\etc\\passwd',
+      '/%2e%2e%5c%2e%2e%5cetc%5cpasswd',
+      '/assets/..\\..\\secret.key',
+    ]) {
       const resolved = resolveStaticPath(root, attempt)
       expect(resolved, attempt).not.toBeNull()
-      expect(resolved?.startsWith(`${root}/`), attempt).toBe(true)
+      expect(resolved?.startsWith(RESOLVED + sep), attempt).toBe(true)
     }
   })
 
@@ -960,8 +983,8 @@ describe('resolveStaticPath', () => {
   })
 
   it('resolves ordinary assets', () => {
-    expect(resolveStaticPath(root, '/assets/app.js')).toBe('/srv/pwa/assets/app.js')
-    expect(resolveStaticPath(root, '/')).toBe('/srv/pwa/index.html')
+    expect(resolveStaticPath(root, '/assets/app.js')).toBe(join(RESOLVED, 'assets', 'app.js'))
+    expect(resolveStaticPath(root, '/')).toBe(join(RESOLVED, 'index.html'))
   })
 
   it('refuses a path with a null byte', () => {

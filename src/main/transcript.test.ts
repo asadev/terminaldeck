@@ -1,3 +1,4 @@
+import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { promptTokens } from './cost'
 import {
@@ -10,26 +11,62 @@ import {
   UNKNOWN_MODEL,
 } from './transcript'
 
+/**
+ * The two halves of `encodeProjectPath` split cleanly by how portable they are.
+ *
+ * The character rewrite is the same rule everywhere. `resolve`, which runs
+ * first, is not: a macOS fixture is only *drive-relative* on Windows, so
+ * `/Users/apple/ClaudeAsad` resolves to `C:\Users\apple\ClaudeAsad` there and
+ * encodes to `C--Users-apple-ClaudeAsad` (observed on Windows 11). That is the
+ * right answer for that machine and the wrong fixture for it, and there is no
+ * way to pin both platforms in one run the way `platform/host.ts` allows —
+ * `resolve` reads the host rather than an argument.
+ *
+ * So the fixtures are split by platform, and each side was read off real
+ * `.claude/projects` directories rather than derived from the rule being
+ * tested: the macOS ones from this Mac, the Windows ones from
+ * `C:\Users\Imza\.claude\projects`.
+ */
+const ON_WINDOWS = process.platform === 'win32'
+
 describe('encodeProjectPath', () => {
   // Every case below was checked against a real directory in
   // ~/.claude/projects and the `cwd` recorded inside that transcript.
-  it('replaces separators with hyphens', () => {
+  it.skipIf(ON_WINDOWS)('replaces separators with hyphens', () => {
     expect(encodeProjectPath('/Users/apple/ClaudeAsad')).toBe('-Users-apple-ClaudeAsad')
     expect(encodeProjectPath('/Users/apple/Projects/terminaldeck')).toBe('-Users-apple-Projects-terminaldeck')
   })
 
-  it('collapses a dot-directory into a double hyphen', () => {
+  it.skipIf(ON_WINDOWS)('collapses a dot-directory into a double hyphen', () => {
     expect(encodeProjectPath('/Users/apple/ClaudeImza/.claude/worktrees/focused-lumiere-5424d6')).toBe(
       '-Users-apple-ClaudeImza--claude-worktrees-focused-lumiere-5424d6',
     )
   })
 
-  it('rewrites every non-alphanumeric character, including tildes and spaces', () => {
+  it.skipIf(ON_WINDOWS)('rewrites every non-alphanumeric character, including tildes and spaces', () => {
     expect(
       encodeProjectPath(
         '/Users/apple/Library/Mobile Documents/com~apple~CloudDocs/OpenClaw/workspace',
       ),
     ).toBe('-Users-apple-Library-Mobile-Documents-com-apple-CloudDocs-OpenClaw-workspace')
+  })
+
+  it.skipIf(!ON_WINDOWS)('turns a drive letter into its own leading segment', () => {
+    // `I:\Claude Temp` is a directory that exists on that machine as
+    // `I--Claude-Temp`: the colon and the backslash each become a hyphen, so a
+    // drive-rooted path never starts with the single hyphen a POSIX one does.
+    expect(encodeProjectPath('I:\\Claude Temp')).toBe('I--Claude-Temp')
+  })
+
+  it.skipIf(!ON_WINDOWS)('keeps a UNC path addressable, both slashes and all', () => {
+    // Read off that machine with its transcript's own `cwd` field beside it:
+    // cwd `\\wsl.localhost\Ubuntu-24.04\home\asad\Claude Temporary` is stored
+    // in `--wsl-localhost-Ubuntu-24-04-home-asad-Claude-Temporary`. Both
+    // leading backslashes survive as hyphens, and the dots in the distro
+    // version are rewritten like any other non-alphanumeric.
+    expect(encodeProjectPath('\\\\wsl.localhost\\Ubuntu-24.04\\home\\asad\\Claude Temporary')).toBe(
+      '--wsl-localhost-Ubuntu-24-04-home-asad-Claude-Temporary',
+    )
   })
 
   it('normalises a trailing slash away', () => {
@@ -50,16 +87,26 @@ describe('transcriptDir', () => {
     else process.env.CLAUDE_CONFIG_DIR = original
   })
 
+  /**
+   * A cwd that is already absolute on this platform, and the directory name it
+   * encodes to. The Windows fixtures name their drive rather than relying on
+   * `resolve` to supply one: a bare `/x` would pick up whichever drive the
+   * suite happens to be running from — `C:` on the machine this was ported on,
+   * `D:` on a GitHub Windows runner, which checks out to `D:\a`.
+   */
+  const CWD = ON_WINDOWS ? 'I:\\Claude Temp' : '/Users/apple/ClaudeAsad'
+  const ENCODED = ON_WINDOWS ? 'I--Claude-Temp' : '-Users-apple-ClaudeAsad'
+
   it('lives under <config>/projects', () => {
-    expect(transcriptDir('/Users/apple/ClaudeAsad', '/tmp/cfg')).toBe(
-      '/tmp/cfg/projects/-Users-apple-ClaudeAsad',
-    )
+    // `join` on both sides, because the answer carries the host's separator and
+    // the claim being made is about the shape, not about the slash.
+    expect(transcriptDir(CWD, '/tmp/cfg')).toBe(join('/tmp/cfg', 'projects', ENCODED))
   })
 
   it('honours CLAUDE_CONFIG_DIR, which is how Claude profiles stay isolated', () => {
     process.env.CLAUDE_CONFIG_DIR = '/tmp/work-profile'
     expect(claudeConfigDir()).toBe('/tmp/work-profile')
-    expect(transcriptDir('/x')).toBe('/tmp/work-profile/projects/-x')
+    expect(transcriptDir(CWD)).toBe(join('/tmp/work-profile', 'projects', ENCODED))
   })
 
   it('ignores an empty override', () => {

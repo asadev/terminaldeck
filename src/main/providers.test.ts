@@ -150,9 +150,15 @@ describe('detecting which agent CLIs are installed', () => {
   it('never looks up the shell, which is always there', async () => {
     // The shell binary of the *Windows* table, which is what makes this assert
     // anything: looking up this Mac's `/bin/zsh` would satisfy a check written
-    // against `cmd.exe` no matter what the code did.
-    const shell = providersFor('win32', process.env).shell.bin
-    expect(shell).toBe('cmd.exe')
+    // against cmd.exe no matter what the code did.
+    //
+    // The environment is pinned for the same reason `$SHELL` is pinned above.
+    // Reading `process.env` here took COMSPEC off the host, so the value was
+    // `cmd.exe` on a Mac (nothing to read) and `C:\WINDOWS\system32\cmd.exe` on
+    // Windows — green here, red there, over a fact about the runner rather than
+    // about the code.
+    const shell = providersFor('win32', { COMSPEC: 'C:\\Windows\\system32\\cmd.exe' }).shell.bin
+    expect(shell).toBe('C:\\Windows\\system32\\cmd.exe')
     await detectProviders('win32')
     expect(calls.ran.map((call) => call.args[0])).not.toContain(shell)
     expect(calls.ran.map((call) => call.args[0]).sort()).toEqual(['claude', 'codex', 'gemini'])

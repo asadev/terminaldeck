@@ -33,6 +33,9 @@ import {
   type ProfilesState,
 } from './profiles'
 
+/** Two things here are POSIX-only: file modes, and a `/`-rooted absolute path. */
+const ON_WINDOWS = process.platform === 'win32'
+
 /**
  * The precedence chain is the part worth testing hardest: it decides which
  * account a session runs as, and getting it wrong means work commits land on a
@@ -238,10 +241,16 @@ describe('sessionEnv', () => {
 describe('profileTranscriptDir', () => {
   it('points at the profile config dir, not the default install', () => {
     const p = profile('work')
-    const dir = profileTranscriptDir(p, '/Users/asad/Projects/terminaldeck')
+    // The cwd has to be absolute on the platform running this, and the drive
+    // has to be named: `encodeProjectPath` resolves first, so a POSIX fixture
+    // picks up whichever drive the suite runs from on Windows. See the same
+    // split in transcript.test.ts.
+    const cwd = ON_WINDOWS ? 'I:\\Projects\\terminaldeck' : '/Users/asad/Projects/terminaldeck'
+    const encoded = ON_WINDOWS ? 'I--Projects-terminaldeck' : '-Users-asad-Projects-terminaldeck'
+    const dir = profileTranscriptDir(p, cwd)
     // Claude Code writes transcripts to <configDir>/projects/<encoded-cwd>,
     // so a profiled session's cost data is not under ~/.claude at all.
-    expect(dir).toBe(join(p.configDir, 'projects', '-Users-asad-Projects-terminaldeck'))
+    expect(dir).toBe(join(p.configDir, 'projects', encoded))
   })
 })
 
@@ -531,7 +540,16 @@ describe('never destroys the state file', () => {
     expect(rescued).toContain('"Personal"')
   })
 
-  it('preserves a valid file that could not be read', () => {
+  /**
+   * Skipped on Windows because the *setup* cannot be built there, not because
+   * the behaviour does not matter. `chmod 0o000` is the only way this test has
+   * to make a readable file unreadable, and Windows has no mode bits for it to
+   * clear — after the chmod the file was still read back in full and the state
+   * loaded normally (observed on Windows 11). Making the read fail there means
+   * an ACL edit, which is a different mechanism from the one the product meets
+   * in the wild on macOS.
+   */
+  it.skipIf(ON_WINDOWS)('preserves a valid file that could not be read', () => {
     // EACCES / EMFILE are not corruption. The file is fine and still holds
     // every profile the user has; only this process could not open it.
     writeFileSync(STATE_FILE(), REAL_STATE, 'utf8')

@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process'
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { promisify } from 'node:util'
 import type { IpcMain } from 'electron'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -572,7 +572,9 @@ describe('applyReadinessFix', () => {
     const dir = await tempProject()
     await applyReadinessFix(dir, 'create-readme')
     const text = await readFile(join(dir, 'README.md'), 'utf8')
-    expect(text.startsWith(`# ${dir.slice(dir.lastIndexOf('/') + 1)}`)).toBe(true)
+    // `basename`, not a hand-rolled split on '/': the temp path is backslashed
+    // on Windows, so the split kept the whole path and the title never matched.
+    expect(text.startsWith(`# ${basename(dir)}`)).toBe(true)
   })
 
   it('writes a .gitignore that covers the secrets and clears the check', async () => {

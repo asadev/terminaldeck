@@ -277,6 +277,21 @@ function shellQuote(value: string): string {
  * into a closed pipe, which Claude reports as an EPIPE hook failure. It also
  * has to succeed unconditionally: `|| true` means a hook firing while the app
  * is closed is silence, not an error in the user's session.
+ *
+ * ## POSIX-only, and there is no Windows form of it yet
+ *
+ * Every piece of this is POSIX shell: an absolute `/usr/bin/curl`, `|| true`,
+ * single-quoted arguments, `$VAR` expansion and a trailing `#` comment. None of
+ * it is `cmd.exe` syntax, and `/usr/bin/curl` is not a path Windows has —
+ * `curl.exe` ships in System32 there instead. So on Windows this writes a
+ * command into the user's config that their CLI cannot run.
+ *
+ * That is a live gap, not a theory: it is what the three integration cases in
+ * `hooks.test.ts` are skipped over. It is left rather than guessed at because
+ * writing a `cmd.exe` form means knowing which shell each provider CLI actually
+ * hands a hook command to on Windows, and nothing here has watched one do it.
+ * Everything else in this module — the file handling, the ownership marker, the
+ * round trip — is platform-neutral and is exercised on both.
  */
 export function hookCommand(
   provider: HookProviderId,
