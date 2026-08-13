@@ -10,6 +10,8 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+## [0.1.3] — 2026-08-14
+
 ### Added
 
 - **Start a session from the phone.** Both phone clients have had a New Session
@@ -26,6 +28,13 @@ A release with nothing under Unreleased is refused rather than shipped blank.
   without focus and with an unread dot, so answering something on your phone
   never pulls the Mac out of the terminal you were typing into.
 
+- **See your Mac's localhost on your phone.** Tap a port and the phone dials
+  `127.0.0.1` on the Mac through the sealed channel. It is a raw TCP byte pipe
+  rather than an HTTP proxy, so WebSockets, hot reload, service workers and
+  cookies all survive untouched — save a file on the Mac and the page reloads
+  on the phone. Only `127.0.0.1` is dialable, only ports something is listening
+  on right now, and only after a person taps one.
+
 ### Changed
 
 - **Every page has a designed empty state**, instead of a bare sentence floating
@@ -39,9 +48,47 @@ A release with nothing under Unreleased is refused rather than shipped blank.
   it; the gutter never falls below its old value, so nothing changes on a narrow
   window.
 - Hooks no longer offers two buttons called Refresh.
+- **The desktop speaks Apple's language.** One sidebar, one toolbar, Settings
+  bottom-left, liquid glass, and both themes first-class. Three reachability
+  allowlist entries came out and none went in — CloseSessionConfirm, DebugPanel
+  and FileViewer were each a setting that turned nothing on.
+- **Roughly 87,800 fewer wake-ups a day.** One shared renderer scheduler where
+  N jobs cost one wake-up rather than N, nothing armed at all while the window
+  is hidden, and a panel that polled a channel already pushing to it now
+  subscribes instead. The remote panel alone was a 500 ms interval — 172,800
+  wake-ups a day to move labels that mostly change once a minute.
 
 ### Fixed
 
+- **Remote access had never worked, on any platform.** Electron links
+  BoringSSL, which ships 28 ciphers and not one ChaCha, so
+  `createCipheriv('chacha20-poly1305', …)` threw `Unknown cipher`, a silent
+  catch swallowed it, and every relayed handshake closed with nothing on the
+  wire and nothing in the log. 3628 tests passed throughout, because vitest
+  runs under plain Node. The AEAD now comes from `@noble/ciphers` — the same
+  code in every runtime, with no "native when available" fast path, because a
+  fallback means the suite exercises one implementation and users run the
+  other. `npm test` now runs the sealed channel under Electron's own Node and
+  fails the build if that stops being true.
+- **A paired device no longer has to be paired again after a restart.**
+  Host-identity validated its stored keypair by running a handshake, so the bug
+  above quarantined and regenerated a perfectly good identity on every launch,
+  orphaning every device paired to it.
+- **Both phone clients were one byte off the wire spec** (80/48 where the spec
+  says 81/49), and both stand-in hosts shared the bug — so the fixtures agreed
+  with each other and disagreed with reality. The stand-ins now import the real
+  framing rather than reimplementing it.
+- **Windows, launched for the first time in this project's history, then
+  fixed.** `which` was spawned as a literal command, `spec.bin` was spawned
+  where `spec.spawn` was meant (an npm-installed CLI answers a Windows PATH
+  lookup with a `.cmd` shim, and `CreateProcess` will not run a batch file),
+  and three `{ ...process.env, PATH }` sites lost against Windows' own `Path`
+  key. 31 Windows test failures became 0.
+- **Every macOS build shipped the whole repository.** electron-builder's
+  per-platform `files:` list *replaces* the root allowlist rather than
+  extending it, so `mac:` had no allowlist at all. Invisible until `ios/` and
+  `android/` existed, at which point the app reached 1.0 GB. It is 287 MB now.
+  The identical latent bug in the `win:` block is fixed in the same pass.
 - `scripts/remote-host.sh` served an empty session list, because it was built on
   the belief that `PtyManager` needs Electron. It does not, so the harness now
   runs real terminals against the real endpoint.
@@ -99,5 +146,6 @@ First cut. macOS 12+, Apple silicon, unsigned.
 - Preferences with live dark/light theming
 - Session resume (`⌘⇧T`)
 
-[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/asadev/terminaldeck/releases/tag/v0.1.3
 [0.1.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.1.0

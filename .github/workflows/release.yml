@@ -157,8 +157,10 @@ jobs:
           to Applications. There is no Intel Mac build — macOS 27 runs on none.
 
           Windows 10 or later, x64: run `-x64-setup.exe`. There is no separate
-          ARM build; Windows on ARM runs the x64 one. **The Windows build has
-          never been launched on Windows** — it is published so it can be.
+          ARM build; Windows on ARM runs the x64 one. The Windows build has now
+          been launched on Windows and the three first-launch failures that
+          found are fixed. The test suite is not ported yet, so it runs on the
+          Windows runner without gating the installer.
 
           Neither build is signed. macOS will refuse the first launch: either
           right-click the app and choose *Open*, or clear the quarantine flag:
