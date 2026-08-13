@@ -27,11 +27,24 @@ function read(path: string): string {
   return readFileSync(join(ROOT, path), 'utf8')
 }
 
-function mainSources(): string {
-  return readdirSync(join(ROOT, 'main'))
-    .filter((f) => f.endsWith('.ts') && !f.includes('.test.'))
-    .map((f) => read(join('main', f)))
-    .join('\n')
+/**
+ * Every main-process source, subdirectories included.
+ *
+ * The recursion is not tidiness. This used to read only the top level of
+ * `src/main`, so a feature that grew into a folder — `src/main/remote/` is the
+ * first — registered its handlers somewhere this test could not see. The
+ * preload would call `remote:start`, the channel would be found nowhere, and
+ * the failure would read "no handler at all" for a handler that was right
+ * there. A guard whose blind spot is the thing being added is worse than no
+ * guard, because it fails in the direction of blaming correct code.
+ */
+function mainSources(dir = 'main', acc: string[] = []): string {
+  for (const entry of readdirSync(join(ROOT, dir), { withFileTypes: true })) {
+    const rel = join(dir, entry.name)
+    if (entry.isDirectory()) mainSources(rel, acc)
+    else if (entry.name.endsWith('.ts') && !entry.name.includes('.test.')) acc.push(read(rel))
+  }
+  return acc.join('\n')
 }
 
 function rendererFiles(dir: string, acc: string[] = []): string[] {

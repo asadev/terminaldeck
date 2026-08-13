@@ -72,6 +72,31 @@ const api = {
     return () => ipcRenderer.off('cost:update', handler)
   },
 
+  /* ----------------------------------------------------------- remote -- */
+  // Every one of these is an ipcMain.handle, so every one is invoke(). The
+  // remote module registers no send-channel at all, deliberately: each call
+  // wants an answer, and a send that routes nowhere fails silently.
+  remoteStatus: (): Promise<unknown> => ipcRenderer.invoke('remote:status'),
+  startRemote: (): Promise<unknown> => ipcRenderer.invoke('remote:start'),
+  stopRemote: (): Promise<unknown> => ipcRenderer.invoke('remote:stop'),
+  listRemoteDevices: (): Promise<unknown> => ipcRenderer.invoke('remote:devices'),
+  startRemotePairing: (): Promise<unknown> => ipcRenderer.invoke('remote:pair'),
+  cancelRemotePairing: (): Promise<unknown> => ipcRenderer.invoke('remote:pair:cancel'),
+  approveRemoteDevice: (deviceId: string): Promise<unknown> =>
+    ipcRenderer.invoke('remote:device:approve', deviceId),
+  revokeRemoteDevice: (deviceId: string): Promise<unknown> =>
+    ipcRenderer.invoke('remote:device:revoke', deviceId),
+  disconnectRemoteConnection: (connectionId: string): Promise<unknown> =>
+    ipcRenderer.invoke('remote:connection:disconnect', connectionId),
+  onRemoteConnections: (cb: (connections: unknown) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, connections: unknown) => cb(connections)
+    ipcRenderer.on('remote:connections', handler)
+    return () => ipcRenderer.off('remote:connections', handler)
+  },
+  tailnetStatus: (force?: boolean): Promise<unknown> =>
+    ipcRenderer.invoke('tailnet:status', force === true),
+  tailnetCert: (dnsName: string): Promise<unknown> => ipcRenderer.invoke('tailnet:cert', dnsName),
+
   /* ------------------------------------------------------ plan limits -- */
   // Read off the session's own screen, so these are keyed on a session id
   // rather than a project. `plan:unwatch` is a send, not an invoke — there is

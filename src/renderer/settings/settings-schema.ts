@@ -64,6 +64,11 @@ export const SECTIONS = [
     blurb: 'The built-in browser tab and what it remembers.',
   },
   {
+    id: 'remote',
+    label: 'Remote',
+    blurb: 'Reach these sessions from a phone, over your own tailnet.',
+  },
+  {
     id: 'shortcuts',
     label: 'Shortcuts',
     blurb: 'Every key the app answers to.',

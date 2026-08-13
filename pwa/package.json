@@ -1,0 +1,22 @@
+{
+  "name": "terminaldeck-pwa",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Phone and browser client for Terminal Deck — pair, list sessions, drive a terminal.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json",
+    "icons": "node icons/make-icons.mjs"
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2",
+    "vite": "^7.0.0"
+  }
+}

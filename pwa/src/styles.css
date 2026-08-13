@@ -1,0 +1,471 @@
+/* ============================================================================
+   Terminal Deck — phone client
+
+   Mobile-first and dark by default. The values match the desktop's
+   `src/renderer/styles/tokens.css`; they are restated rather than imported
+   because that file's @font-face rules point at paths relative to the renderer,
+   and pulling it in whole would break this build over a font URL.
+
+   Two layout rules do most of the work here:
+
+     1. The page never scrolls. It is a fixed frame with one scrolling region
+        inside it, because a terminal that rubber-bands the whole document
+        under a finger is unusable.
+     2. The bottom of the frame is wherever the keyboard is not. See
+        --dock-safe, which main.ts drives from visualViewport.
+   ============================================================================ */
+
+@font-face {
+  font-family: 'Hanken Grotesk';
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url('../../src/renderer/assets/fonts/hanken-grotesk.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400 500;
+  font-display: swap;
+  src: url('../../src/renderer/assets/fonts/jetbrains-mono.woff2') format('woff2');
+}
+
+:root {
+  --bg-primary: #191919;
+  --bg-secondary: #202020;
+  --bg-tertiary: #252525;
+  --bg-hover: rgba(255, 255, 255, 0.055);
+  --bg-active: rgba(255, 255, 255, 0.085);
+
+  --text-primary: #d4d4d4;
+  --text-secondary: #9b9b9b;
+  --text-muted: #6f6f6f;
+
+  --accent: #529cca;
+  --accent-soft: rgba(82, 156, 202, 0.14);
+  --accent-fg: #ffffff;
+
+  --border: rgba(255, 255, 255, 0.094);
+  --border-subtle: rgba(255, 255, 255, 0.055);
+
+  --status-working: #529cca;
+  --status-waiting: #c9a227;
+  --status-input: #d9730d;
+  --status-completed: #4dab9a;
+  --status-idle: #6f6f6f;
+  --color-critical: #ff7369;
+
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+
+  --font-ui: 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* Home-indicator padding, dropped to zero while the keyboard covers it. */
+  --dock-safe: env(safe-area-inset-bottom, 0px);
+
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: 16px;
+  line-height: 1.45;
+  -webkit-text-size-adjust: 100%;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* No tap-highlight anywhere: every control here gives its own :active feedback,
+   and the default blue flash on a key-bar button reads as a rendering fault. */
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+/* The frame is the visual viewport, not the layout viewport.
+   iOS does not shrink the layout viewport when the soft keyboard opens, so a
+   bar at the bottom of a 100dvh frame ends up underneath it. main.ts sizes this
+   from `window.visualViewport`, which excludes the keyboard; the dvh values are
+   the fallback for a browser without that API. */
+#app {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  height: 100dvh;
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+}
+
+/* ------------------------------------------------------------------ header */
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-secondary);
+}
+
+.header__back {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* 44px is the smallest reliable touch target; below it people miss. */
+  width: 44px;
+  height: 44px;
+  margin-left: -10px;
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  font-size: 20px;
+}
+.header__back:active {
+  background: var(--bg-active);
+}
+/* `display: flex` above outranks the UA rule that `hidden` relies on, so the
+   back chevron sat on the pair screen pointing at nothing. */
+.header__back[hidden] {
+  display: none;
+}
+
+.header__titles {
+  min-width: 0;
+  flex: 1;
+}
+
+.header__title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.header__subtitle {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ------------------------------------------------------------------ banner */
+
+/* The connection banner is never hidden while anything is wrong. It is the
+   difference between this client and one that lies about being connected. */
+.banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  font-size: 13px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+}
+
+.banner--online {
+  display: none;
+}
+
+.banner--rejected,
+.banner--incompatible {
+  color: var(--color-critical);
+}
+
+.banner__text {
+  flex: 1;
+  min-width: 0;
+}
+
+.banner__action {
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  font-size: 13px;
+  white-space: nowrap;
+}
+.banner__action:active {
+  background: var(--bg-active);
+}
+
+/* ----------------------------------------------------------------- content */
+
+/* A flex column, not a plain block. The terminal screen is `flex: 1` and needs
+   a flex parent to stretch into; as a block container this sized itself to
+   xterm's rows and left a third of the phone empty under the key bar. */
+.content {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.screen {
+  padding: 16px 16px calc(24px + var(--dock-safe));
+}
+
+.screen__lead {
+  margin: 0 0 20px;
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+.screen h2 {
+  margin: 0 0 6px;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.steps {
+  margin: 0 0 20px;
+  padding-left: 20px;
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+.steps li {
+  margin-bottom: 8px;
+}
+
+.note {
+  margin: 16px 0 0;
+  padding: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.button {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  margin-top: 10px;
+  padding: 12px;
+  border-radius: var(--radius-md);
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: 15px;
+  font-weight: 600;
+  text-align: center;
+}
+.button:active {
+  filter: brightness(0.9);
+}
+
+.button--quiet {
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-weight: 400;
+}
+
+/* ------------------------------------------------------------ session list */
+
+.sessions {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.session {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 60px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-subtle);
+  text-align: left;
+}
+.session:active {
+  background: var(--bg-hover);
+}
+
+.session__dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--status-idle);
+}
+.session__dot--working {
+  background: var(--status-working);
+}
+.session__dot--waiting {
+  background: var(--status-waiting);
+}
+.session__dot--input {
+  background: var(--status-input);
+}
+.session__dot--completed {
+  background: var(--status-completed);
+}
+.session__dot--exited,
+.session__dot--unknown {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--status-idle);
+}
+
+.session__body {
+  flex: 1;
+  min-width: 0;
+}
+
+.session__title {
+  font-size: 15px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session__meta {
+  display: flex;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session__chevron {
+  flex: none;
+  color: var(--text-muted);
+}
+
+.empty {
+  padding: 40px 16px;
+  color: var(--text-muted);
+  font-size: 14px;
+  text-align: center;
+}
+
+/* --------------------------------------------------------------- terminal */
+
+.terminal-screen {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.terminal {
+  flex: 1;
+  min-height: 0;
+  padding: 4px 0 4px 8px;
+  background: var(--bg-primary);
+}
+
+/* Not connected: dimmed, and the cursor stops blinking (terminal.ts). A live
+   cursor over frozen output is the most convincing part of a lie. */
+.terminal--stale {
+  opacity: 0.45;
+}
+
+.terminal .xterm {
+  height: 100%;
+}
+
+/* xterm.css paints the scrolling viewport black, and the strip of it either
+   side of the canvas read as a border drawn around the terminal. The theme
+   colour is what the canvas itself uses, so this makes the seam disappear. */
+.terminal .xterm-viewport {
+  background-color: var(--bg-primary);
+}
+
+/* ---------------------------------------------------------------- key bar */
+
+.keybar-dock {
+  flex: none;
+  border-top: 1px solid var(--border);
+  background: var(--bg-secondary);
+  /* The home-indicator gap, which main.ts zeroes while the keyboard is up —
+     the keyboard is already covering that strip, and paying for it twice
+     lifts the bar off the keys by a visible third of a key. */
+  padding-bottom: var(--dock-safe);
+}
+
+.keybar {
+  display: flex;
+  gap: 3px;
+  padding: 5px 4px;
+}
+
+.keybar__key {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 42px;
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  /* Held, not tapped, is the common mistake on a moving train — make the
+     pressed state obvious enough to see out of the corner of an eye. */
+  transition: background 60ms linear;
+}
+.keybar__key:active {
+  background: var(--accent-soft);
+}
+
+/* Eleven keys across a 390px phone leaves 30px each, and "ctrl" is wider than
+   that at any legible size — the word ran out of its own button. The three
+   word keys take a larger share; the eight single glyphs do not need it. */
+.keybar__key--esc,
+.keybar__key--tab,
+.keybar__key--ctrl {
+  flex: 1.3 1 0;
+}
+
+.keybar__key--ctrl.is-armed {
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+/* ------------------------------------------------------------------ wider */
+
+/* A tablet or a desktop browser: the same layout, centred, with room for the
+   key bar to stop stretching each key across a third of the screen. */
+@media (min-width: 700px) {
+  #app {
+    max-width: 900px;
+    margin: 0 auto;
+    border-left: 1px solid var(--border-subtle);
+    border-right: 1px solid var(--border-subtle);
+  }
+
+  .keybar__key {
+    flex: 0 0 64px;
+  }
+}

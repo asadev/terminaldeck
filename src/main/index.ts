@@ -15,6 +15,9 @@ import { registerInsightsIpc } from './session-insights'
 import { registerChatIpc } from './chat-transcript'
 import { registerDevPortsIpc } from './dev-ports'
 import { registerAgentControlsIpc } from './agent-controls'
+import { registerTailnetIpc } from './remote/tailnet'
+import { registerRemoteIpc } from './remote/server'
+import { SessionFanout } from './remote/session-fanout'
 import {
   dropPlanSession,
   notePlanOutput,
@@ -85,20 +88,35 @@ function send(channel: string, ...args: unknown[]): void {
  */
 const liveStatus = new Map<string, { status: SessionStatus; at: number }>()
 
+/**
+ * Fans each session's output out to the window and to any attached phone.
+ * Declared before `ptys` because the PtyManager callbacks below feed it, and
+ * pointed at `ptys` afterwards — the two genuinely reference each other.
+ */
+const remoteSessions = new SessionFanout({
+  list: () => ptys.list(),
+  write: (id, data) => ptys.write(id, data),
+  resize: (id, cols, rows) => ptys.resize(id, cols, rows),
+  scrollback: (id) => ptys.scrollback(id),
+})
+
 const ptys = new PtyManager(
   (id, data) => {
     // Plan limits are read off the same bytes the terminal draws — the CLI
     // reports them in its own output, so there is nothing else to ask.
     notePlanOutput(id, data)
+    remoteSessions.noteData(id, data)
     send('session:data', id, data)
   },
   (id, exitCode) => {
     liveStatus.delete(id)
     dropPlanSession(id)
+    remoteSessions.noteExit(id, exitCode)
     send('session:exit', id, exitCode)
   },
   (id, status) => {
     liveStatus.set(id, { status, at: Date.now() })
+    remoteSessions.noteStatus(id, status)
     send('session:status', id, status)
   },
 )
@@ -213,6 +231,15 @@ function registerIpc(): void {
   // module reports 'unwired' and the strip hides the control rather than
   // offering a button that does nothing.
   registerPlanLimitIpc(ipcMain, { write: (id, data) => ptys.write(id, data) })
+  registerTailnetIpc(ipcMain, { certDir: join(app.getPath('userData'), 'tailnet-certs') })
+  // Off until the user turns it on: this serves a shell. The server itself
+  // binds only to the tailnet address and refuses to start without one.
+  registerRemoteIpc(ipcMain, {
+    sessions: remoteSessions,
+    webRoot: join(app.getAppPath(), 'pwa', 'dist'),
+    storageDir: join(app.getPath('userData'), 'remote'),
+    broadcast: (channel, payload) => send(channel, payload),
+  })
   registerGitHubIpc(ipcMain)
   registerReadinessIpc(ipcMain)
   registerDashboardIpc(ipcMain)

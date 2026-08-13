@@ -49,6 +49,51 @@ const api: Record<string, unknown> = new Proxy(
       { port: 5173, process: 'node', guessed: false },
       { port: 8080, process: '', guessed: true },
     ],
+    // Remote access. The harness has no tailnet, so it shows the state a user
+    // most often hits first: Tailscale present, HTTPS certificates not enabled.
+    remoteStatus: async () => ({
+      running: false,
+      tailnet: {
+        ready: true,
+        address: '100.86.107.119',
+        dnsName: 'asads-macbook-pro-1.taile59277.ts.net',
+        tailnetName: 'taile59277.ts.net',
+        certsAvailable: false,
+      },
+      url: null,
+      connections: [],
+    }),
+    startRemote: async () => ({ ok: false, reason: 'certs-disabled' }),
+    stopRemote: async () => ({ ok: true }),
+    listRemoteDevices: async () => [],
+    startRemotePairing: async () => ({
+      token: 'stub-token',
+      url: 'https://asads-macbook-pro-1.taile59277.ts.net/#stub-token',
+      expiresAt: 0,
+    }),
+    cancelRemotePairing: async () => ({ ok: true }),
+    approveRemoteDevice: async () => ({ ok: true }),
+    revokeRemoteDevice: async () => ({ ok: true }),
+    disconnectRemoteConnection: async () => ({ ok: true }),
+    onRemoteConnections: noop,
+    tailnetStatus: async () => ({
+      ready: true,
+      address: '100.86.107.119',
+      address6: null,
+      dnsName: 'asads-macbook-pro-1.taile59277.ts.net',
+      hostName: 'asads-macbook-pro-1',
+      tailnetName: 'taile59277.ts.net',
+      magicDnsSuffix: 'taile59277.ts.net',
+      magicDns: true,
+      certsAvailable: false,
+      binary: '/opt/homebrew/bin/tailscale',
+    }),
+    tailnetCert: async () => ({
+      ok: false,
+      reason: 'https-disabled',
+      message:
+        'Tailscale HTTPS certificates are off for this tailnet. Open the admin console DNS page and turn on HTTPS Certificates.',
+    }),
     onPlanLimits: noop,
     // The harness has no live session, so the plan half reports "not available"
     // — which is the state worth being able to look at anyway.

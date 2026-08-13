@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <!--
+      viewport-fit=cover is what makes env(safe-area-inset-*) return anything
+      other than zero, and without it the key bar sits under the home indicator.
+      Zoom is deliberately left alone: blocking it is an accessibility failure,
+      and `touch-action: manipulation` already removes the 300ms double-tap wait
+      that is the real reason people reach for user-scalable=no.
+    -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#191919" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <!-- black-translucent puts the page under the status bar, which is the
+         other half of the safe-area story above. -->
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Terminal Deck" />
+    <meta name="referrer" content="no-referrer" />
+    <!--
+      The manifest and icon links are injected by the `shellAssets` plugin in
+      vite.config.ts rather than written here. Written here, Vite resolves them
+      as build inputs and gives them hashed filenames — which is right for a
+      bundle and wrong for these: the service worker precaches them by path, and
+      a manifest whose URL changes every build is a different manifest to the
+      platform that installed it.
+    -->
+    <!--
+      The product name lives in src/shared/brand.ts. This tag and the manifest
+      are the two places here that cannot import TypeScript, so they carry a
+      copy — main.ts overwrites this title from BRAND as soon as it runs.
+    -->
+    <title>Terminal Deck</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <noscript>
+      <p style="padding: 24px; color: #d4d4d4; font-family: system-ui">
+        This client is a terminal. It needs JavaScript.
+      </p>
+    </noscript>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

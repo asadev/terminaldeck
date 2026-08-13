@@ -24,6 +24,9 @@ artifactName: ${name}-${version}-${arch}.${ext}
 files:
   - out/**/*
   - package.json
+  # The phone client. Built separately by `pwa/`, served by the remote server
+  # off disk — so it must ship, and it must not be inside the asar.
+  - pwa/dist/**/*
   - '!**/*.map'
   - '!**/node_modules/*/{test,tests,__tests__,example,examples,benchmark,benchmarks}/**'
   - '!**/node_modules/better-sqlite3/{src,deps}/**'
@@ -46,6 +49,9 @@ asar: true
 # them keeps that from being a silent assumption. node-pty needs more than its
 # .node file — spawn-helper is a separate executable that it forks.
 asarUnpack:
+  # Served over HTTP by the remote server. Reading it out of the asar works for
+  # small files and gets awkward for streamed ones; on disk it is just a folder.
+  - 'pwa/dist/**'
   - '**/*.node'
   - '**/node_modules/node-pty/**'
   - '**/node_modules/better-sqlite3/**'

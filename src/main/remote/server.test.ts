@@ -1,0 +1,1056 @@
+import { randomBytes } from 'node:crypto'
+import { createServer, request, type Server } from 'node:http'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import type { AddressInfo, Socket } from 'node:net'
+import { afterEach, describe, expect, it } from 'vitest'
+import { CLOSE, PROTOCOL_VERSION, type RemoteSession, type ServerMessage } from './protocol'
+import type { TailnetReady } from './tailnet'
+import { RemoteAuth } from './device-auth'
+import {
+  WS_PATH,
+  authenticatorFor,
+  createRemoteEndpoint,
+  createRemoteServer,
+  pairingDesk,
+  resolveStaticPath,
+  type RemoteAuthenticator,
+  type RemoteEndpoint,
+  type SessionAccess,
+  type SessionHandle,
+} from './server'
+
+/**
+ * Everything here runs over a real loopback socket.
+ *
+ * The interesting behaviour of this module is what it refuses — a socket that
+ * never authenticates, one that talks before it does, a frame bigger than the
+ * cap — and every one of those lives in the framing and the message loop, not
+ * in a function you can call directly. A test that called the handler with a
+ * hand-made message would pass against a server that never reads a frame
+ * correctly at all.
+ *
+ * The transport is a plain `http.Server` on 127.0.0.1 rather than the real
+ * HTTPS one: TLS here would mean minting a certificate, which means Tailscale,
+ * which means the test only runs on a machine that is on a tailnet with HTTPS
+ * enabled — this one is not. `createRemoteEndpoint` exists as its own function
+ * for exactly that reason, and the tailnet-shaped half is covered separately
+ * through the injected seams.
+ *
+ * The WebSocket client below is written out for the same reason the server's
+ * framing is: `ws` is not a dependency of this project.
+ */
+
+/* ------------------------------------------------------------- ws client -- */
+
+interface Frame {
+  opcode: number
+  payload: Buffer
+}
+
+function maskedFrame(opcode: number, payload: Buffer): Buffer {
+  const mask = randomBytes(4)
+  const masked = Buffer.from(payload)
+  for (let i = 0; i < masked.length; i += 1) masked[i] ^= mask[i & 3]
+
+  let header: Buffer
+  if (masked.length < 126) {
+    header = Buffer.alloc(2)
+    header[1] = 0x80 | masked.length
+  } else if (masked.length < 65536) {
+    header = Buffer.alloc(4)
+    header[1] = 0x80 | 126
+    header.writeUInt16BE(masked.length, 2)
+  } else {
+    header = Buffer.alloc(10)
+    header[1] = 0x80 | 127
+    header.writeBigUInt64BE(BigInt(masked.length), 2)
+  }
+  header[0] = 0x80 | opcode
+  return Buffer.concat([header, mask, masked])
+}
+
+/** Server frames are never masked, which keeps this reader short. */
+function readFrames(buffer: Buffer): { frames: Frame[]; rest: Buffer } {
+  const frames: Frame[] = []
+  let at = 0
+  for (;;) {
+    if (buffer.length - at < 2) break
+    const opcode = buffer[at] & 0x0f
+    let length = buffer[at + 1] & 0x7f
+    let offset = at + 2
+    if (length === 126) {
+      if (buffer.length < offset + 2) break
+      length = buffer.readUInt16BE(offset)
+      offset += 2
+    } else if (length === 127) {
+      if (buffer.length < offset + 8) break
+      length = Number(buffer.readBigUInt64BE(offset))
+      offset += 8
+    }
+    if (buffer.length < offset + length) break
+    frames.push({ opcode, payload: buffer.subarray(offset, offset + length) })
+    at = offset + length
+  }
+  return { frames, rest: buffer.subarray(at) }
+}
+
+interface Client {
+  send(message: unknown): void
+  sendFrame(frame: Buffer): void
+  /** Every JSON message received so far, in order. */
+  received: ServerMessage[]
+  /** Resolves once `predicate` matches, or rejects on timeout. */
+  until(predicate: (message: ServerMessage) => boolean, label: string): Promise<ServerMessage>
+  /** The close code the server sent, once it closes. */
+  closed: Promise<number>
+  socket: Socket
+}
+
+function connect(port: number, path = WS_PATH, host?: string, origin?: string): Promise<Client> {
+  return new Promise((settle, fail) => {
+    const req = request({
+      host: '127.0.0.1',
+      port,
+      path,
+      headers: {
+        connection: 'Upgrade',
+        upgrade: 'websocket',
+        'sec-websocket-key': randomBytes(16).toString('base64'),
+        'sec-websocket-version': '13',
+        ...(host ? { host } : {}),
+        ...(origin ? { origin } : {}),
+      },
+    })
+
+    req.on('response', (res) => fail(new Error(`upgrade refused with ${res.statusCode}`)))
+    req.on('error', fail)
+    req.on('upgrade', (_res, socket, head) => {
+      const received: ServerMessage[] = []
+      const waiters: { predicate: (m: ServerMessage) => boolean; settle: (m: ServerMessage) => void }[] = []
+      let closeCode = -1
+      let resolveClosed: (code: number) => void = () => {}
+      const closed = new Promise<number>((done) => {
+        resolveClosed = done
+      })
+
+      let buffer: Buffer = head
+      const consume = (): void => {
+        const { frames, rest } = readFrames(buffer)
+        buffer = rest
+        for (const frame of frames) {
+          if (frame.opcode === 0x8) {
+            closeCode = frame.payload.length >= 2 ? frame.payload.readUInt16BE(0) : 1005
+            continue
+          }
+          if (frame.opcode !== 0x1) continue
+          const message = JSON.parse(frame.payload.toString('utf8')) as ServerMessage
+          received.push(message)
+          for (const waiter of [...waiters]) {
+            if (!waiter.predicate(message)) continue
+            waiters.splice(waiters.indexOf(waiter), 1)
+            waiter.settle(message)
+          }
+        }
+      }
+      consume()
+
+      socket.on('data', (chunk: Buffer) => {
+        buffer = Buffer.concat([buffer, chunk])
+        consume()
+      })
+      socket.on('close', () => resolveClosed(closeCode))
+      socket.on('error', () => resolveClosed(closeCode))
+
+      settle({
+        received,
+        socket: socket as Socket,
+        send: (message) => socket.write(maskedFrame(0x1, Buffer.from(JSON.stringify(message), 'utf8'))),
+        sendFrame: (frame) => socket.write(frame),
+        until: (predicate, label) =>
+          new Promise((done, reject) => {
+            const already = received.find(predicate)
+            if (already) return done(already)
+            const timer = setTimeout(() => reject(new Error(`timed out waiting for ${label}`)), 2000)
+            waiters.push({
+              predicate,
+              settle: (message) => {
+                clearTimeout(timer)
+                done(message)
+              },
+            })
+          }),
+        closed,
+      })
+    })
+    req.end()
+  })
+}
+
+/* ------------------------------------------------------------------ fakes -- */
+
+interface FakeSessions extends SessionAccess {
+  emit(id: string, data: string): void
+  written: { id: string; data: string }[]
+  resized: { id: string; cols: number; rows: number }[]
+  detached: string[]
+  attachCount: number
+}
+
+function fakeSessions(sessions: Record<string, string> = { 'sess-1': 'earlier output\r\n' }): FakeSessions {
+  const listeners = new Map<string, (data: string) => void>()
+  const meta: RemoteSession[] = Object.keys(sessions).map((id) => ({
+    id,
+    title: id,
+    cwd: `/tmp/${id}`,
+    provider: 'claude',
+    status: 'working',
+    exitCode: null,
+  }))
+
+  return {
+    written: [],
+    resized: [],
+    detached: [],
+    attachCount: 0,
+    list: () => meta,
+    attach(id, onData) {
+      if (!(id in sessions)) return null
+      this.attachCount += 1
+      listeners.set(id, onData)
+      return { sessionId: id, replay: sessions[id] }
+    },
+    write(id, data) {
+      this.written.push({ id, data })
+    },
+    resize(id, cols, rows) {
+      this.resized.push({ id, cols, rows })
+    },
+    detach(handle: SessionHandle) {
+      this.detached.push(handle.sessionId)
+      listeners.delete(handle.sessionId)
+    },
+    emit(id, data) {
+      listeners.get(id)?.(data)
+    },
+  }
+}
+
+const CREDENTIAL = 'device-1.c2VjcmV0'
+
+/** Stands in for `RemoteAuth`, so the socket tests do not spend scrypt per connection. */
+const allowKnownDevice: RemoteAuthenticator = {
+  async authenticate(token) {
+    if (token === CREDENTIAL) {
+      return { ok: true, deviceId: 'device-1', deviceName: 'Test iPhone', credential: null }
+    }
+    return { ok: false, message: 'This device is not allowed in.' }
+  },
+}
+
+/* ------------------------------------------------------------------ setup -- */
+
+const HELLO = { t: 'hello', protocol: PROTOCOL_VERSION, token: CREDENTIAL, device: { name: 'iPhone', platform: 'iOS' } }
+
+let servers: Server[] = []
+let roots: string[] = []
+
+afterEach(() => {
+  for (const server of servers) server.close()
+  servers = []
+  for (const root of roots) rmSync(root, { recursive: true, force: true })
+  roots = []
+})
+
+interface Harness {
+  port: number
+  endpoint: RemoteEndpoint
+  sessions: FakeSessions
+  connections: number
+  /** The temporary `pwa/dist` this harness is serving. */
+  root: string
+}
+
+async function serve(
+  overrides: Partial<Parameters<typeof createRemoteEndpoint>[0]> = {},
+  sessions = fakeSessions(),
+): Promise<Harness> {
+  const root = mkdtempSync(join(tmpdir(), 'deck-pwa-'))
+  roots.push(root)
+  writeFileSync(join(root, 'index.html'), '<!doctype html><title>deck</title>')
+
+  const harness: Harness = { port: 0, endpoint: undefined as unknown as RemoteEndpoint, sessions, connections: 0, root }
+  harness.endpoint = createRemoteEndpoint({
+    sessions,
+    auth: allowKnownDevice,
+    webRoot: root,
+    // Heartbeats would fire mid-assertion and are covered by their own timer,
+    // not by these tests.
+    pingIntervalMs: 0,
+    onConnections: () => {
+      harness.connections += 1
+    },
+    ...overrides,
+  })
+
+  const server = createServer(harness.endpoint.handleRequest)
+  server.on('upgrade', harness.endpoint.handleUpgrade)
+  servers.push(server)
+  await new Promise<void>((settle) => server.listen(0, '127.0.0.1', settle))
+  harness.port = (server.address() as AddressInfo).port
+  return harness
+}
+
+/* ------------------------------------------------------------------ tests -- */
+
+describe('a socket that has not authenticated', () => {
+  it('is closed when it says nothing at all', async () => {
+    const harness = await serve({ helloTimeoutMs: 60 })
+    const client = await connect(harness.port)
+
+    await expect(client.closed).resolves.toBe(CLOSE.policyViolation)
+    expect(client.received).toEqual([])
+  })
+
+  it('is closed when it asks for anything before hello', async () => {
+    const harness = await serve()
+    const client = await connect(harness.port)
+    client.send({ t: 'list' })
+
+    const error = await client.until((m) => m.t === 'error', 'the refusal')
+    expect(error).toEqual({ t: 'error', code: 'unauthenticated', message: 'Say hello first.' })
+    await expect(client.closed).resolves.toBe(CLOSE.policyViolation)
+    // The session list is the thing being protected; it must not have leaked
+    // into the refusal.
+    expect(client.received.some((m) => m.t === 'sessions')).toBe(false)
+  })
+
+  it('is closed when its credential is not one we know', async () => {
+    const harness = await serve()
+    const client = await connect(harness.port)
+    client.send({ ...HELLO, token: 'device-9.bm90' })
+
+    const error = await client.until((m) => m.t === 'error', 'the refusal')
+    expect(error).toMatchObject({ t: 'error', code: 'unauthorized' })
+    await expect(client.closed).resolves.toBe(CLOSE.policyViolation)
+    expect(harness.connections).toBe(0)
+  })
+
+  it('is closed when it sends two hellos at once', async () => {
+    // Verification is asynchronous, so both would otherwise be checked against
+    // a connection that is unauthenticated for both.
+    const harness = await serve()
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    client.send(HELLO)
+
+    await expect(client.closed).resolves.toBe(CLOSE.protocolError)
+    expect(harness.endpoint.connections()).toEqual([])
+  })
+
+  it('is refused when it comes from a page on another site', async () => {
+    // `Host` says where the request went; only `Origin` says where it came
+    // from, and a page on any site the phone visits can dial this URL.
+    const harness = await serve({ hosts: ['deck.example.ts.net:8443'] })
+    await expect(
+      connect(harness.port, WS_PATH, 'deck.example.ts.net:8443', 'https://evil.example.com'),
+    ).rejects.toThrow(/403/)
+
+    const client = await connect(harness.port, WS_PATH, 'deck.example.ts.net:8443', 'https://deck.example.ts.net:8443')
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+  })
+
+  it('is refused once the server is already holding as many sockets as it will', async () => {
+    // Nothing before hello costs a caller anything, so without a ceiling any
+    // peer on the tailnet can spend this process's file descriptors.
+    const harness = await serve({ helloTimeoutMs: 60_000 })
+    const held: Client[] = []
+    try {
+      for (let i = 0; i < 64; i += 1) held.push(await connect(harness.port))
+      await expect(connect(harness.port)).rejects.toThrow(/503/)
+
+      // Not a permanent wall: a slot that frees up is a slot.
+      held[0].socket.destroy()
+      await new Promise((settle) => setTimeout(settle, 50))
+      held.push(await connect(harness.port))
+    } finally {
+      for (const client of held) client.socket.destroy()
+    }
+  })
+
+  it('is closed when it speaks a different protocol version', async () => {
+    const harness = await serve()
+    const client = await connect(harness.port)
+    client.send({ ...HELLO, protocol: PROTOCOL_VERSION + 1 })
+
+    const error = await client.until((m) => m.t === 'error', 'the refusal')
+    expect(error).toMatchObject({ code: 'version' })
+    await expect(client.closed).resolves.toBe(CLOSE.policyViolation)
+  })
+})
+
+describe('a paired device', () => {
+  it('is welcomed with the sessions it can see', async () => {
+    const harness = await serve()
+    const client = await connect(harness.port)
+    client.send(HELLO)
+
+    const welcome = await client.until((m) => m.t === 'welcome', 'the welcome')
+    expect(welcome).toMatchObject({ t: 'welcome', deviceId: 'device-1', deviceName: 'Test iPhone', token: null })
+    expect(welcome.t === 'welcome' && welcome.sessions.map((s) => s.id)).toEqual(['sess-1'])
+    expect(harness.endpoint.connections()).toHaveLength(1)
+  })
+
+  it('can list sessions', async () => {
+    const harness = await serve()
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    client.send({ t: 'list' })
+    const listed = await client.until((m) => m.t === 'sessions', 'the session list')
+    expect(listed.t === 'sessions' && listed.sessions[0].cwd).toBe('/tmp/sess-1')
+  })
+
+  it('gets the scrollback before any live output', async () => {
+    const harness = await serve()
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    client.send({ t: 'attach', id: 'sess-1' })
+    await client.until((m) => m.t === 'attached', 'the attach')
+    await client.until((m) => m.t === 'output' && m.replay === true, 'the replay')
+
+    harness.sessions.emit('sess-1', 'live output\r\n')
+    await client.until((m) => m.t === 'output' && m.replay !== true, 'the live output')
+
+    // The whole point of the feature: reconnecting shows what was already said,
+    // in the order it was said, and only then what happens next.
+    const output = client.received.filter((m): m is Extract<ServerMessage, { t: 'output' }> => m.t === 'output')
+    expect(output.map((m) => m.data)).toEqual(['earlier output\r\n', 'live output\r\n'])
+    expect(output[0].replay).toBe(true)
+    expect(output[1].replay).toBeUndefined()
+  })
+
+  it('replays the tail of an enormous scrollback rather than choking on it', async () => {
+    // `PtyManager` keeps 4,000 chunks and a chunk out of a build log is
+    // kilobytes, so an afternoon's session is tens of megabytes. Sent whole it
+    // passes the 8 MB backpressure cap, the socket closes itself, and the phone
+    // reconnects into the same attach and the same drop — the sessions most
+    // worth opening from a phone would be the ones that never open.
+    const marker = 'THE-VERY-LAST-LINE'
+    const huge = 'a'.repeat(10 * 1024 * 1024) + marker
+    const harness = await serve({}, fakeSessions({ 'sess-big': huge }))
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    client.send({ t: 'attach', id: 'sess-big' })
+    await client.until((m) => m.t === 'attached', 'the attach')
+    // Ordered after every replay frame, so its arrival means the replay is done
+    // — and it arriving at all means the socket survived the attach.
+    client.send({ t: 'ping' })
+    await client.until((m) => m.t === 'pong', 'the pong')
+
+    const replayed = client.received
+      .filter((m): m is Extract<ServerMessage, { t: 'output' }> => m.t === 'output' && m.replay === true)
+      .map((m) => m.data)
+      .join('')
+
+    expect(replayed.length).toBeLessThanOrEqual(2 * 1024 * 1024)
+    // The tail is what the user was reading, so the front is what goes.
+    expect(replayed.endsWith(marker)).toBe(true)
+    expect(replayed.length).toBeGreaterThan(1024 * 1024)
+  })
+
+  it('is told when a session it asked for is not running', async () => {
+    const harness = await serve()
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    client.send({ t: 'attach', id: 'nope' })
+    const error = await client.until((m) => m.t === 'error', 'the refusal')
+    expect(error).toMatchObject({ code: 'unknown-session' })
+    // Refused, not closed: a phone that opened a stale bookmark stays connected.
+    expect(harness.endpoint.connections()).toHaveLength(1)
+  })
+})
+
+describe('input', () => {
+  it('reaches the session it is attached to', async () => {
+    const harness = await serve()
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+    client.send({ t: 'attach', id: 'sess-1' })
+    await client.until((m) => m.t === 'attached', 'the attach')
+
+    client.send({ t: 'input', id: 'sess-1', data: 'ls -la\r' })
+    client.send({ t: 'resize', id: 'sess-1', cols: 100, rows: 30 })
+    client.send({ t: 'ping' })
+    await client.until((m) => m.t === 'pong', 'the pong')
+
+    expect(harness.sessions.written).toEqual([{ id: 'sess-1', data: 'ls -la\r' }])
+    expect(harness.sessions.resized).toEqual([{ id: 'sess-1', cols: 100, rows: 30 }])
+  })
+
+  it('is refused for a session this device never attached to', async () => {
+    const harness = await serve()
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    client.send({ t: 'input', id: 'sess-1', data: 'rm -rf /\r' })
+    const error = await client.until((m) => m.t === 'error', 'the refusal')
+    expect(error).toMatchObject({ code: 'unauthorized' })
+    // A remembered session id is not a keyboard.
+    expect(harness.sessions.written).toEqual([])
+  })
+})
+
+describe('frames the server will not accept', () => {
+  it('rejects one larger than the cap', async () => {
+    const harness = await serve({ maxMessageBytes: 1024 })
+    const client = await connect(harness.port)
+    client.sendFrame(maskedFrame(0x1, Buffer.alloc(4096, 0x61)))
+
+    await expect(client.closed).resolves.toBe(CLOSE.messageTooBig)
+  })
+
+  it('rejects one that only claims to be enormous', async () => {
+    const harness = await serve({ maxMessageBytes: 1024 })
+    const client = await connect(harness.port)
+
+    // A 64-bit length header and no payload: the cap has to be enforced on the
+    // declared size, or the process buffers whatever a caller promises.
+    const header = Buffer.alloc(14)
+    header[0] = 0x81
+    header[1] = 0x80 | 127
+    header.writeBigUInt64BE(BigInt(64 * 1024 * 1024), 2)
+    client.sendFrame(header)
+
+    await expect(client.closed).resolves.toBe(CLOSE.messageTooBig)
+  })
+
+  it('rejects a message fragmented to sneak past the cap', async () => {
+    const harness = await serve({ maxMessageBytes: 1024 })
+    const client = await connect(harness.port)
+
+    const piece = Buffer.alloc(600, 0x61)
+    const start = maskedFrame(0x1, piece)
+    start[0] = 0x01 // text, not final
+    const rest = maskedFrame(0x0, piece)
+    rest[0] = 0x80 // continuation, final
+    client.sendFrame(start)
+    client.sendFrame(rest)
+
+    await expect(client.closed).resolves.toBe(CLOSE.messageTooBig)
+  })
+
+  it('rejects an unmasked frame', async () => {
+    const harness = await serve()
+    const client = await connect(harness.port)
+
+    const payload = Buffer.from('{"t":"list"}', 'utf8')
+    const frame = Buffer.concat([Buffer.from([0x81, payload.length]), payload])
+    client.sendFrame(frame)
+
+    await expect(client.closed).resolves.toBe(CLOSE.protocolError)
+  })
+
+  it('rejects a binary frame', async () => {
+    const harness = await serve()
+    const client = await connect(harness.port)
+    client.sendFrame(maskedFrame(0x2, Buffer.from([1, 2, 3])))
+
+    await expect(client.closed).resolves.toBe(CLOSE.unsupportedData)
+  })
+
+  it('rejects text that is not a message this protocol has', async () => {
+    const harness = await serve()
+    const client = await connect(harness.port)
+    client.sendFrame(maskedFrame(0x1, Buffer.from('not json at all', 'utf8')))
+
+    await expect(client.closed).resolves.toBe(CLOSE.protocolError)
+  })
+})
+
+describe('closing', () => {
+  it('drops every socket and lets go of every session', async () => {
+    const harness = await serve()
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+    client.send({ t: 'attach', id: 'sess-1' })
+    await client.until((m) => m.t === 'attached', 'the attach')
+
+    harness.endpoint.closeAll()
+
+    await expect(client.closed).resolves.toBe(CLOSE.goingAway)
+    // A server that stops without detaching leaks a subscription into
+    // PtyManager for every phone that was connected when it stopped.
+    expect(harness.sessions.detached).toEqual(['sess-1'])
+    expect(harness.endpoint.connections()).toEqual([])
+  })
+
+  it('drops the sockets of a device that was just revoked', async () => {
+    const harness = await serve()
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+    client.send({ t: 'attach', id: 'sess-1' })
+    await client.until((m) => m.t === 'attached', 'the attach')
+
+    expect(harness.endpoint.dropDevice('device-2')).toBe(0)
+    expect(harness.endpoint.dropDevice('device-1')).toBe(1)
+
+    await expect(client.closed).resolves.toBe(CLOSE.policyViolation)
+    expect(harness.sessions.detached).toEqual(['sess-1'])
+  })
+
+  it('drops one connection without touching the pairing', async () => {
+    const harness = await serve()
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    const [connection] = harness.endpoint.connections()
+    // The panel lists what the phone said it was, so it has to survive the trip.
+    expect(connection).toMatchObject({ deviceId: 'device-1', platform: 'iOS' })
+
+    expect(harness.endpoint.dropConnection('no-such-connection')).toBe(false)
+    expect(harness.endpoint.dropConnection(connection.id)).toBe(true)
+    await expect(client.closed).resolves.toBe(CLOSE.goingAway)
+  })
+
+  it('does not admit a device that was revoked while its hello was being checked', async () => {
+    // The sweep cannot see this connection — it has no device id until the
+    // check lands — and the check is holding the device record it read before
+    // it started hashing, so the trust store will still say yes. Verified
+    // against the real `RemoteAuth`: a `verifyCredential` whose scrypt overlaps
+    // `revokeDevice` returns ok. Without the marker this socket stays open,
+    // attached, for as long as the app runs.
+    let admit = (): void => {}
+    const opened = new Promise<void>((settle) => (admit = settle))
+    let arrived = (): void => {}
+    const checking = new Promise<void>((settle) => (arrived = settle))
+
+    const slowAuth: RemoteAuthenticator = {
+      async authenticate() {
+        arrived()
+        await opened
+        return { ok: true, deviceId: 'device-1', deviceName: 'Test iPhone', credential: null }
+      },
+    }
+
+    const harness = await serve({ auth: slowAuth })
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await checking
+
+    expect(harness.endpoint.dropDevice('device-1')).toBe(0) // nothing named it yet
+    admit()
+
+    const error = await client.until((m) => m.t === 'error', 'the refusal')
+    expect(error).toMatchObject({ code: 'unauthorized' })
+    // Same sentence as any other refusal: which of the two happened is not a
+    // remote caller's business.
+    expect(error.t === 'error' && error.message).toBe('This device is not allowed in. Pair it again from the Mac.')
+    await expect(client.closed).resolves.toBe(CLOSE.policyViolation)
+    expect(harness.endpoint.connections()).toEqual([])
+    expect(client.received.some((m) => m.t === 'welcome')).toBe(false)
+  })
+
+  it('lets a kicked device connect again, unlike a revoked one', async () => {
+    // `dropConnection` and `dropDevice` are both "get off my machine"; only one
+    // of them is "never again". A marker that outlived the sweep would turn the
+    // first into the second.
+    const harness = await serve()
+    const first = await connect(harness.port)
+    first.send(HELLO)
+    await first.until((m) => m.t === 'welcome', 'the welcome')
+    expect(harness.endpoint.dropDevice('device-1')).toBe(1)
+    await first.closed
+
+    const second = await connect(harness.port)
+    second.send(HELLO)
+    await second.until((m) => m.t === 'welcome', 'the second welcome')
+  })
+
+  it('lets go of the session when the phone half-closes without a close frame', async () => {
+    // A phone that goes into a tunnel or is force-quit sends a FIN and never a
+    // close frame. The server's half of an upgraded socket takes that as `end`
+    // and stays writable, so `close` does not fire — and a server listening for
+    // `close` alone keeps the session attached to a phone that is gone.
+    const harness = await serve()
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+    client.send({ t: 'attach', id: 'sess-1' })
+    await client.until((m) => m.t === 'attached', 'the attach')
+
+    client.socket.end()
+    await new Promise((settle) => setTimeout(settle, 50))
+
+    expect(harness.sessions.detached).toEqual(['sess-1'])
+    expect(harness.endpoint.connections()).toEqual([])
+  })
+
+  it('drops a phone that stops answering the heartbeat', async () => {
+    // The client below never sends a pong, which is what a phone in a tunnel
+    // looks like: a TCP connection that stays open for minutes, holding a
+    // session, with nobody on the other end.
+    const harness = await serve({ pingIntervalMs: 25 })
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+    client.send({ t: 'attach', id: 'sess-1' })
+    await client.until((m) => m.t === 'attached', 'the attach')
+
+    await expect(client.closed).resolves.toBe(CLOSE.goingAway)
+    expect(harness.sessions.detached).toEqual(['sess-1'])
+  })
+
+  it('lets go of the session when the phone simply disappears', async () => {
+    const harness = await serve()
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+    client.send({ t: 'attach', id: 'sess-1' })
+    await client.until((m) => m.t === 'attached', 'the attach')
+
+    client.socket.destroy()
+    await new Promise((settle) => setTimeout(settle, 50))
+
+    expect(harness.sessions.detached).toEqual(['sess-1'])
+    expect(harness.endpoint.connections()).toEqual([])
+  })
+})
+
+describe('pairing, against the real trust store', () => {
+  /**
+   * Not a fake here on purpose. Everything else in this file stubs `RemoteAuth`
+   * to keep scrypt out of the socket tests, which leaves the join between the
+   * two modules — which secret goes down which path, and what an unapproved
+   * device is told — checked by nothing at all. That join is the part most
+   * likely to be wrong.
+   */
+  function realAuth(): { auth: RemoteAuth; desk: ReturnType<typeof pairingDesk> } {
+    const dir = mkdtempSync(join(tmpdir(), 'deck-auth-'))
+    roots.push(dir)
+    const auth = new RemoteAuth(dir)
+    return { auth, desk: pairingDesk(auth) }
+  }
+
+  const phone = { name: 'iPhone', platform: 'iOS' }
+
+  it('pairs a phone but does not let it in until a human approves', async () => {
+    const { auth, desk } = realAuth()
+    const authenticator = authenticatorFor(auth, desk)
+    const { token } = desk.create()
+
+    const paired = await authenticator.authenticate(token, phone, '100.86.107.7')
+    expect(paired.ok).toBe(false)
+    // The credential still has to travel or the phone can never come back —
+    // and it is useless until the device is approved.
+    expect(paired.ok === false && paired.credential).toMatch(/\./)
+    expect(paired.ok === false && paired.message).toMatch(/[Aa]pprove/)
+
+    const credential = paired.ok === false ? (paired.credential as string) : ''
+    const early = await authenticator.authenticate(credential, phone, '100.86.107.7')
+    expect(early.ok).toBe(false)
+
+    const device = auth.listDevices()[0]
+    expect(auth.approveDevice(device.id)).toBe(true)
+
+    const admitted = await authenticator.authenticate(credential, phone, '100.86.107.7')
+    expect(admitted).toMatchObject({ ok: true, deviceId: device.id })
+  })
+
+  it('gets its credential across the wire before the socket closes', async () => {
+    // The whole pairing hinges on a frame that is written and then immediately
+    // followed by a close. Destroying the socket in the same tick would discard
+    // it unsent, the phone would have no credential, and nothing above this line
+    // would notice — every other pairing test calls the authenticator directly.
+    const { auth, desk } = realAuth()
+    const harness = await serve({ auth: authenticatorFor(auth, desk) })
+    const { token } = desk.create()
+
+    const pairing = await connect(harness.port)
+    pairing.send({ t: 'hello', protocol: PROTOCOL_VERSION, token, device: phone })
+
+    const welcome = await pairing.until((m) => m.t === 'welcome', 'the credential')
+    const credential = welcome.t === 'welcome' ? welcome.token : null
+    expect(credential).toMatch(/\./)
+    // Carrying a credential is not being let in.
+    expect(welcome.t === 'welcome' && welcome.sessions).toEqual([])
+    await expect(pairing.closed).resolves.toBe(CLOSE.policyViolation)
+    expect(harness.endpoint.connections()).toEqual([])
+
+    // Still pending: the credential is real and opens nothing.
+    const early = await connect(harness.port)
+    early.send({ t: 'hello', protocol: PROTOCOL_VERSION, token: credential, device: phone })
+    const refused = await early.until((m) => m.t === 'error', 'the refusal')
+    expect(refused).toMatchObject({ code: 'unauthorized' })
+    await early.closed
+
+    auth.approveDevice(auth.listDevices()[0].id)
+    const admitted = await connect(harness.port)
+    admitted.send({ t: 'hello', protocol: PROTOCOL_VERSION, token: credential, device: phone })
+    const second = await admitted.until((m) => m.t === 'welcome', 'the real welcome')
+    // Present exactly once, on the connection that paired.
+    expect(second.t === 'welcome' && second.token).toBeNull()
+    expect(second.t === 'welcome' && second.sessions.map((s) => s.id)).toEqual(['sess-1'])
+  })
+
+  it('refuses a pairing code that was cancelled', async () => {
+    const { auth, desk } = realAuth()
+    const authenticator = authenticatorFor(auth, desk)
+    const { token } = desk.create()
+    desk.cancel()
+
+    const refused = await authenticator.authenticate(token, phone, '100.86.107.7')
+    expect(refused.ok).toBe(false)
+    expect(refused.ok === false && refused.credential).toBeUndefined()
+    // Cancel means cancelled, not "hidden": no device row was created either.
+    expect(auth.listDevices()).toEqual([])
+  })
+
+  it('refuses the previous code once a new one is on screen', async () => {
+    const { auth, desk } = realAuth()
+    const authenticator = authenticatorFor(auth, desk)
+    const first = desk.create()
+    desk.create()
+
+    expect((await authenticator.authenticate(first.token, phone, '100.86.107.7')).ok).toBe(false)
+    expect(auth.listDevices()).toEqual([])
+  })
+
+  it('refuses a revoked device without saying that is why', async () => {
+    const { auth, desk } = realAuth()
+    const authenticator = authenticatorFor(auth, desk)
+    const { token } = desk.create()
+    const paired = await authenticator.authenticate(token, phone, '100.86.107.7')
+    const credential = paired.ok === false ? (paired.credential as string) : ''
+    const device = auth.listDevices()[0]
+    auth.approveDevice(device.id)
+    expect((await authenticator.authenticate(credential, phone, '100.86.107.7')).ok).toBe(true)
+
+    auth.revokeDevice(device.id)
+    const after = await authenticator.authenticate(credential, phone, '100.86.107.7')
+    expect(after.ok).toBe(false)
+    // "revoked" and "never heard of you" have to read the same from outside, or
+    // the refusal is an oracle for which device ids are real.
+    expect(after.ok === false && after.message).toBe('This device is not allowed in. Pair it again from the Mac.')
+  })
+})
+
+describe('the static files', () => {
+  async function get(
+    port: number,
+    path: string,
+    host?: string,
+  ): Promise<{ status: number; body: string; headers: Record<string, string | string[] | undefined> }> {
+    return new Promise((settle, fail) => {
+      const req = request({ host: '127.0.0.1', port, path, headers: host ? { host } : {} }, (res) => {
+        let body = ''
+        res.setEncoding('utf8')
+        res.on('data', (chunk: string) => {
+          body += chunk
+        })
+        res.on('end', () => settle({ status: res.statusCode ?? 0, body, headers: res.headers }))
+      })
+      req.on('error', fail)
+      req.end()
+    })
+  }
+
+  it('serves the shell', async () => {
+    const harness = await serve()
+    const response = await get(harness.port, '/')
+    expect(response.status).toBe(200)
+    expect(response.body).toContain('<title>deck</title>')
+  })
+
+  it('gives a client-side route the shell rather than a 404', async () => {
+    const harness = await serve()
+    const response = await get(harness.port, '/session/abc')
+    expect(response.status).toBe(200)
+    expect(response.body).toContain('<title>deck</title>')
+  })
+
+  it('caches the fingerprinted bundle forever and nothing else', async () => {
+    // `pwa/vite.config.ts` fingerprints into /assets/ and deliberately emits
+    // sw.js, manifest.webmanifest and the icons at fixed URLs, because a
+    // service worker's script and scope have to stay put across builds. Those
+    // are the files whose contents change from one build to the next, so an
+    // immutable year on them is how a phone ends up holding a manifest — and,
+    // through the worker's own install step, a shell — from a build months old.
+    const harness = await serve()
+    mkdirSync(join(harness.root, 'assets'))
+    writeFileSync(join(harness.root, 'assets', 'index-BoSiuOJ9.js'), 'console.log(1)')
+    writeFileSync(join(harness.root, 'sw.js'), 'self.addEventListener("fetch", () => {})')
+    writeFileSync(join(harness.root, 'manifest.webmanifest'), '{"name":"deck"}')
+
+    const hashed = await get(harness.port, '/assets/index-BoSiuOJ9.js')
+    expect(hashed.headers['cache-control']).toBe('public, max-age=31536000, immutable')
+
+    for (const path of ['/sw.js', '/manifest.webmanifest', '/']) {
+      const stable = await get(harness.port, path)
+      expect(stable.status, path).toBe(200)
+      expect(stable.headers['cache-control'], path).toBe('no-cache')
+    }
+  })
+
+  it('refuses to be framed', async () => {
+    // The page is a live terminal on a phone that is already signed in. A tap
+    // the user believes is landing on someone else's page must not land here.
+    const harness = await serve()
+    const response = await get(harness.port, '/')
+    expect(response.headers['content-security-policy']).toBe("frame-ancestors 'none'")
+    expect(response.headers['x-frame-options']).toBe('DENY')
+  })
+
+  it('refuses a Host it is not serving', async () => {
+    const harness = await serve({ hosts: ['deck.example.ts.net:8443'] })
+    expect((await get(harness.port, '/', 'evil.example.com')).status).toBe(403)
+    expect((await get(harness.port, '/', 'deck.example.ts.net:8443')).status).toBe(200)
+  })
+
+  it('refuses an upgrade on a Host it is not serving', async () => {
+    const harness = await serve({ hosts: ['deck.example.ts.net:8443'] })
+    await expect(connect(harness.port, WS_PATH, 'evil.example.com')).rejects.toThrow(/403/)
+  })
+
+  it('refuses an upgrade anywhere but the socket path', async () => {
+    const harness = await serve()
+    await expect(connect(harness.port, '/anything-else')).rejects.toThrow(/404/)
+  })
+})
+
+describe('resolveStaticPath', () => {
+  const root = '/srv/pwa'
+
+  it('keeps traversal inside the root', () => {
+    // Encoded and plain are the same request once decoded, so both are checked
+    // after decoding rather than by pattern-matching the raw string.
+    //
+    // These resolve to a path *inside* the root rather than to null, because
+    // `normalize` collapses leading `..` against the root of an absolute path —
+    // verified on this machine: `/assets/../../secret.key` normalizes to
+    // `/secret.key`, not to `../secret.key`. The property that matters is not
+    // which answer comes back but that no answer ever names a file outside the
+    // PWA directory.
+    for (const attempt of ['/../../etc/passwd', '/%2e%2e%2f%2e%2e%2fetc/passwd', '/assets/../../secret.key']) {
+      const resolved = resolveStaticPath(root, attempt)
+      expect(resolved, attempt).not.toBeNull()
+      expect(resolved?.startsWith(`${root}/`), attempt).toBe(true)
+    }
+  })
+
+  it('refuses a path that resolves outside the root', () => {
+    // The containment check earns its keep on a request path that is not
+    // rooted, which `normalize` leaves alone.
+    expect(resolveStaticPath(root, '../secret.key')).toBeNull()
+    expect(resolveStaticPath(root, '../../etc/passwd')).toBeNull()
+  })
+
+  it('resolves ordinary assets', () => {
+    expect(resolveStaticPath(root, '/assets/app.js')).toBe('/srv/pwa/assets/app.js')
+    expect(resolveStaticPath(root, '/')).toBe('/srv/pwa/index.html')
+  })
+
+  it('refuses a path with a null byte', () => {
+    expect(resolveStaticPath(root, '/index.html%00.png')).toBeNull()
+  })
+})
+
+describe('the server as a whole', () => {
+  const neverListens = {
+    sessions: fakeSessions(),
+    auth: allowKnownDevice,
+    webRoot: '/nowhere',
+    certDir: '/nowhere',
+  }
+
+  it('does not listen when the tailnet is not ready, and says why', async () => {
+    const server = createRemoteServer({
+      ...neverListens,
+      readTailnet: async () => ({
+        ready: false,
+        state: 'logged-out',
+        reason: 'Tailscale is installed but signed out on this Mac.',
+      }),
+      readCert: async () => {
+        throw new Error('a certificate must never be requested before the tailnet is ready')
+      },
+    })
+
+    const status = await server.start()
+    expect(status.running).toBe(false)
+    expect(status.url).toBeNull()
+    expect(status.reason).toBe('Tailscale is installed but signed out on this Mac.')
+    expect(server.url()).toBeNull()
+  })
+
+  it('does not listen when the certificate cannot be issued, and passes the reason through', async () => {
+    const server = createRemoteServer({
+      ...neverListens,
+      readTailnet: async () => ready(),
+      readCert: async () => ({ ok: false, message: 'HTTPS certificates are off for this tailnet.' }),
+    })
+
+    const status = await server.start()
+    expect(status.running).toBe(false)
+    // The daemon's own sentence, not one of ours: the fix is in their admin
+    // console and only the daemon knows which switch.
+    expect(status.reason).toBe('HTTPS certificates are off for this tailnet.')
+  })
+
+  it('refuses to serve a tailnet with no MagicDNS name', async () => {
+    const server = createRemoteServer({
+      ...neverListens,
+      readTailnet: async () => ({ ...ready(), magicDns: false, dnsName: '' }),
+      readCert: async () => {
+        throw new Error('a certificate must never be requested without a name to put it on')
+      },
+    })
+
+    const status = await server.start()
+    expect(status.running).toBe(false)
+    expect(status.reason).toMatch(/MagicDNS/)
+  })
+
+  it('is safe to stop when it never started', async () => {
+    const server = createRemoteServer({ ...neverListens, readTailnet: async () => ready() })
+    const status = await server.stop()
+    expect(status.running).toBe(false)
+    expect(status.connections).toEqual([])
+  })
+})
+
+/**
+ * A ready tailnet, shaped exactly as `tailnet.ts` reports this machine.
+ *
+ * Annotated rather than inferred on purpose: the return type is what makes a
+ * rename in that module fail here instead of silently leaving these tests
+ * asserting against a shape the server no longer receives.
+ */
+function ready(): TailnetReady {
+  return {
+    ready: true,
+    address: '100.86.107.119',
+    address6: 'fd7a:115c:a1e0::fd39:6b77',
+    dnsName: 'asads-macbook-pro-1.taild11505.ts.net',
+    hostName: 'asads-macbook-pro-1',
+    tailnetName: 'example@gmail.com',
+    magicDnsSuffix: 'taild11505.ts.net',
+    magicDns: true,
+    certsAvailable: true,
+    binary: '/opt/homebrew/bin/tailscale',
+  }
+}

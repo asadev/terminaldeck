@@ -1,0 +1,189 @@
+/* Remote access.
+
+   Only what the shared settings controls do not already cover: the QR figure,
+   the pairing layout, and the device and connection rows. Everything else on
+   this panel is a `settings-*` class, so it keeps matching the rest of the
+   window when that changes.
+
+   The one place this file deliberately ignores the theme is the QR code — see
+   below. */
+
+/* ------------------------------------------------------------- addresses -- */
+
+.remote-url {
+  margin: 8px 0;
+  overflow-wrap: anywhere;
+}
+
+/* Monospace and selectable: this is read aloud, typed on a phone keyboard, and
+   occasionally copied. A proportional font makes rn/m and l/1 arguments. */
+.remote-url code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-primary);
+  user-select: text;
+}
+
+/* ------------------------------------------------------------------- QR -- */
+
+.remote-pairing {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 18px;
+  margin: 10px 0 4px;
+}
+
+.remote-pairing-side {
+  flex: 1;
+  min-width: 220px;
+}
+
+/* Black on white in both themes, on purpose.
+
+   A scanner needs the quiet zone lighter than the modules. Some cope with an
+   inverted code and some do not, and this is the one surface in the app whose
+   entire job is to be photographed — so it does not participate in dark mode.
+   `crispEdges` in the markup stops the browser antialiasing module edges into
+   grey, which is what turns a code that reads at arm's length into one that
+   needs three tries. */
+/* 224px is not decoration: a pairing URL runs to about ninety bytes, which is a
+   45×45 symbol, and this keeps every module four screen pixels wide. Smaller
+   than that and a phone held at arm's length starts needing a second try. */
+.remote-qr {
+  width: 224px;
+  height: 224px;
+  max-width: 100%;
+  flex-shrink: 0;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+}
+
+.remote-qr-paper {
+  fill: #ffffff;
+}
+
+.remote-qr-ink {
+  fill: #000000;
+}
+
+.remote-countdown {
+  margin: 0 0 6px;
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+}
+
+/* Muted rather than red: an expired code is the system working, not a fault. */
+.remote-countdown-done {
+  color: var(--text-muted);
+}
+
+/* ----------------------------------------------------- devices and links -- */
+
+.remote-list {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+}
+
+.remote-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.remote-row:last-child {
+  border-bottom: none;
+}
+
+.remote-row-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.remote-row-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.remote-row-note {
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+
+/* A revoked device stays in the list — the record of it is the point — but it
+   is not something you can act on, so it recedes. */
+.remote-row-revoked .remote-row-name,
+.remote-row-revoked .remote-row-note {
+  color: var(--text-muted);
+}
+
+.remote-state {
+  flex-shrink: 0;
+  width: 96px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+.remote-row-pending .remote-state {
+  color: var(--status-input);
+}
+
+/* ------------------------------------------------------------- attached -- */
+
+/* The one loud thing on the panel. Something typing into this machine right now
+   should not look like another row of settings, so it gets the label, the dot
+   and the tinted background — the only place in this file that uses colour to
+   mean anything. */
+.remote-row-live {
+  padding: 9px 10px;
+  margin-bottom: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+}
+
+.remote-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  width: 96px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--status-working);
+}
+
+.remote-live-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--status-working);
+  animation: remote-pulse 2s ease-in-out infinite;
+}
+
+@keyframes remote-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+/* The dot still reads as present without the pulse; only the motion goes. */
+@media (prefers-reduced-motion: reduce) {
+  .remote-live-dot {
+    animation: none;
+  }
+}
