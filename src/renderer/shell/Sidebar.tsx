@@ -1,0 +1,323 @@
+import { useState, type MouseEvent } from 'react'
+import { StatusDot } from '../components/StatusDot'
+import type { Project } from '../state/store'
+import { tip } from '../keymap'
+import { PANEL_GROUPS, PANELS, type PanelId } from './panels'
+import { KIND_ICON, sessionLabel, type WorkspaceTab } from './workspace-tabs'
+
+interface Props {
+  width: number
+  projects: Project[]
+  tabs: WorkspaceTab[]
+  /** The open session or page, whether or not a view is covering it. */
+  activeTabId: string | null
+  /** The view covering the window, or null when a session/page is on screen. */
+  activePanel: PanelId | null
+  /** Session ids with output nobody has looked at yet. */
+  unread?: readonly string[]
+  badges?: Partial<Record<PanelId, number>>
+  onSelectTab(id: string): void
+  onCloseTab(id: string): void
+  onSelectPanel(id: PanelId): void
+  onNewSession(projectPath?: string, resume?: boolean): void
+  onNewBrowserTab(): void
+  onOpenProject(): void
+  onCloseProject(path: string): void
+  onOpenSettings(): void
+  onStartResize(event: MouseEvent): void
+}
+
+function Glyph({
+  path,
+  size = 17,
+  className,
+}: {
+  path: string
+  size?: number
+  className?: string
+}) {
+  return (
+    <svg
+      className={className ? `sb-glyph ${className}` : 'sb-glyph'}
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d={path} />
+    </svg>
+  )
+}
+
+const PLUS = 'M12 5.5v13M5.5 12h13'
+const DISCLOSURE = 'M9.5 6.5l5.5 5.5-5.5 5.5'
+const RESUME = 'M4 12a8 8 0 1 0 2.7-6M4 4.5v4h4'
+const CLOSE = 'M6.5 6.5l11 11M17.5 6.5l-11 11'
+const GEAR =
+  'M12 15.1a3.1 3.1 0 1 0 0-6.2 3.1 3.1 0 0 0 0 6.2zM19.3 14.6a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5v.2a2 2 0 1 1-4 0v-.1a1.6 1.6 0 0 0-1.1-1.5 1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1h-.2a2 2 0 1 1 0-4h.1a1.6 1.6 0 0 0 1.5-1.1 1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5v-.2a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1h.2a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z'
+
+/**
+ * The sidebar. One of them.
+ *
+ * What used to be here was a 48px icon rail, a 300px drawer with its own
+ * header and collapse button, a tab strip in the window title bar and a
+ * segmented control in a bar of its own — four pieces of chrome answering the
+ * same question. This is that question asked once: what do you have open, and
+ * what would you like to look at.
+ *
+ * The rows are quiet on purpose. Nothing here is boxed, nothing is separated by
+ * a line, and the only colour is the status dot next to a session that is
+ * actually doing something.
+ */
+export function Sidebar({
+  width,
+  projects,
+  tabs,
+  activeTabId,
+  activePanel,
+  unread = [],
+  badges,
+  onSelectTab,
+  onCloseTab,
+  onSelectPanel,
+  onNewSession,
+  onNewBrowserTab,
+  onOpenProject,
+  onCloseProject,
+  onOpenSettings,
+  onStartResize,
+}: Props) {
+  /** Folded projects, by path. Local: it is a view state, not a preference. */
+  const [folded, setFolded] = useState<ReadonlySet<string>>(new Set())
+  const toggleFold = (path: string) =>
+    setFolded((current) => {
+      const next = new Set(current)
+      if (!next.delete(path)) next.add(path)
+      return next
+    })
+
+  const browserTabs = tabs.filter((tab) => tab.kind === 'browser')
+  const sessionsIn = (path: string) =>
+    tabs.filter((tab) => tab.kind === 'session' && tab.projectPath === path)
+  /** Sessions whose project has been closed out from under them. */
+  const orphaned = tabs.filter(
+    (tab) =>
+      tab.kind === 'session' && !projects.some((project) => project.path === tab.projectPath),
+  )
+
+  const labelFor = (tab: WorkspaceTab, index: number, projectName?: string): string =>
+    tab.kind === 'session' ? sessionLabel(tab.label, index, projectName) : tab.label
+
+  const tabRow = (tab: WorkspaceTab, label: string) => (
+    <li key={tab.id}>
+      <div
+        className={`sb-row sb-open${!activePanel && tab.id === activeTabId ? ' active' : ''}${
+          unread.includes(tab.id) ? ' unread' : ''
+        }`}
+      >
+        <button
+          type="button"
+          className="sb-row-main"
+          title={label}
+          aria-current={!activePanel && tab.id === activeTabId}
+          onClick={() => onSelectTab(tab.id)}
+        >
+          {tab.kind === 'session' ? (
+            <StatusDot status={tab.status ?? 'idle'} />
+          ) : (
+            <Glyph path={KIND_ICON.browser} size={15} />
+          )}
+          <span className="sb-label">{label}</span>
+        </button>
+        {/* Mail's idiom: a dot for a row with something new in it. It hides
+            under the close button on hover, because at that point the pointer
+            is on its way somewhere else. */}
+        {unread.includes(tab.id) && <span className="sb-unread" aria-label="Unread output" />}
+        {tab.closable && (
+          <button
+            type="button"
+            className="sb-row-action sb-close"
+            aria-label={`Close ${label}`}
+            title={`Close ${label}`}
+            onClick={() => onCloseTab(tab.id)}
+          >
+            <Glyph path={CLOSE} size={13} />
+          </button>
+        )}
+      </div>
+    </li>
+  )
+
+  return (
+    <aside className="sidebar" style={{ width }} aria-label="Sidebar">
+      {/* The traffic lights live over this. Nothing else may. */}
+      <div className="sidebar-gutter" />
+
+      <div className="sidebar-actions">
+        <button
+          type="button"
+          className="sb-new"
+          onClick={() => onNewSession()}
+          title={tip('New session', 'session.new')}
+        >
+          <Glyph path={PLUS} size={16} />
+          <span>New session</span>
+        </button>
+        <button
+          type="button"
+          className="sb-new-alt"
+          onClick={onNewBrowserTab}
+          aria-label="New browser tab"
+          title="New browser tab"
+        >
+          <Glyph path={KIND_ICON.browser} size={16} />
+        </button>
+      </div>
+
+      <div className="sidebar-scroll">
+        {PANEL_GROUPS.map((group) => (
+          <section key={group.id} className="sb-group">
+            <h2 className="sb-group-label">{group.label}</h2>
+            <ul className="sb-list">
+              {PANELS.filter((panel) => panel.group === group.id).map((panel) => {
+                const count = badges?.[panel.id] ?? 0
+                return (
+                  <li key={panel.id}>
+                    <button
+                      type="button"
+                      className={`sb-row sb-nav${activePanel === panel.id ? ' active' : ''}`}
+                      aria-current={activePanel === panel.id}
+                      // Read out of the keymap for this platform, never typed
+                      // here: the rail used to carry its own ⌘1/⌘2/⌘3 tooltips
+                      // and every one of them was wrong.
+                      title={panel.command ? tip(panel.label, panel.command) : panel.label}
+                      onClick={() => onSelectPanel(panel.id)}
+                    >
+                      <Glyph path={panel.icon} />
+                      <span className="sb-label">{panel.label}</span>
+                      {count > 0 && <span className="sb-badge">{count > 99 ? '99+' : count}</span>}
+                    </button>
+                  </li>
+                )
+              })}
+            </ul>
+          </section>
+        ))}
+
+        <section className="sb-group">
+          <div className="sb-group-head">
+            <h2 className="sb-group-label">Open</h2>
+            <button
+              type="button"
+              className="sb-group-action"
+              onClick={onOpenProject}
+              aria-label="Open a project"
+              title={tip('Open a project', 'project.open')}
+            >
+              <Glyph path={PLUS} size={14} />
+            </button>
+          </div>
+
+          {projects.length === 0 && browserTabs.length === 0 && (
+            <p className="sb-empty">
+              Nothing open yet. <button type="button" className="sb-link" onClick={onOpenProject}>Open a project</button> to start.
+            </p>
+          )}
+
+          {projects.map((project) => (
+            <div key={project.path} className="sb-project">
+              <div className="sb-row sb-project-head">
+                {/* A disclosure, the way a macOS sidebar folds a group. It used
+                    to start a session, which is what the ＋ beside it does — one
+                    affordance, one meaning. */}
+                <button
+                  type="button"
+                  className="sb-row-main"
+                  title={project.path}
+                  aria-expanded={!folded.has(project.path)}
+                  onClick={() => toggleFold(project.path)}
+                >
+                  <Glyph
+                    path={DISCLOSURE}
+                    size={12}
+                    className={`sb-disclosure${folded.has(project.path) ? '' : ' open'}`}
+                  />
+                  <span className="sb-project-name">{project.name}</span>
+                </button>
+                <button
+                  type="button"
+                  className="sb-row-action"
+                  onClick={() => onNewSession(project.path, true)}
+                  aria-label={`Continue the last session in ${project.name}`}
+                  title={tip('Continue last session', 'session.resume')}
+                >
+                  <Glyph path={RESUME} size={13} />
+                </button>
+                <button
+                  type="button"
+                  className="sb-row-action"
+                  onClick={() => onNewSession(project.path)}
+                  aria-label={`New session in ${project.name}`}
+                  title={tip('New session', 'session.new')}
+                >
+                  <Glyph path={PLUS} size={13} />
+                </button>
+                <button
+                  type="button"
+                  className="sb-row-action"
+                  onClick={() => onCloseProject(project.path)}
+                  aria-label={`Close ${project.name}`}
+                  title="Close project"
+                >
+                  <Glyph path={CLOSE} size={13} />
+                </button>
+              </div>
+              {!folded.has(project.path) && (
+                <ul className="sb-list sb-sessions">
+                  {sessionsIn(project.path).map((tab, index) =>
+                    tabRow(tab, labelFor(tab, index, project.name)),
+                  )}
+                </ul>
+              )}
+            </div>
+          ))}
+
+          {orphaned.length > 0 && (
+            <ul className="sb-list">
+              {orphaned.map((tab, index) => tabRow(tab, labelFor(tab, index)))}
+            </ul>
+          )}
+          {browserTabs.length > 0 && (
+            <ul className="sb-list">{browserTabs.map((tab) => tabRow(tab, tab.label))}</ul>
+          )}
+        </section>
+      </div>
+
+      {/* Bottom-left, where every app of this shape puts it. */}
+      <div className="sidebar-foot">
+        <button
+          type="button"
+          className="sb-row sb-settings"
+          onClick={onOpenSettings}
+          title={tip('Settings', 'app.preferences')}
+        >
+          <Glyph path={GEAR} />
+          <span className="sb-label">Settings</span>
+        </button>
+      </div>
+
+      <div
+        className="sidebar-resize"
+        onMouseDown={onStartResize}
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize sidebar"
+      />
+    </aside>
+  )
+}

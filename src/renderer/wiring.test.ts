@@ -46,8 +46,14 @@ const SEAMS: Array<{ file: string; child: string; props: string[]; why: string }
   {
     file: 'renderer/App.tsx',
     child: 'ChatView',
-    props: ['cwd', 'sessionId'],
-    why: 'without sessionId the controls row and usage strip render their empty state',
+    props: ['cwd', 'session', 'sessionId'],
+    why: 'without sessionId the controls row and usage strip render their empty state, and without session the pane reads whatever transcript in the folder was written last',
+  },
+  {
+    file: 'renderer/App.tsx',
+    child: 'SessionInspector',
+    props: ['cwd', 'session', 'sessionTitle'],
+    why: 'without session it reports the folder’s newest transcript under this session’s name — including one belonging to a claude this app never started',
   },
   {
     file: 'renderer/components/ChatView.tsx',
@@ -75,6 +81,12 @@ const SEAMS: Array<{ file: string; child: string; props: string[]; why: string }
   },
   {
     file: 'renderer/App.tsx',
+    child: 'BrowserWorkspace',
+    props: ['visible', 'parkPage'],
+    why: 'visible hides the whole panel per tab; parkPage hides only the native pages under a dialog',
+  },
+  {
+    file: 'renderer/App.tsx',
     child: 'UpdateBanner',
     props: [],
     // It takes no required props on purpose — it resolves its own bridge, and
@@ -97,4 +109,43 @@ describe('components that are built are also wired', () => {
       }
     })
   }
+})
+
+/** The value of `<Name prop={...}>`, or null. Brace-aware, like `openingTag`. */
+function propExpression(tag: string, prop: string): string | null {
+  const at = tag.search(new RegExp(`[\\s{]${prop}=\\{`))
+  if (at < 0) return null
+  const from = tag.indexOf('{', at)
+  let depth = 0
+  for (let i = from; i < tag.length; i++) {
+    if (tag[i] === '{') depth++
+    else if (tag[i] === '}' && --depth === 0) return tag.slice(from + 1, i)
+  }
+  return null
+}
+
+/**
+ * Two different questions that were once one prop.
+ *
+ * `visible` used to mean "this tab is on screen AND no dialog is open", which
+ * forced a choice between two wrong screens: park the pages for a dialog and
+ * the panel keeps painting over other tabs, or hide the panel for a dialog and
+ * the workspace blanks out behind it. Folding the modal flag back into
+ * `visible` brings one of those back.
+ */
+describe('the browser panel is hidden per tab, parked per dialog', () => {
+  const tag = openingTag(read('renderer/App.tsx'), 'BrowserWorkspace') ?? ''
+
+  it('decides visibility from the tab alone', () => {
+    const visible = propExpression(tag, 'visible')
+    expect(visible, '<BrowserWorkspace> has no visible={...}').not.toBeNull()
+    expect(visible).toMatch(/activeTab/)
+    expect(visible, 'a dialog is not a tab switch — that belongs in parkPage').not.toMatch(
+      /Modal|Open\b/,
+    )
+  })
+
+  it('parks the pages for whatever dialog is open', () => {
+    expect(propExpression(tag, 'parkPage')).toMatch(/Modal/)
+  })
 })

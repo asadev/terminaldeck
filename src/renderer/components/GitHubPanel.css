@@ -1,5 +1,12 @@
 /* ============================================================================
-   GitHub panel
+   GitHub — pull requests and issues for this remote, as a page.
+
+   This used to render in a 300px drawer: a bordered head bar, a bordered tab
+   bar, and rows whose titles clamped to two lines because there was nowhere
+   for them to go. It has the window now, so a row is one line — badge, title,
+   then the facts about it — and nothing is boxed. The only lines left are the
+   ink underline under the selected tab and the ones inside a code sample.
+
    State colours are aliased from the foundation tokens rather than restated,
    so a theme swap in tokens.css moves this panel with everything else. The one
    exception is the label dot, whose colour is GitHub's own per-label hex and
@@ -8,7 +15,7 @@
 
 .gh-panel {
   --gh-open: var(--status-completed);
-  --gh-draft: var(--text-secondary);
+  --gh-draft: var(--text-muted);
   /* GitHub paints merged purple; this palette has no purple, and the app's blue
      means focus. --status-working is the token for "a thing that happened". */
   --gh-merged: var(--status-working);
@@ -20,22 +27,25 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
-  background: var(--bg-secondary);
+  /* The page is the ground. A second fill here drew a grey slab the height of
+     whatever happened to be loaded. */
+  max-width: 82rem;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--t-body);
   user-select: none;
 }
 
 /* ----------------------------------------------------------------- head -- */
 
+/* The repository, said once. The view's own name and blurb are already in the
+   toolbar above it, so this line is identity, not a title bar. */
 .gh-head {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--sp-2);
   flex-shrink: 0;
-  height: var(--tabbar-height);
-  padding: 0 8px 0 12px;
-  border-bottom: 1px solid var(--border-subtle);
+  min-height: var(--control-h-lg);
+  margin-bottom: var(--sp-5);
 }
 
 .gh-head-icon {
@@ -45,38 +55,41 @@
 
 .gh-repo {
   min-width: 0;
-  padding: 2px 4px;
-  margin-left: -4px;
+  height: var(--control-h);
+  padding: 0 var(--sp-2);
+  margin-left: calc(var(--sp-2) * -1);
   border-radius: var(--radius-sm);
-  font-size: 12px;
-  font-weight: 600;
+  font-size: var(--t-title3);
+  font-weight: var(--w-semibold);
+  letter-spacing: var(--t-title3-ls);
   color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  transition: background 120ms ease, color 120ms ease;
+  transition: background var(--dur-fast) var(--ease);
 }
 
 .gh-repo:hover {
   background: var(--bg-hover);
-  color: var(--text-primary);
 }
 
 .gh-head-spacer {
   flex: 1;
+  min-width: var(--sp-4);
 }
 
 .gh-bell {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--sp-1);
   flex-shrink: 0;
-  padding: 1px 7px 1px 5px;
-  border-radius: var(--radius-sm);
-  background: var(--bg-tertiary);
+  height: var(--control-h-sm);
+  padding: 0 var(--sp-2);
+  border-radius: var(--radius-pill);
+  background: var(--fill-tertiary);
   color: var(--text-secondary);
-  font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--t-footnote);
+  font-variant-numeric: tabular-nums;
 }
 
 /* Something is waiting on *this* project, not just somewhere in the account —
@@ -89,11 +102,11 @@
   display: grid;
   place-items: center;
   flex-shrink: 0;
-  width: 22px;
-  height: 22px;
+  width: var(--icon-btn);
+  height: var(--icon-btn);
   border-radius: var(--radius-sm);
   color: var(--text-muted);
-  transition: background 120ms ease, color 120ms ease;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
 
 .gh-refresh:hover:not(:disabled) {
@@ -112,42 +125,53 @@
 
 /* ----------------------------------------------------------------- tabs -- */
 
+/* Two words and an ink underline under the selected one. The bordered bar this
+   replaced drew a full-width rule to separate two buttons from a list. */
 .gh-tabs {
   display: flex;
   flex-shrink: 0;
-  gap: 2px;
-  padding: 6px 8px;
-  border-bottom: 1px solid var(--border-subtle);
+  gap: var(--sp-5);
+  margin-bottom: var(--sp-4);
 }
 
-/* A button's own label has to clear AA, so tabs sit at --text-secondary even
-   when unselected; --text-muted is for things that repeat elsewhere. */
 .gh-tab {
+  position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 9px;
-  border-radius: var(--radius-sm);
+  gap: var(--sp-15);
+  padding-bottom: var(--sp-2);
   color: var(--text-secondary);
-  font-size: 11.5px;
-  font-weight: 550;
-  transition: background 120ms ease, color 120ms ease;
+  font-size: var(--t-body);
+  font-weight: var(--w-medium);
+  transition: color var(--dur-fast) var(--ease);
 }
 
 .gh-tab:hover {
-  background: var(--bg-hover);
   color: var(--text-primary);
 }
 
 .gh-tab[aria-selected='true'] {
-  background: var(--bg-active);
   color: var(--text-primary);
+  font-weight: var(--w-semibold);
+}
+
+/* Selection is one of the three jobs the accent is allowed to do. */
+.gh-tab[aria-selected='true']::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: var(--sp-05);
+  border-radius: var(--radius-pill);
+  background: var(--accent);
 }
 
 .gh-tab-count {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  opacity: 0.8;
+  font-size: var(--t-footnote);
+  font-weight: var(--w-regular);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
 }
 
 .gh-tab:focus-visible,
@@ -157,6 +181,7 @@
 .gh-retry:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
+  border-radius: var(--radius-sm);
 }
 
 /* ----------------------------------------------------------------- list -- */
@@ -164,26 +189,32 @@
 .gh-list-wrap {
   flex: 1;
   min-height: 0;
-  overflow-y: auto;
-  padding: 6px;
 }
 
 .gh-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-05);
   list-style: none;
   margin: 0;
   padding: 0;
 }
 
+/* One line, full width, no outline. Rows are told apart by the space between
+   them and by the fill that follows the pointer. */
 .gh-row {
   display: flex;
-  align-items: flex-start;
-  gap: 8px;
+  align-items: baseline;
+  gap: var(--sp-4);
   width: 100%;
-  padding: 7px 8px;
-  border-radius: var(--radius-sm);
+  padding: var(--sp-3) var(--sp-3);
+  border-radius: var(--radius-md);
+  /* The title is the only thing allowed to give way, so the row clips rather
+     than the page growing a horizontal scrollbar. */
+  overflow: hidden;
   text-align: left;
   color: var(--text-secondary);
-  transition: background 120ms ease;
+  transition: background var(--dur-fast) var(--ease);
 }
 
 .gh-row:hover {
@@ -192,99 +223,110 @@
 
 .gh-body {
   display: flex;
-  flex-direction: column;
-  gap: 3px;
+  align-items: baseline;
+  gap: var(--sp-4);
   flex: 1;
   min-width: 0;
-}
-
-/* Two lines, then an ellipsis: PR titles routinely run past the panel width,
-   and truncating to one line loses the part that distinguishes them. */
-.gh-title {
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
+  /* The facts cluster does not shrink, so past a certain narrowness it has to
+     be clipped by something. Clipped here, it disappears under the row's right
+     edge; unclipped, it printed straight through the diffstat. */
   overflow: hidden;
-  color: var(--text-primary);
-  font-size: 12px;
-  line-height: 1.35;
 }
 
+/* One line and an ellipsis. Two-line titles were a 300px compromise; at this
+   width they only make one row twice the height of its neighbours. */
+.gh-title {
+  flex: 1 1 var(--sp-16);
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-primary);
+  font-size: var(--t-body);
+}
+
+/* The facts about the row, in one nowrap cluster at the right. It does not
+   shrink: squeezing it sliced label chips mid-word, and a sliced chip is worse
+   than a shorter title — the title is the one thing here that ellipsizes into
+   something still readable. */
 .gh-meta {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  font-size: 10.5px;
+  align-items: baseline;
+  gap: var(--sp-3);
+  flex-shrink: 0;
+  font-size: var(--t-footnote);
   color: var(--text-secondary);
 }
 
 .gh-number,
 .gh-age {
-  font-family: var(--font-mono);
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.gh-author {
+  flex-shrink: 0;
+  max-width: 18ch;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .gh-author[data-bot='true']::after {
   content: 'bot';
-  margin-left: 4px;
-  padding: 0 3px;
-  border: 1px solid var(--border);
+  margin-left: var(--sp-1);
+  padding: 0 var(--sp-1);
   border-radius: var(--radius-sm);
-  font-size: 8.5px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  background: var(--fill-tertiary);
+  font-size: var(--t-caption);
 }
 
 .gh-fork,
 .gh-assignees {
-  font-style: italic;
+  flex-shrink: 0;
+  max-width: 22ch;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 /* --------------------------------------------------------------- badges -- */
 
+/* The state, in the colour it means, in a column of its own so the titles
+   beside it line up. No pill, no outline — four boxed capitals in a column is
+   the loudest thing a quiet list can do. */
 .gh-badge {
   flex-shrink: 0;
-  min-width: 48px;
-  margin-top: 1px;
-  padding: 2px 6px;
-  border-radius: var(--radius-sm);
-  border: 1px solid transparent;
-  font-size: 9.5px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-align: center;
-  text-transform: uppercase;
+  width: 5rem;
+  font-size: var(--t-footnote);
+  font-weight: var(--w-medium);
+  text-transform: capitalize;
+  color: var(--text-secondary);
 }
 
 .gh-badge[data-badge='open'] {
-  border-color: var(--gh-open);
   color: var(--gh-open);
 }
 
 /* A draft is deliberately the quietest of the four — it is not asking for you. */
 .gh-badge[data-badge='draft'] {
-  border-color: var(--border-strong);
   color: var(--gh-draft);
 }
 
-/* Outlined like the other three rather than filled — four badges in a column
-   should differ by one variable, not two. */
 .gh-badge[data-badge='merged'] {
-  border-color: var(--gh-merged);
   color: var(--gh-merged);
 }
 
 .gh-badge[data-badge='closed'] {
-  border-color: var(--gh-closed);
   color: var(--gh-closed);
 }
 
 /* --------------------------------------------------------------- review -- */
 
 .gh-review {
-  padding: 0 5px;
-  border-radius: var(--radius-sm);
-  font-weight: 550;
+  flex-shrink: 0;
+  font-weight: var(--w-medium);
+  white-space: nowrap;
 }
 
 .gh-review[data-review='approved'] {
@@ -303,28 +345,35 @@
 
 .gh-labels {
   display: inline-flex;
-  flex-wrap: wrap;
-  gap: 5px;
+  align-items: baseline;
+  gap: var(--sp-15);
+  flex-shrink: 0;
 }
 
+/* Inline-block, not inline-flex: `text-overflow` needs the chip to be a block
+   container for its own text. As a flex box the label's text was an anonymous
+   flex item, so a long name was sliced through a letter instead of ellipsized.
+   The chip also never shrinks — the title is the thing that gives way. */
 .gh-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  max-width: 120px;
-  padding: 0 5px;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
+  display: inline-block;
+  flex-shrink: 0;
+  max-width: 14ch;
+  padding: 0 var(--sp-15);
+  border-radius: var(--radius-pill);
+  background: var(--fill-quaternary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .gh-label-dot {
-  flex-shrink: 0;
+  display: inline-block;
   width: 6px;
   height: 6px;
-  border-radius: 50%;
+  margin-right: var(--sp-1);
+  border-radius: var(--radius-pill);
+  /* Optical nudge off the baseline onto the x-height. */
+  vertical-align: var(--sp-05);
 }
 
 .gh-label-more {
@@ -336,10 +385,9 @@
 .gh-diffstat {
   display: flex;
   flex-shrink: 0;
-  gap: 5px;
-  margin-top: 2px;
-  font-family: var(--font-mono);
-  font-size: 10.5px;
+  gap: var(--sp-2);
+  font-size: var(--t-footnote);
+  font-variant-numeric: tabular-nums;
 }
 
 .gh-plus {
@@ -354,26 +402,25 @@
 
 .gh-message {
   margin: 0;
-  padding: 14px 12px;
+  padding: var(--sp-4) var(--sp-3);
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--t-body);
 }
 
 .gh-note {
-  margin: 0;
-  padding: 8px 12px;
-  border-top: 1px solid var(--border-subtle);
-  color: var(--text-secondary);
-  font-size: 11px;
+  margin: var(--sp-5) 0 0;
+  padding: 0 var(--sp-3);
+  color: var(--text-muted);
+  font-size: var(--t-callout);
 }
 
 .gh-note code,
 .gh-failure-action code {
-  padding: 1px 4px;
+  padding: 1px var(--sp-1);
   border-radius: var(--radius-sm);
-  background: var(--bg-tertiary);
+  background: var(--fill-tertiary);
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--t-footnote);
   color: var(--text-primary);
   user-select: text;
 }
@@ -384,28 +431,46 @@
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 6px;
-  padding: 16px 14px;
+  gap: var(--sp-2);
+  max-width: 52ch;
+  padding: var(--sp-4) var(--sp-3);
 }
 
 .gh-failure-title {
   margin: 0;
   color: var(--text-primary);
-  font-size: 12.5px;
-  font-weight: 600;
+  font-size: var(--t-title3);
+  font-weight: var(--w-semibold);
+  letter-spacing: var(--t-title3-ls);
 }
 
 .gh-failure-message,
 .gh-failure-action {
   margin: 0;
   color: var(--text-secondary);
-  font-size: 11.5px;
-  line-height: 1.45;
+  font-size: var(--t-body);
+  line-height: var(--lh-body);
+}
+
+/* When the whole panel is one failure — no remote, not signed in — it is the
+   page's empty state, not a notice inside a list, and it is centred like every
+   other empty state in the app. */
+.gh-panel > .gh-failure,
+.gh-panel > .gh-message {
+  align-items: center;
+  max-width: 34rem;
+  margin: 12vh auto 0;
+  padding: 0;
+  text-align: center;
+}
+
+.gh-panel > .gh-failure .gh-failure-detail {
+  text-align: left;
 }
 
 .gh-failure-detail {
   width: 100%;
-  font-size: 11px;
+  font-size: var(--t-callout);
   color: var(--text-secondary);
 }
 
@@ -414,14 +479,15 @@
 }
 
 .gh-failure-detail pre {
-  max-height: 140px;
-  margin: 6px 0 0;
-  padding: 8px;
+  max-height: 14rem;
+  margin: var(--sp-2) 0 0;
+  padding: var(--sp-3);
   overflow: auto;
-  border-radius: var(--radius-sm);
-  background: var(--bg-tertiary);
+  border-radius: var(--radius-md);
+  background: var(--fill-quaternary);
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
   /* Raw tool output is the one thing here worth copying out. */
   user-select: text;
   white-space: pre-wrap;
@@ -429,16 +495,46 @@
 }
 
 .gh-retry {
-  margin-top: 2px;
-  padding: 4px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: var(--control-h);
+  margin-top: var(--sp-2);
+  padding: 0 var(--sp-4);
+  border-radius: var(--radius-md);
+  background: var(--fill-tertiary);
   color: var(--text-primary);
-  font-size: 11.5px;
-  transition: background 120ms ease, border-color 120ms ease;
+  font-size: var(--t-body);
+  font-weight: var(--w-medium);
+  transition: background var(--dur-fast) var(--ease);
 }
 
 .gh-retry:hover {
-  background: var(--bg-hover);
-  border-color: var(--border-strong);
+  background: var(--fill-secondary);
+}
+
+/* Below the width where a title and its facts fit on one line, the facts drop
+   under the title and wrap. Nothing is hidden and nothing is cut — the row is
+   just two lines tall, which is what a narrow window buys you. */
+@media (max-width: 1180px) {
+  .gh-row {
+    align-items: flex-start;
+  }
+
+  .gh-body {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--sp-1);
+    overflow: visible;
+  }
+
+  .gh-title {
+    flex: none;
+    max-width: 100%;
+  }
+
+  .gh-meta {
+    flex-wrap: wrap;
+    max-width: 100%;
+  }
 }

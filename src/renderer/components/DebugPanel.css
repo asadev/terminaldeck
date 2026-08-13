@@ -2,22 +2,21 @@
    Debug panel
 
    Instrument panel, not a document: dense rows, monospace numbers in tabular
-   figures so a column of timings can be scanned, and hairline rules instead of
-   boxes. The only colour is on a failure or a slow call — everything else stays
-   neutral, or the eye has nothing left to catch when something is actually
-   wrong.
+   figures so a column of timings can be scanned. The boxes are gone — a table
+   is separated from the page by the fill under its header row and by the space
+   around it, not by an outline drawn around every section of the window. The
+   only colour is on a failure or a slow call; everything else stays neutral, or
+   the eye has nothing left to catch when something is actually wrong.
    ============================================================================ */
 
 .debug {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: var(--sp-8);
   min-height: 0;
-  overflow-y: auto;
-  padding: 16px 16px 24px;
-  background: var(--bg-secondary);
+  max-width: 82rem;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--t-body);
 }
 
 /* ------------------------------------------------------------------ head -- */
@@ -26,26 +25,23 @@
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 16px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--border-subtle);
+  gap: var(--sp-6);
 }
 
 .debug-title {
   margin: 0;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--text-muted);
+  font-size: var(--t-title2);
+  font-weight: var(--w-semibold);
+  letter-spacing: var(--t-title2-ls);
+  color: var(--text-primary);
 }
 
 .debug-subtitle {
-  margin: 3px 0 0;
-  max-width: 60ch;
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--text-muted);
+  max-width: 68ch;
+  margin: var(--sp-1) 0 0;
+  font-size: var(--t-body);
+  line-height: var(--lh-body);
+  color: var(--text-secondary);
 }
 
 /* -------------------------------------------------------------- sections -- */
@@ -54,55 +50,58 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 8px;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-3);
 }
 
 .debug-section-title {
   margin: 0;
-  font-size: 12.5px;
-  font-weight: 600;
+  font-size: var(--t-title3);
+  font-weight: var(--w-semibold);
+  letter-spacing: var(--t-title3-ls);
   color: var(--text-primary);
 }
 
 .debug-controls {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--sp-15);
 }
 
 .debug-hint {
-  margin: 0 0 8px;
-  max-width: 72ch;
-  font-size: 11.5px;
-  line-height: 1.55;
+  max-width: 78ch;
+  margin: 0 0 var(--sp-2);
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
   color: var(--text-muted);
 }
 
 .debug-empty {
   margin: 0;
-  padding: 12px 0;
-  font-size: 12px;
+  padding: var(--sp-3) 0;
+  font-size: var(--t-body);
   color: var(--text-muted);
 }
 
 /* --------------------------------------------------------------- controls -- */
 
 .debug-button {
-  padding: 4px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-tertiary);
-  font-size: 11.5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: var(--control-h);
+  padding: 0 var(--sp-3);
+  border-radius: var(--radius-md);
+  background: var(--fill-tertiary);
+  font-size: var(--t-callout);
+  font-weight: var(--w-medium);
   white-space: nowrap;
-  color: var(--text-secondary);
-  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+  color: var(--text-primary);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
 
 .debug-button:hover:not(:disabled) {
-  border-color: var(--border-strong);
-  background: var(--bg-hover);
-  color: var(--text-primary);
+  background: var(--fill-secondary);
 }
 
 .debug-button:disabled {
@@ -113,26 +112,31 @@
 /* Paused is a state you must be able to see at a glance — a trace that has
    silently stopped updating reads as an app that has hung. */
 .debug-button[data-active] {
-  border-color: transparent;
   background: var(--accent-soft);
   color: var(--accent);
 }
 
 .debug-filter {
-  width: 150px;
-  height: 24px;
-  padding: 0 8px;
+  width: 11rem;
+  height: var(--control-h);
+  padding: 0 var(--sp-2);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   outline: none;
   background: var(--bg-primary);
   color: var(--text-primary);
   font-family: var(--font-ui);
-  font-size: 11.5px;
+  font-size: var(--t-callout);
+  transition: border-color var(--dur-fast) var(--ease);
 }
 
-.debug-filter:focus {
-  border-color: var(--accent);
+.debug-filter:hover {
+  border-color: var(--border-strong);
+}
+
+.debug-filter:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .debug-filter::-webkit-search-cancel-button {
@@ -141,43 +145,37 @@
 
 /* ---------------------------------------------------------------- tables -- */
 
+/* Wide traces scroll inside their own frame rather than pushing the page. */
 .debug-scroll {
-  max-height: 260px;
+  max-height: 20rem;
   overflow: auto;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
 }
 
 .debug-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 11.5px;
+  font-size: var(--t-callout);
 }
 
+/* The header row is told from the body by its fill — which it needs anyway,
+   since it is sticky and the rows scroll under it. */
 .debug-table th {
   position: sticky;
   top: 0;
   z-index: 1;
-  padding: 6px 10px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-tertiary);
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--bg-secondary);
   text-align: left;
-  font-weight: 500;
-  font-size: 10.5px;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  font-size: var(--t-footnote);
+  font-weight: var(--w-semibold);
   color: var(--text-muted);
 }
 
 .debug-table td {
-  padding: 5px 10px;
-  border-bottom: 1px solid var(--border-subtle);
+  padding: var(--sp-15) var(--sp-3);
   color: var(--text-secondary);
   vertical-align: baseline;
-}
-
-.debug-table tbody tr:last-child td {
-  border-bottom: none;
 }
 
 .debug-table tbody tr:hover td {
@@ -185,9 +183,8 @@
 }
 
 .debug-summary {
-  margin-bottom: 10px;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
+  margin-bottom: var(--sp-3);
+  border-radius: var(--radius-lg);
   overflow: hidden;
 }
 
@@ -195,7 +192,7 @@
 .debug-number,
 .debug-path {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--t-footnote);
 }
 
 .debug-channel {
@@ -209,14 +206,14 @@
 }
 
 .debug-path {
-  max-width: 260px;
+  max-width: 22rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .debug-result {
-  max-width: 320px;
+  max-width: 28rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -245,29 +242,29 @@
 /* ------------------------------------------------------------------ text -- */
 
 .debug-pre {
-  max-height: 320px;
+  max-height: 22rem;
   margin: 0;
-  padding: 10px 12px;
+  padding: var(--sp-3) var(--sp-4);
   overflow: auto;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
-  background: var(--bg-primary);
+  border-radius: var(--radius-lg);
+  background: var(--fill-quaternary);
   font-family: var(--font-mono);
-  font-size: 11px;
-  line-height: 1.55;
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
   color: var(--text-secondary);
   white-space: pre-wrap;
   word-break: break-word;
+  user-select: text;
 }
 
 @media (max-width: 620px) {
   .debug-section-head {
     flex-direction: column;
     align-items: flex-start;
-    gap: 6px;
+    gap: var(--sp-15);
   }
 
   .debug-filter {
-    width: 120px;
+    width: 9rem;
   }
 }

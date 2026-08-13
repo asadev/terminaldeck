@@ -52,8 +52,28 @@ import './BrowserWorkspace.css'
 /* ------------------------------------------------------------------ types -- */
 
 export interface BrowserWorkspaceProps {
-  /** False parks every view offscreen without tearing the pages down. */
+  /**
+   * Whether this panel is the pane on screen.
+   *
+   * False hides the *whole* panel — its own chrome as well as the native pages
+   * — without tearing anything down. Both halves matter. The panel is a plain
+   * in-flow block in `.panes` while terminals are absolutely positioned over
+   * it, so a panel that only parked its pages kept painting its toolbar in the
+   * gap around the terminal, and pushed a chat view for the same tab clean off
+   * the bottom of the window. That is one bug wearing two faces: a session tab
+   * that renders the browser forever, and browser chrome ghosting over another
+   * tab's terminal.
+   */
   visible?: boolean
+  /**
+   * Park the pages but keep the panel.
+   *
+   * Separate from `visible` because a dialog is not a tab switch. The pages are
+   * native views layered ABOVE the HTML, so every modal opens behind them and
+   * has to park them — but the panel itself is what the dialog is over, and
+   * hiding that too would blank the workspace behind the dialog.
+   */
+  parkPage?: boolean
   /**
    * Draw this panel's own tab strip.
    *
@@ -179,6 +199,7 @@ function without<T>(map: Record<string, T>, key: string): Record<string, T> {
  */
 export function BrowserWorkspace({
   visible = true,
+  parkPage = false,
   showTabs = false,
   onSendToAgent,
   bridge,
@@ -266,7 +287,14 @@ export function BrowserWorkspace({
     const node = stageRef.current
     if (!node || typeof window === 'undefined') return
 
-    const measure = (): void => setStage(rectOf(node))
+    const measure = (): void => {
+      const box = rectOf(node)
+      // A hidden panel has no box at all. Keeping the last good rectangle means
+      // the page comes back exactly where it was on the next tab switch instead
+      // of being handed 0x0 for the frame before the observer catches up.
+      if (box.width === 0 && box.height === 0) return
+      setStage(box)
+    }
     measure()
 
     const observer = new ResizeObserver(measure)
@@ -293,9 +321,12 @@ export function BrowserWorkspace({
       // A tab still on the start page keeps its native view hidden, so the
       // React start page underneath is what the user sees.
       const onStartPage = !tab.url || tab.url === 'about:blank'
-      api.browserVisible(tab.id, isActive && visible && !sessionOpen && !onStartPage)
+      api.browserVisible(
+        tab.id,
+        isActive && visible && !parkPage && !sessionOpen && !onStartPage,
+      )
     }
-  }, [api, tabs, activeKey, fit, visible, sessionOpen])
+  }, [api, tabs, activeKey, fit, visible, parkPage, sessionOpen])
 
   /* -- events from the main process, matched to tabs by id. */
   useEffect(() => {
@@ -620,7 +651,7 @@ export function BrowserWorkspace({
   /* -- the unwired case, which is what a half-wired preload actually produces. */
   if (!api) {
     return (
-      <div className="bw bw-unwired">
+      <div className="bw bw-unwired" data-visible={visible}>
         <p className="bw-unwired-title">The browser is not connected</p>
         <p className="bw-unwired-body">
           The preload bridge is missing {missing.length} method{missing.length === 1 ? '' : 's'} this
@@ -635,7 +666,7 @@ export function BrowserWorkspace({
   const security = securityOf(active?.url ?? '')
 
   return (
-    <div className="bw" ref={rootRef} onKeyDown={onKeyDown}>
+    <div className="bw" ref={rootRef} data-visible={visible} onKeyDown={onKeyDown}>
       {showTabs && (
         <TabStrip
           tabs={tabs}

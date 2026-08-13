@@ -55,6 +55,22 @@ export const KIND_ICON: Record<TabKind, string> = {
 }
 
 /**
+ * What to call a session on screen.
+ *
+ * A session starts out titled after the folder it runs in, and it is listed
+ * *under* that folder in the sidebar and beside its siblings in the swarm — so
+ * the untitled case printed the project's name three times down one column and
+ * again across every cell of the grid. Once the agent has named the session,
+ * that name is what is worth reading.
+ *
+ * `folderName` is optional because the swarm and the orphan list have no
+ * project heading above them to be redundant with.
+ */
+export function sessionLabel(title: string, index: number, folderName?: string): string {
+  return title && title !== folderName ? title : `Session ${index + 1}`
+}
+
+/**
  * Which tab should take focus after `closingId` goes away.
  *
  * Falls to the right neighbour, then the left, then nothing — the same rule

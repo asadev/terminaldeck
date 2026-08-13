@@ -1,4 +1,5 @@
-/* The attach popover: menu, picker and connector list share one surface. */
+/* The attach popover: menu, picker and connector list share one surface, and it
+   is the app's glass — the same material every dialog, menu and tooltip wears. */
 
 .at-host {
   position: relative;
@@ -10,16 +11,19 @@
    of the window, so downwards has nowhere to go. */
 .at-pop {
   position: absolute;
-  bottom: calc(100% + 6px);
+  bottom: calc(100% + var(--sp-2));
   left: 0;
   z-index: 20;
-  width: 340px;
-  max-width: min(340px, calc(100vw - 32px));
-  padding: 4px;
-  border: 1px solid var(--border-strong);
+  width: 336px;
+  max-width: min(336px, calc(100vw - var(--sp-8)));
+  padding: var(--sp-15);
   border-radius: var(--radius-lg);
-  background: var(--bg-primary);
-  box-shadow: var(--shadow-md);
+  background-color: var(--material-bg-strong);
+  background-image: var(--material-sheen);
+  -webkit-backdrop-filter: var(--material-filter);
+  backdrop-filter: var(--material-filter);
+  border: 1px solid var(--material-hairline);
+  box-shadow: var(--shadow-lg), inset 0 1px 0 var(--material-edge);
 }
 
 /* ------------------------------------------------------------- the menu -- */
@@ -36,15 +40,16 @@
 .at-item {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--sp-3);
   width: 100%;
-  padding: 7px 8px;
+  padding: var(--sp-15) var(--sp-2);
   border-radius: var(--radius-sm);
   background: none;
   color: var(--text-primary);
   font-family: var(--font-ui);
-  font-size: 13px;
+  font-size: var(--t-body);
   text-align: left;
+  transition: background var(--dur-fast) var(--ease);
 }
 
 .at-item:hover {
@@ -60,8 +65,8 @@
   display: grid;
   place-items: center;
   flex-shrink: 0;
-  width: 24px;
-  height: 24px;
+  width: var(--sp-6);
+  height: var(--sp-6);
   color: var(--text-secondary);
 }
 
@@ -73,13 +78,13 @@
 }
 
 .at-item-label {
-  line-height: 1.3;
+  line-height: var(--lh-tight);
 }
 
 .at-item-hint {
   color: var(--text-muted);
-  font-size: 11.5px;
-  line-height: 1.3;
+  font-size: var(--t-footnote);
+  line-height: var(--lh-tight);
 }
 
 /* ------------------------------------------------- picker & connectors -- */
@@ -93,19 +98,20 @@
 .at-head {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 4px 4px 6px;
+  gap: var(--sp-1);
+  padding: var(--sp-1) var(--sp-1) var(--sp-15);
 }
 
 .at-back {
   display: grid;
   place-items: center;
-  width: 22px;
-  height: 22px;
+  width: var(--control-h-sm);
+  height: var(--control-h-sm);
   flex-shrink: 0;
   border-radius: var(--radius-sm);
   background: none;
   color: var(--text-secondary);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
 
 .at-back:hover {
@@ -118,24 +124,24 @@
   outline-offset: -2px;
 }
 
+/* Sentence case: a heading, not a tracked-out label. */
 .at-title {
-  color: var(--text-secondary);
+  color: var(--text-muted);
   font-family: var(--font-ui);
-  font-size: 11.5px;
-  font-weight: 500;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
+  font-size: var(--t-footnote);
+  font-weight: var(--w-semibold);
 }
 
 .at-search {
   width: 100%;
-  padding: 6px 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-secondary);
+  height: var(--control-h);
+  padding: 0 var(--sp-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--fill-tertiary);
   color: var(--text-primary);
   font-family: var(--font-ui);
-  font-size: 13px;
+  font-size: var(--t-body);
 }
 
 .at-search::placeholder {
@@ -144,13 +150,12 @@
 
 .at-search:focus-visible {
   outline: 2px solid var(--accent);
-  outline-offset: -1px;
-  border-color: transparent;
+  outline-offset: -2px;
 }
 
 .at-list {
-  max-height: 232px;
-  margin: 4px 0 0;
+  max-height: 240px;
+  margin: var(--sp-1) 0 0;
   padding: 0;
   overflow-y: auto;
   list-style: none;
@@ -159,18 +164,22 @@
 .at-row {
   display: flex;
   align-items: baseline;
-  gap: 7px;
+  gap: var(--sp-15);
   width: 100%;
-  padding: 4px 7px;
+  padding: var(--sp-1) var(--sp-2);
   border-radius: var(--radius-sm);
   background: none;
   color: var(--text-primary);
   font-family: var(--font-ui);
-  font-size: 12.5px;
+  font-size: var(--t-callout);
   text-align: left;
 }
 
-/* The one blue in this surface, and it means "this is what Enter takes". */
+.at-row:hover {
+  background: var(--bg-hover);
+}
+
+/* The one accent in this surface, and it means "this is what Enter takes". */
 .at-row-on {
   background: var(--accent-soft);
 }
@@ -204,7 +213,7 @@
 .at-row-dir mark {
   background: none;
   color: var(--accent);
-  font-weight: 600;
+  font-weight: var(--w-semibold);
 }
 
 .at-row-dir {
@@ -218,29 +227,26 @@
 .at-row-dir,
 .at-row-tag {
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--t-footnote);
 }
 
 .at-row-tag {
   flex-shrink: 0;
-}
-
-.at-row-tag {
-  padding: 0 4px;
-  border: 1px solid var(--border);
+  padding: 0 var(--sp-1);
   border-radius: var(--radius-sm);
+  background: var(--fill-tertiary);
 }
 
 .at-row-mcp {
   align-items: center;
-  padding: 6px 7px;
+  padding: var(--sp-15) var(--sp-2);
 }
 
 .at-dot {
   width: 6px;
   height: 6px;
   flex-shrink: 0;
-  border-radius: 50%;
+  border-radius: var(--radius-pill);
   background: var(--status-completed);
 }
 
@@ -249,22 +255,22 @@
 }
 
 .at-note {
-  margin: 6px 4px 4px;
+  margin: var(--sp-15) var(--sp-1) var(--sp-1);
   color: var(--text-secondary);
   font-family: var(--font-ui);
-  font-size: 12px;
-  line-height: 1.45;
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
 }
 
 .at-note-quiet {
   color: var(--text-muted);
-  font-size: 11.5px;
+  font-size: var(--t-footnote);
 }
 
 .at-note code {
-  padding: 0 3px;
+  padding: 0 var(--sp-05);
   border-radius: var(--radius-sm);
-  background: var(--bg-tertiary);
+  background: var(--fill-tertiary);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--t-footnote);
 }

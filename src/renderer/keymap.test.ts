@@ -133,7 +133,14 @@ describe('chordMatches', () => {
 describe('scope resolution', () => {
   it('resolves the app shortcuts anywhere', () => {
     expect(resolveCommand(press('t', { metaKey: true }), MAC)).toBe('session.new')
-    expect(resolveCommand(press('T', { metaKey: true, shiftKey: true }), MAC)).toBe('session.resume')
+    // ⌘⇧T is the accelerator the application menu prints beside "New Session…",
+    // and an Electron menu accelerator is what actually fires — so it is the
+    // dialog, not a resume. This assertion used to say the opposite, which is
+    // the drift the sheet was printing.
+    expect(resolveCommand(press('T', { metaKey: true, shiftKey: true }), MAC)).toBe(
+      'session.newDialog',
+    )
+    expect(resolveCommand(press('R', { metaKey: true, shiftKey: true }), MAC)).toBe('session.resume')
     expect(resolveCommand(press('I', { metaKey: true, shiftKey: true }), MAC)).toBe('view.inspector')
     expect(resolveCommand(press(',', { metaKey: true }), MAC)).toBe('app.preferences')
     expect(resolveCommand(press('/', { metaKey: true }), MAC)).toBe('app.shortcuts')

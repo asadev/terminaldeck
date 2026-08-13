@@ -48,6 +48,27 @@ files:
   # user downstream reads.
   - '!**/node_modules/node-pty/prebuilds/darwin-x64/**'
   - '!**/node_modules/node-pty/prebuilds/**/*.pdb'
+  # The phone apps and the relay, excluded by name even though the allowlist
+  # above never selects them.
+  #
+  # An allowlist decides what ships; it does not stop electron-builder walking
+  # the tree to evaluate it. Those trees are build output — `ios/build` and
+  # `android/app/build` are ~700 MB of Xcode and Gradle caches between them, and
+  # a packaging run once died outright on a 4.2 GB `CompilationCache.noindex`
+  # file that Xcode was writing at that moment:
+  #
+  #   ENOBUFS / size exceeded, at ios/build/DerivedData/.../v8.data
+  #
+  # It left a half-written Electron.app behind in release/, which is a worse
+  # failure than a slow one — a partial bundle looks like a build. Naming these
+  # keeps the walk out of them entirely, so packaging no longer depends on
+  # whether someone happens to be compiling for a phone at the same moment.
+  - '!ios/**'
+  - '!android/**'
+  # Server-side; deployed to the relay host, never bundled into the desktop app.
+  - '!relay/**'
+  # The npm name-claim placeholder. Published separately, ships nothing.
+  - '!packages/**'
 
 asar: true
 # electron-builder detects native modules and unpacks them on its own; naming
@@ -62,8 +83,32 @@ asarUnpack:
   - '**/node_modules/better-sqlite3/**'
 
 mac:
+  # The platform `files` list REPLACES the top-level allowlist rather than adding
+  # to it, and that has quietly been true since this file was written.
+  #
+  # It went unnoticed because the repository had nothing large outside `out/`:
+  # every build shipped the whole tree and nobody looked, because the whole tree
+  # was small. The night `ios/` and `android/` appeared, the mac build went from
+  # ~120 MB to **1.0 GB** — an `app.asar` of 790 MB containing 7,436 iOS files,
+  # 3,099 Android files and 3,424 from `node_modules`.
+  #
+  # So the allowlist is restated here in full. It is duplication, and the
+  # alternative is a platform build that silently ignores it.
   files:
+    - out/**/*
+    - package.json
+    - pwa/dist/**/*
+    - '!**/*.map'
+    - '!**/node_modules/*/{test,tests,__tests__,example,examples,benchmark,benchmarks}/**'
+    - '!**/node_modules/better-sqlite3/{src,deps}/**'
+    - '!**/node_modules/node-pty/{src,scripts,deps,node-addon-api}/**'
+    - '!**/node_modules/node-pty/prebuilds/darwin-x64/**'
+    - '!**/node_modules/node-pty/prebuilds/**/*.pdb'
     - '!**/node_modules/node-pty/prebuilds/win32-*/**'
+    - '!ios/**'
+    - '!android/**'
+    - '!relay/**'
+    - '!packages/**'
 
   # Apple silicon only. Not universal, and no separate Intel build.
   #

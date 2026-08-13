@@ -357,6 +357,17 @@ export function HooksPanel({ bridge }: HooksPanelProps) {
       </ul>
 
       {statuses === null && !error ? <p className="hooks-empty">Reading settings files…</p> : null}
+
+      {/* An empty array is not the same as "still loading", and it used to
+          print nothing at all — a page that ended in silence after the
+          endpoint line, with no way to tell a working install from a broken
+          one. There is nothing to install hooks into until a CLI exists. */}
+      {statuses !== null && statuses.length === 0 && !error ? (
+        <p className="hooks-empty">
+          No agent CLIs were found on this machine, so there is nothing to install hooks into.
+          Install Claude Code, Codex or Gemini CLI and press Refresh.
+        </p>
+      ) : null}
     </section>
   )
 }

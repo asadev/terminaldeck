@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      A bare Material 3 theme. The real palette is Compose's, in ui/theme/Theme.kt — this exists so
+      the window background matches before the first frame, which is the difference between a launch
+      that fades in and one that flashes white.
+    -->
+    <style name="Theme.TerminalDeck" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/deck_ink</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <!--
+          The bar appearance is set in MainActivity through `enableEdgeToEdge` rather than here:
+          `windowLightNavigationBar` is API 27 and `enforceNavigationBarContrast` is API 29, so as
+          theme attributes they would need a values-v29 fork to stay honest at minSdk 26.
+        -->
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>

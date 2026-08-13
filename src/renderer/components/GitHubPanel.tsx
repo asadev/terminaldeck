@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useWhenActive } from '../schedule'
 import './GitHubPanel.css'
 
 /* ------------------------------------------------------------------ types -- */
@@ -217,10 +218,6 @@ export function isFailure<T extends { ok: boolean }>(value: T): value is T & Git
   return value.ok === false
 }
 
-/** How often the panel re-asks. Matches the main process cache TTL, so a tick
- *  that lands on warm data costs one IPC round trip and no `gh` process. */
-export const POLL_MS = 60_000
-
 const MAX_LABELS = 3
 
 /**
@@ -414,18 +411,27 @@ export function GitHubPanel({ cwd, bridge, now, initialTab = 'pulls' }: GitHubPa
     setBusy(false)
     void load(false)
 
-    const timer = setInterval(() => {
-      // A hidden window has nobody looking at it; polling it just burns the
-      // user's API budget and wakes the machine.
-      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
-      void load(false)
-    }, POLL_MS)
-
     return () => {
       shown.current = null
-      clearInterval(timer)
     }
   }, [api, cwd, load])
+
+  /**
+   * Re-ask when the user comes back to the window, not every minute.
+   *
+   * Nothing on this panel changes because of anything that happened on this
+   * Mac: a pull request is opened, a review is left and a notification arrives
+   * on somebody else's machine, and there is no local event to subscribe to. So
+   * the honest trigger is the moment the answer starts to matter — the user
+   * looking at the window again — which is a platform event rather than a
+   * guess. The old 60-second interval asked 1,440 times a day, spent the user's
+   * GitHub rate limit doing it, and was still a minute stale at the moment they
+   * turned back to it. Anyone who wants it fresher has Refresh, which forces
+   * past the main process cache.
+   */
+  useWhenActive(() => {
+    if (api && shown.current === cwd) void load(false)
+  })
 
   const refresh = useCallback(() => void load(true), [load])
   const clock = now ?? Date.now()

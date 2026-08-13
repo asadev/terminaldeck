@@ -1,5 +1,11 @@
 /* ============================================================================
    Git panel
+
+   A page of rows: a branch line, then four labelled runs of files with space
+   between them and no rules anywhere. It is capped at a measure rather than
+   run to the window's edge, because a row whose name is at the left margin and
+   whose +/− counts are 1400px away is two rows as far as the eye is concerned.
+
    Status colours are aliased from the foundation tokens rather than restated,
    so a theme swap in tokens.css moves this panel with everything else.
    ============================================================================ */
@@ -13,14 +19,15 @@
   --git-renamed: var(--status-working);
   --git-untracked: var(--text-secondary);
   --git-conflicted: var(--status-input);
-  --git-row-height: 24px;
+  --git-row-height: 28px;
+  --git-measure: 900px;
 
   display: flex;
   flex-direction: column;
+  height: 100%;
   min-height: 0;
-  background: var(--bg-secondary);
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--t-body);
   user-select: none;
 }
 
@@ -29,11 +36,13 @@
 .git-head {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--sp-2);
   flex-shrink: 0;
-  height: var(--tabbar-height);
-  padding: 0 8px 0 12px;
-  border-bottom: 1px solid var(--border-subtle);
+  width: 100%;
+  max-width: var(--git-measure);
+  height: var(--control-h-lg);
+  padding: 0 var(--sp-1) 0 var(--sp-3);
+  margin-bottom: var(--sp-4);
 }
 
 .git-head-icon {
@@ -42,8 +51,8 @@
 }
 
 .git-branch {
-  font-size: 12px;
-  font-weight: 600;
+  font-size: var(--t-headline);
+  font-weight: var(--w-semibold);
   color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
@@ -53,14 +62,14 @@
 /* A detached HEAD is a state worth noticing before you commit into it. */
 .git-branch[data-detached='true'] {
   color: var(--color-warning);
-  font-weight: 550;
 }
 
 .git-track {
   flex-shrink: 0;
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--t-footnote);
   color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
 }
 
 .git-head-spacer {
@@ -69,13 +78,14 @@
 
 .git-count {
   flex-shrink: 0;
-  min-width: 18px;
-  padding: 1px 6px;
-  border-radius: var(--radius-sm);
-  background: var(--bg-tertiary);
+  min-width: 20px;
+  padding: 0 var(--sp-15);
+  border-radius: var(--radius-pill);
+  background: var(--fill-tertiary);
   color: var(--text-secondary);
-  font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--t-footnote);
+  font-variant-numeric: tabular-nums;
+  line-height: 18px;
   text-align: center;
 }
 
@@ -83,11 +93,11 @@
   display: grid;
   place-items: center;
   flex-shrink: 0;
-  width: 22px;
-  height: 22px;
+  width: var(--icon-btn);
+  height: var(--icon-btn);
   border-radius: var(--radius-sm);
   color: var(--text-muted);
-  transition: background 120ms ease, color 120ms ease;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
 
 .git-refresh:hover {
@@ -108,34 +118,36 @@
 
 .git-groups {
   flex: 1;
+  width: 100%;
   min-height: 0;
+  max-width: var(--git-measure);
   overflow-y: auto;
-  padding: 6px 6px 12px;
+  padding-bottom: var(--sp-10);
 }
 
+/* The gap is what separates one run of files from the next. */
 .git-group + .git-group {
-  margin-top: 10px;
+  margin-top: var(--sp-6);
 }
 
 .git-group-head {
   display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 6px;
+  align-items: baseline;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-3) var(--sp-1);
 }
 
+/* Sentence case, as the component writes it — "Conflicts", "Staged". */
 .git-group-label {
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--text-secondary);
+  font-size: var(--t-footnote);
+  font-weight: var(--w-semibold);
+  color: var(--text-muted);
 }
 
 .git-group-count {
-  font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--t-footnote);
   color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
 }
 
 .git-list {
@@ -149,14 +161,14 @@
 .git-row {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: var(--sp-2);
   width: 100%;
   height: var(--git-row-height);
-  padding: 0 8px 0 6px;
-  border-radius: var(--radius-sm);
+  padding: 0 var(--sp-3);
+  border-radius: var(--radius-md);
   text-align: left;
   color: var(--text-secondary);
-  transition: background 120ms ease, color 120ms ease;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
 
 .git-row:hover {
@@ -178,8 +190,8 @@
   flex-shrink: 0;
   width: 16px;
   font-family: var(--font-mono);
-  font-size: 11px;
-  font-weight: 500;
+  font-size: var(--t-footnote);
+  font-weight: var(--w-medium);
   text-align: center;
   color: var(--text-muted);
 }
@@ -216,26 +228,28 @@
   text-overflow: ellipsis;
 }
 
-/* The directory trails the filename and gives up its width first — the name
-   is what you scan for, the folder is only there to disambiguate. */
 /* The folder is what tells two files of the same name apart, so it is real
-   information rather than decoration and has to stay legible. */
+   information rather than decoration and has to stay legible — but it gives up
+   its width first, because the name is what you scan for. */
 .git-dir {
   flex: 1;
   min-width: 0;
-  font-size: 11px;
-  color: var(--text-secondary);
+  font-size: var(--t-callout);
+  color: var(--text-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
+/* Green added, red removed: the one place in this panel where colour is the
+   information rather than the decoration. */
 .git-stat {
   display: flex;
   flex-shrink: 0;
-  gap: 5px;
+  gap: var(--sp-15);
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--t-footnote);
+  font-variant-numeric: tabular-nums;
 }
 
 .git-plus {
@@ -253,18 +267,30 @@
 /* Reads as a note, not a row: there is nothing here to click. */
 .git-overflow {
   height: var(--git-row-height);
-  padding: 0 8px 0 29px;
+  padding: 0 var(--sp-3);
   line-height: var(--git-row-height);
-  font-size: 11px;
-  font-style: italic;
-  color: var(--text-secondary);
+  font-size: var(--t-callout);
+  color: var(--text-muted);
 }
 
 /* -------------------------------------------------------------- messages -- */
 
+/* "Working tree clean.", "Not a git repository.", "Reading repository…" — the
+   states where the page has nothing to list. One plain sentence, placed the
+   way the shell places its own empty states rather than left hanging in the
+   top corner of an otherwise blank window. */
 .git-message {
-  margin: 0;
-  padding: 14px 12px;
+  max-width: 52ch;
+  margin: 12vh auto 0;
+  padding: 0 var(--sp-6);
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--t-body);
+  line-height: var(--lh-body);
+  text-align: center;
+}
+
+/* ------------------------------------------------------------- density -- */
+
+[data-density='compact'] .git-panel {
+  --git-row-height: 24px;
 }

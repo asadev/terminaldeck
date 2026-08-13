@@ -1,11 +1,18 @@
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { createServer, request, type Server } from 'node:http'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AddressInfo, Socket } from 'node:net'
-import { afterEach, describe, expect, it } from 'vitest'
-import { CLOSE, PROTOCOL_VERSION, type RemoteSession, type ServerMessage } from './protocol'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import {
+  CAPABILITIES,
+  CLOSE,
+  MAX_UPLOAD_CHUNK_BYTES,
+  PROTOCOL_VERSION,
+  type RemoteSession,
+  type ServerMessage,
+} from './protocol'
 import type { TailnetReady } from './tailnet'
 import { RemoteAuth } from './device-auth'
 import {
@@ -15,6 +22,8 @@ import {
   createRemoteServer,
   pairingDesk,
   resolveStaticPath,
+  type CreateOutcome,
+  type CreateRequest,
   type RemoteAuthenticator,
   type RemoteEndpoint,
   type SessionAccess,
@@ -192,15 +201,18 @@ function connect(port: number, path = WS_PATH, host?: string, origin?: string): 
 
 interface FakeSessions extends SessionAccess {
   emit(id: string, data: string): void
+  /** Put another session in the list, as though something on the Mac started one. */
+  add(id: string, replay: string, cwd?: string): RemoteSession
   written: { id: string; data: string }[]
   resized: { id: string; cols: number; rows: number }[]
   detached: string[]
   attachCount: number
 }
 
-function fakeSessions(sessions: Record<string, string> = { 'sess-1': 'earlier output\r\n' }): FakeSessions {
+function fakeSessions(seed: Record<string, string> = { 'sess-1': 'earlier output\r\n' }): FakeSessions {
   const listeners = new Map<string, (data: string) => void>()
-  const meta: RemoteSession[] = Object.keys(sessions).map((id) => ({
+  const replays = new Map<string, string>(Object.entries(seed))
+  const meta: RemoteSession[] = Object.keys(seed).map((id) => ({
     id,
     title: id,
     cwd: `/tmp/${id}`,
@@ -215,11 +227,17 @@ function fakeSessions(sessions: Record<string, string> = { 'sess-1': 'earlier ou
     detached: [],
     attachCount: 0,
     list: () => meta,
+    add(id, replay, cwd = `/tmp/${id}`) {
+      const session: RemoteSession = { id, title: id, cwd, provider: 'shell', status: 'idle', exitCode: null }
+      replays.set(id, replay)
+      meta.push(session)
+      return session
+    },
     attach(id, onData) {
-      if (!(id in sessions)) return null
+      if (!replays.has(id)) return null
       this.attachCount += 1
       listeners.set(id, onData)
-      return { sessionId: id, replay: sessions[id] }
+      return { sessionId: id, replay: replays.get(id) as string }
     },
     write(id, data) {
       this.written.push({ id, data })
@@ -237,6 +255,39 @@ function fakeSessions(sessions: Record<string, string> = { 'sess-1': 'earlier ou
   }
 }
 
+interface CreatingSessions extends FakeSessions {
+  /** Every request that reached the session layer, in order. Empty is the assertion. */
+  requests: CreateRequest[]
+  /** Set to answer with a refusal instead of starting anything. */
+  refuseWith: CreateOutcome | null
+  /** Set to hold `create` open, so a test can look at the window while it runs. */
+  hold: Promise<void> | null
+}
+
+/**
+ * A session layer that can start one — which is what makes the desktop
+ * advertise `create` at all. The default fake deliberately cannot, so that
+ * every other test in this file runs against a desktop that does not offer it.
+ */
+function creatingSessions(folders: string[] = ['/tmp/allowed']): CreatingSessions {
+  const fake = fakeSessions() as CreatingSessions
+  let made = 0
+  fake.requests = []
+  fake.refuseWith = null
+  fake.hold = null
+  fake.create = async (request: CreateRequest): Promise<CreateOutcome> => {
+    fake.requests.push(request)
+    if (fake.hold) await fake.hold
+    if (fake.refuseWith) return fake.refuseWith
+    if (request.cwd !== undefined && !folders.includes(request.cwd)) {
+      return { ok: false, code: 'unauthorized', message: 'This Mac will not start a session in that folder.' }
+    }
+    made += 1
+    return { ok: true, session: fake.add(`made-${made}`, '', request.cwd ?? folders[0]) }
+  }
+  return fake
+}
+
 const CREDENTIAL = 'device-1.c2VjcmV0'
 
 /** Stands in for `RemoteAuth`, so the socket tests do not spend scrypt per connection. */
@@ -246,6 +297,24 @@ const allowKnownDevice: RemoteAuthenticator = {
       return { ok: true, deviceId: 'device-1', deviceName: 'Test iPhone', credential: null }
     }
     return { ok: false, message: 'This device is not allowed in.' }
+  },
+}
+
+/**
+ * A device that has paired and that nobody at the Mac has approved yet.
+ *
+ * The real `authenticatorFor` answers exactly this way: the credential travels,
+ * because otherwise the pairing was for nothing, and the connection still ends.
+ */
+const awaitApproval: RemoteAuthenticator = {
+  async authenticate() {
+    return {
+      ok: false,
+      message: 'Paired. Approve this device on the Mac, then reconnect.',
+      credential: 'device-2.bmV3',
+      deviceId: 'device-2',
+      deviceName: 'Unapproved iPhone',
+    }
   },
 }
 
@@ -326,6 +395,34 @@ describe('a socket that has not authenticated', () => {
     expect(client.received.some((m) => m.t === 'sessions')).toBe(false)
   })
 
+  it('cannot open a tunnel to this Mac before it has said who it is', async () => {
+    // The localhost feature reaches a socket on this machine, so it gets the
+    // same gate as everything else: an unauthenticated peer is refused and
+    // closed rather than answered. Checked at this level as well as in
+    // `tunnel.ts` because the gate is the *server's*, not the hub's — the hub
+    // is only ever reached from the authenticated branch of `onMessage`.
+    const harness = await serve()
+    const client = await connect(harness.port)
+    client.send({ t: 'tunnel.open', id: 'tun-1', port: 3000 })
+
+    const error = await client.until((m) => m.t === 'error', 'the refusal')
+    expect(error).toEqual({ t: 'error', code: 'unauthenticated', message: 'Say hello first.' })
+    await expect(client.closed).resolves.toBe(CLOSE.policyViolation)
+    expect(client.received.some((m) => m.t === 'tunnel.opened' || m.t === 'ports')).toBe(false)
+  })
+
+  it('cannot ask what is listening on this Mac before it has said who it is', async () => {
+    // A port list is a description of what is running on somebody's laptop, so
+    // it is behind the same door as the sessions.
+    const harness = await serve()
+    const client = await connect(harness.port)
+    client.send({ t: 'ports' })
+
+    await client.until((m) => m.t === 'error', 'the refusal')
+    await expect(client.closed).resolves.toBe(CLOSE.policyViolation)
+    expect(client.received.some((m) => m.t === 'ports')).toBe(false)
+  })
+
   it('is closed when its credential is not one we know', async () => {
     const harness = await serve()
     const client = await connect(harness.port)
@@ -401,6 +498,125 @@ describe('a paired device', () => {
     expect(welcome).toMatchObject({ t: 'welcome', deviceId: 'device-1', deviceName: 'Test iPhone', token: null })
     expect(welcome.t === 'welcome' && welcome.sessions.map((s) => s.id)).toEqual(['sess-1'])
     expect(harness.endpoint.connections()).toHaveLength(1)
+  })
+
+  it('is told what this desktop can do beyond protocol v1', async () => {
+    // The whole reason the version did not have to move. A phone offers the
+    // localhost feature only because this list said so, so a build that stops
+    // advertising it makes the button disappear rather than making a tap fail.
+    const harness = await serve()
+    const client = await connect(harness.port)
+    client.send(HELLO)
+
+    const welcome = await client.until((m) => m.t === 'welcome', 'the welcome')
+    expect(welcome.t === 'welcome' && welcome.capabilities).toEqual(['localhost'])
+    expect(CAPABILITIES).toContain('localhost')
+  })
+
+  it('advertises `create` only when the session layer can actually start one', async () => {
+    // The gap this feature was: both phones had a New Session button gated on a
+    // capability, and no desktop advertised it — so it could never appear. The
+    // fix is not "advertise it"; it is "advertise it when it is true". A host
+    // built on a session layer with no `create` still must not offer the button.
+    const cannot = await serve()
+    const dark = await connect(cannot.port)
+    dark.send(HELLO)
+    const without = await dark.until((m) => m.t === 'welcome', 'the welcome')
+    expect(without.t === 'welcome' && without.capabilities).not.toContain('create')
+
+    const can = await serve({}, creatingSessions())
+    const lit = await connect(can.port)
+    lit.send(HELLO)
+    const with_ = await lit.until((m) => m.t === 'welcome', 'the welcome')
+    expect(with_.t === 'welcome' && with_.capabilities).toContain('create')
+    expect(CAPABILITIES).toContain('create')
+  })
+
+  it('advertises `upload` only when it has somewhere to put a file', async () => {
+    // Same rule as `create`, and the same failure it is written to prevent: a
+    // Send File button on somebody's phone that produces a refusal, because the
+    // capability was read off a constant rather than off the thing that makes it
+    // possible. Here the thing is a directory, and its absence is the switch.
+    const nowhere = await serve()
+    const dark = await connect(nowhere.port)
+    dark.send(HELLO)
+    const without = await dark.until((m) => m.t === 'welcome', 'the welcome')
+    expect(without.t === 'welcome' && without.capabilities).not.toContain('upload')
+
+    const dir = mkdtempSync(join(tmpdir(), 'deck-uploads-'))
+    roots.push(dir)
+    const somewhere = await serve({ uploadsDir: dir })
+    const lit = await connect(somewhere.port)
+    lit.send(HELLO)
+    const with_ = await lit.until((m) => m.t === 'welcome', 'the welcome')
+    expect(with_.t === 'welcome' && with_.capabilities).toContain('upload')
+    expect(CAPABILITIES).toContain('upload')
+  })
+
+  it('refuses an upload on its own id when the host has nowhere to put one', async () => {
+    // Answered on the upload's id rather than as a bare `error`, so the phone
+    // ends the right progress bar instead of showing a banner about nothing.
+    const harness = await serve()
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+    client.send({ t: 'upload.begin', id: 'up-1', name: 'a.jpg', size: 10 })
+    const refusal = await client.until((m) => m.t === 'upload.failed', 'a refusal')
+    expect(refusal.t === 'upload.failed' && refusal.id).toBe('up-1')
+  })
+
+  it('carries a whole file to disk and reports where it landed', async () => {
+    // The end-to-end shape, over a real socket and through the real parser: the
+    // path arrives before the bytes, the bytes are acknowledged, and what is on
+    // disk is what was sent. `uploads.test.ts` covers the failure modes; this
+    // one exists because a feature that works in a unit test and not through
+    // `parseClientMessage` is a feature that does not work.
+    const dir = mkdtempSync(join(tmpdir(), 'deck-uploads-'))
+    roots.push(dir)
+    const harness = await serve({ uploadsDir: dir })
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    const payload = randomBytes(70_000)
+    client.send({ t: 'upload.begin', id: 'up-1', name: 'clip.mov', size: payload.length })
+    const ready = await client.until((m) => m.t === 'upload.ready', 'the path')
+    expect(ready.t === 'upload.ready' && ready.path).toBe(join(dir, 'clip.mov'))
+
+    for (let at = 0; at < payload.length; at += MAX_UPLOAD_CHUNK_BYTES) {
+      client.send({
+        t: 'upload.data',
+        id: 'up-1',
+        data: payload.subarray(at, at + MAX_UPLOAD_CHUNK_BYTES).toString('base64'),
+      })
+    }
+    client.send({
+      t: 'upload.end',
+      id: 'up-1',
+      sha256: createHash('sha256').update(payload).digest('hex'),
+    })
+
+    const done = await client.until((m) => m.t === 'upload.done', 'the finish')
+    expect(done.t === 'upload.done' && done.bytes).toBe(payload.length)
+    expect(readFileSync(join(dir, 'clip.mov'))).toEqual(payload)
+  })
+
+  it('answers a port list, and will not tunnel to a port nothing is serving', async () => {
+    const harness = await serve({ scanPorts: async () => [{ port: 4321, process: 'node', guessed: false }] })
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    client.send({ t: 'ports' })
+    const ports = await client.until((m) => m.t === 'ports', 'the port list')
+    expect(ports.t === 'ports' && ports.ports).toEqual([{ port: 4321, process: 'node', guessed: false }])
+
+    // A port that is not in the scan is refused before any socket exists, which
+    // is what stops this being a way to sweep the Mac's loopback.
+    client.send({ t: 'tunnel.open', id: 'tun-1', port: 9999 })
+    const closed = await client.until((m) => m.t === 'tunnel.closed', 'the refusal')
+    expect(closed.t === 'tunnel.closed' && closed.message).toContain('9999')
+    expect(client.received.some((m) => m.t === 'tunnel.opened')).toBe(false)
   })
 
   it('can list sessions', async () => {
@@ -509,6 +725,196 @@ describe('input', () => {
     expect(error).toMatchObject({ code: 'unauthorized' })
     // A remembered session id is not a keyboard.
     expect(harness.sessions.written).toEqual([])
+  })
+})
+
+describe('starting a session from a phone', () => {
+  /**
+   * Creating a session is at least as sensitive as typing into one, and in one
+   * respect more so: `input` can only reach a session this device already
+   * attached to, whereas this makes a new process on somebody's Mac. So the
+   * first two tests here are the same two the rest of this file opens with —
+   * nothing before `hello`, and nothing for a device a human has not approved.
+   */
+  it('is refused, and the socket closed, before the phone has said who it is', async () => {
+    const sessions = creatingSessions()
+    const harness = await serve({}, sessions)
+    const client = await connect(harness.port)
+    client.send({ t: 'create' })
+
+    const error = await client.until((m) => m.t === 'error', 'the refusal')
+    expect(error).toEqual({ t: 'error', code: 'unauthenticated', message: 'Say hello first.' })
+    await expect(client.closed).resolves.toBe(CLOSE.policyViolation)
+    // The assertion that matters: no process was started. An `error` frame with
+    // a shell running behind it would be the worst possible pass.
+    expect(sessions.requests).toEqual([])
+    expect(client.received.some((m) => m.t === 'created')).toBe(false)
+  })
+
+  it('is refused for a device that has paired but nobody has approved', async () => {
+    // The credential is real and the device is in the trust store; the human at
+    // the Mac has not said yes. It gets its credential and nothing else — note
+    // the empty capability list, so it is not even told this desktop can start
+    // sessions — and the frame it sends afterwards reaches a closed socket.
+    const sessions = creatingSessions()
+    const harness = await serve({ auth: awaitApproval }, sessions)
+    const client = await connect(harness.port)
+    client.send(HELLO)
+
+    const welcome = await client.until((m) => m.t === 'welcome', 'the welcome')
+    expect(welcome.t === 'welcome' && welcome.capabilities).toEqual([])
+    client.send({ t: 'create' })
+
+    await expect(client.closed).resolves.toBe(CLOSE.policyViolation)
+    expect(sessions.requests).toEqual([])
+    expect(harness.endpoint.connections()).toEqual([])
+  })
+
+  it('is refused by a desktop whose session layer cannot start one', async () => {
+    // The default fake has no `create`, so this desktop never advertised the
+    // capability. A client sending it anyway is answered rather than closed:
+    // the socket is authenticated and its sessions are fine, it just asked for
+    // something this Mac does not do.
+    const harness = await serve()
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    client.send({ t: 'create' })
+    const error = await client.until((m) => m.t === 'error', 'the refusal')
+    expect(error).toMatchObject({ code: 'unauthorized' })
+    expect(harness.endpoint.connections()).toHaveLength(1)
+  })
+
+  it('starts one and answers with the row, so the tap that started it can open it', async () => {
+    const sessions = creatingSessions()
+    const harness = await serve({}, sessions)
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    client.send({ t: 'create', cols: 100, rows: 30 })
+    const created = await client.until((m) => m.t === 'created', 'the new session')
+    expect(created.t === 'created' && created.session.id).toBe('made-1')
+    // The size travelled, so the first screen is drawn at the size it is read at.
+    expect(sessions.requests).toEqual([{ cwd: undefined, cols: 100, rows: 30 }])
+  })
+
+  it('makes a first-class session: it is in the list, and it can be attached to', async () => {
+    // The point of routing this through the real session layer rather than a
+    // remote-only path. A session the phone started is a session.
+    const sessions = creatingSessions()
+    const harness = await serve({}, sessions)
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    client.send({ t: 'create' })
+    const created = await client.until((m) => m.t === 'created', 'the new session')
+    const id = created.t === 'created' ? created.session.id : ''
+
+    client.send({ t: 'list' })
+    const list = await client.until((m) => m.t === 'sessions', 'the refreshed list')
+    expect(list.t === 'sessions' && list.sessions.map((s) => s.id)).toContain(id)
+
+    client.send({ t: 'attach', id })
+    await client.until((m) => m.t === 'attached' && m.id === id, 'the attach')
+    sessions.emit(id, 'hello from a phone-started shell\r\n')
+    const output = await client.until((m) => m.t === 'output' && m.id === id, 'live output')
+    expect(output.t === 'output' && output.data).toContain('phone-started')
+
+    client.send({ t: 'input', id, data: 'ls\r' })
+    client.send({ t: 'ping' })
+    await client.until((m) => m.t === 'pong', 'the pong')
+    expect(sessions.written).toEqual([{ id, data: 'ls\r' }])
+  })
+
+  it('refuses a folder this Mac is not offering, rather than starting somewhere else', async () => {
+    // Silently substituting the default would be worse than refusing: someone
+    // types a command into what they believe is their project.
+    const sessions = creatingSessions(['/tmp/allowed'])
+    const harness = await serve({}, sessions)
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    client.send({ t: 'create', cwd: '/etc' })
+    const error = await client.until((m) => m.t === 'error', 'the refusal')
+    expect(error).toMatchObject({ code: 'unauthorized' })
+    expect(client.received.some((m) => m.t === 'created')).toBe(false)
+    // Refused, not closed: a stale folder on a phone is not an attack.
+    expect(harness.endpoint.connections()).toHaveLength(1)
+
+    client.send({ t: 'create', cwd: '/tmp/allowed' })
+    const created = await client.until((m) => m.t === 'created', 'the new session')
+    expect(created.t === 'created' && created.session.cwd).toBe('/tmp/allowed')
+  })
+
+  it('tells every other connected device, in a frame they already understand', async () => {
+    // `created` is a capability frame and the other phone may never have heard
+    // of it; `sessions` is v1 and every client back to the first one reads it.
+    const sessions = creatingSessions()
+    const harness = await serve({}, sessions)
+    const maker = await connect(harness.port)
+    const watcher = await connect(harness.port)
+    maker.send(HELLO)
+    watcher.send(HELLO)
+    await maker.until((m) => m.t === 'welcome', 'the welcome')
+    await watcher.until((m) => m.t === 'welcome', 'the welcome')
+
+    maker.send({ t: 'create' })
+    const refreshed = await watcher.until((m) => m.t === 'sessions', 'the pushed list')
+    expect(refreshed.t === 'sessions' && refreshed.sessions.map((s) => s.id)).toContain('made-1')
+    expect(watcher.received.some((m) => m.t === 'created')).toBe(false)
+  })
+
+  it('starts one session for a double tap, not two', async () => {
+    // Spawning is asynchronous and the socket keeps reading throughout. Without
+    // a guard the second tap — or a client retrying because the first answer
+    // was slow — puts two shells on somebody's Mac and shows them one.
+    const sessions = creatingSessions()
+    let release = (): void => {}
+    sessions.hold = new Promise<void>((settle) => {
+      release = settle
+    })
+    const harness = await serve({}, sessions)
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    client.send({ t: 'create' })
+    client.send({ t: 'create' })
+    const error = await client.until((m) => m.t === 'error', 'the second tap')
+    expect(error).toMatchObject({ code: 'unavailable' })
+
+    release()
+    await client.until((m) => m.t === 'created', 'the one session')
+    expect(sessions.requests).toHaveLength(1)
+  })
+
+  it('does not fall over when the phone leaves while the session is still starting', async () => {
+    // The session is real and stays on the Mac — that is the honest outcome of
+    // "start something" — but there is no socket left to tell about it, and
+    // writing to one that has gone must not take the main process down.
+    const sessions = creatingSessions()
+    let release = (): void => {}
+    sessions.hold = new Promise<void>((settle) => {
+      release = settle
+    })
+    const harness = await serve({}, sessions)
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    client.send({ t: 'create' })
+    await vi.waitFor(() => expect(sessions.requests).toHaveLength(1))
+    client.socket.destroy()
+    await new Promise((settle) => setTimeout(settle, 20))
+    release()
+    await new Promise((settle) => setTimeout(settle, 20))
+
+    expect(harness.endpoint.connections()).toEqual([])
+    expect(sessions.list().map((s) => s.id)).toContain('made-1')
   })
 })
 

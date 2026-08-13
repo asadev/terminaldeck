@@ -56,6 +56,19 @@ const api = {
     return () => ipcRenderer.off('session:status', handler)
   },
 
+  /**
+   * A session started somewhere other than this window — today, from a phone.
+   *
+   * Never fires for a session this window asked for: that one arrives as the
+   * return value of `createSession`, and a consumer adding a tab on both would
+   * show the session twice.
+   */
+  onSessionCreated: (cb: (meta: SessionMeta) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, meta: SessionMeta) => cb(meta)
+    ipcRenderer.on('session:created', handler)
+    return () => ipcRenderer.off('session:created', handler)
+  },
+
   /* ------------------------------------------------------------ cost -- */
 
   getProjectCost: (cwd: string): Promise<unknown> => ipcRenderer.invoke('cost:project', cwd),
@@ -102,6 +115,11 @@ const api = {
     ipcRenderer.invoke('remote:device:revoke', deviceId),
   disconnectRemoteConnection: (connectionId: string): Promise<unknown> =>
     ipcRenderer.invoke('remote:connection:disconnect', connectionId),
+  // Both ids, because a tunnel only exists inside the connection that opened
+  // it: two phones can each have a page open on port 3000, and a stop that
+  // named only the port would take down the wrong one.
+  stopRemoteTunnel: (connectionId: string, tunnelId: string): Promise<unknown> =>
+    ipcRenderer.invoke('remote:tunnel:stop', connectionId, tunnelId),
   onRemoteConnections: (cb: (connections: unknown) => void): (() => void) => {
     const handler = (_e: IpcRendererEvent, connections: unknown) => cb(connections)
     ipcRenderer.on('remote:connections', handler)

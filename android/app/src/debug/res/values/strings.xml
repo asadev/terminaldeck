@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The debug build's name on the phone.
+
+  `applicationIdSuffix = ".debug"` already lets a debug and a release build sit on the same device,
+  and that is exactly what makes this necessary: both of them claim `terminaldeck://pair`, so a
+  pairing link fired at a device carrying both raises Android's "Open with" chooser — with two
+  entries, the same icon, and, until this file existed, the same name. There is no way to pick the
+  right one, and picking the wrong one pairs a build you are not testing. That happened here: a
+  release APK was installed alongside a debug APK and the first deep link went to a chooser.
+
+  A build-type resource rather than a `resValue` in `build.gradle.kts`, because `app_name` is
+  already declared in `main` and a generated resource of the same name collides with it. Overriding
+  it from the `debug` source set is the mechanism the resource merger is for.
+-->
+<resources>
+    <string name="app_name">Terminal Deck (debug)</string>
+</resources>

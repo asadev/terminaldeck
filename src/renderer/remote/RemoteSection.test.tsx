@@ -5,24 +5,30 @@ import {
   connectionNote,
   deviceStateAfter,
   missingRemoteMethods,
-  pairingUrl,
   remoteActions,
   RemoteSection,
   RemoteView,
   resolveRemoteBridge,
   toRemoteConnections,
+  retryNote,
   toRemoteDevices,
   toRemotePairing,
+  toRemoteRelay,
   toRemoteState,
+  toRemoteTunnels,
+  tunnelNote,
   whenSeen,
   type RemoteActions,
   type RemoteBridge,
   type RemoteConnection,
   type RemoteDevice,
   type RemotePairing,
+  type RemoteRelay,
   type RemoteState,
+  type RemoteTunnel,
   type RemoteViewProps,
 } from './RemoteSection'
+import type { PairPath } from './pairing-link'
 
 /**
  * What this panel says in each of the states it can be in.
@@ -47,19 +53,45 @@ const NOTHING: RemoteActions = {
   dismissEnable: () => {},
   pair: () => {},
   closePairing: () => {},
+  choosePath: () => {},
   approve: () => {},
   deny: () => {},
   revoke: () => {},
   disconnect: () => {},
+  stopTunnel: () => {},
 }
 
+/** A relay that is up, with the identity a pairing link is built from. */
+const RELAY: RemoteRelay = {
+  url: 'wss://relay.terminaldeck.dev',
+  hostId: 'AXGK7VAEYZHKTTVUKZ4U9HZQ7J',
+  publicKey: 'Zm9vYmFyYmF6cXV1eGZvb2JhcmJhenF1dXhmb29iYXI',
+  fingerprint: 'K7QM-3XTB-9WHD-2PVJ-6RNY-4CFG',
+  connected: true,
+  channels: 0,
+  reason: null,
+  retryAt: null,
+}
+
+/** Both ways in, which is the state a healthy Mac on a tailnet is in. */
 const RUNNING: RemoteState = {
   running: true,
   url: 'https://asads-macbook-pro-1.taile59277.ts.net:8443',
   address: '100.86.107.119',
   reason: null,
+  directReason: null,
+  relay: RELAY,
   devices: [],
   connections: [],
+}
+
+/** The Mac the relay was built for: no tailnet, and remote access still up. */
+const RELAY_ONLY: RemoteState = {
+  ...RUNNING,
+  url: null,
+  address: null,
+  directReason:
+    'Tailscale is installed but this Mac is logged out of the tailnet. Open the Tailscale menu bar icon and sign in, then turn this on again.',
 }
 
 const PHONE = {
@@ -68,6 +100,7 @@ const PHONE = {
   state: 'pending' as const,
   addedAt: NOW - 3 * 3_600_000,
   lastSeenAt: NOW - 10_000,
+  fingerprint: 'H4TC-8MKD-2QWX-7BNP-5ZRJ-9VFY',
 }
 
 const ATTACHED: RemoteConnection = {
@@ -78,7 +111,21 @@ const ATTACHED: RemoteConnection = {
   address: '100.86.107.42',
   connectedAt: NOW - 12 * 60_000,
   sessionIds: ['s1', 's2'],
+  tunnels: [],
 }
+
+/** A dev server on this Mac, being read by a browser on the phone. */
+const TUNNEL: RemoteTunnel = {
+  id: 'tun-1',
+  port: 5173,
+  streams: 3,
+  openedAt: NOW - 4 * 60_000,
+}
+
+/** The same page with nothing moving through it, which is its resting state. */
+const IDLE_TUNNEL: RemoteTunnel = { id: 'tun-2', port: 8080, streams: 0, openedAt: NOW - 40_000 }
+
+const TUNNELLED: RemoteConnection = { ...ATTACHED, tunnels: [TUNNEL, IDLE_TUNNEL] }
 
 function render(props: Partial<RemoteViewProps> = {}): string {
   return renderToStaticMarkup(
@@ -91,6 +138,7 @@ function render(props: Partial<RemoteViewProps> = {}): string {
       secondsLeft={null}
       busy={null}
       confirmEnable={false}
+      pairPath={null}
       actions={NOTHING}
       now={NOW}
       {...props}
@@ -170,6 +218,18 @@ describe('serving, with nothing paired', () => {
     expect(html).toContain('same tailnet')
   })
 
+  it('draws both ways in, each with its own state', () => {
+    expect(html).toContain('Direct on your tailnet')
+    expect(html).toContain('Through the relay')
+    expect(html).toContain('>Ready<')
+    expect(html).toContain('>Connected<')
+  })
+
+  it('names this Mac at the relay, and the key a phone will check it by', () => {
+    expect(html).toContain(RELAY.hostId)
+    expect(html).toContain(RELAY.fingerprint)
+  })
+
   it('says the lists are empty rather than showing empty lists', () => {
     expect(html).toContain('No device has been paired')
     expect(html).toContain('Nothing is attached')
@@ -178,6 +238,78 @@ describe('serving, with nothing paired', () => {
   it('offers pairing, and says a code alone lets nothing in', () => {
     expect(html).toMatch(/<button(?![^>]*disabled)[^>]*>Pair a device<\/button>/)
     expect(html).toContain('it does not let anything in')
+  })
+})
+
+/**
+ * The state this whole feature exists for.
+ *
+ * A Mac with no tailnet has no URL, and the panel used to disable Pair on
+ * exactly that — so the users the relay was built for were the one group who
+ * could never reach it. Every assertion here is that regression.
+ */
+describe('reachable only through the relay', () => {
+  const html = render({ state: RELAY_ONLY })
+
+  it('still offers to pair, with no URL anywhere in sight', () => {
+    expect(html).toMatch(/<button(?![^>]*disabled)[^>]*>Pair a device<\/button>/)
+  })
+
+  it('says why the faster path is missing without calling remote access broken', () => {
+    expect(html).toContain('logged out of the tailnet')
+    expect(html).toContain('Remote access is still up')
+    // That sentence belongs to the direct row. Printed as *the* reason it would
+    // tell somebody their working feature had failed.
+    expect(html).not.toContain('Not serving')
+  })
+
+  it('marks the tailnet unavailable and the relay connected, in that order', () => {
+    expect(html).toContain('>Unavailable<')
+    expect(html).toContain('>Connected<')
+    expect(html.indexOf('Direct on your tailnet')).toBeLessThan(html.indexOf('Through the relay'))
+  })
+})
+
+describe('the relay is not connected', () => {
+  const reason = 'The relay refused this Mac’s host secret. Turn remote access off and on again.'
+  const state: RemoteState = {
+    ...RELAY_ONLY,
+    relay: { ...RELAY, connected: false, reason, retryAt: NOW + 8000 },
+  }
+  const html = render({ state })
+
+  it('looks different from connected, and says which it is', () => {
+    expect(html).toContain('>Not connected<')
+    expect(html).not.toContain('>Connected<')
+    expect(html).toContain('data-state="down"')
+  })
+
+  it('prints the relay’s own sentence, and when it will try again', () => {
+    expect(html).toContain(reason)
+    expect(html).toContain('Trying again in 8s')
+  })
+
+  it('refuses to hand out a code for a path that is down, and says why', () => {
+    // A code minted here produces a phone that scans, waits, and fails.
+    expect(html).toMatch(/<button[^>]*disabled[^>]*>Pair a device<\/button>/)
+    expect(html).toContain('Neither way in is up')
+  })
+
+  it('never claims the identity of a link that could not be used', () => {
+    expect(html).not.toContain(RELAY.hostId)
+  })
+})
+
+describe('the relay is switched off in this build', () => {
+  const html = render({ state: { ...RUNNING, relay: null } })
+
+  it('says so rather than drawing a relay that is not there', () => {
+    expect(html).toContain('>Off<')
+    expect(html).toContain('not dialling a relay')
+  })
+
+  it('still pairs, because the tailnet is a whole path on its own', () => {
+    expect(html).toMatch(/<button(?![^>]*disabled)[^>]*>Pair a device<\/button>/)
   })
 })
 
@@ -232,12 +364,85 @@ describe('something attached right now', () => {
     expect(html).toContain('not at its next connection')
     expect(html).toContain('can attach again straight away')
   })
+
+  it('adds nothing at all for a phone that has not tapped a port', () => {
+    // The ordinary case by a wide margin. A "no pages open" line under every
+    // attached row would be noise about the state almost every row is in.
+    expect(html).not.toContain('remote-tunnels')
+    expect(html).not.toContain('>Stop</button>')
+    expect(html).not.toContain('localhost:')
+  })
+})
+
+/**
+ * A phone reading a dev server on this Mac.
+ *
+ * This is the second thing on the panel that is a live claim about the machine
+ * rather than a setting: while one of these is up, a browser somewhere else is
+ * being served by a process running here. The rule it exists for is that it
+ * must be *visible* on the Mac and *endable* from the Mac, so both halves are
+ * pinned — the port on screen, and one press that closes it.
+ */
+describe('a phone with a page open on one of this Mac’s ports', () => {
+  const html = render({
+    state: {
+      ...RUNNING,
+      devices: [{ ...PHONE, state: 'approved' }],
+      connections: [TUNNELLED],
+    },
+  })
+
+  it('names the port, which is the whole sentence the row says', () => {
+    expect(html).toContain('localhost:5173')
+    expect(html).toContain('localhost:8080')
+  })
+
+  it('says in plain words what that is', () => {
+    // "Tunnel" is the main process's word for the mechanism. What a person at
+    // this Mac needs to know is that somebody else is looking at one of their
+    // ports, and that sentence contains no jargon at all.
+    expect(html).toContain('open in a browser on this phone')
+    expect(html).toContain('served from this Mac to that phone’s browser')
+  })
+
+  it('says how long it has been open, reusing the attachment’s own clock', () => {
+    expect(html).toContain('open for 4 minutes')
+  })
+
+  it('counts sockets only where the count says something', () => {
+    // Zero is what every page that has finished loading sits at, so printing
+    // it would read as a fault on a page that is working.
+    expect(html).toContain('carrying 3 sockets')
+    expect(html).not.toContain('carrying 0 sockets')
+  })
+
+  it('offers one press per page, and does not ask twice', () => {
+    // Stopping one closes a web page. Nothing is lost and the phone can tap
+    // the port again, so the confirmation step the switch and the QR get would
+    // be friction bought with nothing.
+    expect(html.match(/>Stop<\/button>/g)).toHaveLength(2)
+    expect(html).not.toContain('settings-confirm')
+  })
+
+  it('says what Stop does, so nobody leaves a page open rather than risk it', () => {
+    expect(html).toMatch(/<strong>Stop closes the page, and nothing else\.<\/strong>/)
+    expect(html).toContain('The session keeps running')
+  })
+
+  it('leaves the attached row itself exactly as it was', () => {
+    // The tunnels are a line inside that row, not a replacement for it: the
+    // sessions count is still the thing that says how much of the machine this
+    // phone has.
+    expect(html).toContain('2 sessions open')
+    expect(html).toContain('>Disconnect</button>')
+  })
 })
 
 describe('a live pairing code', () => {
   const pairing = { token: '8fb1c2d4e5a6b7c8d9e0f1a2', expiresAt: NOW + 45_000 }
   const html = render({ state: RUNNING, pairing, secondsLeft: 45 })
-  const expected = 'https://asads-macbook-pro-1.taile59277.ts.net:8443/#8fb1c2d4e5a6b7c8d9e0f1a2'
+  const relayLink = `terminaldeck://pair?v=1&r=wss%3A%2F%2Frelay.terminaldeck.dev&h=${RELAY.hostId}&k=${RELAY.publicKey}&t=${pairing.token}`
+  const directLink = 'https://asads-macbook-pro-1.taile59277.ts.net:8443/#t=8fb1c2d4e5a6b7c8d9e0f1a2'
 
   it('draws the code as an SVG with a real path in it', () => {
     expect(html).toContain('<svg class="remote-qr"')
@@ -248,9 +453,46 @@ describe('a live pairing code', () => {
     expect(html).toContain('Expires in 45s')
   })
 
-  it('prints the same address for anyone who cannot scan it', () => {
-    expect(html).toContain(expected)
+  it('hands over the relay path first, because that is the endpoint the phone keeps', () => {
+    // Pairing on the tailnet produces a phone that only works on the tailnet,
+    // which is a surprise waiting at an airport.
+    expect(html).toContain(relayLink.replaceAll('&', '&amp;'))
     expect(html).toContain('Can’t scan it?')
+  })
+
+  it('offers the other path as a button rather than a second code', () => {
+    expect(html).toContain('Direct on your tailnet')
+    expect(html).toMatch(/aria-pressed="true"[^>]*>Through the relay</)
+  })
+
+  it('honours that choice, and prints the tailnet link instead', () => {
+    const chosen = render({ state: RUNNING, pairing, secondsLeft: 45, pairPath: 'direct' })
+    expect(chosen).toContain(directLink)
+    expect(chosen).not.toContain(relayLink.replaceAll('&', '&amp;'))
+    expect(chosen).toMatch(/aria-pressed="true"[^>]*>Direct on your tailnet</)
+  })
+
+  it('names the parameter in the tailnet link, because the PWA reads it as one', () => {
+    // A bare `#<token>` reads as no token at all in `pwa/src/pair.ts`, and the
+    // phone lands on the pair screen as if the QR had not been scanned.
+    const chosen = render({ state: RUNNING, pairing, secondsLeft: 45, pairPath: 'direct' })
+    expect(chosen).toContain('/#t=')
+  })
+
+  it('shows this Mac’s fingerprint, so the phone’s copy can be compared with it', () => {
+    expect(html).toContain(RELAY.fingerprint)
+    expect(html).toContain('same six groups')
+  })
+
+  it('drops the fingerprint on the tailnet path, where no key is exchanged', () => {
+    const chosen = render({ state: RUNNING, pairing, secondsLeft: 45, pairPath: 'direct' })
+    expect(chosen).not.toContain('same six groups')
+  })
+
+  it('offers no choice when there is only one way in', () => {
+    const only = render({ state: RELAY_ONLY, pairing, secondsLeft: 45 })
+    expect(only).toContain(relayLink.replaceAll('&', '&amp;'))
+    expect(only).not.toContain('aria-pressed')
   })
 
   it('has one press to kill the code early', () => {
@@ -263,9 +505,23 @@ describe('a live pairing code', () => {
     expect(expired).toContain('Nothing was let in')
     expect(expired).toContain('New code')
     expect(expired).not.toContain('<svg class="remote-qr"')
-    // And the address goes with it — a dead URL left on screen to type is worse
-    // than no URL at all.
-    expect(expired).not.toContain(expected)
+    // And the link goes with it — a dead one left on screen to type is worse
+    // than none at all.
+    expect(expired).not.toContain(relayLink.replaceAll('&', '&amp;'))
+    expect(expired).not.toContain(directLink)
+  })
+
+  it('says the right thing when every path goes away underneath it', () => {
+    // Reachable: the relay drops while the code is on screen. "Expired" would
+    // be the wrong reason and would send somebody to make another one.
+    const stranded = render({
+      state: { ...RELAY_ONLY, relay: { ...RELAY, connected: false, reason: 'The link dropped.' } },
+      pairing,
+      secondsLeft: 45,
+    })
+    expect(stranded).toContain('nowhere to point this code')
+    expect(stranded).not.toContain('<svg class="remote-qr"')
+    expect(stranded).not.toContain('That code has expired')
   })
 
   it('does not count down when the main process never said when it expires', () => {
@@ -346,6 +602,30 @@ describe('narrowing what the main process sends', () => {
     expect(toRemoteConnections([{ id: 'conn-1' }], [])[0].deviceName).toBe('Unnamed device')
   })
 
+  it('gives every connection a tunnel list, so no row has to guard against one', () => {
+    expect(toRemoteConnections([{ id: 'conn-1' }], [])[0].tunnels).toEqual([])
+    expect(toRemoteConnections([{ id: 'conn-1', tunnels: 'yes' }], [])[0].tunnels).toEqual([])
+  })
+
+  it('drops a tunnel it could not name or could not point at', () => {
+    // The port is the whole sentence the row says and the id is the only thing
+    // Stop can name, so a row missing either would be a claim this panel has
+    // no way to act on.
+    const tunnels = toRemoteTunnels([
+      { id: 'a', port: 5173, streams: 2, openedAt: NOW },
+      { id: 'b', streams: 1, openedAt: NOW },
+      { port: 3000, streams: 1, openedAt: NOW },
+      { id: 'd', port: 'eighty', openedAt: NOW },
+    ])
+    expect(tunnels.map((tunnel) => tunnel.id)).toEqual(['a'])
+  })
+
+  it('defaults an unreadable socket count to none rather than inventing traffic', () => {
+    const [tunnel] = toRemoteTunnels([{ id: 'a', port: 5173 }])
+    expect(tunnel.streams).toBe(0)
+    expect(tunnel.openedAt).toBeNull()
+  })
+
   it('drops a pairing with no token, because the token is the whole code', () => {
     expect(toRemotePairing({ expiresAt: 1 })).toBeNull()
     expect(toRemotePairing(null)).toBeNull()
@@ -354,17 +634,52 @@ describe('narrowing what the main process sends', () => {
   })
 })
 
-describe('pairingUrl', () => {
-  it('puts the token in the fragment, where it never reaches a server log', () => {
-    expect(pairingUrl('https://host.ts.net', 'abc')).toBe('https://host.ts.net/#abc')
-    expect(pairingUrl('https://host.ts.net/', 'abc')).toBe('https://host.ts.net/#abc')
-    expect(pairingUrl('https://host.ts.net:8443/', 'abc')).toBe('https://host.ts.net:8443/#abc')
+describe('narrowing the relay half of the status', () => {
+  it('is null when there is no link at all, which is the ordinary stopped state', () => {
+    expect(toRemoteRelay(null)).toBeNull()
+    expect(toRemoteState({ running: true }, [])?.relay).toBeNull()
   })
 
-  it('replaces an existing fragment rather than nesting one inside it', () => {
-    // Two hashes would make the token part of the first one's value, and the
-    // phone would send a token that is not the token.
-    expect(pairingUrl('https://host.ts.net/#stale', 'abc')).toBe('https://host.ts.net/#abc')
+  it('defaults to not connected, so an unreadable answer never draws a live link', () => {
+    const relay = toRemoteRelay({ url: 'wss://r', hostId: 'X', reason: 'dialling' })
+    expect(relay?.connected).toBe(false)
+    expect(relay?.channels).toBe(0)
+    expect(relay?.reason).toBe('dialling')
+    expect(relay?.retryAt).toBeNull()
+  })
+
+  it('keeps the two "why" fields apart, because they are two different facts', () => {
+    const state = toRemoteState(
+      { running: true, reason: null, directReason: 'Tailscale is logged out.' },
+      [],
+    )
+    expect(state?.reason).toBeNull()
+    expect(state?.directReason).toBe('Tailscale is logged out.')
+  })
+
+  it('reads a device that has no key as having none, rather than inventing one', () => {
+    const devices = toRemoteDevices([
+      { id: 'a', name: 'A', status: 'approved', fingerprint: 'ABCD-EFGH' },
+      { id: 'b', name: 'B', status: 'approved' },
+      { id: 'c', name: 'C', status: 'approved', fingerprint: '' },
+    ])
+    expect(devices.map((device) => device.fingerprint)).toEqual(['ABCD-EFGH', null, null])
+  })
+})
+
+describe('retryNote', () => {
+  it('says a reconnect is coming, which is the difference between waiting and fixing', () => {
+    expect(retryNote(NOW + 8_000, NOW)).toBe('Trying again in 8s.')
+    expect(retryNote(NOW + 90_000, NOW)).toBe('Trying again in 2 minutes.')
+    expect(retryNote(NOW + 60_000, NOW)).toBe('Trying again in 1 minute.')
+  })
+
+  it('never counts backwards past zero', () => {
+    expect(retryNote(NOW - 5_000, NOW)).toBe('Trying again now.')
+  })
+
+  it('says nothing when nothing is scheduled', () => {
+    expect(retryNote(null, NOW)).toBeNull()
   })
 })
 
@@ -435,10 +750,28 @@ describe('connectionNote', () => {
   })
 })
 
+describe('tunnelNote', () => {
+  it('says how long the page has been open, in the same words the row above uses', () => {
+    expect(tunnelNote(TUNNEL, NOW)).toBe('open for 4 minutes · carrying 3 sockets')
+  })
+
+  it('stays silent at zero, which is what a finished page sits at', () => {
+    expect(tunnelNote(IDLE_TUNNEL, NOW)).toBe('open for less than a minute')
+  })
+
+  it('gets the singular right', () => {
+    expect(tunnelNote({ ...TUNNEL, streams: 1 }, NOW)).toBe('open for 4 minutes · carrying 1 socket')
+  })
+
+  it('prints no age it was never given, rather than 56 years', () => {
+    expect(tunnelNote({ ...TUNNEL, openedAt: null, streams: 0 }, NOW)).toBe('open')
+  })
+})
+
 /* ----------------------------------------------------------- the actions -- */
 
 /**
- * The nine buttons, exercised directly.
+ * Every button, exercised directly.
  *
  * Everything above this line renders markup, and markup cannot tell you what a
  * press *does*. That gap is not academic here: with only the rendering tests,
@@ -455,6 +788,7 @@ interface Harness {
   notices: Array<{ ok: boolean; text: string }>
   pairing: RemotePairing | null
   confirming: boolean
+  path: PairPath | null
   settled(): Promise<void>
 }
 
@@ -473,11 +807,15 @@ function fakeBridge(
     'approveRemoteDevice',
     'revokeRemoteDevice',
     'disconnectRemoteConnection',
+    'stopRemoteTunnel',
   ]
   const bridge: Record<string, unknown> = {}
   for (const name of names) {
-    bridge[name] = (arg?: unknown): Promise<unknown> => {
-      calls.push(arg === undefined ? `${name}()` : `${name}(${String(arg)})`)
+    // Every argument, not just the first: `remote:tunnel:stop` takes two ids,
+    // and a recorder that kept only the connection would pass a Stop wired to
+    // the wrong tunnel — which on a phone with two pages open is the whole bug.
+    bridge[name] = (...args: unknown[]): Promise<unknown> => {
+      calls.push(`${name}(${args.map((arg) => String(arg)).join(', ')})`)
       return Promise.resolve(answers[name] ?? null)
     }
   }
@@ -487,7 +825,7 @@ function fakeBridge(
 function harness(bridge: Partial<RemoteBridge>, pairing: RemotePairing | null = null): Harness {
   const notices: Harness['notices'] = []
   const pending: Array<Promise<void>> = []
-  const state = { pairing, confirming: false }
+  const state = { pairing, confirming: false, path: null as PairPath | null }
   const actions = remoteActions({
     bridge,
     pairing,
@@ -496,6 +834,9 @@ function harness(bridge: Partial<RemoteBridge>, pairing: RemotePairing | null = 
     },
     setConfirmEnable: (next) => {
       state.confirming = next
+    },
+    setPairPath: (next) => {
+      state.path = next
     },
     run: (_key, work, done) => {
       pending.push(
@@ -521,6 +862,9 @@ function harness(bridge: Partial<RemoteBridge>, pairing: RemotePairing | null = 
     get confirming() {
       return state.confirming
     },
+    get path() {
+      return state.path
+    },
     settled: async () => {
       await Promise.all(pending)
     },
@@ -533,6 +877,7 @@ const PENDING_DEVICE: RemoteDevice = {
   state: 'pending',
   addedAt: NOW,
   lastSeenAt: null,
+  fingerprint: null,
 }
 
 describe('the switch', () => {
@@ -653,6 +998,74 @@ describe('approving and refusing', () => {
   })
 })
 
+describe('stopping one page a phone has open', () => {
+  /** What `remote:tunnel:stop` answers with: the fresh connection list. */
+  const AFTER = [
+    {
+      id: 'conn-1',
+      deviceId: 'dev-1',
+      deviceName: 'Asad’s iPhone',
+      platform: 'iOS 26',
+      address: '100.86.107.42',
+      connectedAt: NOW - 12 * 60_000,
+      sessionIds: ['s1', 's2'],
+      tunnels: [{ id: 'tun-2', port: 8080, streams: 0, openedAt: NOW - 40_000 }],
+    },
+  ]
+
+  it('names both ids, because a tunnel id only means anything inside its connection', async () => {
+    // Two phones can each have a page open on port 3000. A stop that carried
+    // only one of the two ids would be a coin flip over which one closed.
+    const { bridge, calls } = fakeBridge({ stopRemoteTunnel: AFTER })
+    const h = harness(bridge)
+    h.actions.stopTunnel(TUNNELLED, TUNNEL)
+    await h.settled()
+    expect(calls).toEqual(['stopRemoteTunnel(conn-1, tun-1)'])
+  })
+
+  it('goes on the first press — there is no confirmation to get through', async () => {
+    const { bridge, calls } = fakeBridge({ stopRemoteTunnel: AFTER })
+    const h = harness(bridge)
+    h.actions.stopTunnel(TUNNELLED, TUNNEL)
+    await h.settled()
+    // If this ever needs a second call to reach the channel, a confirm step
+    // has been added to something that closes a web page.
+    expect(calls).toHaveLength(1)
+  })
+
+  it('says what closed and that it can come back', async () => {
+    const { bridge } = fakeBridge({ stopRemoteTunnel: AFTER })
+    const h = harness(bridge)
+    h.actions.stopTunnel(TUNNELLED, TUNNEL)
+    await h.settled()
+    expect(h.notices).toEqual([
+      { ok: true, text: 'Closed the page on port 5173. Asad’s iPhone can open it again.' },
+    ])
+  })
+
+  it('draws the list that came back, not the one that was on screen', () => {
+    // The handler answers with the fresh connections for the same reason the
+    // device channels do: what this panel claims about the machine comes from
+    // an answer, never from the fact that a call returned. The row that was
+    // stopped goes; the one beside it stays.
+    const redrawn = render({
+      state: { ...RUNNING, connections: toRemoteConnections(AFTER, []) },
+    })
+    expect(redrawn).not.toContain('localhost:5173')
+    expect(redrawn).toContain('localhost:8080')
+  })
+
+  it('draws nothing extra once the last page is closed', () => {
+    const empty = [{ ...AFTER[0], tunnels: [] }]
+    const redrawn = render({ state: { ...RUNNING, connections: toRemoteConnections(empty, []) } })
+    expect(redrawn).not.toContain('remote-tunnels')
+    expect(redrawn).not.toContain('>Stop</button>')
+    // The phone is still attached, though — closing its page is not a
+    // disconnect, and the row it lives on has to stay.
+    expect(redrawn).toContain('>Disconnect</button>')
+  })
+})
+
 describe('a channel this build does not have', () => {
   const CONNECTION: RemoteConnection = { ...ATTACHED }
 
@@ -669,8 +1082,9 @@ describe('a channel this build does not have', () => {
     h.actions.deny(PENDING_DEVICE)
     h.actions.revoke(PENDING_DEVICE)
     h.actions.disconnect(CONNECTION)
+    h.actions.stopTunnel(CONNECTION, TUNNEL)
     await h.settled()
-    expect(h.notices).toHaveLength(8)
+    expect(h.notices).toHaveLength(9)
     expect(h.notices.every((notice) => !notice.ok)).toBe(true)
     for (const notice of h.notices) expect(notice.text).toContain('half wired')
   })
@@ -706,6 +1120,18 @@ describe('pairing', () => {
     await h.settled()
     expect(calls).toEqual(['startRemotePairing()', 'cancelRemotePairing()'])
     expect(h.pairing).toBeNull()
+  })
+
+  it('re-points a live code without minting a second one', async () => {
+    // Both paths carry the same one-shot token. A second mint here would burn
+    // the code that is on screen and being photographed.
+    const { bridge, calls } = fakeBridge()
+    const h = harness(bridge, { token: 'tok-1', expiresAt: NOW + 60_000 })
+    h.actions.choosePath('direct')
+    await h.settled()
+    expect(calls).toEqual([])
+    expect(h.path).toBe('direct')
+    expect(h.pairing).toEqual({ token: 'tok-1', expiresAt: NOW + 60_000 })
   })
 
   it('never leaves a tokenless answer on screen as if it were a code', async () => {

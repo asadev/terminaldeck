@@ -1,11 +1,12 @@
 /* ============================================================================
    Smart alerts — grouped by what the user is meant to do about them.
 
-   Severity is carried by a small colour cue and by section order, never by a
-   filled red panel: this sits beside the session the user is working in, and a
-   block of alarm colour in peripheral vision is exactly what makes a panel get
-   collapsed and never reopened. Colours alias the foundation tokens, so a theme
-   swap moves this with everything else.
+   Severity is carried by a dot and by a wash behind the row, never by an
+   outline and never by a filled red panel. A block of alarm colour in
+   peripheral vision is exactly what makes a panel get closed and never
+   reopened, and an outline around a row that already has a coloured dot says
+   the same thing twice. Colours alias the foundation tokens, so a theme swap
+   moves this with everything else.
    ============================================================================ */
 
 .alerts {
@@ -16,23 +17,23 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
-  overflow-y: auto;
-  padding: 14px 14px 22px;
-  background: var(--bg-secondary);
+  max-width: 78rem;
   color: var(--text-secondary);
   font-family: var(--font-ui);
-  font-size: 12px;
+  font-size: var(--t-body);
 }
 
 /* ------------------------------------------------------------------ head -- */
 
+/* One sentence and one button. The rule that used to sit under it separated a
+   summary from the list the summary is about. */
 .alerts-head {
   display: flex;
-  align-items: flex-start;
-  gap: 14px;
+  align-items: center;
+  gap: var(--sp-4);
   flex-shrink: 0;
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--border-subtle);
+  min-height: var(--control-h-lg);
+  margin-bottom: var(--sp-5);
 }
 
 .alerts-headline {
@@ -42,18 +43,16 @@
 
 .alerts-heading {
   margin: 0;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--text-secondary);
+  font-size: var(--t-footnote);
+  font-weight: var(--w-semibold);
+  color: var(--text-muted);
 }
 
 .alerts-summary {
-  margin: 3px 0 0;
-  font-size: 14px;
-  font-weight: 500;
-  letter-spacing: -0.01em;
+  margin: 0;
+  font-size: var(--t-title2);
+  font-weight: var(--w-semibold);
+  letter-spacing: var(--t-title2-ls);
   color: var(--text-primary);
 }
 
@@ -61,29 +60,31 @@
   color: var(--alerts-critical);
 }
 
+/* Nothing wrong is the normal state, so it is said in the quiet voice. */
 .alerts-summary[data-worst='none'] {
   color: var(--text-secondary);
-  font-weight: 400;
+  font-weight: var(--w-regular);
 }
 
 .alerts-rescan {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex-shrink: 0;
-  padding: 5px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text-secondary);
+  height: var(--control-h);
+  padding: 0 var(--sp-4);
+  border-radius: var(--radius-md);
+  background: var(--fill-tertiary);
+  color: var(--text-primary);
   font-family: inherit;
-  font-size: 11px;
+  font-size: var(--t-body);
+  font-weight: var(--w-medium);
   cursor: pointer;
-  transition:
-    background 120ms ease,
-    color 120ms ease;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
 
 .alerts-rescan:hover:not(:disabled) {
-  background: var(--bg-hover);
-  color: var(--text-primary);
+  background: var(--fill-secondary);
 }
 
 .alerts-rescan:disabled {
@@ -98,64 +99,54 @@
 
 /* ----------------------------------------------------------------- empty -- */
 
+/* A quiet project is the state this panel is in most of the time, so it gets
+   the app's empty-state treatment rather than a dashed box. */
 .alerts-empty {
-  margin: 18px 0 0;
-  padding: 16px;
-  /* --border-subtle disappears against both surfaces at this size — checked on
-     screen in dark and light. The full border still reads as calm. */
-  border: 1px dashed var(--border);
-  border-radius: var(--radius-md);
+  max-width: 34rem;
+  margin: 10vh auto 0;
   color: var(--text-secondary);
-  font-size: 12px;
-  line-height: 1.6;
+  font-size: var(--t-body);
+  line-height: var(--lh-body);
   text-align: center;
 }
 
 /* ---------------------------------------------------------------- groups -- */
 
 .alerts-group {
-  margin-top: 16px;
+  margin-top: var(--sp-6);
 }
 
+.alerts-group:first-of-type {
+  margin-top: 0;
+}
+
+/* Sentence case, and neutral: every row underneath already carries its own
+   severity in a dot and a wash. */
 .alerts-group-head {
   display: flex;
   align-items: center;
-  gap: 7px;
-  margin: 0 0 7px;
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--text-secondary);
-}
-
-.alerts-group[data-severity='critical'] .alerts-group-head {
-  color: var(--alerts-critical);
-}
-
-.alerts-group[data-severity='warning'] .alerts-group-head {
-  color: var(--alerts-warning);
+  gap: var(--sp-2);
+  margin: 0 0 var(--sp-2);
+  padding-left: var(--sp-4);
+  font-size: var(--t-footnote);
+  font-weight: var(--w-semibold);
+  color: var(--text-muted);
 }
 
 .alerts-count {
-  min-width: 16px;
-  padding: 0 5px;
-  border-radius: var(--radius-sm);
-  background: var(--bg-tertiary);
-  color: var(--text-secondary);
-  font-size: 10px;
-  font-weight: 500;
-  line-height: 16px;
-  text-align: center;
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--w-regular);
 }
 
+/* Enough gap that two rows of the same severity read as two rows and not as
+   one taller wash. */
 .alerts-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
   margin: 0;
   padding: 0;
   list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
 }
 
 /* ----------------------------------------------------------------- items -- */
@@ -163,11 +154,19 @@
 .alerts-item {
   display: flex;
   align-items: flex-start;
-  gap: 10px;
-  padding: 10px 11px;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
-  background: var(--bg-primary);
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--radius-lg);
+}
+
+/* The wash, not an outline. Info stays on bare paper: it is the tier that
+   exists to be skimmed past. */
+.alerts-item[data-severity='warning'] {
+  background: color-mix(in srgb, var(--alerts-warning) 9%, transparent);
+}
+
+.alerts-item[data-severity='critical'] {
+  background: color-mix(in srgb, var(--alerts-critical) 9%, transparent);
 }
 
 .alerts-dot {
@@ -175,8 +174,8 @@
   width: 7px;
   height: 7px;
   /* Optically centred on the title's cap height rather than its line box. */
-  margin-top: 5px;
-  border-radius: 50%;
+  margin-top: var(--sp-15);
+  border-radius: var(--radius-pill);
   background: var(--alerts-info);
 }
 
@@ -196,40 +195,40 @@
 .alerts-title {
   margin: 0;
   color: var(--text-primary);
-  font-size: 12.5px;
-  font-weight: 600;
-  letter-spacing: -0.005em;
+  font-size: var(--t-body);
+  font-weight: var(--w-semibold);
 }
 
 .alerts-detail {
-  margin: 3px 0 0;
+  max-width: 84ch;
+  margin: var(--sp-05) 0 0;
   color: var(--text-secondary);
-  font-size: 11.5px;
-  line-height: 1.55;
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
   overflow-wrap: anywhere;
 }
 
 .alerts-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex-shrink: 0;
   align-self: center;
-  padding: 5px 11px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: transparent;
+  height: var(--control-h);
+  padding: 0 var(--sp-3);
+  border-radius: var(--radius-md);
+  background: var(--fill-tertiary);
   color: var(--text-primary);
   font-family: inherit;
-  font-size: 11px;
+  font-size: var(--t-callout);
+  font-weight: var(--w-medium);
   white-space: nowrap;
   cursor: pointer;
-  transition:
-    background 120ms ease,
-    border-color 120ms ease;
+  transition: background var(--dur-fast) var(--ease);
 }
 
 .alerts-action:hover {
-  background: var(--bg-hover);
-  border-color: var(--border-strong);
-  color: var(--text-primary);
+  background: var(--fill-secondary);
 }
 
 .alerts-action:focus-visible {
@@ -237,14 +236,14 @@
   outline-offset: 1px;
 }
 
-/* On a narrow dock the action drops beneath the text rather than squeezing it. */
-@media (max-width: 420px) {
+/* On a narrow window the action drops beneath the text rather than squeezing it. */
+@media (max-width: 640px) {
   .alerts-item {
     flex-wrap: wrap;
   }
 
   .alerts-action {
-    margin-left: 17px;
+    margin-left: var(--sp-5);
     align-self: flex-start;
   }
 }

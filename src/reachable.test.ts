@@ -29,17 +29,12 @@ const KNOWN_UNREACHABLE: Record<string, string> = {
   'src/renderer/layout/SplitView.tsx':
     'split panes: built, never rendered. Listed as not built on the roadmap and the site.',
   'src/renderer/layout/pane-tree.ts': 'the tree behind SplitView, unreachable for the same reason.',
-  'src/renderer/unread.ts':
-    'unread indicators: no importers. Listed as not built on the roadmap and the site.',
-  'src/renderer/components/TabBar.tsx':
-    'superseded by shell/HeaderTabs.tsx when tabs moved into the window header.',
-  'src/renderer/components/FileViewer.tsx':
-    'superseded by the file panel; kept until the panel handles binary preview.',
-  'src/renderer/components/DebugPanel.tsx': 'developer aid, mounted by hand when debugging.',
-  'src/renderer/components/CloseSessionConfirm.tsx':
-    'the confirm step is not wired to the close action yet.',
   'src/renderer/board/board-session-link.ts':
     'board cards cannot yet open the session they name.',
+  'src/main/remote/sealed.electron-probe.ts':
+    'unreachable from the app on purpose: it is the body of the Electron-runtime crypto check, ' +
+    'bundled and run under ELECTRON_RUN_AS_NODE by scripts/check-electron-crypto.mjs during ' +
+    '`npm test`. It lives in src/ so that tsc typechecks it against the modules it exercises.',
 }
 
 const SOURCE = /\.tsx?$/

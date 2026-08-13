@@ -1,78 +1,75 @@
-/* The update strip.
+/* ============================================================================
+   The update strip.
 
-   It lives between the title bar and the app body, in the flow of the shell's
-   flex column — never over it. That is the whole design constraint: a session
-   running underneath must not lose a pixel it was already using to something
-   the user did not ask for, and an overlay would sit on top of a terminal
-   somebody is reading. Being in flow costs one reflow when it appears and
-   nothing after that.
+   It sits above the work on every launch that has news, so its whole job is to
+   be readable in one glance and then get out of the way. It used to be a
+   three-line block with a thick coloured rule down its left edge — a banner
+   shouting at somebody who is mid-session.
 
-   Colour is used once, on the phase stripe, and only because "an update is
-   waiting" and "that update failed" are different things to walk past. The rest
-   is the same near-neutral surface as the title bar above it, so the strip reads
-   as part of the window chrome rather than as an advertisement. */
+   Now: one line, a quiet tint that says which kind of news it is, and the
+   actions on the right. The tint is mixed from the semantic token for the
+   phase, so the colour still carries meaning without a border carrying it.
+   ============================================================================ */
 
 .upd-banner {
   flex-shrink: 0;
-  padding: 8px 12px;
-  background: var(--bg-secondary);
-  border-bottom: 1px solid var(--border);
-  /* The stripe. Overridden per phase below; grey is the default so a phase this
-     stylesheet has not met yet is quiet rather than alarming. */
-  box-shadow: inset 3px 0 0 var(--status-idle);
-  font-family: var(--font-ui);
-  font-size: 12.5px;
+  padding: var(--sp-2) var(--sp-4);
+  background: var(--fill-quaternary);
+  color: var(--text-primary);
+  font-size: var(--t-callout);
 }
 
+/* Phase tints, kept deliberately faint. This strip sits above the work on
+   every launch that has news, and at full bleed even a 15% wash is the loudest
+   thing on the screen — which is the wrong ranking against a session that is
+   mid-run. Mixed rather than hardcoded so both themes stay in step. */
 .upd-banner[data-phase='available'],
-.upd-banner[data-phase='downloading'] {
-  box-shadow: inset 3px 0 0 var(--status-working);
-}
-
-/* The one state that is asking for something: a restart that closes sessions. */
+.upd-banner[data-phase='downloading'],
 .upd-banner[data-phase='ready'] {
-  box-shadow: inset 3px 0 0 var(--status-completed);
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
 }
 
 .upd-banner[data-phase='error'] {
-  box-shadow: inset 3px 0 0 var(--color-critical);
+  background: color-mix(in srgb, var(--color-critical) 10%, transparent);
 }
 
-/* Not a failure — a build that cannot self-update is working correctly and has
-   a manual path. Warning, not critical. */
+/* No tint at all: "this build cannot update itself" is a standing fact about
+   the build, not a warning about something that just happened, and it is on
+   screen from launch until it is dismissed. */
 .upd-banner[data-phase='unsupported'] {
-  box-shadow: inset 3px 0 0 var(--color-warning);
+  background: var(--fill-quaternary);
 }
 
-/* ------------------------------------------------------------------ row -- */
+.upd-banner[data-phase='unsupported'] .upd-title {
+  color: var(--text-secondary);
+  font-weight: var(--w-regular);
+}
 
 .upd-row {
   display: flex;
   align-items: center;
-  gap: 12px;
-  /* Wraps rather than truncates: every sentence on this strip is either a
-     version number or the main process explaining what went wrong, and an
-     ellipsis through the middle of "…could not be verified" is useless. */
-  flex-wrap: wrap;
+  gap: var(--sp-4);
+  min-height: var(--control-h);
 }
 
+/* One line where it fits, wrapping rather than clipping where it does not. */
 .upd-text {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
   flex: 1;
-  min-width: 220px;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--sp-05) var(--sp-3);
 }
 
 .upd-title {
-  font-weight: 550;
+  font-weight: var(--w-medium);
   color: var(--text-primary);
 }
 
 .upd-detail {
-  font-size: 11.5px;
   color: var(--text-secondary);
-  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
 }
 
 .upd-link {
@@ -84,124 +81,116 @@
   text-decoration: underline;
 }
 
-/* -------------------------------------------------------------- buttons -- */
-
 .upd-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--sp-1);
   flex-shrink: 0;
 }
 
 .upd-btn {
-  padding: 4px 12px;
-  border: 1px solid var(--border-strong);
+  display: inline-flex;
+  align-items: center;
+  height: var(--control-h-sm);
+  padding: 0 var(--sp-3);
   border-radius: var(--radius-sm);
-  background: var(--bg-primary);
+  background: var(--fill-tertiary);
   color: var(--text-primary);
-  font-size: 12px;
-  font-weight: 500;
-  transition: background 120ms ease, border-color 120ms ease;
+  font-size: var(--t-callout);
+  font-weight: var(--w-medium);
+  white-space: nowrap;
+  transition: background var(--dur-fast) var(--ease), opacity var(--dur-fast) var(--ease);
 }
 
-.upd-btn:hover:not(:disabled) {
-  background: var(--bg-hover);
+.upd-btn:hover {
+  background: var(--fill-secondary);
 }
 
 .upd-btn[data-tone='primary'] {
-  border-color: transparent;
   background: var(--accent);
   color: var(--accent-fg);
 }
 
-.upd-btn[data-tone='primary']:hover:not(:disabled) {
+.upd-btn[data-tone='primary']:hover {
   background: var(--accent-dim);
 }
 
-.upd-btn:disabled {
-  opacity: 0.55;
-  cursor: default;
+.upd-btn[disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
-.upd-btn:focus-visible,
-.upd-dismiss:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-
-/* Quiet on purpose. Dismissing is the reversible choice on this strip — it
-   comes back next launch — so it does not compete with the button that isn't. */
 .upd-dismiss {
-  padding: 4px 6px;
-  color: var(--text-muted);
-  font-size: 11.5px;
+  height: var(--control-h-sm);
+  padding: 0 var(--sp-2);
   border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: var(--t-callout);
+  white-space: nowrap;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
 
 .upd-dismiss:hover {
-  color: var(--text-primary);
   background: var(--bg-hover);
+  color: var(--text-primary);
 }
 
-/* ------------------------------------------------------------- progress -- */
+/* -------------------------------------------------------------- progress -- */
 
 .upd-progress {
+  margin-top: var(--sp-2);
   height: 3px;
-  margin-top: 8px;
-  border-radius: 999px;
-  background: var(--bg-active);
+  border-radius: var(--radius-pill);
+  background: var(--fill-secondary);
   overflow: hidden;
 }
 
 .upd-progress-fill {
   height: 100%;
-  border-radius: 999px;
-  background: var(--status-working);
-  /* The width comes from the feed and can only move forward, so a transition
-     smooths the ticks without ever animating backwards over a stall. */
-  transition: width 240ms ease;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width var(--dur) var(--ease);
 }
 
-/* No percentage was reported. A sliding bar says "working" without claiming an
-   amount, which is the honest shape for a download whose total is unknown. */
+/* No percentage to show: a stripe that travels, so the bar still says "busy"
+   rather than "nothing is happening". */
 .upd-progress-fill[data-indeterminate='true'] {
-  width: 30%;
-  animation: upd-slide 1.4s ease-in-out infinite;
+  width: 35%;
+  animation: upd-slide 1.4s var(--ease) infinite;
 }
 
 @keyframes upd-slide {
-  0% {
+  from {
     transform: translateX(-100%);
   }
-  100% {
-    transform: translateX(333%);
+  to {
+    transform: translateX(300%);
   }
 }
 
-/* The bar still reads as present without the motion; only the motion goes. */
 @media (prefers-reduced-motion: reduce) {
-  .upd-progress-fill {
-    transition: none;
-  }
-
   .upd-progress-fill[data-indeterminate='true'] {
-    width: 100%;
     animation: none;
-    opacity: 0.45;
+    width: 100%;
+    opacity: 0.5;
   }
 }
 
-/* ---------------------------------------------------------------- notes -- */
+/* ----------------------------------------------------------------- notes -- */
 
 .upd-notes {
-  margin-top: 8px;
-  font-size: 11.5px;
-  color: var(--text-secondary);
+  margin-top: var(--sp-2);
 }
 
 .upd-notes > summary {
+  display: inline-flex;
+  align-items: center;
+  height: var(--control-h-sm);
+  padding: 0 var(--sp-2);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: var(--t-callout);
   cursor: pointer;
-  color: var(--text-muted);
   list-style: none;
 }
 
@@ -210,58 +199,60 @@
 }
 
 .upd-notes > summary::before {
-  content: '▸ ';
+  content: '›';
+  display: inline-block;
+  margin-right: var(--sp-15);
+  transition: transform var(--dur-fast) var(--ease);
 }
 
 .upd-notes[open] > summary::before {
-  content: '▾ ';
+  transform: rotate(90deg);
 }
 
-/* Capped and scrollable: a release body is arbitrary length, and a strip in the
-   window chrome that grows to 40 lines has pushed the workspace off screen. */
-.upd-notes-body {
-  max-height: 180px;
-  margin-top: 6px;
-  padding-right: 6px;
-  overflow-y: auto;
-  line-height: 1.55;
-  color: var(--text-secondary);
-  user-select: text;
-}
-
-.upd-notes-body :is(h1, h2, h3, h4, h5, h6) {
-  margin: 8px 0 4px;
-  font-size: 12px;
+.upd-notes > summary:hover {
+  background: var(--bg-hover);
   color: var(--text-primary);
 }
 
-.upd-notes-body p,
-.upd-notes-body ul,
-.upd-notes-body ol {
-  margin: 4px 0;
+.upd-notes-body {
+  max-width: var(--content-measure);
+  max-height: 12rem;
+  margin-top: var(--sp-1);
+  padding: var(--sp-3);
+  overflow: auto;
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
 }
 
-.upd-notes-body ul,
-.upd-notes-body ol {
-  padding-left: 18px;
+.upd-notes-body > :first-child {
+  margin-top: 0;
 }
 
-.upd-notes-body code {
+.upd-notes-body > :last-child {
+  margin-bottom: 0;
+}
+
+.upd-notes-body code,
+.upd-notes-plain {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--t-footnote);
 }
 
-/* The fallback when there is no sanitiser: raw text, and it keeps its own line
-   breaks because that is all the structure it has left. */
 .upd-notes-plain {
   white-space: pre-wrap;
+  word-break: break-word;
 }
 
-/* ----------------------------------------------------------------- note -- */
+/* ------------------------------------------------------------- half-wired -- */
 
 .upd-note {
-  margin: 8px 0 0;
-  font-size: 11.5px;
+  max-width: var(--content-measure);
+  margin: var(--sp-2) 0 0;
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
   color: var(--text-secondary);
 }
 

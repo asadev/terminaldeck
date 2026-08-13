@@ -1,0 +1,24 @@
+<!--
+  A prompt caret and a cursor block, on the adaptive icon's 108dp canvas with everything inside the
+  66dp safe zone. Drawn as paths rather than shipped as a PNG so it stays sharp at every density and
+  the repo stays free of binary assets nobody can diff.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- ❯ -->
+    <path
+        android:strokeColor="#3DDC84"
+        android:strokeWidth="7"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M 36,42 L 50,54 L 36,66" />
+
+    <!-- cursor block -->
+    <path
+        android:fillColor="#3DDC84"
+        android:pathData="M 58,60 h 16 v 7 h -16 z" />
+</vector>

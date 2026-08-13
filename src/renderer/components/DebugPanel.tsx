@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { SessionMeta } from '@shared/types'
+import { useEvery } from '../schedule'
 import './DebugPanel.css'
 
 /**
@@ -190,6 +191,9 @@ export function orderCalls(records: readonly IpcCallRecord[], filter: string): I
 
 /** Keeps the trace bounded — main caps its own ring buffer at the same order. */
 const MAX_ROWS = 500
+
+/** How often the process table and its uptime column move. */
+const SESSION_TICK_MS = 2000
 
 /* ----------------------------------------------------------------- tables -- */
 
@@ -408,14 +412,28 @@ export function DebugPanel({ enabled, bridge, live = true }: DebugPanelProps) {
   useEffect(() => {
     if (!on || !live) return
     refreshSessions()
-    const timer = setInterval(() => {
-      refreshSessions()
-      // Drives the uptime column; state rather than Date.now() at render time
-      // so the numbers actually move.
-      setNow(Date.now())
-    }, 2000)
-    return () => clearInterval(timer)
   }, [on, live, refreshSessions])
+
+  /**
+   * The one tick in this file, and why it cannot be an event.
+   *
+   * This table's whole subject is a clock: the uptime column exists to answer
+   * "how long has that pty been up", which changes for no reason other than
+   * time passing and which no channel will ever announce. Re-listing the
+   * sessions on the same tick is free beside it — one wake-up already spent —
+   * and is what keeps the row set honest without a second subscription in a
+   * panel that exists to be looked at rather than to be efficient.
+   *
+   * It costs nothing when nobody is debugging: this component is in
+   * `reachable.test.ts`'s allowlist because it is mounted by hand, `live` is a
+   * switch on the panel itself, and the shared tick stops entirely behind a
+   * hidden window.
+   */
+  useEvery(on && live ? SESSION_TICK_MS : null, () => {
+    refreshSessions()
+    // State rather than `Date.now()` at render time, so the numbers move.
+    setNow(Date.now())
+  })
 
   /* -- log tail -- */
   const refreshLog = useCallback(() => {

@@ -1,8 +1,12 @@
+import { appendFileSync, mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { promptTokens } from './cost'
 import {
   claudeConfigDir,
   encodeProjectPath,
+  listTranscripts,
   parseEventLine,
   parseUsage,
   SessionAggregator,
@@ -521,5 +525,52 @@ describe('SessionAggregator', () => {
   it('derives a session id from the filename when the transcript has none', () => {
     const aggregator = new SessionAggregator('/tmp/749c33cd-a336.jsonl')
     expect(aggregator.summary().sessionId).toBe('749c33cd-a336')
+  })
+})
+
+describe('listTranscripts', () => {
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+  /**
+   * Two clocks per transcript, and the difference is load-bearing.
+   *
+   * Resuming appends to an existing conversation rather than starting a new
+   * file — a transcript on this machine was born on 1 June and still being
+   * written to on 13 August — so "last written" says nothing about when the
+   * conversation began. Ranking by it alone is how a session eight minutes old
+   * came to be shown a stranger's two-hour, $18 conversation: the stranger was
+   * simply the busier writer. `createdAt` is the field that can rule that out.
+   */
+  it('reports when a conversation began, not only when it was last written', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'terminaldeck-list-'))
+    appendFileSync(join(dir, 'older.jsonl'), '{}\n')
+    await sleep(30)
+    appendFileSync(join(dir, 'newer.jsonl'), '{}\n')
+    await sleep(30)
+    // The older conversation is the one still being typed into.
+    appendFileSync(join(dir, 'older.jsonl'), '{}\n')
+
+    const files = await listTranscripts(dir)
+    const older = files.find((f) => f.sessionId === 'older')
+    const newer = files.find((f) => f.sessionId === 'newer')
+    if (!older || !newer) throw new Error('both transcripts should be listed')
+
+    // Sorted by last write, which is the older conversation.
+    expect(files[0].sessionId).toBe('older')
+    expect(older.modifiedAt).toBeGreaterThan(newer.modifiedAt)
+    // But it plainly began first, and that is what tells them apart.
+    expect(older.createdAt).toBeLessThan(newer.createdAt)
+    expect(older.createdAt).toBeLessThanOrEqual(older.modifiedAt)
+  })
+
+  it('never reports a birth time later than the last write', async () => {
+    // Filesystems without a birth time report 0 or the epoch, and a copied file
+    // can report one later than its preserved mtime. Either would make every
+    // transcript look like it began after every session and be excluded.
+    const dir = mkdtempSync(join(tmpdir(), 'terminaldeck-birth-'))
+    appendFileSync(join(dir, 'a.jsonl'), '{}\n')
+    const [file] = await listTranscripts(dir)
+    expect(file.createdAt).toBeGreaterThan(0)
+    expect(file.createdAt).toBeLessThanOrEqual(file.modifiedAt)
   })
 })

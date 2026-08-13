@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useEvery } from '../schedule'
 import './AlertsPanel.css'
 
 /* ------------------------------------------------------------------ types -- */
@@ -204,6 +205,24 @@ export function AlertRow({
 
 /* ------------------------------------------------------------------ panel -- */
 
+/**
+ * How often to rescan, and why this one cannot be an event.
+ *
+ * Most of what this panel reports has a push behind it — a transcript that
+ * grew, a working tree that changed — but two of the rules do not, and they are
+ * the two worth interrupting for. `BLOCKED_WARNING_MS` and
+ * `BLOCKED_CRITICAL_MS` in `src/main/alerts.ts` turn a session that asked a
+ * question into an alert after ten minutes and a louder one after forty-five,
+ * and a session sitting on an unanswered question is by definition a session
+ * that is not doing anything. Nothing happens. No file changes, no process
+ * writes, no channel fires — the alert comes into existence purely because time
+ * passed, and the only thing that can notice that is a clock.
+ *
+ * A minute is a tenth of the finest threshold, so the alert is never more than
+ * that late. It runs on the shared tick rather than an interval of its own, and
+ * the shared tick does not run at all behind a hidden window — an alert nobody
+ * is looking at can wait for the moment they look.
+ */
 const DEFAULT_REFRESH_MS = 60_000
 
 export function AlertsPanel({ projectPath, onAction, bridge, refreshMs }: AlertsPanelProps) {
@@ -246,16 +265,12 @@ export function AlertsPanel({ projectPath, onAction, bridge, refreshMs }: Alerts
     return () => gate.invalidate()
   }, [gate, scan])
 
-  useEffect(() => {
-    const interval = refreshMs ?? DEFAULT_REFRESH_MS
-    if (interval <= 0) return
-    const timer = setInterval(() => {
-      // A scan that outlasts its own interval must not have another stacked on
-      // top of it — each one reads every transcript in the project.
-      if (!gate.isBusy()) void scan()
-    }, interval)
-    return () => clearInterval(timer)
-  }, [gate, scan, refreshMs])
+  const interval = refreshMs ?? DEFAULT_REFRESH_MS
+  useEvery(interval > 0 ? interval : null, () => {
+    // A scan that outlasts its own period must not have another stacked on top
+    // of it — each one reads every transcript in the project.
+    if (!gate.isBusy()) void scan()
+  })
 
   const groups = useMemo(() => (report ? groupAlerts(report.alerts) : []), [report])
 

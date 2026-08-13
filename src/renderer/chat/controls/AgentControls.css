@@ -1,28 +1,40 @@
-/* The control row under the composer.
-   Quiet by default: these are settings, not the action. The composer's send
-   button is the only filled control in this view and it stays that way. */
+/* ============================================================================
+   The control row under the composer.
+
+   Metadata, not a widget bar. There is no strip, no border and no surface of
+   its own: four labelled values sitting in the composer's own whitespace, each
+   one a target that only grows a background when you point at it. The send
+   button is still the only filled control in this view.
+   ============================================================================ */
 
 .agent-controls {
   flex-shrink: 0;
-  padding: 8px 14px 10px;
-  border-top: 1px solid var(--border-subtle);
-  background: var(--bg-secondary);
+  /* Held to the same measure and axis as the conversation and the composer. */
+  box-sizing: border-box;
+  width: 100%;
+  max-width: calc(var(--content-measure) + var(--sp-6) * 2);
+  align-self: center;
+  margin-inline: auto;
+  padding: 0 var(--sp-6) var(--sp-2);
+  background: var(--bg-primary);
 }
 
 .agent-controls-idle {
-  padding: 10px 14px;
+  padding: 0 var(--sp-6) var(--sp-3);
 }
 
 .ac-idle {
   font-family: var(--font-ui);
-  font-size: 12px;
+  font-size: var(--t-footnote);
   color: var(--text-muted);
 }
 
 .ac-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  align-items: center;
+  gap: var(--sp-05) var(--sp-1);
+  margin-left: calc(var(--sp-15) * -1);
 }
 
 /* -------------------------------------------------------------- button -- */
@@ -34,16 +46,17 @@
 .ac-button {
   display: flex;
   align-items: baseline;
-  gap: 6px;
-  padding: 4px 8px;
-  border: 1px solid var(--border);
+  gap: var(--sp-15);
+  height: var(--control-h-sm);
+  padding: 0 var(--sp-15);
+  border: 0;
   border-radius: var(--radius-sm);
-  background: var(--bg-primary);
+  background: none;
   font-family: var(--font-ui);
-  font-size: 12px;
-  line-height: 1.4;
+  font-size: var(--t-footnote);
+  line-height: var(--lh-tight);
   color: var(--text-primary);
-  transition: background 120ms ease, border-color 120ms ease;
+  transition: background var(--dur-fast) var(--ease);
 }
 
 .ac-button:hover:not(:disabled) {
@@ -51,13 +64,12 @@
 }
 
 .ac-button[aria-expanded='true'] {
-  border-color: var(--border-strong);
-  background: var(--bg-hover);
+  background: var(--bg-active);
 }
 
 .ac-button:focus-visible {
   outline: 2px solid var(--accent);
-  outline-offset: 1px;
+  outline-offset: -2px;
 }
 
 .ac-button:disabled {
@@ -70,14 +82,14 @@
 }
 
 .ac-value {
-  font-weight: 500;
+  font-weight: var(--w-medium);
 }
 
 /* An unread value is muted and italic, so a glance separates "this is what it
    is" from "we could not find out". Colour is not used: nothing is wrong. */
 .ac-value-unknown {
   font-style: italic;
-  font-weight: 400;
+  font-weight: var(--w-regular);
   color: var(--text-muted);
 }
 
@@ -92,34 +104,38 @@
   position: absolute;
   left: 0;
   z-index: 20;
-  min-width: 236px;
-  max-width: 300px;
-  padding: 4px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-primary);
-  box-shadow: var(--shadow-md);
+  min-width: 240px;
+  max-width: 304px;
+  padding: var(--sp-1);
+  border-radius: var(--radius-lg);
+  background-color: var(--material-bg-strong);
+  background-image: var(--material-sheen);
+  -webkit-backdrop-filter: var(--material-filter);
+  backdrop-filter: var(--material-filter);
+  border: 1px solid var(--material-hairline);
+  box-shadow: var(--shadow-lg), inset 0 1px 0 var(--material-edge);
 }
 
 .ac-menu-above {
-  bottom: calc(100% + 5px);
+  bottom: calc(100% + var(--sp-15));
 }
 
 .ac-menu:not(.ac-menu-above) {
-  top: calc(100% + 5px);
+  top: calc(100% + var(--sp-15));
 }
 
 .ac-item {
   display: flex;
   align-items: flex-start;
-  gap: 6px;
+  gap: var(--sp-15);
   width: 100%;
-  padding: 5px 7px;
+  padding: var(--sp-15) var(--sp-2);
   border-radius: var(--radius-sm);
   text-align: left;
   font-family: var(--font-ui);
-  font-size: 12.5px;
+  font-size: var(--t-callout);
   color: var(--text-primary);
+  transition: background var(--dur-fast) var(--ease);
 }
 
 .ac-item:hover {
@@ -131,17 +147,17 @@
   outline-offset: -2px;
 }
 
-/* Selection is the one thing the blue is for in this app. */
+/* Selection is the one thing the accent is for in this app. */
 .ac-item-current {
   background: var(--accent-soft);
 }
 
 .ac-tick {
-  width: 11px;
+  width: var(--sp-3);
   flex-shrink: 0;
   color: var(--accent);
-  font-size: 11px;
-  line-height: 1.5;
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
 }
 
 .ac-item-text {
@@ -152,27 +168,26 @@
 }
 
 .ac-item-label {
-  line-height: 1.35;
+  line-height: var(--lh-tight);
 }
 
 .ac-item-hint {
-  font-size: 11px;
-  line-height: 1.35;
+  font-size: var(--t-footnote);
+  line-height: var(--lh-tight);
   color: var(--text-muted);
 }
 
 /* The foot of the menu: what the value is, where it came from, how far a
-   change reaches. The scope line is the one nobody could work out otherwise. */
+   change reaches. Space sets it apart from the options; it needs no rule. */
 .ac-reach {
   display: flex;
   flex-direction: column;
   gap: 1px;
-  margin-top: 4px;
-  padding: 6px 7px 3px;
-  border-top: 1px solid var(--border-subtle);
+  margin-top: var(--sp-2);
+  padding: 0 var(--sp-2) var(--sp-1);
   font-family: var(--font-ui);
-  font-size: 11px;
-  line-height: 1.4;
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
   color: var(--text-muted);
 }
 
@@ -181,20 +196,20 @@
 }
 
 .ac-blocked {
-  padding: 6px 7px;
+  padding: var(--sp-15) var(--sp-2);
   font-family: var(--font-ui);
-  font-size: 12px;
-  line-height: 1.45;
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
   color: var(--text-secondary);
 }
 
 /* -------------------------------------------------------------- notice -- */
 
 .ac-notice {
-  margin: 7px 1px 0;
+  margin: var(--sp-15) 0 0;
   font-family: var(--font-ui);
-  font-size: 11.5px;
-  line-height: 1.4;
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
   color: var(--text-secondary);
 }
 

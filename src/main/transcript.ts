@@ -75,6 +75,21 @@ export interface TranscriptFile {
   path: string
   /** Session id — Claude Code names the file after it. */
   sessionId: string
+  /**
+   * When this conversation began, from the file's birth time.
+   *
+   * Not the same question as `modifiedAt`, and the difference is what tells a
+   * session's own transcript apart from a stranger's. Resuming appends to the
+   * existing file rather than starting a new one — verified against this
+   * machine, where a transcript born on 1 June was still being written to on
+   * 13 August — so a conversation that began before a tab opened cannot be that
+   * tab's, however recently it was written to.
+   *
+   * Falls back to `modifiedAt` on filesystems that do not record a birth time,
+   * where node reports 0 or the epoch. That degrades the check to "no worse
+   * than before" rather than silently excluding every transcript.
+   */
+  createdAt: number
   modifiedAt: number
   bytes: number
 }
@@ -95,9 +110,11 @@ export async function listTranscripts(dir: string): Promise<TranscriptFile[]> {
     try {
       const info = await stat(path)
       if (!info.isFile()) continue
+      const born = info.birthtimeMs
       files.push({
         path,
         sessionId: basename(name, '.jsonl'),
+        createdAt: born > 0 && born <= info.mtimeMs ? born : info.mtimeMs,
         modifiedAt: info.mtimeMs,
         bytes: info.size,
       })

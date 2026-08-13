@@ -1,61 +1,70 @@
 /* ============================================================================
    Shortcuts sheet
 
-   A reference table, so it is read by scanning down the key column rather than
-   across each row: the keys are right-aligned in a fixed lane and every label
-   starts at the same x. Colour is carried entirely by foundation tokens, and
-   the base `kbd` rule in app.css supplies the chip — only the size is
-   overridden here, because in this panel the keys are the content.
+   A reading surface, not a table. It is read by scanning down the key column
+   rather than across each row, so the keys are right-aligned in a fixed lane
+   and every label starts at the same x — and that alignment is the whole
+   structure. There is no line between rows and none under a group heading:
+   two aligned columns with air around them are already a table.
+
+   Colour is carried entirely by foundation tokens, and the base `kbd` rule in
+   app.css supplies the chip — only its size is adjusted here, because in this
+   panel the keys are the content.
    ============================================================================ */
+
+:root {
+  /* The lane the keys are right-aligned in, so every row's chord ends on the
+     same edge. Wide enough for the longest spelled-out chord in this keymap
+     (Ctrl+Shift+Tab). */
+  --sheet-keys-lane: 132px;
+}
 
 .sheet {
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: var(--sp-6);
 }
 
 /* ---------------------------------------------------------------- search -- */
 
+/* The strip *is* the field, exactly as the command palette's is: a glyph, a
+   borderless input and the count, with nothing drawn around them. It is
+   full-bleed and sticky so rows scroll under it rather than past it, which is
+   the one thing here that has to be opaque: the sheet's own glass is 86%
+   opaque, and at 86% the rows read straight through the field they are
+   supposed to be sliding behind. A tint is the separation, rather than the
+   rule this strip used to carry. */
 .sheet-search {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--sp-2);
   position: sticky;
-  /* -4px cancels the modal body's top padding, so rows scroll under the field
-     rather than appearing in a 4px gap above it. Both values live in
-     Modal.css; if that padding changes, these follow. */
-  top: -4px;
+  /* The modal body has no top padding, so 0 is flush with the header. */
+  top: 0;
   z-index: 1;
-  margin: 0 -18px;
-  padding: 8px 18px;
+  margin: 0 calc(-1 * var(--sp-5));
+  padding: var(--sp-2) var(--sp-5) var(--sp-3);
   background: var(--bg-secondary);
-  border-bottom: 1px solid var(--border-subtle);
   color: var(--text-muted);
-}
-
-/* The input is borderless and takes focus when the sheet opens, so a ring drawn
-   around it would be permanent noise. The rule under the field takes the accent
-   instead — the same "focus is blue" idea as the command palette, at the scale
-   of the field. Drawn as an inset shadow over the existing hairline rather than
-   a thicker border, so the field does not grow by a pixel when it takes focus.
-   Without this the sheet's only text input has no visible focus state at all:
-   the close button is the other tab stop, and tabbing back to the field would
-   otherwise land silently. */
-.sheet-search:focus-within {
-  border-bottom-color: var(--accent);
-  box-shadow: inset 0 -2px 0 var(--accent);
 }
 
 .sheet-input {
   flex: 1;
   min-width: 0;
-  height: 26px;
+  height: var(--control-h);
   border: none;
   outline: none;
   background: none;
   color: var(--text-primary);
   font-family: var(--font-ui);
-  font-size: 13px;
+  font-size: var(--t-body);
+}
+
+/* The field takes focus the moment the sheet opens and keeps it, so the ring
+   Modal draws around anything focusable would be permanent decoration rather
+   than an answer to "where am I?". The caret is the answer here. */
+.sheet .sheet-input:focus-visible {
+  outline: none;
 }
 
 .sheet-input::placeholder {
@@ -71,7 +80,7 @@
 .sheet-count {
   flex-shrink: 0;
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--t-caption);
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }
@@ -79,22 +88,23 @@
 /* ---------------------------------------------------------------- groups -- */
 
 .sheet-group-head {
-  margin-bottom: 6px;
+  margin-bottom: var(--sp-2);
 }
 
+/* Sentence case, small and quiet — the tracked-out uppercase this used to be
+   is a Notion idiom, and it shouted louder than the rows it introduced. */
 .sheet-group-title {
   margin: 0;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--text-secondary);
+  font-size: var(--t-footnote);
+  font-weight: var(--w-semibold);
+  letter-spacing: normal;
+  color: var(--text-muted);
 }
 
 .sheet-group-hint {
-  margin: 2px 0 0;
-  font-size: 11.5px;
-  line-height: 1.45;
+  margin: var(--sp-05) 0 0;
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
   color: var(--text-secondary);
 }
 
@@ -108,13 +118,8 @@
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: 20px;
-  padding: 7px 0;
-  border-bottom: 1px solid var(--border-subtle);
-}
-
-.sheet-row:last-child {
-  border-bottom: none;
+  gap: var(--sp-5);
+  padding: var(--sp-15) 0;
 }
 
 /* Nothing is wired to this command yet. Dimmed rather than hidden: a gap in
@@ -128,19 +133,18 @@
   display: flex;
   align-items: baseline;
   flex-wrap: wrap;
-  gap: 6px;
-  font-size: 12.5px;
-  line-height: 1.4;
+  gap: var(--sp-15);
+  font-size: var(--t-body);
+  line-height: var(--lh-body);
   color: var(--text-primary);
 }
 
 .sheet-flag {
-  padding: 1px 5px;
-  border-radius: var(--radius-sm);
-  background: var(--bg-tertiary);
+  padding: 0 var(--sp-15);
+  border-radius: var(--radius-pill);
+  background: var(--fill-tertiary);
   color: var(--text-secondary);
-  font-size: 10px;
-  letter-spacing: 0.02em;
+  font-size: var(--t-caption);
   white-space: nowrap;
 }
 
@@ -155,10 +159,8 @@
   display: flex;
   align-items: baseline;
   flex-shrink: 0;
-  gap: 6px;
-  /* Every row's keys begin at the same x, which is what makes the column
-     scannable. Wide enough for the longest spelled-out chord (Ctrl+Shift+Tab). */
-  min-width: 132px;
+  gap: var(--sp-15);
+  min-width: var(--sheet-keys-lane);
   justify-content: flex-end;
   text-align: right;
 }
@@ -166,24 +168,24 @@
 .sheet-chord {
   display: inline-flex;
   align-items: baseline;
-  gap: 6px;
+  gap: var(--sp-15);
 }
 
 .sheet-chord kbd {
-  padding: 2px 6px;
-  font-size: 11.5px;
+  padding: var(--sp-05) var(--sp-15);
+  font-size: var(--t-footnote);
   color: var(--text-primary);
   white-space: nowrap;
 }
 
 .sheet-or {
-  font-size: 10.5px;
-  color: var(--text-secondary);
+  font-size: var(--t-caption);
+  color: var(--text-muted);
 }
 
 .sheet-empty {
-  margin: 8px 0;
-  font-size: 12.5px;
+  margin: var(--sp-2) 0;
+  font-size: var(--t-body);
   color: var(--text-secondary);
 }
 
@@ -193,7 +195,7 @@
   .sheet-row {
     flex-direction: column;
     align-items: flex-start;
-    gap: 4px;
+    gap: var(--sp-1);
   }
 
   .sheet-keys {

@@ -1,7 +1,12 @@
 /* ============================================================================
    Provider hooks — one row per agent CLI, with the file it writes named in
-   full. State colours alias the foundation tokens so a theme swap moves this
-   panel with everything else.
+   full.
+
+   A row is three columns now: which agent, what is true about it, and what you
+   can do. The rules between rows are gone — a list of four items separated by
+   a full-window hairline each was three lines drawing what one gap of white
+   space draws better. State colours alias the foundation tokens so a theme
+   swap moves this panel with everything else.
    ============================================================================ */
 
 .hooks {
@@ -13,11 +18,9 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
-  overflow-y: auto;
-  padding: 16px 16px 24px;
-  background: var(--bg-secondary);
+  max-width: 82rem;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--t-body);
 }
 
 /* ------------------------------------------------------------------ head -- */
@@ -25,10 +28,9 @@
 .hooks-head {
   display: flex;
   align-items: flex-start;
-  gap: 16px;
+  gap: var(--sp-6);
   flex-shrink: 0;
-  padding-bottom: 14px;
-  border-bottom: 1px solid var(--border-subtle);
+  margin-bottom: var(--sp-5);
 }
 
 .hooks-headline {
@@ -36,37 +38,45 @@
   min-width: 0;
 }
 
+/* The toolbar above this page already says "Hooks" in the title voice. Saying
+   it again in the body is the same word twice; it stays in the document for
+   anything reading the structure rather than looking at it. */
 .hooks-heading {
-  margin: 0;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--text-secondary);
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .hooks-sub {
-  margin: 5px 0 0;
-  max-width: 56ch;
-  font-size: 12px;
-  line-height: 1.55;
+  margin: 0;
+  max-width: 68ch;
+  font-size: var(--t-body);
+  line-height: var(--lh-body);
   color: var(--text-secondary);
 }
 
 .hooks-refresh {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex-shrink: 0;
-  padding: 5px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-tertiary);
-  font-size: 12px;
-  color: var(--text-secondary);
-  transition: background 120ms ease, color 120ms ease;
+  height: var(--control-h);
+  padding: 0 var(--sp-4);
+  border-radius: var(--radius-md);
+  background: var(--fill-tertiary);
+  font-size: var(--t-body);
+  font-weight: var(--w-medium);
+  color: var(--text-primary);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
 
 .hooks-refresh:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
+  background: var(--fill-secondary);
 }
 
 .hooks-refresh:focus-visible,
@@ -78,79 +88,86 @@
 
 /* -------------------------------------------------------------- endpoint -- */
 
+/* Where the hooks report to. A wash rather than a bordered strip: it is one
+   sentence of status, and it should read like a note, not a dialog. */
 .hooks-endpoint {
-  margin: 12px 0 0;
-  padding: 8px 11px;
-  border: 1px solid var(--border);
-  border-left: 2px solid var(--hooks-off);
-  border-radius: var(--radius-sm);
-  background: var(--bg-tertiary);
-  font-size: 11.5px;
-  line-height: 1.55;
+  max-width: 84ch;
+  margin: 0 0 var(--sp-6);
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--radius-lg);
+  background: var(--fill-quaternary);
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
   color: var(--text-secondary);
 }
 
 .hooks-endpoint[data-running='true'] {
-  border-left-color: var(--hooks-ok);
+  background: color-mix(in srgb, var(--hooks-ok) 10%, transparent);
 }
 
 .hooks-error {
-  margin: 12px 0 0;
-  padding: 9px 11px;
-  border: 1px solid var(--border);
-  border-left: 2px solid var(--hooks-bad);
-  border-radius: var(--radius-sm);
-  background: var(--bg-tertiary);
-  font-size: 12px;
-  line-height: 1.5;
+  max-width: 84ch;
+  margin: 0 0 var(--sp-4);
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--hooks-bad) 10%, transparent);
+  font-size: var(--t-body);
+  line-height: var(--lh-body);
 }
 
 .hooks-empty {
-  margin: 0;
-  padding: 24px 0;
-  text-align: center;
+  max-width: 34rem;
+  margin: 10vh auto 0;
   color: var(--text-secondary);
+  line-height: var(--lh-body);
+  text-align: center;
 }
 
 /* ------------------------------------------------------------------ rows -- */
 
 .hooks-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
+/* Three columns: the agent, the facts, the actions. `.hooks-row-body` is a
+   wrapper that only ever drew a box, so it hands its children straight to the
+   grid instead of forming a column of its own. */
 .hooks-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  padding: 14px 2px;
-  border-bottom: 1px solid var(--border-subtle);
-}
-
-.hooks-row:last-child {
-  border-bottom: none;
+  display: grid;
+  grid-template-columns: minmax(9rem, 14rem) minmax(0, 1fr) auto;
+  gap: var(--sp-1) var(--sp-6);
+  align-items: start;
+  padding: var(--sp-4) var(--sp-3);
+  border-radius: var(--radius-lg);
 }
 
 .hooks-row-body {
-  flex: 1;
-  min-width: 0;
+  display: contents;
 }
 
 .hooks-row-head {
+  grid-column: 1;
   display: flex;
-  align-items: baseline;
+  align-items: center;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: var(--sp-2);
+}
+
+.hooks-row-body > p {
+  grid-column: 2;
 }
 
 /* One dot carries the state, the same vocabulary as the session status dots. */
 .hooks-dot {
-  align-self: center;
   flex-shrink: 0;
   width: 7px;
   height: 7px;
-  border-radius: 50%;
+  border-radius: var(--radius-pill);
   background: var(--hooks-off);
 }
 
@@ -166,16 +183,16 @@
 }
 
 .hooks-provider {
-  font-size: 13px;
-  font-weight: 550;
+  font-size: var(--t-body);
+  font-weight: var(--w-semibold);
   color: var(--text-primary);
 }
 
+/* Sentence case: this is already a sentence in the data, and capitals here
+   would shout the state of a row that is fine. */
 .hooks-state {
-  font-size: 10.5px;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--text-secondary);
+  font-size: var(--t-footnote);
+  color: var(--text-muted);
 }
 
 .hooks-row[data-state='stale'] .hooks-state,
@@ -188,18 +205,19 @@
 }
 
 .hooks-count {
-  padding: 1px 6px;
-  border-radius: var(--radius-sm);
-  background: var(--bg-hover);
-  font-family: var(--font-mono);
-  font-size: 10.5px;
+  padding: 0 var(--sp-15);
+  border-radius: var(--radius-pill);
+  background: var(--fill-quaternary);
+  font-size: var(--t-footnote);
+  font-variant-numeric: tabular-nums;
   color: var(--text-secondary);
 }
 
 .hooks-message {
-  margin: 4px 0 0;
-  font-size: 12px;
-  line-height: 1.55;
+  max-width: 78ch;
+  margin: 0;
+  font-size: var(--t-body);
+  line-height: var(--lh-body);
   color: var(--text-secondary);
 }
 
@@ -207,38 +225,40 @@
    to something that could be mistaken for a different file, and never set it
    in the muted tier, which does not clear AA on this surface. */
 .hooks-file {
-  margin: 5px 0 0;
+  margin: 0;
   font-family: var(--font-mono);
-  font-size: 11px;
-  line-height: 1.5;
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
   overflow-wrap: anywhere;
   color: var(--text-secondary);
 }
 
 .hooks-foreign,
 .hooks-backup {
-  margin: 5px 0 0;
-  font-size: 11.5px;
-  line-height: 1.5;
+  max-width: 78ch;
+  margin: 0;
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
   overflow-wrap: anywhere;
-  color: var(--text-secondary);
+  color: var(--text-muted);
 }
 
 .hooks-confirm {
-  margin: 8px 0 0;
-  padding: 8px 10px;
-  border-radius: var(--radius-sm);
-  background: var(--bg-primary);
-  font-size: 11.5px;
-  line-height: 1.55;
+  max-width: 78ch;
+  margin: var(--sp-1) 0 0;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--hooks-bad) 9%, transparent);
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
   overflow-wrap: anywhere;
   color: var(--text-secondary);
 }
 
 .hooks-result {
-  margin: 8px 0 0;
-  font-size: 11.5px;
-  line-height: 1.5;
+  margin: var(--sp-1) 0 0;
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
   overflow-wrap: anywhere;
   color: var(--hooks-warn);
 }
@@ -250,56 +270,80 @@
 /* --------------------------------------------------------------- actions -- */
 
 .hooks-actions {
+  grid-row: 1;
+  grid-column: 3;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--sp-1);
   flex-shrink: 0;
-  padding-top: 1px;
 }
 
 .hooks-install,
 .hooks-remove {
-  padding: 5px 11px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-tertiary);
-  font-size: 11.5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: var(--control-h);
+  padding: 0 var(--sp-3);
+  border-radius: var(--radius-md);
+  background: var(--fill-tertiary);
+  font-size: var(--t-callout);
+  font-weight: var(--w-medium);
   white-space: nowrap;
-  color: var(--text-secondary);
-  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+  color: var(--text-primary);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
 
 .hooks-install:hover:not(:disabled) {
-  border-color: var(--border-strong);
-  background: var(--bg-hover);
-  color: var(--text-primary);
+  background: var(--fill-secondary);
 }
 
 .hooks-install:disabled,
 .hooks-remove:disabled {
-  opacity: 0.55;
+  opacity: 0.5;
   cursor: default;
 }
 
 .hooks-remove {
-  border-color: transparent;
   background: none;
   color: var(--text-secondary);
 }
 
 .hooks-remove:hover:not(:disabled) {
+  background: var(--fill-quaternary);
   color: var(--text-primary);
 }
 
 /* Confirming a write to somebody's real config is the one moment this panel
    raises its voice. */
 .hooks-remove[data-confirming] {
-  border-color: transparent;
   background: var(--hooks-bad);
   color: var(--accent-fg);
 }
 
 .hooks-remove[data-confirming]:hover:not(:disabled) {
+  background: var(--hooks-bad);
   filter: brightness(1.08);
   color: var(--accent-fg);
+}
+
+/* Below the width where a name column would leave the facts in a gutter, the
+   row goes back to one column with the actions beside it. The threshold counts
+   the sidebar and the page's own padding, not just the row. */
+@media (max-width: 1120px) {
+  .hooks-row {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--sp-4);
+  }
+
+  .hooks-row-body {
+    display: block;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .hooks-row-body > p {
+    margin-top: var(--sp-1);
+  }
 }

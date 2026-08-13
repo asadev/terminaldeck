@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+      The socket. Terminal Deck reaches a Mac through the rendezvous relay; it does not read
+      contacts, files or location, and a terminal client that asked for any of those would deserve
+      the suspicion it got.
+    -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!--
+      The camera, for the pairing QR code and nothing else. Requested at the moment the scan button
+      is tapped rather than at startup, and never required: the same code can be typed or pasted, so
+      a phone that refuses the permission can still pair.
+    -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+
+    <application
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.TerminalDeck">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:launchMode="singleTask"
+            android:theme="@style/Theme.TerminalDeck"
+            android:windowSoftInputMode="adjustResize"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|density|smallestScreenSize|uiMode">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <!--
+              The pairing link.
+
+              The desktop and both stand-in hosts hand out `terminaldeck://pair#h=…&k=…&t=…`, and
+              until this filter existed the phone had no way to receive one: `am start -a VIEW -d
+              "terminaldeck://pair?…"` answered "unable to resolve Intent", and tapping the link in
+              a message did nothing. The only route into the app was retyping a 200-character code
+              or pointing the camera at a QR — which is why the QR path was the only one anybody
+              had exercised.
+
+              `singleTask` above is what makes the two arrival paths two paths: a cold start reads
+              `intent.data` in `onCreate`, and a link that arrives while the app is already up comes
+              through `onNewIntent`. Both are handled; an app that only handled the first would
+              swallow every link after the first launch.
+
+              A custom scheme, not an App Link. Verified `https://` links need a
+              `assetlinks.json` served from a domain this project does not yet control, and an
+              unverified `https://` filter is a disambiguation dialog rather than a deep link. The
+              scheme carries no trust of its own — any app may claim it — but nothing here is
+              trusted on arrival either: `PairingCodes.parse` validates the shape, the token is
+              single-use, and the Mac still requires a human to approve the device. The worst a
+              hostile link can do is point this phone at a relay that refuses it.
+
+              `android:host` is pinned to `pair` so the filter claims exactly the one URL shape the
+              product emits, rather than every `terminaldeck://` address that could ever exist.
+            -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="terminaldeck" android:host="pair" />
+            </intent-filter>
+        </activity>
+    </application>
+
+</manifest>

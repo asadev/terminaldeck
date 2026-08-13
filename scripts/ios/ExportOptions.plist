@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+    How `xcodebuild -exportArchive` turns ios/build/release/TerminalDeck.xcarchive
+    into an App Store .ipa. Consumed by scripts/ios/release.sh; the full list of
+    keys this file may contain is `xcodebuild -help`, under "Available keys for
+    -exportOptionsPlist".
+
+    Every key here is stated deliberately, including the ones whose value is the
+    default, because an export options plist is read once a release and the
+    defaults that matter are not the obvious ones.
+
+    release.sh copies this file and patches the copy when TD_IOS_SIGN_STYLE=manual
+    is set; this is the source of truth and the copy is thrown away.
+-->
+<plist version="1.0">
+<dict>
+	<!-- Xcode 15.3 renamed this from `app-store`, which still works and is
+	     deprecated. `release-testing` (once `ad-hoc`) is the other one that
+	     produces an installable build, and it is not this one: TestFlight
+	     distribution goes through App Store Connect. -->
+	<key>method</key>
+	<string>app-store-connect</string>
+
+	<!-- "Asad Iqbal", individual account. Also in scripts/ios/common.sh and in
+	     ios/project.yml as DEVELOPMENT_TEAM; the day a second team exists,
+	     those three have to move together. -->
+	<key>teamID</key>
+	<string>6U4VNX5W87</string>
+
+	<!-- `export` writes an .ipa to disk. The alternative, `upload`, would send
+	     it to App Store Connect from inside this same command — fewer steps and
+	     a worse failure mode, because a build that fails on the way up has then
+	     left nothing behind to inspect, re-validate or re-send. release.sh
+	     exports here and uploads as a separate, repeatable step. -->
+	<key>destination</key>
+	<string>export</string>
+
+	<!-- Match how the archive was built. The archive is signed for development
+	     and re-signed for distribution here, which is why the distribution
+	     certificate matters at this step and not the previous one. -->
+	<key>signingStyle</key>
+	<string>automatic</string>
+
+	<!-- The default is YES, and YES means Xcode silently rewrites CFBundleVersion
+	     during export to whatever it thinks the next build number should be.
+	     That is a helpful default for a human clicking Distribute and a
+	     disaster for a script that has already stamped a build number, logged
+	     it, and is about to tell someone which build to look for. The number in
+	     the archive is the number that ships. -->
+	<key>manageAppVersionAndBuildNumber</key>
+	<false/>
+
+	<!-- Send the dSYMs. Without them a TestFlight crash report is a column of
+	     hex addresses, and the build they belong to cannot be rebuilt
+	     byte-for-byte later to make sense of it. -->
+	<key>uploadSymbols</key>
+	<true/>
+
+	<!-- Symbols stripped from the *shipped* binary; the copy Apple keeps for
+	     symbolication is the one uploaded above. Smaller download, same crash
+	     reports. -->
+	<key>stripSwiftSymbols</key>
+	<true/>
+
+	<!-- Flip to true for a build that must never escape the internal testing
+	     group — a pull request, an experiment, anything not meant for external
+	     testers or the store. It cannot be undone for that build: a build
+	     marked internal-only can never be promoted, only replaced. -->
+	<key>testFlightInternalTestingOnly</key>
+	<false/>
+</dict>
+</plist>

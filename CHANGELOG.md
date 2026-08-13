@@ -10,6 +10,24 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+### Added
+
+- **Start a session from the phone.** Both phone clients have had a New Session
+  button for a while, gated on a `create` capability that no desktop advertised
+  — so it could never appear, and each client had invented its own frame shape
+  against its own stand-in. There is now one shape, `{"t":"create"}` with an
+  optional folder and size, parsed and narrowed in `protocol.ts` like every
+  other frame; the desktop advertises `create` only when its session layer can
+  actually start one; and a session started this way is a real PTY made by the
+  same call the desktop's own button makes — same shell, same PATH, same
+  profile. A phone may name a folder only if the Mac is already offering it.
+
+### Fixed
+
+- `scripts/remote-host.sh` served an empty session list, because it was built on
+  the belief that `PtyManager` needs Electron. It does not, so the harness now
+  runs real terminals against the real endpoint.
+
 ## [0.1.2] — 2026-08-13
 
 ### Added

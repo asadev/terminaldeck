@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Button, Group, Notice, SectionHead, SettingList } from '../controls'
+import { DebugPanel } from '../../components/DebugPanel'
 import { booleanSetting, defaultPatch, sectionMeta, splitPatch } from '../settings-schema'
 import { applyTheme, isThemePreference } from '../../theme'
 import {
@@ -156,6 +157,18 @@ export function AdvancedSection({ values, save, bridge, loading, reload }: Secti
             about more settings than this one.
           </p>
           <pre className="settings-code">{JSON.stringify(values, null, 2)}</pre>
+        </Group>
+      )}
+
+      {/* The panel this switch has always promised. It was built, tested and
+          then rendered nowhere — the README described its IPC trace, process
+          table, log tail and support bundle as things you get by turning debug
+          mode on, and turning debug mode on got you the JSON above and nothing
+          else. `enabled` is passed so it obeys this switch instead of keeping a
+          second one of its own. */}
+      {debug && (
+        <Group title="Diagnostics">
+          <DebugPanel enabled />
         </Group>
       )}
 

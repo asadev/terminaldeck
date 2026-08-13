@@ -31,6 +31,13 @@
  * become one. The credential exists in plaintext exactly once, in the return
  * value of `redeemPairingToken`, and is never written anywhere.
  *
+ * A device's X25519 **public** key is stored beside it once relayed access
+ * exists, and that does not weaken the sentence above. The public half verifies
+ * a signature-shaped claim and produces nothing: an attacker holding it can
+ * check a guess they already made, not become the device. The private half never
+ * leaves the phone, and this Mac's own private key lives in a different file
+ * that holds nothing else.
+ *
  * Pairing tokens are held in memory only. They live for 60 seconds and the
  * person is at the keyboard, so persisting them buys nothing and would put a
  * second bearer secret on disk for no reason. A restart cancels a pairing in
@@ -56,19 +63,10 @@
  */
 
 import { createHash, randomBytes, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto'
-import {
-  chmodSync,
-  closeSync,
-  fsyncSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  renameSync,
-  statSync,
-  unlinkSync,
-  writeSync,
-} from 'node:fs'
+import { readFileSync, renameSync, statSync } from 'node:fs'
 import { join } from 'node:path'
+import { fingerprint } from '../../shared/sealed'
+import { writeSecretFile } from './secret-file'
 
 /* -------------------------------------------------------------------------- */
 /* Public shapes                                                               */
@@ -86,6 +84,18 @@ export interface Device {
   revoked: boolean
   /** Derived from the two flags above; revocation outranks approval. */
   status: DeviceStatus
+  /**
+   * The device's X25519 public key in the short form a person can compare, or
+   * null for a device that paired before it had one.
+   *
+   * Shown on the approval screen beside the same six groups on the phone. It is
+   * not a security boundary on its own — the pairing code and the approval step
+   * are — but it is what turns "trust this device" from a dialog you dismiss
+   * into one you can actually check. Null means the device can only be reached
+   * over the tailnet: without a key there is no sealed channel, so there is no
+   * way for it to come in through a relay.
+   */
+  fingerprint: string | null
 }
 
 export interface PairingToken {
@@ -237,6 +247,21 @@ interface StoredDevice {
   approved: boolean
   revoked: boolean
   credential: StoredCredential
+  /**
+   * The device's X25519 **public** key, base64, or absent.
+   *
+   * This is the one thing in the file that is a key rather than a hash of one,
+   * and it is safe to store precisely because it is the public half: it lets
+   * this Mac verify that whoever is dialling holds the matching private key, and
+   * it lets an attacker who steals the file verify a guess they already made.
+   * It cannot become a device. The promise at the top of this module — that
+   * `remote-auth.json` is not a set of keys — is unchanged.
+   *
+   * Optional because devices paired before relayed access existed do not have
+   * one. Those keep working on the tailnet and are refused at the relay, which
+   * is the correct direction: a channel we cannot authenticate is not opened.
+   */
+  publicKey?: string
 }
 
 interface StoredState {
@@ -319,6 +344,7 @@ function statusOf(device: { approved: boolean; revoked: boolean }): DeviceStatus
 }
 
 function toPublic(device: StoredDevice): Device {
+  const key = publicKeyBytes(device.publicKey)
   return {
     id: device.id,
     name: device.name,
@@ -327,7 +353,29 @@ function toPublic(device: StoredDevice): Device {
     approved: device.approved,
     revoked: device.revoked,
     status: statusOf(device),
+    // The fingerprint rather than the key: the screen that reads this is asking
+    // a person to compare six groups of characters with a phone, and 44
+    // characters of base64 is a thing people tick rather than read.
+    fingerprint: key === null ? null : fingerprint(key),
   }
+}
+
+/** X25519 public keys are exactly 32 bytes; a stored value of any other shape is not one. */
+const PUBLIC_KEY_BYTES = 32
+
+/**
+ * Decode a stored public key, or null.
+ *
+ * A damaged key reads as *absent* rather than as a parse failure that drops the
+ * whole record: the key is the relay's business and the credential hash is
+ * everything else's, so losing the first must not revoke a device that is still
+ * perfectly able to connect over the tailnet. Absent then fails closed at the
+ * relay, which is the only place the key is consulted.
+ */
+function publicKeyBytes(stored: string | undefined): Buffer | null {
+  if (typeof stored !== 'string' || stored === '') return null
+  const raw = Buffer.from(stored, 'base64')
+  return raw.length === PUBLIC_KEY_BYTES ? raw : null
 }
 
 function asStoredCredential(value: unknown): StoredCredential | null {
@@ -358,11 +406,16 @@ function asStoredDevice(value: unknown): StoredDevice | null {
   if (typeof value.id !== 'string' || value.id === '' || name === null) return null
   if (typeof value.addedAt !== 'number') return null
   const lastSeenAt = typeof value.lastSeenAt === 'number' ? value.lastSeenAt : null
+  const publicKey =
+    typeof value.publicKey === 'string' && value.publicKey.length <= MAX_STORED_FIELD_LENGTH
+      ? value.publicKey
+      : undefined
   return {
     id: value.id,
     name,
     addedAt: value.addedAt,
     lastSeenAt,
+    ...(publicKey === undefined ? {} : { publicKey }),
     // Anything that is not literally `true` reads as not approved, so a
     // corrupted or truncated flag fails closed rather than open.
     approved: value.approved === true,
@@ -457,8 +510,21 @@ export class RemoteAuth {
    * `address` is optional because the local UI may not have one, but any
    * transport that has it should pass it: without it, token guessing is capped
    * only by the token's own entropy.
+   *
+   * `devicePublicKey` is the device's X25519 static key, and it arrives
+   * **already authenticated** — the relay transport only calls this after a
+   * Noise handshake in which the far end proved it holds the matching private
+   * key. It is stored so that every later connection from that device can be
+   * tied to the same key, which is what makes a stolen credential useless
+   * without the phone. Absent for a device on the tailnet, which has no
+   * handshake to have proved anything with.
    */
-  async redeemPairingToken(token: unknown, deviceName: unknown, address?: string): Promise<RedeemResult> {
+  async redeemPairingToken(
+    token: unknown,
+    deviceName: unknown,
+    address?: string,
+    devicePublicKey?: Buffer,
+  ): Promise<RedeemResult> {
     const now = this.now()
     if (typeof token !== 'string' || token === '' || token.length > MAX_TOKEN_LENGTH) {
       return { ok: false, reason: 'malformed' }
@@ -504,6 +570,12 @@ export class RemoteAuth {
       approved: false,
       revoked: false,
       credential: { ...SCRYPT, salt: salt.toString('base64'), hash: hash.toString('base64') },
+      // Refused rather than truncated or padded: a key of the wrong length is a
+      // caller bug, and storing it would bind the device to something no
+      // handshake can ever match.
+      ...(devicePublicKey !== undefined && devicePublicKey.length === PUBLIC_KEY_BYTES
+        ? { publicKey: devicePublicKey.toString('base64') }
+        : {}),
     }
 
     try {
@@ -604,6 +676,52 @@ export class RemoteAuth {
     this.clearFailures(keys)
     this.touch(device, now)
     return { ok: true, device: toPublic(device) }
+  }
+
+  /* ------------------------------------------------------------ public keys */
+
+  /**
+   * Is this X25519 key one a device here holds?
+   *
+   * Asked by the relay transport in the middle of a Noise handshake, before any
+   * reply exists, so that an unpaired device never gets a channel it could send
+   * anything down. A revoked device is not one: revocation outranks everything,
+   * and cutting it here costs the attacker the connection before the app layer
+   * has spent a scrypt on it.
+   *
+   * Every stored key is compared, with no early exit, so the answer does not
+   * depend on where in the list a match sat. There are at most 64 of them.
+   */
+  knowsDeviceKey(publicKey: Buffer): boolean {
+    if (publicKey.length !== PUBLIC_KEY_BYTES) return false
+    let found = false
+    for (const device of this.devices) {
+      if (device.revoked) continue
+      const stored = publicKeyBytes(device.publicKey)
+      if (stored !== null && sameBytes(stored, publicKey)) found = true
+    }
+    return found
+  }
+
+  /**
+   * Does *this* device hold that key?
+   *
+   * The question `knowsDeviceKey` cannot answer, and the one that closes the
+   * hole between the two authentications a relayed connection carries: the
+   * handshake proves possession of a private key, the credential proves
+   * possession of a bearer secret, and without this they could belong to two
+   * different devices. A credential copied off one phone onto another is then
+   * refused, because the other phone cannot produce the first one's key.
+   *
+   * False when the device has no stored key: an unbindable device is not one
+   * that binds to anything.
+   */
+  deviceHoldsKey(id: string, publicKey: Buffer): boolean {
+    if (publicKey.length !== PUBLIC_KEY_BYTES) return false
+    const device = this.devices.find((candidate) => candidate.id === id)
+    if (!device) return false
+    const stored = publicKeyBytes(device.publicKey)
+    return stored !== null && sameBytes(stored, publicKey)
   }
 
   /* ------------------------------------------------------------- internals */
@@ -768,64 +886,10 @@ export class RemoteAuth {
   }
 
   private persist(state: StoredState): void {
-    const json = JSON.stringify(state, null, 2)
-    mkdirSync(this.dir, { recursive: true, mode: 0o700 })
-    // Per-process temp name: two windows writing at once must not rename each
-    // other's half-written file into place.
-    const tmp = `${this.file}.${process.pid}.tmp`
-    try {
-      // A leftover temp file from an earlier crash is removed rather than
-      // written through: `w` follows a symlink, and this is where credential
-      // hashes land. `wx` after the unlink means the open either creates the
-      // file or fails.
-      try {
-        unlinkSync(tmp)
-      } catch {
-        /* nothing there, which is the normal case */
-      }
-      const fd = openSync(tmp, 'wx', 0o600)
-      try {
-        // Looped: a single `write` is allowed to come up short — on a full disk
-        // it reports the bytes it managed rather than failing — and a trust file
-        // that stops halfway is a trust file that will not parse on the next
-        // start.
-        const bytes = Buffer.from(json, 'utf8')
-        for (let written = 0; written < bytes.length; ) {
-          written += writeSync(fd, bytes, written, bytes.length - written)
-        }
-        // rename is atomic in ordering, not in durability: on APFS the entry
-        // can land while the bytes behind it are still in cache, so a power cut
-        // straight after a revoke can come back up with the device still
-        // trusted. That is the one failure this file promises does not happen,
-        // so the bytes are flushed before the name moves.
-        fsyncSync(fd)
-      } finally {
-        closeSync(fd)
-      }
-      // `mode` on open only applies when the file is created and is masked by
-      // umask; this is a file of credential hashes, so make it certain.
-      chmodSync(tmp, 0o600)
-      renameSync(tmp, this.file)
-      chmodSync(this.file, 0o600)
-      // And the rename itself, for the same reason.
-      try {
-        const dir = openSync(this.dir, 'r')
-        try {
-          fsyncSync(dir)
-        } finally {
-          closeSync(dir)
-        }
-      } catch {
-        /* not every filesystem lets a directory be synced; the file already is */
-      }
-    } catch (err) {
-      try {
-        unlinkSync(tmp)
-      } catch {
-        /* never created, or already gone */
-      }
-      throw err
-    }
+    // Every step of that write is load-bearing and is explained where it lives;
+    // the private key file next door needs exactly the same one, and two copies
+    // of it is how the two end up disagreeing about which steps mattered.
+    writeSecretFile(this.dir, this.file, JSON.stringify(state, null, 2))
   }
 
   private load(): void {

@@ -1,0 +1,354 @@
+package dev.terminaldeck.android.ui
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.unit.dp
+import dev.terminaldeck.android.DeckUiState
+import dev.terminaldeck.android.transport.TransportState
+import dev.terminaldeck.android.transport.detail
+
+/**
+ * Pairing, and the wait that follows it.
+ *
+ * ## Four states, not one screen with a spinner
+ *
+ * - **No pairing.** A field for the code and a button for the camera.
+ * - **Paired, waiting for approval.** The pairing worked; a human has to press a button on the
+ *   Mac. This is not an error and is deliberately not drawn as one — it is the normal path, and
+ *   the client polls it on the reconnect schedule rather than making the user retry.
+ * - **A code, and no Mac at the other end of it.** The phone has stored a pairing code and nothing
+ *   has ever answered it. New, and the reason for this rewrite.
+ * - **Refused.** The credential is gone and the only way forward is a new code.
+ *
+ * The waiting state is the one that matters. `device-auth.ts` will not admit a device until
+ * someone approves it, so a client that treated the refusal as a failure would send people back to
+ * scan the QR again — spending a second single-use token to reach the same wait.
+ *
+ * ## Why the third state had to be split out of the second
+ *
+ * This screen used to decide "waiting for approval" from `pairing != null && !approved`, which is
+ * true from the instant a code is *parsed* — before a byte has been sent. So while the client's
+ * handshake was failing on every single attempt, the header said **"Paired with a Mac. Waiting to
+ * be let in."** directly above a card reading **"Could not reach that Mac."** Both sentences on
+ * screen at once, and only the second one true.
+ *
+ * That is not a wording bug. It is a screen that renders a total connection failure as a
+ * successful pairing awaiting a human — which is precisely the disguise that let a client unable
+ * to complete a single handshake look like it was working normally, for as long as nobody looked
+ * at a packet. The failure now gets its own words, its own card and no spinner, and the claim
+ * "paired with a Mac" is made only when a Mac has actually answered: see [DeckUiState.macAnswered].
+ *
+ * ## The fingerprints are shown, not hidden behind a details link
+ *
+ * Both of them: the Mac's, so the person can see the same six groups the desktop is showing, and
+ * this phone's, so they can find the right row in the desktop's approval list. Neither is secret
+ * and neither is a security boundary on its own, but they are what turns "trust this device" from
+ * a dialog you dismiss into one you can check.
+ */
+@Composable
+fun PairingScreen(
+    state: DeckUiState,
+    onPair: (String) -> Unit,
+    onScan: () -> Unit,
+    onForget: () -> Unit,
+    onRetry: () -> Unit,
+) {
+    var code by remember { mutableStateOf("") }
+    // Three mutually exclusive readings of the same stored code. `awaitingApproval` requires the
+    // Mac to have answered; `unreachable` is the case that used to borrow the first one's words.
+    val awaitingApproval = state.awaitingApproval
+    val unreachable = state.macUnreachable
+    // A refusal is not an unreachable Mac and must not borrow its words either — same mistake, one
+    // state along. `Rejected` clears the credential but leaves the pairing record, so without this
+    // branch a refused phone reads "Paired with a Mac that is not answering" over a card saying the
+    // Mac refused it.
+    val refused = unreachable &&
+        (state.transport is TransportState.Rejected || state.transport is TransportState.Incompatible)
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .imePadding()
+            .verticalScroll(rememberScrollState())
+            .padding(24.dp),
+    ) {
+        Text("Terminal Deck", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onBackground)
+        Spacer(Modifier.height(6.dp))
+        Text(
+            text = when {
+                // The Mac answered on this attempt and asked for a human. The only case in which
+                // the claim "paired with a Mac, waiting" is true of the present tense.
+                awaitingApproval -> "Paired with a Mac. Waiting to be let in."
+                // Answered, and said no. Not the same as silence, and waiting will not change it.
+                refused && state.transport is TransportState.Incompatible ->
+                    "That Mac and this app speak different versions."
+                refused -> "That Mac refused this phone."
+                // It has answered before but is not answering now — a true and useful distinction
+                // from the case below, because the pairing itself is fine.
+                unreachable && state.macEverAnswered -> "Paired with a Mac that is not answering."
+                // And here nothing has ever answered. Says what is actually known: a code was
+                // entered. Claims nothing on the Mac's behalf, because it has said nothing.
+                unreachable -> "This phone has a code for a Mac it cannot reach."
+                else -> "Pair this phone with your Mac."
+            },
+            style = MaterialTheme.typography.bodyMedium,
+            color = if (unreachable) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        Spacer(Modifier.height(20.dp))
+
+        when {
+            awaitingApproval -> WaitingCard(state, onRetry, onForget)
+            unreachable -> UnreachableCard(state, onRetry, onForget)
+            else -> EnterCard(
+                code = code,
+                error = state.pairingError,
+                onCode = { code = it },
+                onPair = { onPair(code) },
+                onScan = onScan,
+            )
+        }
+
+        Spacer(Modifier.height(24.dp))
+        FingerprintRow("This phone", state.deviceFingerprint)
+        state.pairing?.let {
+            Spacer(Modifier.height(10.dp))
+            FingerprintRow("That Mac", it.hostFingerprint)
+            Spacer(Modifier.height(10.dp))
+            FingerprintRow("Relay", it.relayUrl)
+        }
+    }
+}
+
+@Composable
+private fun EnterCard(
+    code: String,
+    error: String?,
+    onCode: (String) -> Unit,
+    onPair: () -> Unit,
+    onScan: () -> Unit,
+) {
+    Card {
+        Text(
+            text = "On the Mac, open Terminal Deck → Remote → Pair a device. Scan the code, or paste the link it shows.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(16.dp))
+        OutlinedTextField(
+            value = code,
+            onValueChange = onCode,
+            label = { Text("Pairing link") },
+            placeholder = { Text("terminaldeck://pair#…") },
+            singleLine = false,
+            maxLines = 3,
+            isError = error != null,
+            supportingText = error?.let { { Text(it, color = MaterialTheme.colorScheme.error) } },
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedTextColor = MaterialTheme.colorScheme.onSurface,
+                unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
+                focusedBorderColor = MaterialTheme.colorScheme.primary,
+                unfocusedBorderColor = MaterialTheme.colorScheme.outline,
+            ),
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(Modifier.height(14.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Button(
+                onClick = onPair,
+                enabled = code.isNotBlank(),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+                modifier = Modifier.weight(1f),
+            ) { Text("Pair") }
+            TextButton(onClick = onScan, modifier = Modifier.weight(1f)) { Text("Scan QR") }
+        }
+    }
+}
+
+/**
+ * The Mac answered and asked for a human. The genuine wait, and the only card that may say so.
+ *
+ * It used to carry a `refused` branch that dimmed the spinner and reddened the text, because this
+ * card was shown for every unapproved state including the failing ones. It is now reached only from
+ * [DeckUiState.awaitingApproval] — which requires [TransportState.Pending], which requires the Mac
+ * to have answered on this attempt — so the spinner is unconditional and honest: something really
+ * is in progress, and it really is a person.
+ */
+@Composable
+private fun WaitingCard(state: DeckUiState, onRetry: () -> Unit, onForget: () -> Unit) {
+    Card {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            CircularProgressIndicator(
+                strokeWidth = 2.dp,
+                color = MaterialTheme.colorScheme.secondary,
+                modifier = Modifier.size(16.dp),
+            )
+            Spacer(Modifier.width(12.dp))
+            Text(
+                text = state.transport.detail,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+        }
+        Spacer(Modifier.height(12.dp))
+        Text(
+            text = "Approve this phone in Terminal Deck on the Mac. It keeps checking on its own — " +
+                "there is nothing to do here.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(14.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Button(
+                onClick = onRetry,
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+            ) { Text("Check now") }
+            TextButton(onClick = onForget) { Text("Use a different code") }
+        }
+    }
+}
+
+/**
+ * A code is stored and nothing has ever answered it.
+ *
+ * Deliberately *not* the waiting card with different words. No spinner, because a spinner next to
+ * a state that is failing is its own kind of lie — the retries are real but there is nothing to
+ * wait for yet. No instruction to go and approve anything either: telling someone to press a button
+ * on a Mac that has never heard from this phone sends them to the wrong room, which is exactly what
+ * this screen did while the handshake was one byte short.
+ *
+ * What it says instead is what is actually known: the phone is trying, this is why it might be
+ * failing, and here is what can be done about it.
+ */
+@Composable
+private fun UnreachableCard(state: DeckUiState, onRetry: () -> Unit, onForget: () -> Unit) {
+    val transport = state.transport
+
+    Card {
+        Text(
+            text = transport.detail,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.error,
+        )
+        Spacer(Modifier.height(12.dp))
+        Text(
+            text = when {
+                // A version mismatch is not fixed by a new code, and offering one would send
+                // someone round a loop that cannot end.
+                transport is TransportState.Incompatible ->
+                    "Update whichever of the two is older. Pairing again will reach the same refusal."
+                transport is TransportState.Rejected ->
+                    "That Mac refused this phone. A new pairing code is the only way forward."
+                // Paired for real, and now unreachable. Approving it changes nothing until the two
+                // can reach each other, and saying "go and approve it" would send someone to the
+                // wrong room — which is what this screen used to do.
+                state.macEverAnswered ->
+                    "This phone is paired but not approved yet, and the Mac is not answering. " +
+                        "Approving it will not help until the two can reach each other — check that " +
+                        "the Mac is awake and that Terminal Deck is running on it."
+                else ->
+                    "The code was accepted by this phone, but that Mac has never answered it. " +
+                        "Check that Terminal Deck is running and awake on the Mac, that both are online, " +
+                        "and that the code has not expired."
+            },
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        (transport as? TransportState.Waiting)?.let {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = "Tried ${it.attempts} time${if (it.attempts == 1) "" else "s"} so far.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Spacer(Modifier.height(14.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Button(
+                onClick = onRetry,
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+            ) { Text("Try again") }
+            TextButton(onClick = onForget) { Text("Use a different code") }
+        }
+    }
+}
+
+@Composable
+private fun Card(content: @Composable ColumnScope.() -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(MaterialTheme.colorScheme.surface)
+            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(14.dp))
+            .padding(18.dp),
+    ) { content() }
+}
+
+@Composable
+private fun FingerprintRow(label: String, value: String) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(
+            modifier = Modifier
+                .size(6.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.outline)
+        )
+        Spacer(Modifier.width(10.dp))
+        Column {
+            Text(
+                text = label.uppercase(),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                text = value,
+                style = MaterialTheme.typography.bodySmall,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+        }
+    }
+}

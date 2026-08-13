@@ -20,6 +20,13 @@ export interface SessionMeta {
   /** Set once the underlying process exits. */
   exitCode: number | null
   createdAt: number
+  /**
+   * Started with "continue the last conversation" rather than fresh.
+   *
+   * Carried because it changes which transcript belongs to this session: a
+   * fresh run writes a new file, a continued one appends to an older one.
+   */
+  resumed?: boolean
 }
 
 export interface CreateSessionInput {
@@ -72,6 +79,14 @@ export interface DeckApi {
   onSessionData(cb: (id: string, data: string) => void): () => void
   onSessionExit(cb: (id: string, exitCode: number) => void): () => void
   onSessionStatus(cb: (id: string, status: SessionStatus) => void): () => void
+  /**
+   * A session this window did not start — today, one started from a phone.
+   *
+   * The window builds its tab list from what it asked for, so without
+   * subscribing to this a session started remotely runs on this Mac and never
+   * appears in the app that owns it.
+   */
+  onSessionCreated(cb: (meta: SessionMeta) => void): () => void
   /** Application-menu items, dispatched as command ids. */
   onMenuCommand(cb: (command: string) => void): () => void
 

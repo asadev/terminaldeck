@@ -2,69 +2,75 @@
    New session dialog.
 
    Five decisions in one panel, so the panel has to read as five decisions and
-   not as a form. Sections are separated by a hairline and nothing else — no
-   cards, no fills, no colour except the one blue that marks what is selected.
-   Every value here comes from tokens.css.
+   not as a form. Nothing here is boxed and nothing is ruled off: the sections
+   are told apart by the space between them, the choices by a fill, and the one
+   that is selected by the accent. Every value comes from tokens.css.
    ============================================================================ */
+
+:root {
+  /* The radio's dot. Small enough to read as a control, large enough to hit. */
+  --ns-mark: 14px;
+  /* The pop-up button's lane, so the row does not resize as logins change. */
+  --ns-select-min: 168px;
+}
 
 .ns {
   display: flex;
   flex-direction: column;
-  padding-top: 4px;
+  gap: var(--sp-6);
+  padding-top: var(--sp-1);
 }
 
+/* Space, not a rule. A `border-top` per section drew four lines across a panel
+   whose sections were already obvious from their headings. */
 .ns-section {
-  padding: 14px 0;
-  border-top: 1px solid var(--border-subtle);
-}
-
-/* The first section sits directly under the dialog's own header rule. */
-.ns-section:first-of-type {
-  padding-top: 8px;
-  border-top: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
 }
 
 .ns-section-head {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--sp-3);
 }
 
+/* Sentence case and quiet — the tracked-out uppercase this used to be shouted
+   over the choices underneath it. */
 .ns-section-title {
-  margin: 0 0 8px;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  margin: 0;
+  font-size: var(--t-footnote);
+  font-weight: var(--w-semibold);
+  letter-spacing: normal;
   color: var(--text-muted);
-}
-
-.ns-section-head .ns-section-title {
-  margin-bottom: 8px;
 }
 
 .ns-hint {
-  font-size: 11.5px;
-  line-height: 1.45;
-  color: var(--text-muted);
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+  color: var(--text-secondary);
 }
 
+/* A tint rather than a box. Both of these are a sentence about what the panel
+   can and cannot do, and a sentence does not need a frame. */
 .ns-error,
 .ns-problem {
-  margin: 0 0 4px;
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-tertiary);
-  font-size: 12px;
-  color: var(--text-primary);
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-md);
+  background: var(--fill-quaternary);
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+  color: var(--text-secondary);
 }
 
 /* A blocked start is a fact about the machine, not an alarm — it borrows the
-   critical colour for its rule only, so it reads as "cannot" not "danger". */
+   critical colour at the strength of a tint, so it reads as "cannot", not
+   "danger". */
 .ns-problem {
-  border-left: 2px solid var(--color-critical);
+  background: color-mix(in srgb, var(--color-critical) 10%, transparent);
+  color: var(--text-primary);
 }
 
 /* ---------------------------------------------------------------- shared -- */
@@ -85,12 +91,12 @@
 
 .ns-mark {
   flex-shrink: 0;
-  width: 14px;
-  height: 14px;
-  margin-top: 2px;
+  width: var(--ns-mark);
+  height: var(--ns-mark);
+  margin-top: var(--sp-05);
   border: 1.5px solid var(--border-strong);
-  border-radius: 50%;
-  transition: border-color 120ms ease, box-shadow 120ms ease;
+  border-radius: var(--radius-pill);
+  transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
 }
 
 /* An inset ring rather than a child element: one box-shadow draws the dot. */
@@ -100,8 +106,7 @@
 }
 
 [data-available='false'] > .ns-mark {
-  border-style: dashed;
-  border-color: var(--text-muted);
+  border-color: var(--border);
 }
 
 .ns input:focus-visible ~ .ns-mark {
@@ -118,10 +123,10 @@
 }
 
 .ns-link {
-  padding: 2px 4px;
+  padding: var(--sp-05) var(--sp-1);
   border-radius: var(--radius-sm);
-  font-size: 12px;
-  font-weight: 550;
+  font-size: var(--t-callout);
+  font-weight: var(--w-medium);
   color: var(--accent);
 }
 
@@ -133,29 +138,28 @@
 
 /* A shortlist, not a browser: it scrolls at about five rows so the four
    decisions below it stay on screen without the dialog growing a second
-   scrollbar of its own. */
+   scrollbar of its own. No frame around it — the rows are the list. */
 .ns-projects {
   display: flex;
   flex-direction: column;
-  max-height: 156px;
+  max-height: calc(var(--control-h-lg) * 5);
   overflow-y: auto;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
+  overscroll-behavior: contain;
+  /* Clears the selected row's own corners from the scroll edge. */
+  margin: 0 calc(-1 * var(--sp-3));
+  padding: 0 var(--sp-3);
 }
 
 .ns-project {
   position: relative;
   display: flex;
   align-items: baseline;
-  gap: 10px;
-  padding: 7px 10px;
-  border-bottom: 1px solid var(--border-subtle);
+  gap: var(--sp-2);
+  min-height: var(--control-h-lg);
+  padding: var(--sp-15) var(--sp-3);
+  border-radius: var(--radius-md);
   cursor: pointer;
-  transition: background 120ms ease;
-}
-
-.ns-project:last-child {
-  border-bottom: none;
+  transition: background var(--dur-fast) var(--ease);
 }
 
 .ns-project:hover {
@@ -168,8 +172,8 @@
 
 .ns-project-name {
   flex-shrink: 0;
-  font-size: 13px;
-  font-weight: 550;
+  font-size: var(--t-body);
+  font-weight: var(--w-medium);
   color: var(--text-primary);
 }
 
@@ -179,7 +183,7 @@
 .ns-chosen-path {
   min-width: 0;
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--t-caption);
   color: var(--text-muted);
   white-space: nowrap;
   overflow: hidden;
@@ -187,12 +191,12 @@
 }
 
 .ns-chosen-path {
-  margin: 8px 0 0;
+  margin: var(--sp-2) 0 0;
 }
 
 .ns-empty {
   margin: 0;
-  font-size: 12px;
+  font-size: var(--t-callout);
   color: var(--text-secondary);
 }
 
@@ -202,33 +206,36 @@
 .ns-choices {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--sp-1);
 }
 
+/* A fill, not an outline. Nine bordered cards in one dialog read as a form
+   made of boxes; the same nine as quiet fills read as a list you choose from.
+   Selected is the accent tint, with a hairline of the same accent and nothing
+   else — the mark inside already says which one it is. */
 .ns-agent,
 .ns-choice {
   position: relative;
   display: flex;
   align-items: flex-start;
-  gap: 10px;
-  padding: 9px 11px;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
-  background: var(--bg-tertiary);
+  gap: var(--sp-3);
+  padding: var(--sp-3);
+  border: none;
+  border-radius: var(--radius-lg);
+  background: var(--fill-quaternary);
   cursor: pointer;
-  transition: background 120ms ease, border-color 120ms ease;
+  transition: background var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
 }
 
 .ns-agent:hover[data-available='true'],
 .ns-choice:hover:not([data-available='false']) {
-  background: var(--bg-hover);
-  border-color: var(--border);
+  background: var(--fill-tertiary);
 }
 
 .ns-agent[data-selected='true'],
 .ns-choice[data-selected='true'] {
-  border-color: var(--accent);
   background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--accent-line);
 }
 
 /* Dimmed but legible: the reason it is dimmed is written inside it. */
@@ -236,22 +243,22 @@
 .ns-choice[data-available='false'] {
   cursor: default;
   background: transparent;
-  border-style: dashed;
+  box-shadow: none;
 }
 
 .ns-agent-text {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: var(--sp-05);
   min-width: 0;
 }
 
 .ns-agent-label {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  font-weight: 550;
+  gap: var(--sp-2);
+  font-size: var(--t-body);
+  font-weight: var(--w-medium);
   color: var(--text-primary);
 }
 
@@ -260,24 +267,21 @@
 }
 
 .ns-tag {
-  padding: 1px 6px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  font-size: 10px;
-  font-weight: 550;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
+  padding: 0 var(--sp-15);
+  border-radius: var(--radius-pill);
+  background: var(--fill-tertiary);
+  font-size: var(--t-caption);
+  font-weight: var(--w-medium);
   color: var(--text-muted);
 }
 
 .ns-install {
-  margin-top: 2px;
-  padding: 4px 8px;
-  border: 1px solid var(--border-subtle);
+  margin-top: var(--sp-1);
+  padding: var(--sp-1) var(--sp-2);
   border-radius: var(--radius-sm);
-  background: var(--bg-secondary);
+  background: var(--fill-quaternary);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--t-footnote);
   color: var(--text-secondary);
   overflow-x: auto;
   white-space: nowrap;
@@ -289,20 +293,20 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: var(--sp-4);
 }
 
 .ns-row-text {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--sp-05);
   min-width: 0;
 }
 
 .ns-row-label {
   display: block;
-  font-size: 13px;
-  font-weight: 550;
+  font-size: var(--t-body);
+  font-weight: var(--w-medium);
   color: var(--text-primary);
 }
 
@@ -324,7 +328,7 @@
 .ns-select-wrap::after {
   content: '';
   position: absolute;
-  right: 11px;
+  right: var(--sp-3);
   top: 50%;
   width: 6px;
   height: 6px;
@@ -334,23 +338,24 @@
   pointer-events: none;
 }
 
+/* macOS pop-up button: control height, a quiet fill, no border. */
 .ns-select {
   appearance: none;
-  min-width: 168px;
-  padding: 6px 28px 6px 10px;
-  border: 1px solid var(--border);
+  min-width: var(--ns-select-min);
+  height: var(--control-h);
+  padding: 0 var(--sp-6) 0 var(--sp-3);
+  border: none;
   border-radius: var(--radius-sm);
-  background: var(--bg-tertiary);
+  background: var(--fill-tertiary);
   color: var(--text-primary);
   font: inherit;
-  font-size: 12.5px;
+  font-size: var(--t-callout);
   cursor: pointer;
-  transition: border-color 120ms ease, background 120ms ease;
+  transition: background var(--dur-fast) var(--ease);
 }
 
 .ns-select:hover:not(:disabled) {
-  background: var(--bg-hover);
-  border-color: var(--border-strong);
+  background: var(--fill-secondary);
 }
 
 .ns-select:disabled {
@@ -358,40 +363,38 @@
   cursor: default;
 }
 
-/* A limit on what the control above can actually do. Muted rather than warned:
-   nothing has gone wrong, the wiring simply is not there yet. */
+/* A limit on what the control above can actually do. Muted rather than walled
+   off behind a rail: nothing has gone wrong, the wiring simply is not there. */
 .ns-caveat {
-  margin: 8px 0 0;
-  padding-left: 8px;
-  border-left: 2px solid var(--border-strong);
-  font-size: 11.5px;
-  line-height: 1.45;
+  margin: 0;
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
   color: var(--text-muted);
 }
 
 /* ---------------------------------------------------------------- prompt -- */
 
 .ns-optional {
-  margin-left: 6px;
-  font-size: 10px;
-  font-weight: 550;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
+  margin-left: var(--sp-15);
+  font-size: var(--t-footnote);
+  font-weight: var(--w-regular);
+  letter-spacing: normal;
   color: var(--text-muted);
 }
 
+/* A field is a fill here too, so the dialog has one control language. */
 .ns-prompt {
   display: block;
   width: 100%;
-  margin: 8px 0 6px;
-  padding: 8px 10px;
-  border: 1px solid var(--border);
+  margin: var(--sp-1) 0 0;
+  padding: var(--sp-2) var(--sp-3);
+  border: none;
   border-radius: var(--radius-md);
-  background: var(--bg-primary);
+  background: var(--fill-quaternary);
   color: var(--text-primary);
   font: inherit;
-  font-size: 12.5px;
-  line-height: 1.5;
+  font-size: var(--t-body);
+  line-height: var(--lh-body);
   resize: vertical;
 }
 
@@ -401,18 +404,17 @@
 
 .ns-prompt:focus-visible {
   outline: 2px solid var(--accent);
-  outline-offset: -1px;
-  border-color: var(--accent);
+  outline-offset: -2px;
 }
 
 .ns-preview {
-  margin: 6px 0 0;
-  font-size: 11.5px;
+  margin: 0;
+  font-size: var(--t-footnote);
   color: var(--text-secondary);
 }
 
 .ns-preview strong {
-  font-weight: 600;
+  font-weight: var(--w-semibold);
   color: var(--text-primary);
 }
 
@@ -423,29 +425,25 @@
 .ns-notices {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  margin: 0 0 4px;
+  gap: var(--sp-1);
+  margin: 0;
   padding: 0;
   list-style: none;
 }
 
 .ns-notice {
-  padding: 6px 10px;
-  border-left: 2px solid var(--border-strong);
-  background: var(--bg-tertiary);
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-  font-size: 11.5px;
-  line-height: 1.45;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-md);
+  background: var(--fill-quaternary);
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
   color: var(--text-secondary);
 }
 
 .ns-remember {
   display: flex;
   align-items: flex-start;
-  gap: 10px;
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border-subtle);
+  gap: var(--sp-3);
   cursor: pointer;
 }
 
@@ -453,14 +451,14 @@
    second control language to the same dialog. */
 .ns-remember input {
   flex-shrink: 0;
-  width: 14px;
-  height: 14px;
-  margin-top: 2px;
+  width: var(--ns-mark);
+  height: var(--ns-mark);
+  margin: var(--sp-05) 0 0;
   accent-color: var(--accent);
 }
 
 .ns-footer-hint {
   margin-right: auto;
-  font-size: 11px;
+  font-size: var(--t-footnote);
   color: var(--text-muted);
 }

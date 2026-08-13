@@ -96,7 +96,7 @@ export function Onboarding({ onContinue, onOpenProject }: Props) {
 
         <section>
           <h2>Optional</h2>
-          <p className="onboarding-note">Missing these only disables the matching panel.</p>
+          <p className="onboarding-note">Missing these only disables the matching view.</p>
           <ul className="onboarding-list">
             {extras.map((tool) => (
               <li key={tool.id} className={`onboarding-row state-${tool.state}`}>

@@ -53,7 +53,7 @@ empty, no version has been tagged yet; build from source in the meantime.
 - **At least one agent CLI**, installed and already authenticated:
   [Claude Code](https://docs.anthropic.com/en/docs/claude-code), Codex CLI or
   Gemini CLI
-- Optional: [`gh`](https://cli.github.com) for the GitHub panel
+- Optional: [`gh`](https://cli.github.com) for the GitHub view
 
 Terminal Deck never handles your API keys or logins. It launches the CLI you
 already have and inherits whatever authentication that CLI uses.
@@ -146,9 +146,9 @@ Read from Claude Code's own JSONL transcripts, not scraped from terminal output.
 
 ### Project workspace
 
-- Git panel — branch, dirty files, diffs
+- Source control — branch, dirty files, diffs
 - File tree and viewer, quick open, command palette
-- GitHub panel — PRs and issues through the `gh` CLI
+- GitHub — PRs and issues through the `gh` CLI
 - **AI readiness score** — whether a project has CLAUDE.md, tests, lint,
   typecheck and a clean git state, with one-click fixes
 - `.deckignore`, honoured by the tree, search and watchers
@@ -173,6 +173,36 @@ Read from Claude Code's own JSONL transcripts, not scraped from terminal output.
   collide with another tool's hooks on the same machine
 - Chrome cookie import
 - Live dev-server port discovery
+
+### Your localhost, on your phone
+
+The phone app lists the dev servers running on the Mac — no typing a port, no
+typing a URL — and tapping one opens it in a browser view on the phone, at the
+**same port number**, over the connection that is already there. No public URL
+and no third-party tunnel service is involved.
+
+It is a byte pipe rather than a page fetcher, which is what makes it useful: the
+page's own `fetch` calls, its cookies and its **hot-reload WebSocket** all work,
+so a file saved on the Mac reloads what is on the phone. Matching the port
+matters for the same reason — a dev server writes absolute URLs into its own
+redirects and sockets, and any of them would escape a tunnel served on a
+different number.
+
+What it will and will not reach:
+
+- Only the paired Mac, and only `127.0.0.1` on it. There is no field for a host
+  anywhere in the protocol, so a phone cannot reach another machine on the Mac's
+  network or its tailnet.
+- Only ports a fresh scan says are being listened on right now, so this cannot
+  be used to sweep the Mac's loopback for services that are not there.
+- Only after the device has paired and a human at the Mac has approved it — the
+  same gate that guards attaching to a terminal.
+- Only after a tap. The tap **is** the consent: nothing is reachable before it,
+  closing the view ends it, and while it is live it is listed on both the phone
+  and the Mac and can be stopped from either.
+
+Everything rides the existing sealed channel, so a relay in the middle carries
+ciphertext it holds no key for.
 
 ### When something breaks
 
@@ -199,9 +229,10 @@ the file is right.
 | Action | Keys |
 |---|---|
 | New session | `⌘T` |
-| Resume the last session here | `⌘⇧T` |
+| New session, with options | `⌘⇧T` |
+| Resume the last session here | `⌘⇧R` |
 | Close session | `⌘W` |
-| Jump to a session tab | `⌘1`–`9` |
+| Jump to an open session | `⌘1`–`9` |
 | Next session | `⌃⇥` |
 | Previous session | `⌃⇧⇥` |
 | Open a project | `⌘O` |
@@ -209,15 +240,13 @@ the file is right.
 | Command palette | `⌘K` or `⌘⇧P` |
 | Task board | `⌘⇧B` |
 | Project dashboard | `⌘⇧D` |
-| File tree | `⌘⇧E` |
-| Git panel | `⌘⇧G` |
+| Files | `⌘⇧E` |
+| Search past sessions | `⌘⇧F` |
+| Source control | `⌘⇧G` |
 | Session inspector | `⌘⇧I` |
 | Swarm view | `⌘\` |
 | Toggle the sidebar | `⌘B` |
-| Split right | `⌘D` |
-| Split down | `⌘⇧S` |
-| Close the pane | `⌘⇧W` |
-| Preferences | `⌘,` |
+| Settings | `⌘,` |
 | Keyboard shortcuts | `⌘/` |
 
 ### In a session

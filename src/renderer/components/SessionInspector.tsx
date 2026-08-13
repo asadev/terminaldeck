@@ -7,6 +7,12 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from 'react'
 import { Modal } from './Modal'
+import {
+  useSessionTranscript,
+  type Attribution,
+  type SessionScope,
+  type TranscriptLookup,
+} from '../session-transcript'
 import './SessionInspector.css'
 
 /**
@@ -792,12 +798,46 @@ export function ContextTab({ insights }: { insights: SessionInsights }) {
 interface Props {
   open: boolean
   onClose(): void
-  /** Project folder whose newest transcript to read. */
+  /** Project folder holding the transcripts. */
   cwd: string | null
-  /** Inspect one specific transcript instead of the newest for `cwd`. */
+  /** Inspect one specific transcript, whatever else is in the folder. */
   transcriptPath?: string | null
+  /**
+   * The session this dialog is about.
+   *
+   * Without it the dialog is about a *folder*, and it said so by showing that
+   * folder's most recently written transcript under the active session's name —
+   * which, with a `claude` running in the same folder outside the app, was a
+   * stranger's 143 requests and $18.49. See `session-transcript.ts`.
+   */
+  session?: SessionScope | null
   /** Tab label of the session being inspected, for the dialog heading. */
   sessionTitle?: string
+}
+
+/**
+ * Name the transcript on screen, not just the tab it was opened from.
+ *
+ * The app cannot prove which conversation a terminal is driving — see
+ * `session-transcript.ts` — so the dialog says which one it read. A number that
+ * looks wrong is then traceable to a file instead of being silently attributed
+ * to whichever tab happened to be in front.
+ */
+export function describeSource(
+  sessionTitle: string | undefined,
+  insights: { sessionId: string; startedAt: number } | null,
+  attribution: Attribution | null,
+): string | undefined {
+  if (!insights) return sessionTitle ? `${sessionTitle} — from its Claude Code transcript` : undefined
+  const short = insights.sessionId.slice(0, 8)
+  const began = formatClock(insights.startedAt, true)
+  const lead =
+    attribution === 'resumed'
+      ? `continued transcript ${short}`
+      : attribution === 'project'
+        ? `newest transcript in this folder, ${short}`
+        : `transcript ${short}`
+  return `${sessionTitle ? `${sessionTitle} — ` : ''}${lead}, started ${began}`
 }
 
 type LoadState =
@@ -807,11 +847,61 @@ type LoadState =
   | { status: 'empty' }
   | { status: 'error'; message: string }
 
-export function SessionInspector({ open, onClose, cwd, transcriptPath, sessionTitle }: Props) {
+/** What this dialog should read, given what it has been told to be about. */
+export type InsightsTarget =
+  | { kind: 'transcript'; path: string }
+  | { kind: 'folder'; cwd: string }
+  /** The lookup has not settled; read nothing yet. */
+  | { kind: 'waiting' }
+  | { kind: 'none' }
+
+/**
+ * The whole of bug three in one function.
+ *
+ * A dialog opened *about a session* must never fall back to the folder. "The
+ * newest transcript in this folder" is a different question with a different
+ * answer — on the run that found this, the answer was a `claude` the app had
+ * not started, whose 143 requests and $18.49 were shown under a tab that was
+ * eight minutes old and had never been prompted.
+ */
+export function insightsTarget(
+  transcriptPath: string | null | undefined,
+  cwd: string | null,
+  session: SessionScope | null | undefined,
+  lookup: TranscriptLookup,
+): InsightsTarget {
+  if (transcriptPath) return { kind: 'transcript', path: transcriptPath }
+  if (session) {
+    if (lookup.status === 'loading') return { kind: 'waiting' }
+    if (lookup.status === 'ready') return { kind: 'transcript', path: lookup.choice.path }
+    return { kind: 'none' }
+  }
+  return cwd ? { kind: 'folder', cwd } : { kind: 'none' }
+}
+
+export function SessionInspector({
+  open,
+  onClose,
+  cwd,
+  transcriptPath,
+  session,
+  sessionTitle,
+}: Props) {
   const [tab, setTab] = useState<TabId>('timeline')
   const [state, setState] = useState<LoadState>({ status: 'idle' })
   /** Bumped to force a re-read of a transcript that is still being appended to. */
   const [nonce, setNonce] = useState(0)
+
+  // Resolved against the session rather than the folder. An explicit path still
+  // wins — the alerts panel opens this dialog on one it already knows. Only
+  // while open: the lookup retries until a session has a transcript, and a
+  // closed dialog polling forever costs a directory listing every few seconds.
+  const lookup = useSessionTranscript(open && !transcriptPath ? cwd : null, session ?? null)
+  const attribution = lookup.status === 'ready' ? lookup.choice.attribution : null
+  const target = insightsTarget(transcriptPath, cwd, session, lookup)
+  const targetKind = target.kind
+  const targetPath = target.kind === 'transcript' ? target.path : null
+  const targetCwd = target.kind === 'folder' ? target.cwd : null
 
   const load = useCallback(async (): Promise<LoadState> => {
     const bridge = window.deck as unknown as InsightsBridge | undefined
@@ -819,20 +909,29 @@ export function SessionInspector({ open, onClose, cwd, transcriptPath, sessionTi
       return { status: 'error', message: 'The insights bridge is not wired up in this build.' }
     }
     try {
-      const raw = transcriptPath
-        ? await bridge.getSessionInsights?.(transcriptPath)
-        : cwd
-          ? await bridge.getLatestSessionInsights?.(cwd)
+      const raw = targetPath
+        ? await bridge.getSessionInsights?.(targetPath)
+        : // No session to scope by: the caller is asking about a folder, and
+          // the folder's newest transcript is the honest answer to that.
+          targetCwd
+          ? await bridge.getLatestSessionInsights?.(targetCwd)
           : null
       if (!raw) return { status: 'empty' }
       return { status: 'ready', insights: raw as SessionInsights }
     } catch (err) {
       return { status: 'error', message: err instanceof Error ? err.message : String(err) }
     }
-  }, [cwd, transcriptPath])
+  }, [targetPath, targetCwd])
 
   useEffect(() => {
     if (!open) return
+    // Nothing to read until the lookup has settled. Reading the folder's newest
+    // in the meantime is exactly the flash of somebody else's numbers this
+    // dialog exists to stop showing.
+    if (targetKind === 'waiting') {
+      setState({ status: 'loading' })
+      return
+    }
     let cancelled = false
     setState({ status: 'loading' })
     void load().then((next) => {
@@ -843,7 +942,7 @@ export function SessionInspector({ open, onClose, cwd, transcriptPath, sessionTi
     return () => {
       cancelled = true
     }
-  }, [open, load, nonce])
+  }, [open, load, nonce, targetKind])
 
   /**
    * Arrow keys move the selection *and* the focus, which is the half of the
@@ -876,7 +975,7 @@ export function SessionInspector({ open, onClose, cwd, transcriptPath, sessionTi
     <Modal
       open={open}
       title="Session inspector"
-      description={sessionTitle ? `${sessionTitle} — from its Claude Code transcript` : undefined}
+      description={describeSource(sessionTitle, insights, transcriptPath ? 'session' : attribution)}
       onClose={onClose}
       size="lg"
       footer={
@@ -907,8 +1006,9 @@ export function SessionInspector({ open, onClose, cwd, transcriptPath, sessionTi
 
         {state.status === 'empty' && (
           <p className="si-empty">
-            No Claude Code transcript for this folder yet. One appears once a session makes its
-            first request.
+            {session
+              ? 'This session has not written a transcript yet. One appears once it makes its first request — until then there is nothing here that belongs to it.'
+              : 'No Claude Code transcript for this folder yet. One appears once a session makes its first request.'}
           </p>
         )}
 

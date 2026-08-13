@@ -1,51 +1,55 @@
 /* ============================================================================
-   Help
+   Help — a reading surface.
 
-   Reading matter, so it is set like reading matter: one measure, generous
-   leading, and headings that separate by weight rather than by colour. The
-   section rail on the left is the only navigation, and the search field
-   replaces it entirely while a query is active — two ways to filter at once is
-   how a help panel starts feeling like a database.
+   Reading matter set like reading matter: one measure, generous leading, and
+   headings that separate by weight and space rather than by a rule under every
+   one. The section rail on the left is the only navigation, and the search
+   field replaces it entirely while a query is active — two ways to filter at
+   once is how a help panel starts feeling like a database.
 
-   Every colour is a foundation token. The only saturated thing on the page is
-   the selected section marker.
+   The same component is the ⌘? dialog and the Help section of Settings, so
+   nothing in here may reach outside its own box: no negative margins onto a
+   parent's padding, and no sticky offsets tuned to one of the two frames.
    ============================================================================ */
 
 .help {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: var(--sp-5);
+  max-width: var(--content-measure);
   color: var(--text-secondary);
 }
 
 /* ---------------------------------------------------------------- search -- */
 
+/* A macOS search field: a filled capsule, no border, the glyph inside it. */
 .help-search {
   display: flex;
   align-items: center;
-  gap: 8px;
-  position: sticky;
-  /* Cancels the modal body's top padding so topics scroll under the field
-     rather than appearing in a gap above it. Both values live in Modal.css. */
-  top: -4px;
-  z-index: 1;
-  margin: 0 -18px;
-  padding: 8px 18px;
-  background: var(--bg-secondary);
-  border-bottom: 1px solid var(--border-subtle);
+  gap: var(--sp-2);
+  box-sizing: border-box;
+  height: var(--control-h);
+  padding: 0 var(--sp-3);
+  border-radius: var(--radius-sm);
+  background: var(--fill-tertiary);
   color: var(--text-muted);
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.help-search:focus-within {
+  background: var(--fill-secondary);
 }
 
 .help-input {
   flex: 1;
   min-width: 0;
-  height: 26px;
+  height: 100%;
   border: none;
   outline: none;
   background: none;
   color: var(--text-primary);
   font-family: var(--font-ui);
-  font-size: 13px;
+  font-size: var(--t-body);
 }
 
 .help-input::placeholder {
@@ -59,7 +63,7 @@
 .help-count {
   flex-shrink: 0;
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--t-caption);
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }
@@ -69,28 +73,34 @@
 .help-body {
   display: flex;
   align-items: flex-start;
-  gap: 24px;
+  gap: var(--sp-6);
 }
 
 .help-nav {
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: var(--sp-05);
   flex-shrink: 0;
   width: 148px;
-  position: sticky;
-  top: 40px;
 }
 
 .help-nav-item {
-  position: relative;
-  padding: 5px 8px;
-  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  height: var(--row-h);
+  padding: 0 var(--sp-3);
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
   text-align: left;
-  font-size: 12.5px;
-  line-height: 1.35;
+  font-family: var(--font-ui);
+  font-size: var(--t-body);
+  font-weight: var(--w-regular);
   color: var(--text-secondary);
-  transition: background 120ms ease, color 120ms ease;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
 
 .help-nav-item:hover {
@@ -101,175 +111,166 @@
 .help-nav-item[data-active] {
   background: var(--bg-active);
   color: var(--text-primary);
-  font-weight: 550;
+  font-weight: var(--w-medium);
 }
 
-/* The one piece of colour in the panel: which section you are reading. */
-.help-nav-item[data-active]::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 6px;
-  bottom: 6px;
-  width: 2px;
-  border-radius: 1px;
-  background: var(--accent);
+.help-nav-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
 .help-content {
   flex: 1;
   min-width: 0;
-  /* A measure, not a column of full-width prose. */
-  max-width: 62ch;
 }
 
 .help-section-hint {
-  margin: 0 0 14px;
-  font-size: 11.5px;
+  margin: 0 0 var(--sp-5);
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
   color: var(--text-muted);
 }
 
 /* ---------------------------------------------------------------- topics -- */
 
+/* Space between topics, not a rule. A page of help with a line under every
+   heading reads as a form. */
 .help-topic {
-  padding-bottom: 18px;
-  margin-bottom: 18px;
-  border-bottom: 1px solid var(--border-subtle);
+  margin-bottom: var(--sp-8);
 }
 
 .help-topic:last-child {
-  border-bottom: none;
   margin-bottom: 0;
-  padding-bottom: 0;
 }
 
 .help-topic-title {
-  margin: 0 0 8px;
-  font-size: 14px;
-  font-weight: 600;
-  letter-spacing: -0.005em;
+  margin: 0 0 var(--sp-2);
+  font-size: var(--t-title3);
+  font-weight: var(--w-semibold);
+  letter-spacing: var(--t-title3-ls);
   color: var(--text-primary);
 }
 
 .help-text,
 .help-steps,
 .help-bullets {
-  margin: 0 0 10px;
-  font-size: 13px;
-  line-height: 1.62;
+  margin: 0 0 var(--sp-3);
+  font-size: var(--t-body);
+  line-height: var(--lh-loose);
   color: var(--text-secondary);
 }
 
 .help-steps,
 .help-bullets {
-  padding-left: 20px;
+  padding-left: var(--sp-5);
 }
 
 .help-steps li,
 .help-bullets li {
-  margin-bottom: 5px;
+  margin-bottom: var(--sp-1);
 }
 
-.help-steps li::marker {
+.help-steps li::marker,
+.help-bullets li::marker {
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }
 
-.help-bullets li::marker {
-  color: var(--text-muted);
-}
-
+/* An aside. A fill and a corner, and nothing drawn around it. */
 .help-note {
-  margin: 0 0 10px;
-  padding: 8px 10px;
-  border-left: 2px solid var(--border-strong);
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-  background: var(--bg-tertiary);
-  font-size: 12px;
-  line-height: 1.55;
-  color: var(--text-muted);
+  margin: 0 0 var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  border: none;
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  font-size: var(--t-callout);
+  line-height: var(--lh-loose);
+  color: var(--text-secondary);
 }
 
 /* A command inside a sentence. Tinted, not boxed — a border on every one of
    these turns a paragraph into a fence. */
 .help-inline-code {
-  padding: 1px 4px;
+  padding: 1px var(--sp-1);
   border-radius: var(--radius-sm);
-  background: var(--bg-tertiary);
+  background: var(--fill-tertiary);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--t-footnote);
   color: var(--text-primary);
 }
 
 .help-code {
-  margin: 0 0 10px;
-  padding: 9px 11px;
-  border: 1px solid var(--border-subtle);
+  margin: 0 0 var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  border: none;
   border-radius: var(--radius-md);
-  background: var(--bg-tertiary);
+  background: var(--bg-secondary);
   overflow-x: auto;
 }
 
 .help-code code {
   font-family: var(--font-mono);
-  font-size: 11.5px;
-  line-height: 1.6;
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
   color: var(--text-primary);
   white-space: pre;
 }
 
 .help-link {
   padding: 0;
-  font-size: 12.5px;
+  border: none;
+  background: none;
+  font-family: var(--font-ui);
+  font-size: var(--t-callout);
   color: var(--accent);
   text-decoration: underline;
   text-underline-offset: 2px;
+  cursor: pointer;
 }
 
 .help-empty {
-  margin: 8px 0;
-  font-size: 12.5px;
+  margin: var(--sp-2) 0;
+  font-size: var(--t-callout);
   color: var(--text-muted);
 }
 
 /* ------------------------------------------------------------- shortcuts -- */
 
 .help-keys-group {
-  margin-bottom: 16px;
+  margin-bottom: var(--sp-6);
 }
 
 .help-keys-title {
   margin: 0;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--text-secondary);
-}
-
-.help-keys-hint {
-  margin: 2px 0 4px;
-  font-size: 11.5px;
-  line-height: 1.45;
+  font-size: var(--t-footnote);
+  font-weight: var(--w-semibold);
+  letter-spacing: normal;
+  text-transform: none;
   color: var(--text-muted);
 }
 
+.help-keys-hint {
+  margin: var(--sp-05) 0 var(--sp-2);
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+  color: var(--text-muted);
+}
+
+/* One soft block per group, rows separated by the space inside them. */
 .help-keys {
   list-style: none;
   margin: 0;
-  padding: 0;
+  padding: var(--sp-1) 0;
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
 }
 
 .help-key-row {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: 20px;
-  padding: 6px 0;
-  border-bottom: 1px solid var(--border-subtle);
-}
-
-.help-key-row:last-child {
+  gap: var(--sp-5);
+  padding: var(--sp-15) var(--sp-4);
   border-bottom: none;
 }
 
@@ -277,17 +278,17 @@
   display: flex;
   align-items: baseline;
   flex-wrap: wrap;
-  gap: 6px;
-  font-size: 12.5px;
+  gap: var(--sp-15);
+  font-size: var(--t-callout);
   color: var(--text-primary);
 }
 
 .help-flag {
-  padding: 1px 5px;
-  border-radius: 999px;
-  background: var(--bg-tertiary);
+  padding: 1px var(--sp-15);
+  border-radius: var(--radius-pill);
+  background: var(--fill-tertiary);
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: var(--t-caption);
   white-space: nowrap;
 }
 
@@ -295,22 +296,25 @@
   display: flex;
   align-items: baseline;
   flex-shrink: 0;
-  gap: 6px;
+  gap: var(--sp-15);
   /* Same lane as the shortcuts sheet, so the column is scannable. */
   min-width: 132px;
   justify-content: flex-end;
 }
 
 .help-key-chords kbd {
-  padding: 2px 6px;
-  font-size: 11.5px;
+  padding: 1px var(--sp-15);
+  border-radius: var(--radius-sm);
+  background: var(--fill-tertiary);
+  font-family: var(--font-ui);
+  font-size: var(--t-footnote);
   color: var(--text-primary);
   white-space: nowrap;
 }
 
 .help-or {
-  margin-right: 6px;
-  font-size: 10.5px;
+  margin-right: var(--sp-15);
+  font-size: var(--t-caption);
   color: var(--text-muted);
 }
 
@@ -318,29 +322,33 @@
 
 .help-about-name {
   margin: 0;
-  font-size: 17px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
+  font-family: var(--font-display);
+  font-size: var(--t-title2);
+  font-weight: var(--w-semibold);
+  letter-spacing: var(--t-title2-ls);
   color: var(--text-primary);
 }
 
 .help-about-tagline {
-  margin: 2px 0 14px;
-  font-size: 12.5px;
+  margin: var(--sp-1) 0 var(--sp-5);
+  font-size: var(--t-callout);
   color: var(--text-muted);
 }
 
 .help-about-rows {
-  margin: 0 0 14px;
+  margin: 0 0 var(--sp-5);
+  padding: var(--sp-1) 0;
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
 }
 
 .help-about-row {
   display: flex;
   justify-content: space-between;
-  gap: 20px;
-  padding: 6px 0;
-  border-bottom: 1px solid var(--border-subtle);
-  font-size: 12.5px;
+  gap: var(--sp-5);
+  padding: var(--sp-15) var(--sp-4);
+  border-bottom: none;
+  font-size: var(--t-callout);
 }
 
 .help-about-row dt {
@@ -350,46 +358,47 @@
 .help-about-row dd {
   margin: 0;
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: var(--t-footnote);
   color: var(--text-primary);
 }
 
 .help-copy {
-  margin-bottom: 14px;
-  padding: 5px 12px;
-  border: 1px solid var(--border);
+  height: var(--control-h);
+  margin-bottom: var(--sp-5);
+  padding: 0 var(--sp-3);
+  border: none;
   border-radius: var(--radius-sm);
-  background: var(--bg-tertiary);
-  font-size: 12px;
-  color: var(--text-secondary);
-  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+  background: var(--fill-tertiary);
+  font-family: var(--font-ui);
+  font-size: var(--t-callout);
+  font-weight: var(--w-medium);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
 }
 
 .help-copy:hover {
-  border-color: var(--border-strong);
-  background: var(--bg-hover);
-  color: var(--text-primary);
+  background: var(--fill-secondary);
 }
 
 /* The rail costs more than it gives once the content column is this narrow. */
 @media (max-width: 620px) {
   .help-body {
     flex-direction: column;
-    gap: 12px;
+    gap: var(--sp-3);
   }
 
   .help-nav {
-    position: static;
     flex-direction: row;
     flex-wrap: wrap;
     width: auto;
-    gap: 4px;
+    gap: var(--sp-1);
   }
 
   .help-key-row {
     flex-direction: column;
     align-items: flex-start;
-    gap: 4px;
+    gap: var(--sp-1);
   }
 
   .help-key-chords {

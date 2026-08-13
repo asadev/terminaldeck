@@ -1,38 +1,134 @@
-/** Single source of truth for the panel rail — icons, labels and shortcuts. */
+/** Single source of truth for the sidebar's views — icons, labels, blurbs. */
 
 export type PanelId =
-  | 'projects'
   | 'overview'
-  | 'board'
   | 'files'
   | 'search'
   | 'git'
+  | 'board'
   | 'github'
-  | 'readiness'
   | 'alerts'
+  | 'readiness'
   | 'mcp'
   | 'hooks'
+
+/** The two labelled runs in the sidebar. Order here is the order on screen. */
+export type PanelGroupId = 'project' | 'integrations'
 
 export interface PanelSpec {
   id: PanelId
   label: string
-  /** SVG path data, drawn at 24x24. */
+  group: PanelGroupId
+  /** SVG path data, drawn on a 24×24 grid at 1.5 stroke. */
   icon: string
-  shortcut?: string
+  /**
+   * The keymap id that opens this view, when one exists. The chord itself is
+   * never written here — `chordFor` reads it out of `keymap.ts`, so a tooltip
+   * cannot claim a shortcut the app does not answer to.
+   */
+  command?: string
+  /** One line under the title in the toolbar. Also the empty state's subtitle. */
+  blurb: string
 }
 
-export const PANELS: PanelSpec[] = [
-  { id: 'projects', label: 'Projects', shortcut: '⌘1', icon: 'M3 7h6l2 2h10v9a2 2 0 0 1-2 2H3z M3 7V5a2 2 0 0 1 2-2h4l2 2' },
-  // Views of the current project rather than windows, so they belong here
-  // and not in the tab strip.
-  { id: 'overview', label: 'Overview', icon: 'M4 4h7v7H4zM13 4h7v4h-7zM13 11h7v9h-7zM4 14h7v6H4z' },
-  { id: 'board', label: 'Task board', icon: 'M4 5h4v14H4zM10 5h4v9h-4zM16 5h4v11h-4z' },
-  { id: 'files', label: 'Files', shortcut: '⌘2', icon: 'M4 4h9l3 3v13H4z M13 4v3h3' },
-  { id: 'search', label: 'Search sessions', shortcut: '⌘⇧F', icon: 'M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14z M20 20l-4.2-4.2' },
-  { id: 'git', label: 'Source control', shortcut: '⌘3', icon: 'M6 4v9a3 3 0 0 0 3 3h6 M6 20a2 2 0 1 0 0-4 2 2 0 0 0 0 4z M6 8a2 2 0 1 0 0-4 2 2 0 0 0 0 4z M18 18a2 2 0 1 0 0-4 2 2 0 0 0 0 4z' },
-  { id: 'github', label: 'GitHub', icon: 'M12 3a9 9 0 0 0-2.8 17.5c.4.1.6-.2.6-.5v-2c-2.5.5-3-1.2-3-1.2-.4-1-1-1.3-1-1.3-.9-.6 0-.6 0-.6 1 .1 1.4 1 1.4 1 .9 1.5 2.4 1 3 .8.1-.6.3-1 .6-1.3-2-.2-4.1-1-4.1-4.4 0-1 .3-1.8.9-2.4-.1-.3-.4-1.2.1-2.4 0 0 .7-.3 2.5 1a8.6 8.6 0 0 1 4.5 0c1.8-1.3 2.5-1 2.5-1 .5 1.2.2 2.1.1 2.4.6.6.9 1.4.9 2.4 0 3.4-2.1 4.2-4.1 4.4.3.3.6.9.6 1.8v2.7c0 .3.2.6.6.5A9 9 0 0 0 12 3z' },
-  { id: 'readiness', label: 'AI readiness', icon: 'M12 3l2.6 5.6 6.1.8-4.5 4.2 1.2 6-5.4-3-5.4 3 1.2-6L3.3 9.4l6.1-.8z' },
-  { id: 'alerts', label: 'Alerts', icon: 'M12 4a6 6 0 0 0-6 6c0 4-2 5-2 5h16s-2-1-2-5a6 6 0 0 0-6-6z M10.5 20a1.8 1.8 0 0 0 3 0' },
-  { id: 'mcp', label: 'MCP servers', icon: 'M5 7h14 M5 12h14 M5 17h14 M8 5v4 M16 10v4 M11 15v4' },
-  { id: 'hooks', label: 'Hooks', icon: 'M9 5a3 3 0 1 1 6 0v9a4 4 0 1 1-8 0v-1' },
+export const PANEL_GROUPS: ReadonlyArray<{ id: PanelGroupId; label: string }> = [
+  { id: 'project', label: 'Project' },
+  { id: 'integrations', label: 'Integrations' },
 ]
+
+/**
+ * Ten views, in two runs, ordered by how often they are wanted.
+ *
+ * These used to be an icon rail plus a 300px drawer — two vertical bars before
+ * the content even started, with a dashboard squeezed into the narrower of
+ * them. They are pages now: the sidebar names them and the window shows them.
+ */
+export const PANELS: PanelSpec[] = [
+  {
+    id: 'overview',
+    label: 'Overview',
+    group: 'project',
+    command: 'view.dashboard',
+    icon: 'M4.5 5.5h5.5v5.5H4.5zM14 5.5h5.5v5.5H14zM4.5 13h5.5v5.5H4.5zM14 13h5.5v5.5H14z',
+    blurb: 'Cost, context and activity for this project.',
+  },
+  {
+    id: 'files',
+    label: 'Files',
+    group: 'project',
+    command: 'view.files',
+    icon: 'M13 3.5H6.5A1.5 1.5 0 0 0 5 5v14a1.5 1.5 0 0 0 1.5 1.5h11A1.5 1.5 0 0 0 19 19V9.5zM13 3.5V9.5H19',
+    blurb: 'Browse the project and read any file in it.',
+  },
+  {
+    id: 'search',
+    label: 'Search',
+    group: 'project',
+    command: 'view.search',
+    icon: 'M11 4.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zM19.5 19.5l-3.9-3.9',
+    blurb: 'Everything your past sessions said and did.',
+  },
+  {
+    id: 'git',
+    label: 'Source control',
+    group: 'project',
+    command: 'view.git',
+    icon: 'M7 5.5v8.2a3 3 0 0 0 3 3h4.5M7 19.5a2.4 2.4 0 1 0 0-4.8 2.4 2.4 0 0 0 0 4.8zM7 8.3a2.4 2.4 0 1 0 0-4.8 2.4 2.4 0 0 0 0 4.8zM17 19.1a2.4 2.4 0 1 0 0-4.8 2.4 2.4 0 0 0 0 4.8z',
+    blurb: 'What has changed, and what is staged.',
+  },
+  {
+    id: 'board',
+    label: 'Task board',
+    group: 'project',
+    command: 'view.board',
+    icon: 'M5 4.5h3.6v15H5zM10.2 4.5h3.6v9.5h-3.6zM15.4 4.5H19v12.4h-3.6z',
+    blurb: 'The work in flight, in columns.',
+  },
+  {
+    id: 'github',
+    label: 'GitHub',
+    group: 'integrations',
+    icon: 'M12 3a9 9 0 0 0-2.8 17.5c.4.1.6-.2.6-.5v-2c-2.5.5-3-1.2-3-1.2-.4-1-1-1.3-1-1.3-.9-.6 0-.6 0-.6 1 .1 1.4 1 1.4 1 .9 1.5 2.4 1 3 .8.1-.6.3-1 .6-1.3-2-.2-4.1-1-4.1-4.4 0-1 .3-1.8.9-2.4-.1-.3-.4-1.2.1-2.4 0 0 .7-.3 2.5 1a8.6 8.6 0 0 1 4.5 0c1.8-1.3 2.5-1 2.5-1 .5 1.2.2 2.1.1 2.4.6.6.9 1.4.9 2.4 0 3.4-2.1 4.2-4.1 4.4.3.3.6.9.6 1.8v2.7c0 .3.2.6.6.5A9 9 0 0 0 12 3z',
+    blurb: 'Pull requests, checks and issues for this remote.',
+  },
+  {
+    id: 'alerts',
+    label: 'Alerts',
+    group: 'integrations',
+    icon: 'M12 4.2a5.6 5.6 0 0 0-5.6 5.6c0 3.7-1.8 4.7-1.8 4.7h14.8s-1.8-1-1.8-4.7A5.6 5.6 0 0 0 12 4.2zM10.3 18.5a2 2 0 0 0 3.4 0',
+    blurb: 'What this project is waiting on you for.',
+  },
+  {
+    id: 'readiness',
+    label: 'AI readiness',
+    group: 'integrations',
+    icon: 'M4.5 6.5h8M4.5 12h8M4.5 17.5h8M16 5.6l1.7 1.7 3.3-3.3M16 11.1l1.7 1.7 3.3-3.3M16 16.6l1.7 1.7 3.3-3.3',
+    blurb: 'How well this repository is set up for an agent.',
+  },
+  {
+    id: 'mcp',
+    label: 'MCP servers',
+    group: 'integrations',
+    icon: 'M4.5 5.5h15v4.2h-15zM4.5 14.3h15v4.2h-15zM7.6 7.6h.01M7.6 16.4h.01',
+    blurb: 'The tools your agents can reach, and what they expose.',
+  },
+  {
+    id: 'hooks',
+    label: 'Hooks',
+    group: 'integrations',
+    icon: 'M9.2 5.2a2.8 2.8 0 1 1 5.6 0v8.6a4 4 0 1 1-8 0v-1.1',
+    blurb: 'Commands this project runs around every agent action.',
+  },
+]
+
+export function panelSpec(id: PanelId): PanelSpec {
+  const found = PANELS.find((panel) => panel.id === id)
+  // The union above is the only source of ids, so this is unreachable in
+  // practice — it exists so callers get a spec rather than `undefined`.
+  if (!found) throw new Error(`unknown panel: ${id}`)
+  return found
+}
+
+export function isPanelId(value: unknown): value is PanelId {
+  return PANELS.some((panel) => panel.id === value)
+}

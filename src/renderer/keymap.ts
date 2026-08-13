@@ -518,17 +518,29 @@ export const KEYMAP: readonly KeyBinding[] = [
   { id: 'session.new', keys: ['mod+t'], label: 'New session', scope: 'global', group: 'Sessions' },
   {
     id: 'session.resume',
-    keys: ['mod+shift+t'],
+    keys: ['mod+shift+r'],
     label: 'Resume the last session here',
     scope: 'global',
     group: 'Sessions',
   },
   { id: 'session.close', keys: ['mod+w'], label: 'Close session', scope: 'global', group: 'Sessions' },
+  // ⌘⇧T belongs to the dialog, because that is the accelerator the application
+  // menu has always printed next to "New Session…", and an Electron menu
+  // accelerator is what actually fires. This table used to give ⌘⇧T to
+  // `session.resume`, so the shortcuts sheet printed a chord the app answered
+  // differently. Resume keeps a chord of its own rather than losing one.
+  {
+    id: 'session.newDialog',
+    keys: ['mod+shift+t'],
+    label: 'New session, with options',
+    scope: 'global',
+    group: 'Sessions',
+  },
   {
     id: 'session.jump',
     keys: ['mod+1', 'mod+2', 'mod+3', 'mod+4', 'mod+5', 'mod+6', 'mod+7', 'mod+8', 'mod+9'],
     collapse: 'range',
-    label: 'Jump to a session tab',
+    label: 'Jump to an open session',
     scope: 'global',
     group: 'Sessions',
   },
@@ -573,8 +585,15 @@ export const KEYMAP: readonly KeyBinding[] = [
     scope: 'global',
     group: 'Panels',
   },
-  { id: 'view.files', keys: ['mod+shift+e'], label: 'File tree', scope: 'global', group: 'Panels' },
-  { id: 'view.git', keys: ['mod+shift+g'], label: 'Git panel', scope: 'global', group: 'Panels' },
+  { id: 'view.files', keys: ['mod+shift+e'], label: 'Files', scope: 'global', group: 'Panels' },
+  { id: 'view.git', keys: ['mod+shift+g'], label: 'Source control', scope: 'global', group: 'Panels' },
+  {
+    id: 'view.search',
+    keys: ['mod+shift+f'],
+    label: 'Search past sessions',
+    scope: 'global',
+    group: 'Panels',
+  },
   {
     id: 'view.inspector',
     keys: ['mod+shift+i'],
@@ -585,13 +604,17 @@ export const KEYMAP: readonly KeyBinding[] = [
   { id: 'view.swarm', keys: ['mod+\\'], label: 'Swarm view', scope: 'global', group: 'Panels' },
   { id: 'view.sidebar', keys: ['mod+b'], label: 'Toggle the sidebar', scope: 'global', group: 'Panels' },
 
-  // -- layout --
-  { id: 'pane.splitRight', keys: ['mod+d'], label: 'Split right', scope: 'global', group: 'Layout' },
-  { id: 'pane.splitDown', keys: ['mod+shift+s'], label: 'Split down', scope: 'global', group: 'Layout' },
-  { id: 'pane.close', keys: ['mod+shift+w'], label: 'Close the pane', scope: 'global', group: 'Layout' },
+  // Split panes had three chords documented here for a component that is
+  // never rendered (see KNOWN_UNREACHABLE in src/reachable.test.ts). A sheet
+  // that prints a shortcut for a feature nobody can reach is the same lie as a
+  // roadmap that ticks it, so the bindings are gone until the panes are real.
 
   // -- app --
-  { id: 'app.preferences', keys: ['mod+,'], label: 'Preferences', scope: 'global', group: 'App' },
+  // The id stays `app.preferences` because the application menu dispatches it;
+  // the *label* is what the user reads, and everywhere else in the app — the
+  // sidebar's bottom-left button, the menu item, the page's own title — this
+  // is called Settings.
+  { id: 'app.preferences', keys: ['mod+,'], label: 'Settings', scope: 'global', group: 'App' },
   {
     id: 'app.shortcuts',
     keys: ['mod+/'],
@@ -693,6 +716,26 @@ export function searchKeymap(
       .toLowerCase()
     return terms.every((term) => haystack.includes(term))
   })
+}
+
+/**
+ * The chord to print beside a command, for this platform, or null.
+ *
+ * The reason this exists rather than a hand-typed string in the caller: the
+ * sidebar used to carry its own `⌘1` / `⌘2` / `⌘3` tooltips, and every one of
+ * them was wrong — ⌘1–9 jumps between open sessions, and those views are bound
+ * to ⌘⇧D / ⌘⇧E / ⌘⇧G. A tooltip nobody can act on is worse than no tooltip.
+ */
+export function chordFor(id: string, isMac: boolean = detectMac()): string | null {
+  const binding = KEYMAP.find((b) => b.id === id && !b.passthrough)
+  if (!binding) return null
+  return formatBinding(binding, isMac)[0] ?? null
+}
+
+/** A tooltip: the label, and the chord in brackets when there is one. */
+export function tip(label: string, id: string, isMac: boolean = detectMac()): string {
+  const chord = chordFor(id, isMac)
+  return chord ? `${label} (${chord})` : label
 }
 
 /** Command ids with no handler — lets the app assert the sheet is not lying. */

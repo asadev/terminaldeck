@@ -1,7 +1,7 @@
 import { join } from 'node:path'
-import { app, BrowserWindow, dialog, ipcMain, session, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, powerMonitor, session, shell } from 'electron'
 import { BRAND } from '../shared/brand'
-import type { CreateSessionInput } from '../shared/types'
+import type { CreateSessionInput, SessionMeta } from '../shared/types'
 import { PtyManager } from './pty-manager'
 import { detectProviders, loginPath, PROVIDERS } from './providers'
 import { store, type Preferences } from './store'
@@ -21,6 +21,7 @@ import { createManualStrategy } from './updates/manual-strategy'
 import { registerTailnetIpc } from './remote/tailnet'
 import { registerRemoteIpc } from './remote/server'
 import { SessionFanout } from './remote/session-fanout'
+import { remoteSessionCreator } from './remote/session-create'
 import {
   dropPlanSession,
   notePlanOutput,
@@ -95,15 +96,60 @@ const liveStatus = new Map<string, { status: SessionStatus; at: number }>()
 let updates: ReturnType<typeof registerUpdateIpc> | null = null
 
 /**
+ * Main → renderer: a session appeared that this window did not ask for.
+ *
+ * Today that means a phone started one. The window keeps its own list of tabs,
+ * built from what it asked `session:create` for, so without this a session
+ * started from the phone is running on the Mac and invisible in the app that
+ * owns it — the user's own machine is the last to know.
+ *
+ * Deliberately *not* fired for a session the renderer asked for itself: it is
+ * about to be handed the same `SessionMeta` as the return value of its own
+ * call, and a consumer that adds a tab on both would show two.
+ */
+const SESSION_CREATED_CHANNEL = 'session:created'
+
+/**
  * Fans each session's output out to the window and to any attached phone.
  * Declared before `ptys` because the PtyManager callbacks below feed it, and
  * pointed at `ptys` afterwards — the two genuinely reference each other.
+ *
+ * `create` is the same call the window's own New Session makes, with the same
+ * PATH, the same profile and the same provider detection — see `startSession`.
+ * A remote-only spawn path would be a second way to start a session, and the
+ * two would drift the first time either changed.
  */
 const remoteSessions = new SessionFanout({
   list: () => ptys.list(),
   write: (id, data) => ptys.write(id, data),
   resize: (id, cols, rows) => ptys.resize(id, cols, rows),
   scrollback: (id) => ptys.scrollback(id),
+  create: remoteSessionCreator({
+    // Most-recently-opened first, so a phone that names nothing lands in the
+    // project the user was last in rather than in a folder they have forgotten.
+    // Live sessions come after: a session can be running in a folder that was
+    // never added as a project, and the phone can see it in its own list, so
+    // refusing to start a second one beside it would be arbitrary.
+    folders: () => [
+      ...store().getProjects().map((project) => project.path),
+      ...ptys.list().map((session) => session.cwd),
+    ],
+    home: () => app.getPath('home'),
+    spawn: async (input) => {
+      const meta = await startSession({
+        ...input,
+        // The phone does not choose an agent — it has no honest way to know
+        // which are installed. The desktop's own default is the answer, and it
+        // falls back to a plain shell in `startSession` when that CLI is not
+        // there, exactly as the window's button does.
+        provider: store().getPreferences().defaultProvider,
+      })
+      // The window has to be told, or the session is running on this Mac and
+      // only the phone knows about it.
+      send(SESSION_CREATED_CHANNEL, meta)
+      return meta
+    },
+  }),
 })
 
 const ptys = new PtyManager(
@@ -193,6 +239,51 @@ function createWindow(): void {
   }
 }
 
+/**
+ * Start a session. The one place that does, for the window and for a phone.
+ *
+ * Was inline in the `session:create` handler until a phone needed to start one
+ * too. Everything here is load-bearing and none of it is obvious from the
+ * outside — the login shell's PATH, the fallback when the requested CLI is not
+ * installed, the profile's redirected config directory — so a second copy for
+ * the remote path would be a session that is subtly not the same kind of
+ * session: no agent CLI on PATH, or two "separate" logins quietly sharing one
+ * config directory.
+ */
+async function startSession(input: CreateSessionInput): Promise<SessionMeta> {
+  const path = await loginPath()
+  const available = await detectProviders()
+  // Fall back to a plain shell rather than spawning a binary that isn't there,
+  // which would flash a dead tab with no explanation.
+  const requested = input.provider ?? 'claude'
+  const provider = available[requested] ? requested : 'shell'
+  const spec = PROVIDERS[provider]
+
+  // Resolve the profile the session should run as and hand the PTY its
+  // config-dir override. Without this the picker records a choice that never
+  // reaches the process, and two "separate" logins quietly share one.
+  const profile = resolveProfile(profilesState(), {
+    sessionProfileId: input.profileId ?? undefined,
+    projectPath: input.cwd,
+  })
+
+  // `spec.spawn`, not `spec.bin`. They are the same thing on macOS and are not
+  // on Windows, where the name that answers a PATH lookup for an npm-installed
+  // agent CLI is a `.cmd` shim and `CreateProcess` will not run a batch file.
+  // Spawning `bin` there failed with a bare "File not found:" and a tab that
+  // died with no message — observed on Windows 11, which is what this comment
+  // is replacing a guess with. `providers.ts` has carried the launchable form
+  // in `spawn` the whole time, unread.
+  return ptys.create(input, {
+    provider,
+    command: spec.spawn.command,
+    args:
+      input.resume && spec.spawn.resumeArgs.length > 0 ? spec.spawn.resumeArgs : spec.spawn.args,
+    path,
+    env: sessionEnv(profile, provider),
+  })
+}
+
 function registerIpc(): void {
   // Installed first so it wraps every handler registered below.
   traceIpc(ipcMain)
@@ -268,12 +359,24 @@ function registerIpc(): void {
   registerTailnetIpc(ipcMain, { certDir: join(app.getPath('userData'), 'tailnet-certs') })
   // Off until the user turns it on: this serves a shell. The server itself
   // binds only to the tailnet address and refuses to start without one.
-  registerRemoteIpc(ipcMain, {
+  const remote = registerRemoteIpc(ipcMain, {
     sessions: remoteSessions,
     webRoot: join(app.getAppPath(), 'pwa', 'dist'),
     storageDir: join(app.getPath('userData'), 'remote'),
+    // Where a photo or a file sent from a phone lands. The user's downloads
+    // folder, in a folder named after the app — somewhere a person already looks,
+    // rather than application support, which they never do and which an
+    // uninstall takes with it. Passing it is also what advertises the capability;
+    // see `RemoteEndpointOptions.uploadsDir`.
+    uploadsDir: join(app.getPath('downloads'), BRAND.name),
     broadcast: (channel, payload) => send(channel, payload),
   })
+  // Re-dial the relay the instant the machine wakes, rather than polling the
+  // clock to work out that it did. A socket that slept through a suspend is
+  // usually dead and TCP will not admit it for minutes — minutes in which a
+  // phone cannot reach this Mac. `powerMonitor` already knows; asking it is
+  // free, and it is exactly one event instead of a timer that runs forever.
+  powerMonitor.on('resume', () => remote.server.wake())
   registerGitHubIpc(ipcMain)
   registerReadinessIpc(ipcMain)
   registerDashboardIpc(ipcMain)
@@ -310,31 +413,7 @@ function registerIpc(): void {
     defaultProvider: () => store().getPreferences().defaultProvider,
   })
 
-  ipcMain.handle('session:create', async (_e, input: CreateSessionInput) => {
-    const path = await loginPath()
-    const available = await detectProviders()
-    // Fall back to a plain shell rather than spawning a binary that isn't there,
-    // which would flash a dead tab with no explanation.
-    const requested = input.provider ?? 'claude'
-    const provider = available[requested] ? requested : 'shell'
-    const spec = PROVIDERS[provider]
-
-    // Resolve the profile the session should run as and hand the PTY its
-    // config-dir override. Without this the picker records a choice that never
-    // reaches the process, and two "separate" logins quietly share one.
-    const profile = resolveProfile(profilesState(), {
-      sessionProfileId: input.profileId ?? undefined,
-      projectPath: input.cwd,
-    })
-
-    return ptys.create(input, {
-      provider,
-      command: spec.bin,
-      args: input.resume && spec.resumeArgs.length > 0 ? spec.resumeArgs : spec.args,
-      path,
-      env: sessionEnv(profile, provider),
-    })
-  })
+  ipcMain.handle('session:create', (_e, input: CreateSessionInput) => startSession(input))
 
   ipcMain.on('session:write', (_e, id: string, data: string) => ptys.write(id, data))
   ipcMain.on('session:resize', (_e, id: string, cols: number, rows: number) => {

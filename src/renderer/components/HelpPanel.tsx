@@ -69,7 +69,7 @@ export interface HelpBridge {
 
 export const SECTIONS: ReadonlyArray<{ id: HelpSectionId; label: string; hint: string }> = [
   { id: 'start', label: 'Getting started', hint: 'From nothing installed to a running session.' },
-  { id: 'panels', label: 'The panels', hint: 'What each surface in the app is for.' },
+  { id: 'panels', label: 'The views', hint: 'What each surface in the app is for.' },
   { id: 'shortcuts', label: 'Shortcuts', hint: 'Every key the app answers to.' },
   { id: 'trouble', label: 'Troubleshooting', hint: 'The things that actually go wrong.' },
   { id: 'about', label: 'About', hint: 'Versions, and what to include in a bug report.' },
@@ -79,7 +79,6 @@ export const SECTIONS: ReadonlyArray<{ id: HelpSectionId; label: string; hint: s
 
 /** One line each, in the user's terms rather than the module's. */
 export const PANEL_HELP: Record<PanelId, string> = {
-  projects: 'Folders you have opened. A project is the unit of work — sessions start in one, and closing a project ends its sessions.',
   overview: 'A dashboard for the open project: sessions, spend, git state and readiness in one place. Widgets can be rearranged.',
   board: 'A task board for the open project. Cards can spawn or resume a session, and move themselves to Done when it finishes.',
   files: 'The project tree, with anything your ignore rules exclude hidden. Open a file to read it beside the session.',
@@ -139,14 +138,14 @@ const GETTING_STARTED: HelpTopic[] = [
       {
         kind: 'steps',
         items: [
-          'Open a folder with the Projects panel, or press the Open a project shortcut.',
+          'Press the ＋ beside “Open” at the bottom of the sidebar, or use the Open a project shortcut.',
           'Pick the root of the repo you want to work in — the folder the agent should treat as its working directory.',
           'It stays in the list, most recent first, until you remove it.',
         ],
       },
       {
         kind: 'note',
-        text: 'Removing a project also kills its running sessions. That is intentional — a session with no visible tab is a process you cannot stop.',
+        text: 'Removing a project also kills its running sessions. That is intentional — a session with no row in the sidebar is a process you cannot stop.',
       },
     ],
   },
@@ -158,12 +157,12 @@ const GETTING_STARTED: HelpTopic[] = [
     blocks: [
       {
         kind: 'text',
-        text: 'A session is one agent process running in one project folder, shown as a tab. Start one with the New session shortcut, or resume the most recent conversation in that folder with Resume the last session here.',
+        text: 'A session is one agent process running in one project folder, listed under that project in the sidebar. Start one with the New session shortcut, or resume the most recent conversation in that folder with Resume the last session here.',
       },
       {
         kind: 'bullets',
         items: [
-          'The dot on a tab is the session’s state: working, waiting on you, or finished.',
+          'The dot beside a session is its state: working, waiting on you, or finished.',
           'Everything you type goes to the agent. The app only claims the shortcuts listed under Shortcuts — the rest reaches the terminal.',
           'Splitting a pane runs two sessions side by side in the same window.',
         ],
@@ -210,7 +209,7 @@ const TROUBLESHOOTING: HelpTopic[] = [
     blocks: [
       {
         kind: 'text',
-        text: 'An installed but unauthenticated CLI starts fine and then asks to log in — inside the terminal. If the session tab looks like it is doing nothing, read what is actually in it; the prompt is usually right there waiting for a keystroke.',
+        text: 'An installed but unauthenticated CLI starts fine and then asks to log in — inside the terminal. If a session looks like it is doing nothing, read what is actually in it; the prompt is usually right there waiting for a keystroke.',
       },
       {
         kind: 'text',
@@ -265,7 +264,7 @@ const TROUBLESHOOTING: HelpTopic[] = [
     blocks: [
       {
         kind: 'text',
-        text: 'The tab shows the exit code when the process ends. In order of likelihood:',
+        text: 'The terminal shows the exit code when the process ends. In order of likelihood:',
       },
       {
         kind: 'bullets',
@@ -278,7 +277,7 @@ const TROUBLESHOOTING: HelpTopic[] = [
       },
       {
         kind: 'text',
-        text: 'The Debug panel’s process table shows every session and its exit code, and the log below it usually names the cause.',
+        text: 'Turn on Settings → Advanced → Debug mode: its process table shows every session and its exit code, and the log below it usually names the cause.',
       },
     ],
   },
@@ -310,17 +309,15 @@ export const HELP_TOPICS: HelpTopic[] = [
     blocks: [
       {
         kind: 'text',
-        text: 'The rail down the side switches panels. They all act on the project that is currently open.',
+        text: 'The sidebar down the left switches views. They all act on the project that is currently open, and the window shows one at a time.',
       },
     ],
   },
   /**
-   * `PanelSpec.shortcut` is deliberately not shown here. Those strings are
-   * hardcoded macOS glyphs, and two of them disagree with the keymap — the rail
-   * says Files is ⌘2 and Source control ⌘3, while `keymap.ts` binds them to
-   * ⌘⇧E and ⌘⇧G. Printing a chord that may not work is exactly the kind of
-   * quiet lie this panel is generated from real sources to avoid; the Shortcuts
-   * section lists the real, platform-correct bindings.
+   * Shortcuts are not printed here. The sidebar's own tooltips read them out of
+   * `keymap.ts` through `chordFor`, so they are already both real and correct
+   * for the platform; the Shortcuts section lists the whole set. Printing a
+   * third copy here is a third thing to keep true.
    */
   ...PANELS.map<HelpTopic>((panel) => ({
     id: `panel-${panel.id}`,

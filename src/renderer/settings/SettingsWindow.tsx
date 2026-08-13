@@ -418,7 +418,9 @@ export function SettingsWindow({ open, onClose, ...panel }: SettingsWindowProps)
       title="Settings"
       description="Applies to every project and session."
       onClose={onClose}
-      size="lg"
+      // A page, not a dialog: this has eleven sections and one of them is the
+      // whole remote-access panel. It gets the window.
+      size="page"
       footer={
         <>
           <span

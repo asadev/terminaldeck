@@ -30,6 +30,7 @@ class FakeSocket implements SocketLike {
       deviceName: 'iPhone',
       token: null,
       sessions: [],
+      capabilities: [],
       ...patch,
     })
   }

@@ -1,458 +1,590 @@
-/* ------------------------------------------------------- activity bar -- */
+/* ============================================================================
+   Terminal Deck — the shell
 
-.activity-bar {
-  width: 48px;
-  flex-shrink: 0;
+   One sidebar, one toolbar, and the window. That is the whole frame.
+
+   What this replaced: a 48px icon rail, a 300px drawer with its own header and
+   collapse button, a tab strip inside the title bar, and a bar below that
+   holding a single segmented control. Four pieces of chrome, three vertical
+   hairlines and two horizontal ones before any work was visible.
+
+   The rules here, in order of preference: separate with SPACE, then with a
+   change of MATERIAL, and only then with a line. There are two lines left in
+   this file and each one is doing a job nothing else could.
+   ============================================================================ */
+
+/* ---------------------------------------------------------------- frame -- */
+
+.app {
   display: flex;
+  height: 100%;
+  min-height: 0;
+  /* The ground the sidebar's glass is lit against. Without something behind
+     it, a translucent surface is just flat paint. */
+  background:
+    radial-gradient(120% 90% at 0% 0%, var(--bg-secondary) 0%, var(--bg-sunken) 100%);
+}
+
+/* The first-run screen, which has no sidebar to hang the traffic lights on. */
+.app-plain {
   flex-direction: column;
-  align-items: center;
-  gap: 2px;
-  padding: 8px 0;
-  background: var(--bg-secondary);
-  border-right: 1px solid var(--border);
+  background: var(--bg-primary);
 }
 
-.activity-item {
-  position: relative;
-  display: grid;
-  place-items: center;
-  width: 36px;
-  height: 36px;
-  border-radius: var(--radius-sm);
-  color: var(--text-muted);
-  transition: color 120ms ease, background 120ms ease;
-}
-
-.activity-item:hover {
-  color: var(--text-primary);
-  background: var(--bg-hover);
-}
-
-.activity-item:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
-}
-
-/* Which panel is open is a selection, and selections in this app are grey —
-   the blue is kept for focus so that the two states stay distinguishable. */
-.activity-item.active {
-  color: var(--text-primary);
-  background: var(--bg-active);
-}
-
-.activity-item.active::before {
-  content: '';
-  position: absolute;
-  left: -6px;
-  top: 8px;
-  bottom: 8px;
-  width: 2px;
-  border-radius: var(--radius-sm);
-  background: var(--text-primary);
-}
-
-/* The one filled swatch on the rail, and it is earned: a count of things
-   waiting on the user. */
-.activity-badge {
-  position: absolute;
-  top: 3px;
-  right: 3px;
-  min-width: 15px;
-  padding: 0 4px;
-  border-radius: var(--radius-sm);
-  background: var(--color-critical);
-  color: var(--accent-fg);
-  font-size: 9.5px;
-  font-weight: 650;
-  line-height: 15px;
-  text-align: center;
-}
-
-/* --------------------------------------------------------- panel dock -- */
-
-.panel-dock {
-  min-width: var(--sidebar-min);
-  max-width: var(--sidebar-max);
+.window-drag {
+  height: var(--titlebar-height);
   flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  background: var(--bg-secondary);
-  overflow: hidden;
+  -webkit-app-region: drag;
 }
 
-.panel-dock-title {
-  margin: 0;
-  font: inherit;
-  letter-spacing: inherit;
-  color: inherit;
-}
-
-.panel-dock-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  flex-shrink: 0;
-  padding: 12px 8px 8px 14px;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--text-secondary);
-}
-
-/* Drag to resize. Wider hit area than the visible line, or it is fiddly. */
-.dock-resize {
-  width: 5px;
-  margin-left: -2px;
-  flex-shrink: 0;
-  cursor: col-resize;
-  background: transparent;
-  border-right: 1px solid var(--border);
-  transition: border-color 120ms ease;
-}
-
-/* The handle darkens rather than turning blue — it is being pointed at, not
-   focused, and the same drag in SplitView reads the same way. */
-.dock-resize:hover,
-.dock-resize:active {
-  border-right-color: var(--border-strong);
-}
-
-.dock-resize:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -1px;
-}
-
-.panel-dock-body {
+/* The first-run screen takes the rest of the window and scrolls itself. */
+.app-plain > :not(.window-drag) {
   flex: 1;
   min-height: 0;
   overflow: auto;
 }
 
-.panel-empty {
-  padding: 16px 14px;
-  color: var(--text-secondary);
-  font-size: 12px;
-}
-
-.panel-empty-hint {
-  margin-top: 4px;
-  color: var(--text-muted);
-  opacity: 0.75;
-}
-
-/* ------------------------------------------------------ view switcher -- */
-
-/* This was four words of dim text in the top-right corner. It read as a
-   caption, not a control — the browser was unreachable simply because nobody
-   could tell "Browser" was a button. Now it is a bordered segmented control
-   with icons and full-contrast labels. */
-
-.view-switcher {
+.main {
+  flex: 1;
+  min-width: 0;
   display: flex;
-  align-items: center;
-  gap: 2px;
-  padding: 0 8px;
+  flex-direction: column;
+  background: var(--bg-primary);
+}
+
+.panes {
+  flex: 1;
+  position: relative;
+  min-height: 0;
+}
+
+/* -------------------------------------------------------------- sidebar -- */
+
+.sidebar {
+  position: relative;
   flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  min-width: var(--sidebar-min);
+  max-width: var(--sidebar-max);
+  /* Liquid glass: a blur, a saturation lift, and a top-down sheen so the
+     surface catches light even where there is nothing behind it to blur. */
+  background-color: var(--material-bg);
+  background-image: var(--material-sheen);
+  -webkit-backdrop-filter: var(--material-filter);
+  backdrop-filter: var(--material-filter);
+  user-select: none;
 }
 
-.view-tab {
+/* Traffic lights sit in here, and nothing else may. */
+.sidebar-gutter {
+  height: var(--titlebar-height);
+  flex-shrink: 0;
+  -webkit-app-region: drag;
+}
+
+.sidebar-actions {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 5px 11px;
-  border-radius: var(--radius-sm);
-  font-size: 12.5px;
-  font-weight: 500;
+  gap: var(--sp-1);
+  padding: 0 var(--sp-2) var(--sp-3);
+}
+
+.sb-new {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  height: var(--control-h-lg);
+  padding: 0 var(--sp-2);
+  border-radius: var(--radius-md);
   color: var(--text-primary);
-  white-space: nowrap;
-  transition: background 120ms ease, color 120ms ease;
+  font-size: var(--t-body);
+  font-weight: var(--w-medium);
+  text-align: left;
+  transition: background var(--dur-fast) var(--ease);
 }
 
-.view-tab svg {
-  display: block;
-  opacity: 0.75;
+.sb-new .sb-glyph {
+  color: var(--accent);
 }
 
-.view-tab.active svg {
-  opacity: 1;
-}
-
-.view-tab:hover {
+.sb-new:hover,
+.sb-new-alt:hover {
   background: var(--bg-hover);
-  color: var(--text-primary);
 }
 
-.view-tab.active {
+.sb-new:active,
+.sb-new-alt:active {
   background: var(--bg-active);
+}
+
+.sb-new-alt {
+  display: grid;
+  place-items: center;
+  width: var(--control-h-lg);
+  height: var(--control-h-lg);
+  flex-shrink: 0;
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.sb-new-alt:hover {
   color: var(--text-primary);
-  box-shadow: var(--shadow-sm);
 }
 
-.view-tab:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -1px;
+.sidebar-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 0 var(--sp-2) var(--sp-4);
 }
 
-.view-bar {
+.sb-group {
+  margin-bottom: var(--sp-5);
+}
+
+.sb-group-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  height: var(--tabbar-height);
-  background: var(--bg-secondary);
-  border-bottom: 1px solid var(--border);
+  gap: var(--sp-2);
 }
 
-.view-bar .tabbar {
-  border-bottom: none;
-  background: transparent;
-  flex: 1;
-  min-width: 0;
+/* Sentence case, not tracked-out capitals: macOS sidebar headers are quiet
+   labels, not section dividers standing in for a rule. */
+.sb-group-label {
+  margin: 0 0 var(--sp-1);
+  padding: 0 var(--sp-2);
+  font-size: var(--t-footnote);
+  font-weight: var(--w-semibold);
+  color: var(--text-muted);
 }
 
-.view-modes {
-  display: flex;
-  gap: 2px;
-  margin-right: 10px;
-  padding: 2px;
-  flex-shrink: 0;
-  /* A container is what makes a row of buttons read as one control. */
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-primary);
-}
-
-/* --------------------------------------------------------- status bar -- */
-
-.status-bar {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  height: 24px;
-  padding: 0 12px;
-  background: var(--bg-secondary);
-  border-top: 1px solid var(--border);
-  font-size: 11px;
-  color: var(--text-secondary);
-}
-
-.status-item {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  white-space: nowrap;
-}
-
-.status-item.clickable {
-  cursor: pointer;
+.sb-group-action {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  margin-bottom: var(--sp-1);
   border-radius: var(--radius-sm);
-  padding: 0 4px;
+  color: var(--text-muted);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
 
-.status-item.clickable:hover {
+.sb-group-action:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
 }
 
-.status-item.clickable:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -1px;
+.sb-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
 }
 
-.status-spacer {
-  flex: 1;
-}
-
-.status-alert {
-  color: var(--color-warning);
-}
-
-.panel-dock-actions {
+/* The one row shape the sidebar has. Everything in here is one of these. */
+.sb-row {
   display: flex;
   align-items: center;
-  gap: 2px;
-}
-
-/* Panels are narrow by nature; anything laid out in a row has to wrap rather
-   than overflow. A cut-off filter chip reads as a broken panel. */
-.panel-dock-body [class*='filters'],
-.panel-dock-body [class*='chips'],
-.panel-dock-body [class*='segment'] {
-  flex-wrap: wrap;
-}
-
-.panel-dock-body {
-  overflow-x: hidden;
-}
-
-/* Pushes Help and Settings to the bottom of the rail. */
-.activity-spacer {
-  flex: 1;
-}
-
-/* --------------------------------------------------------- header tabs -- */
-
-/* Sessions and browsers share one strip in the window header. The old layout
-   had a session tab bar plus a separate view switcher, so a browser window
-   never read as a window you had open. */
-.header-tabs {
-  display: flex;
-  align-items: stretch;
-  height: 100%;
+  gap: var(--sp-2);
+  width: 100%;
   min-width: 0;
-  -webkit-app-region: no-drag;
-}
-
-/* Only the strip scrolls. The new-tab button sits outside it so its dropdown
-   is not clipped by the scroll container. */
-.header-tabs-strip {
-  display: flex;
-  align-items: flex-end;
-  gap: 2px;
-  height: 100%;
-  min-width: 0;
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-
-.header-tabs-strip::-webkit-scrollbar {
-  display: none;
-}
-
-.htab {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  height: calc(100% - 6px);
-  padding: 0 8px 0 11px;
-  min-width: 120px;
-  max-width: 210px;
-  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  height: var(--row-h);
+  padding: 0 var(--sp-15) 0 var(--sp-2);
+  border-radius: var(--radius-md);
   color: var(--text-secondary);
-  font-size: 12px;
-  cursor: pointer;
-  user-select: none;
-  flex-shrink: 0;
+  font-size: var(--t-body);
+  text-align: left;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
 
-.htab:hover {
+.sb-row:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
 }
 
-.htab.active {
-  background: var(--bg-primary);
+.sb-row.active {
+  background: var(--bg-active);
   color: var(--text-primary);
+  font-weight: var(--w-medium);
 }
 
-.htab:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
+/* The single point of colour in the rail: the icon of whatever you are
+   looking at. Selection itself stays grey so the accent means one thing.
+
+   Direct children only — a descendant selector also caught the close button's
+   × inside a selected row and painted it accent, which read as "delete". */
+.sb-row.active > .sb-glyph,
+.sb-row.active > .sb-row-main > .sb-glyph {
+  color: var(--accent);
 }
 
-.htab svg {
-  display: block;
+.sb-glyph {
   flex-shrink: 0;
-  opacity: 0.8;
+  display: block;
 }
 
-.htab-label {
+.sb-label {
   flex: 1;
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.htab-close {
+.sb-badge {
+  flex-shrink: 0;
+  min-width: 18px;
+  height: 17px;
+  padding: 0 var(--sp-15);
+  border-radius: var(--radius-pill);
+  background: var(--color-critical);
+  color: #fff;
+  font-size: var(--t-caption);
+  font-weight: var(--w-semibold);
+  line-height: 17px;
+  text-align: center;
+}
+
+.sb-row:focus-visible,
+.sb-row-main:focus-visible,
+.sb-row-action:focus-visible,
+.sb-new:focus-visible,
+.sb-new-alt:focus-visible,
+.sb-group-action:focus-visible,
+.sb-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: var(--radius-md);
+}
+
+/* A row that is one control plus some hover-only ones. The wrapper carries the
+   hover and selection; the buttons inside carry the clicks. */
+.sb-open,
+.sb-project-head {
+  padding-right: var(--sp-05);
+}
+
+.sb-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  height: 100%;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.sb-row-action {
   display: grid;
   place-items: center;
-  width: 17px;
-  height: 17px;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
   border-radius: var(--radius-sm);
   color: var(--text-muted);
   opacity: 0;
-  flex-shrink: 0;
-  transition: opacity 120ms ease, background 120ms ease;
+  transition: opacity var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
 }
 
-.htab:hover .htab-close,
-.htab.active .htab-close {
+.sb-row:hover .sb-row-action,
+.sb-row:focus-within .sb-row-action,
+.sb-row.active .sb-close {
   opacity: 1;
 }
 
-.htab-close:hover {
+.sb-row-action:hover {
   background: var(--bg-active);
   color: var(--text-primary);
 }
 
-.htab-new {
-  position: relative;
-  display: flex;
-  align-items: center;
-  height: 100%;
-  -webkit-app-region: no-drag;
+/* Something arrived on a session nobody is looking at — most often one a
+   paired phone started. It is a dot, not a focus steal. */
+.sb-unread {
+  width: 7px;
+  height: 7px;
+  flex-shrink: 0;
+  margin-right: var(--sp-05);
+  border-radius: 50%;
+  background: var(--accent);
 }
 
-.htab-new-button {
-  display: grid;
-  place-items: center;
-  width: 26px;
+.sb-row.unread .sb-label {
+  color: var(--text-primary);
+  font-weight: var(--w-medium);
+}
+
+.sb-row:hover .sb-unread,
+.sb-row:focus-within .sb-unread {
+  display: none;
+}
+
+.sb-project {
+  margin-bottom: var(--sp-2);
+}
+
+.sb-project-head {
   height: 26px;
-  margin-left: 4px;
-  border-radius: var(--radius-sm);
+}
+
+.sb-project-name {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--t-footnote);
+  font-weight: var(--w-semibold);
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sb-project-head:hover .sb-project-name {
   color: var(--text-secondary);
 }
 
-.htab-new-button:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
+.sb-disclosure {
+  color: var(--text-muted);
+  transition: transform var(--dur-fast) var(--ease);
 }
 
-.htab-menu-scrim {
-  position: fixed;
-  inset: 0;
-  z-index: 40;
+.sb-disclosure.open {
+  transform: rotate(90deg);
 }
 
-.htab-menu {
+/* Sessions read as belonging to the project above them. */
+.sb-sessions .sb-row {
+  padding-left: var(--sp-3);
+}
+
+.sb-empty {
+  margin: var(--sp-1) var(--sp-2) 0;
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+  color: var(--text-muted);
+}
+
+.sb-link {
+  padding: 0;
+  color: var(--accent);
+  font: inherit;
+  text-decoration: none;
+}
+
+.sb-link:hover {
+  text-decoration: underline;
+}
+
+.sidebar-foot {
+  flex-shrink: 0;
+  padding: var(--sp-2);
+}
+
+/* Wider than the line it draws, or it is fiddly to grab. Invisible at rest —
+   the sidebar and the content are already different materials. */
+.sidebar-resize {
   position: absolute;
-  top: calc(100% + 2px);
-  left: 0;
-  z-index: 41;
-  min-width: 208px;
-  padding: 4px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-tertiary);
-  box-shadow: var(--shadow-md);
+  top: 0;
+  right: -3px;
+  bottom: 0;
+  width: 7px;
+  z-index: 2;
+  cursor: col-resize;
 }
 
-.htab-menu-item {
+.sidebar-resize:hover::after,
+.sidebar-resize:active::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 1px;
+  background: var(--border-strong);
+}
+
+.sidebar-resize:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* -------------------------------------------------------------- toolbar -- */
+
+.toolbar {
   display: flex;
   align-items: center;
-  gap: 9px;
-  width: 100%;
-  padding: 7px 9px;
-  border-radius: var(--radius-sm);
-  color: var(--text-primary);
-  font-size: 12.5px;
-  text-align: left;
-}
-
-.htab-menu-item:hover {
-  background: var(--bg-hover);
-}
-
-.htab-menu-item kbd {
-  margin-left: auto;
-}
-
-/* The traffic lights sit here; tabs start after them. */
-.titlebar-gutter {
-  width: 78px;
+  gap: var(--sp-2);
+  height: var(--toolbar-h);
   flex-shrink: 0;
+  padding: 0 var(--sp-3) 0 var(--sp-2);
+  /* Same glass as the sidebar, so the chrome reads as one piece. */
+  background-color: var(--material-bg);
+  background-image: var(--material-sheen);
+  -webkit-backdrop-filter: var(--material-filter);
+  backdrop-filter: var(--material-filter);
+  /* The one hairline in the shell. It is what stops a pale toolbar from
+     dissolving into a pale page, and a dark one from floating over a black
+     terminal with no edge at all. */
+  box-shadow: inset 0 -1px 0 var(--border-subtle);
+}
+
+/* With the sidebar hidden the traffic lights land on the toolbar instead. */
+.toolbar[data-sidebar-collapsed] {
+  padding-left: 82px;
+}
+
+.toolbar-lead {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  -webkit-app-region: no-drag;
+}
+
+.toolbar-heading {
+  min-width: 0;
+}
+
+.toolbar-title {
+  margin: 0;
+  font-size: var(--t-title3);
+  font-weight: var(--w-semibold);
+  letter-spacing: var(--t-title3-ls);
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.toolbar-subtitle {
+  margin: 0;
+  font-size: var(--t-caption);
+  line-height: 1.3;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* Long project paths must not push the actions off the right edge. */
+  max-width: 46ch;
+}
+
+.toolbar-drag {
+  flex: 1;
+  min-width: var(--sp-4);
+  height: 100%;
   -webkit-app-region: drag;
+}
+
+.toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex-shrink: 0;
+  -webkit-app-region: no-drag;
+}
+
+.toolbar-btn {
+  display: grid;
+  place-items: center;
+  width: var(--control-h);
+  height: var(--control-h);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.toolbar-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.toolbar-btn.on {
+  background: var(--bg-active);
+  color: var(--accent);
+}
+
+.toolbar-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* ----------------------------------------------------------------- page -- */
+
+/* A view from the sidebar, filling the window. These used to render inside a
+   300px column — a dashboard, a kanban board and a pull-request list, all in a
+   strip narrower than a phone. */
+.panel-page {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  overflow-x: hidden;
+  padding: var(--sp-6) var(--sp-8) var(--sp-10);
+}
+
+/* Two panes and no page scroll of its own. */
+.panel-page[data-panel='files'],
+.panel-page[data-panel='board'] {
+  padding: 0;
+  overflow: hidden;
+}
+
+.page-empty {
+  max-width: 34rem;
+  margin: 12vh auto 0;
+  text-align: center;
+}
+
+.page-empty h2 {
+  margin: 0 0 var(--sp-2);
+  font-size: var(--t-title2);
+  font-weight: var(--w-semibold);
+  letter-spacing: var(--t-title2-ls);
+  color: var(--text-primary);
+}
+
+.page-empty p {
+  margin: 0;
+  font-size: var(--t-body);
+  line-height: var(--lh-body);
+  color: var(--text-secondary);
+}
+
+.page-empty .btn-primary {
+  margin-top: var(--sp-5);
+}
+
+.page-empty-hint {
+  margin-top: var(--sp-4) !important;
+  font-size: var(--t-callout) !important;
+  color: var(--text-muted) !important;
+}
+
+/* ------------------------------------------------------------ files page -- */
+
+.files-page {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+}
+
+.files-page-tree {
+  width: 280px;
+  min-width: 200px;
+  flex-shrink: 0;
+  overflow: auto;
+  padding: var(--sp-3) var(--sp-2);
+  background: var(--bg-secondary);
+}
+
+.files-page-viewer {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }

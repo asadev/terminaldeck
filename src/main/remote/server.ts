@@ -7,9 +7,15 @@
  * **It listens on the tailnet or it does not listen.** `0.0.0.0` would put a
  * terminal on every network this laptop ever joins, and a LAN address would put
  * one on the coffee shop's. `tailnet.ts` reads the address from the running
- * daemon; if it cannot, `start()` returns the reason and no socket is opened.
- * There is no option to override this, because an option is a thing someone
- * eventually sets.
+ * daemon; if it cannot, no socket is opened. There is no option to override
+ * this, because an option is a thing someone eventually sets.
+ *
+ * That rule is about *listening*, and it is unchanged. What did change is that
+ * listening is no longer the only way in: `relay-client.ts` dials **out** to a
+ * rendezvous service and hands the channels it gets back to `attachTransport`
+ * below, which is the same door a tailnet socket comes through. So a Mac with
+ * no Tailscale is reachable, and a Mac with Tailscale is reachable faster,
+ * without either path being able to open a port on this machine.
  *
  * **Nothing happens before `hello`.** A socket that has not authenticated may
  * not list sessions, may not attach and may not type, and it is closed outright
@@ -48,6 +54,8 @@ import { extname, join, normalize, resolve, sep } from 'node:path'
 import type { IpcMain } from 'electron'
 import { RemoteAuth, type Device, type PairingToken } from './device-auth'
 import {
+  CAPABILITIES,
+  CAPABILITY,
   CLOSE,
   MAX_MESSAGE_BYTES,
   PROTOCOL_VERSION,
@@ -56,12 +64,31 @@ import {
   serialize,
   type ClientMessage,
   type DeviceDescriptor,
+  type LocalPort,
   type ProtocolErrorCode,
   type RemoteSession,
   type ServerMessage,
 } from './protocol'
+import {
+  MAX_STREAMS_TOTAL,
+  createTunnelHub,
+  streamBudget,
+  type LocalhostMessage,
+  type TunnelHub,
+  type TunnelInfo,
+} from './tunnel'
+import {
+  createUploadDesk,
+  diskUploadStore,
+  type UploadDesk,
+  type UploadMessage,
+} from './uploads'
+import { scanDevPorts } from '../dev-ports'
+import { createRelayClient, relayEnabled, relayUrl, type RelayLink, type RelayState } from './relay-client'
+import { loadHostIdentity } from './host-identity'
 import { tailnetStatus, type TailnetStatus } from './tailnet'
 import { serveOff, serveOn } from './tailscale-serve'
+import { FrameReader, OPCODE, acceptKey, encodeFrame } from '../../shared/ws-frame'
 
 /* ------------------------------------------------------------------ types -- */
 
@@ -81,6 +108,36 @@ export interface SessionHandle {
 }
 
 /**
+ * What a phone asked for when it asked for a session.
+ *
+ * The shape `parseClientMessage` produced, minus the tag — this server does not
+ * decide what any of it means. `cwd` is a folder the *phone* named and nothing
+ * has checked yet; whether this Mac will start a session there is a question
+ * only the session layer can answer, because only it can see the desktop's
+ * project list.
+ */
+export interface CreateRequest {
+  cwd?: string
+  cols?: number
+  rows?: number
+}
+
+/**
+ * What the session layer says about a request to start one.
+ *
+ * A refusal carries its own code because the two refusals mean genuinely
+ * different things to the person holding the phone. `unauthorized` is "this Mac
+ * will not start a session in that folder", which is a policy answer and stays
+ * true however many times it is retried. `unavailable` is "it would have, and
+ * it could not" — a folder deleted since it was listed, a shell that will not
+ * spawn — which is worth trying again. Collapsing them would send someone to
+ * the pairing screen to fix a missing directory.
+ */
+export type CreateOutcome =
+  | { ok: true; session: RemoteSession }
+  | { ok: false; code: 'unauthorized' | 'unavailable'; message: string }
+
+/**
  * What this server needs from the session layer, and nothing more.
  *
  * `PtyManager` satisfies it through a small adapter in the main process; the
@@ -98,6 +155,22 @@ export interface SessionAccess {
   write(id: string, data: string): void
   resize(id: string, cols: number, rows: number): void
   detach(handle: SessionHandle): void
+  /**
+   * Start a session, or say why not. **Optional, and its absence is the switch.**
+   *
+   * A session layer that cannot start anything simply does not have this
+   * method, and the `create` capability is then never advertised — so a phone
+   * talking to such a host never draws a New Session button and never sends a
+   * frame that would be refused. That is the whole of the negotiation, and it
+   * is why this is optional rather than a method that always exists and
+   * sometimes returns a refusal: a capability list assembled from a boolean
+   * somebody has to remember to set is a capability list that will one day lie.
+   *
+   * Asynchronous because starting a real session is: the desktop resolves the
+   * login shell's PATH and probes which agent CLIs are installed before it
+   * spawns anything, and both of those are `execFile`.
+   */
+  create?(request: CreateRequest): Promise<CreateOutcome>
 }
 
 /**
@@ -111,7 +184,20 @@ export interface SessionAccess {
  * message loop.
  */
 export interface RemoteAuthenticator {
-  authenticate(token: string, device: DeviceDescriptor, address: string): Promise<AuthOutcome>
+  /**
+   * `peerPublicKey` is set only for a connection that arrived through a relay,
+   * where a Noise handshake has already proved the far end holds the private
+   * half. It is a second, independent fact about the caller — the credential
+   * says *what* it knows, this says *which device it is* — and the authenticator
+   * is expected to insist the two agree. Null on the tailnet, where there is no
+   * handshake to have proved anything with.
+   */
+  authenticate(
+    token: string,
+    device: DeviceDescriptor,
+    address: string,
+    peerPublicKey?: Buffer | null,
+  ): Promise<AuthOutcome>
 }
 
 export type AuthOutcome =
@@ -134,6 +220,15 @@ export interface RemoteConnection {
   connectedAt: number
   /** Sessions this phone is currently watching. */
   sessionIds: string[]
+  /**
+   * Ports on this Mac this phone currently has a page open on.
+   *
+   * Listed for the same reason the sessions are: while a tunnel is live, a
+   * browser on somebody's phone is talking to a server on this machine, and the
+   * person at the machine should be able to see that and end it. Empty for
+   * every phone that has not tapped a port, which is most of them.
+   */
+  tunnels: TunnelInfo[]
 }
 
 export interface RemoteEndpointOptions {
@@ -154,16 +249,59 @@ export interface RemoteEndpointOptions {
   maxMessageBytes?: number
   /** Fires whenever a phone authenticates, attaches, detaches or leaves. */
   onConnections?: (connections: RemoteConnection[]) => void
+  /**
+   * What is listening on this Mac, for the `localhost` capability.
+   *
+   * Injected so the socket tests never spawn `lsof`, and so the one place that
+   * decides which ports a phone may be offered is a function this file is
+   * handed rather than a module it reaches for. Defaults to the real scan.
+   */
+  scanPorts?: () => Promise<LocalPort[]>
+  /**
+   * Ports this app is serving on itself, which it will not tunnel to.
+   *
+   * Tunnelling to our own listener would let a phone reach the desktop's static
+   * file server through the connection it is already holding, which is a loop
+   * with nothing on the other end of it.
+   */
+  reservedPorts?: number[]
+  /**
+   * Where files sent from a phone land. **Absent is the switch.**
+   *
+   * A host with no directory does not advertise the `upload` capability, so a
+   * phone talking to it never draws a Send File button and never sends a frame
+   * that would be refused — the same negotiation `SessionAccess.create` gets, and
+   * for the same reason. It is a path rather than a boolean because there is no
+   * sensible default this module could compute: `app.getPath('downloads')` needs
+   * Electron, and a module that guessed at a folder in someone's home directory
+   * would be the one place in this feature where a path is invented rather than
+   * given. `registerRemoteIpc` fills it in.
+   *
+   * Created on the first upload, not here: a folder made at startup for a
+   * feature nobody has used is litter in somebody's Downloads.
+   */
+  uploadsDir?: string
 }
 
 export interface RemoteEndpoint {
   handleRequest(req: IncomingMessage, res: ServerResponse): void
   handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void
+  /**
+   * Bring a connection into being over something that is not an HTTP upgrade.
+   *
+   * The relay's channels arrive this way. Everything past this call —
+   * authentication, the hello timeout, attach, revocation — is the same code
+   * that serves a phone on the tailnet, which is the entire reason the wire is
+   * an interface rather than a socket.
+   */
+  attachTransport: AttachTransport
   connections(): RemoteConnection[]
   /** Close every socket held by one device. Returns how many were dropped. */
   dropDevice(deviceId: string): number
   /** Close one socket, leaving the device paired. False when it had already gone. */
   dropConnection(connectionId: string): boolean
+  /** End one localhost tunnel from the Mac. False when it had already gone. */
+  stopTunnel(connectionId: string, tunnelId: string): boolean
   closeAll(): void
 }
 
@@ -181,6 +319,17 @@ export interface RemoteServerOptions extends RemoteEndpointOptions {
   }
   /** Test seams. Both default to the real thing in `tailnet.ts`. */
   readTailnet?: () => Promise<TailnetStatus>
+  /**
+   * The outbound link to a rendezvous relay, or nothing.
+   *
+   * Injected rather than built here, and absent by default, for two reasons that
+   * point the same way: a relay needs this Mac's persisted identity and the
+   * device trust store, neither of which this function has, and a server
+   * constructed in a test must not dial the public internet. `registerRemoteIpc`
+   * is where the real one is assembled, which is also the only place that knows
+   * whether the user has switched the feature on.
+   */
+  relay?: RelayLink
 }
 
 /** What the server needs to open a listener: the PEM text, not the paths. */
@@ -188,12 +337,26 @@ export type CertLoad = { ok: true; cert: string; key: string } | { ok: false; me
 
 export interface RemoteStatus {
   running: boolean
-  /** What to open on the phone. Null when not running. */
+  /**
+   * What to open on the phone, for the direct path. Null when there is no
+   * direct path — a relayed connection has no URL at all; the phone finds this
+   * Mac by the host id in `relay`.
+   */
   url: string | null
   address: string | null
   port: number
-  /** Why it is not running, in a sentence a person can act on. */
+  /** Why nothing at all is running, in a sentence a person can act on. */
   reason: string | null
+  /**
+   * Why the *direct* tailnet path is not up, while something else is.
+   *
+   * Separate from `reason` on purpose: with a relay carrying the session, "this
+   * Mac is signed out of Tailscale" is a note about a faster route, not a
+   * failure, and printing it as one is how a panel teaches people to ignore it.
+   */
+  directReason: string | null
+  /** The relay link, when one is running. Null when the feature is off or unconfigured. */
+  relay: RelayState | null
   connections: RemoteConnection[]
 }
 
@@ -204,7 +367,17 @@ export interface RemoteServer {
   connections(): RemoteConnection[]
   dropDevice(deviceId: string): number
   dropConnection(connectionId: string): boolean
+  stopTunnel(connectionId: string, tunnelId: string): boolean
   status(): RemoteStatus
+  /**
+   * The machine woke from sleep. Re-dial the relay now instead of waiting.
+   *
+   * Driven by `powerMonitor.on('resume')` in `index.ts`, because an event that
+   * already exists beats a timer that watches the clock hoping to infer it. A
+   * link that slept through a suspend is usually dead and TCP will not say so
+   * for minutes — minutes during which a phone cannot reach this Mac.
+   */
+  wake(): void
 }
 
 /* -------------------------------------------------------------- constants -- */
@@ -282,40 +455,61 @@ const MAX_DROPPED_TRACKED = 256
 
 /* ------------------------------------------------------- RFC 6455 framing -- */
 
-/** The magic string from RFC 6455 §1.3. Not a secret, just a constant. */
-const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
+/**
+ * The framing itself lives in `shared/ws-frame` because the relay decodes and
+ * re-encodes the same frames. Re-exported here so this module stays the one
+ * place the rest of the app looks for the remote wire.
+ */
+export { acceptKey, encodeFrame, OPCODE } from '../../shared/ws-frame'
 
-export function acceptKey(key: string): string {
-  return createHash('sha1')
-    .update(key + WS_GUID)
-    .digest('base64')
-}
-
-const OPCODE = { continuation: 0x0, text: 0x1, binary: 0x2, close: 0x8, ping: 0x9, pong: 0xa } as const
-
-/** Server frames are never masked (RFC 6455 §5.1); client frames always are. */
-export function encodeFrame(opcode: number, payload: Buffer): Buffer {
-  const length = payload.length
-  let header: Buffer
-  if (length < 126) {
-    header = Buffer.alloc(2)
-    header[1] = length
-  } else if (length < 65536) {
-    header = Buffer.alloc(4)
-    header[1] = 126
-    header.writeUInt16BE(length, 2)
-  } else {
-    header = Buffer.alloc(10)
-    header[1] = 127
-    header.writeBigUInt64BE(BigInt(length), 2)
-  }
-  header[0] = 0x80 | opcode
-  return Buffer.concat([header, payload])
-}
-
-interface WireHandlers {
+export interface WireHandlers {
   message(text: string): void
   closed(): void
+}
+
+/**
+ * How a carrier hands this server a new connection.
+ *
+ * `connect` is a factory rather than a finished wire because the wire needs the
+ * handlers and the handlers need the connection — the two are mutually
+ * recursive, and a factory is how that knot gets tied without a cast.
+ *
+ * Returns false when the server is full, in which case nothing was registered
+ * and the carrier should close whatever it was holding. `peerPublicKey` is the
+ * device's X25519 static key when the carrier has already authenticated one.
+ */
+export type AttachTransport = (
+  address: string,
+  connect: (handlers: WireHandlers) => RemoteWire,
+  peerPublicKey?: Buffer,
+) => boolean
+
+/**
+ * Everything a connection needs from whatever is carrying it.
+ *
+ * A `WireSocket` over TCP is one implementation. The relay transport is
+ * another: the same protocol messages, sealed and posted through a rendezvous
+ * server, with no HTTP upgrade and no socket of its own.
+ *
+ * Naming this interface is what lets the authentication, session and protocol
+ * layers below stay completely unaware of how a phone got here — which is the
+ * property that made adding the relay a new file rather than a second copy of
+ * this one.
+ */
+export interface RemoteWire {
+  send(text: string): void
+  close(code: number, reason?: string): void
+  /**
+   * Start liveness checking, once the connection has said who it is.
+   *
+   * Optional because it is a property of the carrier, not of the protocol. A
+   * TCP socket needs it — a phone that drives into a tunnel leaves a connection
+   * that looks open for minutes, holding an attached session with it. A relayed
+   * connection does not: the relay pings its own two sockets and tears the
+   * channel down when either stops answering, so a second heartbeat inside the
+   * first would only duplicate the work and the failure.
+   */
+  startHeartbeat?(intervalMs: number): void
 }
 
 /**
@@ -327,7 +521,7 @@ interface WireHandlers {
  * phone on a bad network.
  */
 class WireSocket {
-  private incoming: Buffer = Buffer.alloc(0)
+  private readonly reader: FrameReader
   private fragments: Buffer[] = []
   private fragmentBytes = 0
   private fragmented = false
@@ -340,6 +534,7 @@ class WireSocket {
     private readonly maxMessageBytes: number,
     private readonly handlers: WireHandlers,
   ) {
+    this.reader = new FrameReader(maxMessageBytes)
     // Keystrokes are one-byte writes; Nagle would hold each one waiting for an
     // ack and the phone would feel like a satellite link.
     if ('setNoDelay' in socket && typeof socket.setNoDelay === 'function') socket.setNoDelay(true)
@@ -413,7 +608,7 @@ class WireSocket {
     this.heartbeat = null
     // Free the parser's buffers: a connection that died mid-message would
     // otherwise hold its fragments until the object itself is collected.
-    this.incoming = Buffer.alloc(0)
+    this.reader.reset()
     this.fragments = []
     // End our own half — the peer may only have closed its writing side — and
     // tear the socket down if it never answers. Not `destroy()` on the spot:
@@ -433,51 +628,20 @@ class WireSocket {
 
   private receive(chunk: Buffer): void {
     if (this.finished) return
-    this.incoming = this.incoming.length === 0 ? chunk : Buffer.concat([this.incoming, chunk])
+    const batch = this.reader.push(chunk)
 
-    for (;;) {
+    // Good frames are delivered even when the chunk ended in a bad one, and in
+    // order, because the frame before a protocol error is usually the one that
+    // explains it. `finished` is re-checked each pass: handing a message to the
+    // app can close the connection, and the frames behind it are then moot.
+    for (const { fin, opcode, payload } of batch.frames) {
       if (this.finished) return
-      const buf = this.incoming
-      if (buf.length < 2) return
-
-      const first = buf[0]
-      const second = buf[1]
-      if ((first & 0x70) !== 0) return this.fail(CLOSE.protocolError, 'reserved bits set')
-
-      const fin = (first & 0x80) !== 0
-      const opcode = first & 0x0f
-      // Unmasked client frames are a protocol violation, and accepting them is
-      // the classic cache-poisoning hole.
-      if ((second & 0x80) === 0) return this.fail(CLOSE.protocolError, 'client frame was not masked')
-
-      let length = second & 0x7f
-      let offset = 2
-      if (length === 126) {
-        if (buf.length < offset + 2) return
-        length = buf.readUInt16BE(offset)
-        offset += 2
-      } else if (length === 127) {
-        if (buf.length < offset + 8) return
-        const wide = buf.readBigUInt64BE(offset)
-        offset += 8
-        // Compared as BigInt: a 2^63 length would round to a plausible Number.
-        if (wide > BigInt(this.maxMessageBytes)) return this.fail(CLOSE.messageTooBig, 'frame too large')
-        length = Number(wide)
-      }
-      // Refused on the declared length, before the payload is buffered — the
-      // point of a cap is not to hold the memory in the first place.
-      if (length > this.maxMessageBytes) return this.fail(CLOSE.messageTooBig, 'frame too large')
-
-      const total = offset + 4 + length
-      if (buf.length < total) return
-
-      const mask = buf.subarray(offset, offset + 4)
-      const payload = Buffer.from(buf.subarray(offset + 4, total))
-      for (let i = 0; i < payload.length; i += 1) payload[i] ^= mask[i & 3]
-
-      this.incoming = buf.subarray(total)
       this.frame(fin, opcode, payload)
     }
+
+    if (batch.ok || this.finished) return
+    const { reason, detail } = batch.error
+    this.fail(reason === 'too-large' ? CLOSE.messageTooBig : CLOSE.protocolError, detail)
   }
 
   private frame(fin: boolean, opcode: number, payload: Buffer): void {
@@ -649,13 +813,31 @@ async function serveStatic(root: string, req: IncomingMessage, res: ServerRespon
 
 interface LiveConnection {
   id: string
-  wire: WireSocket
+  wire: RemoteWire
   address: string
   connectedAt: number
   deviceId: string | null
   deviceName: string
   platform: string
+  /** Proved by the carrier's own handshake, before any of this ran. Null on the tailnet. */
+  peerPublicKey: Buffer | null
   handles: Map<string, SessionHandle>
+  /**
+   * Made on the first `localhost` verb and not before.
+   *
+   * Most phones never tap a port, and a hub that exists for all of them is a
+   * budget entry, a scan cache and a socket map per connection for a feature
+   * nobody used.
+   */
+  tunnels: TunnelHub | null
+  /**
+   * Made on the first `upload` verb and not before, for the same reason.
+   *
+   * It also holds an open file descriptor while a file is arriving, which is the
+   * stronger version of the argument: a desk per connection, made eagerly, would
+   * be sixty-four objects on a machine where nobody has sent anything.
+   */
+  uploads: UploadDesk | null
   helloTimer: NodeJS.Timeout | null
   /**
    * Set while a `hello` is being checked. Verification is asynchronous — scrypt
@@ -664,6 +846,15 @@ interface LiveConnection {
    * checked at once, against a connection that is unauthenticated for both.
    */
   greeting: boolean
+  /**
+   * Set while a `create` is being served.
+   *
+   * Spawning is asynchronous and the socket keeps reading throughout, so
+   * without this a double-tap on the phone's button — or a client that retries
+   * because the first answer was slow — starts two shells on somebody's Mac and
+   * only shows them one. The same reason `greeting` exists, for the same window.
+   */
+  creating: boolean
 }
 
 function hostAllowed(host: string | undefined, hosts: string[]): boolean {
@@ -721,6 +912,32 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
   const maxMessageBytes = options.maxMessageBytes ?? MAX_MESSAGE_BYTES
   const hosts = (options.hosts ?? []).map((host) => host.toLowerCase())
   const live = new Map<string, LiveConnection>()
+  const scanPorts = options.scanPorts ?? ((): Promise<LocalPort[]> => scanDevPorts())
+  // One budget for the whole endpoint, handed to every hub it makes. Per-phone
+  // caps alone would let sixty-four paired devices exhaust this process's
+  // descriptors between them.
+  const streams = streamBudget(MAX_STREAMS_TOTAL)
+
+  /**
+   * What this desktop tells a phone it can do, computed from what it can do.
+   *
+   * Read off the injected session layer rather than from a constant, so the
+   * advertisement cannot outlive the thing it advertises. `scripts/remote-host.ts`
+   * ran for weeks with a session layer that could not list, attach or start
+   * anything; had `create` been a constant it would have offered a button that
+   * could only ever produce a refusal.
+   *
+   * Computed once: the session layer is injected at construction and does not
+   * grow methods afterwards, and a `welcome` is not a place to be doing work.
+   */
+  const advertised: string[] = CAPABILITIES.filter((name) => {
+    if (name === CAPABILITY.create) return typeof options.sessions.create === 'function'
+    // Same rule, same reason: the thing that makes the feature possible is the
+    // thing that decides whether it is offered. A host with nowhere to put a file
+    // must not draw a Send File button on somebody's phone.
+    if (name === CAPABILITY.upload) return typeof options.uploadsDir === 'string' && options.uploadsDir !== ''
+    return true
+  })
 
   /**
    * When each device was last swept off this server, and a counter to date it.
@@ -758,6 +975,7 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
         address: connection.address,
         connectedAt: connection.connectedAt,
         sessionIds: [...connection.handles.keys()],
+        tunnels: connection.tunnels?.list() ?? [],
       })
     }
     return out.sort((a, b) => a.connectedAt - b.connectedAt)
@@ -780,7 +998,58 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
     connection.wire.close(closeCode, code)
   }
 
+  /**
+   * The tunnel hub for one phone, made on demand.
+   *
+   * Only ever called from the authenticated branch of `onMessage`, which is the
+   * whole of the authorisation for this feature: a socket that has not said
+   * hello, or whose device a human has not approved, never reaches the call.
+   * See `tunnel.ts` for what the hub itself will and will not dial.
+   */
+  function hubFor(connection: LiveConnection): TunnelHub {
+    if (connection.tunnels) return connection.tunnels
+    const hub = createTunnelHub({
+      scan: scanPorts,
+      send: (message) => send(connection, message),
+      reserved: options.reservedPorts,
+      budget: streams,
+      // The desktop's device list shows a phone's live tunnels next to its
+      // sessions, so opening or closing one has to redraw it for the same
+      // reason attaching does.
+      onChange: announce,
+    })
+    connection.tunnels = hub
+    return hub
+  }
+
+  /**
+   * The upload desk for one phone, made on demand.
+   *
+   * Reached only from the authenticated branch of `onMessage`, which is the whole
+   * of the authorisation for writing a file to this Mac — the same gate that
+   * guards typing into a terminal. Null when this host has nowhere to put a file,
+   * in which case the capability was never advertised and the caller refuses.
+   */
+  function deskFor(connection: LiveConnection): UploadDesk | null {
+    if (connection.uploads) return connection.uploads
+    const dir = options.uploadsDir
+    if (dir === undefined || dir === '') return null
+    const desk = createUploadDesk({
+      store: diskUploadStore(dir),
+      send: (message) => send(connection, message),
+    })
+    connection.uploads = desk
+    return desk
+  }
+
   function detachAll(connection: LiveConnection): void {
+    connection.tunnels?.closeAll()
+    connection.tunnels = null
+    // Before the handles, because this deletes half-written files. A partial
+    // video left in someone's Downloads wearing a real name is the one piece of
+    // state a dropped socket must not leave behind.
+    connection.uploads?.closeAll()
+    connection.uploads = null
     for (const handle of connection.handles.values()) {
       try {
         options.sessions.detach(handle)
@@ -885,7 +1154,12 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
     }
 
     const startedAt = sweep
-    const outcome = await options.auth.authenticate(message.token, message.device, connection.address)
+    const outcome = await options.auth.authenticate(
+      message.token,
+      message.device,
+      connection.address,
+      connection.peerPublicKey,
+    )
     // The socket can be gone by now: scrypt takes tens of milliseconds and the
     // hello timer keeps running through it.
     if (!live.has(connection.id)) return
@@ -916,6 +1190,10 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
           deviceName: outcome.deviceName ?? message.device.name,
           token: outcome.credential,
           sessions: [],
+          // Nothing is advertised to a device that is not in yet. What this
+          // desktop can do is not a secret, but this connection is about to be
+          // closed and a capability list would only invite it to try one.
+          capabilities: [],
         })
       }
       refuse(connection, 'unauthorized', outcome.message, CLOSE.policyViolation)
@@ -930,7 +1208,7 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
     connection.platform = message.device.platform
     if (connection.helloTimer) clearTimeout(connection.helloTimer)
     connection.helloTimer = null
-    connection.wire.startHeartbeat(pingIntervalMs)
+    connection.wire.startHeartbeat?.(pingIntervalMs)
     send(connection, {
       t: 'welcome',
       protocol: PROTOCOL_VERSION,
@@ -939,8 +1217,79 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
       // Present exactly once, on the connection that paired.
       token: outcome.credential,
       sessions: options.sessions.list(),
+      capabilities: advertised,
     })
     announce()
+  }
+
+  /**
+   * Start a session because a phone asked.
+   *
+   * Three gates, in this order, and the order is the point. The socket is
+   * already authenticated — `onMessage` will not reach this for a connection
+   * with no `deviceId`, and a device only has one after `RemoteAuth` matched a
+   * credential *and* a human approved the device on the Mac. Then the
+   * capability: a `create` arriving at a host that never advertised one is
+   * refused here rather than passed on, because a client that sends an
+   * unadvertised verb is not a client of ours. Then the session layer, which
+   * owns the only question left — whether this Mac will start a session in the
+   * folder that was named.
+   *
+   * Creating is at least as sensitive as typing, and it is more so in one
+   * respect: `input` can only reach a session this device has attached to,
+   * whereas this makes a *new* process. What keeps it honest is that the phone
+   * cannot name anything the desktop has not already offered it — see
+   * `CreateRequest`.
+   */
+  async function create(connection: LiveConnection, message: Extract<ClientMessage, { t: 'create' }>): Promise<void> {
+    const start = options.sessions.create
+    if (!start) {
+      send(connection, {
+        t: 'error',
+        code: 'unauthorized',
+        message: 'This Mac cannot start sessions from a phone.',
+      })
+      return
+    }
+
+    if (connection.creating) {
+      send(connection, {
+        t: 'error',
+        code: 'unavailable',
+        message: 'A session is already starting. Wait for it to appear.',
+      })
+      return
+    }
+
+    connection.creating = true
+    let outcome: CreateOutcome
+    try {
+      outcome = await start({ cwd: message.cwd, cols: message.cols, rows: message.rows })
+    } finally {
+      connection.creating = false
+    }
+    // The phone can be gone by now: spawning resolves a login shell's PATH and
+    // probes for agent CLIs, which is two `execFile` calls and tens of
+    // milliseconds. The session is still real and still on the Mac — that is
+    // the honest outcome of "start something", and it will be in the next
+    // `list` — but there is no socket left to tell about it.
+    if (!live.has(connection.id)) return
+
+    if (!outcome.ok) {
+      send(connection, { t: 'error', code: outcome.code, message: outcome.message })
+      return
+    }
+
+    send(connection, { t: 'created', session: outcome.session })
+    // Everyone else hears about it as an ordinary list refresh. `created` is a
+    // capability frame and the phone that did not ask for it may never have
+    // heard of it; `sessions` is v1 and every client back to the first one
+    // understands it.
+    const sessions = options.sessions.list()
+    for (const other of live.values()) {
+      if (other.id === connection.id || !other.deviceId) continue
+      send(other, { t: 'sessions', sessions })
+    }
   }
 
   function onMessage(connection: LiveConnection, raw: string): void {
@@ -1024,7 +1373,113 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
       case 'ping':
         send(connection, { t: 'pong' })
         return
+      case 'create':
+        // Not awaited: the message loop is the socket's data handler and must
+        // not stop reading for the length of a spawn. A rejection is impossible
+        // by contract and caught anyway — an unhandled rejection on this path
+        // would be a main process that exits while a phone is holding a shell.
+        void create(connection, message).catch((error) => {
+          console.error('[remote] create failed:', error)
+          if (!live.has(connection.id)) return
+          send(connection, {
+            t: 'error',
+            code: 'unavailable',
+            message: 'This Mac could not start that session.',
+          })
+        })
+        return
+      case 'ports':
+      case 'tunnel.open':
+      case 'tunnel.close':
+      case 'net.open':
+      case 'net.data':
+      case 'net.ack':
+      case 'net.close':
+        // Listed one by one rather than caught by a default, so that adding a
+        // verb to the protocol without deciding where it belongs stops the
+        // build instead of quietly falling through to the tunnel hub.
+        hubFor(connection).handle(message satisfies LocalhostMessage)
+        return
+      case 'upload.begin':
+      case 'upload.data':
+      case 'upload.end':
+      case 'upload.cancel': {
+        const desk = deskFor(connection)
+        if (!desk) {
+          // Refused here rather than passed on, for the same reason `create` is:
+          // a client sending a verb this host never advertised is not a client of
+          // ours. Answered on the upload's own id so the phone can end the right
+          // progress bar rather than showing a banner about nothing.
+          send(connection, {
+            t: 'upload.failed',
+            id: message.id,
+            message: 'This Mac cannot receive files from a phone.',
+          })
+          return
+        }
+        desk.handle(message satisfies UploadMessage)
+        return
+      }
     }
+  }
+
+  /**
+   * Brings one authenticated-eventually connection into being, whatever carried it.
+   *
+   * Everything past this point is identical for a phone on the tailnet and a
+   * phone on the far side of the relay, which is the point.
+   *
+   * The ceiling is checked here as well as at the HTTP upgrade, because the
+   * upgrade is no longer the only door: a relay can open channels as fast as it
+   * likes, and each one buys a slot, a timer and a parser for the length of the
+   * hello timeout.
+   */
+  function attachTransport(
+    address: string,
+    connect: (handlers: WireHandlers) => RemoteWire,
+    peerPublicKey?: Buffer,
+  ): boolean {
+    if (live.size >= MAX_CONNECTIONS) return false
+
+    const connection: LiveConnection = {
+      id: randomUUID(),
+      wire: undefined as unknown as RemoteWire,
+      address,
+      connectedAt: Date.now(),
+      deviceId: null,
+      deviceName: '',
+      platform: '',
+      peerPublicKey: peerPublicKey ?? null,
+      handles: new Map(),
+      tunnels: null,
+      uploads: null,
+      helloTimer: null,
+      greeting: false,
+      creating: false,
+    }
+
+    connection.wire = connect({
+      message: (text) => onMessage(connection, text),
+      closed: () => {
+        if (!live.delete(connection.id)) return
+        if (connection.helloTimer) clearTimeout(connection.helloTimer)
+        connection.helloTimer = null
+        const wasAuthenticated = connection.deviceId !== null
+        detachAll(connection)
+        if (wasAuthenticated) announce()
+      },
+    })
+
+    // An unauthenticated connection costs a slot; it does not get to keep one
+    // indefinitely, whether or not it also costs a file descriptor.
+    connection.helloTimer = setTimeout(() => {
+      if (connection.deviceId) return
+      connection.wire.close(CLOSE.policyViolation, 'no hello')
+    }, helloTimeoutMs)
+    connection.helloTimer.unref?.()
+
+    live.set(connection.id, connection)
+    return true
   }
 
   function handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
@@ -1051,40 +1506,9 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
         '\r\n',
     )
 
-    const connection: LiveConnection = {
-      id: randomUUID(),
-      wire: undefined as unknown as WireSocket,
-      address: req.socket.remoteAddress ?? 'unknown',
-      connectedAt: Date.now(),
-      deviceId: null,
-      deviceName: '',
-      platform: '',
-      handles: new Map(),
-      helloTimer: null,
-      greeting: false,
-    }
-
-    connection.wire = new WireSocket(socket, maxMessageBytes, {
-      message: (text) => onMessage(connection, text),
-      closed: () => {
-        if (!live.delete(connection.id)) return
-        if (connection.helloTimer) clearTimeout(connection.helloTimer)
-        connection.helloTimer = null
-        const wasAuthenticated = connection.deviceId !== null
-        detachAll(connection)
-        if (wasAuthenticated) announce()
-      },
-    })
-
-    // An unauthenticated socket costs a file descriptor and a slot; it does not
-    // get to keep either indefinitely.
-    connection.helloTimer = setTimeout(() => {
-      if (connection.deviceId) return
-      connection.wire.close(CLOSE.policyViolation, 'no hello')
-    }, helloTimeoutMs)
-    connection.helloTimer.unref?.()
-
-    live.set(connection.id, connection)
+    attachTransport(req.socket.remoteAddress ?? 'unknown', (handlers) =>
+      new WireSocket(socket, maxMessageBytes, handlers),
+    )
     // Bytes that arrived in the same TCP segment as the handshake. Dropping
     // them loses the client's first message roughly one time in a hundred.
     if (head.length > 0) socket.unshift(head)
@@ -1110,6 +1534,7 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
   return {
     handleRequest,
     handleUpgrade,
+    attachTransport,
     connections: publicConnections,
     dropDevice(deviceId: string): number {
       sweep += 1
@@ -1140,6 +1565,14 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
       connection.wire.close(CLOSE.goingAway, 'disconnected from the desktop')
       return true
     },
+    stopTunnel(connectionId: string, tunnelId: string): boolean {
+      // The phone stays connected and its terminal sessions are untouched: this
+      // ends one page, not the device's access. The sentence travels to the
+      // phone, which takes the page down and says where the decision came from.
+      return (
+        live.get(connectionId)?.tunnels?.stop(tunnelId, 'Stopped from the Mac.') ?? false
+      )
+    },
     closeAll(): void {
       for (const connection of [...live.values()]) connection.wire.close(CLOSE.goingAway, 'server stopping')
     },
@@ -1162,11 +1595,32 @@ export interface PairingDesk {
   cancel(): void
   /** True only for the code currently on screen, and only before it expires. */
   offers(token: string): boolean
+  /**
+   * Is a code on screen right now?
+   *
+   * The relay asks, and only the relay: a device pairing for the first time has
+   * no key this Mac has ever seen, so `isKnownDevice` would refuse its handshake
+   * and it could never get as far as presenting the code. Opening the handshake
+   * while a code is up is what makes first-time pairing possible at all, and it
+   * grants nothing on its own — the device still has to produce the code, and a
+   * human still has to approve it afterwards.
+   *
+   * The window is sixty seconds long and only exists because somebody pressed a
+   * button on this Mac, which is a far smaller opening than the one the pairing
+   * code itself already is.
+   */
+  open(): boolean
 }
 
 export function pairingDesk(auth: RemoteAuth, now: () => number = Date.now): PairingDesk {
   let live: { digest: Buffer; expiresAt: number } | null = null
   const digestOf = (value: string): Buffer => createHash('sha256').update(value).digest()
+  const expired = (): boolean => {
+    if (!live) return true
+    if (now() < live.expiresAt) return false
+    live = null
+    return true
+  }
 
   return {
     create(): PairingToken {
@@ -1181,12 +1635,11 @@ export function pairingDesk(auth: RemoteAuth, now: () => number = Date.now): Pai
       live = null
     },
     offers(token: string): boolean {
-      if (!live) return false
-      if (now() >= live.expiresAt) {
-        live = null
-        return false
-      }
+      if (expired() || !live) return false
       return timingSafeEqual(digestOf(token), live.digest)
+    },
+    open(): boolean {
+      return !expired()
     },
   }
 }
@@ -1206,10 +1659,20 @@ export function pairingDesk(auth: RemoteAuth, now: () => number = Date.now): Pai
  */
 export function authenticatorFor(auth: RemoteAuth, desk: PairingDesk): RemoteAuthenticator {
   return {
-    async authenticate(token, device, address): Promise<AuthOutcome> {
+    async authenticate(token, device, address, peerPublicKey): Promise<AuthOutcome> {
       if (token.includes('.')) {
         const verified = await auth.verifyCredential(token, address)
         if (verified.ok) {
+          // Two proofs, one device. The handshake proved possession of a private
+          // key and the credential proved possession of a bearer secret, and
+          // nothing so far has said they belong to the same phone. Insisting
+          // they do is what makes a credential copied off a phone — out of a
+          // backup, off a screen, out of a bug — useless without the phone.
+          // Refused in the same words as everything else here: which of the two
+          // did not match is not a remote caller's business.
+          if (peerPublicKey && !auth.deviceHoldsKey(verified.device.id, peerPublicKey)) {
+            return { ok: false, message: 'This device is not allowed in. Pair it again from the Mac.' }
+          }
           return { ok: true, deviceId: verified.device.id, deviceName: verified.device.name, credential: null }
         }
         return {
@@ -1234,7 +1697,15 @@ export function authenticatorFor(auth: RemoteAuth, desk: PairingDesk): RemoteAut
         return { ok: false, message: 'That pairing code is not right.' }
       }
 
-      const redeemed = await auth.redeemPairingToken(token, device.name, address)
+      // The key goes in at pairing time or never: it is the one moment a device
+      // and a person are both present, and every later connection is checked
+      // against what was written here.
+      const redeemed = await auth.redeemPairingToken(
+        token,
+        device.name,
+        address,
+        peerPublicKey ?? undefined,
+      )
       if (!redeemed.ok) {
         return {
           ok: false,
@@ -1246,6 +1717,14 @@ export function authenticatorFor(auth: RemoteAuth, desk: PairingDesk): RemoteAut
                 : 'That pairing code is not right.',
         }
       }
+
+      // The code has been spent, so the window it opened closes now rather than
+      // when it would have expired. That window is not only about the code: while
+      // it is up, the relay lets a device this Mac has never seen complete a
+      // handshake, because a phone pairing for the first time has no key here to
+      // be known by. Leaving it open for the rest of the minute would leave that
+      // door open for a device that is no longer the one being paired.
+      desk.cancel()
 
       // Paired, and deliberately not admitted: a token can be read over a
       // shoulder, so a human at the Mac approves the device before it opens
@@ -1265,37 +1744,67 @@ export function authenticatorFor(auth: RemoteAuth, desk: PairingDesk): RemoteAut
 /* --------------------------------------------------------------- lifecycle -- */
 
 /**
- * The whole server: tailnet address, certificate, HTTPS, WebSocket.
+ * The whole server: the two ways in, and the lifecycle around them.
  *
- * `start()` resolves with a status rather than throwing. Every way it can fail —
- * Tailscale off, signed out, HTTPS not enabled on the tailnet, port taken — is
- * something the user fixes somewhere else, so it has to arrive as a sentence
+ * There are two, and neither is required:
+ *
+ *  - **Direct on the tailnet.** One hop, WireGuard, no third party, and a real
+ *    certificate on a MagicDNS name. This is the better path and it is tried
+ *    first, but it needs Tailscale installed, signed in and switched on, which
+ *    is three steps before a phone sees anything.
+ *  - **Through the relay.** An outbound socket to a rendezvous service that is
+ *    treated as hostile and cannot read a byte of what it carries. No install,
+ *    no login, works from a hotel wifi.
+ *
+ * Tailscale being absent used to mean remote access was off. It no longer does:
+ * a missing tailnet blocks the direct listener and nothing else, and the reason
+ * is reported as `directReason` rather than as *the* reason so that a panel does
+ * not print an error next to a feature that is working.
+ *
+ * `start()` resolves with a status rather than throwing. Every way it can fail
+ * is something the user fixes somewhere else, so it has to arrive as a sentence
  * the settings panel can show, not as a stack trace in a console nobody opens.
+ *
+ * The one thing that is not configurable, on either path, is what the listener
+ * binds to. `0.0.0.0` would put a terminal on every network this laptop ever
+ * joins; the socket is on loopback and Tailscale's own proxy is the only thing
+ * in front of it. The relay does not change that — it never listens at all.
  */
 export function createRemoteServer(options: RemoteServerOptions): RemoteServer {
   const port = options.port ?? DEFAULT_PORT
   const readTailnet = options.readTailnet ?? (() => tailnetStatus())
 
   const serve = options.serve ?? { on: serveOn, off: serveOff }
+  const relay = options.relay ?? null
   let servers: LocalServer[] = []
   let endpoint: RemoteEndpoint | null = null
   let current: { url: string; address: string } | null = null
   let reason: string | null = null
+  let directReason: string | null = null
+  let relaying = false
   let starting: Promise<RemoteStatus> | null = null
 
   function snapshot(): RemoteStatus {
+    const link = relaying ? (relay?.state() ?? null) : null
     return {
-      running: servers.length > 0,
+      running: servers.length > 0 || relaying,
       url: current?.url ?? null,
       address: current?.address ?? null,
       port,
-      reason,
+      // Read live rather than remembered. With no listener, the honest answer to
+      // "why can my phone not see this Mac" is whatever the relay is saying at
+      // the moment somebody asks — a sentence recorded at `start()` would still
+      // be describing a DNS failure long after the wifi came back.
+      reason: servers.length > 0 ? null : (link ? link.reason : reason),
+      directReason,
+      relay: link,
       connections: endpoint?.connections() ?? [],
     }
   }
 
   function failure(message: string): RemoteStatus {
     reason = message
+    directReason = message
     current = null
     return snapshot()
   }
@@ -1317,14 +1826,39 @@ export function createRemoteServer(options: RemoteServerOptions): RemoteServer {
     })
   }
 
-  async function open(): Promise<RemoteStatus> {
-    const tailnet = await readTailnet()
-    if (!tailnet.ready) return failure(tailnet.reason)
+  /** Everything the direct path needs, or the sentence saying why it has none. */
+  type Direct =
+    | { ok: true; hosts: string[]; url: string; address: string }
+    | { ok: false; reason: string }
+
+  function directPlan(tailnet: TailnetStatus): Direct {
+    if (!tailnet.ready) return { ok: false, reason: tailnet.reason }
     if (!tailnet.magicDns || tailnet.dnsName === '') {
-      return failure(
-        'MagicDNS is off for this tailnet, so this Mac has no name a phone can trust a certificate for. Turn MagicDNS on in the Tailscale admin console, then try again.',
-      )
+      return {
+        ok: false,
+        reason:
+          'MagicDNS is off for this tailnet, so this Mac has no name a phone can trust a certificate for. Turn MagicDNS on in the Tailscale admin console, then try again.',
+      }
     }
+    return {
+      ok: true,
+      hosts: [
+        tailnet.dnsName,
+        `${tailnet.dnsName}:${port}`,
+        `${tailnet.address}:${port}`,
+        ...(tailnet.address6 ? [`[${tailnet.address6}]:${port}`] : []),
+      ],
+      url: `https://${tailnet.dnsName}:${port}/`,
+      address: tailnet.address,
+    }
+  }
+
+  async function open(): Promise<RemoteStatus> {
+    const direct = directPlan(await readTailnet())
+
+    // Nothing to run and nothing to fall back on. Reported exactly as before:
+    // the tailnet's own sentence, which names the switch to flick.
+    if (!direct.ok && relay === null) return failure(direct.reason)
 
     // No certificate is loaded any more. Electron's Node is built against
     // BoringSSL, where `https.createServer` accepts the connection and then
@@ -1333,58 +1867,68 @@ export function createRemoteServer(options: RemoteServerOptions): RemoteServer {
     // Tailscale terminates TLS instead, with the certificate it already
     // manages, and proxies to loopback.
 
-    const hosts =
-      options.hosts ??
-      [
-        tailnet.dnsName,
-        `${tailnet.dnsName}:${port}`,
-        `${tailnet.address}:${port}`,
-        ...(tailnet.address6 ? [`[${tailnet.address6}]:${port}`] : []),
-      ]
-    const live = createRemoteEndpoint({ ...options, hosts })
+    const hosts = options.hosts ?? (direct.ok ? direct.hosts : [])
+    const live = createRemoteEndpoint({
+      ...options,
+      hosts,
+      // This app's own listener is never a tunnel target. Only this function
+      // knows which port that is, which is why the endpoint is told rather than
+      // left to work it out.
+      reservedPorts: [port, ...(options.reservedPorts ?? [])],
+    })
 
-    // MagicDNS answers with both an A and an AAAA record. Binding only the IPv4
-    // address leaves a v6-preferring phone waiting for Happy Eyeballs to give up
-    // on every single connection, so both tailnet addresses get a listener — and
-    // still only tailnet addresses.
-    // Loopback only. Nothing on the tailnet reaches this socket directly; the
-    // only way in is through the proxy, which Tailscale scopes to the tailnet.
-    const addresses = ['127.0.0.1']
     const opened: LocalServer[] = []
-    try {
-      for (const address of addresses) {
+    let blocked: string | null = direct.ok ? null : direct.reason
+    if (direct.ok) {
+      // MagicDNS answers with both an A and an AAAA record, but nothing on the
+      // tailnet reaches this socket directly: the only way in is through
+      // Tailscale's proxy, which it scopes to the tailnet, so the listener is
+      // loopback and nothing else.
+      try {
         const server = createPlainServer(live.handleRequest)
         server.on('upgrade', live.handleUpgrade)
         // A phone that drops mid-handshake is routine, not a crash.
         server.on('clientError', (_error, socket) => socket.destroy())
-        await listenOn(server, address)
+        await listenOn(server, '127.0.0.1')
         opened.push(server)
-      }
-      const proxied = await serve.on(port, port)
-      if (!proxied.ok) {
-        for (const server of opened) server.close()
-        return failure(proxied.message ?? 'Tailscale could not put a proxy in front of this app.')
-      }
-    } catch (error) {
-      for (const server of opened) server.close()
-      const message = error instanceof Error ? error.message : String(error)
-      return failure(
-        /EADDRINUSE/.test(message)
+        const proxied = await serve.on(port, port)
+        if (!proxied.ok) {
+          blocked = proxied.message ?? 'Tailscale could not put a proxy in front of this app.'
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        blocked = /EADDRINUSE/.test(message)
           ? `Port ${port} on the tailnet address is already in use by something else on this Mac.`
-          : `Could not listen on the tailnet address: ${message}`,
-      )
+          : `Could not listen on the tailnet address: ${message}`
+      }
+      if (blocked !== null) {
+        for (const server of opened) server.close()
+        opened.length = 0
+      }
+    }
+
+    // A relay with nothing else working is still remote access; a direct path
+    // with no relay is what this was before. Only both failing is a failure.
+    if (opened.length === 0 && relay === null) return failure(blocked ?? 'Remote access could not start.')
+
+    if (relay !== null) {
+      relay.start(live.attachTransport)
+      relaying = true
     }
 
     servers = opened
     endpoint = live
-    reason = null
-    current = { url: `https://${tailnet.dnsName}:${port}/`, address: tailnet.address }
+    directReason = blocked
+    // Not an error while something is serving. A panel that prints "Tailscale is
+    // signed out" next to a working connection teaches people to ignore it.
+    reason = opened.length === 0 && !relaying ? blocked : null
+    current = opened.length > 0 && direct.ok ? { url: direct.url, address: direct.address } : null
     return snapshot()
   }
 
   return {
     async start(): Promise<RemoteStatus> {
-      if (servers.length > 0) return snapshot()
+      if (servers.length > 0 || relaying) return snapshot()
       // Two clicks on Start would otherwise each bind a socket, and the second
       // set is left listening with nothing holding a reference to it.
       if (starting) return starting
@@ -1403,9 +1947,15 @@ export function createRemoteServer(options: RemoteServerOptions): RemoteServer {
         }
       }
       endpoint?.closeAll()
+      // Stopped before the sockets are closed: the relay is an outbound link
+      // that reconnects on its own, so a relay left running would dial straight
+      // back in and hand out channels against an endpoint that is going away.
+      if (relaying) relay?.stop()
+      relaying = false
       const closing = servers
       servers = []
       current = null
+      directReason = null
       // Tailscale stores the serve config in tailscaled, so it outlives this
       // process. Left behind, it advertises a URL that proxies to a port
       // nothing is listening on any more.
@@ -1428,7 +1978,10 @@ export function createRemoteServer(options: RemoteServerOptions): RemoteServer {
     connections: () => endpoint?.connections() ?? [],
     dropDevice: (deviceId) => endpoint?.dropDevice(deviceId) ?? 0,
     dropConnection: (connectionId) => endpoint?.dropConnection(connectionId) ?? false,
+    stopTunnel: (connectionId, tunnelId) => endpoint?.stopTunnel(connectionId, tunnelId) ?? false,
     status: snapshot,
+    // No relay configured (`TERMINALDECK_RELAY=off`) means nothing to re-dial.
+    wake: () => relay?.wake(),
   }
 }
 
@@ -1443,14 +1996,94 @@ export interface RemoteIpcDeps {
   webRoot: string
   /** Directory for the device trust file and the certificate pair, under userData. */
   storageDir: string
+  /**
+   * Where files sent from a phone land, and the switch for the whole feature.
+   *
+   * Deliberately **not** under `storageDir`: that is application support, which
+   * is somewhere a person never looks and which an uninstall removes. A file sent
+   * from a phone is the user's file, so it goes where their downloads go —
+   * `index.ts` passes `app.getPath('downloads')` joined with the product name.
+   * Absent means this host does not offer the capability at all.
+   */
+  uploadsDir?: string
   port?: number
   /** Push an event at the renderer. `index.ts` already has exactly this function. */
   broadcast(channel: string, payload: unknown): void
+  /**
+   * Where the rendezvous relay lives, when it is not the default.
+   *
+   * `TERMINALDECK_RELAY_URL` overrides this and `TERMINALDECK_RELAY=off` turns
+   * the relay off entirely; see `relay-client.ts` for why the environment wins.
+   */
+  relayUrl?: string | null
+  /** False keeps the Mac off any relay, direct-on-tailnet only. */
+  relayEnabled?: boolean
+  /** Reads the environment. Injected so a test can set one without setting one. */
+  env?: NodeJS.ProcessEnv
 }
 
 export interface RemoteIpc {
   server: RemoteServer
   auth: RemoteAuth
+}
+
+/**
+ * The relay link for a real app: this Mac's identity, and who may handshake.
+ *
+ * Built lazily, on the first `start()`. Registering the IPC happens on every
+ * launch and turning remote access on does not, and `loadHostIdentity` writes a
+ * private key: minting key material on disk for a feature nobody switched on is
+ * the kind of thing this panel exists to not do.
+ *
+ * A failure to keep that identity turns the relay off rather than throwing. A
+ * private key that exists only in memory works until the next launch and then
+ * hands every paired phone a host id that no longer exists — so the honest
+ * answer is no relay, a sentence in the status, and a tailnet path that is
+ * untouched by any of it.
+ */
+function relayFor(storageDir: string, url: string, auth: RemoteAuth, desk: PairingDesk): RelayLink {
+  let link: RelayLink | null = null
+  let broken: string | null = null
+
+  return {
+    start(attachTransport): void {
+      if (link === null && broken === null) {
+        try {
+          link = createRelayClient({
+            url,
+            identity: loadHostIdentity(storageDir),
+            // Two ways in, and both are narrow. A device this Mac already knows,
+            // by a key it stored when that device paired — or any device at all,
+            // but only while a pairing code is on screen, because a phone
+            // pairing for the first time has no key here to be known by. Neither
+            // grants access: the hello that follows still needs a credential,
+            // and a human still has to approve.
+            isKnownDevice: (key) => auth.knowsDeviceKey(key) || desk.open(),
+          })
+        } catch (error) {
+          console.error('[relay] could not keep this Mac’s relay identity:', error)
+          broken =
+            'This Mac could not save the key it needs to be reachable through the relay. Check that its application-support folder is writable, then turn remote access off and on again.'
+        }
+      }
+      link?.start(attachTransport)
+    },
+    stop: () => link?.stop(),
+    // Harmless before the link exists: a Mac that has never started the relay
+    // has nothing to reconnect on waking.
+    wake: () => link?.wake(),
+    state: () =>
+      link?.state() ?? {
+        url,
+        hostId: '',
+        publicKey: '',
+        fingerprint: '',
+        connected: false,
+        channels: 0,
+        reason: broken ?? 'The relay has not been started yet.',
+        retryAt: null,
+      },
+  }
 }
 
 /**
@@ -1464,13 +2097,25 @@ export interface RemoteIpc {
 export function registerRemoteIpc(ipcMain: IpcMain, deps: RemoteIpcDeps): RemoteIpc {
   const auth = new RemoteAuth(deps.storageDir)
   const desk = pairingDesk(auth)
+  const env = deps.env ?? process.env
+
+  // Built here rather than inside the server, because this is the only place
+  // that holds the trust store and the storage directory. Nothing is dialled and
+  // no key is written until `start()`, which only runs when the user turns the
+  // feature on.
+  const relay = relayEnabled(env, deps.relayEnabled)
+    ? relayFor(deps.storageDir, relayUrl(env, deps.relayUrl), auth, desk)
+    : null
+
   const server = createRemoteServer({
     sessions: deps.sessions,
     auth: authenticatorFor(auth, desk),
     webRoot: deps.webRoot,
     certDir: deps.storageDir,
+    ...(deps.uploadsDir ? { uploadsDir: deps.uploadsDir } : {}),
     port: deps.port,
     onConnections: (connections) => deps.broadcast(REMOTE_CONNECTIONS_CHANNEL, connections),
+    ...(relay ? { relay } : {}),
   })
 
   ipcMain.handle('remote:status', (): RemoteStatus => server.status())
@@ -1487,6 +2132,20 @@ export function registerRemoteIpc(ipcMain: IpcMain, deps: RemoteIpcDeps): Remote
     if (typeof id === 'string') server.dropConnection(id)
     return server.connections()
   })
+
+  // The other half of "killable from either end". Not destructive enough to
+  // confirm — it closes a web page, and the phone can reopen it with one tap —
+  // but the phone is told why, so nobody is left looking at a dead page
+  // wondering whether their wifi dropped.
+  ipcMain.handle(
+    'remote:tunnel:stop',
+    (_event, connectionId: unknown, tunnelId: unknown): RemoteConnection[] => {
+      if (typeof connectionId === 'string' && typeof tunnelId === 'string') {
+        server.stopTunnel(connectionId, tunnelId)
+      }
+      return server.connections()
+    },
+  )
 
   ipcMain.handle('remote:devices', (): Device[] => auth.listDevices())
   ipcMain.handle('remote:device:approve', (_event, id: unknown): Device[] => {
