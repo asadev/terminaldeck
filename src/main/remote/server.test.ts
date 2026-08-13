@@ -1006,6 +1006,11 @@ describe('the server as a whole', () => {
     // the failure that matters here is the proxy refusing, not a certificate.
     const server = createRemoteServer({
       ...neverListens,
+      // A real socket is bound before the proxy is asked for, so this needs a
+      // port nothing else holds. 8443 is the default, and a running copy of the
+      // app sits on it — which reports a port clash instead of the proxy's own
+      // refusal, and that is the thing under test here.
+      port: 39217,
       readTailnet: async () => ready(),
       serve: {
         on: async () => ({ ok: false, message: 'HTTPS certificates are off for this tailnet.' }),
