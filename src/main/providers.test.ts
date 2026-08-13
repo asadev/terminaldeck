@@ -94,6 +94,20 @@ describe('the provider table per platform', () => {
 })
 
 describe('the PATH a spawned CLI gets', () => {
+  // $SHELL is pinned because the module reads it to decide which shell to ask,
+  // and the mock answers for /bin/zsh. Left to the host this passes on a zsh
+  // machine and fails on a bash one — which is exactly what it did: green
+  // locally, red on the CI runner, where SHELL is bash and the call fell
+  // through to the runner's own PATH.
+  const realShell = process.env.SHELL
+  beforeEach(() => {
+    process.env.SHELL = '/bin/zsh'
+  })
+  afterEach(() => {
+    if (realShell === undefined) delete process.env.SHELL
+    else process.env.SHELL = realShell
+  })
+
   it('asks the login shell on macOS', async () => {
     expect(await loginPath('darwin')).toBe('/opt/homebrew/bin:/usr/bin')
     expect(calls.ran).toEqual([{ file: '/bin/zsh', args: ['-lic', 'echo -n "$PATH"'] }])

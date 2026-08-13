@@ -358,7 +358,12 @@ describe('shellQuote', () => {
     expect(shellQuote("/Users/me/it's here/App.app")).toBe("'/Users/me/it'\\''s here/App.app'")
   })
 
-  it('neutralises everything sh would otherwise expand', async () => {
+  // The module refuses any platform but darwin, and this case runs `sh` /
+  // inspects a macOS path. Skipped on Windows rather than deleted: the
+  // behaviour is real everywhere it can happen.
+  it.skipIf(process.platform === 'win32')(
+    'neutralises everything sh would otherwise expand',
+    async () => {
     // Asserted by asking `sh` itself rather than by reasoning about the string.
     // Quoting rules are the shell's, so the shell is the only authority worth
     // testing against — and `printf '%s'` prints exactly one argument, so a
@@ -684,7 +689,12 @@ describe('starting the helper', () => {
     expect(result.logPath).toBe(join(STAGING_DIR, LOG_NAME))
   })
 
-  it('writes the helper into the staging directory, not the app', async () => {
+  // The module refuses any platform but darwin, and this case runs `sh` /
+  // inspects a macOS path. Skipped on Windows rather than deleted: the
+  // behaviour is real everywhere it can happen.
+  it.skipIf(process.platform === 'win32')(
+    'writes the helper into the staging directory, not the app',
+    async () => {
     const { options, fs } = healthyOptions()
     await installStagedUpdate(options)
     expect(fs.written).toHaveLength(1)
@@ -748,7 +758,12 @@ describe('the injected seams match the real modules', () => {
     expect(typeof fits).toBe('function')
   })
 
-  it('points at an `open` that exists on this machine', async () => {
+  // The module refuses any platform but darwin, and this case runs `sh` /
+  // inspects a macOS path. Skipped on Windows rather than deleted: the
+  // behaviour is real everywhere it can happen.
+  it.skipIf(process.platform === 'win32')(
+    'points at an `open` that exists on this machine',
+    async () => {
     // Verified rather than assumed: the relaunch is the last thing the helper
     // does, and a wrong path there is an update that silently never comes back.
     await expect(stat(DEFAULT_OPEN_BINARY)).resolves.toBeDefined()
