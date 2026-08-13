@@ -137,3 +137,58 @@ jobs:
         working-directory: release
         run: shasum -a 256 *.dmg *.zip *.exe > SHA256SUMS.txt
 
+
+      # `--generate-notes` writes the commit summary; `--notes` is prepended to
+      # it. The install note is not decoration: both builds are unsigned, so a
+      # first launch without it looks like a broken download on either platform.
+      #
+      # The product name is read from package.json and substituted into a
+      # placeholder rather than typed here — this repo keeps the name in one
+      # place, and a workflow is no more exempt from that than a component is.
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          app="$(node -p "require('./package.json').productName")"
+          notes="$(cat <<'NOTE'
+          ### Install
+
+          macOS 12 or later, Apple silicon: open `-arm64.dmg` and drag the app
+          to Applications. There is no Intel Mac build — macOS 27 runs on none.
+
+          Windows 10 or later, x64: run `-x64-setup.exe`. There is no separate
+          ARM build; Windows on ARM runs the x64 one. **The Windows build has
+          never been launched on Windows** — it is published so it can be.
+
+          Neither build is signed. macOS will refuse the first launch: either
+          right-click the app and choose *Open*, or clear the quarantine flag:
+
+          ```sh
+          xattr -dr com.apple.quarantine "/Applications/{{APP}}.app"
+          ```
+
+          Windows SmartScreen will warn instead: choose *More info*, then
+          *Run anyway*. The `-portable.exe` needs no installation and cannot
+          update itself.
+
+          {{APP}} runs agent CLIs; it does not bundle them. At least one of
+          Claude Code, Codex CLI or Gemini CLI needs to be installed and
+          authenticated already.
+
+          The app checks for new versions and installs them itself, so the
+          `.zip` and `latest*.yml` files are for the updater rather than for
+          you. `SHA256SUMS.txt` lists the checksum of every artifact below.
+          NOTE
+          )"
+
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes \
+            --notes "${notes//\{\{APP\}\}/$app}" \
+            release/*.dmg \
+            release/*.zip \
+            release/*.exe \
+            release/*.blockmap \
+            release/latest-mac.yml \
+            release/latest.yml \
+            release/SHA256SUMS.txt
