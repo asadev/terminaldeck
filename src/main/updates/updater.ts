@@ -149,8 +149,34 @@ export interface UpdateEnvironment {
   feedConfigPath: string
 }
 
+/**
+ * The way to update a build Squirrel will not touch.
+ *
+ * Squirrel.Mac refuses to replace a bundle it cannot verify a signature for,
+ * which is every unsigned build — including this one. That is a limit of
+ * Squirrel, not of updating: the feed, the archive and its sha512 are all
+ * public, and replacing an app bundle is a move. This is that path, injected so
+ * the state machine below does not care which one is in use.
+ *
+ * Supplied only on macOS today. When it is absent the verdict stands and the
+ * panel says so, which is the honest answer rather than a silent no-op.
+ */
+export interface ManualStrategy {
+  /** The newest release, or null when it is not newer than the running one. */
+  check(): Promise<{ version: string; notes: string | null; sizeBytes: number | null } | null>
+  /** Download and verify. Resolves once the bytes are proven and unpacked. */
+  download(
+    version: string,
+    onProgress: (percent: number, bytesPerSecond: number) => void,
+  ): Promise<{ ok: true } | { ok: false; message: string }>
+  /** Swap the bundle and relaunch. Only reachable from `ready`. */
+  install(version: string): Promise<{ ok: true } | { ok: false; message: string }>
+}
+
 export interface UpdaterDeps {
   updater: UpdaterLike
+  /** Used instead of Squirrel when this build cannot be updated by Squirrel. */
+  manual?: ManualStrategy
   environment: UpdateEnvironment
   /** Push a state to the renderer. `src/main/index.ts` supplies the window. */
   broadcast: (channel: string, state: UpdateState) => void
@@ -371,8 +397,8 @@ export interface UpdateController {
   check(options?: { automatic?: boolean }): Promise<UpdateState>
   /** Begin downloading the update the user was shown. */
   download(): Promise<UpdateState>
-  /** Quit and install what is already staged. The only caller of quitAndInstall. */
-  installNow(): UpdateState
+  /** Install what is already staged. The only caller of quitAndInstall. */
+  installNow(): Promise<UpdateState>
   /** Arm the launch check and the recurring one. Returns immediately. */
   start(): void
   /** Disarm the timers. Call from `before-quit`. */
@@ -396,7 +422,13 @@ export function createUpdateController(deps: UpdaterDeps): UpdateController {
 
   const verdict = updateSupport(environment, fileExists)
 
-  let current: UpdateState = verdict.supported
+  // A build Squirrel refuses is still updatable when a manual strategy is
+  // supplied — that is the whole point of the seam. The verdict only stands
+  // when there is no other way in.
+  const manual = deps.manual ?? null
+  const usable = verdict.supported || manual !== null
+
+  let current: UpdateState = usable
     ? { phase: 'idle', checkedAt: null }
     : { phase: 'unsupported', reason: verdict.reason }
 
@@ -508,6 +540,21 @@ export function createUpdateController(deps: UpdaterDeps): UpdateController {
   }
 
   async function check(options?: { automatic?: boolean }): Promise<UpdateState> {
+    if (manualInUse()) {
+      // Squirrel is not involved, so neither is its feed handling: the release
+      // manifest is public and `fetch-update` already parses it.
+      if (read().phase === 'downloading') return read()
+      set({ phase: 'checking' })
+      try {
+        const found = await (manual as ManualStrategy).check()
+        return found === null
+          ? set({ phase: 'idle', checkedAt: now() })
+          : set({ phase: 'available', version: found.version, notes: found.notes, sizeBytes: found.sizeBytes })
+      } catch (error) {
+        return set({ phase: 'error', message: messageOf(error) })
+      }
+    }
+
     const before = read()
     if (before.phase === 'unsupported') return before
 
@@ -546,7 +593,26 @@ export function createUpdateController(deps: UpdaterDeps): UpdateController {
     return after
   }
 
+  /** True when Squirrel is refused and the manual path is doing the work. */
+  const manualInUse = (): boolean => manual !== null && !verdict.supported
+
   async function download(): Promise<UpdateState> {
+    if (manualInUse()) {
+      const offered = read()
+      if (offered.phase !== 'available') return offered
+      const version = offered.version
+      set({ phase: 'downloading', version, percent: 0, bytesPerSecond: 0 })
+      const done = await (manual as ManualStrategy).download(version, (percent, bytesPerSecond) => {
+        // Only while this download is still the current one: a check that
+        // superseded it must not be overwritten by a late progress event.
+        const now = read()
+        if (now.phase === 'downloading' && now.version === version) {
+          set({ phase: 'downloading', version, percent, bytesPerSecond })
+        }
+      })
+      return done.ok ? set({ phase: 'ready', version }) : set({ phase: 'error', message: done.message })
+    }
+
     // Only from `available`. The panel only offers the button in that phase, so
     // reaching here otherwise is a double click or a stale renderer, and
     // `downloadUpdate()` with nothing to download rejects.
@@ -576,11 +642,17 @@ export function createUpdateController(deps: UpdaterDeps): UpdateController {
     return after
   }
 
-  function installNow(): UpdateState {
+  async function installNow(): Promise<UpdateState> {
     // The only call to quitAndInstall in this module, and it is unreachable
     // except from a user who pressed a button on a staged update.
     const staged = read()
     if (staged.phase !== 'ready') return staged
+    if (manualInUse()) {
+      // The swap quits this process itself, so a resolved failure is the only
+      // thing that can come back here — a success never returns.
+      const done = await (manual as ManualStrategy).install(staged.version)
+      return done.ok ? staged : set({ phase: 'error', message: done.message })
+    }
     updater.quitAndInstall()
     return staged
   }
@@ -651,7 +723,7 @@ export function registerUpdateIpc(ipcMain: IpcMain, deps: UpdaterDeps): UpdateCo
   // it is never rate limited.
   ipcMain.handle('update:check', (): Promise<UpdateState> => controller.check({ automatic: false }))
   ipcMain.handle('update:download', (): Promise<UpdateState> => controller.download())
-  ipcMain.handle('update:install', (): UpdateState => controller.installNow())
+  ipcMain.handle('update:install', (): Promise<UpdateState> => controller.installNow())
 
   controller.start()
   return controller

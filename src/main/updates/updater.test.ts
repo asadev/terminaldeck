@@ -326,7 +326,7 @@ describe('an unsupported build', () => {
 
     expect(await controller.check()).toEqual(controller.state())
     expect(await controller.download()).toEqual(controller.state())
-    expect(controller.installNow()).toEqual(controller.state())
+    expect(await controller.installNow()).toEqual(controller.state())
 
     expect(updater.calls).toEqual({ check: 0, download: 0, quitAndInstall: 0 })
     controller.stop()
@@ -649,11 +649,11 @@ describe('nothing happens without an explicit call', () => {
 
   it('install does nothing when nothing is staged', async () => {
     const { controller, updater } = harness()
-    expect(controller.installNow().phase).toBe('idle')
+    expect((await controller.installNow()).phase).toBe('idle')
 
     updater.onCheck = () => updater.emitAvailable(info('0.2.0'))
     await controller.check()
-    expect(controller.installNow().phase).toBe('available')
+    expect((await controller.installNow()).phase).toBe('available')
 
     expect(updater.calls.quitAndInstall).toBe(0)
   })

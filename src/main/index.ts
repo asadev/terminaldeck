@@ -17,6 +17,7 @@ import { registerDevPortsIpc } from './dev-ports'
 import { autoUpdater } from 'electron-updater'
 import { registerAgentControlsIpc } from './agent-controls'
 import { registerUpdateIpc } from './updates/updater'
+import { createManualStrategy } from './updates/manual-strategy'
 import { registerTailnetIpc } from './remote/tailnet'
 import { registerRemoteIpc } from './remote/server'
 import { SessionFanout } from './remote/session-fanout'
@@ -241,6 +242,19 @@ function registerIpc(): void {
   // checking forever — see updates/updater.ts.
   updates = registerUpdateIpc(ipcMain, {
     updater: autoUpdater,
+    // Squirrel refuses an unsigned bundle, which is this build. The manual
+    // path does the same job without it: read the public feed, verify the
+    // archive's sha512, swap the bundle. Supplied on macOS only.
+    manual:
+      process.platform === 'darwin'
+        ? createManualStrategy({
+            feedUrl: 'https://github.com/asadev/terminaldeck/releases/latest/download/latest-mac.yml',
+            userDataPath: app.getPath('userData'),
+            currentVersion: app.getVersion(),
+            platform: process.platform,
+            exePath: app.getPath('exe'),
+          })
+        : undefined,
     environment: {
       platform: process.platform,
       isPackaged: app.isPackaged,
