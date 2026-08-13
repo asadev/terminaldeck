@@ -34,15 +34,20 @@ files:
   # ALL prebuilds, not just the Windows ones. electron-builder rebuilds
   # build/Release/pty.node against the target architecture and node-pty loads
   # that first, so the folder is a fallback that ships every platform at once.
-  # Keeping darwin-x64 inside an arm64 app is enough for macOS to flag the
-  # whole bundle: "App Update Required — This version of Terminal Deck will not
-  # open in macOS 28." The trigger is a nested x86_64 binary actually being
-  # executed, and macOS attributes it to the parent bundle, not the helper.
+  # These were one blanket `prebuilds/**` exclusion, which was right for macOS
+  # and quietly wrong for Windows: it also deleted win32-x64, taking with it the
+  # fallback that would have covered an incomplete rebuild — and silently, since
+  # node-pty tries build/Release first and finds it.
   #
-  # Now that only arm64 ships, this line is the last thing standing between
-  # this app and that notification. The darwin-x64 prebuilt is still sitting in
-  # node_modules; delete or mistype this line and the bug is back.
-  - '!**/node_modules/node-pty/prebuilds/**'
+  # darwin-x64 is excluded everywhere because a nested x86_64 binary is enough
+  # for macOS to flag the whole bundle: "App Update Required — This version of
+  # Terminal Deck will not open in macOS 28", attributed to the parent app. That
+  # is the bug this line exists for; delete or mistype it and it returns.
+  #
+  # The .pdb files are 28.5 MB of the 30 MB Windows slice — debug symbols no
+  # user downstream reads.
+  - '!**/node_modules/node-pty/prebuilds/darwin-x64/**'
+  - '!**/node_modules/node-pty/prebuilds/**/*.pdb'
 
 asar: true
 # electron-builder detects native modules and unpacks them on its own; naming
@@ -57,6 +62,9 @@ asarUnpack:
   - '**/node_modules/better-sqlite3/**'
 
 mac:
+  files:
+    - '!**/node_modules/node-pty/prebuilds/win32-*/**'
+
   # Apple silicon only. Not universal, and no separate Intel build.
   #
   # Rosetta is not the reason, and it is worth being explicit because it is the
@@ -123,6 +131,36 @@ mac:
     NSDocumentsFolderUsageDescription: Terminal Deck opens coding projects stored in your Documents folder.
     NSDownloadsFolderUsageDescription: Terminal Deck opens coding projects stored in your Downloads folder.
     NSRemovableVolumesUsageDescription: Terminal Deck opens coding projects stored on external drives.
+
+win:
+  files:
+    - '!**/node_modules/node-pty/prebuilds/darwin-*/**'
+
+  # x64 only, and for the mirror image of the macOS reasoning. There, Rosetta
+  # translates Intel to Apple silicon and never the reverse, so arm64 reaches
+  # everyone. Here the emulation runs the other way — Windows 11 on ARM runs x64
+  # — so one x64 build reaches every Windows machine alive, Snapdragon included.
+  # An arm64 slice would buy those laptops native speed and nothing else, and
+  # there is no ARM Windows machine here to launch the result on.
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: portable
+      arch: [x64]
+  icon: build/icon.ico
+
+nsis:
+  # Both targets emit .exe, so each needs its own name. The inherited pattern
+  # would name them identically and whichever finished second would overwrite
+  # the first — silently, since both are legitimate outputs of one run.
+  artifactName: ${name}-${version}-${arch}-setup.${ext}
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  perMachine: false
+  deleteAppDataOnUninstall: false
+
+portable:
+  artifactName: ${name}-${version}-${arch}-portable.${ext}
 
 dmg:
   title: ${productName} ${version}

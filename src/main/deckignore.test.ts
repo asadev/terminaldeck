@@ -368,6 +368,7 @@ describe('malformed and hostile files', () => {
     expect(explainPath(ignore, 'x.bak', false).rule?.line).toBe(4)
   })
 
+  // Emphatically not skipped on Windows: CRLF is the line ending it uses.
   it('handles CRLF line endings', async () => {
     const ignore = await ignoreFor(await project({ [TERMINALDECKIGNORE_FILE]: '*.log\r\ntmp/\r\n' }))
     expect(verdict(ignore, 'a.log', false)).toBe(true)

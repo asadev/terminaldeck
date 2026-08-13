@@ -21,6 +21,9 @@ coverage/
 # unsigned — but an Apple Developer identity arrives as exactly these files,
 # and the moment to have this rule is before one is downloaded, not after.
 *.p12
+# A Windows code-signing certificate arrives as a .pfx. Listed before one
+# ever lands here, not after.
+*.pfx
 *.pem
 *.key
 *.cer

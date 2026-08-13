@@ -19,6 +19,7 @@
     "postinstall": "electron-builder install-app-deps",
     "art": "node build/art/icon.mjs && iconutil -c icns build/icon.iconset -o build/icon.icns && node build/art/dmg-background.mjs",
     "dist:mac": "npm run build && electron-builder --mac --publish never",
+    "dist:win": "npm run build && electron-builder --win --publish never",
     "pack:mac": "npm run build && electron-builder --mac dir:arm64 --publish never",
     "release:check": "node scripts/check-release.mjs",
     "preversion": "npm run typecheck && npm test && node scripts/version.mjs check",

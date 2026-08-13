@@ -59,54 +59,78 @@ jobs:
       - name: Build the mac artifacts
         run: npm run dist:mac
 
+      - name: Upload the mac artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac
+          path: |
+            release/*.dmg
+            release/*.zip
+            release/*.blockmap
+            release/latest-mac.yml
+          if-no-files-found: error
+          retention-days: 1
+
+  windows:
+    # Built natively on Windows. Cross-compiling the native modules from macOS
+    # is the dominant failure mode in this space, and NSIS would additionally
+    # need Wine on a Mac — one more untested moving part between source and
+    # installer. `better-sqlite3` downloads a prebuilt Electron binary and
+    # `node-pty` ships an N-API prebuild, so no compiler is on the critical path
+    # here either; the runner is about being the right platform, not toolchain.
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      # Two tests create a FIFO with mkfifo, which Windows has no equivalent
+      # for; both are skipped there by an explicit platform guard rather than by
+      # being deleted.
+      - name: Test
+        run: npm test
+
+      - name: Build the Windows artifacts
+        run: npm run dist:win
+
+      - name: Upload the Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: |
+            release/*.exe
+            release/*.blockmap
+            release/latest.yml
+          if-no-files-found: error
+          retention-days: 1
+
+  release:
+    # One job creates the Release. Two jobs both calling `gh release create` is
+    # a race, and the loser's assets do not land.
+    needs: [macos, windows]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Collect both platforms
+        uses: actions/download-artifact@v4
+        with:
+          path: release
+          merge-multiple: true
+
       - name: Checksums
         working-directory: release
-        run: shasum -a 256 *.dmg *.zip > SHA256SUMS.txt
+        run: shasum -a 256 *.dmg *.zip *.exe > SHA256SUMS.txt
 
-      # `--generate-notes` writes the commit/PR summary; `--notes` is prepended
-      # to it. The install note is not decoration: the app is unsigned, so a
-      # first launch without this instruction looks like a broken download.
-      #
-      # The product name is read from package.json and substituted into a
-      # placeholder rather than typed out here — this repo keeps the name in one
-      # place, and a workflow is no more exempt from that than a component is.
-      # The heredoc stays quoted so the backticks in the markdown are markdown.
-      - name: Create the GitHub Release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          app="$(node -p "require('./package.json').productName")"
-          notes="$(cat <<'NOTE'
-          ### Install
-
-          macOS 12 or later, Apple silicon. Open `-arm64.dmg` and drag the app
-          to Applications. There is no Intel build.
-
-          This build is **not signed or notarised** — an Apple Developer identity
-          would be needed for that. macOS will refuse the first launch. Either
-          right-click the app and choose *Open*, or clear the quarantine flag:
-
-          ```sh
-          xattr -dr com.apple.quarantine "/Applications/{{APP}}.app"
-          ```
-
-          {{APP}} runs agent CLIs; it does not bundle them. At least one of
-          Claude Code, Codex CLI or Gemini CLI needs to be installed and
-          authenticated already.
-
-          Install the `.dmg`. The `.zip` files are the same app in the format an
-          updater consumes — nothing in this build checks for updates yet, so
-          there is no reason to download one by hand. `SHA256SUMS.txt` lists the
-          checksum of every artifact below.
-          NOTE
-          )"
-
-          gh release create "${GITHUB_REF_NAME}" \
-            --title "${GITHUB_REF_NAME}" \
-            --generate-notes \
-            --notes "${notes//\{\{APP\}\}/$app}" \
-            release/*.dmg \
-            release/*.zip \
-            release/*.blockmap \
-            release/latest-mac.yml \
-            release/SHA256SUMS.txt

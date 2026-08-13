@@ -331,12 +331,19 @@ describe('listDirectory and readTextFile edges', () => {
     await expect(readTextFile(root, 'adir')).rejects.toThrow(/not a readable file/)
   })
 
-  it('lists a FIFO but never reads it — a read would block the IPC handler forever', async () => {
-    execFileSync('mkfifo', [join(root, 'pipe')])
-    const pipe = (await listDirectory(root)).entries.find((e) => e.name === 'pipe')
-    expect(pipe).toMatchObject({ kind: 'file', blocked: true })
-    await expect(readTextFile(root, 'pipe')).rejects.toThrow(/not a readable file/)
-  })
+  // Windows has no mkfifo and no FIFO in the filesystem sense, so the hazard
+  // this pins cannot exist there. Skipped rather than deleted: the invariant is
+  // real everywhere else, and a test that silently vanishes from CI is how a
+  // platform stops being covered without anyone noticing.
+  it.skipIf(process.platform === 'win32')(
+    'lists a FIFO but never reads it — a read would block the IPC handler forever',
+    async () => {
+      execFileSync('mkfifo', [join(root, 'pipe')])
+      const pipe = (await listDirectory(root)).entries.find((e) => e.name === 'pipe')
+      expect(pipe).toMatchObject({ kind: 'file', blocked: true })
+      await expect(readTextFile(root, 'pipe')).rejects.toThrow(/not a readable file/)
+    },
+  )
 
   it('blocks a symlink that reaches outside the root through another symlink', async () => {
     await symlink(tmpdir(), join(root, 'hop1'), 'dir')
