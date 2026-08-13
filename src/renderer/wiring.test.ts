@@ -73,6 +73,16 @@ const SEAMS: Array<{ file: string; child: string; props: string[]; why: string }
     props: [],
     why: 'the microphone has no other entry point',
   },
+  {
+    file: 'renderer/App.tsx',
+    child: 'UpdateBanner',
+    props: [],
+    // It takes no required props on purpose — it resolves its own bridge, and
+    // every state it can draw is pushed to it. Being rendered *at all* is the
+    // entire wiring, which is exactly the failure this table exists for: a
+    // shipped update nobody in the app is ever told about.
+    why: 'it is the only place in the app that says an update exists or asks for the restart',
+  },
 ]
 
 describe('components that are built are also wired', () => {

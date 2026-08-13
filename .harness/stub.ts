@@ -94,6 +94,16 @@ const api: Record<string, unknown> = new Proxy(
       message:
         'Tailscale HTTPS certificates are off for this tailnet. Open the admin console DNS page and turn on HTTPS Certificates.',
     }),
+    // The harness shows the state most users on an unsigned build will meet.
+    updateStatus: async () => ({
+      phase: 'unsupported',
+      reason:
+        'This build is not signed, so it cannot update itself. Download the latest version from the releases page.',
+    }),
+    checkForUpdate: async () => ({ phase: 'checking' }),
+    downloadUpdate: async () => ({ phase: 'downloading', version: '0.2.0', percent: 42, bytesPerSecond: 1_500_000 }),
+    installUpdate: async () => ({ phase: 'ready', version: '0.2.0' }),
+    onUpdateState: noop,
     onPlanLimits: noop,
     // The harness has no live session, so the plan half reports "not available"
     // — which is the state worth being able to look at anyway.

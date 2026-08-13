@@ -13,12 +13,22 @@
  *    while the same command without it is logged in. Isolation is real.
  * 2. It creates `.claude.json`, `projects/`, `sessions/` and `backups/` inside
  *    that directory. Transcripts move with it — see `transcriptDir()`.
- * 3. Credentials live in the macOS Keychain, not in the directory, and the
- *    Keychain service name carries a suffix derived from the config dir:
+ * 3. **On macOS**, credentials live in the login Keychain, not in the directory,
+ *    and the Keychain service name carries a suffix derived from the config dir:
  *    `Claude Code-credentials` for the default, `Claude Code-credentials-<hex>`
  *    for a custom one. Both exist on this machine. So logging into a second
  *    profile cannot overwrite the first one's token — and, the other way
  *    round, deleting a profile's directory does NOT log it out.
+ *
+ *    That paragraph is a statement about macOS and nothing else. Point 1 — the
+ *    part that makes profiles work at all — is an environment variable and is
+ *    not platform-specific; point 3 is about where a program this app does not
+ *    own puts its secrets, and it has never been checked anywhere but here.
+ *    `platform/credential-store.ts` says which platforms it is claimed for,
+ *    `profileStatus` reports that per profile, and Windows gets an honest "not
+ *    established" rather than a copy of the sentence above. It also explains why
+ *    Electron's `safeStorage` is not a fix for it: this app never holds the
+ *    credential, so there is nothing here for DPAPI to protect.
  * 4. **Setting the variable to the default path is not a no-op.** With
  *    `CLAUDE_CONFIG_DIR=$HOME/.claude` the CLI looks for
  *    `~/.claude/.claude.json`, but a default install keeps its config at
@@ -36,6 +46,8 @@ import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { app, type IpcMain, type IpcMainInvokeEvent } from 'electron'
 import type { ProviderId } from '../shared/types'
+import { profileIsolation, type ProfileIsolation } from './platform/credential-store'
+import { currentPlatform, type Platform } from './platform/host'
 import { claudeConfigDir, transcriptDir } from './transcript'
 
 /* ---------------------------------------------------------------- model -- */
@@ -107,9 +119,22 @@ export class ProfileError extends Error {
 }
 
 /**
+ * MS-DOS device names, which Windows still refuses as filenames anywhere in a
+ * path. `mkdir con` fails there with EINVAL — so a profile called "Con" would
+ * slug to `con`, fail to create, and take the whole dialog down with an errno
+ * nobody can read. Only the exact names are reserved; `console` is fine.
+ */
+const WINDOWS_RESERVED_NAMES = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/
+
+/**
  * A profile id becomes a directory name, so it has to survive a filesystem
  * round-trip on any platform: no separators, no dots that could climb a level,
  * nothing Windows reserves.
+ *
+ * The last clause was a claim rather than a behaviour until the Windows port —
+ * the character class handles separators and dots, and nothing handled the
+ * device names. Applied on every platform on purpose: an id is written into
+ * `profiles.json`, and a file written on a Mac gets opened on a PC.
  */
 export function slugifyProfileId(name: string): string {
   const slug = name
@@ -120,7 +145,8 @@ export function slugifyProfileId(name: string): string {
     .slice(0, 32)
   // A name of only punctuation ("!!!") would slug to nothing, and an empty
   // directory name would silently resolve to the profiles root itself.
-  return slug === '' ? 'profile' : slug
+  if (slug === '') return 'profile'
+  return WINDOWS_RESERVED_NAMES.test(slug) ? `${slug}-profile` : slug
 }
 
 /** Append -2, -3 … until the id is free. Two "Work" profiles are legal. */
@@ -594,14 +620,30 @@ export interface DeleteProfileResult {
   /** False when the directory was left alone — the app did not create it. */
   filesDeleted: boolean
   /**
-   * The login itself is not deleted. Claude stores credentials in the OS
-   * keychain under a service name derived from the config directory, so
-   * recreating a profile at the same path signs straight back in.
+   * True when the login survives this deletion, so recreating a profile at the
+   * same path signs straight back in.
+   *
+   * On macOS that is always the case: credentials are in the login Keychain
+   * under a service name derived from the config directory, and this only ever
+   * removes the directory. It is **not** unconditional, which is why it is
+   * computed rather than written as `true`. Where the credential turns out to
+   * live inside the config directory — which is what a `.credentials.json`
+   * there means, and is the only thing that can be established on Windows —
+   * deleting the files does sign the profile out, and answering `true` there
+   * would be a straightforward lie about work already done.
+   *
+   * No caller reads this field today; it is part of the IPC answer and nothing
+   * puts it on screen. Computed correctly anyway, because the moment something
+   * does show it, it will be showing whatever this returns.
    */
   credentialsRetained: boolean
 }
 
-export function deleteProfile(id: string, options: { deleteFiles?: boolean } = {}): DeleteProfileResult {
+export function deleteProfile(
+  id: string,
+  options: { deleteFiles?: boolean } = {},
+  platform: Platform = currentPlatform(),
+): DeleteProfileResult {
   const state = getState()
   if (id === SYSTEM_PROFILE_ID) {
     throw new ProfileError('the default profile is your own Claude install and cannot be deleted')
@@ -610,6 +652,13 @@ export function deleteProfile(id: string, options: { deleteFiles?: boolean } = {
   const index = state.profiles.findIndex((entry) => entry.id === id)
   if (index === -1) throw new ProfileError(`no profile with id ${id}`)
   const [profile] = state.profiles.splice(index, 1)
+
+  // Read before the directory goes, because that is the only moment the
+  // question "where does this profile's login live?" can still be answered.
+  const isolation = profileIsolation(
+    platform,
+    existsSync(join(profile.configDir, '.credentials.json')),
+  )
 
   // Every reference goes with it, so nothing resolves to a profile that is gone.
   if (state.defaultProfileId === id) state.defaultProfileId = null
@@ -629,7 +678,12 @@ export function deleteProfile(id: string, options: { deleteFiles?: boolean } = {
     }
   }
 
-  return { removed: true, filesDeleted, credentialsRetained: true }
+  return {
+    removed: true,
+    filesDeleted,
+    // Nothing was deleted, or the credential is somewhere this did not touch.
+    credentialsRetained: !filesDeleted || isolation.store !== 'config-directory',
+  }
 }
 
 export function setGlobalDefault(id: string | null): ProfilesState {
@@ -672,19 +726,34 @@ export interface ProfileStatus {
   /** A `.claude.json` is present, i.e. the CLI has run under this profile. */
   initialized: boolean
   /**
-   * Login state is deliberately absent. Credentials live in the OS keychain,
-   * not in the directory, so nothing here can tell whether a profile is signed
-   * in without prompting for keychain access on every render.
+   * Login state is deliberately absent. On macOS credentials live in the OS
+   * keychain, not in the directory, so nothing here can tell whether a profile
+   * is signed in without prompting for keychain access on every render.
    */
   configDir: string
+  /**
+   * Whether this profile's *login* is actually separate from the others, and on
+   * what basis. Not decoration: on a platform where that has not been
+   * established, `isolated` is false and `note` says so, because a picker that
+   * shows two names for one login is the exact failure this feature exists to
+   * prevent. See `platform/credential-store.ts`.
+   *
+   * NOT YET RENDERED. `ProfilePicker.tsx` reads `initialized` out of this
+   * payload and nothing else, so the warning travels over IPC and stops there.
+   * It is computed and honest; it is not yet something a user sees.
+   */
+  isolation: ProfileIsolation
 }
 
-export function profileStatus(profile: Profile): ProfileStatus {
+export function profileStatus(profile: Profile, platform: Platform = currentPlatform()): ProfileStatus {
   return {
     id: profile.id,
     exists: existsSync(profile.configDir),
     initialized: existsSync(join(profile.configDir, '.claude.json')),
     configDir: profile.configDir,
+    // A `stat`, not a keychain read: it costs nothing and prompts for nothing,
+    // which is what keeps the paragraph above true.
+    isolation: profileIsolation(platform, existsSync(join(profile.configDir, '.credentials.json'))),
   }
 }
 

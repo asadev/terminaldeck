@@ -67,6 +67,9 @@ import { BlockList, isIPv4, isIPv6 } from 'node:net'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import type { IpcMain } from 'electron'
+import { currentPlatform, isWindows, withPath, type Platform } from '../platform/host'
+import { firstLookupPath, lookupSpec } from '../platform/lookup'
+import { TAILSCALE_BIN, tailscaleCandidates } from '../platform/tailscale'
 import { loginPath } from '../providers'
 
 const run = promisify(execFile)
@@ -130,8 +133,14 @@ export type TailnetStatus = TailnetReady | TailnetNotReady
  * names where to click, because "Tailscale is not running" on its own sends
  * people to a search engine, and because Tailscale installs three different ways
  * on macOS — the menu bar is the only place all three agree on.
+ *
+ * Per platform for the same reason the paths are: "click the Tailscale icon in
+ * the menu bar" is not an instruction anyone can follow on Windows, and a
+ * remedy that names the wrong place is worse than a bare diagnosis — it sends
+ * someone looking for a thing that is not there and makes the app look like it
+ * was ported by find-and-replace.
  */
-export const BLOCKED_REASONS: Record<TailnetBlockedState, string> = {
+const MAC_REASONS: Record<TailnetBlockedState, string> = {
   'not-installed':
     'Tailscale is not installed on this Mac. Your phone connects over the tailnet, so there is no address to listen on without it — install it from https://tailscale.com/download, sign in, then try again.',
   'not-running':
@@ -149,6 +158,41 @@ export const BLOCKED_REASONS: Record<TailnetBlockedState, string> = {
   unreadable:
     'Could not read Tailscale’s status on this Mac. Run `tailscale status` in a terminal to see what it says, then try again.',
 }
+
+/**
+ * The same eight states, told the way Windows works: a notification-area icon
+ * instead of a menu bar, a Windows service instead of a launch agent, and a
+ * terminal command beside each one because the tray icon is hideable and the
+ * command is not.
+ */
+const WINDOWS_REASONS: Record<TailnetBlockedState, string> = {
+  'not-installed':
+    'Tailscale is not installed on this PC. Your phone connects over the tailnet, so there is no address to listen on without it — install it from https://tailscale.com/download, sign in, then try again.',
+  'not-running':
+    'Tailscale is installed but its background service is not answering. Open Tailscale from the Start menu, or run `net start Tailscale` in an administrator terminal, then try again.',
+  'logged-out':
+    'Tailscale is installed but signed out on this PC. Click the Tailscale icon in the notification area and choose Log in, or run `tailscale login` in a terminal, then try again.',
+  stopped:
+    'Tailscale is signed in but switched off on this PC. Click the Tailscale icon in the notification area and choose Connect, or run `tailscale up` in a terminal, then try again.',
+  'needs-approval':
+    'This PC is signed in but still waiting to join the tailnet. Approve it at https://login.tailscale.com/admin/machines, then try again.',
+  starting:
+    'Tailscale is still starting up on this PC. Give it a few seconds, or run `tailscale status` in a terminal to watch it come up, then try again.',
+  'no-address':
+    'Tailscale is running but has not given this PC a tailnet address yet. Run `tailscale down` and then `tailscale up` in a terminal, or switch it off and on from the notification area, then try again.',
+  unreadable:
+    'Could not read Tailscale’s status on this PC. Run `tailscale status` in a terminal to see what it says, then try again.',
+}
+
+export function blockedReasons(platform: Platform): Record<TailnetBlockedState, string> {
+  return isWindows(platform) ? WINDOWS_REASONS : MAC_REASONS
+}
+
+/**
+ * The table for the platform this process is on. Everything below reads it, so
+ * a message never has to decide which OS it is describing.
+ */
+export const BLOCKED_REASONS: Record<TailnetBlockedState, string> = blockedReasons(currentPlatform())
 
 function notReady(state: TailnetBlockedState, detail?: string): TailnetNotReady {
   const trimmed = detail?.trim()
@@ -333,23 +377,23 @@ function redactSecrets(text: string): string {
  *
  * Homebrew on Apple silicon is one of four real answers, and a GUI app on macOS
  * inherits a PATH with none of them in it — `providers.ts` documents that lesson
- * first-hand. So the login shell is asked first, because it is the only source
+ * first-hand. So the PATH lookup is tried first, because it is the only source
  * that knows about a non-standard install, and the fixed list is a fallback
- * rather than the answer. `/usr/local/bin` is Homebrew on Intel; the App Store
- * build ships its CLI inside the bundle and puts nothing on PATH at all, which
- * is why the third entry looks like that.
+ * rather than the answer.
+ *
+ * Both halves are needed on Windows too, and for the mirror-image reasons:
+ * Tailscale's own MSI documentation gives `C:\Program Files\Tailscale` as a
+ * *default* that `INSTALLDIR` can move (so the list alone is not enough), and
+ * nowhere states that the directory is added to PATH (so the lookup alone is not
+ * enough either). `platform/tailscale.ts` carries the citations.
  *
  * Executability, not existence: the App Store path is a real file for users who
  * have the app but have never opened it, and a non-executable hit there would
- * shadow a working binary further down the list.
+ * shadow a working binary further down the list. On Windows `X_OK` is not a
+ * thing the filesystem models and Node documents it as behaving like `F_OK`
+ * there, so this quietly degrades to an existence check — which is the right
+ * answer on a platform where "can I run it" is decided by the extension.
  */
-const BINARIES = [
-  '/opt/homebrew/bin/tailscale',
-  '/usr/local/bin/tailscale',
-  '/Applications/Tailscale.app/Contents/MacOS/Tailscale',
-  '/usr/bin/tailscale',
-]
-
 function executable(path: string): boolean {
   try {
     accessSync(path, constants.X_OK)
@@ -361,22 +405,37 @@ function executable(path: string): boolean {
 
 let cachedBin: string | null | undefined
 
-export async function findTailscale(force = false): Promise<string | null> {
+/** Drops the memo. Exported for tests, which pin one platform per case. */
+export function resetTailscaleBinaryCache(): void {
+  cachedBin = undefined
+}
+
+export async function findTailscale(
+  force = false,
+  platform: Platform = currentPlatform(),
+): Promise<string | null> {
   if (!force && cachedBin !== undefined) return cachedBin
 
   try {
-    const PATH = await loginPath()
-    const { stdout } = await run('which', ['tailscale'], { env: { ...process.env, PATH }, timeout: 5000 })
-    const found = stdout.trim().split('\n')[0]?.trim()
+    const PATH = await loginPath(platform)
+    const spec = lookupSpec(platform, TAILSCALE_BIN)
+    // `withPath` rather than a spread: see `platform/host.ts` on why setting
+    // `PATH` over a Windows environment can leave two spellings behind.
+    const { stdout } = await run(spec.command, spec.args, {
+      env: withPath(process.env, PATH, platform),
+      timeout: 5000,
+      windowsHide: true,
+    })
+    const found = firstLookupPath(stdout)
     if (found && executable(found)) {
       cachedBin = found
       return cachedBin
     }
   } catch {
-    /* Not on the login PATH. The fixed list below is the whole point. */
+    /* Not on the PATH. The fixed list below is the whole point. */
   }
 
-  cachedBin = BINARIES.find(executable) ?? null
+  cachedBin = tailscaleCandidates(platform, process.env).find(executable) ?? null
   return cachedBin
 }
 

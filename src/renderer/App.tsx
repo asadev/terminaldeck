@@ -12,6 +12,7 @@ import { CommandPalette, type PaletteCommand } from './components/CommandPalette
 import { ShortcutsSheet } from './components/ShortcutsSheet'
 import { Onboarding } from './components/Onboarding'
 import { ChatView } from './components/ChatView'
+import { UpdateBanner } from './updates/UpdateBanner'
 import { ChatToggle, type SessionViewMode } from './components/ChatToggle'
 import { BrowserWorkspace } from './browser/BrowserWorkspace'
 import { SwarmGrid } from './layout/SwarmGrid'
@@ -392,6 +393,10 @@ function Workspace() {
           onOpen={openTab}
         />
       </TitleBar>
+      {/* Below the tab strip, above everything else: an update is worth
+          interrupting the chrome for, but never the work — a session may be
+          mid-run, so this is a banner and not a modal. */}
+      <UpdateBanner />
       <div className="app-body">
         <ActivityBar
           active={panel}

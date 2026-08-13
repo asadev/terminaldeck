@@ -14,7 +14,9 @@ import { registerBoardIpc } from './board-store'
 import { registerInsightsIpc } from './session-insights'
 import { registerChatIpc } from './chat-transcript'
 import { registerDevPortsIpc } from './dev-ports'
+import { autoUpdater } from 'electron-updater'
 import { registerAgentControlsIpc } from './agent-controls'
+import { registerUpdateIpc } from './updates/updater'
 import { registerTailnetIpc } from './remote/tailnet'
 import { registerRemoteIpc } from './remote/server'
 import { SessionFanout } from './remote/session-fanout'
@@ -87,6 +89,9 @@ function send(channel: string, ...args: unknown[]): void {
  * to read it from without this.
  */
 const liveStatus = new Map<string, { status: SessionStatus; at: number }>()
+
+/** Held so the recheck interval can be disarmed on quit. */
+let updates: ReturnType<typeof registerUpdateIpc> | null = null
 
 /**
  * Fans each session's output out to the window and to any attached phone.
@@ -231,6 +236,21 @@ function registerIpc(): void {
   // module reports 'unwired' and the strip hides the control rather than
   // offering a button that does nothing.
   registerPlanLimitIpc(ipcMain, { write: (id, data) => ptys.write(id, data) })
+  // Checks on a delay after launch and then occasionally; never installs on its
+  // own. An unsigned build reports that it cannot self-update rather than
+  // checking forever — see updates/updater.ts.
+  updates = registerUpdateIpc(ipcMain, {
+    updater: autoUpdater,
+    environment: {
+      platform: process.platform,
+      isPackaged: app.isPackaged,
+      execPath: process.execPath,
+      feedConfigPath: app.isPackaged
+        ? join(process.resourcesPath, 'app-update.yml')
+        : join(app.getAppPath(), 'dev-app-update.yml'),
+    },
+    broadcast: (channel, state) => send(channel, state),
+  })
   registerTailnetIpc(ipcMain, { certDir: join(app.getPath('userData'), 'tailnet-certs') })
   // Off until the user turns it on: this serves a shell. The server itself
   // binds only to the tailnet address and refuses to start without one.
@@ -342,6 +362,7 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   ptys.killAll()
   stopAllGitWatches()
+  updates?.stop()
   void stopHookServer()
   void clearBrowserDataIfNotPersisting()
 })

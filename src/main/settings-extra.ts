@@ -26,6 +26,7 @@ import { dirname, join } from 'node:path'
 import { app, session, shell, type IpcMain, type IpcMainInvokeEvent } from 'electron'
 import { BRAND } from '../shared/brand'
 import { GUEST_PARTITION } from './browser-session'
+import { updateSupport } from './updates/updater'
 
 /* ---------------------------------------------------------------- limits -- */
 
@@ -362,7 +363,12 @@ export interface UpdateChannel {
   packaged: boolean
   /** Whether an update feed file is present beside the app. */
   feedPresent: boolean
-  /** Whether anything in this build actually checks. */
+  /**
+   * Whether this build *could* install an update it found.
+   *
+   * Not a claim that anything checks. Nothing calls `registerUpdateIpc` yet —
+   * see {@link updateChannel}.
+   */
   checkable: boolean
   detail: string
 }
@@ -423,12 +429,28 @@ export function repositoryUrl(field: unknown): string | null {
 /**
  * Whether this build can update itself.
  *
- * Checked against the disk rather than assumed. `electron-updater` is a
- * dependency of this project but nothing imports it, so no code path checks a
- * feed — and electron-builder writes `app-update.yml` beside a packaged app
- * only when a publish target is configured. Both facts are reported so the
- * About panel can say what is actually true instead of showing a button that
- * would do nothing.
+ * This used to say, correctly at the time, that `electron-updater` was a
+ * dependency nothing imported and that no code path checked a feed. That is no
+ * longer the shape of the truth: `./updates/updater.ts` is the code path, and
+ * the question has become the harder one it always should have been — not
+ * "does anything check" but "could an update actually be installed if it did".
+ *
+ * So the verdict is not computed here twice. It is asked of the module that
+ * owns it, which weighs three things against the disk: whether this is a
+ * packaged build at all, whether the bundle carries a real code signature
+ * (macOS will not apply an update to one that does not), and whether
+ * electron-builder wrote a feed beside the app. `feedPresent` is still reported
+ * separately because the About panel shows it as its own fact.
+ *
+ * One thing this deliberately does **not** claim: that a check happens.
+ * `./updates/updater.ts` exports `registerUpdateIpc`, and `src/main/index.ts`
+ * does not call it — only `updateSupport` is reached from here, for the
+ * sentence below. So the supported branch describes what the build could do
+ * and says plainly that nothing checks yet. Rewrite that sentence in the same
+ * commit that wires the IPC, and not before: understating a feature is
+ * recoverable, and this project has already shipped the other kind.
+ *
+ * @see updateSupport
  */
 export function updateChannel(): UpdateChannel {
   const packaged = app.isPackaged
@@ -443,14 +465,28 @@ export function updateChannel(): UpdateChannel {
     feedPresent = false
   }
 
-  const detail = !packaged
-    ? 'This is a development build — it is run from source, so there is nothing to update.'
-    : feedPresent
-      ? 'An update feed is configured, but this build does not check it yet.'
-      : 'No update feed is configured for this build.'
+  const verdict = updateSupport(
+    {
+      platform: process.platform,
+      isPackaged: packaged,
+      execPath: process.execPath,
+      feedConfigPath: feed,
+    },
+    existsSync,
+  )
 
-  // Flip to `feedPresent` on the day something actually calls autoUpdater.
-  return { packaged, feedPresent, checkable: false, detail }
+  return {
+    packaged,
+    feedPresent,
+    checkable: verdict.supported,
+    // The unsupported sentence is the updater's own, printed verbatim. A
+    // paraphrase here would be a second copy of a message that changes.
+    detail: verdict.supported
+      ? 'This build is code-signed and carries a release feed, so it could install an ' +
+        'update — but nothing in this build checks for one yet. Download new versions ' +
+        'from Releases.'
+      : verdict.reason,
+  }
 }
 
 export function aboutInfo(): AboutInfo {

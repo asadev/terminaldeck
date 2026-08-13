@@ -72,6 +72,20 @@ const api = {
     return () => ipcRenderer.off('cost:update', handler)
   },
 
+  /* ---------------------------------------------------------- updates -- */
+  // Four requests and one push. `update:get` is deliberately a different string
+  // from the push channel `update:state`: giving a request and an event the
+  // same name is how the next handle/send mix-up gets written.
+  updateStatus: (): Promise<unknown> => ipcRenderer.invoke('update:get'),
+  checkForUpdate: (): Promise<unknown> => ipcRenderer.invoke('update:check'),
+  downloadUpdate: (): Promise<unknown> => ipcRenderer.invoke('update:download'),
+  installUpdate: (): Promise<unknown> => ipcRenderer.invoke('update:install'),
+  onUpdateState: (cb: (state: unknown) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, state: unknown) => cb(state)
+    ipcRenderer.on('update:state', handler)
+    return () => ipcRenderer.off('update:state', handler)
+  },
+
   /* ----------------------------------------------------------- remote -- */
   // Every one of these is an ipcMain.handle, so every one is invoke(). The
   // remote module registers no send-channel at all, deliberately: each call
