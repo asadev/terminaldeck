@@ -10,6 +10,17 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+## [0.1.2] — 2026-08-13
+
+### Added
+
+- A Windows build, produced natively in CI. It has not been run on Windows.
+
+### Fixed
+
+- Two tests read the machine they ran on instead of a fixture, so they passed
+  here and failed on the CI runner.
+
 ## [0.1.1] — 2026-08-13
 
 ### Added
