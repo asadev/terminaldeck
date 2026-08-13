@@ -148,6 +148,29 @@ object Protocol {
 }
 
 /**
+ * Whether a clipboard is too big to paste, and the sentence to say if it is. Null when it will go.
+ *
+ * A free function next to the protocol rather than a branch inside the view model, so it can be
+ * tested without an Android framework — it is the half of pasting that is a pure function and the
+ * half with a decision in it.
+ *
+ * The decision: **refuse, do not shorten.** [ClientFrames.chunkInput] would happily cut a 40 MB
+ * clipboard into 2,500 frames, at which point the Mac's own backpressure cap drops this phone and a
+ * paste that was too big fails as *the connection dying* — the least actionable failure there is.
+ * The other tempting option, sending the first megabyte, is worse still: the user watches text land,
+ * believes all of it did, and the command that runs is not the command they copied.
+ *
+ * Both numbers are in the sentence, because "too large" is not something a person can act on.
+ */
+fun pasteRefusal(text: String): String? {
+    val bytes = Protocol.utf8Length(text)
+    if (bytes <= Protocol.MAX_PASTE_BYTES) return null
+    return "That clipboard is ${dev.terminaldeck.android.transfer.byteSize(bytes.toLong())} — the most " +
+        "this can paste at once is ${dev.terminaldeck.android.transfer.byteSize(Protocol.MAX_PASTE_BYTES.toLong())}. " +
+        "Send it as a file instead."
+}
+
+/**
  * What a desktop can advertise beyond protocol version 1, in `welcome.capabilities`.
  *
  * A named object rather than loose strings, because a capability string is a **promise about a wire

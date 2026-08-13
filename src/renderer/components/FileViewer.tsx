@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { panelSpec } from '../shell/panels'
+import { PageEmpty } from './PageEmpty'
 import './FileViewer.css'
 
 /**
@@ -176,7 +178,9 @@ export function FileViewer({ root, path, className }: Props) {
         aria-label={path ? `Contents of ${name}` : 'No file open'}
       >
         {view.status === 'empty' && (
-          <p className="file-viewer-notice">Select a file to view it here.</p>
+          <PageEmpty icon={panelSpec('files').icon} title="No file open">
+            Pick something from the tree and it opens here.
+          </PageEmpty>
         )}
 
         {view.status === 'loading' && <p className="file-viewer-notice">Loading…</p>}

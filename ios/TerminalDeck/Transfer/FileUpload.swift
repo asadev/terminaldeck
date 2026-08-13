@@ -162,7 +162,7 @@ final class FileUpload: Identifiable {
             return true
         case let .uploadDone(id, path, _, _) where id == self.id:
             // The Mac decided it is over, so it is not told again.
-            end(.landed(path), tellMac: false)
+            end(.landed(path: path), tellMac: false)
             onLanded(path)
             return true
         case let .uploadFailed(id, detail) where id == self.id:
@@ -202,7 +202,14 @@ final class FileUpload: Identifiable {
      */
     private func pump() {
         guard case .sending = phase, let handle else { return }
-        while inFlight < Wire.uploadWindowBytes && read < size {
+        // `inFlight + a whole slice <= window`, not `inFlight < window`. The
+        // looser condition reads one more slice when it is already 240 KiB ahead
+        // and overshoots the window by a chunk — which is small, and is also the
+        // difference between a bound this can be tested against and a bound that
+        // is approximately true. The tunnel's `forward` has the looser shape
+        // because it is handed whatever the kernel gives it; here the read size
+        // is ours to choose, so the exact version costs nothing.
+        while inFlight + Wire.maxUploadChunkBytes <= Wire.uploadWindowBytes && read < size {
             let slice: Data?
             do {
                 slice = try handle.read(upToCount: Wire.maxUploadChunkBytes)

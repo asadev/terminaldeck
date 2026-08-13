@@ -41,13 +41,6 @@
   min-width: 0;
 }
 
-.alerts-heading {
-  margin: 0;
-  font-size: var(--t-footnote);
-  font-weight: var(--w-semibold);
-  color: var(--text-muted);
-}
-
 .alerts-summary {
   margin: 0;
   font-size: var(--t-title2);
@@ -97,18 +90,9 @@
   outline-offset: 1px;
 }
 
-/* ----------------------------------------------------------------- empty -- */
-
-/* A quiet project is the state this panel is in most of the time, so it gets
-   the app's empty-state treatment rather than a dashed box. */
-.alerts-empty {
-  max-width: 34rem;
-  margin: 10vh auto 0;
-  color: var(--text-secondary);
-  font-size: var(--t-body);
-  line-height: var(--lh-body);
-  text-align: center;
-}
+/* A quiet project, and a panel with no bridge, are both drawn by the shared
+   `PageEmpty` in shell.css — there is one empty-state shape in the app now,
+   so this file no longer carries its own. */
 
 /* ---------------------------------------------------------------- groups -- */
 

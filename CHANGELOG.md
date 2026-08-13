@@ -22,6 +22,24 @@ A release with nothing under Unreleased is refused rather than shipped blank.
   same call the desktop's own button makes — same shell, same PATH, same
   profile. A phone may name a folder only if the Mac is already offering it.
 
+- **A session started from a phone now appears on the desktop.** It arrives
+  without focus and with an unread dot, so answering something on your phone
+  never pulls the Mac out of the terminal you were typing into.
+
+### Changed
+
+- **Every page has a designed empty state**, instead of a bare sentence floating
+  in the middle of the window. One shape — the view's own glyph, a title, the
+  explanation, and the single thing to do next — used by Source control, GitHub,
+  Alerts, Hooks, the file viewer and every view that needs a project.
+- **The update notice is an inset card**, not a full-bleed grey strip under the
+  toolbar. It wears the same glass as the sidebar and the toolbar.
+- **Pages and Settings hold a measure and centre it.** On a wide display the
+  content used to sit in the top-left corner with an ocean of blank paper beside
+  it; the gutter never falls below its old value, so nothing changes on a narrow
+  window.
+- Hooks no longer offers two buttons called Refresh.
+
 ### Fixed
 
 - `scripts/remote-host.sh` served an empty session list, because it was built on

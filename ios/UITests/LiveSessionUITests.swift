@@ -120,8 +120,13 @@ final class LiveSessionUITests: XCTestCase {
         XCTAssertTrue(actions.waitForExistence(timeout: 10))
         actions.tap()
 
-        XCTAssertTrue(app.buttons["Copy"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["Paste"].exists)
+        // `terminal.copyScreen`, not `terminal.copy`. The menu copies the
+        // screen and says so; copying a *selection* is the accessory row's
+        // `copy` key and the system's own long-press menu, because a selection
+        // does not survive the trip to this one — see `TerminalScreen`.
+        let copy = app.buttons["terminal.copyScreen"]
+        XCTAssertTrue(copy.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["terminal.paste"].exists)
         XCTAssertTrue(app.buttons["Re-attach"].exists)
 
         // `changeCount` rather than the toast: the toast is two and a half
@@ -130,7 +135,7 @@ final class LiveSessionUITests: XCTestCase {
         // says a copy happened, the pasteboard *is* the copy. Reading the count
         // does not touch the contents, so it raises no Allow Paste prompt.
         let before = UIPasteboard.general.changeCount
-        app.buttons["Copy"].tap()
+        copy.tap()
 
         let changed = NSPredicate(format: "changeCount > %d", before)
         expectation(for: changed, evaluatedWith: UIPasteboard.general, handler: nil)
@@ -151,8 +156,8 @@ final class LiveSessionUITests: XCTestCase {
         let actions = app.buttons["terminal.actions"]
         XCTAssertTrue(actions.waitForExistence(timeout: 10))
         actions.tap()
-        XCTAssertTrue(app.buttons["Paste"].waitForExistence(timeout: 5))
-        app.buttons["Paste"].tap()
+        XCTAssertTrue(app.buttons["terminal.paste"].waitForExistence(timeout: 5))
+        app.buttons["terminal.paste"].tap()
 
         // iOS asks before letting an app read another app's clipboard, and the
         // alert is not reliably in any one process — it has been seen on

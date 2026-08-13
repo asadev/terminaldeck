@@ -29,14 +29,16 @@
  *   curl 127.0.0.1:8788/state      host id, devices, live connections, tunnels
  *   curl 127.0.0.1:8788/approve    be the human
  *   curl 127.0.0.1:8788/pair       mint another code
+ *   curl 127.0.0.1:8788/uploads    what files have landed, with digests
  *   curl '127.0.0.1:8788/stop-tunnel?connection=<id>&tunnel=<id>'
  *
  * `/stop-tunnel` is the Mac's Stop button, reachable from a script. It goes
  * through `server.stopTunnel`, which is the same call the desktop panel makes.
  */
 
+import { createHash } from 'node:crypto'
 import { createServer } from 'node:http'
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { resolve } from 'node:path'
 import { RemoteAuth } from '../src/main/remote/device-auth'
@@ -162,8 +164,18 @@ const sessions: SessionAccess = fanout
 /* ------------------------------------------------------------------ run -- */
 
 let relayUrl = RELAY_URL
+/**
+ * The relay this process is running, when it is running one.
+ *
+ * Declared out here rather than inside the branch so `shutdown` can close it. It was scoped to the
+ * `if` for a few minutes and the symptom was not a compile error — `--relay-url` made `relay`
+ * genuinely absent, so TypeScript was right to allow neither reading — it was a `ReferenceError`
+ * thrown out of the SIGINT handler, which killed the harness on its way down and left the port
+ * held. Null when an external relay was named.
+ */
+let relay: ReturnType<typeof createRelayServer> | null = null
 if (relayUrl === '') {
-  const relay = createRelayServer({ heartbeatMs: 15_000 })
+  relay = createRelayServer({ heartbeatMs: 15_000 })
   await new Promise<void>((settle) => relay.server.listen(RELAY_PORT, '127.0.0.1', () => settle()))
   relayUrl = `ws://127.0.0.1:${RELAY_PORT}`
   log(`relay        ${relayUrl} (local, this process)`)
@@ -267,6 +279,35 @@ const control = createServer((request, response) => {
         devices: auth.listDevices().map((device) => ({ id: device.id, name: device.name, approved: device.approved })),
         connections: server.connections(),
       })
+    /**
+     * What has landed here, with a digest of each file.
+     *
+     * The half of a file transfer a phone cannot prove. The phone can show a bar
+     * reaching the end and a path on screen and still be wrong about both, so a
+     * scripted check asks *this* side what it actually has — and asks for the
+     * SHA-256 rather than the size, because a truncated file has a plausible size
+     * and a wrong digest.
+     */
+    case '/uploads': {
+      let names: string[] = []
+      try {
+        names = readdirSync(UPLOADS)
+      } catch {
+        // Nothing has been sent yet, so the folder does not exist. That is an
+        // empty list, not an error — it is the answer to the question asked.
+      }
+      return answer(
+        names.map((name) => {
+          const path = resolve(UPLOADS, name)
+          return {
+            name,
+            path,
+            bytes: statSync(path).size,
+            sha256: createHash('sha256').update(readFileSync(path)).digest('hex'),
+          }
+        }),
+      )
+    }
     case '/ports':
       return void scanDevPorts(true).then((ports) => answer(ports))
     case '/pair':
@@ -287,7 +328,7 @@ const control = createServer((request, response) => {
       return
     default:
       response.writeHead(404, { 'content-type': 'text/plain' })
-      response.end('state | ports | pair | approve | stop-tunnel | quit\n')
+      response.end('state | ports | uploads | pair | approve | stop-tunnel | quit\n')
   }
 })
 control.listen(CONTROL_PORT, '127.0.0.1')
@@ -298,7 +339,7 @@ log(`control      http://127.0.0.1:${CONTROL_PORT}/state`)
 log(`pair with    ${mint()}`)
 
 const shutdown = (): void => {
-  void server.stop().then(() => relay.close()).then(() => process.exit(0))
+  void server.stop().then(() => relay?.close()).then(() => process.exit(0))
 }
 process.on('SIGINT', shutdown)
 process.on('SIGTERM', shutdown)

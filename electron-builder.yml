@@ -178,8 +178,38 @@ mac:
     NSRemovableVolumesUsageDescription: Terminal Deck opens coding projects stored on external drives.
 
 win:
+  # Restated in full for the same reason as `mac:` above: a platform `files`
+  # list REPLACES the top-level allowlist rather than adding to it. This block
+  # used to be the single negation below, which meant the Windows build had no
+  # allowlist at all — electron-builder falls back to "everything except what is
+  # negated", so it shipped the entire repository.
+  #
+  # It has never actually bitten, and only by luck: the Windows installer is
+  # built in CI from a clean checkout, and `ios/` and `android/` are untracked,
+  # so the one tree large enough to notice was never there to be copied. The
+  # 0.1.2 installer is 107 MB because CI could not see the 700 MB it would
+  # otherwise have swallowed. Build Windows locally on a working tree — or
+  # commit the phone apps — and it becomes the same 1.0 GB asar that the macOS
+  # build produced the night `ios/` appeared.
+  #
+  # So this is a latent copy of a bug already paid for once on the other
+  # platform, fixed the same way rather than left to be rediscovered.
   files:
+    - out/**/*
+    - package.json
+    - pwa/dist/**/*
+    - '!**/*.map'
+    - '!**/node_modules/*/{test,tests,__tests__,example,examples,benchmark,benchmarks}/**'
+    - '!**/node_modules/better-sqlite3/{src,deps}/**'
+    - '!**/node_modules/node-pty/{src,scripts,deps,node-addon-api}/**'
+    # Both macOS slices, not just x64 — a Windows installer has no use for
+    # either. The mirror of the `win32-*` exclusion in the `mac:` block.
     - '!**/node_modules/node-pty/prebuilds/darwin-*/**'
+    - '!**/node_modules/node-pty/prebuilds/**/*.pdb'
+    - '!ios/**'
+    - '!android/**'
+    - '!relay/**'
+    - '!packages/**'
 
   # x64 only, and for the mirror image of the macOS reasoning. There, Rosetta
   # translates Intel to Apple silicon and never the reverse, so arm64 reaches

@@ -209,3 +209,33 @@ escalate, say what you tried and why each failed.
 Earned the hard way in one night: the issuer ID *was* in the Imza folder
 (`apps/eas.json`); the App Store record *could* be created, just not by the API;
 npm's auth URL *was* recoverable, just not without a pty.
+
+
+---
+
+## G. Keep the lanes full — added 2026-08-14 after stalling
+
+Asad: *"make sure its not happening again you need to keep going."*
+
+The list stopped moving twice tonight, and both times for the same reason: work
+was correctly queued behind a busy file lane, the lane freed, and nobody
+relaunched. Queuing is not progress.
+
+**The rule: whenever an agent finishes, immediately start the next queued stream
+in that lane.** Do not batch it, do not wait for a natural pause, do not wait to
+report first. Report *after* launching.
+
+Lanes, so two agents never share files:
+
+| Lane | Owns |
+|---|---|
+| renderer | `src/renderer/**` |
+| main | `src/main/**`, `src/shared/**` |
+| ios | `ios/` |
+| android | `android/` |
+| infra | `relay/`, `.github/`, release, website |
+| verify | read-only; may run anywhere |
+
+A verification agent never edits, so it can always run alongside the others.
+If every lane is genuinely busy, say which and when each frees — never just go
+quiet.

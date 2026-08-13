@@ -243,7 +243,7 @@
   padding: 0 var(--sp-15);
   border-radius: var(--radius-pill);
   background: var(--color-critical);
-  color: #fff;
+  color: var(--badge-fg);
   font-size: var(--t-caption);
   font-weight: var(--w-semibold);
   line-height: 17px;
@@ -519,11 +519,23 @@
    300px column — a dashboard, a kanban board and a pull-request list, all in a
    strip narrower than a phone. */
 .panel-page {
+  /* A measure, centred. Left-aligned in a 1600px window these pages put a
+     search field, a score ring or a two-line notice in the top-left corner
+     with an ocean of empty paper to their right — the layout of a document
+     that overflowed, not one that was designed. The gutter never falls below
+     --sp-8, so nothing changes on a narrow window. */
+  --page-measure: 940px;
   position: absolute;
   inset: 0;
   overflow: auto;
   overflow-x: hidden;
-  padding: var(--sp-6) var(--sp-8) var(--sp-10);
+  padding-block: var(--sp-6) var(--sp-10);
+  padding-inline: max(var(--sp-8), calc((100% - var(--page-measure)) / 2));
+}
+
+/* A grid of widgets earns more width than a column of prose. */
+.panel-page[data-panel='overview'] {
+  --page-measure: 1240px;
 }
 
 /* Two panes and no page scroll of its own. */
@@ -533,35 +545,84 @@
   overflow: hidden;
 }
 
-.page-empty {
-  max-width: 34rem;
-  margin: 12vh auto 0;
+/* ----------------------------------------------------- a page with nothing -- */
+
+/* The shape every "nothing here yet" wears. Sat high rather than dead centre
+   — a block of text pinned to the middle of a tall window reads as an error
+   dialog. The mark is the view's own glyph at a whisper, which is what tells
+   you *which* page is empty without a second heading saying so. */
+.page-blank {
+  max-width: 30rem;
+  margin: 11vh auto 0;
   text-align: center;
 }
 
-.page-empty h2 {
-  margin: 0 0 var(--sp-2);
-  font-size: var(--t-title2);
+.page-blank-mark {
+  display: block;
+  margin: 0 auto var(--sp-4);
+  color: var(--text-muted);
+  opacity: 0.55;
+}
+
+.page-blank-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--t-title3);
   font-weight: var(--w-semibold);
-  letter-spacing: var(--t-title2-ls);
+  letter-spacing: var(--t-title3-ls);
   color: var(--text-primary);
 }
 
-.page-empty p {
-  margin: 0;
+.page-blank-body {
+  margin: var(--sp-2) 0 0;
   font-size: var(--t-body);
   line-height: var(--lh-body);
   color: var(--text-secondary);
+  text-wrap: pretty;
 }
 
-.page-empty .btn-primary {
+.page-blank-action {
+  height: var(--control-h);
   margin-top: var(--sp-5);
+  padding: 0 var(--sp-4);
+  border-radius: var(--radius-md);
+  background: var(--fill-tertiary);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: var(--t-body);
+  font-weight: var(--w-medium);
+  transition: background var(--dur-fast) var(--ease);
 }
 
-.page-empty-hint {
-  margin-top: var(--sp-4) !important;
-  font-size: var(--t-callout) !important;
-  color: var(--text-muted) !important;
+.page-blank-action:hover:not(:disabled) {
+  background: var(--fill-secondary);
+}
+
+.page-blank-action:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.page-blank-action:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* The accent variant is `.btn-primary` with this class only for the margin. */
+.btn-primary.page-blank-action {
+  height: var(--control-h-lg);
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+.btn-primary.page-blank-action:hover:not(:disabled) {
+  background: var(--accent-dim);
+}
+
+.page-blank-hint {
+  margin: var(--sp-4) 0 0;
+  font-size: var(--t-callout);
+  color: var(--text-muted);
 }
 
 /* ------------------------------------------------------------ files page -- */

@@ -68,6 +68,21 @@ const sealed = bundle('src/shared/sealed.ts', path.join(GEN, 'sealed.cjs'))
 const relayWire = bundle('src/shared/relay-wire.ts', path.join(GEN, 'relay-wire.cjs'))
 const wsFrame = bundle('src/shared/ws-frame.ts', path.join(GEN, 'ws-frame.cjs'))
 const rendezvous = bundle('relay/src/rendezvous.ts', path.join(GEN, 'rendezvous.cjs'))
+/**
+ * The wire language itself, imported rather than restated.
+ *
+ * This file used to carry its own copy of the version number, its own `chunkOutput`, its own
+ * capability list and its own hand-rolled `switch` over `message.t` — and that is exactly how it
+ * came to advertise `session.create` and answer `{"t":"new"}`, a shape no real desktop has ever
+ * spoken. A stand-in that shares a bug with the client it is standing in for hides the bug: the
+ * 81-vs-80 byte error in the sealed envelope survived a day that way.
+ *
+ * So the parser, the constants and the file-upload desk are the product's own. What remains local
+ * is only what this process genuinely does differently from a Mac — a flat session map instead of
+ * `PtyManager`, and a keyboard instead of a human approving devices.
+ */
+const wire = bundle('src/main/remote/protocol.ts', path.join(GEN, 'protocol.cjs'))
+const uploads = bundle('src/main/remote/uploads.ts', path.join(GEN, 'uploads.cjs'))
 const pty = require(path.join(REPO, 'node_modules/node-pty'))
 
 /* --------------------------------------------------------------- options -- */
@@ -81,8 +96,16 @@ const PORT = Number(option('port', '8787'))
 /** What goes in the pairing code. `10.0.2.2` is the host machine as seen from an AVD. */
 const RELAY_URL = option('relay', `ws://10.0.2.2:${PORT}`)
 
-const PROTOCOL_VERSION = 1
-const OUTPUT_CHUNK_BYTES = 32 * 1024
+const PROTOCOL_VERSION = wire.PROTOCOL_VERSION
+const OUTPUT_CHUNK_BYTES = wire.OUTPUT_CHUNK_BYTES
+/**
+ * Where a file sent from the phone lands here.
+ *
+ * Under `tools/.gen` rather than the real downloads folder: this process is started and killed a
+ * dozen times an evening and a harness that fills somebody's Downloads with test photos is a
+ * harness people stop running.
+ */
+const UPLOAD_DIR = path.join(GEN, 'uploads')
 const SCROLLBACK_BYTES = 96 * 1024
 const PAIRING_TTL_MS = 5 * 60_000
 
@@ -173,12 +196,14 @@ function pairingCodeText() {
 const sessions = new Map()
 let sessionCounter = 0
 
-function createSession(title, command, args, cwd) {
+function createSession(title, command, args, cwd, size = {}) {
   const id = `dev-${(sessionCounter += 1)}-${crypto.randomBytes(3).toString('hex')}`
   const child = pty.spawn(command, args, {
     name: 'xterm-256color',
-    cols: 80,
-    rows: 24,
+    // The phone's viewport travels with `create`, so the first screen is drawn at the size it will
+    // be read at rather than arriving at 80x24 and reflowing.
+    cols: size.cols || 80,
+    rows: size.rows || 24,
     cwd,
     env: { ...process.env, TERM: 'xterm-256color', TERMINALDECK: '1' },
   })
@@ -229,21 +254,8 @@ function announce() {
 
 const clients = new Set()
 
-function chunkOutput(data, size = OUTPUT_CHUNK_BYTES) {
-  const out = []
-  let start = 0
-  while (start < data.length) {
-    let end = Math.min(start + size, data.length)
-    // Never cut between the halves of a surrogate pair.
-    if (end < data.length) {
-      const code = data.charCodeAt(end - 1)
-      if (code >= 0xd800 && code <= 0xdbff) end -= 1
-    }
-    out.push(data.slice(start, end))
-    start = end
-  }
-  return out
-}
+/** The product's own, so a phone meets the same chunking here as on a Mac. */
+const chunkOutput = (data) => wire.chunkOutput(data, OUTPUT_CHUNK_BYTES)
 
 function sendJson(client, message) {
   if (!client.channel) return
@@ -260,12 +272,12 @@ function refuse(client, code, message) {
 }
 
 function onProtocol(client, raw) {
-  let message
-  try {
-    message = JSON.parse(raw)
-  } catch {
-    return refuse(client, 'bad-message', 'not JSON')
-  }
+  // The product's own parser, not a `JSON.parse` and a hopeful `switch`. Everything a phone sends
+  // here meets the same narrowing it would meet on a Mac — the id shapes, the byte caps, the
+  // both-or-neither size rule — so a client that passes against this host passes against the app.
+  const parsed = wire.parseClientMessage(raw)
+  if (!parsed.ok) return refuse(client, parsed.code, parsed.reason)
+  const message = parsed.message
 
   if (!client.deviceId) {
     if (message.t !== 'hello') return refuse(client, 'unauthenticated', 'Say hello first.')
@@ -305,19 +317,87 @@ function onProtocol(client, raw) {
       if (session) resize(session, message.cols, message.rows)
       return
     }
+    /* ---- capability `create` -------------------------------------------------------------- */
     /**
-     * Not in protocol version 1.
+     * Start a session, under the same folder rule a Mac applies.
      *
-     * The phone only sends this when the `welcome` advertised it, so a desktop that has never
-     * heard of it never sees one. See `capabilities` below.
+     * `cwd` is accepted only when this host is already offering the folder — the working directory
+     * of a session it has already listed, or its own home. A path it does not offer is **refused**,
+     * never quietly replaced with the default, because a New Session that silently started
+     * somewhere else is a command typed into the wrong project.
+     *
+     * The answer is `created` carrying the whole row, not a bare `sessions` list. This host used to
+     * send the list, which leaves the phone guessing which row is new — and with two sessions in
+     * the same folder there is no way to guess right.
      */
-    case 'new': {
-      const session = createSession(message.title || 'shell', process.env.SHELL || '/bin/zsh', ['-il'], process.env.HOME)
-      return sendJson(client, { t: 'sessions', sessions: listSessions() })
+    case 'create': {
+      const offered = [process.env.HOME, ...[...sessions.values()].map((entry) => entry.cwd)]
+      if (message.cwd !== undefined && !offered.includes(message.cwd)) {
+        return sendJson(client, {
+          t: 'error',
+          code: 'unauthorized',
+          message: 'This Mac will not start a session in that folder. Open it on the Mac first.',
+        })
+      }
+      let session
+      try {
+        session = createSession(
+          'shell',
+          process.env.SHELL || '/bin/zsh',
+          ['-il'],
+          message.cwd || process.env.HOME,
+          { cols: message.cols, rows: message.rows },
+        )
+      } catch (error) {
+        return sendJson(client, {
+          t: 'error',
+          code: 'unavailable',
+          message: 'This Mac could not start a session there. The folder may have moved.',
+        })
+      }
+      sendJson(client, {
+        t: 'created',
+        session: {
+          id: session.id,
+          title: session.title,
+          cwd: session.cwd,
+          provider: session.provider,
+          status: session.status,
+          exitCode: session.exitCode,
+        },
+      })
+      // Everyone else hears about it as an ordinary list refresh, which is a v1 frame every client
+      // back to the first one understands.
+      for (const other of clients) {
+        if (other !== client && other.deviceId) sendJson(other, { t: 'sessions', sessions: listSessions() })
+      }
+      return
     }
+
+    /* ---- capability `upload` -------------------------------------------------------------- */
+    case 'upload.begin':
+    case 'upload.data':
+    case 'upload.end':
+    case 'upload.cancel':
+      // The product's own desk, writing to a real directory. Nothing about receiving a file is
+      // reimplemented here: the name sanitising, the `.part` file, the acknowledgement window and
+      // the digest check are the ones a Mac uses.
+      return deskFor(client).handle(message)
+
     default:
       return refuse(client, 'bad-message', 'unknown message type')
   }
+}
+
+/** The upload desk for one phone, made on the first `upload` verb and not before. */
+function deskFor(client) {
+  if (!client.uploads) {
+    client.uploads = uploads.createUploadDesk({
+      store: uploads.diskUploadStore(UPLOAD_DIR),
+      send: (message) => sendJson(client, message),
+    })
+  }
+  return client.uploads
 }
 
 function resize(session, cols, rows) {
@@ -354,7 +434,11 @@ function hello(client, message) {
       deviceName: known.name,
       token: null,
       sessions: listSessions(),
-      capabilities: ['session.create'],
+      // What this host can actually do, taken from the product's own list rather than typed out.
+      // `localhost` is filtered because this stand-in has no tunnel hub — advertising it would put
+      // a Ports button on the phone with nothing behind it, which is the exact failure the
+      // capability mechanism exists to prevent.
+      capabilities: wire.CAPABILITIES.filter((name) => name !== wire.CAPABILITY.localhost),
     })
   }
 
@@ -466,11 +550,17 @@ function connectAsHost() {
             deviceName: '',
             devicePublicKey: null,
             attached: new Set(),
+            /** Made on the first `upload` verb, torn down with the channel. See `deskFor`. */
+            uploads: null,
             send: (payload) => write(rendezvous.encodeEnvelope(rendezvous.ENVELOPE.data, envelope.channel, payload)),
             close: () => {
               write(rendezvous.encodeEnvelope(rendezvous.ENVELOPE.close, envelope.channel, Buffer.alloc(0)))
               channels.delete(key)
               clients.delete(client)
+              // A half-written `.part` file left in the uploads folder wearing a real name is the
+              // one piece of state a dropped socket must not leave behind.
+              client.uploads?.closeAll()
+              client.uploads = null
             },
           }
           channels.set(key, client)
@@ -485,6 +575,8 @@ function connectAsHost() {
         if (envelope.type === rendezvous.ENVELOPE.close) {
           channels.delete(key)
           clients.delete(client)
+          client.uploads?.closeAll()
+          client.uploads = null
           log('guest channel closed')
           continue
         }

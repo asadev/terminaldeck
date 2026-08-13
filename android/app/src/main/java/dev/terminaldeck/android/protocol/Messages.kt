@@ -365,6 +365,16 @@ enum class ProtocolErrorCode {
     @SerialName("too-large")
     TooLarge,
 
+    /**
+     * The Mac understood, would have been allowed to do it, and could not.
+     *
+     * A folder deleted since it was listed, a shell that will not spawn. Worth trying again, which
+     * is why it is not [Unauthorized]: telling someone "not allowed" when the truth is "it broke"
+     * sends them to the pairing screen to fix a missing directory.
+     */
+    @SerialName("unavailable")
+    Unavailable,
+
     @SerialName("version")
     Version,
 

@@ -123,6 +123,9 @@ dependencies {
     implementation(libs.zxing.android.embedded)
 
     testImplementation(libs.junit)
+    // The upload pump is a coroutine driven by acknowledgements, so its tests need a scheduler they
+    // can drive rather than a clock they have to wait on.
+    testImplementation(libs.kotlinx.coroutines.test)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))
 }

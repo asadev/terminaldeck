@@ -101,6 +101,11 @@
   --pane-focus: var(--accent);
   --pane-unfocus: var(--border);
 
+  /* Ink on a filled status badge. White in both appearances, the way Apple's
+     red count badges are — `--text-onaccent` goes dark in the dark theme,
+     which is right on a clay button and unreadable on a red pill. */
+  --badge-fg: #ffffff;
+
   /* Liquid glass. The sheen is the part that matters: opacity alone over an
      empty area just reads as flat paint (see rule 6.2 in the build rules). */
   --material-bg: rgba(249, 248, 244, 0.72);
@@ -168,6 +173,7 @@
 
   --tab-active: #1c1b19;
   --tab-inactive: #232220;
+  --badge-fg: #ffffff;
 
   --material-bg: rgba(36, 35, 32, 0.68);
   --material-bg-strong: rgba(40, 39, 36, 0.88);

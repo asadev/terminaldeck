@@ -111,6 +111,47 @@ describe('components that are built are also wired', () => {
   }
 })
 
+/**
+ * A session started from a paired phone has to arrive, and has to arrive
+ * quietly.
+ *
+ * Both halves shipped broken once. The main process broadcast `session:created`
+ * and the preload exposed `onSessionCreated`, and nothing in the renderer
+ * listened — a real pty ran on this Mac with no row anywhere in the window.
+ * The obvious repair is worse than the bug: `addSession` sets the active
+ * session, so subscribing without `focus: false` means answering a message on
+ * your phone yanks the Mac out of whatever terminal you were typing into.
+ *
+ * Static, like the table above, and asserted on the source for the same reason
+ * — this project has no DOM to mount an effect in.
+ */
+describe('a session started from a phone appears without stealing focus', () => {
+  const app = read('renderer/App.tsx')
+
+  it('subscribes to session:created', () => {
+    expect(
+      app,
+      'nothing in the renderer listens for onSessionCreated — a session started from a paired ' +
+        'phone runs a real pty on this Mac and never appears in the window',
+    ).toMatch(/window\.deck\.onSessionCreated\(/)
+  })
+
+  it('adds the session without focus', () => {
+    // The whole subscription, from the call through to its closing brace.
+    const at = app.indexOf('window.deck.onSessionCreated(')
+    const body = app.slice(at, at + 400)
+    expect(body).toMatch(/addSession\([^)]*\{[^}]*focus:\s*false/)
+  })
+
+  it('badges the new row rather than switching to it', () => {
+    const at = app.indexOf('window.deck.onSessionCreated(')
+    expect(
+      app.slice(at, at + 400),
+      'an arrival with no focus and no badge is an arrival nobody can see',
+    ).toMatch(/unread\.recordOutput\(/)
+  })
+})
+
 /** The value of `<Name prop={...}>`, or null. Brace-aware, like `openingTag`. */
 function propExpression(tag: string, prop: string): string | null {
   const at = tag.search(new RegExp(`[\\s{]${prop}=\\{`))

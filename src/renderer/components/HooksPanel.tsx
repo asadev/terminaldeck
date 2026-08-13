@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { panelSpec } from '../shell/panels'
+import { PageEmpty } from './PageEmpty'
 import './HooksPanel.css'
 
 /* ------------------------------------------------------------------ types -- */
@@ -324,6 +326,9 @@ export function HooksPanel({ bridge }: HooksPanelProps) {
     <section className="hooks" aria-label="Provider hooks">
       <header className="hooks-head">
         <div className="hooks-headline">
+          {/* Visually hidden — see `.hooks-heading`. The toolbar says "Hooks"
+              in the title voice already; this is here for anything reading the
+              structure rather than looking at it. */}
           <h2 className="hooks-heading">Provider hooks</h2>
           <p className="hooks-sub">
             Agent CLIs can call out on session and tool events. Installing hooks lets this app
@@ -362,11 +367,14 @@ export function HooksPanel({ bridge }: HooksPanelProps) {
           print nothing at all — a page that ended in silence after the
           endpoint line, with no way to tell a working install from a broken
           one. There is nothing to install hooks into until a CLI exists. */}
+      {/* The blank carries no action of its own: Refresh is already in this
+          page's header, and two buttons with the same word on one screen is
+          the redundancy the rules call out. */}
       {statuses !== null && statuses.length === 0 && !error ? (
-        <p className="hooks-empty">
-          No agent CLIs were found on this machine, so there is nothing to install hooks into.
-          Install Claude Code, Codex or Gemini CLI and press Refresh.
-        </p>
+        <PageEmpty icon={panelSpec('hooks').icon} title="No agent CLIs on this machine">
+          There is nothing to install hooks into yet. Install Claude Code, Codex or Gemini CLI,
+          then press Refresh.
+        </PageEmpty>
       ) : null}
     </section>
   )

@@ -459,9 +459,22 @@
 .gh-panel > .gh-message {
   align-items: center;
   max-width: 34rem;
-  margin: 12vh auto 0;
+  margin: 11vh auto 0;
   padding: 0;
   text-align: center;
+}
+
+/* A mark belongs to a page with nothing on it, not to a notice sitting inside
+   a list of pull requests — so it is drawn only in the page-level case. */
+.gh-failure-mark {
+  display: none;
+}
+
+.gh-panel > .gh-failure .gh-failure-mark {
+  display: block;
+  margin-bottom: var(--sp-2);
+  color: var(--text-muted);
+  opacity: 0.55;
 }
 
 .gh-panel > .gh-failure .gh-failure-detail {

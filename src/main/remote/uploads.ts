@@ -55,19 +55,6 @@ import { mkdir, open, rename, unlink } from 'node:fs/promises'
 import { extname, join } from 'node:path'
 import { MAX_UPLOAD_NAME_BYTES, type ServerMessage } from './protocol'
 
-/** One upload in flight, as the desktop would list it. */
-export interface UploadInfo {
-  id: string
-  /** The name as it will appear on disk, not as the phone spelled it. */
-  name: string
-  path: string
-  /** What the phone said the file is. */
-  size: number
-  /** What has been written and acknowledged so far. */
-  received: number
-  startedAt: number
-}
-
 /**
  * A file being written, as this module needs it.
  *
@@ -107,15 +94,11 @@ export interface UploadDeps {
   store: UploadStore
   /** Send a frame to the phone this desk belongs to. */
   send(message: ServerMessage): void
-  /** Fires when the list of uploads changes, so a desktop panel could redraw it. */
-  onChange?: () => void
-  now?: () => number
 }
 
 export interface UploadDesk {
   /** The `upload` verbs. Anything else is not this module's business. */
   handle(message: UploadMessage): void
-  list(): UploadInfo[]
   /** The phone is gone. Whatever it was sending is deleted, not left half-written. */
   closeAll(): void
 }
@@ -153,13 +136,11 @@ interface Live {
   acked: number
   sink: UploadSink
   digest: Hash
-  startedAt: number
   /** Set once anything has gone wrong, so the failure is announced exactly once. */
   finished: boolean
 }
 
 export function createUploadDesk(deps: UploadDeps): UploadDesk {
-  const now = deps.now ?? Date.now
   const live = new Map<string, Live>()
   /**
    * Uploads whose file is being opened.
@@ -175,14 +156,6 @@ export function createUploadDesk(deps: UploadDeps): UploadDesk {
    */
   const opening = new Map<string, { cancelled: boolean }>()
 
-  function changed(): void {
-    try {
-      deps.onChange?.()
-    } catch (error) {
-      console.error('[upload] change listener threw:', error)
-    }
-  }
-
   /** Announce a failure once, delete the partial file, and forget the upload. */
   function fail(id: string, message: string): void {
     const upload = live.get(id)
@@ -197,7 +170,6 @@ export function createUploadDesk(deps: UploadDeps): UploadDesk {
     upload.finished = true
     void upload.sink.discard()
     deps.send({ t: 'upload.failed', id, message })
-    changed()
   }
 
   async function begin(id: string, name: string, size: number): Promise<void> {
@@ -252,12 +224,10 @@ export function createUploadDesk(deps: UploadDeps): UploadDesk {
       acked: 0,
       sink: opened.sink,
       digest: createHash('sha256'),
-      startedAt: now(),
       finished: false,
     })
     // Before a single byte is asked for. See the header.
     deps.send({ t: 'upload.ready', id, path: opened.path })
-    changed()
   }
 
   function data(id: string, encoded: string): void {
@@ -326,11 +296,9 @@ export function createUploadDesk(deps: UploadDeps): UploadDesk {
         id,
         message: 'This Mac could not put that file in its downloads folder. Nothing was saved.',
       })
-      changed()
       return
     }
     deps.send({ t: 'upload.done', id, path: upload.path, bytes: upload.size, sha256: actual })
-    changed()
   }
 
   return {
@@ -359,21 +327,7 @@ export function createUploadDesk(deps: UploadDeps): UploadDesk {
       }
     },
 
-    list(): UploadInfo[] {
-      return [...live.values()]
-        .map((upload) => ({
-          id: upload.id,
-          name: upload.name,
-          path: upload.path,
-          size: upload.size,
-          received: upload.acked,
-          startedAt: upload.startedAt,
-        }))
-        .sort((a, b) => a.startedAt - b.startedAt)
-    },
-
     closeAll(): void {
-      const had = live.size > 0
       for (const upload of live.values()) {
         upload.finished = true
         // Nothing is announced: the socket this would have gone down is the one
@@ -384,8 +338,6 @@ export function createUploadDesk(deps: UploadDeps): UploadDesk {
       live.clear()
       for (const pending of opening.values()) pending.cancelled = true
       opening.clear()
-      // Most phones never send a file, and this runs on every disconnection.
-      if (had) changed()
     },
   }
 }

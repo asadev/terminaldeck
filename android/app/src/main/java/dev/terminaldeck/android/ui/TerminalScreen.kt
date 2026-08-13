@@ -25,15 +25,24 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ContentPaste
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.Keyboard
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -54,6 +63,8 @@ import com.termux.terminal.TerminalSession
 import com.termux.view.TerminalView
 import com.termux.view.TerminalViewClient
 import dev.terminaldeck.android.session.RemoteSessionBinding
+import dev.terminaldeck.android.transfer.UploadPhase
+import dev.terminaldeck.android.transfer.UploadView
 import dev.terminaldeck.android.transport.TransportState
 import dev.terminaldeck.android.transport.detail
 import dev.terminaldeck.android.transport.isOnline
@@ -92,12 +103,41 @@ fun TerminalScreen(
     transport: TransportState,
     onBack: () -> Unit,
     onKey: (String) -> Unit,
-    onCopy: () -> Unit,
+    /**
+     * Copy out.
+     *
+     * The argument is what is selected on screen right now, or null. It is passed rather than read
+     * by the view model because only the view knows about a selection — and the fallback (the
+     * visible screen) is only reachable from the emulator, which only the binding has. The choice
+     * between them belongs with the rest of the policy, so both are handed over and the view model
+     * decides.
+     */
+    onCopy: (String?) -> Unit,
     onPaste: () -> Unit,
+    /** Absent, not disabled, when the Mac never advertised `upload`. See `DeckUiState.canSendFiles`. */
+    canSendFiles: Boolean = false,
+    onSendPhoto: () -> Unit = {},
+    onSendFile: () -> Unit = {},
+    upload: UploadView? = null,
+    onCancelUpload: () -> Unit = {},
+    onDismissUpload: () -> Unit = {},
+    /**
+     * The one-line result of the last thing the user did here.
+     *
+     * This screen had no way to show one, and the omission was invisible from the code: `notify`
+     * wrote to the state, the *session list* had a `SnackbarHost`, and this screen did not — so
+     * every "Copied 4 lines from the screen" and every "The clipboard is empty" went nowhere. Copy
+     * and paste are silent by nature; without a confirmation they feel broken exactly when they
+     * worked. Found by tapping Copy on a real emulator and watching nothing happen.
+     */
+    notice: String? = null,
 ) {
     val context = LocalContext.current
+    val snackbar = remember { SnackbarHostState() }
+    LaunchedEffect(notice) { notice?.let { snackbar.showSnackbar(it) } }
     val client = remember(binding) { DeckTerminalViewClient() }
     var ctrlArmed by remember(binding) { mutableStateOf(false) }
+    var attachOpen by remember { mutableStateOf(false) }
 
     val terminalView = remember(binding) {
         TerminalView(context, null).apply {
@@ -128,6 +168,7 @@ fun TerminalScreen(
 
     Scaffold(
         containerColor = Color(TERMINAL_BACKGROUND),
+        snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             Column(
                 modifier = Modifier
@@ -178,10 +219,20 @@ fun TerminalScreen(
                             overflow = TextOverflow.Ellipsis,
                         )
                     }
-                    IconButton(onClick = onCopy) {
+                    IconButton(onClick = {
+                        // Read at the moment of the tap, not remembered: a selection made and then
+                        // dismissed must not still be what Copy takes.
+                        val selection = terminalView.takeIf { it.isSelectingText() }?.selectedText
+                        onCopy(selection?.takeIf { it.isNotEmpty() })
+                        terminalView.stopTextSelectionMode()
+                    }) {
                         Icon(
                             Icons.Filled.ContentCopy,
-                            contentDescription = "Copy the whole transcript",
+                            // Says both halves, because Copy means two different things depending on
+                            // whether anything is selected and a control whose meaning changes
+                            // silently is one people stop trusting. Long-press is discoverable in
+                            // the same breath rather than being a gesture nobody is told about.
+                            contentDescription = "Copy the selection, or the screen. Long-press the terminal to select.",
                             tint = MaterialTheme.colorScheme.onBackground,
                         )
                     }
@@ -191,6 +242,35 @@ fun TerminalScreen(
                             contentDescription = "Paste into the session",
                             tint = MaterialTheme.colorScheme.onBackground,
                         )
+                    }
+                    if (canSendFiles) {
+                        Box {
+                            IconButton(onClick = { attachOpen = true }) {
+                                Icon(
+                                    Icons.Filled.AttachFile,
+                                    contentDescription = "Send a photo, video or file to the Mac",
+                                    tint = MaterialTheme.colorScheme.onBackground,
+                                )
+                            }
+                            DropdownMenu(expanded = attachOpen, onDismissRequest = { attachOpen = false }) {
+                                DropdownMenuItem(
+                                    text = { Text("Photo or video") },
+                                    leadingIcon = { Icon(Icons.Filled.Image, contentDescription = null) },
+                                    onClick = {
+                                        attachOpen = false
+                                        onSendPhoto()
+                                    },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("File") },
+                                    leadingIcon = { Icon(Icons.AutoMirrored.Filled.InsertDriveFile, contentDescription = null) },
+                                    onClick = {
+                                        attachOpen = false
+                                        onSendFile()
+                                    },
+                                )
+                            }
+                        }
                     }
                     IconButton(onClick = {
                         terminalView.requestFocus()
@@ -220,16 +300,23 @@ fun TerminalScreen(
             }
         },
         bottomBar = {
-            KeyRow(
-                enabled = transport.isOnline,
-                ctrl = ctrlArmed,
-                onPress = { key ->
-                    val press = KeyBar.press(key, ctrlArmed)
-                    ctrlArmed = press.ctrl
-                    if (press.data.isNotEmpty()) onKey(press.data)
-                },
-                modifier = Modifier.imePadding().navigationBarsPadding(),
-            )
+            Column(modifier = Modifier.imePadding().navigationBarsPadding()) {
+                // Above the keys rather than over the terminal: it has to stay readable while the
+                // keyboard is up, and an overlay on the terminal would cover the output the file is
+                // about to be used on.
+                if (upload != null) {
+                    UploadRow(upload, onCancel = onCancelUpload, onDismiss = onDismissUpload)
+                }
+                KeyRow(
+                    enabled = transport.isOnline,
+                    ctrl = ctrlArmed,
+                    onPress = { key ->
+                        val press = KeyBar.press(key, ctrlArmed)
+                        ctrlArmed = press.ctrl
+                        if (press.data.isNotEmpty()) onKey(press.data)
+                    },
+                )
+            }
         },
     ) { padding ->
         Box(
@@ -252,6 +339,57 @@ fun TerminalScreen(
                 },
             )
         }
+    }
+}
+
+/**
+ * The file on its way to the Mac.
+ *
+ * The bar is driven by `acked`, which is what the Mac says it has *written* — not by what this phone
+ * has handed to the socket. Drawn the other way it would fill in two seconds on any file that fits
+ * in a read buffer and then sit at 100% for a minute, which is not a progress bar.
+ *
+ * The path is on screen from the moment the Mac names it, before the bytes move, so a person can see
+ * where the file is going while Cancel still means something. Cancel is always there while it is
+ * running, because the failure this feature must not have is a transfer that has stalled and cannot
+ * be stopped from the phone.
+ */
+@Composable
+private fun UploadRow(upload: UploadView, onCancel: () -> Unit, onDismiss: () -> Unit) {
+    val failed = upload.phase is UploadPhase.Failed
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surface)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = upload.name,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(onClick = if (upload.isRunning) onCancel else onDismiss) {
+                Text(if (upload.isRunning) "Cancel" else "Dismiss")
+            }
+        }
+        if (upload.isRunning) {
+            LinearProgressIndicator(
+                progress = { upload.fraction },
+                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+            )
+        }
+        Text(
+            text = upload.detail,
+            style = MaterialTheme.typography.bodySmall,
+            fontFamily = FontFamily.Monospace,
+            color = if (failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 

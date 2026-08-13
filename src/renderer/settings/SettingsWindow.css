@@ -102,12 +102,17 @@
   min-width: 0;
   min-height: 0;
   overflow-y: auto;
-  padding: var(--sp-8) var(--sp-10) var(--sp-12);
+  /* One measure, centred in whatever room is left. Held to the left it put a
+     720px column against the window's left edge with 500px of blank paper
+     beside it — System Settings centres its column, and so does this. The
+     gutter never drops below --sp-10, so a narrow window is unchanged. */
+  padding-block: var(--sp-8) var(--sp-12);
+  padding-inline: max(var(--sp-10), calc((100% - var(--content-measure)) / 2));
   background: var(--bg-primary);
 }
 
-/* One measure, held to the left. A settings row whose control is 900px from
-   its label is a row nobody reads across. */
+/* A settings row whose control is 900px from its label is a row nobody reads
+   across, so the measure is enforced on the blocks as well as the gutter. */
 .settings-panel > * {
   max-width: var(--content-measure);
 }

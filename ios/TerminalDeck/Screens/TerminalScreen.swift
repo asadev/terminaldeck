@@ -30,6 +30,16 @@ struct TerminalScreen: View {
 
     @State private var title: String?
     @State private var toast: String?
+    /// Which picker is up, if any. One `@State` rather than two booleans, so the
+    /// impossible state — both sheets at once — cannot be expressed.
+    @State private var picking: Picking?
+
+    /// The two ways in. Both run out of process; see `FilePickers.swift`.
+    private enum Picking: String, Identifiable {
+        case photos
+        case files
+        var id: String { rawValue }
+    }
 
     private var bridge: TerminalBridge { model.bridge(for: sessionID) }
     private var session: RemoteSession? { model.session(sessionID) }
@@ -67,17 +77,58 @@ struct TerminalScreen: View {
             ToolbarItem(placement: .principal) { header }
             ToolbarItemGroup(placement: .topBarTrailing) {
                 Menu {
+                    /*
+                     * Copy Screen, and deliberately *only* Copy Screen.
+                     *
+                     * There was a "Copy Selection" item here and it had to go,
+                     * because it could never do what it said. SwiftTerm clears
+                     * its selection on a touch outside the terminal, so reaching
+                     * this menu at all destroys the selection on the way — the
+                     * item opened, correctly reported that nothing was selected,
+                     * and left the pasteboard untouched. Measured on a live
+                     * session: the whole screen was selected in one screenshot
+                     * and the pasteboard's change count did not move.
+                     *
+                     * Copying a *selection* therefore lives in the two places a
+                     * selection survives: the system's own long-press → Select →
+                     * Copy, and the `copy` key on the accessory row, which is the
+                     * terminal's own `inputAccessoryView` rather than something
+                     * outside it. Both are exercised in
+                     * `ClipboardAndTransferUITests`.
+                     */
                     Button {
-                        show(model.copy(from: sessionID))
+                        show(model.copyScreen(from: sessionID))
                     } label: {
-                        Label("Copy", systemImage: "doc.on.doc")
+                        Label("Copy Screen", systemImage: "doc.on.doc")
                     }
+                    .accessibilityIdentifier("terminal.copyScreen")
                     Button {
                         model.paste(into: sessionID)
                     } label: {
                         Label("Paste", systemImage: "doc.on.clipboard")
                     }
                     .disabled(!model.connection.isLive)
+                    .accessibilityIdentifier("terminal.paste")
+
+                    // Absent rather than disabled when the Mac cannot receive
+                    // one: a control that can only produce a refusal is not a
+                    // control. See `DeckModel.canSendFiles`.
+                    if model.canSendFiles {
+                        Divider()
+                        Button {
+                            picking = .photos
+                        } label: {
+                            Label("Send Photo or Video", systemImage: "photo")
+                        }
+                        .accessibilityIdentifier("terminal.sendPhoto")
+                        Button {
+                            picking = .files
+                        } label: {
+                            Label("Send File", systemImage: "doc")
+                        }
+                        .accessibilityIdentifier("terminal.sendFile")
+                    }
+
                     Divider()
                     Button {
                         model.reattach(sessionID)
@@ -105,11 +156,37 @@ struct TerminalScreen: View {
             }
         }
         .safeAreaInset(edge: .top, spacing: 0) {
-            if !model.connection.isLive {
-                // The one thing this screen must never do is look connected when
-                // it is not. The banner is the honest half of that; `send`
-                // refusing rather than buffering is the other.
-                Banner(text: model.connection.detail, tone: .warning)
+            VStack(spacing: 0) {
+                if !model.connection.isLive {
+                    // The one thing this screen must never do is look connected when
+                    // it is not. The banner is the honest half of that; `send`
+                    // refusing rather than buffering is the other.
+                    Banner(text: model.connection.detail, tone: .warning)
+                }
+                if let upload = model.upload {
+                    // Under the connection banner rather than over the terminal:
+                    // the point of watching an upload from a phone is to keep
+                    // reading the session while it runs.
+                    UploadRow(upload: upload) { model.clearUpload() }
+                }
+            }
+        }
+        // Out-of-process pickers. Nothing in this app reads the photo library, so
+        // neither of these prompts for anything — see `FilePickers.swift`.
+        .sheet(item: $picking) { which in
+            switch which {
+            case .photos:
+                PhotoPicker { picked in
+                    picking = nil
+                    hand(picked)
+                }
+                .ignoresSafeArea()
+            case .files:
+                DocumentPicker { picked in
+                    picking = nil
+                    hand(picked)
+                }
+                .ignoresSafeArea()
             }
         }
         .onAppear {
@@ -156,6 +233,115 @@ struct TerminalScreen: View {
         Task {
             try? await Task.sleep(for: .seconds(2.5))
             withAnimation { toast = nil }
+        }
+    }
+
+    /// A picker came back. Nil means the user cancelled, which is not an error
+    /// and must not produce a message.
+    private func hand(_ picked: PickedFile?) {
+        guard let picked else { return }
+        model.send(picked, into: sessionID)
+    }
+}
+
+/**
+ * The progress row for a file on its way to the Mac.
+ *
+ * Three things are on it and each one earns its place: **where the file is going**,
+ * which the Mac names before a byte moves and which is the only chance to notice
+ * it is the wrong machine; **how far it has got**, drawn from acknowledgements so
+ * it measures the Mac rather than this phone's read speed; and **Cancel**, because
+ * an upload that stalls on a train has to be stoppable from here — the alternative
+ * is force-quitting the app, which leaves the Mac holding a partial file.
+ */
+private struct UploadRow: View {
+    let upload: FileUpload
+    let onDismiss: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon)
+                .font(.system(size: 13))
+                .foregroundStyle(tint)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(upload.name)
+                    .font(.system(size: 12, weight: .medium))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Text(detail)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(Theme.faint)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                if case .sending = upload.phase {
+                    ProgressView(value: upload.fraction)
+                        .progressViewStyle(.linear)
+                        .tint(tint)
+                }
+            }
+
+            Spacer(minLength: 8)
+
+            Button(action: onDismiss) {
+                Image(systemName: running ? "xmark.circle.fill" : "xmark")
+                    .font(.system(size: running ? 18 : 13, weight: .semibold))
+                    .foregroundStyle(Theme.faint)
+            }
+            // Two words rather than one, because the same button stops a transfer
+            // and dismisses a finished one, and VoiceOver should not call those
+            // the same thing.
+            .accessibilityLabel(running ? "Cancel the upload" : "Dismiss")
+            .accessibilityIdentifier("upload.dismiss")
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity)
+        .background(.ultraThinMaterial)
+        .accessibilityIdentifier("upload.row")
+        // The bar moves on its own; VoiceOver should be told rather than left to
+        // poll a label that changes eleven times a second.
+        .accessibilityElement(children: .combine)
+        .accessibilityValue(detail)
+    }
+
+    private var running: Bool {
+        switch upload.phase {
+        case .opening, .sending, .finishing: return true
+        case .landed, .failed: return false
+        }
+    }
+
+    /// The sentence under the name. It is never the same in two states, which is
+    /// how a stalled upload is told apart from a slow one.
+    private var detail: String {
+        switch upload.phase {
+        case .opening:
+            return "Asking the Mac where to put it…"
+        case let .sending(path):
+            return "\(byteSize(upload.acked)) of \(byteSize(upload.size)) → \(path)"
+        case .finishing:
+            return "Checking it arrived intact…"
+        case let .landed(path):
+            return "Landed at \(path)"
+        case let .failed(reason):
+            return reason
+        }
+    }
+
+    private var icon: String {
+        switch upload.phase {
+        case .opening, .sending, .finishing: return "arrow.up.circle"
+        case .landed: return "checkmark.circle.fill"
+        case .failed: return "exclamationmark.triangle.fill"
+        }
+    }
+
+    private var tint: Color {
+        switch upload.phase {
+        case .landed: return .green
+        case .failed: return .orange
+        default: return .accentColor
         }
     }
 }

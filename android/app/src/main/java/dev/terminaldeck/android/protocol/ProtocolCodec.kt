@@ -113,6 +113,10 @@ object ServerFrames {
         is ServerMessage.Output -> message.id
         is ServerMessage.Status -> message.id
         is ServerMessage.Exit -> message.id
+        // Not routed like the others — nothing is attached to it yet — but it is the id the phone
+        // is about to navigate to, and an id that would be refused by `attach` must not become a
+        // route argument.
+        is ServerMessage.Created -> message.session.id
         else -> null
     }?.takeIf { Protocol.isValidSessionId(it) }
 }

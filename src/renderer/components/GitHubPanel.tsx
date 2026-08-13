@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useWhenActive } from '../schedule'
+import { panelSpec } from '../shell/panels'
 import './GitHubPanel.css'
 
 /* ------------------------------------------------------------------ types -- */
@@ -255,6 +256,22 @@ function Labels({ labels }: { labels: GitHubLabel[] }) {
 export function FailureBlock({ failure, onRetry }: { failure: GitHubFailure; onRetry(): void }) {
   return (
     <div className="gh-failure" role="status">
+      {/* Shown only when this block *is* the page — see the CSS. An empty page
+          wears the view's own glyph, the way every other one in the app does. */}
+      <svg
+        className="gh-failure-mark"
+        width="30"
+        height="30"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        <path d={panelSpec('github').icon} />
+      </svg>
       <p className="gh-failure-title">{FAILURE_TITLE[failure.kind] ?? FAILURE_TITLE.error}</p>
       <p className="gh-failure-message">{failure.message}</p>
       {failure.action && (

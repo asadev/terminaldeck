@@ -22,6 +22,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
@@ -36,8 +38,10 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -79,10 +83,12 @@ fun SessionListScreen(
     onOpen: (RemoteSessionView) -> Unit,
     onRefresh: () -> Unit,
     onReconnect: () -> Unit,
-    onNewSession: () -> Unit,
+    /** Null means "wherever the Mac would have started one" — see `DeckViewModel.newSession`. */
+    onNewSession: (String?) -> Unit,
     onUnpair: () -> Unit,
 ) {
     val snackbar = remember { SnackbarHostState() }
+    var folderMenu by remember { mutableStateOf(false) }
     LaunchedEffect(state.notice) {
         state.notice?.let { snackbar.showSnackbar(it) }
     }
@@ -117,14 +123,52 @@ fun SessionListScreen(
             )
         },
         floatingActionButton = {
+            // Absent, not disabled, when the Mac never advertised `create`. A button that exists
+            // only to explain that it does not work is a fake feature.
             if (state.canCreateSessions) {
-                ExtendedFloatingActionButton(
-                    onClick = onNewSession,
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary,
-                    icon = { Icon(Icons.Filled.Add, contentDescription = null) },
-                    text = { Text("New session") },
-                )
+                Box {
+                    ExtendedFloatingActionButton(
+                        onClick = {
+                            // One folder to choose from is not a choice. With nothing running the
+                            // Mac picks its own default, which is exactly what its own New Session
+                            // button does with nothing filled in.
+                            if (state.startableFolders.isEmpty()) onNewSession(null) else folderMenu = true
+                        },
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary,
+                        icon = { Icon(Icons.Filled.Add, contentDescription = null) },
+                        text = { Text("New session") },
+                    )
+                    DropdownMenu(expanded = folderMenu, onDismissRequest = { folderMenu = false }) {
+                        DropdownMenuItem(
+                            text = { Text("Where the Mac would") },
+                            onClick = {
+                                folderMenu = false
+                                onNewSession(null)
+                            },
+                        )
+                        // Only folders the Mac is already offering, which is the working directory
+                        // of a session in the list above. The Mac refuses anything else rather than
+                        // quietly starting somewhere different, so a picker built from anything but
+                        // rows on screen would offer choices that fail.
+                        for (folder in state.startableFolders) {
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        text = folder,
+                                        fontFamily = FontFamily.Monospace,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                },
+                                onClick = {
+                                    folderMenu = false
+                                    onNewSession(folder)
+                                },
+                            )
+                        }
+                    }
+                }
             }
         },
     ) { padding ->

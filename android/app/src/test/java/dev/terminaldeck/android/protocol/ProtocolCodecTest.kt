@@ -118,6 +118,105 @@ class ProtocolCodecTest {
         val result = ServerFrames.parse("""{"t":"attached","id":"s1","futureField":42}""")
         assertTrue(result is ServerFrames.Result.Ok)
     }
+
+    /* ---- capability `create` ------------------------------------------------------------- */
+
+    /**
+     * The tag and the capability that gates it, both spelled the way the desktop spells them.
+     *
+     * This build sent `{"t":"new"}` gated on `session.create` for weeks and no desktop ever
+     * advertised either — both were invented against this repo's own stand-in host. A string
+     * comparison is the only kind of test that catches that class of mistake: the wrong tag compiles,
+     * round-trips against itself, and closes the socket on the first tap.
+     */
+    @Test
+    fun `create is tagged the way the desktop parses it`() {
+        assertEquals("""{"t":"create"}""", ClientFrames.encode(ClientMessage.create(null, null, null)))
+        assertEquals(
+            """{"t":"create","cwd":"/Users/apple/Projects/terminaldeck"}""",
+            ClientFrames.encode(ClientMessage.create("/Users/apple/Projects/terminaldeck", null, null)),
+        )
+        assertEquals(
+            """{"t":"create","cwd":"/tmp/p","cols":80,"rows":24}""",
+            ClientFrames.encode(ClientMessage.create("/tmp/p", 80, 24)),
+        )
+    }
+
+    @Test
+    fun `create omits the size entirely when either dimension is missing`() {
+        assertEquals("""{"t":"create"}""", ClientFrames.encode(ClientMessage.create(null, 80, null)))
+        assertEquals("""{"t":"create"}""", ClientFrames.encode(ClientMessage.create(null, null, 24)))
+    }
+
+    @Test
+    fun `the create capability is the string the desktop advertises`() {
+        // Not `session.create`. To an installed build that name still means "answers `new`", so
+        // reusing it for this shape would light the button up and then refuse the frame it sends.
+        assertEquals("create", Capability.CREATE)
+    }
+
+    @Test
+    fun `created carries a whole session row`() {
+        val raw = """{"t":"created","session":{"id":"s9","title":"deck","cwd":"/tmp","provider":"shell","status":"idle","exitCode":null}}"""
+        val message = (ServerFrames.parse(raw) as ServerFrames.Result.Ok).message as ServerMessage.Created
+        assertEquals("s9", message.session.id)
+        assertEquals("/tmp", message.session.cwd)
+        // The id is what the phone is about to navigate to, so it goes through the same shape check
+        // an `attach` id would.
+        assertEquals("s9", ServerFrames.sessionIdOf(message))
+    }
+
+    @Test
+    fun `unavailable is a code this build understands rather than Unknown`() {
+        // The desktop uses it for "would have, and could not" — a folder deleted since it was
+        // listed. Mapping it to Unknown would be fine for display and wrong for meaning: it is the
+        // one refusal worth retrying.
+        val result = ServerFrames.parse("""{"t":"error","code":"unavailable","message":"gone"}""")
+        val message = (result as ServerFrames.Result.Ok).message as ServerMessage.Error
+        assertEquals(ProtocolErrorCode.Unavailable, message.code)
+        assertTrue(!message.code.isFatal)
+    }
+
+    /* ---- capability `upload` ------------------------------------------------------------- */
+
+    @Test
+    fun `the upload frames are tagged the way the desktop parses them`() {
+        assertEquals(
+            """{"t":"upload.begin","id":"u1","name":"clip.mov","size":4096}""",
+            ClientFrames.encode(ClientMessage.UploadBegin("u1", "clip.mov", 4096)),
+        )
+        assertEquals(
+            """{"t":"upload.data","id":"u1","data":"AAEC"}""",
+            ClientFrames.encode(ClientMessage.UploadData("u1", "AAEC")),
+        )
+        assertEquals(
+            """{"t":"upload.end","id":"u1","sha256":"ab"}""",
+            ClientFrames.encode(ClientMessage.UploadEnd("u1", "ab")),
+        )
+        assertEquals("""{"t":"upload.cancel","id":"u1"}""", ClientFrames.encode(ClientMessage.UploadCancel("u1")))
+    }
+
+    @Test
+    fun `the upload answers parse into the shapes the progress row reads`() {
+        val ready = (ServerFrames.parse("""{"t":"upload.ready","id":"u1","path":"/D/Terminal Deck/a.mov"}""")
+            as ServerFrames.Result.Ok).message as ServerMessage.UploadReady
+        assertEquals("/D/Terminal Deck/a.mov", ready.path)
+
+        val ack = (ServerFrames.parse("""{"t":"upload.ack","id":"u1","bytes":24576}""")
+            as ServerFrames.Result.Ok).message as ServerMessage.UploadAck
+        assertEquals(24_576, ack.bytes)
+
+        val done = (ServerFrames.parse("""{"t":"upload.done","id":"u1","path":"/D/a.mov","bytes":9,"sha256":"ff"}""")
+            as ServerFrames.Result.Ok).message as ServerMessage.UploadDone
+        assertEquals(9L, done.bytes)
+        assertEquals("ff", done.sha256)
+
+        // The sentence is what the user reads, and its absence must not lose the frame: the
+        // *failing* is the message.
+        val bare = (ServerFrames.parse("""{"t":"upload.failed","id":"u1"}""")
+            as ServerFrames.Result.Ok).message as ServerMessage.UploadFailed
+        assertTrue(bare.message.isNotEmpty())
+    }
 }
 
 class ProtocolSizingTest {
@@ -160,6 +259,25 @@ class ProtocolSizingTest {
             assertTrue("chunk ends with a lone high surrogate", !chunk.data.last().isHighSurrogate())
         }
         assertEquals(paste, chunks.joinToString("") { it.data })
+    }
+
+    @Test
+    fun `a normal paste is not refused, and an enormous one is refused with both numbers`() {
+        assertEquals(null, pasteRefusal("a stack trace\nwith a few lines\n"))
+        // Exactly at the cap still goes: the boundary is inclusive, and a paste refused for being
+        // exactly the size the message says is allowed is a message nobody believes twice.
+        assertEquals(null, pasteRefusal("a".repeat(Protocol.MAX_PASTE_BYTES)))
+        val refusal = pasteRefusal("a".repeat(Protocol.MAX_PASTE_BYTES + 1))
+        assertTrue("an oversized paste must be refused", refusal != null)
+        assertTrue("the refusal must name the limit: " + refusal, refusal!!.contains("1.0 MB"))
+    }
+
+    @Test
+    fun `the paste cap counts bytes, so an emoji clipboard is not four times the limit`() {
+        // 300,000 four-byte code points are 1.2 MB and 600,000 UTF-16 units. A length check would
+        // wave it through and the Mac would drop the phone for buffering.
+        val emoji = "\uD83D\uDC4D".repeat(300_000)
+        assertTrue(pasteRefusal(emoji) != null)
     }
 
     @Test

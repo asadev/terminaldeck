@@ -7,6 +7,8 @@ const sessions = [
   { id: 's2', cwd: '/Users/apple/Projects/terminaldeck', title: 'terminaldeck', provider: 'claude', exitCode: null, createdAt: launchedAt },
 ]
 let sessionCounter = 0
+/** Subscribers to `session:created`. See `onSessionCreated` below. */
+const sessionCreatedListeners = new Set<(meta: unknown) => void>()
 /** Mirrors `BrowserTabState` in `src/main/browser-tab.ts` — every field of it. */
 const browserTabState = {
   id: 'b1',
@@ -86,8 +88,11 @@ const api: Record<string, unknown> = new Proxy(
     settingsPaths: async () => ({ settings: '~/Library/Application Support/terminaldeck/settings.json' }),
     appAbout: async () => ({ name: 'Deck', version: '0.1.0' }),
     listProjects: async () => [{ path: '/Users/apple/Projects/terminaldeck', lastOpenedAt: Date.now() }],
+    // `?onboarding` forces the first-run screen. It is the one view in the app
+    // that cannot be reached by clicking — it appears only on a machine with no
+    // agent CLI at all — so without a switch here it can never be looked at.
     checkPrerequisites: async () => ({
-      canRunSessions: true,
+      canRunSessions: !new URLSearchParams(location.search).has('onboarding'),
       needsLogin: false,
       tools: [
         { id: 'claude', label: 'Claude Code', state: 'ready', version: '2.1.206', purpose: 'Run Claude Code sessions', required: false },
@@ -110,6 +115,19 @@ const api: Record<string, unknown> = new Proxy(
     writeToSession: () => {},
     resizeSession: () => {},
     onSessionData: noop, onSessionExit: noop, onSessionStatus: noop,
+    /**
+     * A real subscription rather than a noop, because this is the one event
+     * nothing in the window can provoke: `session:created` is broadcast only
+     * for sessions this window did *not* ask for — a phone starting one. With
+     * a noop here the arrival path can only be read, never seen, and the
+     * failure it guards against (the new row stealing the focused tab) is a
+     * render-time fact. Drive it from the console or a script with
+     * `emitSessionCreated({ ... })`.
+     */
+    onSessionCreated: (cb: (meta: unknown) => void) => {
+      sessionCreatedListeners.add(cb)
+      return () => sessionCreatedListeners.delete(cb)
+    },
     onCostUpdate: noop, onGitStatus: noop, onBrowserState: noop, onBrowserElement: noop,
     // A couple of real-looking dev servers, so the browser start page has
     // something to render in the harness.
@@ -190,11 +208,23 @@ const api: Record<string, unknown> = new Proxy(
         'Tailscale HTTPS certificates are off for this tailnet. Open the admin console DNS page and turn on HTTPS Certificates.',
     }),
     // The harness shows the state most users on an unsigned build will meet.
-    updateStatus: async () => ({
-      phase: 'unsupported',
-      reason:
-        'This build is not signed, so it cannot update itself. Download the latest version from the releases page.',
-    }),
+    // `?update=available|downloading|ready|error` picks a phase. Only
+    // `unsupported` can be reached in the harness otherwise, and it is the one
+    // phase with no tint — so the coloured washes on the banner were the only
+    // part of it nobody could look at.
+    updateStatus: async () => {
+      const phase = new URLSearchParams(location.search).get('update')
+      if (phase === 'available') return { phase, version: '0.2.0', notes: null }
+      if (phase === 'downloading')
+        return { phase, version: '0.2.0', percent: 42, bytesPerSecond: 1_500_000 }
+      if (phase === 'ready') return { phase, version: '0.2.0' }
+      if (phase === 'error') return { phase, message: 'The download stopped halfway.' }
+      return {
+        phase: 'unsupported',
+        reason:
+          'This build is not signed, so it cannot update itself. Download the latest version from the releases page.',
+      }
+    },
     checkForUpdate: async () => ({ phase: 'checking' }),
     downloadUpdate: async () => ({ phase: 'downloading', version: '0.2.0', percent: 42, bytesPerSecond: 1_500_000 }),
     installUpdate: async () => ({ phase: 'ready', version: '0.2.0' }),
@@ -407,4 +437,23 @@ const api: Record<string, unknown> = new Proxy(
   },
 )
 ;(globalThis as unknown as { terminaldeck: unknown }).deck = api
+
+/**
+ * Stand in for a phone starting a session on this Mac.
+ *
+ * The main process broadcasts `session:created` only to windows that did not
+ * request the session, so there is no click anywhere in the app that produces
+ * one. This is how the arrival is driven in the harness.
+ */
+;(globalThis as unknown as { emitSessionCreated: (meta?: Record<string, unknown>) => void })
+  .emitSessionCreated = (meta = {}) => {
+  const full = {
+    ...sessions[0],
+    id: `phone-${(sessionCounter += 1)}`,
+    title: 'terminaldeck',
+    createdAt: Date.now(),
+    ...meta,
+  }
+  for (const listener of [...sessionCreatedListeners]) listener(full)
+}
 export {}

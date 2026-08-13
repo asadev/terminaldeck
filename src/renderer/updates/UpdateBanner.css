@@ -11,33 +11,54 @@
    phase, so the colour still carries meaning without a border carrying it.
    ============================================================================ */
 
+/* An inset card, not a full-bleed strip.
+   Edge to edge it read as a second toolbar — a grey slab with a hairline top
+   and bottom, on every screen in the app, and the flattest thing in the
+   window. Apple floats this kind of standing notice: it wears the chrome's
+   own glass, it is inset from the window so the page continues past it, and
+   its corners are what separate it from the work rather than a rule. */
 .upd-banner {
   flex-shrink: 0;
-  padding: var(--sp-2) var(--sp-4);
-  background: var(--fill-quaternary);
+  margin: var(--sp-3) var(--sp-4) 0;
+  padding: var(--sp-15) var(--sp-15) var(--sp-15) var(--sp-4);
+  border-radius: var(--radius-lg);
+  background-color: var(--material-bg);
+  background-image: var(--material-sheen);
+  -webkit-backdrop-filter: var(--material-filter);
+  backdrop-filter: var(--material-filter);
+  box-shadow: var(--shadow-sm), inset 0 0 0 0.5px var(--material-hairline);
   color: var(--text-primary);
   font-size: var(--t-callout);
 }
 
-/* Phase tints, kept deliberately faint. This strip sits above the work on
-   every launch that has news, and at full bleed even a 15% wash is the loudest
-   thing on the screen — which is the wrong ranking against a session that is
-   mid-run. Mixed rather than hardcoded so both themes stay in step. */
+/* Phase tints, kept deliberately faint, and painted as a wash *over* the
+   sheen rather than instead of it — replacing the background would take the
+   glass with it. Mixed rather than hardcoded so both themes stay in step. */
 .upd-banner[data-phase='available'],
 .upd-banner[data-phase='downloading'],
 .upd-banner[data-phase='ready'] {
-  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  background-image:
+    linear-gradient(
+      color-mix(in srgb, var(--accent) 12%, transparent),
+      color-mix(in srgb, var(--accent) 12%, transparent)
+    ),
+    var(--material-sheen);
 }
 
 .upd-banner[data-phase='error'] {
-  background: color-mix(in srgb, var(--color-critical) 10%, transparent);
+  background-image:
+    linear-gradient(
+      color-mix(in srgb, var(--color-critical) 13%, transparent),
+      color-mix(in srgb, var(--color-critical) 13%, transparent)
+    ),
+    var(--material-sheen);
 }
 
 /* No tint at all: "this build cannot update itself" is a standing fact about
    the build, not a warning about something that just happened, and it is on
    screen from launch until it is dismissed. */
 .upd-banner[data-phase='unsupported'] {
-  background: var(--fill-quaternary);
+  background-image: var(--material-sheen);
 }
 
 .upd-banner[data-phase='unsupported'] .upd-title {

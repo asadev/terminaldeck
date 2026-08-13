@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useEvery } from '../schedule'
+import { panelSpec } from '../shell/panels'
+import { PageEmpty } from './PageEmpty'
 import './AlertsPanel.css'
 
 /* ------------------------------------------------------------------ types -- */
@@ -274,30 +276,45 @@ export function AlertsPanel({ projectPath, onAction, bridge, refreshMs }: Alerts
 
   const groups = useMemo(() => (report ? groupAlerts(report.alerts) : []), [report])
 
+  /* A quiet project is the state this panel is in most of the time, and it
+     used to be shown twice: a summary line pinned to the top-left corner and a
+     second sentence saying the same thing ten viewport-percent below it. When
+     there is nothing to list there is nothing to head, so the page is one
+     composed empty state and the rescan button moves into it. */
+  const quiet = host && report !== null && report.alerts.length === 0 && !error
+
   return (
     <section className="alerts" aria-label="Project alerts">
-      <header className="alerts-head">
-        <div className="alerts-headline">
-          <p className="alerts-summary" data-worst={report?.worst ?? 'none'}>
-            {error ?? summarize(report)}
-          </p>
-        </div>
-        <button
-          type="button"
-          className="alerts-rescan"
-          onClick={() => void scan()}
-          disabled={busy || !host}
-        >
-          {busy ? 'Checking…' : 'Check again'}
-        </button>
-      </header>
+      {!quiet && (
+        <header className="alerts-head">
+          <div className="alerts-headline">
+            <p className="alerts-summary" data-worst={report?.worst ?? 'none'}>
+              {error ?? summarize(report)}
+            </p>
+          </div>
+          <button
+            type="button"
+            className="alerts-rescan"
+            onClick={() => void scan()}
+            disabled={busy || !host}
+          >
+            {busy ? 'Checking…' : 'Check again'}
+          </button>
+        </header>
+      )}
 
       {!host ? (
-        <p className="alerts-empty">Alerts are not connected to the main process yet.</p>
-      ) : report && report.alerts.length === 0 ? (
-        <p className="alerts-empty">
+        <PageEmpty icon={panelSpec('alerts').icon} title="Alerts are not available here">
+          Alerts are not connected to the main process yet.
+        </PageEmpty>
+      ) : quiet ? (
+        <PageEmpty
+          icon={panelSpec('alerts').icon}
+          title={summarize(report)}
+          action={{ label: busy ? 'Checking…' : 'Check again', onClick: () => void scan(), busy }}
+        >
           Context is healthy, nothing is blocked, and the tools this project uses are installed.
-        </p>
+        </PageEmpty>
       ) : (
         groups.map((group) => (
           <section className="alerts-group" key={group.severity} data-severity={group.severity}>

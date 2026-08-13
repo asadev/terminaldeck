@@ -459,6 +459,17 @@ final class DeckModel {
         return "Copied \(lineCount(screen)) from the screen."
     }
 
+    /// Copy what is on screen, whatever is selected. What the actions menu
+    /// offers, because a selection cannot survive the trip to that menu.
+    @discardableResult
+    func copyScreen(from id: String) -> String {
+        guard let bridge = bridges[id] else { return "Nothing to copy." }
+        let screen = bridge.visibleText()
+        guard !screen.isEmpty else { return "Nothing to copy." }
+        UIPasteboard.general.string = screen
+        return "Copied \(lineCount(screen)) from the screen."
+    }
+
     /// "1 line" / "12 lines". Named so the toast says what landed rather than
     /// only that something did.
     private func lineCount(_ text: String) -> String {

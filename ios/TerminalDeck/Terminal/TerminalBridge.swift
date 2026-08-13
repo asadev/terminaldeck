@@ -67,6 +67,12 @@ final class TerminalBridge: NSObject, @preconcurrency TerminalViewDelegate {
         // ringing on a phone in someone's pocket.
         view.bellStyle = .none
         view.optionAsMetaKey = true
+        // Set on the UIKit view rather than through a SwiftUI modifier, because
+        // the modifier would apply to the representable's wrapper and a
+        // long-press has to land on the terminal itself — which is what starts
+        // SwiftTerm's own text selection, and therefore the only way a UI test
+        // can exercise copying a *selection* rather than the screen.
+        view.accessibilityIdentifier = "terminal.view"
 
         // SwiftTerm builds its own accessory in `init`; this replaces it. See
         // `KeyboardAccessory` for why, and for why arming Control there works
@@ -99,10 +105,6 @@ final class TerminalBridge: NSObject, @preconcurrency TerminalViewDelegate {
     func selectedText() -> String? {
         view.getSelection()
     }
-
-    /// Whether a selection is on screen right now. Read by the Copy button so it
-    /// can say which of the two things it is about to do before it does it.
-    var hasSelection: Bool { view.selectionActive }
 
     /**
      * Drop the selection.

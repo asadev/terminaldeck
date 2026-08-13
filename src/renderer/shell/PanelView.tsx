@@ -7,6 +7,7 @@ import { ReadinessPanel } from '../components/ReadinessPanel'
 import { AlertsPanel } from '../components/AlertsPanel'
 import { McpInspector } from '../components/McpInspector'
 import { HooksPanel } from '../components/HooksPanel'
+import { PageEmpty } from '../components/PageEmpty'
 import { Dashboard } from '../dashboard/Dashboard'
 import { Board } from '../board/Board'
 import { panelSpec, type PanelId } from './panels'
@@ -26,16 +27,18 @@ interface Props {
 function NeedsProject({ panel, onOpenProject }: { panel: PanelId; onOpenProject(): void }) {
   const spec = panelSpec(panel)
   return (
-    <div className="page-empty">
-      <h2>{spec.label} needs an open project</h2>
-      <p>{spec.blurb}</p>
-      <button type="button" className="btn-primary" onClick={onOpenProject}>
-        Open a project
-      </button>
-      <p className="page-empty-hint">
-        Or press <kbd>⌘</kbd> <kbd>O</kbd>.
-      </p>
-    </div>
+    <PageEmpty
+      icon={spec.icon}
+      title={`${spec.label} needs an open project`}
+      action={{ label: 'Open a project', onClick: onOpenProject, primary: true }}
+      hint={
+        <>
+          Or press <kbd>⌘</kbd> <kbd>O</kbd>.
+        </>
+      }
+    >
+      {spec.blurb}
+    </PageEmpty>
   )
 }
 

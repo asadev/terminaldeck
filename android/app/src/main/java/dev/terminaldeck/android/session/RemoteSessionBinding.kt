@@ -107,6 +107,30 @@ class RemoteSessionBinding(
         session.emulator?.paste(text)
     }
 
+    /**
+     * The visible screen as text, with trailing blank rows dropped.
+     *
+     * What Copy falls back to when nothing is selected — which is most of the time, because
+     * selecting text with a fingertip on a phone is genuinely hard and "copy what I am looking at"
+     * is what people mean. Deliberately **not** `transcriptText`: that is two thousand rows, and a
+     * button labelled Copy that silently puts a megabyte of scrollback on the clipboard is a button
+     * that ruins whatever the user pastes it into. The long-press selection is there for anyone who
+     * wants a specific part of the scrollback.
+     *
+     * The iOS client's `visibleText` computes the same thing from SwiftTerm, so Copy means the same
+     * thing on both phones.
+     */
+    fun visibleText(): String {
+        val emulator = session.emulator ?: return ""
+        val text = emulator.screen.getSelectedText(0, 0, emulator.mColumns, emulator.mRows - 1)
+        return text.trimEnd()
+    }
+
+    /** The last size the view reported, for a `create` that should open at this shape. */
+    val measuredCols: Int get() = lastCols
+
+    val measuredRows: Int get() = lastRows
+
     /** Output from the desktop. Any thread. */
     fun feed(data: String) {
         session.feedOutput(data)
