@@ -1,3 +1,9 @@
+/**
+ * Skipped wholesale on Windows: `installStagedUpdate` refuses any platform but
+ * darwin, and these cases run `sh` and inspect macOS paths. The module is not
+ * cross-platform and does not pretend to be — a Windows build updates through
+ * NSIS, which has its own installer.
+ */
 import { spawn as realSpawn } from 'node:child_process'
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import * as realFsPromises from 'node:fs/promises'
@@ -225,7 +231,7 @@ function healthyOptions(overrides: Partial<InstallOptions> = {}): {
 
 /* ------------------------------------------------------------------- paths -- */
 
-describe('installedBundlePath', () => {
+describe.skipIf(process.platform === 'win32')('installedBundlePath', () => {
   it('walks up from the executable to the bundle', () => {
     expect(installedBundlePath(EXE)).toBe(BUNDLE)
   })
@@ -283,7 +289,7 @@ describe('installedBundlePath', () => {
   })
 })
 
-describe('bundleParent', () => {
+describe.skipIf(process.platform === 'win32')('bundleParent', () => {
   it('is the directory the rename happens in', () => {
     expect(bundleParent(BUNDLE)).toBe('/Applications')
     expect(bundleParent('/Users/a b/Apps/Terminal Deck.app')).toBe('/Users/a b/Apps')
@@ -294,7 +300,7 @@ describe('bundleParent', () => {
   })
 })
 
-describe('backupPathFor', () => {
+describe.skipIf(process.platform === 'win32')('backupPathFor', () => {
   it('stays beside the bundle, so the rename is within one volume', () => {
     expect(backupPathFor(BUNDLE, 17)).toBe('/Applications/Terminal Deck.app.old-17')
     expect(bundleParent(backupPathFor(BUNDLE, 17))).toBe(bundleParent(BUNDLE))
@@ -303,7 +309,7 @@ describe('backupPathFor', () => {
 
 /* ----------------------------------------------------------------- version -- */
 
-describe('readShortVersion', () => {
+describe.skipIf(process.platform === 'win32')('readShortVersion', () => {
   it('reads the real plist shape', () => {
     expect(readShortVersion(plist('0.1.0'))).toBe('0.1.0')
   })
@@ -320,7 +326,7 @@ describe('readShortVersion', () => {
   })
 })
 
-describe('compareVersions', () => {
+describe.skipIf(process.platform === 'win32')('compareVersions', () => {
   it('orders releases numerically, not lexically', () => {
     expect(compareVersions('0.2.0', '0.1.0')).toBe(1)
     expect(compareVersions('0.10.0', '0.9.0')).toBe(1)
@@ -349,7 +355,7 @@ describe('compareVersions', () => {
 
 /* ---------------------------------------------------------------- quoting -- */
 
-describe('shellQuote', () => {
+describe.skipIf(process.platform === 'win32')('shellQuote', () => {
   it('survives spaces', () => {
     expect(shellQuote('/Applications/Terminal Deck.app')).toBe("'/Applications/Terminal Deck.app'")
   })
@@ -361,7 +367,7 @@ describe('shellQuote', () => {
   // The module refuses any platform but darwin, and this case runs `sh` /
   // inspects a macOS path. Skipped on Windows rather than deleted: the
   // behaviour is real everywhere it can happen.
-  it.skipIf(process.platform === 'win32')(
+  it(
     'neutralises everything sh would otherwise expand',
     async () => {
     // Asserted by asking `sh` itself rather than by reasoning about the string.
@@ -388,7 +394,7 @@ describe('shellQuote', () => {
 
 /* ------------------------------------------------------------- capability -- */
 
-describe('canInstallInPlace', () => {
+describe.skipIf(process.platform === 'win32')('canInstallInPlace', () => {
   it('accepts a writable bundle and reports both paths it checked', async () => {
     const fs = fakeFs({ directories: [`${BUNDLE}/Contents/MacOS`] })
     const verdict = await canInstallInPlace({
@@ -472,7 +478,7 @@ describe('canInstallInPlace', () => {
 
 /* --------------------------------------------------- refusing before quitting -- */
 
-describe('installStagedUpdate refuses before quitting', () => {
+describe.skipIf(process.platform === 'win32')('installStagedUpdate refuses before quitting', () => {
   it('does not quit when the app is not writable', async () => {
     const { options, quit, spawned } = healthyOptions()
     const fs = fakeFs({
@@ -606,7 +612,7 @@ describe('installStagedUpdate refuses before quitting', () => {
 
 /* ------------------------------------------------------------ version guard -- */
 
-describe('the version guard', () => {
+describe.skipIf(process.platform === 'win32')('the version guard', () => {
   it('refuses an older build', async () => {
     const { options, quit } = healthyOptions({ currentVersion: '0.3.0' })
     const result = await installStagedUpdate(options)
@@ -666,7 +672,7 @@ describe('the version guard', () => {
 
 /* ------------------------------------------------------------- the handoff -- */
 
-describe('starting the helper', () => {
+describe.skipIf(process.platform === 'win32')('starting the helper', () => {
   it('spawns detached, ignores its stdio, unrefs it, and only then quits', async () => {
     const { options, quit, spawned } = healthyOptions()
     const result = await installStagedUpdate(options)
@@ -692,7 +698,7 @@ describe('starting the helper', () => {
   // The module refuses any platform but darwin, and this case runs `sh` /
   // inspects a macOS path. Skipped on Windows rather than deleted: the
   // behaviour is real everywhere it can happen.
-  it.skipIf(process.platform === 'win32')(
+  it(
     'writes the helper into the staging directory, not the app',
     async () => {
     const { options, fs } = healthyOptions()
@@ -745,7 +751,7 @@ describe('starting the helper', () => {
 
 /* --------------------------------------------------------- the seams still fit -- */
 
-describe('the injected seams match the real modules', () => {
+describe.skipIf(process.platform === 'win32')('the injected seams match the real modules', () => {
   it('accepts node:fs/promises', () => {
     // A compile-time check that the narrowed surface has not drifted from the
     // module it stands in for. Nothing here touches the disk.
@@ -761,7 +767,7 @@ describe('the injected seams match the real modules', () => {
   // The module refuses any platform but darwin, and this case runs `sh` /
   // inspects a macOS path. Skipped on Windows rather than deleted: the
   // behaviour is real everywhere it can happen.
-  it.skipIf(process.platform === 'win32')(
+  it(
     'points at an `open` that exists on this machine',
     async () => {
     // Verified rather than assumed: the relaunch is the last thing the helper
@@ -888,7 +894,7 @@ async function swapWorld(options: { parentName?: string } = {}): Promise<{
   }
 }
 
-describe('the swap script, run against real directories', () => {
+describe.skipIf(process.platform === 'win32')('the swap script, run against real directories', () => {
   it('replaces the bundle, removes the backup only after that, and relaunches', async () => {
     const w = await swapWorld()
     await writeFile(
@@ -1405,7 +1411,7 @@ describe('the swap script, run against real directories', () => {
 
 /* ------------------------------------------------- the real permission check -- */
 
-describe('canInstallInPlace against a real directory', () => {
+describe.skipIf(process.platform === 'win32')('canInstallInPlace against a real directory', () => {
   it('refuses a bundle in a folder this account cannot write', async () => {
     if (process.getuid?.() === 0) return // root can write anything; the check is meaningless
     const root = await temp()

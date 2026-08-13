@@ -164,19 +164,19 @@ function poolWith(transport: Transport, timeouts?: Partial<McpTimeouts>) {
 
 describe('claudeJsonPath', () => {
   it('sits beside ~/.claude, not inside it, on a default install', () => {
-    expect(claudeJsonPath({})).toMatch(/\/\.claude\.json$/)
-    expect(claudeJsonPath({})).not.toMatch(/\.claude\/\.claude\.json$/)
+    expect(claudeJsonPath({}).endsWith(join('', '.claude.json').slice(1))).toBe(true)
+    expect(claudeJsonPath({}).endsWith(join('.claude', '.claude.json'))).toBe(false)
   })
 
   it('moves inside CLAUDE_CONFIG_DIR when that is set', () => {
     // Verified by running the real CLI against a throwaway config dir: it
     // created exactly <dir>/.claude.json and reported no servers.
-    expect(claudeJsonPath({ CLAUDE_CONFIG_DIR: '/tmp/work-profile' })).toBe('/tmp/work-profile/.claude.json')
+    expect(claudeJsonPath({ CLAUDE_CONFIG_DIR: '/tmp/work-profile' })).toBe(join('/tmp/work-profile', '.claude.json'))
     expect(claudeSettingsDir({ CLAUDE_CONFIG_DIR: '/tmp/work-profile' })).toBe('/tmp/work-profile')
   })
 
   it('ignores an empty override rather than reading from the filesystem root', () => {
-    expect(claudeJsonPath({ CLAUDE_CONFIG_DIR: '   ' })).toMatch(/\/\.claude\.json$/)
+    expect(claudeJsonPath({ CLAUDE_CONFIG_DIR: '   ' }).endsWith('.claude.json')).toBe(true)
   })
 })
 
