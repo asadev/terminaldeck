@@ -38,8 +38,10 @@
 
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
 import { createReadStream } from 'node:fs'
-import { readFile, stat } from 'node:fs/promises'
-import { createServer as createHttpsServer, type Server as HttpsServer } from 'node:https'
+// Plain HTTP on loopback, not HTTPS. Tailscale terminates TLS in front of it;
+// see ./tailscale-serve for why it cannot be done in-process.
+import { stat } from 'node:fs/promises'
+import { createServer as createPlainServer, type Server as LocalServer } from 'node:http'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Duplex } from 'node:stream'
 import { extname, join, normalize, resolve, sep } from 'node:path'
@@ -58,7 +60,8 @@ import {
   type RemoteSession,
   type ServerMessage,
 } from './protocol'
-import { ensureCert, tailnetStatus, type TailnetStatus } from './tailnet'
+import { tailnetStatus, type TailnetStatus } from './tailnet'
+import { serveOff, serveOn } from './tailscale-serve'
 
 /* ------------------------------------------------------------------ types -- */
 
@@ -168,9 +171,16 @@ export interface RemoteServerOptions extends RemoteEndpointOptions {
   /** Where `tailscale cert` keeps the PEM pair. */
   certDir: string
   port?: number
+  /**
+   * Puts a TLS proxy in front of the loopback listener. Injectable so tests do
+   * not shell out to tailscale; defaults to the real one.
+   */
+  serve?: {
+    on(httpsPort: number, localPort: number): Promise<{ ok: boolean; url?: string; message?: string }>
+    off(httpsPort: number): Promise<void>
+  }
   /** Test seams. Both default to the real thing in `tailnet.ts`. */
   readTailnet?: () => Promise<TailnetStatus>
-  readCert?: (dnsName: string, dir: string) => Promise<CertLoad>
 }
 
 /** What the server needs to open a listener: the PEM text, not the paths. */
@@ -1252,22 +1262,6 @@ export function authenticatorFor(auth: RemoteAuth, desk: PairingDesk): RemoteAut
   }
 }
 
-/** `tailscale cert` hands back paths; a TLS server needs the bytes. */
-async function loadCert(dnsName: string, dir: string): Promise<CertLoad> {
-  const issued = await ensureCert(dnsName, dir)
-  if (!issued.ok) return { ok: false, message: issued.message }
-  try {
-    const [cert, key] = await Promise.all([
-      readFile(issued.certPath, 'utf8'),
-      readFile(issued.keyPath, 'utf8'),
-    ])
-    return { ok: true, cert, key }
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error)
-    return { ok: false, message: `Tailscale issued a certificate but it could not be read: ${detail}` }
-  }
-}
-
 /* --------------------------------------------------------------- lifecycle -- */
 
 /**
@@ -1281,9 +1275,9 @@ async function loadCert(dnsName: string, dir: string): Promise<CertLoad> {
 export function createRemoteServer(options: RemoteServerOptions): RemoteServer {
   const port = options.port ?? DEFAULT_PORT
   const readTailnet = options.readTailnet ?? (() => tailnetStatus())
-  const readCert = options.readCert ?? loadCert
 
-  let servers: HttpsServer[] = []
+  const serve = options.serve ?? { on: serveOn, off: serveOff }
+  let servers: LocalServer[] = []
   let endpoint: RemoteEndpoint | null = null
   let current: { url: string; address: string } | null = null
   let reason: string | null = null
@@ -1306,7 +1300,7 @@ export function createRemoteServer(options: RemoteServerOptions): RemoteServer {
     return snapshot()
   }
 
-  async function listenOn(server: HttpsServer, address: string): Promise<void> {
+  async function listenOn(server: LocalServer, address: string): Promise<void> {
     await new Promise<void>((settle, fail) => {
       const onError = (error: Error): void => {
         server.close()
@@ -1332,8 +1326,12 @@ export function createRemoteServer(options: RemoteServerOptions): RemoteServer {
       )
     }
 
-    const cert = await readCert(tailnet.dnsName, options.certDir)
-    if (!cert.ok) return failure(cert.message)
+    // No certificate is loaded any more. Electron's Node is built against
+    // BoringSSL, where `https.createServer` accepts the connection and then
+    // never finishes the handshake — measured on this machine, same cert and
+    // address, plain Node answered 200 and Electron answered nothing at all.
+    // Tailscale terminates TLS instead, with the certificate it already
+    // manages, and proxies to loopback.
 
     const hosts =
       options.hosts ??
@@ -1349,16 +1347,23 @@ export function createRemoteServer(options: RemoteServerOptions): RemoteServer {
     // address leaves a v6-preferring phone waiting for Happy Eyeballs to give up
     // on every single connection, so both tailnet addresses get a listener — and
     // still only tailnet addresses.
-    const addresses = tailnet.address6 ? [tailnet.address, tailnet.address6] : [tailnet.address]
-    const opened: HttpsServer[] = []
+    // Loopback only. Nothing on the tailnet reaches this socket directly; the
+    // only way in is through the proxy, which Tailscale scopes to the tailnet.
+    const addresses = ['127.0.0.1']
+    const opened: LocalServer[] = []
     try {
       for (const address of addresses) {
-        const server = createHttpsServer({ cert: cert.cert, key: cert.key }, live.handleRequest)
+        const server = createPlainServer(live.handleRequest)
         server.on('upgrade', live.handleUpgrade)
         // A phone that drops mid-handshake is routine, not a crash.
         server.on('clientError', (_error, socket) => socket.destroy())
         await listenOn(server, address)
         opened.push(server)
+      }
+      const proxied = await serve.on(port, port)
+      if (!proxied.ok) {
+        for (const server of opened) server.close()
+        return failure(proxied.message ?? 'Tailscale could not put a proxy in front of this app.')
       }
     } catch (error) {
       for (const server of opened) server.close()
@@ -1401,6 +1406,10 @@ export function createRemoteServer(options: RemoteServerOptions): RemoteServer {
       const closing = servers
       servers = []
       current = null
+      // Tailscale stores the serve config in tailscaled, so it outlives this
+      // process. Left behind, it advertises a URL that proxies to a port
+      // nothing is listening on any more.
+      await serve.off(port).catch(() => {})
       await Promise.all(
         closing.map(
           (server) =>

@@ -985,8 +985,11 @@ describe('the server as a whole', () => {
         state: 'logged-out',
         reason: 'Tailscale is installed but signed out on this Mac.',
       }),
-      readCert: async () => {
-        throw new Error('a certificate must never be requested before the tailnet is ready')
+      serve: {
+        on: async () => {
+          throw new Error('the proxy must never be asked for before the tailnet is ready')
+        },
+        off: async () => {},
       },
     })
 
@@ -997,11 +1000,17 @@ describe('the server as a whole', () => {
     expect(server.url()).toBeNull()
   })
 
-  it('does not listen when the certificate cannot be issued, and passes the reason through', async () => {
+  it('does not stay up when the proxy refuses, and passes the reason through', async () => {
+    // TLS is terminated by `tailscale serve`, not in this process — Electron's
+    // BoringSSL accepts the connection and never completes the handshake. So
+    // the failure that matters here is the proxy refusing, not a certificate.
     const server = createRemoteServer({
       ...neverListens,
       readTailnet: async () => ready(),
-      readCert: async () => ({ ok: false, message: 'HTTPS certificates are off for this tailnet.' }),
+      serve: {
+        on: async () => ({ ok: false, message: 'HTTPS certificates are off for this tailnet.' }),
+        off: async () => {},
+      },
     })
 
     const status = await server.start()
@@ -1015,8 +1024,11 @@ describe('the server as a whole', () => {
     const server = createRemoteServer({
       ...neverListens,
       readTailnet: async () => ({ ...ready(), magicDns: false, dnsName: '' }),
-      readCert: async () => {
-        throw new Error('a certificate must never be requested without a name to put it on')
+      serve: {
+        on: async () => {
+          throw new Error('the proxy must never be asked for without a name to put it on')
+        },
+        off: async () => {},
       },
     })
 
