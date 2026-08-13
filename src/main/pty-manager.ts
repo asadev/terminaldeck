@@ -3,6 +3,7 @@ import { basename } from 'node:path'
 import * as pty from 'node-pty'
 import { BRAND } from '../shared/brand'
 import { stripInheritedSessionEnv } from './session-env'
+import { currentPlatform, withPath } from './platform/host'
 import type { CreateSessionInput, ProviderId, SessionMeta, SessionStatus } from '../shared/types'
 import { ActivityTracker } from './session-activity'
 
@@ -60,10 +61,17 @@ export class PtyManager {
         // agent session, its markers are in here and the CLI would treat the
         // new session as a child — which turns transcript saving off, and
         // chat mode and cost both read those transcripts.
-        ...stripInheritedSessionEnv(process.env, BRAND.sessionEnvVar),
+        //
         // A GUI app inherits a minimal PATH; use the login shell's instead so
-        // CLIs installed via nvm/Homebrew/~/.local/bin resolve.
-        PATH: spawnSpec.path,
+        // CLIs installed via nvm/Homebrew/~/.local/bin resolve. Written through
+        // `withPath` rather than as a literal `PATH:` key — Windows spells the
+        // variable `Path`, and a spread copy would hand the child both
+        // spellings with no defined winner. `platform/host.ts` documents it.
+        ...withPath(
+          stripInheritedSessionEnv(process.env, BRAND.sessionEnvVar),
+          spawnSpec.path,
+          currentPlatform(),
+        ),
         // A profile redirects the agent's config dir, which is what actually
         // keeps two logins apart. Applied last so it wins.
         ...(spawnSpec.env ?? {}),

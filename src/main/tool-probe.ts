@@ -20,6 +20,8 @@
 
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import { currentPlatform, isWindows, withPath, type Platform } from './platform/host'
+import { lookupSpec } from './platform/lookup'
 
 const run = promisify(execFile)
 
@@ -114,8 +116,22 @@ export async function probeBinary(
   bin: string,
   PATH: string,
   shell: string = process.env.SHELL || '/bin/zsh',
+  platform: Platform = currentPlatform(),
 ): Promise<ProbeResult> {
-  const command = `which ${bin}`
+  // `which` is not a Windows command and `/bin/zsh` is not a Windows shell, so
+  // the POSIX form of this probe did not report "not found" on Windows — it
+  // failed to run at all, and every tool came back missing with a sentence
+  // naming a command the user cannot type. `where.exe` is the shipped
+  // equivalent; `platform/lookup.ts` documents its exit-status and stderr
+  // behaviour, which is already what `toProbeResult` expects.
+  //
+  // The POSIX path still goes through the login shell on purpose: zsh's `which`
+  // builtin writes its own "copilot not found", and that sentence is the whole
+  // point of this module. Windows has no equivalent wording to preserve, so it
+  // runs `where.exe` directly with no shell in between.
+  const windows = isWindows(platform)
+  const spec = lookupSpec(platform, bin)
+  const command = windows ? `${spec.command} ${bin}` : `which ${bin}`
   if (!SAFE_BIN.test(bin)) {
     return {
       command,
@@ -128,9 +144,11 @@ export async function probeBinary(
     }
   }
 
+  const target = windows ? spec.command : shell
+  const args = windows ? spec.args : ['-c', command]
   try {
-    const { stdout, stderr } = await run(shell, ['-c', command], {
-      env: { ...process.env, PATH },
+    const { stdout, stderr } = await run(target, args, {
+      env: withPath(process.env, PATH, platform),
       timeout: PROBE_TIMEOUT_MS,
       encoding: 'utf8',
     })
@@ -153,11 +171,17 @@ export async function probeBinary(
  * stdin even for `--version`, so this runs with a hard timeout and treats a
  * timeout as "installed, version unknown" rather than as a failure.
  */
-export async function readVersion(bin: string, PATH: string): Promise<string | undefined> {
+export async function readVersion(
+  bin: string,
+  PATH: string,
+  platform: Platform = currentPlatform(),
+): Promise<string | undefined> {
   if (!SAFE_BIN.test(bin)) return undefined
   try {
     const { stdout } = await run(bin, ['--version'], {
-      env: { ...process.env, PATH },
+      // `{ ...process.env, PATH }` would leave Windows holding both `Path` and
+      // `PATH`; see `platform/host.ts`.
+      env: withPath(process.env, PATH, platform),
       timeout: PROBE_TIMEOUT_MS,
       encoding: 'utf8',
     })
