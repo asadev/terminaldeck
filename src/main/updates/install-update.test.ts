@@ -1,8 +1,26 @@
 /**
- * Skipped wholesale on Windows: `installStagedUpdate` refuses any platform but
- * darwin, and these cases run `sh` and inspect macOS paths. The module is not
- * cross-platform and does not pretend to be — a Windows build updates through
- * NSIS, which has its own installer.
+ * A note on what is skipped on Windows, and what is not.
+ *
+ * This module only ever installs on macOS — a Windows build updates through
+ * NSIS, which has its own installer — and it was once skipped here wholesale on
+ * that basis. That was too blunt. The platform the module *installs on* is not
+ * the platform its logic *depends on*: `compareVersions`, `shellQuote`,
+ * `installedBundlePath`, `readShortVersion` and `swapScript` are pure string
+ * functions, and the decision tree runs entirely against injected `fs`, `spawn`
+ * and `quit` with `environment.platform` supplied by the test rather than read
+ * from the host. None of that needs a Mac to be true, and a blanket skip meant
+ * Windows CI was gating an installer it had never once exercised the logic of.
+ *
+ * So the skips are now per-case, and each one names the POSIX facility it
+ * actually needs:
+ *
+ *   - running the generated script through `/bin/sh`;
+ *   - `stat`-ing `/usr/bin/open`;
+ *   - `chmod`-based permission semantics that Windows does not share;
+ *   - real on-disk paths, which are not the POSIX bundle paths this module
+ *     parses.
+ *
+ * Everything else runs everywhere.
  */
 import { spawn as realSpawn } from 'node:child_process'
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises'
@@ -231,7 +249,7 @@ function healthyOptions(overrides: Partial<InstallOptions> = {}): {
 
 /* ------------------------------------------------------------------- paths -- */
 
-describe.skipIf(process.platform === 'win32')('installedBundlePath', () => {
+describe('installedBundlePath', () => {
   it('walks up from the executable to the bundle', () => {
     expect(installedBundlePath(EXE)).toBe(BUNDLE)
   })
@@ -289,7 +307,7 @@ describe.skipIf(process.platform === 'win32')('installedBundlePath', () => {
   })
 })
 
-describe.skipIf(process.platform === 'win32')('bundleParent', () => {
+describe('bundleParent', () => {
   it('is the directory the rename happens in', () => {
     expect(bundleParent(BUNDLE)).toBe('/Applications')
     expect(bundleParent('/Users/a b/Apps/Terminal Deck.app')).toBe('/Users/a b/Apps')
@@ -300,7 +318,7 @@ describe.skipIf(process.platform === 'win32')('bundleParent', () => {
   })
 })
 
-describe.skipIf(process.platform === 'win32')('backupPathFor', () => {
+describe('backupPathFor', () => {
   it('stays beside the bundle, so the rename is within one volume', () => {
     expect(backupPathFor(BUNDLE, 17)).toBe('/Applications/Terminal Deck.app.old-17')
     expect(bundleParent(backupPathFor(BUNDLE, 17))).toBe(bundleParent(BUNDLE))
@@ -309,7 +327,7 @@ describe.skipIf(process.platform === 'win32')('backupPathFor', () => {
 
 /* ----------------------------------------------------------------- version -- */
 
-describe.skipIf(process.platform === 'win32')('readShortVersion', () => {
+describe('readShortVersion', () => {
   it('reads the real plist shape', () => {
     expect(readShortVersion(plist('0.1.0'))).toBe('0.1.0')
   })
@@ -326,7 +344,7 @@ describe.skipIf(process.platform === 'win32')('readShortVersion', () => {
   })
 })
 
-describe.skipIf(process.platform === 'win32')('compareVersions', () => {
+describe('compareVersions', () => {
   it('orders releases numerically, not lexically', () => {
     expect(compareVersions('0.2.0', '0.1.0')).toBe(1)
     expect(compareVersions('0.10.0', '0.9.0')).toBe(1)
@@ -355,7 +373,7 @@ describe.skipIf(process.platform === 'win32')('compareVersions', () => {
 
 /* ---------------------------------------------------------------- quoting -- */
 
-describe.skipIf(process.platform === 'win32')('shellQuote', () => {
+describe('shellQuote', () => {
   it('survives spaces', () => {
     expect(shellQuote('/Applications/Terminal Deck.app')).toBe("'/Applications/Terminal Deck.app'")
   })
@@ -364,12 +382,10 @@ describe.skipIf(process.platform === 'win32')('shellQuote', () => {
     expect(shellQuote("/Users/me/it's here/App.app")).toBe("'/Users/me/it'\\''s here/App.app'")
   })
 
-  // The module refuses any platform but darwin, and this case runs `sh` /
-  // inspects a macOS path. Skipped on Windows rather than deleted: the
-  // behaviour is real everywhere it can happen.
-  it(
-    'neutralises everything sh would otherwise expand',
-    async () => {
+  // Needs `/bin/sh`: the assertion *is* the shell's own answer. The two cases
+  // above cover the quoting rule as a string on every platform; this one cannot
+  // be ported, only re-invented as the thing it deliberately avoids being.
+  it.skipIf(process.platform === 'win32')('neutralises everything sh would otherwise expand', async () => {
     // Asserted by asking `sh` itself rather than by reasoning about the string.
     // Quoting rules are the shell's, so the shell is the only authority worth
     // testing against — and `printf '%s'` prints exactly one argument, so a
@@ -394,7 +410,7 @@ describe.skipIf(process.platform === 'win32')('shellQuote', () => {
 
 /* ------------------------------------------------------------- capability -- */
 
-describe.skipIf(process.platform === 'win32')('canInstallInPlace', () => {
+describe('canInstallInPlace', () => {
   it('accepts a writable bundle and reports both paths it checked', async () => {
     const fs = fakeFs({ directories: [`${BUNDLE}/Contents/MacOS`] })
     const verdict = await canInstallInPlace({
@@ -478,7 +494,7 @@ describe.skipIf(process.platform === 'win32')('canInstallInPlace', () => {
 
 /* --------------------------------------------------- refusing before quitting -- */
 
-describe.skipIf(process.platform === 'win32')('installStagedUpdate refuses before quitting', () => {
+describe('installStagedUpdate refuses before quitting', () => {
   it('does not quit when the app is not writable', async () => {
     const { options, quit, spawned } = healthyOptions()
     const fs = fakeFs({
@@ -612,7 +628,7 @@ describe.skipIf(process.platform === 'win32')('installStagedUpdate refuses befor
 
 /* ------------------------------------------------------------ version guard -- */
 
-describe.skipIf(process.platform === 'win32')('the version guard', () => {
+describe('the version guard', () => {
   it('refuses an older build', async () => {
     const { options, quit } = healthyOptions({ currentVersion: '0.3.0' })
     const result = await installStagedUpdate(options)
@@ -672,7 +688,7 @@ describe.skipIf(process.platform === 'win32')('the version guard', () => {
 
 /* ------------------------------------------------------------- the handoff -- */
 
-describe.skipIf(process.platform === 'win32')('starting the helper', () => {
+describe('starting the helper', () => {
   it('spawns detached, ignores its stdio, unrefs it, and only then quits', async () => {
     const { options, quit, spawned } = healthyOptions()
     const result = await installStagedUpdate(options)
@@ -695,16 +711,14 @@ describe.skipIf(process.platform === 'win32')('starting the helper', () => {
     expect(result.logPath).toBe(join(STAGING_DIR, LOG_NAME))
   })
 
-  // The module refuses any platform but darwin, and this case runs `sh` /
-  // inspects a macOS path. Skipped on Windows rather than deleted: the
-  // behaviour is real everywhere it can happen.
-  it(
-    'writes the helper into the staging directory, not the app',
-    async () => {
+  it('writes the helper into the staging directory, not the app', async () => {
     const { options, fs } = healthyOptions()
     await installStagedUpdate(options)
     expect(fs.written).toHaveLength(1)
-    expect(fs.written[0].path.startsWith(STAGING_DIR)).toBe(true)
+    // Compared against the same `join` the module uses rather than by prefix:
+    // a `startsWith` on a POSIX literal is really an assertion about the host's
+    // path separator, which is not what this test is about.
+    expect(fs.written[0].path).toBe(join(STAGING_DIR, SCRIPT_NAME))
     // Only this account may run a script that moves its application around.
     expect(fs.written[0].mode).toBe(0o700)
     // And nothing was written inside the bundle being replaced.
@@ -751,7 +765,7 @@ describe.skipIf(process.platform === 'win32')('starting the helper', () => {
 
 /* --------------------------------------------------------- the seams still fit -- */
 
-describe.skipIf(process.platform === 'win32')('the injected seams match the real modules', () => {
+describe('the injected seams match the real modules', () => {
   it('accepts node:fs/promises', () => {
     // A compile-time check that the narrowed surface has not drifted from the
     // module it stands in for. Nothing here touches the disk.
@@ -764,12 +778,10 @@ describe.skipIf(process.platform === 'win32')('the injected seams match the real
     expect(typeof fits).toBe('function')
   })
 
-  // The module refuses any platform but darwin, and this case runs `sh` /
-  // inspects a macOS path. Skipped on Windows rather than deleted: the
-  // behaviour is real everywhere it can happen.
-  it(
-    'points at an `open` that exists on this machine',
-    async () => {
+  // Needs the macOS filesystem: the whole point is to `stat` the real
+  // `/usr/bin/open`, which does not exist on Windows and would be asserting
+  // nothing if it were stubbed.
+  it.skipIf(process.platform === 'win32')('points at an `open` that exists on this machine', async () => {
     // Verified rather than assumed: the relaunch is the last thing the helper
     // does, and a wrong path there is an update that silently never comes back.
     await expect(stat(DEFAULT_OPEN_BINARY)).resolves.toBeDefined()
@@ -894,6 +906,86 @@ async function swapWorld(options: { parentName?: string } = {}): Promise<{
   }
 }
 
+/* --------------------------------------------- the script, as generated text -- */
+
+/**
+ * The two properties of the generated script that are decided before a shell
+ * ever sees it, and so are worth checking on every platform the project builds
+ * on: the wait is bounded, and a pid that is not a pid is refused outright.
+ * These live apart from the block below because that block needs `/bin/sh` and
+ * these need nothing but the generator.
+ */
+describe('the swap script, before it is run', () => {
+  it('caps the wait at a wall-clock ceiling, not merely at a finite number', () => {
+    // "Bounded" has to mean bounded in seconds. Ten million polls is a finite
+    // integer and also a helper holding a swap over the user's app for a month.
+    const plan = {
+      pid: 999,
+      bundlePath: '/Applications/Terminal Deck.app',
+      stagedBundlePath: '/tmp/pending/Terminal Deck.app',
+      backupPath: '/Applications/Terminal Deck.app.old-1',
+      logPath: '/tmp/pending/log',
+      openBinary: DEFAULT_OPEN_BINARY,
+      clearQuarantine: false,
+    }
+    const boundOf = (script: string): { polls: number; seconds: number } => {
+      const polls = Number(/^MAX_POLLS='(.+)'$/m.exec(script)?.[1])
+      const seconds = Number(/^POLL='(.+)'$/m.exec(script)?.[1])
+      return { polls, seconds }
+    }
+
+    for (const hostile of [
+      { pollSeconds: 0.25, maxPolls: Number.POSITIVE_INFINITY },
+      { pollSeconds: 0, maxPolls: Number.POSITIVE_INFINITY },
+      { pollSeconds: Number.NaN, maxPolls: Number.NaN },
+      { pollSeconds: -1, maxPolls: -1 },
+      { pollSeconds: 0.25, maxPolls: 10_000_000 },
+    ]) {
+      const { polls, seconds } = boundOf(swapScript({ ...plan, ...hostile }))
+      expect(Number.isInteger(polls)).toBe(true)
+      expect(polls).toBeGreaterThanOrEqual(1)
+      expect(seconds).toBeGreaterThan(0)
+      expect(polls * seconds * 1000).toBeLessThanOrEqual(MAX_WAIT_MS)
+    }
+
+    // A sane request is passed through untouched.
+    expect(boundOf(swapScript({ ...plan, pollSeconds: 0.25, maxPolls: 240 })).polls).toBe(240)
+  })
+
+  it('refuses to generate a script that waits on something that is not a pid', () => {
+    // `kill -0 not-a-number` fails, and a failing wait reads as "the app has
+    // exited" — which would swap the bundle out from under a running process.
+    const plan = {
+      bundlePath: '/Applications/Terminal Deck.app',
+      stagedBundlePath: '/tmp/pending/Terminal Deck.app',
+      backupPath: '/Applications/Terminal Deck.app.old-1',
+      logPath: '/tmp/pending/log',
+      openBinary: DEFAULT_OPEN_BINARY,
+      pollSeconds: 0.25,
+      maxPolls: 40,
+      clearQuarantine: false,
+    }
+    expect(() => swapScript({ ...plan, pid: Number.NaN })).toThrow(RangeError)
+    expect(() => swapScript({ ...plan, pid: 0 })).toThrow(RangeError)
+    expect(() => swapScript({ ...plan, pid: -1 })).toThrow(RangeError)
+    expect(() => swapScript({ ...plan, pid: 1.5 })).toThrow(RangeError)
+  })
+})
+
+/**
+ * Skipped on Windows, and this one genuinely cannot be ported.
+ *
+ * Every case here writes the generated helper to disk and executes it with
+ * `/bin/sh`, then reads what a real `mv`, `rm -rf`, `ln -s` and `kill -0` did
+ * to real directories. The assertions are about POSIX filesystem and process
+ * semantics — that a rename is atomic within a volume, that `-e` follows a
+ * symlink and `-L` does not, that a locked directory makes `mv` fail — none of
+ * which Windows shares. Rewriting them against `cmd` would be testing a
+ * different program; stubbing the shell would delete the only reason these
+ * tests exist, which is that shell cannot be reasoned about from a mock.
+ *
+ * The parts of the swap that *are* portable were split out above.
+ */
 describe.skipIf(process.platform === 'win32')('the swap script, run against real directories', () => {
   it('replaces the bundle, removes the backup only after that, and relaunches', async () => {
     const w = await swapWorld()
@@ -1225,61 +1317,6 @@ describe.skipIf(process.platform === 'win32')('the swap script, run against real
     }
   })
 
-  it('caps the wait at a wall-clock ceiling, not merely at a finite number', () => {
-    // "Bounded" has to mean bounded in seconds. Ten million polls is a finite
-    // integer and also a helper holding a swap over the user's app for a month.
-    const plan = {
-      pid: 999,
-      bundlePath: '/Applications/Terminal Deck.app',
-      stagedBundlePath: '/tmp/pending/Terminal Deck.app',
-      backupPath: '/Applications/Terminal Deck.app.old-1',
-      logPath: '/tmp/pending/log',
-      openBinary: DEFAULT_OPEN_BINARY,
-      clearQuarantine: false,
-    }
-    const boundOf = (script: string): { polls: number; seconds: number } => {
-      const polls = Number(/^MAX_POLLS='(.+)'$/m.exec(script)?.[1])
-      const seconds = Number(/^POLL='(.+)'$/m.exec(script)?.[1])
-      return { polls, seconds }
-    }
-
-    for (const hostile of [
-      { pollSeconds: 0.25, maxPolls: Number.POSITIVE_INFINITY },
-      { pollSeconds: 0, maxPolls: Number.POSITIVE_INFINITY },
-      { pollSeconds: Number.NaN, maxPolls: Number.NaN },
-      { pollSeconds: -1, maxPolls: -1 },
-      { pollSeconds: 0.25, maxPolls: 10_000_000 },
-    ]) {
-      const { polls, seconds } = boundOf(swapScript({ ...plan, ...hostile }))
-      expect(Number.isInteger(polls)).toBe(true)
-      expect(polls).toBeGreaterThanOrEqual(1)
-      expect(seconds).toBeGreaterThan(0)
-      expect(polls * seconds * 1000).toBeLessThanOrEqual(MAX_WAIT_MS)
-    }
-
-    // A sane request is passed through untouched.
-    expect(boundOf(swapScript({ ...plan, pollSeconds: 0.25, maxPolls: 240 })).polls).toBe(240)
-  })
-
-  it('refuses to generate a script that waits on something that is not a pid', () => {
-    // `kill -0 not-a-number` fails, and a failing wait reads as "the app has
-    // exited" — which would swap the bundle out from under a running process.
-    const plan = {
-      bundlePath: '/Applications/Terminal Deck.app',
-      stagedBundlePath: '/tmp/pending/Terminal Deck.app',
-      backupPath: '/Applications/Terminal Deck.app.old-1',
-      logPath: '/tmp/pending/log',
-      openBinary: DEFAULT_OPEN_BINARY,
-      pollSeconds: 0.25,
-      maxPolls: 40,
-      clearQuarantine: false,
-    }
-    expect(() => swapScript({ ...plan, pid: Number.NaN })).toThrow(RangeError)
-    expect(() => swapScript({ ...plan, pid: 0 })).toThrow(RangeError)
-    expect(() => swapScript({ ...plan, pid: -1 })).toThrow(RangeError)
-    expect(() => swapScript({ ...plan, pid: 1.5 })).toThrow(RangeError)
-  })
-
   it('is still valid sh with the quarantine step switched on', async () => {
     // That branch is generated, not written, so it is only ever exercised when
     // a caller opts in — which in production is the first time anyone runs it.
@@ -1411,6 +1448,22 @@ describe.skipIf(process.platform === 'win32')('the swap script, run against real
 
 /* ------------------------------------------------- the real permission check -- */
 
+/**
+ * Skipped on Windows for two independent reasons, either of which is enough.
+ *
+ * First, the point of these two cases is to check the writability verdict
+ * against the kernel rather than against a fake, and the fixture creates the
+ * unwritable case with `chmod 0555` — which on Windows is advisory at best and
+ * does not produce the EACCES the assertion is about.
+ *
+ * Second, they build their bundle at a real temp path. On Windows that is
+ * `C:\\Users\\...`, and `installedBundlePath` refuses anything not starting with
+ * `/` by design, so both cases would resolve `not-a-bundle` and assert nothing
+ * about permissions at all.
+ *
+ * The same verdict logic is covered against fakes in `canInstallInPlace` above,
+ * which does run on Windows.
+ */
 describe.skipIf(process.platform === 'win32')('canInstallInPlace against a real directory', () => {
   it('refuses a bundle in a folder this account cannot write', async () => {
     if (process.getuid?.() === 0) return // root can write anything; the check is meaningless
