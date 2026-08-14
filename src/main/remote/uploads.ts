@@ -1,10 +1,22 @@
 /**
- * The Mac's half of "send a photo, a video or a file from the phone".
+ * The desktop's half of "send a photo, a video or a file from the phone".
  *
  * A person picks something in their phone's own picker; this receives it in
- * slices over the sealed channel they are already on, writes it to a folder the
- * Mac chose, and answers with the path. The phone then types that path into the
- * terminal. That is the whole feature.
+ * slices over the sealed channel they are already on, writes it to a folder this
+ * machine chose, and answers with the path. The phone then types that path into
+ * the terminal. That is the whole feature.
+ *
+ * ## Why no message here names a Mac, or a PC
+ *
+ * Every `upload.failed` message below is sealed up and read on a phone, and a
+ * phone can be paired to several machines at once — a Mac and a Windows PC, at
+ * the same time, which is the arrangement this app now has to be correct for.
+ * The phone already prints the machine's own label beside anything that machine
+ * says (`StoredCredential.label` on iOS), so "This Mac could not write that
+ * file" next to a row reading `desktop-ddgmncv` is either redundant or a lie,
+ * and on a Windows host it is always the second one. Copy the *host* user reads
+ * names the platform — that is what `machineNoun()` in `platform/host.ts` is
+ * for. Copy that crosses the wire names nothing.
  *
  * ## Why the desktop names the folder, and the phone names nothing
  *
@@ -202,7 +214,7 @@ export function createUploadDesk(deps: UploadDeps): UploadDesk {
           // the phone by `upload.ready` in the successful case, and a failure is
           // the wrong moment to be quoting a path from somebody's home directory
           // into a message that crosses a network.
-          message: 'This Mac could not create a file for that. Check that its downloads folder is writable.',
+          message: 'Could not create a file for that. Check that the downloads folder is writable.',
         })
       }
       return
@@ -254,7 +266,7 @@ export function createUploadDesk(deps: UploadDeps): UploadDesk {
       if (upload.finished) return
       if (error) {
         console.error('[upload] write failed:', error)
-        fail(id, 'This Mac stopped being able to write that file. Nothing was saved.')
+        fail(id, 'Writing that file stopped part way through. Nothing was saved.')
         return
       }
       // From the callback, so the acknowledgement means the kernel has it. See
@@ -267,7 +279,7 @@ export function createUploadDesk(deps: UploadDeps): UploadDesk {
   async function end(id: string, claimed: string): Promise<void> {
     const upload = live.get(id)
     if (!upload || upload.finished) {
-      deps.send({ t: 'upload.failed', id, message: 'There is no upload with that id on this Mac.' })
+      deps.send({ t: 'upload.failed', id, message: 'There is no upload with that id.' })
       return
     }
 
@@ -294,7 +306,7 @@ export function createUploadDesk(deps: UploadDeps): UploadDesk {
       deps.send({
         t: 'upload.failed',
         id,
-        message: 'This Mac could not put that file in its downloads folder. Nothing was saved.',
+        message: 'Could not move that file into the downloads folder. Nothing was saved.',
       })
       return
     }
@@ -345,7 +357,7 @@ export function createUploadDesk(deps: UploadDeps): UploadDesk {
 /* ------------------------------------------------------------------- disk -- */
 
 /**
- * The real store: a folder on this Mac, created when the first file arrives.
+ * The real store: a folder on this machine, created when the first file arrives.
  *
  * Deliberately not a temporary directory. The point of the feature is that the
  * file is *there afterwards* — the phone types the path into a terminal and an

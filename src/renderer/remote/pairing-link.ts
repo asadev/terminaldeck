@@ -66,6 +66,7 @@
  */
 
 import { BRAND } from '../../shared/brand'
+import { detectPlatform, thisMachine, type UiPlatform } from '../platform'
 
 /* -------------------------------------------------------------------------- */
 /* The pieces, and what each of them has to look like                          */
@@ -220,18 +221,29 @@ export interface PairingSources {
   url: string | null
 }
 
-/** How each path is named and what choosing it means, in one line each. */
-const ROUTE: Record<PairPath, Omit<PairingRoute, 'link'>> = {
-  relay: {
-    kind: 'relay',
-    label: 'Through the relay',
-    note: 'The phone will reach this Mac from any network, sealed end to end.',
-  },
-  direct: {
-    kind: 'direct',
-    label: 'Direct on your tailnet',
-    note: 'One hop and no third party — but this phone will only reach this Mac from your tailnet.',
-  },
+/**
+ * How each path is named and what choosing it means, in one line each.
+ *
+ * A function of the platform rather than a constant: both notes name the
+ * machine the reader is sitting at, and on a Windows host "this Mac" is simply
+ * false. This copy never leaves the machine — it sits under the QR code on the
+ * desktop — so naming the platform is right here, unlike anything sealed and
+ * sent to a phone.
+ */
+function routeCopy(platform: UiPlatform): Record<PairPath, Omit<PairingRoute, 'link'>> {
+  const machine = thisMachine(platform)
+  return {
+    relay: {
+      kind: 'relay',
+      label: 'Through the relay',
+      note: `The phone will reach ${machine} from any network, sealed end to end.`,
+    },
+    direct: {
+      kind: 'direct',
+      label: 'Direct on your tailnet',
+      note: `One hop and no third party — but this phone will only reach ${machine} from your tailnet.`,
+    },
+  }
 }
 
 /**
@@ -267,13 +279,18 @@ export function pairingPaths(sources: PairingSources): PairPath[] {
 }
 
 /** Every path above, with the link a phone would read, best first. */
-export function pairingRoutes(sources: PairingSources, token: string): PairingRoute[] {
+export function pairingRoutes(
+  sources: PairingSources,
+  token: string,
+  platform: UiPlatform = detectPlatform(),
+): PairingRoute[] {
+  const copy = routeCopy(platform)
   return pairingPaths(sources).flatMap((kind): PairingRoute[] => {
     const link =
       kind === 'relay'
         ? relayPairingLink(sources.relay as RelayIdentity, token)
         : directPairingLink(sources.url as string, token)
-    return link === null ? [] : [{ ...ROUTE[kind], link }]
+    return link === null ? [] : [{ ...copy[kind], link }]
   })
 }
 

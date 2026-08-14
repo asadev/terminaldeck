@@ -78,6 +78,11 @@ npm-debug.log*
 .harness/**/device-key.json
 .harness/**/credential.txt
 
+# Screenshots the harness writes. Evidence, not source: a UI change is not done
+# until it has been rendered and looked at, which produces megabytes of PNGs per
+# pass and none of them are worth a diff.
+.harness/.shots/
+
 # Editors
 .vscode/
 .idea/

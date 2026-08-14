@@ -127,6 +127,17 @@ const IDLE_TUNNEL: RemoteTunnel = { id: 'tun-2', port: 8080, streams: 0, openedA
 
 const TUNNELLED: RemoteConnection = { ...ATTACHED, tunnels: [TUNNEL, IDLE_TUNNEL] }
 
+/**
+ * `platform` is pinned rather than sniffed, and that is not a detail.
+ *
+ * `detectPlatform()` reads `navigator`, and Node's own `navigator.platform` is
+ * `MacIntel` on this machine — so every assertion below about the words "this
+ * Mac" was passing because of where the test was *run*, not because of what the
+ * component does. The same suite on a Windows runner would have read "this PC"
+ * and gone red for the right sentence. Pinning it makes the macOS copy a fact
+ * the test states, and lets the Windows copy be checked in the same run rather
+ * than on hardware nobody has in CI.
+ */
 function render(props: Partial<RemoteViewProps> = {}): string {
   return renderToStaticMarkup(
     <RemoteView
@@ -141,6 +152,7 @@ function render(props: Partial<RemoteViewProps> = {}): string {
       pairPath={null}
       actions={NOTHING}
       now={NOW}
+      platform="mac"
       {...props}
     />,
   )
@@ -558,6 +570,73 @@ describe('turning it on', () => {
     expect(html).toContain('Turn on remote access?')
     expect(html).toContain('shell on this Mac')
     expect(html).toContain('Leave it off')
+  })
+})
+
+/* ---------------------------------------------- what the machine is called -- */
+
+/**
+ * The same panel on a Windows host.
+ *
+ * This app ships on Windows now, and one phone can be paired to a Mac and a
+ * Windows PC at the same time — so "this Mac" is not a harmless Apple-ism, it
+ * is the app being wrong about the computer the reader is sitting at. Every
+ * sentence on this screen names that computer, which is why the noun is a
+ * prop and why both answers are asserted here in one run.
+ *
+ * The negative assertion is the one that matters. A sentence added later with
+ * "Mac" typed into it passes every positive check above and fails this.
+ */
+describe('the noun for the machine', () => {
+  /** Everything on the panel at once: paths, code, fingerprint, tunnels. */
+  const busy = {
+    state: {
+      ...RUNNING,
+      devices: [PHONE],
+      connections: [TUNNELLED],
+    },
+    pairing: { token: 'tok-abc', expiresAt: NOW + 60_000 } as RemotePairing,
+    secondsLeft: 42,
+    confirmEnable: true,
+  }
+
+  const mac = render(busy)
+  const pc = render({ ...busy, platform: 'windows' })
+
+  it('says Mac on a Mac', () => {
+    expect(mac).toContain('Drive this Mac from a phone')
+    expect(mac).toContain('a paired phone can always reach this Mac')
+    expect(mac).toContain('shell on this Mac')
+    expect(mac).toContain('A rendezvous service this Mac dials out to')
+    expect(mac).toContain('This Mac’s fingerprint')
+    expect(mac).toContain('The phone will reach this Mac from any network')
+    expect(mac).toContain('served from this Mac to that phone’s browser')
+    expect(mac).toContain('the row below shows what this Mac received')
+  })
+
+  it('says PC on Windows, in every one of those sentences', () => {
+    expect(pc).toContain('Drive this PC from a phone')
+    expect(pc).toContain('a paired phone can always reach this PC')
+    expect(pc).toContain('shell on this PC')
+    expect(pc).toContain('A rendezvous service this PC dials out to')
+    expect(pc).toContain('This PC’s fingerprint')
+    expect(pc).toContain('The phone will reach this PC from any network')
+    expect(pc).toContain('served from this PC to that phone’s browser')
+    expect(pc).toContain('the row below shows what this PC received')
+  })
+
+  it('never says Mac on Windows anywhere on the panel', () => {
+    // Everything the panel renders, including labels a screen reader gets.
+    expect(pc).not.toContain('Mac')
+  })
+
+  it('falls back to a word that is true rather than guessing Mac', () => {
+    // Linux has no build target and Node has no platform worth trusting; both
+    // land here. "computer" is not a Mac and not a PC, and it is not wrong.
+    const other = render({ ...busy, platform: 'other' })
+    expect(other).toContain('Drive this computer from a phone')
+    expect(other).not.toContain('Mac')
+    expect(other).not.toContain('this PC')
   })
 })
 
