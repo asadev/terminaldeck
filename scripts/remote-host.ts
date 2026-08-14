@@ -16,7 +16,12 @@
  * side is production code — so the two are not the same program and merging them
  * would weaken both.
  *
- *   scripts/remote-host.sh [--relay-port 8787] [--approve-after 4000]
+ *   scripts/remote-host.sh [--relay-port 8787] [--approve-after 4000] [--name b]
+ *
+ * `--name` is what makes two of these a *pair of machines* rather than one
+ * machine started twice — see `NAME` below. A second host is:
+ *
+ *   scripts/remote-host.sh --name b --relay-port 8797
  *
  * It prints a pairing URI and writes it to `.harness/.remote-host/pairing.txt`:
  *
@@ -30,10 +35,26 @@
  *   curl 127.0.0.1:8788/approve    be the human
  *   curl 127.0.0.1:8788/pair       mint another code
  *   curl 127.0.0.1:8788/uploads    what files have landed, with digests
+ *   curl '127.0.0.1:8788/scrollback?session=<id>'  what a session's PTY holds
+ *   curl '127.0.0.1:8788/input?session=<id>'       what the phone typed into it
  *   curl '127.0.0.1:8788/stop-tunnel?connection=<id>&tunnel=<id>'
  *
  * `/stop-tunnel` is the Mac's Stop button, reachable from a script. It goes
  * through `server.stopTunnel`, which is the same call the desktop panel makes.
+ *
+ * ## `/pair` is not optional after the first minute
+ *
+ * A pairing token is worth **60 seconds** and one redemption, and the *pairing
+ * desk* is only open while one is live — so a code printed at startup does not
+ * merely expire, it closes the door the sealed handshake comes through. The
+ * refusal that follows reads as a crypto failure and is not one. Mint a code
+ * immediately before using it.
+ *
+ * Minting also **replaces** the live token rather than adding to it, which is
+ * why nothing here re-mints on a timer: that would invalidate the code somebody
+ * is halfway through typing. This was tried, and it is how the two-host UI test
+ * came to fail with "that pairing code is not right" against a code it had just
+ * been handed.
  */
 
 import { createHash } from 'node:crypto'
@@ -74,7 +95,24 @@ const RELAY_PORT = Number(flag('relay-port', '8787'))
 const CONTROL_PORT = RELAY_PORT + 1
 const APPROVE_AFTER = Number(flag('approve-after', '4000'))
 const REPO = process.env.TD_REPO_DIR ?? resolve(import.meta.dirname ?? '.', '..')
-const STORAGE = resolve(REPO, '.harness/.remote-host')
+/**
+ * Which harness host this is, and therefore whose state directory it uses.
+ *
+ * There is a name here at all because of multi-host: proving a phone holds two
+ * machines at once needs two of these running, and everything that makes a host
+ * *a* host lives in this directory — `host-identity.ts` derives the host id from
+ * the key it finds here, `RemoteAuth` keeps its device list here, and `mint`
+ * writes the pairing URI here. Two processes sharing it are not two machines.
+ * They are one machine's identity, opened twice, racing each other's writes: the
+ * phone would pair with a second host id it had already paired with, the second
+ * record would land on top of the first, and the run would reproduce exactly the
+ * bug multi-host exists to prevent — while proving nothing about the code.
+ *
+ * Defaulted so every existing invocation, script and note keeps working
+ * unchanged; `--name b` is the whole of the second host.
+ */
+const NAME = flag('name', '')
+const STORAGE = resolve(REPO, NAME === '' ? '.harness/.remote-host' : `.harness/.remote-host-${NAME}`)
 /**
  * Where a file sent from the phone lands here.
  *
@@ -126,9 +164,40 @@ const ptys = new PtyManager(
  */
 const PROJECTS = [REPO, resolve(REPO, 'ios'), resolve(REPO, 'pwa')]
 
+/**
+ * Everything a phone has typed into each session, as it arrived here.
+ *
+ * The half a phone cannot prove, and the half a *screen* cannot prove either.
+ * `/scrollback` is what the shell echoed, which sounds like the same thing and
+ * is not: a shell's line editor repaints, and when the input is wider than the
+ * terminal `zle` shows a moving *window* into it — the whole line is never on
+ * screen at once, and no rendering width reconstructs it. Checking a literal
+ * against the echo therefore fails for text that unquestionably arrived, which
+ * is the worst kind of test: it reports the transport broken when the shell is
+ * merely doing its job.
+ *
+ * So this records the bytes at the point the desktop hands them to the PTY —
+ * after the sealed channel, after the relay, after `server.ts` has authorised
+ * them for this session. Nothing about the shell can flatter or hide it.
+ *
+ * Harness-only, on loopback, and deliberately not part of the protocol. Bounded
+ * because this process runs for hours and a phone can type a lot.
+ */
+const INPUT_LOG_LIMIT = 64 * 1024
+const inputLog = new Map<string, string>()
+
+function recordInput(id: string, data: string): void {
+  const so_far = inputLog.get(id) ?? ''
+  const next = so_far + data
+  inputLog.set(id, next.length > INPUT_LOG_LIMIT ? next.slice(-INPUT_LOG_LIMIT) : next)
+}
+
 const fanout = new SessionFanout({
   list: () => ptys.list(),
-  write: (id, data) => ptys.write(id, data),
+  write: (id, data) => {
+    recordInput(id, data)
+    return ptys.write(id, data)
+  },
   resize: (id, cols, rows) => ptys.resize(id, cols, rows),
   scrollback: (id) => ptys.scrollback(id),
   create: remoteSessionCreator({
@@ -310,6 +379,50 @@ const control = createServer((request, response) => {
     }
     case '/ports':
       return void scanDevPorts(true).then((ports) => answer(ports))
+    /**
+     * What a session's terminal actually has on it.
+     *
+     * The half a phone cannot prove. A phone showing a line in its terminal is
+     * good evidence — nothing echoes locally, so those characters came back from
+     * this machine — but it is still the phone's word for it, and the claim being
+     * checked is *the line reached the agent's PTY on the Mac*. This answers that
+     * from the PTY's own scrollback, through `PtyManager`, which is the app's.
+     *
+     * Read-only, and a harness endpoint on loopback: it writes nothing and it is
+     * not part of the product's protocol.
+     */
+    case '/scrollback': {
+      const wanted = url.searchParams.get('session') ?? ''
+      const rows = ptys
+        .list()
+        .filter((session) => wanted === '' || session.id === wanted)
+        .map((session) => ({
+          id: session.id,
+          title: session.title,
+          cwd: session.cwd,
+          // `ptys`, not `sessions`: `SessionAccess` is the phone-facing surface
+          // and has no scrollback on it — the emulator does. Reading it off the
+          // wrong object threw out of an HTTP handler and took the whole host
+          // down mid-test, which is a good argument for the harness never
+          // reaching for anything it has not been handed.
+          text: ptys.scrollback(session.id),
+        }))
+      return answer(rows)
+    }
+    /**
+     * What the phone typed, as the desktop delivered it to the PTY.
+     *
+     * Use this rather than `/scrollback` to assert on a literal. See the comment
+     * on `inputLog`: the echo is the shell's rendering of the input, not the
+     * input, and for anything wider than the terminal the two genuinely differ.
+     */
+    case '/input': {
+      const wanted = url.searchParams.get('session') ?? ''
+      const rows = [...inputLog.entries()]
+        .filter(([id]) => wanted === '' || id === wanted)
+        .map(([id, text]) => ({ id, bytes: Buffer.byteLength(text), text }))
+      return answer(rows)
+    }
     case '/pair':
       return answer({ uri: mint() })
     case '/approve': {
@@ -328,7 +441,7 @@ const control = createServer((request, response) => {
       return
     default:
       response.writeHead(404, { 'content-type': 'text/plain' })
-      response.end('state | ports | uploads | pair | approve | stop-tunnel | quit\n')
+      response.end('state | ports | uploads | scrollback | input | pair | approve | stop-tunnel | quit\n')
   }
 })
 control.listen(CONTROL_PORT, '127.0.0.1')

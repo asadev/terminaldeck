@@ -14,12 +14,22 @@
  * ## Why the middle test is `awaitingApproval` and not `phase == .pending`
  *
  * Because they are different facts and the screen needs both. `.pending` means
- * the last attempt reached the Mac and the Mac said "not yet";
+ * the last attempt reached the machine and the machine said "not yet";
  * `awaitingApproval` means this device is unapproved, whether or not the last
  * attempt got anywhere. Routing on the phase alone would drop a phone whose
  * connection is failing into the session list — empty, captioned "No sessions",
- * describing an idle Mac when the truth is that nothing has reached it.
+ * describing an idle machine when the truth is that nothing has reached it.
  * `PendingApprovalView` handles both and says which is which.
+ *
+ * ## The approval screen only takes the window when there is nothing else
+ *
+ * With one machine paired, an unapproved device has nothing to show and the
+ * approval screen is the whole app. With several, it must not be: a phone that
+ * has a working Mac and has just scanned a code on a Windows PC would otherwise
+ * lose the Mac behind a full-screen instruction about the PC, with no way back —
+ * which is the multi-host version of "my phone forgot my Mac". Past the first
+ * machine the wait is shown where every other per-machine state is shown: the
+ * connection pill, the banner, and a dot in the switcher.
  */
 
 import SwiftUI
@@ -31,16 +41,15 @@ struct RootView: View {
         Group {
             if !model.isPaired {
                 PairingView(model: model)
-            } else if (model.connection.phase == .pending || model.connection.awaitingApproval)
-                        && model.sessions.isEmpty {
+            } else if model.hosts.count == 1 && awaitingApproval {
                 PendingApprovalView(model: model)
             } else {
                 NavigationStack(path: $model.route) {
                     SessionListView(model: model)
                         .navigationDestination(for: DeckModel.Route.self) { route in
                             switch route {
-                            case let .session(id):
-                                TerminalScreen(model: model, sessionID: id)
+                            case let .session(host, id):
+                                TerminalScreen(model: model, hostID: host, sessionID: id)
                             }
                         }
                 }
@@ -49,6 +58,14 @@ struct RootView: View {
         .animation(.default, value: model.isPaired)
         .tint(Theme.accent)
         .preferredColorScheme(.dark)
+        .sheet(isPresented: $model.addingHost) {
+            PairingView(model: model, adding: true) { model.addingHost = false }
+                .preferredColorScheme(.dark)
+        }
+    }
+
+    private var awaitingApproval: Bool {
+        (model.connection.phase == .pending || model.connection.awaitingApproval) && model.sessions.isEmpty
     }
 }
 

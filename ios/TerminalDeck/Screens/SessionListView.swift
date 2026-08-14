@@ -25,6 +25,8 @@ struct SessionListView: View {
     /// The tunnel the browser sheet is showing. Set by a tap and by nothing
     /// else, which is what makes the tap the consent.
     @State private var browsing: PortTunnel?
+    /// The name being typed into the rename prompt, or nil when it is not up.
+    @State private var renaming: String?
 
     var body: some View {
         ZStack {
@@ -54,14 +56,7 @@ struct SessionListView: View {
             // minimum width, and the pill came out as a single letter in a
             // circle — a status indicator that cannot be read is worse than
             // none, because it looks like it is telling you something.
-            ToolbarItem(placement: .principal) {
-                VStack(spacing: 1) {
-                    Text(Brand.name)
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(.white)
-                    ConnectionPill(state: model.connection)
-                }
-            }
+            ToolbarItem(placement: .principal) { HostSwitcher(model: model) }
             ToolbarItemGroup(placement: .topBarTrailing) {
                 if model.canCreateSessions { newSession }
                 Menu {
@@ -79,15 +74,33 @@ struct SessionListView: View {
                     }
                     .disabled(model.connection.isLive)
 
+                    Button {
+                        model.addingHost = true
+                    } label: {
+                        Label("Pair another machine", systemImage: "plus.rectangle.on.rectangle")
+                    }
+                    .accessibilityIdentifier("sessions.addHost")
+
+                    Button {
+                        renaming = model.current?.label ?? ""
+                    } label: {
+                        Label("Rename this machine", systemImage: "pencil")
+                    }
+                    .disabled(model.current == nil)
+                    .accessibilityIdentifier("sessions.rename")
+
                     if let endpoint = model.endpointSummary {
                         Section("Paired with") { Text(endpoint) }
                     }
 
                     Button(role: .destructive) {
-                        model.unpair()
+                        model.unpairCurrent()
                     } label: {
-                        Label("Unpair this device", systemImage: "minus.circle")
+                        // Named, because with several machines paired "unpair
+                        // this device" does not say which one is about to go.
+                        Label("Forget \(model.current?.label ?? "this machine")", systemImage: "minus.circle")
                     }
+                    .accessibilityIdentifier("sessions.unpair")
                 } label: {
                     Image(systemName: "ellipsis.circle")
                 }
@@ -96,6 +109,19 @@ struct SessionListView: View {
             }
         }
         .safeAreaInset(edge: .top, spacing: 0) { banners }
+        .alert("Name this machine",
+               isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
+            TextField("MacBook, Work PC…", text: Binding(get: { renaming ?? "" }, set: { renaming = $0 }))
+                .accessibilityIdentifier("rename.field")
+            Button("Cancel", role: .cancel) { renaming = nil }
+            Button("Save") {
+                if let id = model.current?.id { model.rename(id, to: renaming) }
+                renaming = nil
+            }
+            .accessibilityIdentifier("rename.save")
+        } message: {
+            Text("A host id is 26 characters of base32. A name is what you will actually recognise it by.")
+        }
     }
 
     // MARK: - Pieces
@@ -176,7 +202,8 @@ struct SessionListView: View {
                     Divider().overlay(Theme.hairline)
                 }
                 ForEach(model.sessions) { session in
-                    NavigationLink(value: DeckModel.Route.session(session.id)) {
+                    NavigationLink(value: DeckModel.Route.session(host: model.current?.id ?? "",
+                                                                  id: session.id)) {
                         SessionRow(session: session, lastActivity: model.lastActivity[session.id])
                     }
                     .buttonStyle(.plain)
@@ -426,6 +453,99 @@ private struct Chip: View {
             .padding(.horizontal, 7)
             .padding(.vertical, 2)
             .background(Theme.surface, in: RoundedRectangle(cornerRadius: 5))
+    }
+}
+
+/* -------------------------------------------------------------------------- */
+/* The switcher                                                                */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Which machine is on screen, and every other one this phone is paired with.
+ *
+ * In the title, where the app's name used to be. That is the trade this feature
+ * makes and it is the right way round: the product's name is the same on every
+ * screen and tells nobody anything, whereas *which machine am I typing into* is
+ * the one question a phone paired with several of them must never leave open.
+ * With a single machine the app's name comes back, because a picker with one row
+ * in it is furniture.
+ *
+ * Every row carries a live dot. That is the whole reason every host stays
+ * connected rather than connecting on demand: a switcher that shows "offline"
+ * for the machines it has not dialled yet would be reporting the *app's* state
+ * instead of the machines', and the point of pairing several is knowing which of
+ * them is busy without opening it.
+ */
+private struct HostSwitcher: View {
+    let model: DeckModel
+
+    var body: some View {
+        if model.hasSeveralHosts {
+            Menu {
+                Section("Machines") {
+                    ForEach(model.hosts) { host in
+                        Button {
+                            model.select(host.id)
+                        } label: {
+                            // Two lines: the name, and what it is doing. The
+                            // second is the reason to look.
+                            Label {
+                                Text(verbatim: "\(host.label) — \(summary(host))")
+                            } icon: {
+                                Image(systemName: host.id == model.current?.id
+                                      ? "checkmark.circle.fill"
+                                      : icon(host))
+                            }
+                        }
+                        .accessibilityIdentifier("host.\(host.id)")
+                    }
+                }
+                Button {
+                    model.addingHost = true
+                } label: {
+                    Label("Pair another machine", systemImage: "plus")
+                }
+                .accessibilityIdentifier("host.add")
+            } label: {
+                VStack(spacing: 1) {
+                    HStack(spacing: 4) {
+                        Text(model.current?.label ?? Brand.name)
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .lineLimit(1)
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(Theme.faint)
+                    }
+                    ConnectionPill(state: model.connection)
+                }
+            }
+            .accessibilityIdentifier("host.switcher")
+            .accessibilityLabel("Machine: \(model.current?.label ?? "none"). \(model.hosts.count) paired.")
+        } else {
+            VStack(spacing: 1) {
+                Text(Brand.name)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(.white)
+                ConnectionPill(state: model.connection)
+            }
+        }
+    }
+
+    /// What the row says about a machine that is not on screen. Sessions when it
+    /// is up, because that is the number worth switching for; the connection
+    /// state when it is not, because then the session count is history.
+    private func summary(_ host: HostLink) -> String {
+        guard host.connection.isLive else { return host.connection.label.lowercased() }
+        let running = host.sessions.filter { $0.status != "exited" }.count
+        if running == 0 { return "nothing running" }
+        let working = host.sessions.filter { $0.status == "working" }.count
+        let sessions = running == 1 ? "1 session" : "\(running) sessions"
+        return working > 0 ? "\(sessions), \(working) working" : sessions
+    }
+
+    private func icon(_ host: HostLink) -> String {
+        host.connection.isLive ? "circle.fill" : "circle.dotted"
     }
 }
 

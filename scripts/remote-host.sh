@@ -9,12 +9,32 @@
 # desktop app, so nothing new is installed.
 #
 #   scripts/remote-host.sh [--relay-port 8787] [--approve-after 4000] [--fresh]
+#                          [--name b]
+#
+# Two hosts, for proving a phone holds both at once:
+#
+#   scripts/remote-host.sh                        --relay-port 8787 &
+#   scripts/remote-host.sh --name b --relay-port 8797 &
+#
+# `--name` is read by remote-host.ts, which uses it to pick a state directory —
+# without it the two share one host identity and are not two machines. It is
+# also read here, because the bundle is written before it is run and two
+# concurrent builds writing one .mjs is a torn file, not a duplicate.
 
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo="$(cd "$here/.." && pwd)"
-out="$repo/.harness/.remote-host"
+
+name=""
+for ((i = 1; i <= $#; i++)); do
+    if [[ "${!i}" == "--name" ]]; then
+        next=$((i + 1))
+        [[ $next -le $# ]] && name="${!next}"
+    fi
+done
+
+out="$repo/.harness/.remote-host${name:+-$name}"
 esbuild="$repo/node_modules/.bin/esbuild"
 
 [[ -x "$esbuild" ]] || {

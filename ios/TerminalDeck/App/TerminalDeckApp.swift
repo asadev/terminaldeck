@@ -43,4 +43,5 @@ enum Composition {
     static func model() -> DeckModel {
         DeckModel(credentials: KeychainCredentialStore(), device: DeviceIdentity.describe())
     }
+
 }

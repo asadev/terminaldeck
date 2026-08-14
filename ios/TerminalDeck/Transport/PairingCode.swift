@@ -74,6 +74,49 @@ enum DeckEndpoint: Equatable, Codable {
         }
     }
 
+    /**
+     * Which machine this is, as a stable string.
+     *
+     * The relay's own host id where there is one — it is the identity the whole
+     * rendezvous is built on and it survives a re-pair, which is exactly what a
+     * key in a collection of pairings has to do.
+     *
+     * On the direct shape there is no host id, so the address stands in. That is
+     * weaker and it is the honest weakness: two tailnet machines are told apart
+     * by their address because that is the only thing the code carries. The
+     * scheme is not part of it — the same machine paired over `http` and `https`
+     * is one machine, and treating it as two would put a duplicate row in the
+     * switcher. The prefix keeps the two namespaces from colliding: a relay host
+     * id cannot contain a colon, so nothing can be produced by both branches.
+     */
+    var hostId: String {
+        switch self {
+        case let .relay(_, hostId, _):
+            return hostId
+        case let .direct(url):
+            let host = url.host ?? url.absoluteString
+            return url.port.map { "direct:\(host):\($0)" } ?? "direct:\(host)"
+        }
+    }
+
+    /**
+     * A few characters a person can pick a machine out of a list by.
+     *
+     * The last thing anybody wants in a switcher is a 26-character base32 id, so
+     * a relay host is shortened — and shortened at the *front*, because the
+     * pairing screen and the desktop both show the full id and the eye compares
+     * the beginning. It is a fallback: `StoredCredential.nickname` is what the
+     * row usually says.
+     */
+    var shortName: String {
+        switch self {
+        case let .relay(_, hostId, _):
+            return String(hostId.prefix(6))
+        case let .direct(url):
+            return url.host ?? url.absoluteString
+        }
+    }
+
     /// One line for the pairing screen and the settings row. Says who can read
     /// the session, because that is the difference between the two.
     var summary: String {

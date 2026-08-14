@@ -1,0 +1,50 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Checkout</title>
+<style>
+  :root { color-scheme: light; font-family: -apple-system, system-ui, sans-serif; }
+  body { margin: 0; background: #f6f7f9; color: #14161a; }
+  header { padding: 20px 18px 8px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  p.sub { margin: 0; color: #6b7280; font-size: 14px; }
+  main { padding: 14px 18px 40px; display: grid; gap: 14px; }
+  .card { background: #fff; border-radius: 14px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+  .row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; }
+  .row + .row { border-top: 1px solid #eef0f3; }
+  .price { font-variant-numeric: tabular-nums; font-weight: 600; }
+  button { font: inherit; border: 0; border-radius: 10px; padding: 12px 16px; }
+  .primary { background: #1f6feb; color: #fff; font-weight: 600; width: 100%; }
+  .ghost { background: #eef0f3; color: #14161a; }
+  nav a { color: #1f6feb; text-decoration: none; margin-right: 14px; font-size: 14px; }
+  #hmr { font: 12px ui-monospace, monospace; color: #6b7280; padding: 0 18px 20px; }
+</style>
+<header>
+  <h1 id="page-title">Served from the Mac</h1>
+  <p class="sub">A dev server on the Mac, tunnelled to the phone.</p>
+  <nav><a href="/">Basket</a><a href="/delivery">Delivery</a><a href="/pay">Pay</a></nav>
+</header>
+<main>
+  <section class="card" id="basket">
+    <div class="row"><span>Mechanical keyboard</span><span class="price">£129.00</span></div>
+    <div class="row"><span>Braided cable</span><span class="price">£18.50</span></div>
+    <div class="row"><strong>Total</strong><strong class="price" id="total">£147.50</strong></div>
+  </section>
+  <section class="card">
+    <label for="promo" style="display:block;font-size:13px;color:#6b7280;margin-bottom:6px">Promo code</label>
+    <input id="promo" placeholder="Enter a code" style="width:100%;box-sizing:border-box;padding:11px;border:1px solid #d8dbe0;border-radius:10px;font:inherit">
+  </section>
+  <button class="primary" data-testid="checkout-button" id="pay-now">Pay now</button>
+  <button class="ghost" aria-label="Save this basket for later">Save for later</button>
+</main>
+<div id="hmr">socket: connecting…</div>
+<script type="module">
+  // A real WebSocket to the same origin, so the tunnel is proved to carry one.
+  const el = document.getElementById('hmr')
+  const socket = new WebSocket(`ws://${location.host}/__probe`)
+  socket.onopen = () => { el.textContent = 'HMR socket OPEN' }
+  socket.onerror = () => { el.textContent = 'socket failed' }
+  fetch('/__probe.json').then((r) => r.json()).then((j) => {
+    el.textContent += `  ·  OK, ${j.served}`
+  }).catch(() => { el.textContent += '  ·  fetch failed' })
+</script>

@@ -54,6 +54,15 @@ final class LiveTransportTests: XCTestCase {
         }
     }
 
+    /**
+     * A one-machine store, in memory.
+     *
+     * Still one machine on purpose: these tests are about what a *transport*
+     * does with the three refusals, and a transport only ever speaks to one
+     * host. That the store can hold several is `CredentialStoreTests`'
+     * business, and mixing the two would test the collection twice and the
+     * refusals once.
+     */
     private final class MemoryStore: CredentialStore {
         var stored: StoredCredential?
         private let keys = StaticKeyPair.generate()
@@ -63,14 +72,25 @@ final class LiveTransportTests: XCTestCase {
             stored = credential
         }
 
-        func load() -> StoredCredential? { stored }
+        func all() -> [StoredCredential] { [stored].compactMap { $0 } }
+        func load(_ hostId: String) -> StoredCredential? {
+            stored?.hostId == hostId ? stored : nil
+        }
         func save(_ credential: StoredCredential) { stored = credential }
-        func clear() {
+        func remove(_ hostId: String) {
+            guard stored?.hostId == hostId else { return }
+            cleared += 1
+            stored = nil
+        }
+        func clearAll() {
             cleared += 1
             stored = nil
         }
         func deviceKeys() -> StaticKeyPair { keys }
     }
+
+    /// The one machine every test here talks to.
+    private static let hostId = "M9G95TNJT64Q928VW3HVRYDR8J"
 
     private var carrier: ScriptedCarrier!
     private var store: MemoryStore!
@@ -81,7 +101,7 @@ final class LiveTransportTests: XCTestCase {
         carrier = ScriptedCarrier()
         store = MemoryStore(StoredCredential(
             endpoint: .relay(url: URL(string: "wss://relay.example")!,
-                             hostId: "M9G95TNJT64Q928VW3HVRYDR8J",
+                             hostId: Self.hostId,
                              hostKey: Data(repeating: 3, count: 32)),
             token: kind == .pairing ? "pairing-token" : "device.credential",
             kind: kind,
@@ -91,6 +111,7 @@ final class LiveTransportTests: XCTestCase {
         // A backoff of milliseconds: these tests are about which state is
         // entered, not about how long the wait is. `BackoffTests` owns that.
         transport = LiveTransport(
+            hostId: Self.hostId,
             device: DeviceDescriptor(name: "iPhone", platform: "iOS 26"),
             credentials: store,
             backoff: Backoff(options: BackoffOptions(firstMs: 1, maxMs: 2, factor: 1, jitter: 0),
@@ -341,5 +362,107 @@ final class LiveTransportTests: XCTestCase {
         transport.start()
         XCTAssertEqual(transport.state.phase, .rejected)
         XCTAssertEqual(carrier.opened, 1, "no socket should be opened without a credential")
+    }
+
+    // MARK: - The badge must never claim a connection this app does not have
+
+    /**
+     * These are written against an observed failure, not a hypothetical one: the
+     * relay reported no guest attached for a sustained forty seconds while the
+     * app was showing **Connected**. A phone terminal that lies about being
+     * connected is worse than no phone terminal, because somebody types Ctrl+C
+     * into stale output and walks away believing the job stopped.
+     */
+
+    func testNothingSaysConnectedBeforeTheWelcome() {
+        start()
+        // The socket is open and `hello` has gone out. Nothing has come back.
+        XCTAssertEqual(transport.state.phase, .connecting)
+        XCTAssertNotEqual(transport.state.label, "Connected")
+        XCTAssertFalse(transport.state.isLive)
+    }
+
+    func testAnUnapprovedDeviceIsNotConnected() {
+        start(kind: .pairing)
+        carrier.deliver(welcome(token: "d-1.durable"))
+        XCTAssertEqual(transport.state.phase, .pending)
+        XCTAssertNotEqual(transport.state.label, "Connected",
+                          "paired-but-unapproved is not connected")
+        XCTAssertFalse(transport.state.isLive)
+    }
+
+    func testTheBadgeGoesDownWithTheChannel() {
+        start()
+        carrier.deliver(welcome(token: nil))
+        XCTAssertEqual(transport.state.label, "Connected")
+        carrier.drop(code: 1006)
+        XCTAssertNotEqual(transport.state.label, "Connected")
+        XCTAssertFalse(transport.state.isLive)
+    }
+
+    /**
+     * The forty-second window, closed.
+     *
+     * Coming back from suspension used to be a no-op while `.online`: the
+     * connection was already up, so there was nothing to reconnect. But `.online`
+     * was decided before the phone went in a pocket, and nothing tells a socket
+     * that a carrier NAT reclaimed its mapping in the meantime. The badge kept
+     * saying Connected until the next heartbeat and its grace had both elapsed.
+     */
+    func testComingBackFromSuspensionDoesNotClaimConnectedUntilItIsChecked() {
+        start()
+        carrier.deliver(welcome(token: nil))
+        XCTAssertEqual(transport.state.label, "Connected")
+        let before = carrier.sent.count
+
+        transport.resume()
+
+        XCTAssertEqual(transport.state.phase, .online, "the session is still there; nothing is torn down")
+        XCTAssertFalse(transport.state.verified)
+        XCTAssertEqual(transport.state.label, "Checking",
+                       "an unverified channel must not be described as connected")
+        XCTAssertEqual(carrier.sent.count, before + 1, "resuming should ask the far end to prove it")
+        XCTAssertTrue(carrier.sent.last?.contains("\"t\":\"ping\"") == true)
+    }
+
+    func testAnAnswerFromTheFarEndRestoresTheBadge() {
+        start()
+        carrier.deliver(welcome(token: nil))
+        transport.resume()
+        XCTAssertEqual(transport.state.label, "Checking")
+
+        carrier.deliver("{\"t\":\"pong\"}")
+
+        XCTAssertTrue(transport.state.verified)
+        XCTAssertEqual(transport.state.label, "Connected")
+    }
+
+    /**
+     * Any sealed frame counts, not only the answer to our own question.
+     *
+     * A line of output is as good a proof that the far end is there as a pong is,
+     * and on a busy session it arrives first. Requiring specifically a pong would
+     * leave the badge saying Checking over a terminal that is visibly printing.
+     */
+    func testOutputAlsoProvesTheFarEndIsThere() {
+        start()
+        carrier.deliver(welcome(token: nil))
+        transport.resume()
+        XCTAssertFalse(transport.state.verified)
+
+        carrier.deliver("{\"t\":\"output\",\"id\":\"s1\",\"data\":\"hello\"}")
+
+        XCTAssertTrue(transport.state.verified)
+        XCTAssertEqual(transport.state.label, "Connected")
+    }
+
+    func testResumingAFreshConnectionChangesNothing() {
+        start()
+        carrier.deliver(welcome(token: nil))
+        // No suspension in between, so nothing has been sent since the welcome
+        // and the state is as verified as it was a moment ago. The probe is
+        // still correct — it just must not look like a reconnect.
+        transport.resume()
+        XCTAssertEqual(carrier.opened, 1, "resuming an online transport must not reopen the socket")
     }
 }

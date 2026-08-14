@@ -24,6 +24,16 @@ import SwiftUI
 
 struct PairingView: View {
     let model: DeckModel
+    /**
+     * Whether this is the *first* machine or another one.
+     *
+     * The only difference is what the screen says and whether it can be closed —
+     * the flow underneath is identical, because pairing has always added a
+     * record and multi-host only made that visible. Splitting it into two screens
+     * would be two screens to keep in step for one behaviour.
+     */
+    var adding = false
+    var close: (() -> Void)?
 
     @State private var typed = ""
     @FocusState private var typing: Bool
@@ -43,6 +53,8 @@ struct PairingView: View {
 
                     QRScanner { code in
                         typed = code
+                        // Closing is the model's, not this view's: it is the only
+                        // place that knows whether the code parsed. See `pair`.
                         model.pair(with: code)
                     }
 
@@ -52,16 +64,37 @@ struct PairingView: View {
                 .padding(20)
             }
             .scrollDismissesKeyboard(.interactively)
+
+            if adding {
+                VStack {
+                    HStack {
+                        Spacer()
+                        Button("Cancel") { close?() }
+                            .font(.system(size: 15, weight: .medium))
+                            .tint(Theme.accent)
+                            .padding(16)
+                            .accessibilityIdentifier("pairing.cancel")
+                    }
+                    Spacer()
+                }
+            }
         }
     }
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Pair with your Mac")
+            Text(adding ? "Pair another machine" : "Pair with your Mac")
                 .font(.system(size: 26, weight: .semibold))
                 .foregroundStyle(.white)
-            Text("Open \(Brand.name) on the Mac and show the pairing code. "
-                 + "Point the camera at it, or paste the link.")
+            Text(adding
+                 // "Machine", not "Mac". The protocol is OS-agnostic and a phone
+                 // genuinely cannot tell one from the other — telling somebody
+                 // with a Windows PC to open it on their Mac is this app being
+                 // wrong about its own capabilities.
+                 ? "Open \(Brand.name) on the other Mac or Windows PC and show its pairing code. "
+                    + "The machines you already have stay paired."
+                 : "Open \(Brand.name) on the Mac and show the pairing code. "
+                    + "Point the camera at it, or paste the link.")
                 .font(.system(size: 14))
                 .foregroundStyle(Theme.secondary)
         }
@@ -252,7 +285,7 @@ struct PendingApprovalView: View {
                         .padding(.vertical, 10)
                         .background(Theme.surface, in: RoundedRectangle(cornerRadius: 10))
 
-                    Button("Start over") { model.unpair() }
+                    Button("Start over") { model.unpairCurrent() }
                         .font(.system(size: 14, weight: .medium))
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 10)

@@ -68,6 +68,32 @@ struct ConnectionState: Equatable {
      */
     var awaitingApproval: Bool = false
 
+    /**
+     * The far end has been heard from since this side last had cause to doubt it.
+     *
+     * `.online` means *a `welcome` came through the sealed channel*, which is a
+     * fact about the past. This is the fact about the present, and the two come
+     * apart in exactly one situation — the one that matters most on a phone.
+     *
+     * An app that is suspended in a pocket does not run its heartbeat, and iOS
+     * does not tell it that a socket died while it was away. So it comes to the
+     * foreground still holding `.online` from before the suspension, against a
+     * TCP connection a carrier NAT reclaimed twenty minutes ago. Every check that
+     * would notice is a timer that has not fired yet: the badge said **Connected**
+     * for as long as it took the next ping to go out and its grace to expire.
+     *
+     * That was observed, not theorised — the relay reported no guest attached for
+     * a sustained forty seconds while the app was showing Connected, which is the
+     * window this closes. `resume()` clears this and probes immediately; anything
+     * arriving through the sealed channel sets it again.
+     *
+     * It is deliberately *not* folded into `isLive`. The carrier and the session
+     * are still there and probably fine; what is not known is whether the far end
+     * is still listening, and the honest thing to do about not knowing is to say
+     * so — not to tear down a working terminal on a guess.
+     */
+    var verified: Bool = true
+
     static let offline = ConnectionState(phase: .offline, detail: "Not connected.", retryAt: nil, attempts: 0)
 
     /// Whether the terminal may show a live cursor and accept keystrokes.
@@ -84,7 +110,10 @@ struct ConnectionState: Equatable {
         switch phase {
         case .offline: return "Offline"
         case .connecting: return "Connecting"
-        case .online: return "Connected"
+        // Never the word Connected on an unverified channel. The pill is the one
+        // thing on this screen a person reads before deciding whether to trust
+        // what is under it, and "Checking" is the truth while a probe is out.
+        case .online: return verified ? "Connected" : "Checking"
         case .pending: return "Waiting for approval"
         case .waiting: return "Reconnecting"
         case .rejected: return "Not paired"

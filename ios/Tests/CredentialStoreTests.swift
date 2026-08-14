@@ -7,6 +7,20 @@
  * once at pairing and never updated again, and the durable token that arrives
  * in the `welcome` would be silently dropped. Every test here uses its own
  * service name so it cannot touch the one a paired app is using.
+ *
+ * ## What multi-host added, and what it must never do
+ *
+ * The store holds a collection now, and the whole risk of that change is in one
+ * sentence: **pairing must add a machine, never replace one.** A phone that
+ * pairs with a Windows PC and quietly drops the Mac does not look like a bug in
+ * a collection, it looks like the app forgetting your Mac — so that is the case
+ * with the most tests on it, from both directions (adding, and re-pairing with
+ * something already in the list).
+ *
+ * The second half is what happens when a record cannot be read. A single blob
+ * holding every pairing would lose all of them to one bad decode, which is why
+ * there is one Keychain item per host; the tests below prove that a corrupt
+ * record costs exactly one machine and is *reported* rather than swallowed.
  */
 
 import XCTest
@@ -27,20 +41,32 @@ final class CredentialStoreTests: XCTestCase {
         super.tearDown()
     }
 
-    private func credential(_ token: String, kind: StoredCredential.Kind = .pairing) -> StoredCredential {
+    /// Two host ids in the relay's own alphabet — no `0`/`O`, no `1`/`I`.
+    private static let macId = "M9G95TNJT64Q928VW3HVRYDR8J"
+    private static let pcId = "K3ZQW7BHTM4RN8DXVYP2SJ6LC5"
+
+    private func credential(_ token: String,
+                            hostId: String = macId,
+                            kind: StoredCredential.Kind = .pairing,
+                            nickname: String? = nil,
+                            pairedAt: TimeInterval = 1_700_000_000) -> StoredCredential {
         StoredCredential(
             endpoint: .relay(url: URL(string: "wss://relay.example")!,
-                             hostId: "M9G95TNJT64Q928VW3HVRYDR8J",
+                             hostId: hostId,
                              hostKey: Data(repeating: 7, count: 32)),
             token: token,
             kind: kind,
             deviceId: "device-1",
             deviceName: "iPhone",
-            pairedAt: Date(timeIntervalSince1970: 1_700_000_000))
+            pairedAt: Date(timeIntervalSince1970: pairedAt),
+            nickname: nickname)
     }
 
+    // MARK: - One machine
+
     func testNothingIsStoredUntilSomethingIs() {
-        XCTAssertNil(store.load())
+        XCTAssertTrue(store.all().isEmpty)
+        XCTAssertNil(store.load(Self.macId))
     }
 
     func testACredentialSurvivesAFreshInstanceOfTheStore() {
@@ -51,40 +77,180 @@ final class CredentialStoreTests: XCTestCase {
         // A second instance reads the Keychain rather than the first one's cache,
         // which is what a relaunch does.
         let second = KeychainCredentialStore(service: service)
-        XCTAssertEqual(second.load()?.token, "abc")
+        XCTAssertEqual(second.load(Self.macId)?.token, "abc")
         second.eraseEverything()
     }
 
     func testTheDurableTokenReplacesThePairingOne() {
         store.save(credential("pairing-token"))
-        let redeemed = store.load()!.redeemed(token: "device.credential",
-                                              deviceId: "d-9", deviceName: "Asad's iPhone")
+        let redeemed = store.load(Self.macId)!.redeemed(token: "device.credential",
+                                                        deviceId: "d-9", deviceName: "Asad's iPhone")
         store.save(redeemed)
 
         // The update path, which `SecItemAdd` alone would have silently skipped.
         let reloaded = KeychainCredentialStore(service: store.serviceForTesting)
-        XCTAssertEqual(reloaded.load()?.token, "device.credential")
-        XCTAssertEqual(reloaded.load()?.kind, .device)
-        XCTAssertEqual(reloaded.load()?.deviceId, "d-9")
+        XCTAssertEqual(reloaded.load(Self.macId)?.token, "device.credential")
+        XCTAssertEqual(reloaded.load(Self.macId)?.kind, .device)
+        XCTAssertEqual(reloaded.load(Self.macId)?.deviceId, "d-9")
+        // One machine, still. A rotation is not a pairing.
+        XCTAssertEqual(reloaded.all().count, 1)
     }
 
-    func testClearingForgetsTheCredential() {
+    func testForgettingOneMachineForgetsIt() {
         store.save(credential("abc"))
-        store.clear()
-        XCTAssertNil(store.load())
-        XCTAssertNil(KeychainCredentialStore(service: store.serviceForTesting).load())
+        store.remove(Self.macId)
+        XCTAssertNil(store.load(Self.macId))
+        XCTAssertNil(KeychainCredentialStore(service: store.serviceForTesting).load(Self.macId))
     }
 
-    func testClearingKeepsTheDeviceIdentity() {
+    func testForgettingKeepsTheDeviceIdentity() {
         // Unpairing must not change who this phone is. Regenerating the static
-        // key would make the Mac see a stranger the next time, and put a second
-        // row in its device list for one physical phone.
+        // key would make every machine see a stranger the next time, and put a
+        // second row in each of their device lists for one physical phone.
         let before = store.deviceKeys()
-        store.clear()
+        store.save(credential("abc"))
+        store.clearAll()
         XCTAssertEqual(store.deviceKeys().publicKey, before.publicKey)
         XCTAssertEqual(KeychainCredentialStore(service: store.serviceForTesting).deviceKeys().publicKey,
                        before.publicKey)
     }
+
+    // MARK: - Several machines
+
+    /// The requirement, stated as plainly as it can be stated.
+    func testPairingASecondMachineKeepsTheFirst() {
+        store.save(credential("mac-token", hostId: Self.macId, pairedAt: 1_700_000_000))
+        store.save(credential("pc-token", hostId: Self.pcId, pairedAt: 1_700_000_100))
+
+        XCTAssertEqual(store.all().count, 2)
+        XCTAssertEqual(store.load(Self.macId)?.token, "mac-token")
+        XCTAssertEqual(store.load(Self.pcId)?.token, "pc-token")
+
+        // And after a relaunch, which is when "my phone forgot my Mac" is
+        // actually noticed.
+        let reloaded = KeychainCredentialStore(service: store.serviceForTesting)
+        XCTAssertEqual(Set(reloaded.all().map(\.hostId)), [Self.macId, Self.pcId])
+    }
+
+    /// Oldest first, and stable. A switcher that reshuffles itself is one people
+    /// tap the wrong row in.
+    func testTheListIsInPairingOrder() {
+        store.save(credential("b", hostId: Self.pcId, pairedAt: 1_700_000_500))
+        store.save(credential("a", hostId: Self.macId, pairedAt: 1_700_000_000))
+        XCTAssertEqual(store.all().map(\.hostId), [Self.macId, Self.pcId])
+    }
+
+    /// Re-pairing after a revoke is a normal thing to do, and it must not cost
+    /// the user their other machines.
+    func testRePairingOneMachineLeavesTheOthersAlone() {
+        store.save(credential("mac-token", hostId: Self.macId))
+        store.save(credential("pc-token", hostId: Self.pcId, pairedAt: 1_700_000_100))
+
+        store.save(credential("mac-token-2", hostId: Self.macId))
+
+        XCTAssertEqual(store.all().count, 2)
+        XCTAssertEqual(store.load(Self.macId)?.token, "mac-token-2")
+        XCTAssertEqual(store.load(Self.pcId)?.token, "pc-token")
+    }
+
+    func testForgettingOneMachineLeavesTheOthers() {
+        store.save(credential("mac-token", hostId: Self.macId))
+        store.save(credential("pc-token", hostId: Self.pcId, pairedAt: 1_700_000_100))
+
+        store.remove(Self.macId)
+
+        XCTAssertEqual(store.all().map(\.hostId), [Self.pcId])
+        XCTAssertEqual(KeychainCredentialStore(service: store.serviceForTesting).all().count, 1)
+    }
+
+    /// Each machine keeps its own key. Two machines that could read each other's
+    /// sessions would be the one thing multi-host is not allowed to cost.
+    func testEachMachineKeepsItsOwnHostKey() {
+        let mac = StoredCredential(
+            endpoint: .relay(url: URL(string: "wss://relay.example")!,
+                             hostId: Self.macId, hostKey: Data(repeating: 1, count: 32)),
+            token: "a", kind: .device, deviceId: "d", deviceName: "iPhone", pairedAt: Date())
+        let pc = StoredCredential(
+            endpoint: .relay(url: URL(string: "wss://relay.example")!,
+                             hostId: Self.pcId, hostKey: Data(repeating: 2, count: 32)),
+            token: "b", kind: .device, deviceId: "d", deviceName: "iPhone", pairedAt: Date())
+        store.save(mac)
+        store.save(pc)
+
+        let reloaded = KeychainCredentialStore(service: store.serviceForTesting)
+        guard case let .relay(_, _, macKey) = reloaded.load(Self.macId)?.endpoint,
+              case let .relay(_, _, pcKey) = reloaded.load(Self.pcId)?.endpoint else {
+            return XCTFail("both endpoints should have come back")
+        }
+        XCTAssertEqual(macKey, Data(repeating: 1, count: 32))
+        XCTAssertEqual(pcKey, Data(repeating: 2, count: 32))
+        XCTAssertNotEqual(macKey, pcKey)
+    }
+
+    func testANicknameSurvivesTheTrip() {
+        store.save(credential("a", nickname: "Studio"))
+        XCTAssertEqual(store.load(Self.macId)?.label, "Studio")
+        // Without one, the label is the front of the host id — the half a person
+        // is comparing against the code on screen.
+        store.save(credential("b", hostId: Self.pcId))
+        XCTAssertEqual(store.load(Self.pcId)?.label, "K3ZQW7")
+    }
+
+    // MARK: - Damage
+
+    /**
+     * One unreadable record costs one machine, and says so.
+     *
+     * The reason this store is one Keychain item per host rather than one item
+     * holding a JSON array: a single blob has a single decode, so a record
+     * written by a shape of the struct this build does not understand would read
+     * as *no pairings at all*.
+     */
+    func testACorruptRecordCostsOneMachineAndIsCounted() {
+        store.save(credential("mac-token", hostId: Self.macId))
+        store.save(credential("pc-token", hostId: Self.pcId, pairedAt: 1_700_000_100))
+
+        // Overwrite one item with something that is not a `StoredCredential`.
+        let vandal = KeychainCredentialStore(service: store.serviceForTesting)
+        vandal.corruptForTesting(hostId: Self.macId)
+
+        let reloaded = KeychainCredentialStore(service: store.serviceForTesting)
+        XCTAssertEqual(reloaded.all().map(\.hostId), [Self.pcId])
+        XCTAssertEqual(reloaded.unreadable, 1, "the app has to be able to say one pairing could not be read")
+    }
+
+    // MARK: - Migration
+
+    /**
+     * A phone paired before this build keeps its machine.
+     *
+     * The single-host record lived at its own account. Nothing about the
+     * multi-host change is worth a user re-pairing, so it is folded into the
+     * collection on first read and the old item is removed only after the new one
+     * is written.
+     */
+    func testASingleHostRecordIsFoldedIn() {
+        store.writeLegacyRecordForTesting(credential("legacy-token"))
+
+        XCTAssertEqual(store.all().map(\.hostId), [Self.macId])
+        XCTAssertEqual(store.load(Self.macId)?.token, "legacy-token")
+
+        // And it stays folded in: a second store reads the new account.
+        let reloaded = KeychainCredentialStore(service: store.serviceForTesting)
+        XCTAssertEqual(reloaded.load(Self.macId)?.token, "legacy-token")
+        XCTAssertEqual(reloaded.all().count, 1, "the migration must not leave two copies")
+    }
+
+    /// The migration runs beside machines paired after it, without disturbing them.
+    func testTheMigrationDoesNotDisturbNewerPairings() {
+        store.save(credential("pc-token", hostId: Self.pcId, pairedAt: 1_700_000_100))
+        store.writeLegacyRecordForTesting(credential("legacy-token", hostId: Self.macId))
+
+        let reloaded = KeychainCredentialStore(service: store.serviceForTesting)
+        XCTAssertEqual(Set(reloaded.all().map(\.hostId)), [Self.macId, Self.pcId])
+    }
+
+    // MARK: - The device identity
 
     func testTheDeviceKeyIsAUsableX25519Identity() {
         let keys = store.deviceKeys()
@@ -104,11 +270,27 @@ final class CredentialStoreTests: XCTestCase {
 
     func testTheEndpointComesBackIntact() {
         store.save(credential("abc"))
-        guard case let .relay(url, hostId, hostKey) = store.load()?.endpoint else {
+        guard case let .relay(url, hostId, hostKey) = store.load(Self.macId)?.endpoint else {
             return XCTFail("expected a relay endpoint")
         }
         XCTAssertEqual(url.absoluteString, "wss://relay.example")
-        XCTAssertEqual(hostId, "M9G95TNJT64Q928VW3HVRYDR8J")
+        XCTAssertEqual(hostId, Self.macId)
         XCTAssertEqual(hostKey.count, 32)
+    }
+
+    /// A tailnet machine has no host id in its code, so its address stands in —
+    /// and the scheme is deliberately not part of it, or one machine paired over
+    /// `http` and `https` would be two rows in the switcher.
+    func testADirectEndpointStillNamesOneMachine() {
+        XCTAssertEqual(DeckEndpoint.direct(url: URL(string: "wss://mac.tailnet.ts.net/ws")!).hostId,
+                       "direct:mac.tailnet.ts.net")
+        XCTAssertEqual(DeckEndpoint.direct(url: URL(string: "ws://mac.tailnet.ts.net/ws")!).hostId,
+                       "direct:mac.tailnet.ts.net")
+        XCTAssertEqual(DeckEndpoint.direct(url: URL(string: "wss://mac.tailnet.ts.net:8443/ws")!).hostId,
+                       "direct:mac.tailnet.ts.net:8443")
+        // And it cannot collide with a relay host id, which has no colon in it.
+        XCTAssertFalse(DeckEndpoint.relay(url: URL(string: "wss://r.example")!,
+                                          hostId: Self.macId,
+                                          hostKey: Data(count: 32)).hostId.contains(":"))
     }
 }

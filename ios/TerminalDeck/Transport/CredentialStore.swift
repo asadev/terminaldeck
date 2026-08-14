@@ -1,19 +1,37 @@
 /**
- * What this phone holds about a Mac, and where it holds it.
+ * What this phone holds about **every** machine it is paired with, and where it
+ * holds it.
  *
- * Three secrets, and they are not the same kind of secret:
+ * Three kinds of secret, and they are not the same kind:
  *
- *  1. **The credential.** A bearer token that grants a shell on someone's Mac.
- *     Whoever has the bytes is the device, so it lives in the Keychain and
- *     nowhere else — not `UserDefaults`, not a plist, not a file in Documents,
- *     all of which are in the unencrypted backup and readable by anything that
- *     gets a look at the container.
+ *  1. **The credentials.** Bearer tokens, each granting a shell on somebody's
+ *     machine. Whoever has the bytes is the device, so they live in the Keychain
+ *     and nowhere else — not `UserDefaults`, not a plist, not a file in
+ *     Documents, all of which are in the unencrypted backup and readable by
+ *     anything that gets a look at the container.
  *  2. **The device's static X25519 private key.** The other half of the sealed
  *     channel's identity. Generated once, never leaves the device, never sent —
- *     only its public half goes to the Mac at pairing time.
- *  3. **The Mac's static public key.** Not secret at all, and stored beside the
- *     credential anyway: it is what stops the relay answering in the Mac's
+ *     only its public half goes to a host at pairing time. **One key for all
+ *     hosts**, deliberately: it is this phone's name, and a per-host key would
+ *     mean re-approving the same physical phone on a machine it is already
+ *     paired with.
+ *  3. **Each host's static public key.** Not secret at all, and stored beside
+ *     its credential anyway: it is what stops the relay answering in that host's
  *     place, so losing it is losing the authentication of the desktop.
+ *
+ * ## One item per host, not one item holding all of them
+ *
+ * The obvious design is a single Keychain item holding a JSON array. It is the
+ * wrong one, and the reason is the failure this whole feature has to be designed
+ * against: **a phone that appears to have forgotten a machine**. A single blob
+ * has a single decode, so one record written by an older shape of this struct —
+ * or one truncated write — reads as *no pairings at all*, and every paired Mac
+ * and PC disappears at once. One item per host makes that failure local: the
+ * unreadable one is skipped and named, and the others are untouched.
+ *
+ * There is no index item either, for the same reason. The list is read back out
+ * of the Keychain itself with `kSecMatchLimitAll`, so there is no second
+ * structure that can disagree with the first about which hosts exist.
  *
  * ## Accessibility, chosen rather than defaulted
  *
@@ -22,17 +40,10 @@
  *  - *AfterFirstUnlock* because a reconnect has to work with the phone in a
  *    pocket. `WhenUnlocked` would make every background reconnect fail, and the
  *    app would look broken exactly when it is most useful.
- *  - *ThisDeviceOnly* because the alternative puts a shell credential in an
+ *  - *ThisDeviceOnly* because the alternative puts shell credentials in an
  *    iCloud Keychain backup and onto every other device on the account. Pairing
- *    is per device on purpose — the Mac approves *this* phone by name — and an
+ *    is per device on purpose — each host approves *this* phone by name — and an
  *    item that syncs quietly undoes that.
- *
- * ## Why the whole record is one item
- *
- * The credential and the endpoint it belongs to are only meaningful together: a
- * token for a host id that is not stored beside it is a secret nobody can spend,
- * and an endpoint without its token sends the app to a Mac it cannot greet. One
- * item, written and cleared atomically, cannot be half of a pairing.
  */
 
 import Foundation
@@ -46,15 +57,15 @@ import Security
  * and is not this app's business to depend on: what matters here is whether this
  * token has already been redeemed, because a *pairing* token that gets refused
  * means the pairing failed and the user must scan again, while a *device*
- * credential that gets refused means the Mac has not approved the device yet and
- * the right move is to keep waiting. Guessing wrong sends the user to the wrong
- * screen at the worst moment.
+ * credential that gets refused means the host has not approved the device yet
+ * and the right move is to keep waiting. Guessing wrong sends the user to the
+ * wrong screen at the worst moment.
  */
 struct StoredCredential: Equatable, Codable {
     enum Kind: String, Codable {
         /// Single-use, from a QR code. Worth 60 seconds and one redemption.
         case pairing
-        /// Durable, minted by the Mac in the `welcome` that answered a pairing.
+        /// Durable, minted by the host in the `welcome` that answered a pairing.
         case device
     }
 
@@ -66,28 +77,82 @@ struct StoredCredential: Equatable, Codable {
     let deviceName: String
     let pairedAt: Date
 
+    /**
+     * What the user calls this machine, if they have renamed it.
+     *
+     * Nil is the normal state and the label falls back to the endpoint. It
+     * exists because a host id is 26 characters of base32 and a relay address is
+     * the same for every host behind it — neither is something a person can pick
+     * their laptop out of a list by, and picking the right machine out of a list
+     * is the whole of this feature.
+     *
+     * Optional with a default so that a record written before this field existed
+     * still decodes. A `StoredCredential` that fails to decode is a host that has
+     * vanished from the phone, which is precisely the outcome this design is for
+     * avoiding.
+     */
+    var nickname: String?
+
+    /// Which machine this is. Stable across re-pairings with the same host.
+    var hostId: String { endpoint.hostId }
+
+    /// What the switcher shows. The user's name for it, or the endpoint's own.
+    var label: String {
+        if let nickname, !nickname.trimmingCharacters(in: .whitespaces).isEmpty { return nickname }
+        return endpoint.shortName
+    }
+
     func redeemed(token: String, deviceId: String, deviceName: String) -> StoredCredential {
         StoredCredential(endpoint: endpoint, token: token, kind: .device,
-                         deviceId: deviceId, deviceName: deviceName, pairedAt: Date())
+                         deviceId: deviceId, deviceName: deviceName, pairedAt: Date(),
+                         nickname: nickname)
+    }
+
+    func renamed(_ name: String?) -> StoredCredential {
+        StoredCredential(endpoint: endpoint, token: token, kind: kind,
+                         deviceId: deviceId, deviceName: deviceName, pairedAt: pairedAt,
+                         nickname: name)
     }
 }
 
 @MainActor
 protocol CredentialStore: AnyObject {
-    func load() -> StoredCredential?
+
+    /**
+     * Every machine this phone is paired with, oldest pairing first.
+     *
+     * Order is stable rather than "most recent", because it is the order of a
+     * list somebody learns the shape of — a switcher that reshuffles itself is a
+     * switcher people tap the wrong row in.
+     */
+    func all() -> [StoredCredential]
+
+    /// One host, by id. Nil when this phone is not paired with it.
+    func load(_ hostId: String) -> StoredCredential?
+
+    /**
+     * Add a host, or update the one with this id.
+     *
+     * **Never touches any other host.** This is the whole of the multi-host
+     * requirement and the one thing that must not regress: a phone that pairs
+     * with a second machine and loses the first looks exactly like a phone that
+     * forgot your Mac.
+     */
     func save(_ credential: StoredCredential)
-    /// Called when the desktop says the credential is no longer good. Clearing
-    /// it is what turns the next launch into a pairing flow rather than five
-    /// more refused attempts against a lockout counter.
-    func clear()
+
+    /// Forget one machine. The others, and the device key, survive.
+    func remove(_ hostId: String)
+
+    /// Forget every machine. The device key survives — see `deviceKeys`.
+    func clearAll()
 
     /**
      * This device's static identity for the sealed channel, made on first use.
      *
-     * Kept here rather than in the transport because it must outlive every
-     * connection and every re-pair against the same Mac: the Mac remembers the
-     * device by this public key, and regenerating it turns a known phone into a
-     * stranger that has to be approved again.
+     * Kept here rather than in a transport because it must outlive every
+     * connection, every host and every re-pair: a host remembers the device by
+     * this public key, and regenerating it turns a known phone into a stranger
+     * that has to be approved again — on *all* of them at once.
      */
     func deviceKeys() -> StaticKeyPair
 }
@@ -100,13 +165,18 @@ protocol CredentialStore: AnyObject {
 final class KeychainCredentialStore: CredentialStore {
 
     private let service: String
-    private let credentialAccount = "credential.v1"
+    /// One account per host. The id is appended, so the list can be recovered
+    /// from the Keychain without a second structure to keep in step.
+    private let hostPrefix = "host.v1."
+    /// The single-host account this store used before it could hold more than
+    /// one. Read once and folded in; see `migrate`.
+    private let legacyAccount = "credential.v1"
     private let deviceKeyAccount = "device-static-key.v1"
 
-    /// Read once per launch and kept, because `load()` is called on every
-    /// reconnect and a Keychain lookup while the app is coming out of the
-    /// background is not free. Writes go through both.
-    private var cached: StoredCredential?
+    /// Read once per launch and kept, because the list is consulted on every
+    /// reconnect of every host and a Keychain sweep while the app is coming out
+    /// of the background is not free. Writes go through both.
+    private var cached: [String: StoredCredential] = [:]
     private var cachedKeys: StaticKeyPair?
     private var loaded = false
 
@@ -120,31 +190,46 @@ final class KeychainCredentialStore: CredentialStore {
     /// prove a write really reached the Keychain rather than the cache.
     var serviceForTesting: String { service }
 
-    func load() -> StoredCredential? {
-        if loaded { return cached }
-        loaded = true
-        guard let data = read(account: credentialAccount) else { return nil }
-        // A record written by an older shape of this struct decodes to nothing,
-        // which reads as unpaired — the honest answer, and it sends the user to
-        // the pairing screen rather than into a login that fails forever.
-        cached = try? JSONDecoder().decode(StoredCredential.self, from: data)
-        return cached
+    /**
+     * Records that are in the Keychain and could not be decoded.
+     *
+     * Surfaced rather than swallowed. A host that silently disappears is the
+     * exact complaint this design exists to prevent, so when one cannot be read
+     * the app is able to say "one pairing could not be read" instead of quietly
+     * showing a shorter list.
+     */
+    private(set) var unreadable = 0
+
+    func all() -> [StoredCredential] {
+        hydrate()
+        return cached.values.sorted { $0.pairedAt < $1.pairedAt }
+    }
+
+    func load(_ hostId: String) -> StoredCredential? {
+        hydrate()
+        return cached[hostId]
     }
 
     func save(_ credential: StoredCredential) {
-        cached = credential
-        loaded = true
+        hydrate()
+        cached[credential.hostId] = credential
         guard let data = try? JSONEncoder().encode(credential) else { return }
-        write(account: credentialAccount, data: data)
+        write(account: account(for: credential.hostId), data: data)
     }
 
-    func clear() {
-        cached = nil
-        loaded = true
-        delete(account: credentialAccount)
+    func remove(_ hostId: String) {
+        hydrate()
+        cached.removeValue(forKey: hostId)
+        delete(account: account(for: hostId))
+    }
+
+    func clearAll() {
+        hydrate()
+        for hostId in cached.keys { delete(account: account(for: hostId)) }
+        cached = [:]
         // The device key deliberately survives. It is not a credential — it is
         // this phone's name in the sealed channel — and keeping it means
-        // re-pairing with the same Mac does not create a second entry in its
+        // re-pairing with the same machine does not create a second entry in its
         // device list for the same physical phone.
     }
 
@@ -160,7 +245,55 @@ final class KeychainCredentialStore: CredentialStore {
         return fresh
     }
 
-    // MARK: - The four lines of Security.framework this needs
+    // MARK: - Reading the drawer
+
+    private func account(for hostId: String) -> String { "\(hostPrefix)\(hostId)" }
+
+    private func hydrate() {
+        if loaded { return }
+        loaded = true
+
+        for (account, data) in readAll() {
+            guard account.hasPrefix(hostPrefix) else { continue }
+            guard let record = try? JSONDecoder().decode(StoredCredential.self, from: data) else {
+                // Kept on disk rather than deleted. A record this build cannot
+                // read may be one a *newer* build can — a phone rolled back for
+                // an afternoon should not permanently lose the pairing it made
+                // while it was ahead.
+                unreadable += 1
+                continue
+            }
+            cached[record.hostId] = record
+        }
+
+        migrate()
+    }
+
+    /**
+     * Fold the single-host record into the collection.
+     *
+     * Runs once. The legacy item is removed only after the new one is written,
+     * so a process killed between the two comes back with the pairing still
+     * readable from the old account rather than from neither.
+     *
+     * A legacy record that will not decode is left exactly where it is: deleting
+     * it would be this build destroying a pairing it merely could not read.
+     */
+    private func migrate() {
+        guard let data = read(account: legacyAccount) else { return }
+        guard let record = try? JSONDecoder().decode(StoredCredential.self, from: data) else { return }
+        if cached[record.hostId] == nil {
+            cached[record.hostId] = record
+            if let encoded = try? JSONEncoder().encode(record) {
+                write(account: account(for: record.hostId), data: encoded)
+            } else {
+                return
+            }
+        }
+        delete(account: legacyAccount)
+    }
+
+    // MARK: - The five lines of Security.framework this needs
 
     private func query(account: String) -> [String: Any] {
         [
@@ -177,6 +310,26 @@ final class KeychainCredentialStore: CredentialStore {
         var result: CFTypeRef?
         guard SecItemCopyMatching(request as CFDictionary, &result) == errSecSuccess else { return nil }
         return result as? Data
+    }
+
+    /// Every item in this service, account name and all. The list of paired hosts
+    /// *is* this query — there is no index to fall out of step with it.
+    private func readAll() -> [(String, Data)] {
+        let request: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecReturnData as String: true,
+            kSecReturnAttributes as String: true,
+            kSecMatchLimit as String: kSecMatchLimitAll,
+        ]
+        var result: CFTypeRef?
+        guard SecItemCopyMatching(request as CFDictionary, &result) == errSecSuccess,
+              let items = result as? [[String: Any]] else { return [] }
+        return items.compactMap { item in
+            guard let account = item[kSecAttrAccount as String] as? String,
+                  let data = item[kSecValueData as String] as? Data else { return nil }
+            return (account, data)
+        }
     }
 
     private func write(account: String, data: Data) {
@@ -200,10 +353,31 @@ final class KeychainCredentialStore: CredentialStore {
     /// Only the tests call this: it removes the device key as well, which the
     /// app must never do to a phone somebody has paired.
     func eraseEverything() {
-        cached = nil
+        hydrate()
+        for hostId in cached.keys { delete(account: account(for: hostId)) }
+        cached = [:]
         cachedKeys = nil
         loaded = false
-        delete(account: credentialAccount)
+        unreadable = 0
+        delete(account: legacyAccount)
         delete(account: deviceKeyAccount)
+    }
+
+    /// Only the tests call this: writes a record at the pre-multi-host account,
+    /// so the migration can be exercised against a real Keychain.
+    func writeLegacyRecordForTesting(_ credential: StoredCredential) {
+        guard let data = try? JSONEncoder().encode(credential) else { return }
+        write(account: legacyAccount, data: data)
+        loaded = false
+        cached = [:]
+    }
+
+    /// Only the tests call this: replaces one host's record with bytes that are
+    /// not a `StoredCredential`, which is what a struct written by another build
+    /// looks like from here.
+    func corruptForTesting(hostId: String) {
+        write(account: account(for: hostId), data: Data("not a credential".utf8))
+        loaded = false
+        cached = [:]
     }
 }

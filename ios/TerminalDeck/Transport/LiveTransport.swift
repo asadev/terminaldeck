@@ -40,9 +40,6 @@ import Foundation
 @MainActor
 final class LiveTransport: Transport {
 
-    /// Well under the 30 seconds after which idle NAT and proxy entries start
-    /// being reclaimed, so the socket is never idle long enough to be collected.
-    private static let pingEvery: TimeInterval = 25
     /// A pong crosses a relay in milliseconds. Ten seconds is a dead socket.
     private static let pongGrace: TimeInterval = 10
     /// The desktop closes an unauthenticated socket after eight seconds, so this
@@ -60,6 +57,10 @@ final class LiveTransport: Transport {
     private(set) var capabilities: Set<String> = []
 
     var onEvent: ((TransportEvent) -> Void)?
+
+    /// Which machine this transport is for. Every credential lookup names it,
+    /// so a transport can never spend one host's token on another's socket.
+    let hostId: String
 
     private let device: DeviceDescriptor
     private let credentials: CredentialStore
@@ -89,10 +90,12 @@ final class LiveTransport: Transport {
     /// Bumped on every connect so a timer armed by a dead socket does nothing.
     private var generation = 0
 
-    init(device: DeviceDescriptor,
+    init(hostId: String,
+         device: DeviceDescriptor,
          credentials: CredentialStore,
          backoff: Backoff = Backoff(),
          makeCarrier: @escaping (DeckEndpoint, StaticKeyPair) -> Carrier = LiveTransport.defaultCarrier) {
+        self.hostId = hostId
         self.device = device
         self.credentials = credentials
         self.backoff = backoff
@@ -134,11 +137,51 @@ final class LiveTransport: Transport {
         // because the phone came out of a pocket, and the desktop locks a device
         // out after repeated failures, so retrying one is actively harmful.
         switch state.phase {
-        case .rejected, .incompatible, .online, .connecting: return
-        default: break
+        case .rejected, .incompatible, .connecting:
+            return
+        case .online:
+            // NOT a no-op, which is what this used to be, and the bug was
+            // invisible because the code that did nothing looked correct: the
+            // connection is already up, so there is nothing to reconnect.
+            //
+            // Except that `.online` was established before the app was
+            // suspended, and nothing about being suspended is reported to a
+            // socket. iOS hands the app back exactly the state it had, including
+            // a `carrier` whose TCP connection a carrier NAT reclaimed while the
+            // phone was in a pocket. The heartbeat is the only thing that would
+            // notice, and `realign` had just pushed its next tick a full interval
+            // away — so the badge read **Connected**, on nothing, for up to
+            // thirty-five seconds. That is the app lying about the one thing it
+            // must never lie about.
+            //
+            // So: doubt it, say so, and ask.
+            probe()
+            return
+        default:
+            break
         }
         backoff.reset()
         connect()
+    }
+
+    /**
+     * Ask the far end to prove it is still there, now.
+     *
+     * The state stays `.online` — the session and the carrier are still there and
+     * are probably fine — but it stops *claiming* to be verified until a pong
+     * comes back. If none does within the grace, the ordinary failure path runs
+     * and the connection goes down honestly.
+     */
+    private func probe() {
+        guard carrier != nil, state.phase == .online else { return }
+        state.verified = false
+        awaitingPong = true
+        send(.ping)
+        let epoch = generation
+        after(Self.pongGrace, epoch: epoch) { [weak self] in
+            guard let self, self.awaitingPong else { return }
+            self.fail("The connection stopped answering.")
+        }
     }
 
     @discardableResult
@@ -158,11 +201,11 @@ final class LiveTransport: Transport {
         heldRefusal = nil
         macAnswered = false
 
-        guard let credential = credentials.load() else {
+        guard let credential = credentials.load(hostId) else {
             // Nothing to connect with. The app routes to the pairing screen off
             // the same emptiness, so this only has to be honest and stop.
             state = ConnectionState(phase: .rejected,
-                                    detail: "This device is not paired with a Mac yet.",
+                                    detail: "This device is not paired with that machine.",
                                     retryAt: nil, attempts: backoff.attempts)
             return
         }
@@ -219,6 +262,10 @@ final class LiveTransport: Transport {
         // socket's open, because a socket opening proves only that something
         // accepted a connection.
         macAnswered = true
+        // And proof it is *still* there, which is a different claim and the one
+        // the pill makes. Any sealed frame will do — a pong, a line of output, a
+        // session list. It does not have to be the answer to our own question.
+        state.verified = true
 
         if case let .welcome(version, deviceId, deviceName, token, _, advertised) = message {
             guard version == Wire.protocolVersion else {
@@ -307,7 +354,7 @@ final class LiveTransport: Transport {
         if let refusal = heldRefusal {
             heldRefusal = nil
             let sentence = refusal.message.isEmpty ? "The desktop refused this device." : refusal.message
-            let credential = credentials.load()
+            let credential = credentials.load(hostId)
 
             // A pairing token that was refused is spent, wrong, or expired, and
             // nothing about waiting fixes it. A *device* credential refused
@@ -317,7 +364,7 @@ final class LiveTransport: Transport {
                 || credential?.kind == .pairing
 
             if pairingFailed {
-                credentials.clear()
+                credentials.remove(hostId)
                 fatal(.rejected, sentence)
                 onEvent?(.needsPairing(sentence))
                 return
@@ -386,25 +433,33 @@ final class LiveTransport: Transport {
 
     // MARK: - Heartbeat
 
+    /**
+     * Join the app's single tick rather than starting a timer.
+     *
+     * Every paired machine holds a socket and every socket needs the keepalive,
+     * so N hosts on N private timers would be N chances per cycle to wake the
+     * radio for the same traffic. See `Heartbeat` for the numbers.
+     */
     private func startHeartbeat() {
-        let epoch = generation
         awaitingPong = false
-        beat(epoch: epoch)
+        Heartbeat.shared.join(self) { [weak self] in self?.beat() }
     }
 
-    private func beat(epoch: Int) {
-        after(Self.pingEvery, epoch: epoch) { [weak self] in
-            guard let self, self.carrier != nil, self.state.phase == .online else { return }
-            self.awaitingPong = true
-            self.send(.ping)
-            self.after(Self.pongGrace, epoch: epoch) { [weak self] in
-                guard let self else { return }
-                if self.awaitingPong {
-                    self.fail("The connection stopped answering.")
-                    return
-                }
-                self.beat(epoch: epoch)
-            }
+    private func beat() {
+        guard carrier != nil, state.phase == .online else { return }
+        // A tick that arrives while the previous pong is still outstanding is
+        // the answer: nothing came back in a whole interval, which is more than
+        // twice the grace this used to allow.
+        if awaitingPong {
+            fail("The connection stopped answering.")
+            return
+        }
+        awaitingPong = true
+        send(.ping)
+        let epoch = generation
+        after(Self.pongGrace, epoch: epoch) { [weak self] in
+            guard let self, self.awaitingPong else { return }
+            self.fail("The connection stopped answering.")
         }
     }
 
@@ -422,6 +477,9 @@ final class LiveTransport: Transport {
     }
 
     private func dropCarrier() {
+        // Left before the socket goes, always: a member whose transport is dead
+        // would keep the shared timer alive with nothing to check on.
+        Heartbeat.shared.leave(self)
         guard let carrier else { return }
         self.carrier = nil
         carrier.onEvent = nil

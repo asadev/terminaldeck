@@ -1,553 +1,358 @@
 /**
- * Everything the screens read, and the only thing that talks to a transport.
+ * Every machine this phone is paired with, which one is on screen, and the
+ * pairing flow that adds another.
  *
- * The split is the same one the desktop draws: the wire layer parses, this layer
- * decides, the views render. A view never sees a `ServerMessage` and never
- * builds a `ClientMessage`.
+ * The per-machine half of this used to live here and is now `HostLink` — one per
+ * paired Mac or Windows PC, each with its own socket, its own sealed channel and
+ * its own sessions. What is left is the collection, the switcher, and the small
+ * set of things that are genuinely about the phone rather than about a machine:
+ * the device key, the navigation stack, and pairing.
  *
- * ## One terminal per session, kept alive
+ * ## Pairing ADDS a host. It never replaces one.
  *
- * `bridges` outlives the terminal screen. Backing out of a session and returning
- * to it keeps its scrollback, which is what a person expects from something that
- * looks like a tab. What clears it is a re-attach — the desktop answers `attach`
- * by replaying the whole scrollback, and appending that to what is already there
- * would print every line twice.
+ * This is the single most important line in the file. The failure mode to design
+ * against is not "multi-host does not work" — it is a phone that pairs with a
+ * second machine and silently drops the first, which to the person holding it
+ * looks exactly like *my phone forgot my Mac*. So `pair` writes one new record
+ * into a collection keyed by host id, and the only things that remove a record
+ * are the user asking and the host refusing the credential outright.
  *
- * ## Wanted, and attached
+ * ## Everything stays connected
  *
- * These are two different things and conflating them is the reason the first
- * version of this app came back from a dropped connection showing a dead
- * terminal. `wanted` is what the user has open. `attached` is what the desktop
- * has confirmed. A reconnect clears the second and not the first, and the gap
- * between them is exactly the set of `attach` frames to send when the socket
- * comes back — which is what makes walking into a lift and out again resume the
- * session instead of ending it.
+ * Not connect-on-switch. Every paired machine holds its socket from launch, which
+ * buys two things worth the cost: the switcher shows *live* status for machines
+ * that are not on screen — the point of having more than one is knowing which of
+ * them is busy — and switching is instant rather than a handshake. The cost is
+ * one keepalive per socket, folded into a single app-wide tick so that N machines
+ * cost one radio wake-up rather than N. See `Heartbeat` and
+ * `docs/multi-host-battery.md`.
+ *
+ * ## The facade
+ *
+ * Most properties here forward to `current`. That is deliberate rather than lazy:
+ * the screens were written against a single host and none of them should have to
+ * learn about the collection to draw a session list. What a screen must never do
+ * is hold a `HostLink` across a switch, so the forwarding reads `current` every
+ * time rather than handing one out.
  */
 
 import Foundation
 import Observation
-import UIKit
 
 @MainActor
 @Observable
 final class DeckModel {
 
-    private(set) var connection: ConnectionState = .offline
-    private(set) var sessions: [RemoteSession] = []
-    /// Epoch-millisecond stamps, only for the sessions the desktop timestamped.
-    private(set) var lastActivity: [String: Double] = [:]
-    /// What is listening on the Mac. Empty until the desktop answers, and empty
-    /// forever against a desktop that does not offer the `localhost` capability.
-    private(set) var ports: [LocalPort] = []
-    /// The one port being browsed, if any. One at a time on purpose: a phone
-    /// shows one page, and a second listener held open for a tab nobody is
-    /// looking at is a socket on the Mac with nothing watching it.
-    private(set) var tunnel: PortTunnel?
-    /// The file being sent, if any. One at a time, which is what the desktop
-    /// accepts — see `send(_:into:)`.
-    private(set) var upload: FileUpload?
+    /// Every paired machine, in the order they were paired. Never reordered:
+    /// a switcher that reshuffles itself is one people tap the wrong row in.
+    private(set) var hosts: [HostLink] = []
+    /// Which machine the screens are showing. Nil only when nothing is paired.
+    private(set) var currentHostId: String?
+
     /// The navigation stack. `RootView` binds to it, and a deep link pushes onto it.
     var route: [Route] = []
-    /// The last thing that went wrong, for the banner. Cleared on the next success.
-    private(set) var lastError: String?
 
-    /// Nil until this phone has been paired with a Mac. The pairing screen is
-    /// shown off exactly this, so there is one source of truth for "am I set up".
-    private(set) var credential: StoredCredential?
-    /// Why the app is back at the pairing screen, when it did not start there.
+    /// Whether the "pair another machine" sheet is up. A flag rather than a
+    /// route, because it can be raised from the switcher on any screen.
+    var addingHost = false
+
+    /// Why the app is at the pairing screen, when it did not start there.
     private(set) var pairingNotice: String?
     /// Set while a pairing code is being redeemed, so the button can say so.
     private(set) var isPairing = false
+    /// A sentence about the collection rather than about one machine — a pairing
+    /// that was refused, a record that could not be read.
+    private(set) var collectionError: String?
 
     private let credentials: CredentialStore
     private let device: DeviceDescriptor
-    private let makeTransport: (CredentialStore, DeviceDescriptor) -> Transport
-    private var transport: Transport?
-    /**
-     * How a `PortTunnel` reaches the socket, without reaching this model.
-     *
-     * A tunnel needs exactly one thing — put this frame on the wire — and
-     * conforming the model itself to `TunnelWire` would give every view in the
-     * app a public `send(ClientMessage)`, which is the one boundary this file's
-     * header says it keeps: a view never builds a wire message. One indirection
-     * buys that back.
-     */
-    /// Not observed: `@Observable` rewrites a stored property into a computed
-    /// one, and a computed property cannot be `lazy`.
-    @ObservationIgnored
-    private lazy var wire: TunnelWire = WireProxy { [weak self] message in
-        self?.transport?.send(message) ?? false
-    }
-    /// The same indirection for an upload, and the same reason: a `FileUpload`
-    /// needs exactly one thing — put this frame on the wire — and conforming this
-    /// model to the protocol directly would give every view a public
-    /// `send(ClientMessage)`.
-    @ObservationIgnored
-    private lazy var uploadWire: UploadWire = WireProxy { [weak self] message in
-        self?.transport?.send(message) ?? false
-    }
-    private var bridges: [String: TerminalBridge] = [:]
-    /// Confirmed by the desktop.
-    private var attached: Set<String> = []
-    /// Wanted by the user — a terminal screen is on the stack for it.
-    private var wanted: Set<String> = []
+    private let makeTransport: ((String, CredentialStore, DeviceDescriptor) -> Transport)?
 
+    /**
+     * A route names the machine as well as the session.
+     *
+     * Session ids are unique per host and nothing guarantees they are unique
+     * *across* hosts — they come from each machine's own session layer. A route
+     * carrying only an id would attach to whichever machine happened to be
+     * current when it was popped, which with two machines paired is a coin flip.
+     */
     enum Route: Hashable {
-        case session(String)
+        case session(host: String, id: String)
     }
 
     /// `makeTransport` is a seam for the tests, which drive this model against a
-    /// scripted transport rather than a socket. Defaulted inside the body rather
-    /// than in the signature: a default argument is evaluated outside the actor,
-    /// and `LiveTransport` is main-actor isolated.
+    /// scripted transport rather than a socket.
     init(credentials: CredentialStore,
          device: DeviceDescriptor,
-         makeTransport: ((CredentialStore, DeviceDescriptor) -> Transport)? = nil) {
+         makeTransport: ((String, CredentialStore, DeviceDescriptor) -> Transport)? = nil) {
         self.credentials = credentials
         self.device = device
-        self.makeTransport = makeTransport ?? { store, device in
-            LiveTransport(device: device, credentials: store)
-        }
-        self.credential = credentials.load()
+        self.makeTransport = makeTransport
+        for record in credentials.all() { adopt(record) }
+        currentHostId = restoredSelection ?? hosts.first?.id
     }
 
-    /// This phone's own fingerprint, for the approval prompt on the Mac. Shown
-    /// on the pairing screen so the two ends can be compared by a person.
+    // MARK: - The collection
+
+    /// The machine the screens are showing, or nil when nothing is paired.
+    var current: HostLink? {
+        guard let currentHostId else { return hosts.first }
+        return hosts.first { $0.id == currentHostId } ?? hosts.first
+    }
+
+    var isPaired: Bool { !hosts.isEmpty }
+
+    /// Whether the switcher is worth drawing at all. One machine does not need a
+    /// picker, and a picker with one row in it is furniture.
+    var hasSeveralHosts: Bool { hosts.count > 1 }
+
+    /**
+     * Show a different machine.
+     *
+     * Nothing is connected or disconnected here: every host is already holding
+     * its socket, which is the whole reason switching is instant. What does
+     * change is the navigation stack — a terminal open on the machine being
+     * switched away from is popped, because leaving it up would show one
+     * machine's session under another machine's name.
+     */
+    func select(_ hostId: String) {
+        guard hosts.contains(where: { $0.id == hostId }), hostId != currentHostId else { return }
+        currentHostId = hostId
+        UserDefaults.standard.set(hostId, forKey: Self.selectionKey)
+        route.removeAll { route in
+            if case let .session(host, _) = route { return host != hostId }
+            return false
+        }
+    }
+
+    func host(_ id: String) -> HostLink? {
+        hosts.first { $0.id == id }
+    }
+
+    private static let selectionKey = "terminaldeck.currentHost.v1"
+
+    private var restoredSelection: String? {
+        guard let saved = UserDefaults.standard.string(forKey: Self.selectionKey),
+              hosts.contains(where: { $0.id == saved }) else { return nil }
+        return saved
+    }
+
+    /// Wire one stored record up as a live host. Idempotent by host id, which is
+    /// what makes re-pairing with a machine already in the list an update rather
+    /// than a duplicate row.
+    @discardableResult
+    private func adopt(_ record: StoredCredential) -> HostLink {
+        if let existing = hosts.first(where: { $0.id == record.hostId }) { return existing }
+
+        let link = HostLink(credential: record,
+                            credentials: credentials,
+                            device: device,
+                            makeTransport: makeTransport)
+        link.onCredential = { [weak self] stored in
+            // One writer to the drawer. A link that saved for itself would be N
+            // writers, and the bug that must not exist is a write for one host
+            // landing on another.
+            self?.credentials.save(stored)
+        }
+        link.onNeedsPairing = { [weak self] reason in
+            self?.forget(record.hostId, because: reason)
+        }
+        link.onConnectionChange = { [weak self] state in
+            // The redemption is over the moment the machine answers in any way at
+            // all — connected, waiting, pending approval, refused. `.connecting`
+            // is the one state that means it is still in flight.
+            if state.phase != .connecting && state.phase != .offline { self?.isPairing = false }
+        }
+        link.onCreated = { [weak self] sessionId in
+            self?.open(session: sessionId, on: record.hostId)
+        }
+        hosts.append(link)
+        return link
+    }
+
+    // MARK: - Lifecycle
+
+    /**
+     * Bring every paired machine up.
+     *
+     * All of them, not just the one on screen. A switcher that shows "offline"
+     * for every machine except the current one would be showing the *app's*
+     * state rather than the machines', which is the opposite of why anybody
+     * would want more than one.
+     */
+    func start() {
+        for host in hosts { host.start() }
+    }
+
+    /// The app came back to the foreground, or the network changed. The pending
+    /// backoff on every machine is describing a condition that has already ended.
+    func resume() {
+        // Realigned first, so the reconnects that follow settle onto one shared
+        // tick instead of each machine keeping whatever phase it had.
+        Heartbeat.shared.realign()
+        for host in hosts { host.resume() }
+    }
+
+    func refresh() {
+        current?.refresh()
+    }
+
+    /// Refresh everything — pulled to refresh on the switcher, where the list
+    /// being looked at is the list of machines.
+    func refreshAll() {
+        for host in hosts { host.refresh() }
+    }
+
+    // MARK: - Pairing
+
+    /// This phone's own fingerprint, for the approval prompt on the machine.
+    /// One key for every host: see `CredentialStore`.
     var deviceFingerprint: String {
         sealedFingerprint(credentials.deviceKeys().publicKey)
     }
 
     var deviceName: String { device.name }
 
-    var isPaired: Bool { credential != nil }
-
-    /// Only true when the far end said it can. See `WireCapability`.
-    var canCreateSessions: Bool {
-        connection.isLive && (transport?.capabilities.contains(WireCapability.create) ?? false)
-    }
-
     /**
-     * Folders this phone may ask for a session in.
-     *
-     * The working directory of a session the Mac has already listed, and
-     * nothing else. The Mac accepts only a folder it is already offering, so a
-     * picker built from anything else would be offering choices that fail — and
-     * this is the honest source, because every one of them is a row the user can
-     * see. Empty is the normal state on a Mac with nothing running, and the
-     * button then starts a session wherever the desktop would have.
-     */
-    var startableFolders: [String] {
-        var seen = Set<String>()
-        return sessions.compactMap { seen.insert($0.cwd).inserted ? $0.cwd : nil }
-    }
-
-    /// Whether this Mac can put its dev servers on this phone. Absent rather
-    /// than disabled in the UI when false, for the same reason New Session is.
-    var canBrowseLocalhost: Bool {
-        connection.isLive && (transport?.capabilities.contains(WireCapability.localhost) ?? false)
-    }
-
-    /// Whether this Mac has somewhere to put a file. The Send buttons are hidden
-    /// rather than disabled when it does not — a control that can only ever
-    /// produce a refusal is not a control.
-    var canSendFiles: Bool {
-        connection.isLive && (transport?.capabilities.contains(WireCapability.upload) ?? false)
-    }
-
-    var endpointSummary: String? { credential?.endpoint.summary }
-
-    // MARK: - Lifecycle
-
-    func start() {
-        guard credential != nil else { return }
-        if transport == nil { buildTransport() }
-        transport?.start()
-    }
-
-    /// The app came back to the foreground, or the network changed. The pending
-    /// backoff is describing a condition that has already ended.
-    func resume() {
-        transport?.resume()
-    }
-
-    func refresh() {
-        transport?.send(.list)
-        // Asked for alongside the sessions rather than on a timer of its own.
-        // The desktop's scan spawns `lsof`; polling it from a phone in a pocket
-        // would run that on somebody's laptop every few seconds forever.
-        if canBrowseLocalhost { transport?.send(.ports) }
-    }
-
-    private func buildTransport() {
-        let transport = makeTransport(credentials, device)
-        transport.onEvent = { [weak self] event in
-            self?.handle(event)
-        }
-        self.transport = transport
-    }
-
-    // MARK: - Pairing
-
-    /**
-     * Redeem a pairing code.
+     * Redeem a pairing code, **adding** a machine.
      *
      * The code's token is stored as the credential straight away, marked
-     * `.pairing`. That looks odd — it is a secret that is about to be spent —
-     * and it is what makes the flow survive the app being killed halfway
-     * through: the reconnect uses it, the desktop answers with the durable
-     * credential, and `LiveTransport` swaps it in place. A token held only in
-     * memory would leave a device that is paired on the Mac and unpaired here.
+     * `.pairing`. That looks odd — it is a secret that is about to be spent — and
+     * it is what makes the flow survive the app being killed halfway through: the
+     * reconnect uses it, the host answers with the durable credential, and
+     * `LiveTransport` swaps it in place. A token held only in memory would leave a
+     * device that is paired on the machine and unpaired here.
+     *
+     * Pairing with a machine already in the list replaces *that machine's* record
+     * and nothing else — a re-pair after a revoke is a normal thing to do, and it
+     * must not cost the user their other machines.
      */
     func pair(with rawCode: String) {
         pairingNotice = nil
+        collectionError = nil
         switch PairingCodeParser.parse(rawCode) {
         case let .failure(error):
             pairingNotice = error.detail
         case let .success(code):
             isPairing = true
+            /*
+             * The sheet closes here, not at the call site.
+             *
+             * Both ways in — the camera and the pasted link — end up on this
+             * line, and only this line knows the code actually parsed. Closing
+             * from the QR callback alone left the sheet up forever after a
+             * paste, with the button stuck on "Pairing…" over an app that had in
+             * fact paired: the machine was added, connected and invisible,
+             * because a modal was covering the list it had been added to.
+             */
+            addingHost = false
+            let hostId = code.endpoint.hostId
+            let existing = credentials.load(hostId)
             let stored = StoredCredential(endpoint: code.endpoint,
                                           token: code.token,
                                           kind: .pairing,
                                           deviceId: "",
                                           deviceName: device.name,
-                                          pairedAt: Date())
+                                          pairedAt: existing?.pairedAt ?? Date(),
+                                          // A machine the user has already named
+                                          // keeps its name through a re-pair.
+                                          nickname: existing?.nickname)
             credentials.save(stored)
-            credential = stored
-            transport?.stop()
-            buildTransport()
-            transport?.start()
+
+            if let link = hosts.first(where: { $0.id == hostId }) {
+                // Same machine, new token. Torn down and brought back up so the
+                // transport reads the credential that was just written rather
+                // than retrying with the one that was refused.
+                link.stop()
+                link.start()
+                select(hostId)
+            } else {
+                let link = adopt(stored)
+                link.start()
+                // The machine that was just paired is the one the user is looking
+                // at. Anything else would be a pairing that appears to do nothing.
+                currentHostId = hostId
+                UserDefaults.standard.set(hostId, forKey: Self.selectionKey)
+            }
         }
     }
 
-    /// Forget the Mac. Deliberately not "log out": the device key survives, so
-    /// pairing with the same Mac again does not create a second entry in its
-    /// device list for one physical phone.
-    func unpair() {
-        closeLocalhost()
-        // Cancels the transfer and deletes the staged copy of the file. Forgetting
-        // the Mac must not leave a photo sitting in this app's container.
-        clearUpload()
-        transport?.stop()
-        transport = nil
-        credentials.clear()
-        credential = nil
-        sessions = []
-        ports = []
-        lastActivity = [:]
-        attached = []
-        wanted = []
-        bridges = [:]
-        route = []
-        connection = .offline
-        lastError = nil
+    /**
+     * Forget one machine.
+     *
+     * Deliberately not "log out": the device key survives, so pairing with the
+     * same machine again does not create a second entry in its device list for
+     * one physical phone. Every *other* machine is untouched — that is the whole
+     * point, and it is why this takes an id rather than being a global reset.
+     */
+    func unpair(_ hostId: String) {
+        forget(hostId, because: nil)
+    }
+
+    /// The one the screens are showing. What the overflow menu calls.
+    func unpairCurrent() {
+        guard let id = current?.id else { return }
+        unpair(id)
+    }
+
+    private func forget(_ hostId: String, because reason: String?) {
+        guard let index = hosts.firstIndex(where: { $0.id == hostId }) else { return }
+        let link = hosts[index]
+        let name = link.label
+        link.stop()
+        hosts.remove(at: index)
+        credentials.remove(hostId)
+        route.removeAll { route in
+            if case let .session(host, _) = route { return host == hostId }
+            return false
+        }
+        if currentHostId == hostId {
+            currentHostId = hosts.first?.id
+            if let next = currentHostId {
+                UserDefaults.standard.set(next, forKey: Self.selectionKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: Self.selectionKey)
+            }
+        }
         isPairing = false
-        pairingNotice = nil
-    }
-
-    // MARK: - Sessions
-
-    func session(_ id: String) -> RemoteSession? {
-        sessions.first { $0.id == id }
-    }
-
-    /// The terminal for a session, created on first use.
-    func bridge(for id: String) -> TerminalBridge {
-        if let existing = bridges[id] { return existing }
-        let bridge = TerminalBridge()
-        bridge.onInput = { [weak self] text in
-            self?.sendInput(id, text)
-        }
-        bridge.onResize = { [weak self] cols, rows in
-            self?.sendResize(id, cols: cols, rows: rows)
-        }
-        bridges[id] = bridge
-        return bridge
-    }
-
-    /// Called when a terminal screen appears. Records the intent first, so a
-    /// reconnect knows to re-attach even if the socket is down right now.
-    func attach(_ id: String) {
-        wanted.insert(id)
-        rememberLastOpened(id)
-        guard !attached.contains(id) else { return }
-        // The size travels with the attach when the view has already measured
-        // itself, so the first screenful arrives the right shape instead of
-        // arriving at 80x25 and reflowing.
-        if transport?.send(.attach(id: id, size: bridge(for: id).size)) != true {
-            bridge(for: id).note(connection.detail)
+        if let reason {
+            // Named, because with several machines paired "the desktop refused
+            // this device" does not say *which* desktop — and the user is about
+            // to be asked to scan a code on one of them.
+            let sentence = "\(name): \(reason)"
+            if hosts.isEmpty { pairingNotice = sentence } else { collectionError = sentence }
         }
     }
 
-    func detach(_ id: String) {
-        wanted.remove(id)
-        guard attached.contains(id) else { return }
-        attached.remove(id)
-        transport?.send(.detach(id: id))
+    /// Give a machine a name a person can pick out of a list.
+    func rename(_ hostId: String, to name: String?) {
+        let trimmed = name?.trimmingCharacters(in: .whitespacesAndNewlines)
+        host(hostId)?.rename(trimmed?.isEmpty == true ? nil : trimmed)
     }
 
-    /// Re-attach by hand, for the case where the automatic one cannot help —
-    /// the connection came back while the screen was open and the desktop had
-    /// already dropped the session's handle.
-    func reattach(_ id: String) {
-        attached.remove(id)
-        bridges[id]?.clear()
-        attach(id)
+    func dismissCollectionError() {
+        collectionError = nil
     }
 
-    /**
-     * Ask the desktop to start a session.
-     *
-     * Refuses rather than sends when the far end has not advertised `create`:
-     * protocol v1 closes a socket on an unknown verb, so an unguarded button
-     * here would drop the connection and look like the network.
-     */
-    func createSession(in folder: String?) {
-        guard canCreateSessions else {
-            lastError = "This desktop cannot start sessions from the phone."
-            return
-        }
-        // Remembered so the `created` that comes back opens the session rather
-        // than merely adding a row: the tap that started it is the tap that
-        // opens it. Cleared on arrival, and by a refusal, so a `created` this
-        // phone did not ask for — one it might one day be sent for another
-        // reason — never yanks the user into a session.
-        openWhenCreated = true
-        // The phone does not choose an agent and does not name a title: the Mac
-        // titles a session after its folder and picks its own default provider,
-        // exactly as its own New Session button does. A picker here would be
-        // offering choices this app has no honest way to know are available.
-        transport?.send(.create(folder: folder, size: pendingSize))
-    }
+    // MARK: - Navigation
 
-    /**
-     * The size a session started from this phone should open at.
-     *
-     * The last size a terminal on this phone actually laid out at, so the first
-     * screen of a new session arrives already the right shape instead of
-     * arriving at 80x24 and reflowing — the same reason the size travels with
-     * an `attach`. Nil before this phone has drawn a terminal at all, in which
-     * case the Mac uses a plain 80x24 and the first `resize` fixes it.
-     */
-    private var pendingSize: TerminalSize? {
-        bridges.values.compactMap(\.size).first
-    }
-
-    /// Set between asking for a session and being told about it. See `createSession`.
-    private var openWhenCreated = false
-
-    /// The session this phone was last looking at, if it is still running.
-    /// Drives the Resume row, which is the difference between opening the app to
-    /// a list and opening it to the thing you were watching.
-    var resumable: RemoteSession? {
-        guard let id = UserDefaults.standard.string(forKey: Self.lastOpenedKey),
-              route.isEmpty,
-              let session = sessions.first(where: { $0.id == id }),
-              session.status != "exited" else { return nil }
-        return session
-    }
-
-    private static let lastOpenedKey = "terminaldeck.lastSession.v1"
-
-    private func rememberLastOpened(_ id: String) {
-        // Not a secret: a session id is meaningless without a credential, and
-        // the credential is in the Keychain.
-        UserDefaults.standard.set(id, forKey: Self.lastOpenedKey)
-    }
-
-    func open(session id: String) {
+    func open(session id: String, on hostId: String? = nil) {
         guard SessionID.isValid(id) else { return }
-        if route.last != .session(id) { route.append(.session(id)) }
+        let host = hostId ?? currentHostId
+        guard let host, hosts.contains(where: { $0.id == host }) else { return }
+        if host != currentHostId { select(host) }
+        let next = Route.session(host: host, id: id)
+        if route.last != next { route.append(next) }
     }
-
-    // MARK: - Localhost
-
-    /**
-     * Put a port on the Mac onto this phone, and hand back the tunnel to watch.
-     *
-     * **The tap is the consent.** There is no confirmation sheet and no setting
-     * to switch on first: nothing on the Mac is reachable until this runs, it
-     * only runs because a person touched a row, and `closeLocalhost` — which the
-     * browser view calls when it goes away — ends it. A dialog here would ask
-     * permission for the thing the tap already was.
-     *
-     * Returns nil only when the far end never offered the capability, which is
-     * also the case in which no row exists to tap.
-     */
-    func openLocalhost(port: Int) -> PortTunnel? {
-        guard canBrowseLocalhost else {
-            lastError = "This desktop cannot show its local servers on a phone."
-            return nil
-        }
-        // One at a time. The previous page is gone the moment this one opens, so
-        // its listener and the Mac's socket go with it.
-        closeLocalhost()
-        let tunnel = PortTunnel(port: port, wire: wire)
-        self.tunnel = tunnel
-        tunnel.start()
-        return tunnel
-    }
-
-    /// The browser view went away. Also called on unpair and on teardown.
-    func closeLocalhost() {
-        tunnel?.stop()
-        tunnel = nil
-    }
-
-    // MARK: - Clipboard
-
-    /**
-     * Paste into the attached session.
-     *
-     * Routed through the terminal rather than straight at the wire, and that is
-     * the whole of the fix this method used to need: `TerminalBridge.paste`
-     * wraps the text in bracketed-paste markers when the far end asked for them,
-     * so a multi-line paste into a coding CLI arrives as **one** prompt instead
-     * of submitting on its first newline and running the rest as commands. The
-     * bytes then come back out through `onInput`, which is the same path a
-     * keystroke takes — so it is chunked to `maxInputBytes` and refused honestly
-     * when the socket is down, both of which are already true there.
-     *
-     * Oversized pastes are refused with the numbers in the sentence rather than
-     * being quietly shortened. Silently truncating a paste is the worst available
-     * behaviour: the user sees the first half land, believes all of it did, and
-     * the command that runs is a different command from the one they copied.
-     */
-    func paste(into id: String) {
-        guard let text = UIPasteboard.general.string, !text.isEmpty else {
-            lastError = "There is nothing on the clipboard."
-            return
-        }
-        let bytes = text.utf8.count
-        guard bytes <= Wire.maxPasteBytes else {
-            lastError = "That paste is \(byteSize(bytes)). The most this can send at once is \(byteSize(Wire.maxPasteBytes))."
-            return
-        }
-        guard let bridge = bridges[id] else {
-            lastError = "That session is not open on this phone."
-            return
-        }
-        bridge.paste(text)
-    }
-
-    /**
-     * Copy the terminal's selection, or the visible screen when there is none.
-     *
-     * The fallback is not a shortcut, it is the feature: selecting text with a
-     * fingertip on a phone is genuinely hard, and "copy what I am looking at" is
-     * what people mean nine times out of ten. Long-pressing the terminal gives
-     * the real selection for the other one.
-     *
-     * Returns a sentence because a copy that silently did nothing is the most
-     * annoying kind of button, and because the sentence has to say *which* of
-     * the two things happened — a Copy that took the whole screen when the user
-     * had carefully selected one line is a bug they will not notice until they
-     * paste it somewhere else.
-     */
-    @discardableResult
-    func copy(from id: String) -> String {
-        guard let bridge = bridges[id] else { return "Nothing to copy." }
-        if let selection = bridge.selectedText(), !selection.isEmpty {
-            UIPasteboard.general.string = selection
-            // Cleared, or every later Copy silently returns this same text
-            // instead of the screen the user has moved on to. See `clearSelection`.
-            bridge.clearSelection()
-            return "Copied \(lineCount(selection)) from the selection."
-        }
-        let screen = bridge.visibleText()
-        guard !screen.isEmpty else { return "Nothing to copy." }
-        UIPasteboard.general.string = screen
-        return "Copied \(lineCount(screen)) from the screen."
-    }
-
-    /// Copy what is on screen, whatever is selected. What the actions menu
-    /// offers, because a selection cannot survive the trip to that menu.
-    @discardableResult
-    func copyScreen(from id: String) -> String {
-        guard let bridge = bridges[id] else { return "Nothing to copy." }
-        let screen = bridge.visibleText()
-        guard !screen.isEmpty else { return "Nothing to copy." }
-        UIPasteboard.general.string = screen
-        return "Copied \(lineCount(screen)) from the screen."
-    }
-
-    /// "1 line" / "12 lines". Named so the toast says what landed rather than
-    /// only that something did.
-    private func lineCount(_ text: String) -> String {
-        let lines = text.split(separator: "\n", omittingEmptySubsequences: false).count
-        return lines == 1 ? "1 line" : "\(lines) lines"
-    }
-
-    // MARK: - Sending a file
-
-    /**
-     * Send a picked file to the Mac and type its path into a session.
-     *
-     * One at a time, which is what the desktop accepts and therefore what this
-     * offers: a second Send while one is running would be refused over the wire,
-     * and a button that produces a refusal is worse than one that is not there.
-     *
-     * The path is typed rather than run. `sendPath` puts a quoted path and a
-     * trailing space into the prompt and stops — the user decides what the
-     * command around it is, and nothing is submitted on their behalf.
-     */
-    func send(_ file: PickedFile, into sessionID: String) {
-        guard canSendFiles else {
-            lastError = "This desktop cannot receive files from a phone."
-            return
-        }
-        guard upload == nil else {
-            lastError = "One file at a time. Wait for the current one, or cancel it."
-            return
-        }
-        guard file.size <= Wire.maxUploadBytes else {
-            lastError = "That file is \(byteSize(file.size)). The most this can send is \(byteSize(Wire.maxUploadBytes))."
-            // Nothing is going to read the staged copy now, and iOS only empties
-            // `tmp` under storage pressure.
-            if file.temporary { try? FileManager.default.removeItem(at: file.url) }
-            return
-        }
-
-        let transfer = FileUpload(file: file, wire: uploadWire) { [weak self] path in
-            self?.sendPath(path, into: sessionID)
-        }
-        upload = transfer
-        transfer.start()
-    }
-
-    /// Dismiss a finished or failed transfer, and stop a running one.
-    func clearUpload() {
-        upload?.cancel()
-        upload = nil
-    }
-
-    /**
-     * Put a landed file's path into the prompt.
-     *
-     * Quoted, so a name with a space or an apostrophe is one word to the shell,
-     * and followed by a space so the user can keep typing. **No newline** — the
-     * same rule `composeSend`/`oneLine` enforce on the desktop, and for the same
-     * reason: a newline into a coding CLI submits the prompt, and submitting on
-     * somebody's behalf because their upload finished would be the app taking an
-     * action nobody asked for.
-     */
-    private func sendPath(_ path: String, into sessionID: String) {
-        guard let bridge = bridges[sessionID] else { return }
-        // Through `paste` rather than raw, so the same control-byte stripping
-        // applies. A path cannot contain a newline — the desktop refuses control
-        // bytes in a name and builds the rest itself — but the one place a remote
-        // string is typed into a terminal is not the place to assume that.
-        bridge.paste("\(shellQuoted(path)) ")
-    }
-
-    // MARK: - Deep links
 
     /**
      * `terminaldeck://session/<id>` and `terminaldeck://pair?…`.
      *
-     * The desktop opens a session on the phone the same way it opens the PWA: by
-     * handing the OS a link. Both are checked before they go anywhere — a link
-     * is the one input to this app that arrives from outside it, and an
-     * unchecked id from one would end up in an `attach`.
+     * A session link carries no machine, because the desktop that writes one has
+     * no idea the phone is paired with anything else. So the machine is worked
+     * out from the id: whichever paired host is currently listing that session.
+     * Falling back to "the current one" would open the wrong machine's session
+     * list and attach to an id it has never heard of.
      */
     func open(_ url: URL) {
         guard url.scheme?.lowercased() == Brand.id else { return }
@@ -559,207 +364,67 @@ final class DeckModel {
             return
         }
         guard first == "session", parts.count >= 2 else { return }
-        open(session: parts[1])
+        let id = parts[1]
+        let owner = hosts.first { $0.session(id) != nil }?.id
+        open(session: id, on: owner)
     }
 
-    // MARK: - Outbound
+    // MARK: - Facade over the current machine
 
-    private func sendInput(_ id: String, _ text: String) {
-        guard !text.isEmpty else { return }
-        for chunk in WireCodec.chunkInput(text) {
-            guard transport?.send(.input(id: id, data: chunk)) == true else {
-                bridges[id]?.note("not sent — \(connection.detail)")
-                return
-            }
-        }
+    var connection: ConnectionState { current?.connection ?? .offline }
+    var sessions: [RemoteSession] { current?.sessions ?? [] }
+    var lastActivity: [String: Double] { current?.lastActivity ?? [:] }
+    var ports: [LocalPort] { current?.ports ?? [] }
+    var upload: FileUpload? { current?.upload }
+    /// The Resume row, and only while the list is what is on screen — offering
+    /// to resume the session already open under it would be a row that does
+    /// nothing.
+    var resumable: RemoteSession? { route.isEmpty ? current?.resumable : nil }
+    var canCreateSessions: Bool { current?.canCreateSessions ?? false }
+    var canBrowseLocalhost: Bool { current?.canBrowseLocalhost ?? false }
+    var canSendFiles: Bool { current?.canSendFiles ?? false }
+    var startableFolders: [String] { current?.startableFolders ?? [] }
+    var endpointSummary: String? { current?.endpointSummary }
+    var agentTargets: [RemoteSession] { current?.agentTargets ?? [] }
+
+    /// The one-line error under the banner: whichever of the two is set. The
+    /// machine's own comes first, because it is the one about what just happened.
+    var lastError: String? { current?.lastError ?? collectionError }
+
+    var agentTarget: String? {
+        get { current?.agentTarget }
+        set { current?.agentTarget = newValue }
     }
 
-    private func sendResize(_ id: String, cols: Int, rows: Int) {
-        // A size the desktop would refuse closes the socket, so it is dropped
-        // here. A layout mid-transition really does produce a two-column
-        // terminal for one frame.
-        guard attached.contains(id), TerminalSize(cols: cols, rows: rows) != nil else { return }
-        transport?.send(.resize(id: id, cols: cols, rows: rows))
+    func session(_ id: String) -> RemoteSession? { current?.session(id) }
+    func bridge(for id: String) -> TerminalBridge {
+        current?.bridge(for: id) ?? TerminalBridge()
     }
 
-    // MARK: - Inbound
+    func attach(_ id: String) { current?.attach(id) }
+    func detach(_ id: String) { current?.detach(id) }
+    func reattach(_ id: String) { current?.reattach(id) }
+    func createSession(in folder: String?) { current?.createSession(in: folder) }
+    func openLocalhost(port: Int) -> PortTunnel? { current?.openLocalhost(port: port) }
+    func closeLocalhost() { current?.closeLocalhost() }
+    func paste(into id: String) { current?.paste(into: id) }
 
-    private func handle(_ event: TransportEvent) {
-        switch event {
-        case let .state(state):
-            let wasLive = connection.isLive
-            connection = state
-            if !state.isLive && wasLive {
-                // The sessions this client thought it was attached to are gone
-                // with the socket; the next connection has to attach again.
-                attached.removeAll()
-                for id in bridges.keys { bridges[id]?.note(state.detail) }
-                // A tunnel cannot survive the connection carrying it, and a web
-                // view left spinning on a socket that will never answer is the
-                // exact failure this app is built not to have.
-                tunnel?.connectionLost(state.detail)
-                tunnel = nil
-                ports = []
-                // A transfer cannot survive the connection carrying it, and the
-                // Mac deletes its half-written file on the same event. A bar
-                // left creeping against a socket that will never answer is the
-                // exact failure this app is built not to have.
-                upload?.connectionLost(state.detail)
-            }
-            if state.isLive && !wasLive {
-                isPairing = false
-                // Everything the user still has open, re-attached without them
-                // asking. `attached` was cleared above, so this is precisely the
-                // set the desktop does not know about yet.
-                for id in wanted {
-                    bridges[id]?.note("reconnected — replaying")
-                    attach(id)
-                }
-            }
+    @discardableResult
+    func copy(from id: String) -> String { current?.copy(from: id) ?? "Nothing to copy." }
 
-        case let .credential(stored):
-            credential = stored
+    @discardableResult
+    func copyScreen(from id: String) -> String { current?.copyScreen(from: id) ?? "Nothing to copy." }
 
-        case let .needsPairing(reason):
-            credential = nil
-            transport = nil
-            sessions = []
-            attached = []
-            isPairing = false
-            pairingNotice = reason
+    func send(_ file: PickedFile, into sessionID: String) { current?.send(file, into: sessionID) }
+    func clearUpload() { current?.clearUpload() }
 
-        case let .message(message, activity):
-            apply(message, activity: activity)
-        }
+    @discardableResult
+    func sendToAgent(_ line: String, into id: String) -> String {
+        current?.sendToAgent(line, into: id) ?? "No machine is selected."
     }
 
-    private func apply(_ message: ServerMessage, activity: [String: Double]) {
-        // A live tunnel gets first refusal. Byte frames are by far the chattiest
-        // thing on this socket and they belong to one object; routing them here
-        // would mean a second copy of its channel map, kept in step by hand.
-        if tunnel?.receive(message) == true { return }
-        // Uploads get the same treatment and for the same reason: the
-        // acknowledgements are the chattiest thing on this socket during a
-        // transfer and they belong to one object. Routing them here would mean a
-        // second copy of its state, kept in step by hand.
-        if upload?.receive(message) == true { return }
-
-        switch message {
-        case let .welcome(_, _, _, _, list, capabilities):
-            sessions = list
-            lastActivity = activity
-            lastError = nil
-            // Asked for as soon as the desktop says it can answer, so the list
-            // is already on screen when the user looks rather than appearing a
-            // beat later.
-            if capabilities.contains(WireCapability.localhost) { transport?.send(.ports) }
-
-        case let .sessions(list):
-            sessions = list
-            if !activity.isEmpty { lastActivity = activity }
-
-        case let .created(session):
-            // Put in the list here rather than waiting for the `sessions` frame
-            // the Mac sends to *other* devices: this phone is told about its own
-            // with the row, so that opening it needs no round trip.
-            if !sessions.contains(where: { $0.id == session.id }) { sessions.append(session) }
-            if !activity.isEmpty { lastActivity.merge(activity) { _, new in new } }
-            lastError = nil
-            if openWhenCreated {
-                openWhenCreated = false
-                open(session: session.id)
-            }
-
-        case let .attached(id):
-            attached.insert(id)
-            wanted.insert(id)
-            // Whatever is on screen is about to arrive again as replay.
-            bridges[id]?.clear()
-            // The size, now that the desktop will accept one.
-            //
-            // The first attach of a session is sent from `onAppear`, before
-            // SwiftUI has laid the terminal out, so it carries no size — and
-            // the `sizeChanged` that follows a moment later was dropped by
-            // `sendResize`, which refuses to resize a session this client is
-            // not attached to yet. The result was a phone rendering a session
-            // the desktop still believed was 80 columns wide: every long line
-            // clipped at the right edge, which looked like a rendering bug and
-            // was a race. Measured against the stand-in desktop, which logs the
-            // size it is asked for.
-            if let size = bridges[id]?.size {
-                transport?.send(.resize(id: id, cols: size.cols, rows: size.rows))
-            }
-
-        case let .detached(id):
-            attached.remove(id)
-
-        case let .output(id, data, _):
-            bridges[id]?.feed(data)
-
-        case let .status(id, status):
-            guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
-            let old = sessions[index]
-            sessions[index] = RemoteSession(id: old.id, title: old.title, cwd: old.cwd,
-                                            provider: old.provider, status: status, exitCode: old.exitCode)
-
-        case let .exit(id, code):
-            if let index = sessions.firstIndex(where: { $0.id == id }) {
-                let old = sessions[index]
-                sessions[index] = RemoteSession(id: old.id, title: old.title, cwd: old.cwd,
-                                                provider: old.provider, status: "exited", exitCode: code)
-            }
-            bridges[id]?.note("session exited with code \(code)")
-
-        case let .error(code, text):
-            // In-session refusals arrive on a live socket and are about one
-            // action, not about the connection; they belong next to the thing
-            // that was refused, not in the connection banner.
-            lastError = text.isEmpty ? code.rawValue : text
-            // A refused request is not going to be followed by a `created`, and
-            // a phone that stayed armed would jump into the *next* session it
-            // was told about, whoever started it.
-            openWhenCreated = false
-
-        case let .ports(list):
-            ports = list
-
-        // Only reachable when no tunnel claimed them above, which means they
-        // belong to one this phone has already forgotten — a close that crossed
-        // with the last of its bytes. Nothing to do but not act on them.
-        case .tunnelOpened, .tunnelClosed, .netData, .netAck, .netClose:
-            break
-
-        // Same again for an upload this phone has already forgotten: a cancel
-        // that crossed with the last of its slices, or a `done` for a transfer
-        // the user dismissed. Acting on one would restart a bar that is gone.
-        case .uploadReady, .uploadAck, .uploadDone, .uploadFailed:
-            break
-
-        case .pong:
-            break
-        }
-    }
-
-    /// Clears the one-line error banner. The views call this when the user has
-    /// plainly seen it — a banner that only time removes is a banner people
-    /// learn to read past.
     func dismissError() {
-        lastError = nil
-    }
-}
-
-/// See `DeckModel.wire`. One class for both protocols, because they ask for the
-/// same single method and a second identical proxy would be a second thing to
-/// keep in step.
-@MainActor
-private final class WireProxy: TunnelWire, UploadWire {
-    private let deliver: (ClientMessage) -> Bool
-
-    init(_ deliver: @escaping (ClientMessage) -> Bool) {
-        self.deliver = deliver
-    }
-
-    func send(_ message: ClientMessage) -> Bool {
-        deliver(message)
+        current?.dismissError()
+        collectionError = nil
     }
 }

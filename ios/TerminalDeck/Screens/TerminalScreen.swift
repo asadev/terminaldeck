@@ -26,6 +26,17 @@ import SwiftUI
 
 struct TerminalScreen: View {
     let model: DeckModel
+    /**
+     * Which machine this session belongs to.
+     *
+     * Named rather than inferred from "whichever host is current". Session ids
+     * come from each machine's own session layer and nothing makes them unique
+     * across machines, so a screen that resolved its session against the current
+     * host would attach to the wrong machine's session the moment the ids
+     * happened to collide — and would silently show a *different* session rather
+     * than failing.
+     */
+    let hostID: String
     let sessionID: String
 
     @State private var title: String?
@@ -41,8 +52,13 @@ struct TerminalScreen: View {
         var id: String { rawValue }
     }
 
-    private var bridge: TerminalBridge { model.bridge(for: sessionID) }
-    private var session: RemoteSession? { model.session(sessionID) }
+    /// The machine, or nil when it has just been unpaired out from under this
+    /// screen. Every use below tolerates that rather than force-unwrapping: an
+    /// unpair while a terminal is open is a real sequence, not an impossible one.
+    private var host: HostLink? { model.host(hostID) }
+    private var bridge: TerminalBridge { host?.bridge(for: sessionID) ?? model.bridge(for: sessionID) }
+    private var session: RemoteSession? { host?.session(sessionID) }
+    private var connection: ConnectionState { host?.connection ?? .offline }
 
     var body: some View {
         ZStack {
@@ -97,23 +113,23 @@ struct TerminalScreen: View {
                      * `ClipboardAndTransferUITests`.
                      */
                     Button {
-                        show(model.copyScreen(from: sessionID))
+                        show(host?.copyScreen(from: sessionID) ?? "Nothing to copy.")
                     } label: {
                         Label("Copy Screen", systemImage: "doc.on.doc")
                     }
                     .accessibilityIdentifier("terminal.copyScreen")
                     Button {
-                        model.paste(into: sessionID)
+                        host?.paste(into: sessionID)
                     } label: {
                         Label("Paste", systemImage: "doc.on.clipboard")
                     }
-                    .disabled(!model.connection.isLive)
+                    .disabled(!connection.isLive)
                     .accessibilityIdentifier("terminal.paste")
 
                     // Absent rather than disabled when the Mac cannot receive
                     // one: a control that can only produce a refusal is not a
                     // control. See `DeckModel.canSendFiles`.
-                    if model.canSendFiles {
+                    if host?.canSendFiles == true {
                         Divider()
                         Button {
                             picking = .photos
@@ -131,12 +147,12 @@ struct TerminalScreen: View {
 
                     Divider()
                     Button {
-                        model.reattach(sessionID)
+                        host?.reattach(sessionID)
                         show("Re-attaching…")
                     } label: {
                         Label("Re-attach", systemImage: "arrow.clockwise")
                     }
-                    .disabled(!model.connection.isLive)
+                    .disabled(!connection.isLive)
                 } label: {
                     Image(systemName: "ellipsis.circle")
                 }
@@ -150,24 +166,24 @@ struct TerminalScreen: View {
                 } label: {
                     Image(systemName: "keyboard")
                 }
-                .disabled(!model.connection.isLive)
+                .disabled(!connection.isLive)
                 .accessibilityLabel("Toggle keyboard")
                 .accessibilityIdentifier("terminal.keyboard")
             }
         }
         .safeAreaInset(edge: .top, spacing: 0) {
             VStack(spacing: 0) {
-                if !model.connection.isLive {
+                if !connection.isLive {
                     // The one thing this screen must never do is look connected when
                     // it is not. The banner is the honest half of that; `send`
                     // refusing rather than buffering is the other.
-                    Banner(text: model.connection.detail, tone: .warning)
+                    Banner(text: connection.detail, tone: .warning)
                 }
-                if let upload = model.upload {
+                if let upload = host?.upload {
                     // Under the connection banner rather than over the terminal:
                     // the point of watching an upload from a phone is to keep
                     // reading the session while it runs.
-                    UploadRow(upload: upload) { model.clearUpload() }
+                    UploadRow(upload: upload) { host?.clearUpload() }
                 }
             }
         }
@@ -191,14 +207,14 @@ struct TerminalScreen: View {
         }
         .onAppear {
             bridge.onTitle = { title = $0 }
-            bridge.onCopy = { show(model.copy(from: sessionID)) }
-            bridge.onPaste = { model.paste(into: sessionID) }
-            model.attach(sessionID)
+            bridge.onCopy = { show(host?.copy(from: sessionID) ?? "Nothing to copy.") }
+            bridge.onPaste = { host?.paste(into: sessionID) }
+            host?.attach(sessionID)
         }
         .onDisappear {
             bridge.onCopy = nil
             bridge.onPaste = nil
-            model.detach(sessionID)
+            host?.detach(sessionID)
         }
     }
 
@@ -214,7 +230,7 @@ struct TerminalScreen: View {
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(Theme.faint)
                 } else {
-                    Text(model.connection.label)
+                    Text(connection.label)
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(Theme.faint)
                 }
@@ -240,7 +256,7 @@ struct TerminalScreen: View {
     /// and must not produce a message.
     private func hand(_ picked: PickedFile?) {
         guard let picked else { return }
-        model.send(picked, into: sessionID)
+        host?.send(picked, into: sessionID)
     }
 }
 

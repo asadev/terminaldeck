@@ -16,6 +16,15 @@
  * dropped — and all three leave a rendered page sitting there looking fine. So
  * the header carries the state, and when a tunnel ends the page is replaced
  * rather than left up with a warning over it.
+ *
+ * ## Inspect mode
+ *
+ * The other half of why this screen is worth having. Tapping an element while
+ * inspecting describes it — a real CSS selector, its tag, whatever a human would
+ * read off it — and a sheet takes one sentence about what should change and types
+ * both into an agent on the Mac, as **one line**. See `Inspect` for why the line
+ * is flattened rather than wrapped, and `InspectScript` for what runs inside the
+ * page. It is the desktop's `CapturePanel` feature, from the sofa.
  */
 
 import SwiftUI
@@ -27,6 +36,7 @@ struct LocalhostBrowser: View {
     let dismiss: () -> Void
 
     @State private var browser = BrowserBridge()
+    @State private var toast: String?
 
     var body: some View {
         ZStack {
@@ -37,8 +47,46 @@ struct LocalhostBrowser: View {
                 Divider().overlay(Theme.hairline)
                 content
             }
+
+            if let toast {
+                VStack {
+                    Spacer()
+                    Text(toast)
+                        .font(.system(size: 13))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(.ultraThinMaterial, in: Capsule())
+                        .padding(.bottom, 28)
+                        .accessibilityIdentifier("localhost.toast")
+                        .accessibilityAddTraits(.updatesFrequently)
+                }
+                .transition(.opacity)
+                .allowsHitTesting(false)
+            }
         }
         .preferredColorScheme(.dark)
+        // Presented off a flag rather than off the capture itself. `.sheet(item:)`
+        // tears the sheet down and builds a new one whenever the identity changes,
+        // and Wider/Narrower change the capture on every press — which would make
+        // the correction control dismiss and re-present the sheet it lives in.
+        .sheet(isPresented: Binding(get: { browser.capture != nil },
+                                    set: { if !$0 { browser.clearCapture() } })) {
+            if let capture = browser.capture {
+                InspectSheet(
+                    capture: capture,
+                    targets: model.agentTargets,
+                    target: Binding(get: { model.agentTarget }, set: { model.agentTarget = $0 }),
+                    step: { browser.step($0) },
+                    send: { line, session in
+                        let sentence = model.sendToAgent(line, into: session)
+                        show(sentence)
+                        return sentence
+                    },
+                    dismiss: { browser.clearCapture() },
+                )
+            }
+        }
         .onChange(of: tunnel.phase) { _, phase in
             // The load waits for the listener. Pointing a web view at a port
             // nothing is bound to yet gets a connection-refused page cached
@@ -48,6 +96,22 @@ struct LocalhostBrowser: View {
         }
         .onAppear {
             if case let .live(url) = tunnel.phase { browser.load(url) }
+        }
+        .onDisappear {
+            // The handler holds the page's only way back into this app, and the
+            // controller holds the handler. Neither should outlive the screen.
+            browser.tearDown()
+        }
+    }
+
+    /// Copy, paste and "sent to an agent" are silent by nature; without this the
+    /// buttons feel broken even when they worked. Two and a half seconds, the
+    /// same as the terminal screen's.
+    private func show(_ message: String) {
+        withAnimation { toast = message }
+        Task {
+            try? await Task.sleep(for: .seconds(2.5))
+            withAnimation { toast = nil }
         }
     }
 
@@ -91,6 +155,28 @@ struct LocalhostBrowser: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
+                /*
+                 * Inspect.
+                 *
+                 * A toggle rather than a mode you enter and leave through a
+                 * menu, because it is the one control on this screen anybody
+                 * reaches for twice in a row: tap an element, say what to change,
+                 * tap the next one. Filled while it is on, so a tap that
+                 * cancels a link instead of following it is explained by
+                 * something visible rather than looking like a broken page.
+                 */
+                Button {
+                    browser.setInspecting(!browser.inspecting)
+                } label: {
+                    Image(systemName: browser.inspecting
+                          ? "square.dashed.inset.filled"
+                          : "square.dashed")
+                        .font(.system(size: 15, weight: .semibold))
+                }
+                .disabled(!isLive)
+                .accessibilityLabel(browser.inspecting ? "Stop inspecting" : "Inspect an element")
+                .accessibilityIdentifier("localhost.inspect")
+
                 Button("Done") {
                     // Closing the view is the whole of the teardown: the
                     // listener goes, the Mac's socket goes, and the port is
@@ -101,6 +187,18 @@ struct LocalhostBrowser: View {
                 .accessibilityIdentifier("localhost.done")
             }
             .tint(Theme.accent)
+
+            if browser.inspecting {
+                HStack(spacing: 6) {
+                    Image(systemName: "hand.tap")
+                        .font(.system(size: 10))
+                    Text("Tap anything on the page to describe it.")
+                        .font(.system(size: 11))
+                    Spacer(minLength: 0)
+                }
+                .foregroundStyle(Theme.accent)
+                .accessibilityIdentifier("localhost.inspectHint")
+            }
 
             if browser.loading {
                 // A page over a phone connection to a laptop is not instant, and
@@ -212,7 +310,21 @@ final class BrowserBridge: NSObject, WKNavigationDelegate {
     /// A sentence for the failure overlay, or nil. Cleared on the next attempt.
     private(set) var failure: String?
 
+    /// Whether taps describe elements instead of driving the page.
+    private(set) var inspecting = false
+    /// The element the last tap described, or nil. Drives the sheet.
+    private(set) var capture: ElementCapture?
+
     let webView: WKWebView
+
+    /**
+     * The world the inspect script and its message handler live in.
+     *
+     * `.defaultClient` rather than `.page`, so the tunnelled site can neither
+     * call `__terminaldeck` nor reach `webkit.messageHandlers` — in the page's
+     * own world neither exists. See the header of `InspectScript`.
+     */
+    private static let world = WKContentWorld.defaultClient
 
     override init() {
         let configuration = WKWebViewConfiguration()
@@ -228,6 +340,32 @@ final class BrowserBridge: NSObject, WKNavigationDelegate {
         webView.isOpaque = false
         webView.backgroundColor = .black
         webView.scrollView.backgroundColor = .black
+
+        /*
+         * Injected at document start on every page, including the ones a
+         * single-page app pushes and the ones a redirect lands on. The script
+         * defines its functions and stops; nothing observes the page until
+         * `enable` is called, so the cost on a page nobody is inspecting is one
+         * closure that ran once.
+         */
+        let controller = webView.configuration.userContentController
+        controller.addUserScript(WKUserScript(source: InspectScript.source,
+                                              injectionTime: .atDocumentStart,
+                                              forMainFrameOnly: true,
+                                              in: Self.world))
+        // Weak, through a proxy. `WKUserContentController` retains its handlers,
+        // and the controller belongs to the web view this object owns — so
+        // registering `self` directly is a cycle that keeps a web view, its
+        // process and its page alive for the life of the app.
+        controller.add(ScriptRelay(self), contentWorld: Self.world, name: InspectScript.messageHandler)
+    }
+
+    /// Drop the page's only route back into this app. Called when the screen goes.
+    func tearDown() {
+        setInspecting(false)
+        webView.configuration.userContentController
+            .removeScriptMessageHandler(forName: InspectScript.messageHandler, contentWorld: Self.world)
+        webView.stopLoading()
     }
 
     func load(_ url: URL) {
@@ -252,6 +390,49 @@ final class BrowserBridge: NSObject, WKNavigationDelegate {
         if webView.canGoBack { webView.goBack() }
     }
 
+    // MARK: - Inspecting
+
+    func setInspecting(_ on: Bool) {
+        inspecting = on
+        if !on { capture = nil }
+        run(on ? "window.__terminaldeck.enable()" : "window.__terminaldeck.disable()")
+    }
+
+    /// Walk the ancestor chain. +1 towards the document, -1 back to the tap.
+    func step(_ delta: Int) {
+        run("window.__terminaldeck.step(\(delta))")
+    }
+
+    /// The sheet was dismissed. The highlight goes with it, because a box left
+    /// on an element nothing is asking about any more is a claim that it is.
+    func clearCapture() {
+        capture = nil
+        run("window.__terminaldeck.clear()")
+    }
+
+    private func run(_ script: String) {
+        // The script is defined at document start, so the only window in which
+        // this can fail is a page mid-navigation — where the next `didFinish`
+        // re-arms it anyway. Errors are dropped rather than surfaced: a page
+        // that is being replaced is not a fault the user can act on.
+        webView.evaluateJavaScript(script, in: nil, in: Self.world) { _ in }
+    }
+
+    /**
+     * A payload from the page-side script.
+     *
+     * The URL is read off the web view rather than taken from the message, for
+     * the same reason `browser-tab.ts` reads it off the `WebContents`: a payload
+     * that could name its own page could tell the agent it is editing a different
+     * site than it is. Everything else goes through `Inspect.parseCapture`, which
+     * refuses rather than repairs.
+     */
+    fileprivate func received(_ body: Any) {
+        guard inspecting else { return }
+        guard let parsed = Inspect.parseCapture(body, url: webView.url?.absoluteString ?? address) else { return }
+        capture = parsed
+    }
+
     // MARK: - WKNavigationDelegate
 
     nonisolated func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
@@ -262,6 +443,11 @@ final class BrowserBridge: NSObject, WKNavigationDelegate {
         MainActor.assumeIsolated {
             failure = nil
             sync(loading: false)
+            // A new document is a new copy of the script, with `active` false and
+            // no listeners. Without this, inspect mode silently stops working the
+            // first time a dev server hot-reloads a route change — which is the
+            // most common thing that happens on the page being inspected.
+            if inspecting { run("window.__terminaldeck.enable()") }
         }
     }
 
@@ -327,5 +513,30 @@ private struct WebSurface: UIViewRepresentable {
     func updateUIView(_ view: WKWebView, context: Context) {
         // Nothing: every change goes through `BrowserBridge`, which owns the
         // view. Reloading from here would restart the page on every redraw.
+    }
+}
+
+/**
+ * The message handler, holding its owner weakly.
+ *
+ * `WKUserContentController` retains every handler added to it, and that
+ * controller belongs to the `WKWebView` that `BrowserBridge` owns — so adding
+ * the bridge itself makes a cycle, and the symptom is not a leak anybody
+ * notices: it is a web content process still running, still holding the
+ * tunnelled page, after the screen it belonged to has gone. `tearDown` removes
+ * the handler as well; this is the half that survives a path that forgets to.
+ */
+private final class ScriptRelay: NSObject, WKScriptMessageHandler {
+    private weak var bridge: BrowserBridge?
+
+    init(_ bridge: BrowserBridge) {
+        self.bridge = bridge
+    }
+
+    nonisolated func userContentController(
+        _ controller: WKUserContentController,
+        didReceive message: WKScriptMessage,
+    ) {
+        MainActor.assumeIsolated { bridge?.received(message.body) }
     }
 }
