@@ -2,9 +2,23 @@ name: Release
 
 # Only a version tag releases. Pushing to main never does — cutting a release
 # is an explicit act by the owner (`npm version …` then `git push --follow-tags`).
+#
+# `workflow_dispatch` builds the same installers from any commit and stops short
+# of publishing. It is not a convenience: the working tree on the machine this
+# is developed from is routinely mid-edit across several agents at once, and a
+# local `dist:win` bakes whatever half-finished state happens to be on disk into
+# the artifact. A dispatched run is the only way to get an installer that
+# provably corresponds to a commit — CI checks the tree out clean.
 on:
   push:
     tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      platforms:
+        description: Which installers to build (a dispatched run never publishes)
+        type: choice
+        options: [both, windows, macos]
+        default: both
 
 permissions:
   # Creating the Release and uploading its assets. Nothing else.
@@ -17,6 +31,7 @@ jobs:
     # could only ever be cross-compiled and never tested on real Intel hardware.
     runs-on: macos-latest
     timeout-minutes: 45
+    if: inputs.platforms != 'windows'
 
     steps:
       - uses: actions/checkout@v5
@@ -34,6 +49,7 @@ jobs:
       # dmg would be stamped with a different version than the release naming
       # them. `npm version` keeps the two in step; this catches a hand-made tag.
       - name: Tag must match package.json
+        if: github.ref_type == 'tag'
         run: |
           tag="${GITHUB_REF_NAME#v}"
           pkg="$(node -p "require('./package.json').version")"
@@ -59,6 +75,11 @@ jobs:
       - name: Build the mac artifacts
         run: npm run dist:mac
 
+      # What is *inside* the app, not just that an app came out. See
+      # scripts/check-package.mjs for the 1.0 GB this is here to prevent.
+      - name: The package carries what it should
+        run: node scripts/check-package.mjs mac
+
       - name: Upload the mac artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -80,6 +101,7 @@ jobs:
     # here either; the runner is about being the right platform, not toolchain.
     runs-on: windows-latest
     timeout-minutes: 45
+    if: inputs.platforms != 'macos'
 
     steps:
       - uses: actions/checkout@v5
@@ -117,6 +139,12 @@ jobs:
       - name: Build the Windows artifacts
         run: npm run dist:win
 
+      # The `win:` block carried the same latent allowlist bug the `mac:` block
+      # was caught with, and survived only because CI happened to check out a
+      # tree with no `ios/` in it. Checked now rather than hoped for.
+      - name: The package carries what it should
+        run: node scripts/check-package.mjs win
+
       - name: Upload the Windows artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -132,6 +160,10 @@ jobs:
     # One job creates the Release. Two jobs both calling `gh release create` is
     # a race, and the loser's assets do not land.
     needs: [macos, windows]
+    # A dispatched run builds and stops. Publishing is a tag's job and only a
+    # tag's job — otherwise "let me just check the installer size" and "ship it
+    # to everyone" are the same button.
+    if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -168,10 +200,9 @@ jobs:
           to Applications. There is no Intel Mac build — macOS 27 runs on none.
 
           Windows 10 or later, x64: run `-x64-setup.exe`. There is no separate
-          ARM build; Windows on ARM runs the x64 one. The Windows build has now
-          been launched on Windows and the three first-launch failures that
-          found are fixed. The test suite is not ported yet, so it runs on the
-          Windows runner without gating the installer.
+          ARM build; Windows on ARM runs the x64 one. The whole test suite runs
+          on a Windows runner and gates this installer — a red Windows test stops
+          the release rather than being waved through.
 
           Neither build is signed. macOS will refuse the first launch: either
           right-click the app and choose *Open*, or clear the quarantine flag:
