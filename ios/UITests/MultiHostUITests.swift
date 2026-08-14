@@ -255,15 +255,29 @@ final class MultiHostUITests: XCTestCase {
         try waitForConnected(timeout: 60)
 
         app.buttons["sessions.more"].tap()
-        app.buttons["sessions.rename"].tap()
-        let field = app.textFields["rename.field"]
+        let rename = app.buttons["sessions.rename"]
+        XCTAssertTrue(rename.waitForExistence(timeout: 10), "the overflow menu should offer Rename")
+        rename.tap()
+
+        // Scoped to the alert, not to the app.
+        //
+        // `app.textFields[…]` searches the application element, and an alert is
+        // presented in a window of its own — the query resolves to nothing while
+        // the alert is plainly on screen, and the failure reads as "Rename did
+        // not open" rather than "the test looked in the wrong window". Asking the
+        // alert also waits for the alert, which is the thing that has to appear.
+        let alert = app.alerts.firstMatch
+        if !alert.waitForExistence(timeout: 10) { capture("zz-no-rename-alert") }
+        XCTAssertTrue(alert.exists, "Rename should raise the naming alert")
+        let field = alert.textFields["rename.field"]
         XCTAssertTrue(field.waitForExistence(timeout: 10))
         field.tap()
-        // The alert's field arrives pre-filled with the current label.
+        // The field arrives pre-filled with the current label, so the old text
+        // has to go before the new name is typed over it.
         field.press(forDuration: 1.1)
         if app.menuItems["Select All"].waitForExistence(timeout: 3) { app.menuItems["Select All"].tap() }
         field.typeText("Studio Mac")
-        app.buttons["rename.save"].tap()
+        alert.buttons["rename.save"].tap()
 
         try pairAnother(freshCode(from: controlB))
         try waitForConnected(timeout: 60)
@@ -302,13 +316,35 @@ final class MultiHostUITests: XCTestCase {
     /// the row's own identifier.
     private func startSession() throws -> String {
         let before = Set(sessionIdentifiers())
+        // A session this machine already has will do, and is preferred.
+        //
+        // This test is about *routing* — that a keystroke lands on the machine
+        // whose session is on screen and on no other. Insisting on making a new
+        // session through the phone puts the create path in front of the thing
+        // being tested, and when a create quietly did nothing the run reported a
+        // routing failure. Seed the hosts before the run instead:
+        //
+        //     curl '127.0.0.1:8891/start?cwd=/tmp/td/StudioMac'
+        //     curl '127.0.0.1:8893/start?cwd=/tmp/td/WorkPC'
+        //
+        // Creating from the phone is still covered — `InspectUITests` needs a
+        // session and makes one.
+        if let existing = before.first { return existing }
+
         let new = app.buttons["sessions.new"]
         XCTAssertTrue(new.waitForExistence(timeout: 30),
                       "this host advertises `create`, so the button should be there")
         new.tap()
         // With no folders yet the button starts one straight away; with some, it
         // is a menu whose first item is the plain New Session.
-        if app.buttons["New session"].waitForExistence(timeout: 3) { app.buttons["New session"].tap() }
+        //
+        // `.firstMatch`, because "New session" is not unique once the menu is up:
+        // the menu has a titled section as well as its items, and a bare
+        // subscript throws *"Multiple matching elements found"* rather than
+        // picking one. It only became ambiguous after the harness had accumulated
+        // folders to offer, so it passed for as long as the host was fresh.
+        let plain = app.buttons["New session"].firstMatch
+        if plain.waitForExistence(timeout: 3) { plain.tap() }
 
         // A created session opens itself, which is the tap that started it also
         // being the tap that opens it. Come back to the list for the next step.
@@ -327,25 +363,62 @@ final class MultiHostUITests: XCTestCase {
     }
 
     /**
-     * Back to the session list.
+     * Back to the session list, and **confirmed** to be there.
      *
      * By identifier rather than by position. `navigationBars.buttons.element(boundBy: 0)`
      * looked reasonable and is a lottery: this screen's bar has a principal item
      * and two trailing ones, and index 0 is whichever the accessibility tree
      * happened to order first — so the "back" tap sometimes opened the actions
      * menu instead and left the test looking for session rows on a terminal.
+     *
+     * Tapping once and trusting it was the next version of the same mistake. A
+     * tap that misses leaves the app on the terminal, and every assertion after
+     * this one then fails describing something else entirely — *"no new session
+     * row appeared"*, when the row is there and the list is not on screen. So
+     * this insists, and the condition is the absence of the terminal rather than
+     * the presence of the list: the toolbar item it was keying off exists on both
+     * screens.
      */
     private func goBack() {
-        let bar = app.navigationBars.firstMatch
-        let back = bar.buttons.matching(NSPredicate(format: "identifier != 'terminal.actions' AND identifier != 'terminal.keyboard'")).firstMatch
-        if back.exists {
-            back.tap()
-        } else {
-            // The swipe every iOS user would use, for a bar that will not say
-            // which of its buttons goes back.
-            app.swipeRight()
+        for attempt in 0 ..< 4 {
+            if isOnTheList() { return }
+
+            switch attempt {
+            case 0:
+                // The identified route. `terminal.view` is the thing that must go
+                // away, so the two trailing items are excluded by name and
+                // whatever is left is the leading one.
+                let back = app.navigationBars.firstMatch.buttons.matching(
+                    NSPredicate(format: "identifier != 'terminal.actions' AND identifier != 'terminal.keyboard'")).firstMatch
+                if back.exists { back.tap() }
+            case 1:
+                // The gesture a person would use. Not first, because a right
+                // swipe across a terminal is also a selection gesture.
+                app.swipeRight()
+            default:
+                /*
+                 * The chevron, by where it is.
+                 *
+                 * Last because a coordinate tap is the least expressive thing a
+                 * UI test can do — but it is the only one that cannot pick the
+                 * wrong element. `buttons.firstMatch` on a navigation bar is
+                 * ordered by the accessibility tree rather than by position, and
+                 * when it resolved to the overflow item instead the run did not
+                 * fail here: it opened a menu, carried on, and failed four
+                 * assertions later saying no session row had appeared.
+                 */
+                app.coordinate(withNormalizedOffset: CGVector(dx: 0.09, dy: 0.088)).tap()
+            }
+            _ = app.buttons["sessions.more"].waitForExistence(timeout: 8)
         }
-        _ = app.buttons["sessions.more"].waitForExistence(timeout: 10)
+        XCTAssertTrue(isOnTheList(), "could not get back to the session list from the terminal")
+    }
+
+    /// The list, and not a terminal on top of it. `sessions.more` alone is not
+    /// enough: a tap that opened the overflow menu instead of going back leaves
+    /// both on screen.
+    private func isOnTheList() -> Bool {
+        !app.otherElements["terminal.view"].exists && app.buttons["sessions.more"].exists
     }
 
     private func sessionIdentifiers() -> [String] {

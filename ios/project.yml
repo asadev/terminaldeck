@@ -70,7 +70,7 @@ targets:
         #
         # Kept in step with package.json by `scripts/ios/preflight.sh`, which
         # fails if the two disagree.
-        MARKETING_VERSION: "0.1.3"
+        MARKETING_VERSION: "0.1.4"
         CURRENT_PROJECT_VERSION: "1"
         # 1 = iPhone only, and the asymmetry in Apple's rules is the whole
         # reason. A device family can be *added* to a shipped app whenever the

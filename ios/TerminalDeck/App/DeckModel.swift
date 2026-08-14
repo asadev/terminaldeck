@@ -56,6 +56,19 @@ final class DeckModel {
     /// route, because it can be raised from the switcher on any screen.
     var addingHost = false
 
+    /**
+     * The name being typed into the rename alert, or nil when it is not up.
+     *
+     * Here rather than in `SessionListView`'s `@State`, and that is a fix rather
+     * than a preference. Every paired machine holds a socket, so this model
+     * publishes on any of them changing — a reconnect, a session list, a port
+     * scan — and a `@State` on a view SwiftUI rebuilds goes back to nil, taking
+     * the alert with it. The symptom was not a reset field: the alert appeared
+     * and vanished inside the same second, which reads as Rename not working at
+     * all. It survives here because the model does.
+     */
+    var renamingTo: String?
+
     /// Why the app is at the pairing screen, when it did not start there.
     private(set) var pairingNotice: String?
     /// Set while a pairing code is being redeemed, so the button can say so.

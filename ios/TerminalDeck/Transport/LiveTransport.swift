@@ -168,20 +168,30 @@ final class LiveTransport: Transport {
      * Ask the far end to prove it is still there, now.
      *
      * The state stays `.online` — the session and the carrier are still there and
-     * are probably fine — but it stops *claiming* to be verified until a pong
-     * comes back. If none does within the grace, the ordinary failure path runs
-     * and the connection goes down honestly.
+     * are probably fine — and this stops *claiming* to be verified until an
+     * answer arrives. That is the whole job: honesty about the badge.
+     *
+     * It deliberately arms **no deadline of its own**. Tearing a connection down
+     * belongs to the heartbeat and to nothing else; giving this its own ten-second
+     * grace added a second, more trigger-happy killer that fired whenever the app
+     * came forward on a busy phone and the pong was merely slow — turning a
+     * working session into a reconnect for no reason. The unanswered ping is not
+     * lost: `beat` finds `awaitingPong` still true on the next tick and ends the
+     * connection then, which is the path that has always owned this decision.
+     * Until it does, the pill reads "Checking" rather than "Connected", which is
+     * the true statement in the meantime.
      */
     private func probe() {
         guard carrier != nil, state.phase == .online else { return }
         state.verified = false
+        // Coming to the foreground runs both `Heartbeat.realign`, which beats
+        // every host, and each host's own `resume`. Without this the second one
+        // sends a duplicate ping into a question already asked — two radio
+        // payloads per host per foreground, which is precisely the waste the
+        // shared tick exists to avoid.
+        guard !awaitingPong else { return }
         awaitingPong = true
         send(.ping)
-        let epoch = generation
-        after(Self.pongGrace, epoch: epoch) { [weak self] in
-            guard let self, self.awaitingPong else { return }
-            self.fail("The connection stopped answering.")
-        }
     }
 
     @discardableResult

@@ -25,8 +25,6 @@ struct SessionListView: View {
     /// The tunnel the browser sheet is showing. Set by a tap and by nothing
     /// else, which is what makes the tap the consent.
     @State private var browsing: PortTunnel?
-    /// The name being typed into the rename prompt, or nil when it is not up.
-    @State private var renaming: String?
 
     var body: some View {
         ZStack {
@@ -82,7 +80,23 @@ struct SessionListView: View {
                     .accessibilityIdentifier("sessions.addHost")
 
                     Button {
-                        renaming = model.current?.label ?? ""
+                        /*
+                         * Deferred by one turn of the run loop.
+                         *
+                         * Set straight through, this raises an alert in the same
+                         * frame the menu is dismissing itself in, and the
+                         * dismissal wins: the request arrives while a
+                         * presentation is already in flight and is dropped. "Pair
+                         * another machine" two rows up does not have the problem
+                         * because a `.sheet` is queued rather than dropped.
+                         *
+                         * The value lives on the model, not in this view — see
+                         * `renamingTo`. A `@State` here was reset by the next
+                         * connection change, which dismissed the alert about a
+                         * second after it appeared.
+                         */
+                        let current = model.current?.label ?? ""
+                        DispatchQueue.main.async { model.renamingTo = current }
                     } label: {
                         Label("Rename this machine", systemImage: "pencil")
                     }
@@ -110,13 +124,13 @@ struct SessionListView: View {
         }
         .safeAreaInset(edge: .top, spacing: 0) { banners }
         .alert("Name this machine",
-               isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
-            TextField("MacBook, Work PC…", text: Binding(get: { renaming ?? "" }, set: { renaming = $0 }))
+               isPresented: Binding(get: { model.renamingTo != nil }, set: { if !$0 { model.renamingTo = nil } })) {
+            TextField("MacBook, Work PC…", text: Binding(get: { model.renamingTo ?? "" }, set: { model.renamingTo = $0 }))
                 .accessibilityIdentifier("rename.field")
-            Button("Cancel", role: .cancel) { renaming = nil }
+            Button("Cancel", role: .cancel) { model.renamingTo = nil }
             Button("Save") {
-                if let id = model.current?.id { model.rename(id, to: renaming) }
-                renaming = nil
+                if let id = model.current?.id { model.rename(id, to: model.renamingTo) }
+                model.renamingTo = nil
             }
             .accessibilityIdentifier("rename.save")
         } message: {

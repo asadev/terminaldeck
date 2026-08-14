@@ -37,6 +37,7 @@
  *   curl 127.0.0.1:8788/uploads    what files have landed, with digests
  *   curl '127.0.0.1:8788/scrollback?session=<id>'  what a session's PTY holds
  *   curl '127.0.0.1:8788/input?session=<id>'       what the phone typed into it
+ *   curl '127.0.0.1:8788/start?cwd=<dir>'          start a session from this side
  *   curl '127.0.0.1:8788/stop-tunnel?connection=<id>&tunnel=<id>'
  *
  * `/stop-tunnel` is the Mac's Stop button, reachable from a script. It goes
@@ -423,6 +424,31 @@ const control = createServer((request, response) => {
         .map(([id, text]) => ({ id, bytes: Buffer.byteLength(text), text }))
       return answer(rows)
     }
+    /**
+     * Start a session here, from this side.
+     *
+     * The desk's own `create`, reached without a phone. It is here for one test
+     * and the reason is worth writing down: proving that a keystroke lands on the
+     * machine whose session is on screen **and on no other** needs a session on
+     * each of two machines, and getting there through the phone's New Session
+     * button makes the proof depend on the create path as well as on the routing
+     * path. When those are tangled, a create that quietly does nothing reads as a
+     * routing failure — which is exactly what happened, and it cost an hour of
+     * looking at the wrong half.
+     *
+     * So the setup is done from here and the phone is asked only the question
+     * being tested. Creating a session *from* the phone is still covered, by
+     * `InspectUITests`, which needs one and makes one.
+     */
+    case '/start': {
+      const start = sessions.create
+      if (!start) return answer({ error: 'this host cannot start sessions' })
+      const cwd = url.searchParams.get('cwd') ?? REPO
+      return void start
+        .call(sessions, { cwd })
+        .then((outcome) => answer(outcome))
+        .catch((error: unknown) => answer({ ok: false, error: String(error) }))
+    }
     case '/pair':
       return answer({ uri: mint() })
     case '/approve': {
@@ -441,7 +467,9 @@ const control = createServer((request, response) => {
       return
     default:
       response.writeHead(404, { 'content-type': 'text/plain' })
-      response.end('state | ports | uploads | scrollback | input | pair | approve | stop-tunnel | quit\n')
+      response.end(
+        'state | ports | uploads | scrollback | input | start | pair | approve | stop-tunnel | quit\n',
+      )
   }
 })
 control.listen(CONTROL_PORT, '127.0.0.1')
