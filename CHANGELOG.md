@@ -10,6 +10,36 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Quitting with a live session no longer prints a wall of errors.** Stopping
+  the app while a terminal was still producing output threw
+  `Render frame was disposed before WebFrameMain could be accessed`, once per
+  message still in flight. The main process was broadcasting into a window that
+  had already gone. Nothing was lost and nothing was corrupted — the errors were
+  the whole symptom — but they were the last thing a packaged build printed.
+
+- **The debug trace no longer writes unless you ask for it.** A build could
+  leave a `ipc-trace.log` of 12 MB and growing in its application-support
+  folder with Debug mode switched off. It is now written only while Debug mode
+  is on, capped at 4 MB with one previous generation kept, and listed in
+  Settings → Advanced → "Where things are kept" so it can be found and cleared.
+  A file left by an earlier version is deleted the next time the app starts
+  with tracing off.
+
+- **The Windows test suite runs as a gate.** All 3,762 tests were ported to
+  Windows and the release workflow no longer lets that job fail without
+  stopping the build. The cases that cannot mean anything on Windows — POSIX
+  file modes, the POSIX shell the hook command is written for, the macOS-only
+  updater — are skipped individually, each saying why, rather than the suite
+  being waved through as a whole.
+
+- **`gh`, `git` and MCP servers find their binaries on Windows.** Six places
+  built a child process environment in a way that left Windows holding two
+  spellings of `PATH`, with no rule about which one the child would search.
+  Affected the GitHub panel, the git status poller, the readiness checks, the
+  Copilot detection and every stdio MCP server.
+
 ## [0.1.3] — 2026-08-14
 
 ### Added
