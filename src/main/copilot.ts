@@ -29,6 +29,7 @@ import { readdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
+import { currentPlatform, withPath, type Platform } from './platform/host'
 import type { ToolState, ToolStatus } from './prerequisites'
 import { probeBinary, readVersion, type ProbeResult } from './tool-probe'
 
@@ -113,19 +114,24 @@ function copilotDirEntries(home: string): string[] {
  * and none of that belongs in this app's memory, let alone on its way to the
  * renderer.
  */
-async function ghAuthenticated(PATH: string): Promise<boolean> {
+async function ghAuthenticated(PATH: string, platform: Platform): Promise<boolean> {
   try {
-    await run('gh', ['auth', 'status'], { env: { ...process.env, PATH }, timeout: TIMEOUT_MS })
+    // `withPath`, not `{ ...process.env, PATH }`: the literal key leaves Windows
+    // holding both `Path` and `PATH`. See `platform/host.ts`.
+    await run('gh', ['auth', 'status'], {
+      env: withPath(process.env, PATH, platform),
+      timeout: TIMEOUT_MS,
+    })
     return true
   } catch {
     return false
   }
 }
 
-async function ghExtensions(PATH: string): Promise<string> {
+async function ghExtensions(PATH: string, platform: Platform): Promise<string> {
   try {
     const { stdout } = await run('gh', ['extension', 'list'], {
-      env: { ...process.env, PATH },
+      env: withPath(process.env, PATH, platform),
       timeout: TIMEOUT_MS,
       encoding: 'utf8',
     })
@@ -139,6 +145,7 @@ async function ghExtensions(PATH: string): Promise<string> {
 export interface DetectCopilotOptions {
   home?: string
   env?: NodeJS.ProcessEnv
+  platform?: Platform
 }
 
 export async function detectCopilot(
@@ -147,12 +154,13 @@ export async function detectCopilot(
 ): Promise<CopilotDetection> {
   const home = options.home ?? homedir()
   const env = options.env ?? process.env
+  const platform = options.platform ?? currentPlatform()
 
-  const probe = await probeBinary(COPILOT_BIN, PATH)
+  const probe = await probeBinary(COPILOT_BIN, PATH, undefined, platform)
   // The extension is only worth a spawn when the standalone binary is absent.
   const route: CopilotRoute | null = probe.found
     ? 'cli'
-    : hasCopilotExtension(await ghExtensions(PATH))
+    : hasCopilotExtension(await ghExtensions(PATH, platform))
       ? 'gh-extension'
       : null
 
@@ -167,12 +175,13 @@ export async function detectCopilot(
 
   const dir = copilotDirEntries(home)
   const authed =
-    signedIn({ env, copilotDir: dir, ghAuthenticated: false }) || (await ghAuthenticated(PATH))
+    signedIn({ env, copilotDir: dir, ghAuthenticated: false }) ||
+    (await ghAuthenticated(PATH, platform))
 
   return {
     state: authed ? 'ready' : 'installed-not-authed',
     route,
-    version: route === 'cli' ? await readVersion(COPILOT_BIN, PATH) : undefined,
+    version: route === 'cli' ? await readVersion(COPILOT_BIN, PATH, platform) : undefined,
     probe,
     remedy: authed
       ? undefined

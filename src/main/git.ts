@@ -3,6 +3,7 @@ import { stat } from 'node:fs/promises'
 import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { promisify } from 'node:util'
 import type { IpcMain, WebContents } from 'electron'
+import { currentPlatform, withPath } from './platform/host'
 import { loginPath } from './providers'
 
 const run = promisify(execFile)
@@ -322,8 +323,9 @@ async function git(cwd: string, args: string[]): Promise<string> {
     maxBuffer: MAX_BUFFER,
     windowsHide: true,
     env: {
-      ...process.env,
-      PATH,
+      // `withPath`, not `{ ...process.env, PATH }`: the literal key leaves
+      // Windows holding both `Path` and `PATH`. See `platform/host.ts`.
+      ...withPath(process.env, PATH, currentPlatform()),
       // Never take index.lock for a read: this module polls in the background
       // and must not lose a race with the agent's own git commands.
       GIT_OPTIONAL_LOCKS: '0',

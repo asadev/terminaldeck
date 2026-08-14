@@ -6,6 +6,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js'
 import { BRAND } from '../shared/brand'
+import { currentPlatform, envPath, isPathKey, withPath, type Platform } from './platform/host'
 import { loginPath } from './providers'
 
 /**
@@ -562,14 +563,34 @@ function initialStatus(server: McpServerConfig): McpServerStatus {
  * what the process already had — so `npx`, `uvx`, `bun` and anything installed
  * by nvm or Homebrew are simply not there, and every stdio server configured
  * the normal way would fail to spawn with ENOENT.
+ *
+ * The single write of PATH goes through `withPath` rather than a literal key in
+ * the spread. On Windows the inherited variable is spelled `Path`, so
+ * `{ ...base, PATH: path }` hands the child *both* spellings and leaves it to
+ * `CreateProcess` which one it searches — which is exactly the failure this is
+ * trying to prevent, since a stdio server that cannot find `npx` never starts.
+ * `withPath` drops every spelling and writes one back. See `platform/host.ts`.
+ *
+ * A server config may set its own PATH, and that still wins: it is merged in
+ * first and then collapsed to a single key, so the caller's spelling — `PATH`
+ * in a config file written on any OS — reaches Windows as the one `Path` the
+ * child will actually read.
  */
-async function defaultEnv(server: McpServerConfig): Promise<Record<string, string>> {
+async function defaultEnv(
+  server: McpServerConfig,
+  platform: Platform = currentPlatform(),
+): Promise<Record<string, string>> {
   const path = await loginPath()
   const base: Record<string, string> = {}
   for (const [key, value] of Object.entries(process.env)) {
     if (typeof value === 'string') base[key] = value
   }
-  return { ...base, PATH: path, ...server.env }
+  const configured = Object.keys(server.env).some((key) => isPathKey(key, platform))
+  return withPath(
+    { ...base, ...server.env },
+    configured ? envPath(server.env, platform) : path,
+    platform,
+  )
 }
 
 export class McpPool {

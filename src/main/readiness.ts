@@ -20,6 +20,7 @@ import { isAbsolute } from 'node:path'
 import { promisify } from 'node:util'
 import { compileIgnorePattern, parseIgnoreFile, safeJoin, type IgnoreRule } from './fs-tree'
 import { findGitDir, readGitStatus } from './git'
+import { currentPlatform, withPath } from './platform/host'
 import { loginPath } from './providers'
 
 const run = promisify(execFile)
@@ -323,8 +324,9 @@ async function git(cwd: string, args: string[], options: GitRunOptions = {}): Pr
     maxBuffer: MAX_BUFFER,
     windowsHide: true,
     env: {
-      ...process.env,
-      PATH,
+      // `withPath`, not `{ ...process.env, PATH }`: the literal key leaves
+      // Windows holding both `Path` and `PATH`. See `platform/host.ts`.
+      ...withPath(process.env, PATH, currentPlatform()),
       ...(options.write ? {} : { GIT_OPTIONAL_LOCKS: '0' }),
       LC_ALL: 'C',
     },

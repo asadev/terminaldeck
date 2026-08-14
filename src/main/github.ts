@@ -3,6 +3,7 @@ import { stat } from 'node:fs/promises'
 import { isAbsolute } from 'node:path'
 import { promisify } from 'node:util'
 import type { IpcMain } from 'electron'
+import { currentPlatform, withPath, type Platform } from './platform/host'
 import { loginPath } from './providers'
 
 const run = promisify(execFile)
@@ -556,10 +557,13 @@ const GIT_TIMEOUT_MS = 5_000
 /** A hundred PRs with labels and titles stays well inside this. */
 const MAX_BUFFER = 8 * 1024 * 1024
 
-async function toolEnv(): Promise<NodeJS.ProcessEnv> {
+async function toolEnv(platform: Platform = currentPlatform()): Promise<NodeJS.ProcessEnv> {
+  // `withPath` rather than a literal `PATH:` key in the spread: on Windows the
+  // inherited variable is spelled `Path`, and an object literal would carry
+  // both spellings — leaving it to `CreateProcess` which one `gh` and `git`
+  // are actually looked up on. See `platform/host.ts`.
   return {
-    ...process.env,
-    PATH: await loginPath(),
+    ...withPath(process.env, await loginPath(), platform),
     // Error text is matched on below, so it must not be localised.
     LC_ALL: 'C',
     // gh will happily block on an interactive prompt (auth, repo selection)
