@@ -1472,7 +1472,21 @@ describe('the server as a whole', () => {
   })
 
   it('is safe to stop when it never started', async () => {
-    const server = createRemoteServer({ ...neverListens, readTailnet: async () => ready() })
+    // The `serve` stub is the point of this line, not decoration. It was the one
+    // `createRemoteServer` call in this file without one, so `stop()` reached the
+    // real `serveOff`, which asks the OS where the `tailscale` binary is — a
+    // spawn of `which`, or `where.exe`, bounded at five seconds. On this Mac that
+    // is a few milliseconds and invisible. On a loaded Windows runner with no
+    // Tailscale installed it consumed the whole budget and the test failed at
+    // 5,007 ms against a 5,000 ms limit, with nothing wrong with the code under
+    // test. What is being asserted here is that stopping something that never
+    // started does not throw; finding Tailscale is incidental to that, and it was
+    // the only part that could be slow.
+    const server = createRemoteServer({
+      ...neverListens,
+      readTailnet: async () => ready(),
+      serve: { on: async () => ({ ok: false, message: 'not asked for' }), off: async () => {} },
+    })
     const status = await server.stop()
     expect(status.running).toBe(false)
     expect(status.connections).toEqual([])
