@@ -8,6 +8,7 @@ import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js'
 import { BRAND } from '../shared/brand'
 import { currentPlatform, envPath, isPathKey, withPath, type Platform } from './platform/host'
 import { loginPath } from './providers'
+import { onWebContentsDestroyed } from './web-contents-teardown'
 
 /**
  * MCP client + inspector backend.
@@ -1174,10 +1175,8 @@ export function registerMcpIpc(ipcMain: Electron.IpcMain): void {
     // Subscribing here rather than on a separate channel means a panel that can
     // read the list is always also receiving its updates.
     const contents = event.sender
-    if (!subscribers.has(contents)) {
-      subscribers.add(contents)
-      contents.once('destroyed', () => subscribers.delete(contents))
-    }
+    subscribers.add(contents)
+    onWebContentsDestroyed(contents, 'mcp', () => subscribers.delete(contents))
     return pool.statusFor(loadServers(optionalProjectPath(projectPath)))
   })
 

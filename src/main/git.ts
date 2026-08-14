@@ -5,6 +5,7 @@ import { promisify } from 'node:util'
 import type { IpcMain, WebContents } from 'electron'
 import { currentPlatform, withPath } from './platform/host'
 import { loginPath } from './providers'
+import { onWebContentsDestroyed } from './web-contents-teardown'
 
 const run = promisify(execFile)
 
@@ -543,7 +544,6 @@ interface Watch {
 }
 
 const watches = new Map<string, Watch>()
-const teardownBound = new Set<number>()
 
 function watchKey(target: WebContents, cwd: string): string {
   return `${target.id}\x00${cwd}`
@@ -606,11 +606,11 @@ async function tick(watch: Watch): Promise<void> {
 }
 
 function bindTeardown(target: WebContents): void {
-  const id = target.id
-  if (teardownBound.has(id)) return
-  teardownBound.add(id)
-  target.once('destroyed', () => {
-    teardownBound.delete(id)
+  // The `teardownBound` set this used to keep is gone: registering by key is
+  // already idempotent, and one set per module doing the same job is what put
+  // eleven `destroyed` listeners on one WebContents. See
+  // `web-contents-teardown.ts`.
+  onWebContentsDestroyed(target, 'git-watch', () => {
     for (const [key, watch] of watches) {
       if (watch.target !== target) continue
       stopWatch(watch)
@@ -661,7 +661,6 @@ async function startWatch(target: WebContents, cwd: string): Promise<GitStatusRe
 export function stopAllGitWatches(): void {
   for (const watch of watches.values()) stopWatch(watch)
   watches.clear()
-  teardownBound.clear()
 }
 
 /** Live poller count. Exported so tests can assert the watch bookkeeping. */

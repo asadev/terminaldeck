@@ -40,6 +40,7 @@
 import { Terminal } from '@xterm/headless'
 import type { IpcMain, IpcMainInvokeEvent, WebContents } from 'electron'
 import { stripAnsi } from './session-activity'
+import { onWebContentsDestroyed } from './web-contents-teardown'
 
 /* -------------------------------------------------------------------------- */
 /* Types                                                                       */
@@ -594,10 +595,14 @@ export function registerPlanLimitIpc(ipcMain: IpcMain, options: PlanLimitOptions
   ipcMain.handle('plan:watch', (event: IpcMainInvokeEvent, sessionId: string): PlanLimitSnapshot => {
     const entry = ensureEntry(sessionKey(sessionId))
     const contents = event.sender
-    if (!entry.subscribers.has(contents)) {
-      entry.subscribers.add(contents)
-      contents.once('destroyed', () => releaseAll(contents))
-    }
+    entry.subscribers.add(contents)
+    // Registered per WebContents, not per entry. The guard here used to be
+    // `if (!entry.subscribers.has(contents))`, which attaches one `destroyed`
+    // listener for every *session* a window watches — eleven tabs, eleven
+    // listeners on one emitter, and Node starts warning at ten. `releaseAll`
+    // already drops this contents from every entry, so one is all it ever
+    // needed. See `web-contents-teardown.ts`.
+    onWebContentsDestroyed(contents, 'plan-limit', () => releaseAll(contents))
     return entry.tracker.current
   })
 

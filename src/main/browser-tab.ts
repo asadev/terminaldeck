@@ -19,6 +19,7 @@ import {
 } from './browser-preload'
 import { composeAgentContext, parseCapture, type ElementCapture } from './selector'
 import { isolatedSession } from './browser-isolation'
+import { onWebContentsDestroyed } from './web-contents-teardown'
 
 /**
  * The embedded browser tab: a real Chromium view, hosted inside the app window,
@@ -99,7 +100,6 @@ interface BrowserTab {
 const GUEST_PARTITION = 'persist:terminaldeck-browser'
 
 const tabs = new Map<string, BrowserTab>()
-const watchedHosts = new WeakSet<WebContents>()
 
 let guestPreloadPath: string | null = null
 let guestSession: Session | null = null
@@ -415,11 +415,10 @@ export function registerBrowserIpc(ipcMain: IpcMain): void {
     applyLayout(tab)
     wireGuestEvents(tab)
 
-    // One listener per host, not per tab, or reopening tabs stacks them up.
-    if (!watchedHosts.has(event.sender)) {
-      watchedHosts.add(event.sender)
-      event.sender.once('destroyed', () => destroyTabsFor(event.sender))
-    }
+    // One registration per host, not per tab, or reopening tabs stacks them up
+    // — and keyed, so the `watchedHosts` set that used to enforce that is gone.
+    // See `web-contents-teardown.ts`.
+    onWebContentsDestroyed(event.sender, 'browser-tabs', () => destroyTabsFor(event.sender))
 
     if (typeof opts.url === 'string' && opts.url.trim() !== '') return navigate(tab, opts.url)
     // An unhandled rejection here takes the main process down with it, and this

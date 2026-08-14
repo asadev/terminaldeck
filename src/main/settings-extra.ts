@@ -26,6 +26,7 @@ import { dirname, join } from 'node:path'
 import { app, session, shell, type IpcMain, type IpcMainInvokeEvent } from 'electron'
 import { BRAND } from '../shared/brand'
 import { GUEST_PARTITION } from './browser-session'
+import { traceFilePath } from './ipc-trace'
 import { updateSupport } from './updates/updater'
 
 /* ---------------------------------------------------------------- limits -- */
@@ -302,6 +303,18 @@ export function configPaths(): ConfigPath[] {
       purpose: 'Crash and diagnostic logs written by the runtime.',
       path: app.getPath('logs'),
       kind: 'folder',
+    },
+    {
+      key: 'ipcTrace',
+      label: 'Debug trace',
+      // Listed whether or not it exists, and says when it is written: a file
+      // that only appears in this list once something has already created it is
+      // no use to somebody wondering what the app is putting on their disk. An
+      // earlier build wrote 12 MB here with Debug mode off and never mentioned
+      // it anywhere.
+      purpose: 'Every IPC call, recorded while Debug mode is on. Off by default.',
+      path: traceFilePath(),
+      kind: 'file',
     },
   ]
 

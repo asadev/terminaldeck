@@ -4,6 +4,7 @@ import { readdir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { isAbsolute, join, parse as parsePath, resolve, sep } from 'node:path'
 import type { IpcMain, IpcMainInvokeEvent } from 'electron'
+import { onWebContentsDestroyed } from './web-contents-teardown'
 
 /**
  * Candidate file enumeration for quick open.
@@ -416,8 +417,6 @@ export interface RegisterSearchOptions {
  */
 export function registerSearchIpc(ipcMain: IpcMain, options: RegisterSearchOptions = {}): void {
   const inFlight = new Map<number, AbortController>()
-  /** Senders already wired for teardown — one listener each, not one per request. */
-  const watched = new Set<number>()
 
   const cancelFor = (senderId: number): void => {
     inFlight.get(senderId)?.abort()
@@ -449,13 +448,10 @@ export function registerSearchIpc(ipcMain: IpcMain, options: RegisterSearchOptio
       const controller = new AbortController()
       inFlight.set(senderId, controller)
       // A closed window must not leave a walk running against a dead sender.
-      if (!watched.has(senderId)) {
-        watched.add(senderId)
-        event.sender.once('destroyed', () => {
-          cancelFor(senderId)
-          watched.delete(senderId)
-        })
-      }
+      // Keyed, so calling this on every request is correct rather than a leak —
+      // the `watched` set that used to guard it is gone. See
+      // `web-contents-teardown.ts`.
+      onWebContentsDestroyed(event.sender, 'file-search', () => cancelFor(senderId))
 
       try {
         const list = await listProjectFiles(root, { signal: controller.signal, limit })

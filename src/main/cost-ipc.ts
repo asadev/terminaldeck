@@ -36,6 +36,7 @@ import {
   type SessionSummary,
   type TranscriptFile,
 } from './transcript'
+import { onWebContentsDestroyed } from './web-contents-teardown'
 
 /** Channel the renderer listens on for live updates. */
 export const COST_UPDATE_CHANNEL = 'cost:update'
@@ -188,12 +189,15 @@ export function registerCostIpc(ipcMain: IpcMain): void {
   ipcMain.handle('cost:watch', async (event: IpcMainInvokeEvent, cwd: string) => {
     const entry = ensureWatcher(projectKey(cwd))
     const contents = event.sender
-    if (!entry.subscribers.has(contents)) {
-      entry.subscribers.add(contents)
-      // A window can close before its scan finishes; drop its subscriptions so
-      // the watcher can shut down instead of tailing for nobody.
-      contents.once('destroyed', () => releaseAll(contents))
-    }
+    entry.subscribers.add(contents)
+    // A window can close before its scan finishes; drop its subscriptions so
+    // the watcher can shut down instead of tailing for nobody.
+    //
+    // Keyed per WebContents, not per entry. The old guard was
+    // `if (!entry.subscribers.has(contents))`, which attaches a fresh
+    // `destroyed` listener for every *project* a window watches; `releaseAll`
+    // clears this contents out of all of them, so one registration is enough.
+    onWebContentsDestroyed(contents, 'cost', () => releaseAll(contents))
     await entry.started
     return entry.watcher.summary()
   })

@@ -41,12 +41,12 @@ import { registerMcpIpc } from './mcp-client'
 import { registerBrowserIpc } from './browser-tab'
 import { registerChromeImportIpc } from './chrome-import'
 import { registerPrerequisitesIpc } from './prerequisites'
-import { registerSettingsIpc, clearBrowserDataIfNotPersisting } from './settings-extra'
+import { registerSettingsIpc, clearBrowserDataIfNotPersisting, storedValue } from './settings-extra'
 import { registerBrowserSessionIpc } from './browser-session'
 import { registerBrowserViewIpc } from './browser-view'
 import { registerDiagnosticsIpc } from './diagnostics'
 import { registerLogIpc } from './app-log'
-import { traceIpc } from './ipc-trace'
+import { traceIpc, TRACE_SETTING } from './ipc-trace'
 import { buildMenu } from './menu'
 import { registerSetupIpc } from './setup'
 import { registerCookieImportIpc } from './cookie-import'
@@ -78,11 +78,73 @@ function applySecurityPolicy(): void {
   })
 }
 
-/** Broadcast to the renderer, guarding against a destroyed window during teardown. */
+/**
+ * True from the moment the app starts going away.
+ *
+ * Set before anything in `before-quit` does its work, because the first thing
+ * that happens there is `ptys.killAll()` — and killing a PTY *generates*
+ * traffic: the process flushes, `onData` fires, `onExit` fires, and
+ * `markExited` pushes a status. All three of those want to talk to a renderer
+ * that is already on its way out.
+ */
+let quitting = false
+
+/**
+ * Whether there is a render frame on the other end of `send`.
+ *
+ * Tracked from events rather than asked for on demand, and that is the whole
+ * point — see `send` below for why nothing can be asked.
+ */
+let rendererAlive = false
+
+/**
+ * Broadcast to the renderer, if there is one.
+ *
+ * ## The bug
+ *
+ * A packaged v0.1.3 printed seven of these when it was stopped with a live
+ * session — five from `PtyManager.onData`, one from `ActivityTracker.onChange`,
+ * one from `onExit`:
+ *
+ *     Error sending from webFrameMain: Render frame was disposed before
+ *     WebFrameMain could be accessed
+ *
+ * All seven came through this function, so the fix belongs here and not at
+ * seven call sites. The PTYs are the cause: they keep producing output after
+ * the render frame is gone, and killing them at quit *generates* a last burst
+ * of exactly that traffic.
+ *
+ * ## Why the obvious guards do not work, all four of them
+ *
+ * This was measured rather than reasoned about. At the moment of a failing
+ * send, with the frame already disposed, every question Electron will answer
+ * says the renderer is healthy:
+ *
+ *     quitting=false winDestroyed=false wcDestroyed=false crashed=false
+ *     mainFrame=obj detached=false
+ *
+ * And the send cannot be caught either: `webContents.send` and
+ * `WebFrameMain.send` both swallow the failure and `console.error` it
+ * themselves, so a `try`/`catch` around either one catches nothing and the
+ * message is printed regardless. Reproduced both ways, still 32 errors.
+ *
+ * So there is no synchronous question worth asking. The only thing that knows
+ * is Electron's own lifecycle, which is why liveness is a flag maintained by
+ * `render-process-gone`, `destroyed` and the window's `close`/`closed` — set up
+ * in `createWindow`, cleared before `killAll` in `before-quit`. With that in
+ * place the same teardown that produced 32 errors produces none.
+ *
+ * The remaining checks below are not redundant with the flag: they cover the
+ * ordinary case of a window that has gone while the app keeps running, which on
+ * macOS is most of the time.
+ */
 function send(channel: string, ...args: unknown[]): void {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send(channel, ...args)
-  }
+  if (quitting || !rendererAlive) return
+  const window = mainWindow
+  if (!window || window.isDestroyed()) return
+  const contents = window.webContents
+  if (!contents || contents.isDestroyed()) return
+  contents.send(channel, ...args)
 }
 
 /**
@@ -195,8 +257,19 @@ function createWindow(): void {
     },
   })
 
+  // Liveness, from the events rather than by asking. `render-process-gone` is
+  // the one that matters when the renderer dies under the app; `close` is the
+  // ordinary path, and fires before the frame goes rather than after.
+  rendererAlive = true
+  const rendererGone = (): void => {
+    rendererAlive = false
+  }
+  mainWindow.webContents.on('render-process-gone', rendererGone)
+  mainWindow.webContents.on('destroyed', rendererGone)
+  mainWindow.on('close', rendererGone)
   mainWindow.on('ready-to-show', () => mainWindow?.show())
   mainWindow.on('closed', () => {
+    rendererGone()
     mainWindow = null
   })
 
@@ -286,7 +359,9 @@ async function startSession(input: CreateSessionInput): Promise<SessionMeta> {
 
 function registerIpc(): void {
   // Installed first so it wraps every handler registered below.
-  traceIpc(ipcMain)
+  // Off unless the user turned Debug mode on. Consulted per call rather than
+  // captured, so toggling the setting takes effect without a relaunch.
+  traceIpc(ipcMain, { enabled: () => storedValue(TRACE_SETTING) === true })
 
   ipcMain.handle('brand:get', () => ({ name: BRAND.name, tagline: BRAND.tagline }))
 
@@ -453,6 +528,11 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
+  // First, and before `killAll`. Killing a PTY makes it flush, exit and push a
+  // status, and all three of those broadcast — into a render frame that is
+  // already being torn down. See `send`.
+  quitting = true
+  rendererAlive = false
   ptys.killAll()
   stopAllGitWatches()
   updates?.stop()

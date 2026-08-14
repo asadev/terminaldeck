@@ -39,6 +39,7 @@ import {
   transcriptDir,
   type TranscriptFile,
 } from './transcript'
+import { onWebContentsDestroyed } from './web-contents-teardown'
 
 export const SESSION_SEARCH_CHANNEL = 'session-search:run'
 export const SESSION_SEARCH_CANCEL_CHANNEL = 'session-search:cancel'
@@ -1246,7 +1247,6 @@ function roleList(value: unknown): SearchRole[] | undefined {
  */
 export function registerSessionSearchIpc(ipcMain: IpcMain): void {
   const inFlight = new Map<number, AbortController>()
-  const watched = new Set<number>()
 
   const cancelFor = (senderId: number): void => {
     inFlight.get(senderId)?.abort()
@@ -1272,14 +1272,11 @@ export function registerSessionSearchIpc(ipcMain: IpcMain): void {
       cancelFor(senderId)
       const controller = new AbortController()
       inFlight.set(senderId, controller)
-      if (!watched.has(senderId)) {
-        watched.add(senderId)
-        // A closed window must not leave a 100 MB scan running for nobody.
-        event.sender.once('destroyed', () => {
-          cancelFor(senderId)
-          watched.delete(senderId)
-        })
-      }
+      // A closed window must not leave a 100 MB scan running for nobody.
+      // Keyed, so calling this on every search is correct rather than a leak —
+      // the `watched` set that used to guard it is gone. See
+      // `web-contents-teardown.ts`.
+      onWebContentsDestroyed(event.sender, 'session-search', () => cancelFor(senderId))
 
       try {
         const result = await searchSessions(cwd, typeof payload.query === 'string' ? payload.query : '', {

@@ -210,9 +210,14 @@ describe('registerSearchIpc', () => {
 
     registerSearchIpc(ipcMain, options)
 
+    // `isDestroyed` is part of the fake because the real WebContents always has
+    // it and the teardown registry asks first — a fake missing it does not fail
+    // like a live one, it fails like a typo.
+    const sender = { id: 1, once: () => {}, isDestroyed: () => false }
+
     return (payload: unknown): Promise<FileSearchResponse> =>
       Promise.resolve(
-        handlers.get(FILE_SEARCH_CHANNEL)!({ sender: { id: 1, once: () => {} } }, payload),
+        handlers.get(FILE_SEARCH_CHANNEL)!({ sender }, payload),
       ) as Promise<FileSearchResponse>
   }
 
