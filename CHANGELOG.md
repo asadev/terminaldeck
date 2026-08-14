@@ -10,6 +10,22 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The phone client is in the app.** It never has been. `webRoot` points at
+  `pwa/dist` inside the bundle, and 0.1.3, 0.1.4 and 0.1.5 all shipped without
+  it — so the tailnet address the Remote panel prints for you to open on your
+  phone answered with nothing at all. The native phone apps were unaffected;
+  they speak the sealed protocol directly and never fetch that page.
+
+  Nothing failed loudly enough to notice. `pwa/dist` is build output, so it is
+  gitignored, so a clean release checkout does not have it, so the line in the
+  packaging allowlist that names it matched zero files — which looks exactly
+  like a line whose files were all excluded on purpose. It only ever worked on
+  a machine where someone had built the phone client by hand at some point.
+  Packaging builds it now, and the release check fails if the built page is not
+  in the bundle.
+
 ## [0.1.5] — 2026-08-14
 
 ### Fixed
