@@ -479,12 +479,28 @@ describe('this Mac’s relay identity', () => {
     expect(second.hostId).toBe(hostIdFor(first.hostSecret))
   })
 
-  it('keeps the private key readable only by its owner', async () => {
-    const dir = tempDir()
-    loadHostIdentity(dir)
-    const { statSync } = await import('node:fs')
-    expect(statSync(join(dir, 'relay-identity.json')).mode & 0o777).toBe(0o600)
-  })
+  /**
+   * POSIX-only, for the same reason and in the same words as the identical
+   * claim in `device-auth.test.ts`. Windows has no mode bits behind `chmod`:
+   * this file comes back 0o666 there whatever it was written with, because Node
+   * synthesises the mode from the read-only attribute alone (measured on
+   * Windows 11 — 438, not 384). Keeping the host's private key owner-only on
+   * Windows is an ACL question this module does not ask; asserting 0o666 would
+   * only record that.
+   *
+   * Written after the fact: this test arrived with the relay work, after the
+   * Windows port had already gone through every other mode assertion in the
+   * suite, and it was the one thing red on Windows when the two were merged.
+   */
+  it.skipIf(process.platform === 'win32')(
+    'keeps the private key readable only by its owner',
+    async () => {
+      const dir = tempDir()
+      loadHostIdentity(dir)
+      const { statSync } = await import('node:fs')
+      expect(statSync(join(dir, 'relay-identity.json')).mode & 0o777).toBe(0o600)
+    },
+  )
 
   it('replaces an identity whose key pair does not agree, and keeps the old file', async () => {
     const dir = tempDir()
