@@ -1,9 +1,23 @@
-import { mkdtempSync, mkdirSync, appendFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, appendFileSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { formatUsd } from './cost'
 import { encodeProjectPath, TranscriptWatcher, type ProjectSummary } from './transcript'
+
+/**
+ * A scratch config directory, spelled the way the OS will spell it back.
+ *
+ * `os.tmpdir()` is `/var/folders/…` on macOS, which is a symlink to
+ * `/private/var/…`, and `C:\Users\RUNNER~1\AppData\Local\Temp` on a Windows
+ * runner, which is an 8.3 short name. A file watcher reports the resolved path,
+ * so handing it the unresolved one makes every event arrive under a name the
+ * watcher's own bookkeeping does not recognise. Resolved once, here, rather
+ * than debugged again per test.
+ */
+function scratch(prefix: string): string {
+  return realpathSync(mkdtempSync(join(tmpdir(), prefix)))
+}
 
 function line(
   id: string,
@@ -77,7 +91,7 @@ async function until(
 
 describe('TranscriptWatcher against a live file', () => {
   it('picks up appends incrementally', async () => {
-    const config = mkdtempSync(join(tmpdir(), 'terminaldeck-cost-'))
+    const config = scratch('terminaldeck-cost-')
     const cwd = '/fake/project'
     const dir = join(config, 'projects', encodeProjectPath(cwd))
     mkdirSync(dir, { recursive: true })
@@ -129,7 +143,7 @@ describe('TranscriptWatcher against a live file', () => {
     // at today's rates and the headline number disagreed with the sessions
     // listed underneath it. This session ran after Sonnet 5's introductory rate
     // ended, so pricing it "now" would charge the wrong card.
-    const config = mkdtempSync(join(tmpdir(), 'terminaldeck-cost-sum-'))
+    const config = scratch('terminaldeck-cost-sum-')
     const cwd = '/fake/project'
     const dir = join(config, 'projects', encodeProjectPath(cwd))
     mkdirSync(dir, { recursive: true })
@@ -155,7 +169,7 @@ describe('TranscriptWatcher against a live file', () => {
     // Regression: `maxSessions` was only applied to the initial scan, so a
     // watcher left running on a busy project accumulated a tail and an
     // aggregator — each holding every request id it had ever seen — forever.
-    const config = mkdtempSync(join(tmpdir(), 'terminaldeck-cost-cap-'))
+    const config = scratch('terminaldeck-cost-cap-')
     const cwd = '/fake/project'
     const dir = join(config, 'projects', encodeProjectPath(cwd))
     mkdirSync(dir, { recursive: true })
@@ -192,7 +206,7 @@ describe('TranscriptWatcher against a live file', () => {
   }, 10_000)
 
   it('survives a project that has never been opened in Claude Code', async () => {
-    const config = mkdtempSync(join(tmpdir(), 'terminaldeck-cost-empty-'))
+    const config = scratch('terminaldeck-cost-empty-')
     const updates: ProjectSummary[] = []
     const watcher = new TranscriptWatcher({
       cwd: '/nowhere/at/all',

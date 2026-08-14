@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events'
 import { mkdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, posix, win32 } from 'node:path'
+import { delimiter, join, posix, win32 } from 'node:path'
 import { BRAND } from '../shared/brand'
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -38,8 +38,16 @@ vi.mock('electron', async () => {
   }
 })
 
-// `loginPath` spawns the user's login shell, which is slow and machine
-// dependent; the bundle only cares that it gets a PATH string back.
+/*
+ * `loginPath` spawns the user's login shell, which is slow and machine
+ * dependent; the bundle only cares that it gets a PATH string back.
+ *
+ * Joined with `path.delimiter` rather than a literal `:`. `collectDiagnostics`
+ * splits on the delimiter of the platform it is running on — which is the whole
+ * point of the fix this file covers — so a fixture hardcoding the POSIX one
+ * arrives on the Windows runner as a single unsplittable entry and fails a test
+ * about redaction for a reason that has nothing to do with redaction.
+ */
 vi.mock('./providers', () => ({
   PROVIDERS: {
     claude: { id: 'claude', label: 'Claude Code', bin: 'claude', args: [], resumeArgs: [] },
@@ -47,7 +55,7 @@ vi.mock('./providers', () => ({
     gemini: { id: 'gemini', label: 'Gemini CLI', bin: 'gemini', args: [], resumeArgs: [] },
     shell: { id: 'shell', label: 'Shell', bin: '/bin/zsh', args: [], resumeArgs: [] },
   },
-  loginPath: async () => '/opt/homebrew/bin:/usr/bin:/Users/testuser/.local/bin',
+  loginPath: async () => ['/opt/homebrew/bin', '/usr/bin', '/Users/testuser/.local/bin'].join(delimiter),
   detectProviders: async () => ({ claude: false, codex: false, gemini: false, shell: true }),
 }))
 
@@ -645,7 +653,7 @@ describe('collectDiagnostics', () => {
     const bundle = await collectDiagnostics({ includeClis: false, redaction: REDACTION })
     expect(bundle.environment.path).toContain('/opt/homebrew/bin')
     // The mocked login PATH carries a home directory; it must arrive folded.
-    expect(bundle.environment.path.join(':')).not.toContain('/Users/testuser')
+    expect(bundle.environment.path.join(delimiter)).not.toContain('/Users/testuser')
     for (const name of bundle.environment.secretsPresent) {
       expect(typeof name).toBe('string')
       expect(bundle.environment.secretsPresent.join()).not.toContain('=')

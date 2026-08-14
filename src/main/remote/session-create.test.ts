@@ -84,7 +84,11 @@ describe('a request that names one', () => {
 
   it('refuses one it is not offering, and starts nothing', async () => {
     const deps = starter()
-    const outcome = await remoteSessionCreator(deps)({ cwd: '/etc' })
+    // The platform is pinned because the message names the machine, and this
+    // suite runs on the Windows runner too — where the unpinned answer is
+    // "This PC" and the sentence would be asserted against the runner rather
+    // than against the code.
+    const outcome = await remoteSessionCreator(deps, 'darwin')({ cwd: '/etc' })
 
     expect(outcome).toEqual({
       ok: false,

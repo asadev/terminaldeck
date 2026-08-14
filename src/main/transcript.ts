@@ -653,6 +653,15 @@ export const DEFAULT_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000
 export const DEFAULT_MAX_SESSIONS = 40
 
 /**
+ * How long `start()` will wait for the file watcher to actually be watching.
+ *
+ * Not a tuned value — chokidar is ready in milliseconds on a directory holding
+ * a handful of transcripts. It is a ceiling so that a watcher which never
+ * becomes ready costs a project a moment rather than never opening at all.
+ */
+const READY_TIMEOUT_MS = 5_000
+
+/**
  * Watches one project's transcript directory and reports cost as it changes.
  *
  * The initial pass runs newest-first and emits after each file, so the live
@@ -691,17 +700,43 @@ export class TranscriptWatcher {
 
     // Watch before draining, so appends that land mid-scan are not missed.
     // `ignoreInitial` because the scan above already has the current contents.
-    this.watcher = watch(this.dir, {
+    const watcher = watch(this.dir, {
       ignoreInitial: true,
       depth: 0,
       persistent: true,
     })
-    this.watcher.on('add', (path: string) => this.enqueue(path))
-    this.watcher.on('change', (path: string) => this.enqueue(path))
-    this.watcher.on('unlink', (path: string) => this.forget(path))
-    this.watcher.on('error', (err: unknown) =>
-      console.error('[transcript] watch failed:', this.dir, err),
+    this.watcher = watcher
+    watcher.on('add', (path: string) => this.enqueue(path))
+    watcher.on('change', (path: string) => this.enqueue(path))
+    watcher.on('unlink', (path: string) => this.forget(path))
+    watcher.on('error', (err: unknown) => console.error('[transcript] watch failed:', this.dir, err),
     )
+
+    /*
+     * `watch()` returns before it is actually watching, and with
+     * `ignoreInitial: true` anything that lands in that gap is dropped rather
+     * than queued. On macOS the gap is small enough that nobody noticed. On
+     * Windows it is not: the Windows CI job failed here with `requests=1` after
+     * an eight-second wait — not slow, *missed*, because the append happened
+     * while chokidar was still setting up and the change event was never
+     * delivered at all.
+     *
+     * So the comment above is now true rather than aspirational: `start()` does
+     * not resolve until the watcher says it is ready. Bounded, because a watcher
+     * that never becomes ready must degrade to "the periodic drain still works"
+     * rather than leave `start()` — which the app awaits before showing a
+     * project — pending for the life of the process.
+     */
+    await new Promise<void>((settle) => {
+      const done = (): void => {
+        clearTimeout(guard)
+        settle()
+      }
+      const guard = setTimeout(done, READY_TIMEOUT_MS)
+      guard.unref?.()
+      watcher.once('ready', done)
+      watcher.once('error', done)
+    })
 
     await this.drain()
     this.scanning = false
