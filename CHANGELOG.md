@@ -10,6 +10,27 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+## [0.1.8] — 2026-08-14
+
+### Fixed
+
+- **Nothing sent to a phone calls a Windows PC a Mac any more.** Ten sentences
+  in the remote server crossed the sealed channel saying "this Mac" — *"This
+  device is not allowed in. Pair it again from the Mac."*, *"This Mac cannot
+  start sessions from a phone."*, *"Stopped from the Mac."* — and one phone can
+  now hold several machines at once, so those could appear on screen directly
+  beneath a row naming a Windows PC. The phone already prints each machine's own
+  label beside anything it says, so wire copy names no platform at all; copy the
+  person at the keyboard reads keeps the noun and gets it from `machineNoun()`,
+  which knows.
+
+  This is the third sweep of the same rule by the third pair of hands, so it is
+  scanned now rather than swept again: a string literal in a module whose output
+  crosses the wire may not name a platform, and the test says which lines are
+  wrong when one does. Run against the previous release it reports all fourteen
+  it was written for — including four that a careful reading of the diff had
+  missed.
+
 ## [0.1.7] — 2026-08-14
 
 ### Fixed
@@ -389,7 +410,8 @@ First cut. macOS 12+, Apple silicon, unsigned.
 - Preferences with live dark/light theming
 - Session resume (`⌘⇧T`)
 
-[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.1.7...HEAD
+[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.1.8...HEAD
+[0.1.8]: https://github.com/asadev/terminaldeck/releases/tag/v0.1.8
 [0.1.7]: https://github.com/asadev/terminaldeck/releases/tag/v0.1.7
 [0.1.6]: https://github.com/asadev/terminaldeck/releases/tag/v0.1.6
 [0.1.5]: https://github.com/asadev/terminaldeck/releases/tag/v0.1.5

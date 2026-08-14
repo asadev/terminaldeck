@@ -310,7 +310,7 @@ const awaitApproval: RemoteAuthenticator = {
   async authenticate() {
     return {
       ok: false,
-      message: 'Paired. Approve this device on the Mac, then reconnect.',
+      message: 'Paired. Approve this device in the desktop app, then reconnect.',
       credential: 'device-2.bmV3',
       deviceId: 'device-2',
       deviceName: 'Unapproved iPhone',
@@ -1065,7 +1065,9 @@ describe('closing', () => {
     expect(error).toMatchObject({ code: 'unauthorized' })
     // Same sentence as any other refusal: which of the two happened is not a
     // remote caller's business.
-    expect(error.t === 'error' && error.message).toBe('This device is not allowed in. Pair it again from the Mac.')
+    expect(error.t === 'error' && error.message).toBe(
+      'This device is not allowed in. Pair it again from the desktop app.',
+    )
     await expect(client.closed).resolves.toBe(CLOSE.policyViolation)
     expect(harness.endpoint.connections()).toEqual([])
     expect(client.received.some((m) => m.t === 'welcome')).toBe(false)
@@ -1251,7 +1253,9 @@ describe('pairing, against the real trust store', () => {
     expect(after.ok).toBe(false)
     // "revoked" and "never heard of you" have to read the same from outside, or
     // the refusal is an oracle for which device ids are real.
-    expect(after.ok === false && after.message).toBe('This device is not allowed in. Pair it again from the Mac.')
+    expect(after.ok === false && after.message).toBe(
+      'This device is not allowed in. Pair it again from the desktop app.',
+    )
   })
 })
 

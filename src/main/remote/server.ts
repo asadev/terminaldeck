@@ -84,6 +84,7 @@ import {
   type UploadMessage,
 } from './uploads'
 import { scanDevPortsDetailed } from '../dev-ports'
+import { machineNoun } from '../platform/host'
 import { createRelayClient, relayEnabled, relayUrl, type RelayLink, type RelayState } from './relay-client'
 import { loadHostIdentity } from './host-identity'
 import { tailnetStatus, type TailnetStatus } from './tailnet'
@@ -1176,7 +1177,7 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
       refuse(
         connection,
         'unauthorized',
-        'This device is not allowed in. Pair it again from the Mac.',
+        'This device is not allowed in. Pair it again from the desktop app.',
         CLOSE.policyViolation,
       )
       return
@@ -1252,7 +1253,7 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
       send(connection, {
         t: 'error',
         code: 'unauthorized',
-        message: 'This Mac cannot start sessions from a phone.',
+        message: 'Sessions cannot be started from a phone here.',
       })
       return
     }
@@ -1389,7 +1390,7 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
           send(connection, {
             t: 'error',
             code: 'unavailable',
-            message: 'This Mac could not start that session.',
+            message: 'That session could not be started.',
           })
         })
         return
@@ -1418,7 +1419,7 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
           send(connection, {
             t: 'upload.failed',
             id: message.id,
-            message: 'This Mac cannot receive files from a phone.',
+            message: 'Files cannot be sent from a phone here.',
           })
           return
         }
@@ -1575,7 +1576,7 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
       // ends one page, not the device's access. The sentence travels to the
       // phone, which takes the page down and says where the decision came from.
       return (
-        live.get(connectionId)?.tunnels?.stop(tunnelId, 'Stopped from the Mac.') ?? false
+        live.get(connectionId)?.tunnels?.stop(tunnelId, 'Stopped from the desktop.') ?? false
       )
     },
     closeAll(): void {
@@ -1676,7 +1677,7 @@ export function authenticatorFor(auth: RemoteAuth, desk: PairingDesk): RemoteAut
           // Refused in the same words as everything else here: which of the two
           // did not match is not a remote caller's business.
           if (peerPublicKey && !auth.deviceHoldsKey(verified.device.id, peerPublicKey)) {
-            return { ok: false, message: 'This device is not allowed in. Pair it again from the Mac.' }
+            return { ok: false, message: 'This device is not allowed in. Pair it again from the desktop app.' }
           }
           return { ok: true, deviceId: verified.device.id, deviceName: verified.device.name, credential: null }
         }
@@ -1684,10 +1685,10 @@ export function authenticatorFor(auth: RemoteAuth, desk: PairingDesk): RemoteAut
           ok: false,
           message:
             verified.reason === 'pending'
-              ? 'This device is waiting to be approved. Approve it on the Mac, then reconnect.'
+              ? 'This device is waiting to be approved. Approve it in the desktop app, then reconnect.'
               : verified.reason === 'rate-limited'
                 ? 'Too many failed attempts. Try again later.'
-                : 'This device is not allowed in. Pair it again from the Mac.',
+                : 'This device is not allowed in. Pair it again from the desktop app.',
         }
       }
 
@@ -1716,7 +1717,7 @@ export function authenticatorFor(auth: RemoteAuth, desk: PairingDesk): RemoteAut
           ok: false,
           message:
             redeemed.reason === 'expired' || redeemed.reason === 'used'
-              ? 'That pairing code has already been used or has expired. Create a new one on the Mac.'
+              ? 'That pairing code has already been used or has expired. Create a new one in the desktop app.'
               : redeemed.reason === 'rate-limited'
                 ? 'Too many failed attempts. Try again later.'
                 : 'That pairing code is not right.',
@@ -1737,7 +1738,7 @@ export function authenticatorFor(auth: RemoteAuth, desk: PairingDesk): RemoteAut
       // come back.
       return {
         ok: false,
-        message: 'Paired. Approve this device on the Mac, then reconnect.',
+        message: 'Paired. Approve this device in the desktop app, then reconnect.',
         credential: redeemed.credential,
         deviceId: redeemed.device.id,
         deviceName: redeemed.device.name,
@@ -1842,7 +1843,7 @@ export function createRemoteServer(options: RemoteServerOptions): RemoteServer {
       return {
         ok: false,
         reason:
-          'MagicDNS is off for this tailnet, so this Mac has no name a phone can trust a certificate for. Turn MagicDNS on in the Tailscale admin console, then try again.',
+          `MagicDNS is off for this tailnet, so this ${machineNoun()} has no name a phone can trust a certificate for. Turn MagicDNS on in the Tailscale admin console, then try again.`,
       }
     }
     return {
@@ -1903,7 +1904,7 @@ export function createRemoteServer(options: RemoteServerOptions): RemoteServer {
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         blocked = /EADDRINUSE/.test(message)
-          ? `Port ${port} on the tailnet address is already in use by something else on this Mac.`
+          ? `Port ${port} on the tailnet address is already in use by something else on this ${machineNoun()}.`
           : `Could not listen on the tailnet address: ${message}`
       }
       if (blocked !== null) {
@@ -2111,9 +2112,9 @@ function relayFor(storageDir: string, url: string, auth: RemoteAuth, desk: Pairi
             isKnownDevice: (key) => auth.knowsDeviceKey(key) || desk.open(),
           })
         } catch (error) {
-          console.error('[relay] could not keep this Mac’s relay identity:', error)
+          console.error('[relay] could not keep this host’s relay identity:', error)
           broken =
-            'This Mac could not save the key it needs to be reachable through the relay. Check that its application-support folder is writable, then turn remote access off and on again.'
+            `This ${machineNoun()} could not save the key it needs to be reachable through the relay. Check that its application-support folder is writable, then turn remote access off and on again.`
         }
       }
       link?.start(attachTransport)

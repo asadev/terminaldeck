@@ -1,6 +1,6 @@
 {
   "name": "terminaldeck",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Run your coding agents on one deck — sessions, browsers, cost and context in a single window.",
   "main": "./out/main/index.js",
   "author": {

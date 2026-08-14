@@ -144,7 +144,7 @@ const VALID_SERVER: ServerMessage[] = [
   { t: 'sessions', sessions: [] },
   { t: 'ports', ports: [{ port: 3000, process: 'node', guessed: false }] },
   { t: 'tunnel.opened', id: 'tun-1', port: 3000 },
-  { t: 'tunnel.closed', id: 'tun-1', message: 'Stopped from the Mac.' },
+  { t: 'tunnel.closed', id: 'tun-1', message: 'Stopped from the desktop.' },
   { t: 'net.data', ch: 'c1', data: Buffer.from('HTTP/1.1 200 OK\r\n\r\n').toString('base64') },
   { t: 'net.ack', ch: 'c1', bytes: 19 },
   { t: 'net.close', ch: 'c1' },
