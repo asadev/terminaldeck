@@ -8,7 +8,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
   BROWSERS,
@@ -310,8 +310,11 @@ describe('collectBookmarkUrls', () => {
 })
 
 describe('session files', () => {
+  // `listSessionFiles` returns paths built with `join`, so the names are pulled
+  // back off with `basename` rather than by splitting on '/': on Windows the
+  // separator is a backslash and every "name" came back as the whole path.
   it('lists only session files, newest first', () => {
-    const files = listSessionFiles(join(root, 'Default')).map((f) => f.split('/').pop())
+    const files = listSessionFiles(join(root, 'Default')).map((f) => basename(f))
     expect(files).toEqual(['Session_13400000000000000', 'Session_13300000000000000'])
   })
 
@@ -336,7 +339,7 @@ describe('session files', () => {
     ]) {
       writeFileSync(join(dir, 'Sessions', name), 'x')
     }
-    const files = listSessionFiles(dir).map((f) => f.split('/').pop())
+    const files = listSessionFiles(dir).map((f) => basename(f))
     expect(files[0]).toBe('Session_13400000000000000')
     expect(files[1]).toBe('Session_13390000000000000')
     expect(files).toHaveLength(4)
@@ -350,7 +353,7 @@ describe('session files', () => {
     writeFileSync(join(dir, 'Sessions', 'Session_13400000000000001'), 'x')
     writeFileSync(join(dir, 'Sessions', 'Session_13400000000000003'), 'x')
     writeFileSync(join(dir, 'Sessions', 'Session_9400000000000003'), 'x')
-    expect(listSessionFiles(dir).map((f) => f.split('/').pop())).toEqual([
+    expect(listSessionFiles(dir).map((f) => basename(f))).toEqual([
       'Session_13400000000000003',
       'Session_13400000000000001',
       'Session_9400000000000003',
@@ -660,23 +663,32 @@ describe('scanForDevUrls', () => {
 })
 
 describe('paths and detection on this machine', () => {
+  // Both answers are pinned from whichever machine is running: `userDataDirFor`
+  // takes the platform and the environment as arguments precisely so neither
+  // side depends on the host.
   it('builds the macOS user-data directories', () => {
     const chrome = BROWSERS.find((b) => b.id === 'chrome')
     expect(chrome).toBeDefined()
-    expect(userDataDirFor(chrome!, 'darwin', '/Users/asad')).toBe(
+    expect(userDataDirFor(chrome!, 'darwin', '/Users/asad', {})).toBe(
       '/Users/asad/Library/Application Support/Google/Chrome',
     )
     // No Linux path for Arc, because there is no Arc for Linux.
     const arc = BROWSERS.find((b) => b.id === 'arc')
-    expect(userDataDirFor(arc!, 'linux', '/home/asad')).toBeNull()
+    expect(userDataDirFor(arc!, 'linux', '/home/asad', {})).toBeNull()
   })
 
   it('needs LOCALAPPDATA on Windows and says so by returning null', () => {
     const chrome = BROWSERS.find((b) => b.id === 'chrome')
-    expect(userDataDirFor(chrome!, 'win32', 'C:/Users/asad', undefined)).toBeNull()
-    expect(userDataDirFor(chrome!, 'win32', 'C:/Users/asad', 'C:/Users/asad/AppData/Local')).toBe(
-      'C:/Users/asad/AppData/Local/Google/Chrome/User Data',
-    )
+    // An empty environment, not an explicit `undefined`: the parameter used to
+    // default to `process.env.LOCALAPPDATA`, and a default fires for an
+    // explicit `undefined` too — so on a machine that sets the variable this
+    // case quietly asserted nothing and then failed.
+    expect(userDataDirFor(chrome!, 'win32', 'C:\\Users\\asad', {})).toBeNull()
+    expect(
+      userDataDirFor(chrome!, 'win32', 'C:\\Users\\asad', {
+        LOCALAPPDATA: 'C:\\Users\\asad\\AppData\\Local',
+      }),
+    ).toBe('C:\\Users\\asad\\AppData\\Local\\Google\\Chrome\\User Data')
   })
 
   it('never throws, whatever this machine happens to have installed', () => {

@@ -523,12 +523,24 @@ describe('writeGuestPreload', () => {
   const root = mkdtempSync(join(tmpdir(), 'terminaldeck-guest-preload-'))
   afterAll(() => rmSync(root, { recursive: true, force: true }))
 
+  /**
+   * Permission bits are a POSIX guarantee, and only that.
+   *
+   * Windows has no mode bits behind `chmod`: a file written with `mode: 0o600`
+   * reads back as 0o666 there, because Node synthesises the mode from the
+   * read-only attribute and nothing else (measured on Windows 11 — 438, not
+   * 384). Owner-only-ness on Windows is an ACL question this module does not
+   * ask, so the claim is skipped there rather than weakened everywhere. What
+   * the file *contains* is checked on both.
+   */
+  const POSIX_MODES = process.platform !== 'win32'
+
   it('writes the script and returns its path', () => {
     const dir = join(root, 'fresh')
     const path = writeGuestPreload(dir)
     expect(path).toBe(join(dir, GUEST_PRELOAD_FILENAME))
     expect(readFileSync(path, 'utf8')).toBe(GUEST_PRELOAD_SOURCE)
-    expect(statSync(path).mode & 0o777).toBe(0o600)
+    if (POSIX_MODES) expect(statSync(path).mode & 0o777).toBe(0o600)
   })
 
   it('takes the permissions back off a file someone else left permissive', () => {
@@ -542,7 +554,9 @@ describe('writeGuestPreload', () => {
     writeFileSync(path, 'planted', { mode: 0o666 })
 
     writeGuestPreload(dir)
-    expect(statSync(path).mode & 0o777).toBe(0o600)
+    if (POSIX_MODES) expect(statSync(path).mode & 0o777).toBe(0o600)
+    // The rewrite itself is not a POSIX claim: the planted content must be gone
+    // on every platform, whatever the mode says.
     expect(readFileSync(path, 'utf8')).toBe(GUEST_PRELOAD_SOURCE)
   })
 

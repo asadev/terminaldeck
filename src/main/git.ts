@@ -430,6 +430,14 @@ export async function readGitStatus(cwd: string): Promise<GitStatusResult> {
  * whatever two paths it is handed. Without this check, `../../../../.ssh/id_rsa`
  * or a plain absolute path turns the diff channel into an arbitrary-file read
  * for anything that gets script execution in the renderer.
+ *
+ * The containment check runs in the host's own path semantics — which is what
+ * makes it right on Windows, where `\` is a separator and `..\..\x` escapes a
+ * root exactly as `../../x` does. Only the *answer* is converted back to `/`:
+ * git speaks one separator on every platform, and every path this function is
+ * handed came out of git's own porcelain in that spelling. Returning
+ * `src\app.ts` on Windows would hand a pathspec back in a spelling git never
+ * used, for no gain.
  */
 export function repoRelative(root: string, path: string): string | null {
   if (typeof path !== 'string' || path === '' || path.includes('\0')) return null
@@ -440,7 +448,7 @@ export function repoRelative(root: string, path: string): string | null {
   // '' is the root itself, '..'-prefixed is outside it, and `relative` returns
   // an absolute path when the two sit on different Windows drives.
   if (rel === '' || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return null
-  return rel
+  return rel.split(sep).join('/')
 }
 
 /**

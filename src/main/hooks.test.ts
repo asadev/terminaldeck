@@ -46,6 +46,25 @@ import {
  * that holds nothing but hooks.
  */
 
+/**
+ * Two POSIX facts this file leans on, and what each means off POSIX.
+ *
+ * **File modes.** Windows has no mode bits behind `chmod` — a file written
+ * 0o600 reads back as 0o666 there, synthesised from the read-only attribute
+ * (measured on Windows 11). "Stays 0600" is a claim that cannot be made or
+ * broken on that platform, so it is skipped rather than softened.
+ *
+ * **A shell to run the hook in.** The command this module writes is POSIX
+ * through and through: `/usr/bin/curl`, `|| true`, single-quoted arguments and
+ * a trailing `#` comment, none of which is `cmd.exe` syntax. There is no
+ * Windows form of it yet, and no `/bin/sh` to run the POSIX one with —
+ * `spawn('/bin/sh')` fails ENOENT there, which is exactly how these three
+ * cases failed. Running them under Git Bash instead would prove something
+ * about Git Bash; it would not prove anything about the shell a provider CLI
+ * actually uses on Windows. See the note in `hooks.ts`.
+ */
+const ON_WINDOWS = process.platform === 'win32'
+
 let root: string
 let context: HookContext
 
@@ -145,7 +164,7 @@ describe('ownership', () => {
    * exactly why this is worth pinning: the day the token generator changes,
    * the failure would be silent and total.
    */
-  it('cannot be broken out of by a value that carries a quote', async () => {
+  it.skipIf(ON_WINDOWS)('cannot be broken out of by a value that carries a quote', async () => {
     const command = hookCommand('claude', 'Stop', {
       port: 9,
       token: "x'; touch /tmp/terminaldeck-hook-injection; echo '",
@@ -294,7 +313,7 @@ describe('install and remove against a real settings file', () => {
     expect(readFileSync(file, 'utf8')).toBe(original)
   })
 
-  it('preserves the file mode, so a 0600 config does not become world-readable', () => {
+  it.skipIf(ON_WINDOWS)('preserves the file mode, so a 0600 config does not become world-readable', () => {
     const file = writeClaude(claudeSettings(), 0o600)
     installHooks(context, 'claude')
     expect(statSync(file).mode & 0o777).toBe(0o600)
@@ -314,7 +333,7 @@ describe('install and remove against a real settings file', () => {
     const file = join(root, '.gemini', 'settings.json')
     expect(allEntries(readJson(file)).filter(isOurs)).toHaveLength(HOOK_PROVIDERS.gemini.events.length)
     // A file we created holds a token, so it starts owner-only.
-    expect(statSync(file).mode & 0o777).toBe(0o600)
+    if (!ON_WINDOWS) expect(statSync(file).mode & 0o777).toBe(0o600)
   })
 
   it('backs the original up once, before the first write, and never again', () => {
@@ -392,7 +411,7 @@ describe('install and remove against a real settings file', () => {
     // the hooks.
     expect(lstatSync(link).isSymbolicLink()).toBe(true)
     expect(allEntries(readJson(real)).filter(isOurs)).toHaveLength(HOOK_PROVIDERS.claude.events.length)
-    expect(statSync(real).mode & 0o777).toBe(0o600)
+    if (!ON_WINDOWS) expect(statSync(real).mode & 0o777).toBe(0o600)
 
     // And removal has to find its way back through the link too.
     expect(removeHooks(context, 'claude').ok).toBe(true)
@@ -500,7 +519,7 @@ describe('the command we write actually works', () => {
    * exactly the way a provider CLI does: payload on stdin, session id in the
    * environment.
    */
-  it('posts stdin to the endpoint when run through a shell', async () => {
+  it.skipIf(ON_WINDOWS)('posts stdin to the endpoint when run through a shell', async () => {
     const seen: HookEvent[] = []
     const endpoint = await startHookServer({ onEvent: (event) => seen.push(event) })
     const command = hookCommand('claude', 'PostToolUse', endpoint)
@@ -525,7 +544,7 @@ describe('the command we write actually works', () => {
     })
   })
 
-  it('exits cleanly when the app is not listening', async () => {
+  it.skipIf(ON_WINDOWS)('exits cleanly when the app is not listening', async () => {
     // Nothing is bound here — the port is one the endpoint never took.
     const command = hookCommand('claude', 'Stop', { port: 9, token: 'x' })
     const child = spawn('/bin/sh', ['-c', command], { stdio: ['pipe', 'pipe', 'pipe'] })

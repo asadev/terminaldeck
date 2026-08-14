@@ -303,6 +303,19 @@ describe('repoRelative', () => {
     expect(repoRelative(root, 'a\0b')).toBeNull()
     expect(repoRelative(root, '.')).toBeNull()
   })
+
+  /**
+   * Windows-only because it is the platform's own answer that is being pinned.
+   * There a backslash is a separator, so `..\..\x` escapes the root exactly as
+   * `../../x` does and has to be refused the same way; on POSIX a backslash is
+   * an ordinary character in a filename and the same strings name files that
+   * legitimately sit inside the repository.
+   */
+  it.skipIf(process.platform !== 'win32')('treats a backslash as a separator where the OS does', () => {
+    expect(repoRelative(root, 'src\\app.ts')).toBe('src/app.ts')
+    expect(repoRelative(root, '..\\..\\etc\\passwd')).toBeNull()
+    expect(repoRelative(root, 'src\\..\\..\\etc\\passwd')).toBeNull()
+  })
 })
 
 /**

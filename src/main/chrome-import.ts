@@ -36,7 +36,8 @@
 
 import { copyFileSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, posix, win32 } from 'node:path'
+import { currentPlatform, type Env, type Platform } from './platform/host'
 
 /* ------------------------------------------------------------------ types -- */
 
@@ -202,15 +203,38 @@ function compareProfileIds(a: string, b: string): number {
   return a.localeCompare(b, undefined, { numeric: true })
 }
 
+/**
+ * Where a browser keeps its user data on a given platform, or null when it
+ * keeps none there.
+ *
+ * Two things are passed in rather than read, and both are the same lesson
+ * `platform/host.ts` writes down at length: a decision that reads the host can
+ * only ever be exercised on the host.
+ *
+ * - **`platform` picks the path flavour too.** Joining with the bare `join`
+ *   used the *running* machine's separator, so asking for the darwin answer on
+ *   Windows produced `\Users\asad\Library\Application Support\…` — a string
+ *   that is neither a macOS path nor a Windows one (observed on Windows 11).
+ *   Production never noticed, because there the platform asked about is the
+ *   platform running; a test pinning the other one did.
+ * - **The environment is an argument, not a default.** `localAppData` used to
+ *   default to `process.env.LOCALAPPDATA`, and a defaulted parameter cannot be
+ *   overridden with `undefined` — passing it explicitly re-triggers the
+ *   default. So "LOCALAPPDATA is not set" was unpinnable on a machine that
+ *   sets it, and the case returned a real directory on Windows instead of null.
+ */
 export function userDataDirFor(
   def: BrowserDef,
-  platform: NodeJS.Platform = process.platform,
+  platform: Platform = currentPlatform(),
   home: string = homedir(),
-  localAppData: string | undefined = process.env.LOCALAPPDATA,
+  env: Env = process.env,
 ): string | null {
-  if (platform === 'darwin') return join(home, def.darwin)
-  if (platform === 'win32') return def.win32 && localAppData ? join(localAppData, def.win32) : null
-  return def.linux ? join(home, def.linux) : null
+  if (platform === 'darwin') return posix.join(home, def.darwin)
+  if (platform === 'win32') {
+    const localAppData = env.LOCALAPPDATA
+    return def.win32 && localAppData ? win32.join(localAppData, def.win32) : null
+  }
+  return def.linux ? posix.join(home, def.linux) : null
 }
 
 /* ----------------------------------------------------------- url matching -- */

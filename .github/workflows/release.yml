@@ -94,14 +94,14 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      # The suite is not ported to Windows yet — roughly twenty cases assume
-      # POSIX file modes, symlink semantics, `sh`, or a `/` separator, and each
-      # is a test describing macOS rather than a product failure. They run here
-      # so the gap stays visible and shrinking; they do not gate the installer
-      # while that port is in progress. This comes off the moment they pass.
-      - name: Test (not yet gating — the Windows port is unfinished)
+      # Gating, as of the port. The suite was run to green on a real Windows 11
+      # box before this flag came off — not inferred from the macOS run.
+      #
+      # What it does *not* claim on Windows is written at each skip rather than
+      # here, so the list cannot go stale: POSIX file modes, the POSIX shell the
+      # hook command is written for, and the macOS-only updater.
+      - name: Test
         run: npm test
-        continue-on-error: true
 
       - name: Build the Windows artifacts
         run: npm run dist:win

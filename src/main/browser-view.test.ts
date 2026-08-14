@@ -1,3 +1,4 @@
+import { join, resolve } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import type { IpcMain } from 'electron'
 import { BRAND } from '../shared/brand'
@@ -8,12 +9,24 @@ import { BRAND } from '../shared/brand'
  * every view look foreign and quietly skip the half of this file that matters.
  */
 const GUEST_SESSION = {}
+
+/**
+ * What `app.getPath('pictures')` answers here, resolved so it is absolute on
+ * this platform.
+ *
+ * The reveal guard compares a `resolve`d request against `screenshotDir()`, and
+ * a bare `/tmp` is only drive-relative on Windows: the guard's own side stayed
+ * `\tmp\…` while the path under test resolved to `C:\tmp\…`, so a capture we
+ * had just written was refused. Electron hands the real thing an absolute path
+ * with a drive on it; the mock now does the same.
+ */
+const PICTURES = resolve('/tmp')
 const revealed: string[] = []
 let onWebContentsCreated: ((event: unknown, wc: unknown) => void) | null = null
 
 vi.mock('electron', () => ({
   app: {
-    getPath: () => '/tmp',
+    getPath: () => PICTURES,
     on: (event: string, fn: (event: unknown, wc: unknown) => void) => {
       if (event === 'web-contents-created') onWebContentsCreated = fn
     },
@@ -257,14 +270,16 @@ describe('revealing a screenshot', () => {
   it('refuses a path outside the screenshot directory', () => {
     revealed.length = 0
     invoke('browser-view:reveal', '/etc/passwd')
-    invoke('browser-view:reveal', `/tmp/Pictures/${BRAND.name}/../../../etc/passwd`)
+    // Left unnormalised on purpose — collapsing it here would test `join`
+    // rather than the `resolve` the handler does before it compares.
+    invoke('browser-view:reveal', `${PICTURES}/Pictures/${BRAND.name}/../../../etc/passwd`)
     invoke('browser-view:reveal', 42)
     expect(revealed).toEqual([])
   })
 
   it('reveals one of our own captures', () => {
     revealed.length = 0
-    invoke('browser-view:reveal', `/tmp/${BRAND.name}/example.com-20260812-163045.png`)
+    invoke('browser-view:reveal', join(PICTURES, BRAND.name, 'example.com-20260812-163045.png'))
     expect(revealed).toHaveLength(1)
   })
 })

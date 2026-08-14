@@ -301,7 +301,15 @@ describe('storage', () => {
     expect(stored.n).toBeGreaterThanOrEqual(16384)
   })
 
-  it('keeps the file readable only by its owner', async () => {
+  /**
+   * POSIX-only, and skipped rather than softened off it. Windows has no mode
+   * bits behind `chmod`: this file comes back 0o666 there whatever it was
+   * written with, because Node synthesises the mode from the read-only
+   * attribute alone (measured on Windows 11 — 438, not 384). Keeping the paired
+   * device secrets owner-only on Windows is an ACL question, and this module
+   * does not ask it; asserting 0o666 would only record that.
+   */
+  it.skipIf(process.platform === 'win32')('keeps the file readable only by its owner', async () => {
     const auth = new RemoteAuth(tempDir(), { now: clock().now })
     await pair(auth)
     expect(statSync(auth.file).mode & 0o777).toBe(0o600)
