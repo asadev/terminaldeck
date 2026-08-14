@@ -36,6 +36,10 @@ androidx-compose-material-icons-extended = { group = "androidx.compose.material"
 
 kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
 okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
+# Test only. The multi-host tests need a *real* WebSocket at the other end of the transport: the one
+# thing they have to prove is that the socket for one machine never spends another machine's
+# credential, and a fake transport cannot answer that because the credential never reaches the wire.
+mockwebserver = { group = "com.squareup.okhttp3", name = "mockwebserver", version.ref = "okhttp" }
 # MIT-licensed, no transitive dependencies, and never registered as a JCA provider — see crypto/Sealed.kt.
 bouncycastle = { group = "org.bouncycastle", name = "bcprov-jdk18on", version.ref = "bouncycastle" }
 # Apache 2.0. The QR half of pairing; the typed half needs nothing.

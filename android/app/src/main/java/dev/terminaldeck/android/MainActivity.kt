@@ -138,7 +138,17 @@ class MainActivity : ComponentActivity() {
 }
 
 private const val ROUTE_SESSIONS = "sessions"
-private const val ROUTE_TERMINAL = "terminal/{sessionId}"
+
+/**
+ * A terminal route names the machine as well as the session.
+ *
+ * Session ids are unique on the computer that minted one and nothing makes them unique *across* two
+ * of them — they come from each machine's own session layer. A route carrying only an id would
+ * attach to whichever machine happened to be on screen when it was popped, which with two paired is
+ * a coin flip, and the wrong side of it types into the wrong computer.
+ */
+private const val ROUTE_TERMINAL = "terminal/{hostId}/{sessionId}"
+private const val ARG_HOST_ID = "hostId"
 private const val ARG_SESSION_ID = "sessionId"
 
 @Composable
@@ -181,8 +191,8 @@ fun TerminalDeckApp(
      */
     val created by viewModel.created.collectAsStateWithLifecycle()
     LaunchedEffect(created) {
-        val id = created ?: return@LaunchedEffect
-        navController.navigate("terminal/$id")
+        val request = created ?: return@LaunchedEffect
+        navController.navigate("terminal/${request.hostId}/${request.sessionId}")
         viewModel.createdHandled()
     }
 
@@ -252,16 +262,23 @@ fun TerminalDeckApp(
         }
     }
 
-    // The pair screen owns the window until a Mac has admitted this device at least once. Not a
-    // navigation destination: an unpaired app has nothing behind the pair screen to go back to, and
-    // a back stack entry that leads to an empty session list is a trap.
+    /*
+     * The pair screen owns the window while the machine on screen has not admitted this device —
+     * which covers "nothing is paired at all", because then there is no machine on screen — and
+     * while the user is adding another one.
+     *
+     * Not a navigation destination: an unpaired app has nothing behind the pair screen to go back
+     * to, and a back stack entry that leads to an empty session list is a trap. Once one machine has
+     * been let in there *is* somewhere to go back to, and that is what `onCancel` is.
+     */
     if (state.needsPairing) {
         PairingScreen(
             state = state,
             onPair = viewModel::pair,
             onScan = startScan,
-            onForget = viewModel::unpair,
+            onForget = viewModel::forgetSelected,
             onRetry = viewModel::reconnect,
+            onCancel = if (state.canLeavePairing) viewModel::cancelAddingHost else null,
         )
         return
     }
@@ -270,40 +287,54 @@ fun TerminalDeckApp(
         composable(ROUTE_SESSIONS) {
             SessionListScreen(
                 state = state,
-                onOpen = { session -> navController.navigate("terminal/${session.id}") },
+                onOpen = { session ->
+                    // The machine travels with the session, taken from the state that produced the
+                    // row rather than looked up again later — by then it could be a different one.
+                    state.host?.let { host -> navController.navigate("terminal/${host.hostId}/${session.id}") }
+                },
                 onRefresh = viewModel::refresh,
                 onReconnect = viewModel::reconnect,
                 onNewSession = viewModel::newSession,
-                onUnpair = viewModel::unpair,
+                onSelectHost = viewModel::select,
+                onRenameHost = viewModel::rename,
+                onForgetHost = viewModel::forget,
+                onAddHost = viewModel::beginAddingHost,
             )
         }
 
         composable(
             route = ROUTE_TERMINAL,
-            arguments = listOf(navArgument(ARG_SESSION_ID) { type = NavType.StringType }),
+            arguments = listOf(
+                navArgument(ARG_HOST_ID) { type = NavType.StringType },
+                navArgument(ARG_SESSION_ID) { type = NavType.StringType },
+            ),
         ) { entry ->
+            val hostId = entry.arguments?.getString(ARG_HOST_ID)
             val sessionId = entry.arguments?.getString(ARG_SESSION_ID)
-            val known = state.sessions.firstOrNull { it.id == sessionId }
+            // Looked up in the machine the route names rather than in whatever is on screen. Those
+            // are the same thing by the frame after `open`, and are not on the frame of it.
+            val known = state.hosts.firstOrNull { it.hostId == hostId }
+                ?.sessions?.firstOrNull { it.id == sessionId }
+            val binding = if (hostId != null && sessionId != null) viewModel.open(hostId, sessionId) else null
 
-            // The route argument is a string from the back stack, and the back stack survives
-            // process death and a Mac restart — so an id that no longer names a session in the
-            // list is a normal thing to arrive with, not a bug to crash on.
+            // The route arguments are strings from the back stack, and the back stack survives
+            // process death, a machine restart and a machine being forgotten — so an id that no
+            // longer names anything is a normal thing to arrive with, not a bug to crash on.
             //
             // The pop happens in an effect rather than inline. Calling `popBackStack` *during*
             // composition is a mutation in the middle of the frame that produced it: the
             // navigation does not take, this composable returns nothing, and what is left on
             // screen is a black rectangle with no bar, no keys and no explanation. That is
             // exactly what happened the first time the Mac was restarted underneath the app.
-            if (sessionId == null || known == null) {
-                LaunchedEffect(sessionId) {
-                    viewModel.closeCurrent()
+            if (hostId == null || binding == null || known == null) {
+                LaunchedEffect(hostId, sessionId) {
+                    hostId?.let(viewModel::closeSession)
                     navController.popBackStack()
                 }
                 LeavingSession()
                 return@composable
             }
 
-            val binding = viewModel.open(sessionId)
             TerminalScreen(
                 binding = binding,
                 title = known.title,
@@ -311,12 +342,12 @@ fun TerminalDeckApp(
                 screenTick = screenTick,
                 transport = state.transport,
                 onBack = {
-                    viewModel.closeCurrent()
+                    viewModel.closeSession(hostId)
                     navController.popBackStack()
                 },
-                onKey = viewModel::type,
-                onCopy = viewModel::copy,
-                onPaste = viewModel::paste,
+                onKey = { text -> viewModel.type(hostId, text) },
+                onCopy = { selection -> viewModel.copy(hostId, selection) },
+                onPaste = { viewModel.paste(hostId) },
                 canSendFiles = state.canSendFiles,
                 onSendPhoto = {
                     photoPicker.launch(

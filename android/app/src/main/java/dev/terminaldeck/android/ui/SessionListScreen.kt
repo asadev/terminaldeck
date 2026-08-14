@@ -21,6 +21,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -59,12 +60,19 @@ import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 
 /**
- * The sessions running on the Mac.
+ * The sessions running on the machine on screen.
  *
  * Deliberately not a dashboard. The protocol carries six fields per session and this screen shows
  * all six, because the phone's job is to let someone decide which session to look at from a bus —
- * anything richer belongs on the Mac, which is the same reasoning `protocol.ts` gives for keeping
- * version 1 tiny.
+ * anything richer belongs on the desktop, which is the same reasoning `protocol.ts` gives for
+ * keeping version 1 tiny.
+ *
+ * ## The title is the switcher
+ *
+ * With several machines paired, the one question this screen has to answer before any other is
+ * *which computer am I looking at* — so the machine's name is the title rather than the app's, and
+ * the title is the control that changes it. See [HostSwitcherSheet], which is also the only place a
+ * machine is named, forgotten, or added.
  *
  * ## The indicator never claims a connection it does not have
  *
@@ -83,15 +91,24 @@ fun SessionListScreen(
     onOpen: (RemoteSessionView) -> Unit,
     onRefresh: () -> Unit,
     onReconnect: () -> Unit,
-    /** Null means "wherever the Mac would have started one" — see `DeckViewModel.newSession`. */
+    /** Null means "wherever that machine would have started one" — see `DeckViewModel.newSession`. */
     onNewSession: (String?) -> Unit,
-    onUnpair: () -> Unit,
+    onSelectHost: (String) -> Unit,
+    onRenameHost: (String, String?) -> Unit,
+    onForgetHost: (String) -> Unit,
+    onAddHost: () -> Unit,
 ) {
     val snackbar = remember { SnackbarHostState() }
     var folderMenu by remember { mutableStateOf(false) }
+    var switcher by remember { mutableStateOf(false) }
     LaunchedEffect(state.notice) {
         state.notice?.let { snackbar.showSnackbar(it) }
     }
+
+    // The switcher is a sibling of the whole screen rather than of its content, so the scrim covers
+    // the bar the switcher was opened from. A sheet with the title still bright above it reads as a
+    // menu belonging to that title rather than as the app's list of machines.
+    Box(modifier = Modifier.fillMaxSize()) {
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -103,22 +120,48 @@ fun SessionListScreen(
                     titleContentColor = MaterialTheme.colorScheme.onBackground,
                 ),
                 title = {
-                    Column {
-                        Text("Terminal Deck", style = MaterialTheme.typography.titleLarge)
-                        Text(
-                            // The Mac's public name from the relay, which is the only name the
-                            // protocol gives for the machine. `welcome.deviceName` is this phone's.
-                            text = state.pairing?.hostId ?: "not paired",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
+                    // The whole title is the control, not just the chevron: a name with an arrow
+                    // next to it that only responds on the arrow is a target the width of a
+                    // fingernail.
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .clickable { switcher = true }
+                            .padding(horizontal = 6.dp, vertical = 4.dp),
+                    ) {
+                        Column(modifier = Modifier.weight(1f, fill = false)) {
+                            Text(
+                                text = state.hostLabel,
+                                style = MaterialTheme.typography.titleLarge,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                // The machine's public name at the relay, which is the only name the
+                                // protocol gives it. `welcome.deviceName` is this phone's.
+                                text = if (state.hasSeveralHosts) {
+                                    "${state.hosts.size} machines · tap to switch"
+                                } else {
+                                    state.pairing?.hostId ?: "not paired"
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        Spacer(Modifier.width(4.dp))
+                        Icon(
+                            Icons.Filled.ExpandMore,
+                            contentDescription = "Your machines",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(20.dp),
                         )
                     }
                 },
                 actions = {
                     TextButton(onClick = onRefresh, enabled = state.transport.isOnline) { Text("Refresh") }
-                    TextButton(onClick = onUnpair) { Text("Unpair") }
                 },
             )
         },
@@ -190,18 +233,24 @@ fun SessionListScreen(
             }
         }
     }
+
+    if (switcher) {
+        HostSwitcherSheet(
+            hosts = state.hosts,
+            onSelect = onSelectHost,
+            onRename = onRenameHost,
+            onForget = onForgetHost,
+            onAddHost = onAddHost,
+            onDismiss = { switcher = false },
+        )
+    }
+
+    }
 }
 
 @Composable
 private fun ConnectionBanner(state: TransportState, onReconnect: () -> Unit) {
-    val tint = when (state) {
-        is TransportState.Online -> MaterialTheme.colorScheme.primary
-        is TransportState.Connecting -> MaterialTheme.colorScheme.secondary
-        is TransportState.Pending -> MaterialTheme.colorScheme.secondary
-        is TransportState.Waiting -> MaterialTheme.colorScheme.error
-        is TransportState.Rejected, is TransportState.Incompatible -> MaterialTheme.colorScheme.error
-        else -> MaterialTheme.colorScheme.onSurfaceVariant
-    }
+    val tint = connectionTint(state)
     val retryAt = when (state) {
         is TransportState.Waiting -> state.retryAt
         is TransportState.Pending -> state.retryAt
@@ -256,11 +305,12 @@ private fun EmptyState(state: DeckUiState) {
         } else {
             Text(
                 text = if (state.transport.isOnline) {
-                    "No sessions on the Mac."
+                    // Named, because with two machines paired "no sessions" does not say whose.
+                    "No sessions on ${state.hostLabel}."
                 } else {
                     // Not "no sessions": nothing is known either way while the socket is down, and
-                    // an empty list would read as a Mac with nothing running on it.
-                    "Not connected, so there is nothing to show yet."
+                    // an empty list would read as a machine with nothing running on it.
+                    "Not connected to ${state.hostLabel}, so there is nothing to show yet."
                 },
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,

@@ -97,6 +97,23 @@ android {
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
     }
+
+    testOptions {
+        unitTests {
+            /*
+             * `android.jar` on the unit-test classpath is stubs, and every method in it throws
+             * `Stub!` unless this is set. The types that matter here are deliberately free of
+             * Android — the vault is a file and a cipher, the transport is OkHttp, the collection of
+             * machines is plain Kotlin — but two leaves are not: `android.util.Log`, which the
+             * transport writes to on every error path, and `android.os.Build`, which supplies the
+             * default device name. Both are things a test is entitled to have do nothing.
+             *
+             * It does not make Android testable here, and it is not meant to: anything that needs a
+             * real framework belongs in `androidTest`.
+             */
+            isReturnDefaultValues = true
+        }
+    }
 }
 
 dependencies {
@@ -126,6 +143,8 @@ dependencies {
     // The upload pump is a coroutine driven by acknowledgements, so its tests need a scheduler they
     // can drive rather than a clock they have to wait on.
     testImplementation(libs.kotlinx.coroutines.test)
+    // See the note in libs.versions.toml: the credential-isolation test needs a real socket.
+    testImplementation(libs.mockwebserver)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))
 }

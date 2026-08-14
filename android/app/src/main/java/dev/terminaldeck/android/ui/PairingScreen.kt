@@ -90,12 +90,29 @@ fun PairingScreen(
     onScan: () -> Unit,
     onForget: () -> Unit,
     onRetry: () -> Unit,
+    /**
+     * Back to the machines that already work.
+     *
+     * Null while this is the first machine — there is genuinely nowhere to go, and a Cancel that
+     * leads to an empty app is worse than no Cancel. Non-null the moment one machine has been let
+     * in, because from then on this screen is something the user opened rather than the state of the
+     * app, and a screen with no way out is how "add a machine" becomes "my phone forgot my Mac".
+     */
+    onCancel: (() -> Unit)? = null,
 ) {
     var code by remember { mutableStateOf("") }
+    /*
+     * Adding wins over everything below it.
+     *
+     * The user asked for an empty field, and the machine on screen may be perfectly happy — so
+     * without this the "add a machine" tap would land on a card describing the machine they already
+     * have, which reads as the tap having done nothing.
+     */
+    val adding = state.addingHost
     // Three mutually exclusive readings of the same stored code. `awaitingApproval` requires the
-    // Mac to have answered; `unreachable` is the case that used to borrow the first one's words.
-    val awaitingApproval = state.awaitingApproval
-    val unreachable = state.macUnreachable
+    // machine to have answered; `unreachable` is the case that used to borrow the first one's words.
+    val awaitingApproval = !adding && state.awaitingApproval
+    val unreachable = !adding && state.macUnreachable
     // A refusal is not an unreachable Mac and must not borrow its words either — same mistake, one
     // state along. `Rejected` clears the credential but leaves the pairing record, so without this
     // branch a refused phone reads "Paired with a Mac that is not answering" over a card saying the
@@ -113,10 +130,24 @@ fun PairingScreen(
             .verticalScroll(rememberScrollState())
             .padding(24.dp),
     ) {
-        Text("Terminal Deck", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onBackground)
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            Text(
+                text = if (adding) "Add a machine" else "Terminal Deck",
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.onBackground,
+                modifier = Modifier.weight(1f),
+            )
+            // Only when there is somewhere to go back to. See `onCancel`.
+            onCancel?.let {
+                TextButton(onClick = it) { Text("Your machines") }
+            }
+        }
         Spacer(Modifier.height(6.dp))
         Text(
             text = when {
+                // Nothing is claimed about any machine here: the user asked for a field.
+                adding -> "Pair this phone with another computer. The ones you already have stay " +
+                    "paired and stay connected."
                 // The Mac answered on this attempt and asked for a human. The only case in which
                 // the claim "paired with a Mac, waiting" is true of the present tense.
                 awaitingApproval -> "Paired with a Mac. Waiting to be let in."
@@ -152,9 +183,11 @@ fun PairingScreen(
 
         Spacer(Modifier.height(24.dp))
         FingerprintRow("This phone", state.deviceFingerprint)
-        state.pairing?.let {
+        // Not while adding: those rows describe the machine already on screen, and printing its key
+        // under a form for a different computer is the screen answering a question nobody asked.
+        state.pairing?.takeIf { !adding }?.let {
             Spacer(Modifier.height(10.dp))
-            FingerprintRow("That Mac", it.hostFingerprint)
+            FingerprintRow("That machine", it.hostFingerprint)
             Spacer(Modifier.height(10.dp))
             FingerprintRow("Relay", it.relayUrl)
         }

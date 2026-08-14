@@ -24,7 +24,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -76,10 +75,25 @@ import java.util.concurrent.TimeUnit
  */
 class WebSocketDeckTransport(
     private val scope: CoroutineScope,
+    /**
+     * Which machine this socket is for.
+     *
+     * Fixed at construction and never read back off the vault, because the vault now holds several
+     * machines and "the pairing" is no longer a question with one answer. A transport that asked the
+     * store which host it belonged to would answer differently depending on what had been paired
+     * since — which is the shape of the bug where a reconnect for one machine spends another
+     * machine's credential.
+     */
+    private val hostId: String,
     private val vault: DeviceVault,
     private val deviceName: String = "${Build.MANUFACTURER} ${Build.MODEL}".trim(),
     private val clock: () -> Long = System::currentTimeMillis,
     private val client: OkHttpClient = defaultClient(),
+    /**
+     * The app-wide tick this socket's keepalive rides on. See [Heartbeat]: N machines cost one
+     * radio wake-up rather than N, which is the whole reason it is shared.
+     */
+    private val heartbeat: Heartbeat = Heartbeat.shared,
 ) : DeckTransport {
 
     private val lock = Any()
@@ -130,7 +144,6 @@ class WebSocketDeckTransport(
     private var macAnsweredLastAttempt = false
 
     private var retryJob: Job? = null
-    private var heartbeatJob: Job? = null
     private var handshakeJob: Job? = null
     private var awaitingPong = false
 
@@ -143,6 +156,14 @@ class WebSocketDeckTransport(
         }
     }
 
+    /**
+     * Try again now.
+     *
+     * Deliberately does **not** realign the shared tick. Realigning is an app-wide act — it stops
+     * one timer and starts another — and doing it here would mean N realignments when N machines
+     * come back from a pocket together, each one moving the tick the previous one had just set.
+     * `DeckViewModel.resume` does it once, before resuming any host. See [Heartbeat.realign].
+     */
     override fun resume() {
         synchronized(lock) {
             if (stopped) return
@@ -189,8 +210,11 @@ class WebSocketDeckTransport(
         channel = null
         initiator = null
         macAnswered = false
+        // Nothing is owed an answer on a socket that does not exist yet. Left set from a previous
+        // attempt it would make the first grace period after a reconnect fail the fresh connection.
+        awaitingPong = false
 
-        val pairing = vault.pairing()
+        val pairing = vault.pairing(hostId)
         val token = pairing?.token
         if (pairing == null || token == null) {
             // Not an error and not a retry: there is nothing to connect with, and the app's answer
@@ -408,7 +432,7 @@ class WebSocketDeckTransport(
         // token is single-use and reconnecting with it would be refused and would count against
         // the failed-attempt limiter.
         val minted = message.token
-        if (minted != null) vault.storeCredential(minted, message.deviceId, message.deviceName)
+        if (minted != null) vault.storeCredential(hostId, minted, message.deviceId, message.deviceName)
 
         /*
          * A `welcome` is not always an admission.
@@ -433,7 +457,7 @@ class WebSocketDeckTransport(
 
         greeted = true
         awaitingApproval = false
-        vault.markApproved()
+        vault.markApproved(hostId)
         backoff.reset()
         clearHandshakeTimer()
         _capabilities.value = message.capabilities.toSet()
@@ -449,7 +473,7 @@ class WebSocketDeckTransport(
                 // The credential is not good any more. Keeping it would spend attempts against a
                 // lockout counter forever; clearing it is what turns the next launch into a pair
                 // screen with an explanation.
-                vault.clearCredential()
+                vault.clearCredential(hostId)
                 terminate(TransportState.Rejected(detail ?: "This device is not paired with that Mac any more."))
             }
 
@@ -538,35 +562,49 @@ class WebSocketDeckTransport(
     }
 
     /**
-     * A ping the desktop has to answer, on top of the relay's own.
+     * This socket's half of the app-wide tick.
      *
-     * The relay pings both of its sockets, so a dead TCP connection is noticed there — but "the
-     * relay can still reach my socket" is not "the Mac is still there". Only an end-to-end pong
-     * proves the far end is alive and still holds the channel.
+     * A ping the desktop has to answer, on top of the relay's own: the relay pings both of its
+     * sockets, so a dead TCP connection is noticed there — but "the relay can still reach my
+     * socket" is not "the Mac is still there". Only an end-to-end pong proves the far end is alive
+     * and still holds the channel.
+     *
+     * It used to be a coroutine per transport. With one machine that was the same thing; with
+     * several it would be one timer each, waking the radio N times a cycle for traffic that fits in
+     * one window. See [Heartbeat].
      */
-    private fun startHeartbeat() {
-        clearHeartbeat()
-        heartbeatJob = scope.launch {
-            while (isActive) {
-                delay(PING_EVERY_MS - PONG_GRACE_MS)
-                synchronized(lock) {
-                    awaitingPong = true
-                    if (!write(ClientFrames.encode(ClientMessage.Ping))) return@launch
-                }
-                delay(PONG_GRACE_MS)
-                synchronized(lock) {
-                    if (awaitingPong) {
-                        fail("The connection stopped answering.")
-                        return@launch
-                    }
-                }
+    private val beat = object : Heartbeat.Member {
+
+        /**
+         * False means this socket is gone and the tick should stop carrying it.
+         *
+         * Returning false is the *only* way a member leaves from inside the loop, and it is why
+         * this does not call [fail] on a write that did not go: a socket that has been torn down
+         * already has a retry scheduled by whoever tore it down, and failing again here would
+         * schedule a second one.
+         */
+        override fun ping(): Boolean = synchronized(lock) {
+            if (stopped || !greeted) return false
+            awaitingPong = true
+            write(ClientFrames.encode(ClientMessage.Ping))
+        }
+
+        override fun pongDue() {
+            synchronized(lock) {
+                if (!awaitingPong || stopped) return
+                fail("The connection stopped answering.")
             }
         }
     }
 
+    private fun startHeartbeat() {
+        awaitingPong = false
+        // Keyed on this transport, so a reconnect replaces its own entry rather than adding one.
+        heartbeat.join(this, beat)
+    }
+
     private fun clearHeartbeat() {
-        heartbeatJob?.cancel()
-        heartbeatJob = null
+        heartbeat.leave(this)
         awaitingPong = false
     }
 
@@ -605,9 +643,10 @@ class WebSocketDeckTransport(
 
         const val PLATFORM = "android"
 
-        /** Well under the 30 seconds after which idle NAT entries start being reclaimed. */
-        const val PING_EVERY_MS = 25_000L
-        const val PONG_GRACE_MS = 10_000L
+        // The keepalive cadence is not declared here any more: it belongs to the tick every socket
+        // shares, and two copies of a number that has to match is how they stop matching.
+        // See Heartbeat.INTERVAL_MS / Heartbeat.GRACE_MS.
+
         const val HANDSHAKE_TIMEOUT_MS = 15_000L
 
         fun defaultClient(): OkHttpClient = OkHttpClient.Builder()
