@@ -64,7 +64,6 @@ import {
   serialize,
   type ClientMessage,
   type DeviceDescriptor,
-  type LocalPort,
   type ProtocolErrorCode,
   type RemoteSession,
   type ServerMessage,
@@ -76,6 +75,7 @@ import {
   type LocalhostMessage,
   type TunnelHub,
   type TunnelInfo,
+  type TunnelPort,
 } from './tunnel'
 import {
   createUploadDesk,
@@ -83,7 +83,7 @@ import {
   type UploadDesk,
   type UploadMessage,
 } from './uploads'
-import { scanDevPorts } from '../dev-ports'
+import { scanDevPortsDetailed } from '../dev-ports'
 import { createRelayClient, relayEnabled, relayUrl, type RelayLink, type RelayState } from './relay-client'
 import { loadHostIdentity } from './host-identity'
 import { tailnetStatus, type TailnetStatus } from './tailnet'
@@ -250,13 +250,18 @@ export interface RemoteEndpointOptions {
   /** Fires whenever a phone authenticates, attaches, detaches or leaves. */
   onConnections?: (connections: RemoteConnection[]) => void
   /**
-   * What is listening on this Mac, for the `localhost` capability.
+   * What is listening on this machine, for the `localhost` capability.
    *
    * Injected so the socket tests never spawn `lsof`, and so the one place that
    * decides which ports a phone may be offered is a function this file is
    * handed rather than a module it reaches for. Defaults to the real scan.
+   *
+   * Returns {@link TunnelPort}, which is `LocalPort` plus the address families
+   * the tunnel dials by — optional, so a stand-in that only knows port numbers
+   * still fits. What reaches the phone is trimmed back to `LocalPort` in
+   * `tunnel.ts`; the extra field never leaves this process.
    */
-  scanPorts?: () => Promise<LocalPort[]>
+  scanPorts?: () => Promise<readonly TunnelPort[]>
   /**
    * Ports this app is serving on itself, which it will not tunnel to.
    *
@@ -912,7 +917,7 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
   const maxMessageBytes = options.maxMessageBytes ?? MAX_MESSAGE_BYTES
   const hosts = (options.hosts ?? []).map((host) => host.toLowerCase())
   const live = new Map<string, LiveConnection>()
-  const scanPorts = options.scanPorts ?? ((): Promise<LocalPort[]> => scanDevPorts())
+  const scanPorts = options.scanPorts ?? ((): Promise<readonly TunnelPort[]> => scanDevPortsDetailed())
   // One budget for the whole endpoint, handed to every hub it makes. Per-phone
   // caps alone would let sixty-four paired devices exhaust this process's
   // descriptors between them.

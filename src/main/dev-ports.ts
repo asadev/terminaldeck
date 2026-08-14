@@ -25,6 +25,36 @@ export interface DevPort {
 }
 
 /**
+ * Which loopbacks a port answers on. At least one is always true.
+ *
+ * Deliberately two booleans rather than one family: a dual-stack server is two
+ * sockets and genuinely answers on both, and a caller that has to pick one
+ * needs to know it has a choice. `tunnel.ts` is the only consumer.
+ */
+export interface PortFamilies {
+  v4: boolean
+  v6: boolean
+}
+
+/**
+ * A {@link DevPort} plus the thing the wire deliberately does not carry.
+ *
+ * `LocalPort` in `remote/protocol.ts` is exactly {@link DevPort} — the phone has
+ * no use for an address family, because it never dials the desktop's loopback;
+ * it names a port and the desktop dials. So the family rides in this separate
+ * type, which stays inside the main process, rather than being added to the
+ * message and then having to be explained to three clients.
+ */
+export interface DevPortDetail extends DevPort {
+  families: PortFamilies
+}
+
+/** Drop the fields the phone must not be sent. */
+function toWire(detail: DevPortDetail): DevPort {
+  return { port: detail.port, process: detail.process, guessed: detail.guessed }
+}
+
+/**
  * Processes that are almost never something you want to open in a browser.
  * Everything else is offered, because guessing which frameworks a person uses
  * is exactly the assumption this module exists to avoid.
@@ -116,19 +146,32 @@ async function listeningOwners(platform: Platform): Promise<PortOwner[]> {
  * tools list one row per socket, so the same port appears twice (IPv4 and IPv6);
  * skipping excluded processes first means a port that a background service and a
  * dev server both touch is credited to the dev server rather than dropped.
+ *
+ * The *name* is taken from the first row that survives the filter and the
+ * *families* are the union of every row that does — which is not the same rule
+ * twice over, on purpose. There is only one honest answer to "what is holding
+ * this port" and picking is unavoidable; there are two honest answers to "where
+ * does it answer", and dropping the second one is what left an IPv6-only dev
+ * server listed and unreachable on Windows.
  */
-async function listeningPorts(platform: Platform): Promise<DevPort[]> {
-  const found = new Map<number, DevPort>()
+async function listeningPorts(platform: Platform): Promise<DevPortDetail[]> {
+  const found = new Map<number, DevPortDetail>()
 
   for (const owner of await listeningOwners(platform)) {
     if (owner.process !== null && NOT_A_DEV_SERVER.has(owner.process)) continue
-    if (found.has(owner.port)) continue
+    const already = found.get(owner.port)
+    if (already) {
+      if (owner.family === 4) already.families.v4 = true
+      else already.families.v6 = true
+      continue
+    }
     found.set(owner.port, {
       port: owner.port,
       // A port whose owner could not be named still answers; saying "unknown"
       // and flagging it beats either inventing a name or hiding the port.
       process: owner.process ?? 'unknown',
       guessed: owner.process === null,
+      families: { v4: owner.family === 4, v6: owner.family === 6 },
     })
   }
 
@@ -137,10 +180,20 @@ async function listeningPorts(platform: Platform): Promise<DevPort[]> {
 
 const FALLBACK_PORTS = [3000, 5173, 8080, 4200, 8000, 5174, 4321, 3001]
 
-/** Used only when the OS scan is unavailable, so the page is never empty by default. */
-function probe(port: number): Promise<boolean> {
+/**
+ * Used only when the OS scan is unavailable, so the page is never empty by
+ * default.
+ *
+ * Both loopbacks, not just `127.0.0.1`. This path is reached on a machine with
+ * no `lsof` or a locked-down `netstat.exe`, and on Windows that is exactly the
+ * machine where the dev server is on `::1` and nowhere else — probing one
+ * family would report "nothing is running" to someone whose server is running.
+ * The two dials go out together: they are 250 ms apart at worst and there are
+ * eight ports in the list.
+ */
+function probe(host: string, port: number): Promise<boolean> {
   return new Promise((resolve) => {
-    const socket = createConnection({ host: '127.0.0.1', port })
+    const socket = createConnection({ host, port })
     let settled = false
     const done = (live: boolean) => {
       if (settled) return
@@ -155,6 +208,11 @@ function probe(port: number): Promise<boolean> {
   })
 }
 
+async function probeFamilies(port: number): Promise<PortFamilies> {
+  const [v4, v6] = await Promise.all([probe('127.0.0.1', port), probe('::1', port)])
+  return { v4, v6 }
+}
+
 /**
  * Cached, and shared between concurrent callers.
  *
@@ -166,10 +224,20 @@ function probe(port: number): Promise<boolean> {
  * once costs one scan, not five.
  */
 const CACHE_MS = 4000
-let cached: { at: number; ports: DevPort[] } | null = null
-let inFlight: Promise<DevPort[]> | null = null
+let cached: { at: number; ports: DevPortDetail[] } | null = null
+let inFlight: Promise<DevPortDetail[]> | null = null
 
-export async function scanDevPorts(force = false, platform: Platform = currentPlatform()): Promise<DevPort[]> {
+/**
+ * The scan, with the address families the tunnel needs.
+ *
+ * One cache serves this and {@link scanDevPorts}: they are the same scan asked
+ * for at different widths, and running two would mean the list a phone was
+ * shown and the list a `tunnel.open` is checked against could disagree.
+ */
+export async function scanDevPortsDetailed(
+  force = false,
+  platform: Platform = currentPlatform(),
+): Promise<DevPortDetail[]> {
   if (!force && cached && Date.now() - cached.at < CACHE_MS) return cached.ports
   if (inFlight) return inFlight
 
@@ -184,13 +252,17 @@ export async function scanDevPorts(force = false, platform: Platform = currentPl
   return inFlight
 }
 
+export async function scanDevPorts(force = false, platform: Platform = currentPlatform()): Promise<DevPort[]> {
+  return (await scanDevPortsDetailed(force, platform)).map(toWire)
+}
+
 /** Drops the memo. Exported for tests, which pin one platform per case. */
 export function resetDevPortsCache(): void {
   cached = null
 }
 
-async function runScan(platform: Platform): Promise<DevPort[]> {
-  let ports: DevPort[]
+async function runScan(platform: Platform): Promise<DevPortDetail[]> {
+  let ports: DevPortDetail[]
   try {
     ports = await listeningPorts(platform)
   } catch {
@@ -198,11 +270,11 @@ async function runScan(platform: Platform): Promise<DevPort[]> {
     // Unix, no `netstat.exe` on a locked-down Windows. Fall back to probing,
     // which at least finds a server on a conventional port.
     const probed = await Promise.all(
-      FALLBACK_PORTS.map(async (port) => ({ port, live: await probe(port) })),
+      FALLBACK_PORTS.map(async (port) => ({ port, families: await probeFamilies(port) })),
     )
     ports = probed
-      .filter((entry) => entry.live)
-      .map((entry) => ({ port: entry.port, process: 'unknown', guessed: true }))
+      .filter((entry) => entry.families.v4 || entry.families.v6)
+      .map((entry) => ({ port: entry.port, process: 'unknown', guessed: true, families: entry.families }))
   }
 
   return ports.sort((a, b) => rank(a) - rank(b) || a.port - b.port)

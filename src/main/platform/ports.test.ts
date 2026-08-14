@@ -4,6 +4,7 @@ import {
   NETSTAT,
   TASKLIST,
   isLocallyReachable,
+  loopbackFamily,
   parseLsof,
   parseNetstat,
   parseTasklist,
@@ -22,11 +23,19 @@ import {
  * network addresses that a browser on another machine could reach and that this
  * app must therefore not offer.
  *
- * `NETSTAT_OUTPUT` and `TASKLIST_OUTPUT` are **not** captures. Nothing in this
- * repo can run on Windows, so they are written from the documented output
- * formats. What they prove is that the decoding is right *if* the capture is
- * right — which is worth having, and is not the same thing as the Windows path
- * being verified. The risk is declared rather than dressed up.
+ * `TASKLIST_OUTPUT` is **not** a capture — it is written from the documented
+ * output format. What it proves is that the decoding is right *if* the capture
+ * is right, which is worth having and is not the same thing as being verified.
+ *
+ * `NETSTAT_OUTPUT` was in the same position until 2026-08-14, when the one row
+ * that matters was captured from a real Windows machine (`desktop-ddgmncv`)
+ * running a real IPv6-only dev server:
+ *
+ *     TCP    [::1]:5199             [::]:0                 LISTENING       22200
+ *
+ * The rest of the block is still written from the documented format; that row
+ * is real, and it settles the two things that were guesses — that a v6 listener
+ * is labelled `TCP` and that its address is bracketed.
  */
 
 const LSOF_OUTPUT = `COMMAND     PID  USER   FD   TYPE             DEVICE SIZE/OFF NODE NAME
@@ -89,18 +98,52 @@ describe('splitting host from port', () => {
   })
 })
 
+describe('which loopback a row is on', () => {
+  it('trusts lsof’s TYPE column, which is the only thing that reads a wildcard', () => {
+    expect(loopbackFamily('*', 'IPv6')).toBe(6)
+    expect(loopbackFamily('*', 'IPv4')).toBe(4)
+  })
+
+  it('reads the address when netstat calls a v6 row TCP, as a real Windows does', () => {
+    // Captured on desktop-ddgmncv: `TCP    [::1]:5199 ...`. A hint of `TCP`
+    // must not be taken to mean IPv4, or every IPv6-only Windows dev server is
+    // dialled at 127.0.0.1 and refused.
+    expect(loopbackFamily('[::1]', 'TCP')).toBe(6)
+    expect(loopbackFamily('[::]', 'TCP')).toBe(6)
+    expect(loopbackFamily('127.0.0.1', 'TCP')).toBe(4)
+    expect(loopbackFamily('0.0.0.0', 'TCP')).toBe(4)
+  })
+
+  it('takes TCPv6 as decisive, for the installs that label them that way', () => {
+    expect(loopbackFamily('[::1]', 'TCPv6')).toBe(6)
+  })
+
+  it('answers IPv4 for anything it does not recognise, which is how it behaved before', () => {
+    expect(loopbackFamily('')).toBe(4)
+    expect(loopbackFamily('*')).toBe(4)
+  })
+})
+
 describe('reading lsof (macOS, from a real capture)', () => {
   const owners = parseLsof(LSOF_OUTPUT)
 
-  it('finds every locally reachable listener', () => {
+  it('finds every locally reachable listener, and which loopback each is on', () => {
     expect(owners).toEqual([
-      { port: 53397, process: 'rapportd' },
-      { port: 53397, process: 'rapportd' },
-      { port: 5000, process: 'ControlCe' },
-      { port: 8931, process: 'Python' },
-      { port: 5199, process: 'node' },
-      { port: 8081, process: 'node' },
+      { port: 53397, process: 'rapportd', family: 4 },
+      { port: 53397, process: 'rapportd', family: 6 },
+      { port: 5000, process: 'ControlCe', family: 4 },
+      { port: 8931, process: 'Python', family: 4 },
+      { port: 5199, process: 'node', family: 6 },
+      { port: 8081, process: 'node', family: 6 },
     ])
+  })
+
+  it('reads a wildcard row’s family off the TYPE column, since the address cannot say', () => {
+    // `*:53397` twice and `*:8081` once. The address is identical either way,
+    // so a parser that only looked at the address would call all three IPv4 —
+    // and the tunnel would then never try `::1` for a server that is only there.
+    const wildcards = owners.filter((owner) => owner.port === 53397 || owner.port === 8081)
+    expect(wildcards.map((owner) => owner.family)).toEqual([4, 6, 6])
   })
 
   it('drops the header rather than reading NAME as an address', () => {
@@ -121,13 +164,13 @@ describe('reading lsof (macOS, from a real capture)', () => {
 })
 
 describe('reading netstat (Windows, from the documented format)', () => {
-  it('finds local listening ports and their PIDs', () => {
+  it('finds local listening ports, their PIDs and their loopback family', () => {
     expect(parseNetstat(NETSTAT_OUTPUT)).toEqual([
-      { port: 135, pid: 968 },
-      { port: 445, pid: 4 },
-      { port: 3000, pid: 12044 },
-      { port: 135, pid: 968 },
-      { port: 5199, pid: 7788 },
+      { port: 135, pid: 968, family: 4 },
+      { port: 445, pid: 4, family: 4 },
+      { port: 3000, pid: 12044, family: 4 },
+      { port: 135, pid: 968, family: 6 },
+      { port: 5199, pid: 7788, family: 6 },
     ])
   })
 
@@ -161,7 +204,7 @@ describe('reading netstat (Windows, from the documented format)', () => {
       '  TCP    127.0.0.1:5173         0.0.0.0:0              ABHÖREN         4242',
       '',
     ].join('\r\n')
-    expect(parseNetstat(german)).toEqual([{ port: 5173, pid: 4242 }])
+    expect(parseNetstat(german)).toEqual([{ port: 5173, pid: 4242, family: 4 }])
   })
 
   it('keeps IPv6 rows under either label netstat uses for them', () => {
@@ -174,8 +217,8 @@ describe('reading netstat (Windows, from the documented format)', () => {
       '  TCPv6    [::1]:5174             [::]:0                 LISTENING       4243',
     ].join('\r\n')
     expect(parseNetstat(labelled)).toEqual([
-      { port: 5173, pid: 4242 },
-      { port: 5174, pid: 4243 },
+      { port: 5173, pid: 4242, family: 6 },
+      { port: 5174, pid: 4243, family: 6 },
     ])
   })
 
@@ -211,19 +254,19 @@ describe('reading tasklist', () => {
 describe('joining the two Windows calls', () => {
   it('names what it can', () => {
     expect(windowsOwners(parseNetstat(NETSTAT_OUTPUT), parseTasklist(TASKLIST_OUTPUT))).toEqual([
-      { port: 135, process: 'svchost' },
-      { port: 445, process: 'System' },
-      { port: 3000, process: 'node' },
-      { port: 135, process: 'svchost' },
-      { port: 5199, process: null },
+      { port: 135, process: 'svchost', family: 4 },
+      { port: 445, process: 'System', family: 4 },
+      { port: 3000, process: 'node', family: 4 },
+      { port: 135, process: 'svchost', family: 6 },
+      { port: 5199, process: null, family: 6 },
     ])
   })
 
   it('keeps a port whose owner tasklist would not describe', () => {
     // The port is answering either way. Dropping it would hide a dev server
     // behind a protected process or one that exited between the two calls.
-    const owners = windowsOwners([{ port: 5173, pid: 9 }], new Map())
-    expect(owners).toEqual([{ port: 5173, process: null }])
+    const owners = windowsOwners([{ port: 5173, pid: 9, family: 6 }], new Map())
+    expect(owners).toEqual([{ port: 5173, process: null, family: 6 }])
   })
 })
 

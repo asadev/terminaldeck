@@ -434,6 +434,12 @@ function registerIpc(): void {
       feedConfigPath: app.isPackaged
         ? join(process.resourcesPath, 'app-update.yml')
         : join(app.getAppPath(), 'dev-app-update.yml'),
+      // Set by electron-builder's portable launcher and by nothing else. The
+      // portable exe and the installed one are the same build carrying the same
+      // feed, so this is the only thing that tells them apart at runtime — and
+      // an update on Windows is an installer, which is the one thing a portable
+      // app must not run. See PORTABLE_REASON.
+      portableExecutable: process.env.PORTABLE_EXECUTABLE_FILE ?? null,
     },
     broadcast: (channel, state) => send(channel, state),
   })

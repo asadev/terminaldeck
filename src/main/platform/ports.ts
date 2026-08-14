@@ -50,14 +50,34 @@
  *    column still has to be *present* — that is what separates a five-column TCP
  *    row from a four-column UDP one, which carries no state at all.
  *
- * This half is written from documented and widely-known output formats and has
- * **not** been run against a real Windows machine; nothing in this repo can.
- * The parsers are therefore pinned against captured samples, which proves the
- * decoding and not the capture.
+ * This half was written from documented and widely-known output formats. One
+ * line of it has since been checked against a real Windows machine
+ * (`desktop-ddgmncv`, 2026-08-14): an IPv6-only dev server really is printed as
+ *
+ *     TCP    [::1]:5199             [::]:0                 LISTENING       22200
+ *
+ * — protocol token `TCP`, not `TCPv6`, and the address bracketed. Both of those
+ * were guesses before and both are now measurements, which is what
+ * {@link loopbackFamily} relies on. The rest of the parsers stay pinned against
+ * captured samples, which proves the decoding and not the capture.
  */
 
 import { isWindows, type Platform } from './host'
 import type { CommandSpec } from './lookup'
+
+/**
+ * Which loopback a listener answers on. 4 is `127.0.0.1`, 6 is `::1`.
+ *
+ * Carried out of the scan because it is the only place that knows it, and
+ * because a tunnel that dials the wrong one gets `ECONNREFUSED` on a port the
+ * same scan just said was live. Measured on `desktop-ddgmncv` rather than
+ * assumed: `node --host localhost` on Windows binds **`::1` only**
+ * (`{"address":"::1","family":"IPv6"}`), `netstat -ano` prints it as
+ * `TCP  [::1]:5199  [::]:0  LISTENING`, and dialling `127.0.0.1:5199` from the
+ * same machine answers `ECONNREFUSED` while `::1` connects. macOS never shows
+ * this because the same servers bind `127.0.0.1` first there.
+ */
+export type LoopbackFamily = 4 | 6
 
 /**
  * One listening port and, when the OS would say, what holds it.
@@ -66,14 +86,44 @@ import type { CommandSpec } from './lookup'
  * honest input to `DevPort.guessed`. It is a real Windows case: `netstat` lists
  * a PID that `tasklist` will not describe (a protected process, or one that
  * exited between the two calls).
+ *
+ * One row is one *socket*, so a dual-stack server appears twice with a
+ * different `family` each time. Collapsing those into one port is
+ * `dev-ports.ts`'s job, because it is the thing that also has to decide which
+ * of the two processes gets the credit.
  */
 export interface PortOwner {
   port: number
   process: string | null
+  family: LoopbackFamily
 }
 
 /** Addresses a browser on this machine can actually reach. */
 const LOCAL_HOSTS = new Set(['', '*', '0.0.0.0', '127.0.0.1', '::', '::1', '[::]', '[::1]'])
+
+/** The IPv6 spellings both tools use, wildcard and loopback, with and without brackets. */
+const IPV6_HOSTS = new Set(['::', '::1', '[::]', '[::1]'])
+
+/**
+ * Which loopback family a row describes.
+ *
+ * Two sources, in the order they can be trusted. `lsof` prints a decisive
+ * `IPv4`/`IPv6` in its TYPE column, and it needs to: its wildcard rows are
+ * written `*:5000` with nothing in the address to tell the families apart.
+ * `netstat` has no such column — it labels IPv6 rows `TCP` as often as `TCPv6`,
+ * which is why a `TCP` hint must fall through rather than decide — but it
+ * always brackets an IPv6 address, so the address itself answers.
+ *
+ * Anything else is IPv4. That is the safe direction: it is what this module
+ * assumed everywhere before today, so an unrecognised spelling behaves exactly
+ * as it did rather than newly dialling somewhere it has never dialled.
+ */
+export function loopbackFamily(host: string, typeHint = ''): LoopbackFamily {
+  const hint = typeHint.toUpperCase()
+  if (hint === 'IPV6' || hint === 'TCPV6') return 6
+  if (hint === 'IPV4') return 4
+  return IPV6_HOSTS.has(host) ? 6 : 4
+}
 
 /**
  * Split a `host:port` as either tool writes it, including bracketed IPv6.
@@ -116,11 +166,14 @@ export function parseLsof(stdout: string): PortOwner[] {
   for (const line of stdout.split('\n').slice(1)) {
     const columns = line.split(/\s+/)
     const command = columns[0]
+    // Column 4 is TYPE — `IPv4` or `IPv6`. It is the only thing that separates
+    // the families on a wildcard row, which lsof writes as a bare `*:5000`.
+    const type = columns[4]
     const address = columns[8]
     if (!command || !address) continue
     const split = splitHostPort(address)
     if (!split || !isLocallyReachable(split.host)) continue
-    owners.push({ port: split.port, process: command })
+    owners.push({ port: split.port, process: command, family: loopbackFamily(split.host, type) })
   }
   return owners
 }
@@ -155,6 +208,7 @@ const UNBOUND_PEER = new Set(['0.0.0.0:0', '[::]:0', '*:*'])
 export interface NetstatRow {
   port: number
   pid: number
+  family: LoopbackFamily
 }
 
 /**
@@ -183,7 +237,7 @@ export function parseNetstat(stdout: string): NetstatRow[] {
 
     const split = splitHostPort(columns[1])
     if (!split || !isLocallyReachable(split.host)) continue
-    rows.push({ port: split.port, pid })
+    rows.push({ port: split.port, pid, family: loopbackFamily(split.host, proto) })
   }
   return rows
 }
@@ -248,7 +302,7 @@ export function parseTasklist(stdout: string): Map<number, string> {
  * describe its owner. `null` there becomes `guessed: true` on screen.
  */
 export function windowsOwners(rows: NetstatRow[], names: Map<number, string>): PortOwner[] {
-  return rows.map((row) => ({ port: row.port, process: names.get(row.pid) ?? null }))
+  return rows.map((row) => ({ port: row.port, process: names.get(row.pid) ?? null, family: row.family }))
 }
 
 /* ------------------------------------------------------------------ choice -- */

@@ -10,6 +10,52 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+## [0.1.7] — 2026-08-14
+
+### Fixed
+
+- **The localhost tunnel reaches a dev server on `::1`, which on Windows is
+  most of them.** Windows resolves `localhost` to `::1` before `127.0.0.1`, so
+  `vite`, `next dev` and `node --host localhost` bind IPv6 and nothing else —
+  and the tunnel only ever dialled `127.0.0.1`. The port was scanned, listed,
+  offered to the phone and then refused the moment it was tapped, with no
+  message anywhere: the phone showed a blank page. A port that is listed and
+  unreachable is worse than one that is not listed.
+
+  The scan now carries the address family it always knew and the tunnel dials
+  the loopback the port is actually on, deciding once per tap by connecting
+  rather than per browser connection by guessing. When nothing accepts on
+  either loopback the tunnel is refused with a sentence naming what was tried,
+  instead of opening a pipe that cannot carry bytes. Nothing changed on the
+  wire — the phone still names a port and this side still decides where that
+  port lives — and nothing changed about the tunnel being a **byte pipe rather
+  than an HTTP proxy**, which is what keeps hot reload, SSE, cookies and the
+  WebSocket upgrade working.
+
+  Measured on a real Windows machine, all three ways a dev server is started:
+  `localhost` binds `::1` alone and `127.0.0.1` answers `ECONNREFUSED`;
+  `127.0.0.1` and the wildcard bind are unchanged and still dial IPv4 first.
+  A real HTTP response and a real `101 Switching Protocols` upgrade were pulled
+  through the tunnel in each case.
+
+- **Windows installs its own updates without anyone clicking an installer.**
+  Finding and downloading an update already worked there; installing did not.
+  `quitAndInstall()` with electron-updater's defaults runs the NSIS setup
+  *without* `/S`, and this project builds an assisted installer — so the app
+  quit, a setup window nobody asked for opened, and it sat on a page waiting
+  for a click. Watched happening: fifty seconds later the setup was still
+  running, the app was still the old version, and there was no app on screen at
+  all. The update now installs silently and the app comes back, which is what
+  the button saying **Restart** promises.
+
+- **The portable Windows build no longer offers an update it cannot install.**
+  It is the same build as the installed one and carries the same release feed,
+  so it reported itself updatable — and an update on Windows is an installer,
+  which would have put a *second*, installed copy of the app somewhere the user
+  did not choose while the portable exe they were running stayed old. It now
+  says plainly that a portable app cannot update itself and points at Releases,
+  which is what the release notes have always claimed.
+
 ## [0.1.6] — 2026-08-14
 
 ### Fixed
@@ -343,7 +389,8 @@ First cut. macOS 12+, Apple silicon, unsigned.
 - Preferences with live dark/light theming
 - Session resume (`⌘⇧T`)
 
-[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.1.6...HEAD
+[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.1.7...HEAD
+[0.1.7]: https://github.com/asadev/terminaldeck/releases/tag/v0.1.7
 [0.1.6]: https://github.com/asadev/terminaldeck/releases/tag/v0.1.6
 [0.1.5]: https://github.com/asadev/terminaldeck/releases/tag/v0.1.5
 [0.1.4]: https://github.com/asadev/terminaldeck/releases/tag/v0.1.4

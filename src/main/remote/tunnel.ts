@@ -1,10 +1,10 @@
 /**
- * The Mac's half of "see your localhost on your phone".
+ * The desktop's half of "see your localhost on your phone".
  *
- * A phone taps a port; this dials `127.0.0.1:<port>` and copies bytes between
- * that socket and the sealed channel the phone is already on. That is the whole
- * feature, and the smallness is the point — it is a **byte pipe, not an HTTP
- * proxy**.
+ * A phone taps a port; this dials that port on this machine's loopback and
+ * copies bytes between that socket and the sealed channel the phone is already
+ * on. That is the whole feature, and the smallness is the point — it is a
+ * **byte pipe, not an HTTP proxy**.
  *
  * ## Why bytes and not requests
  *
@@ -27,15 +27,15 @@
  *
  * Only an authenticated, approved device gets here at all — the server hands a
  * message to this module only after `hello` has succeeded, which is the same
- * gate that guards attaching to a terminal. The only host this will ever dial is
- * `127.0.0.1`; there is no field for a host and no code path that builds one, so
- * a phone cannot reach the printer on the Mac's LAN or a machine on its tailnet.
- * The only ports it will dial are the ones a fresh scan says are being listened
- * on right now, minus the app's own, so a phone cannot use this to sweep the
- * Mac's loopback for services that are not there. And nothing is reachable until
- * a `tunnel.open` arrives, which is a message this app's phone client sends only
- * when a person taps a port — the tap is the consent, and closing the view is
- * the revocation.
+ * gate that guards attaching to a terminal. The only hosts this will ever dial
+ * are the two loopback literals below; there is no field for a host and no code
+ * path that builds one, so a phone cannot reach the printer on this machine's
+ * LAN or a machine on its tailnet. The only ports it will dial are the ones a
+ * fresh scan says are being listened on right now, minus the app's own, so a
+ * phone cannot use this to sweep the loopback for services that are not there.
+ * And nothing is reachable until a `tunnel.open` arrives, which is a message
+ * this app's phone client sends only when a person taps a port — the tap is the
+ * consent, and closing the view is the revocation.
  *
  * ## Flow control
  *
@@ -48,6 +48,7 @@
  */
 
 import { createConnection, type Socket } from 'node:net'
+import type { PortFamilies } from '../dev-ports'
 import {
   MAX_NET_CHUNK_BYTES,
   NET_WINDOW_BYTES,
@@ -56,35 +57,50 @@ import {
 } from './protocol'
 
 /**
- * The only host this module will ever connect to.
+ * The only two hosts this module will ever connect to.
  *
- * A literal, not a name: `localhost` goes through the resolver, and a resolver
+ * Literals, not a name: `localhost` goes through the resolver, and a resolver
  * is a thing that can be told to answer with something else — an `/etc/hosts`
- * line, a DNS search domain, a VPN's split resolver. `127.0.0.1` cannot be
- * pointed anywhere. There is deliberately no way for a caller to supply a host.
+ * line, a DNS search domain, a VPN's split resolver. These two cannot be
+ * pointed anywhere. There is deliberately no way for a caller to supply a host;
+ * the *choice between them* is made from the scan, never from the phone.
  *
- * ## Known, diagnosed, and not yet fixed: an IPv6-only listener on Windows
+ * ## Why there are two, which cost a night on Windows
  *
- * There is no `::1` counterpart here, and on Windows that loses the common
- * case. `platform/ports.ts` accepts `::1`, `[::1]` and `::` as locally
- * reachable, so the scan reports a dev server that is listening **only** on
- * IPv6 — and on Windows that is the normal outcome, because `localhost`
- * resolves to `::1` first and Vite, Next and `node --host localhost` bind what
- * the name gave them. The port is then offered to the phone, `listening()`
- * agrees it is there, and `createConnection({ host: '127.0.0.1' })` is refused.
- * `openStream` answers that with a bare `net.close` carrying no reason — which
- * is deliberate, and here means the phone shows a blank page and nothing
- * anywhere says why. macOS does not see it because the same servers bind
- * `127.0.0.1` first there.
+ * `127.0.0.1` alone loses the common case on Windows. Windows resolves
+ * `localhost` to `::1` first, so Vite, Next and `node --host localhost` bind
+ * what the name gave them and bind **only** that. `platform/ports.ts` accepts
+ * `::1`, `[::1]` and `::` as locally reachable, so the scan lists the port, the
+ * phone is offered it, `listening()` agrees it is there — and the dial is
+ * refused. `openStream` answers that with a bare `net.close` carrying no
+ * reason, which is right for a browser and here meant the phone showed a blank
+ * page with nothing anywhere saying why. A port that is listed and unreachable
+ * is worse than one that is not listed.
  *
- * The fix is not a second literal in this constant: it is to carry the address
- * family through from the scan that already knows it, so a tunnel dials the
- * loopback its port is actually on, and `openTunnel` refuses with a sentence
- * when neither answers rather than opening one that cannot carry bytes. That
- * touches `platform/ports.ts`, `dev-ports.ts` and this file, and the wire type
- * must not gain the field — the phone has no use for it.
+ * Measured on `desktop-ddgmncv`, not reasoned about:
+ *
+ *     listening {"address":"::1","family":"IPv6","port":5199}
+ *     TCP    [::1]:5199    [::]:0    LISTENING    22200
+ *     127.0.0.1  ERROR ECONNREFUSED
+ *     ::1        CONNECTED
+ *
+ * macOS never sees it because the same servers bind `127.0.0.1` first there.
+ *
+ * ## Which one a tunnel uses, and why it is decided once
+ *
+ * The family comes from the scan, which is the only thing that knows it, and it
+ * is resolved **at `tunnel.open`, once, by actually dialling** — not per stream
+ * and not by guessing. `openTunnel` then pins the winner on the tunnel, so
+ * every browser connection inside it goes to an address something has already
+ * accepted a connection on. When neither answers, the tunnel is refused with a
+ * sentence instead of opened as a pipe that cannot carry bytes.
+ *
+ * The wire type gains nothing. A phone names a port; the desktop decides where
+ * that port lives. Adding a family to `LocalPort` would be three clients having
+ * to agree about an answer only this process can produce.
  */
-const LOOPBACK = '127.0.0.1'
+const LOOPBACK_V4 = '127.0.0.1'
+const LOOPBACK_V6 = '::1'
 
 /** One live tunnel, as the desktop lists it. */
 export interface TunnelInfo {
@@ -121,9 +137,21 @@ export function streamBudget(ceiling: number): StreamBudget {
   }
 }
 
+/**
+ * A scanned port, as this module wants it.
+ *
+ * `families` is optional so that every caller which already had a `LocalPort[]`
+ * still type-checks — `scripts/remote-host.ts`, the socket tests, a stand-in.
+ * An entry without it is treated as "could be either", which is what this
+ * module assumed about every port until today.
+ */
+export interface TunnelPort extends LocalPort {
+  families?: PortFamilies
+}
+
 export interface TunnelDeps {
-  /** What is listening on this Mac. Injected; the real one shells out to `lsof`. */
-  scan(): Promise<LocalPort[]>
+  /** What is listening on this machine. Injected; the real one shells out to `lsof`. */
+  scan(): Promise<readonly TunnelPort[]>
   /** Send a frame to the phone this hub belongs to. */
   send(message: ServerMessage): void
   /** Ports this app is itself serving on, which it will not tunnel to. */
@@ -131,8 +159,14 @@ export interface TunnelDeps {
   budget?: StreamBudget
   /** Fires when the tunnel list changes, so the desktop can redraw it. */
   onChange?: () => void
-  /** Test seam. Defaults to a real loopback socket. */
-  connect?: (port: number) => Socket
+  /**
+   * Test seam. Defaults to a real loopback socket.
+   *
+   * `host` is one of the two literals above and never anything a phone chose;
+   * it is a parameter so a test can assert *which* loopback was dialled, which
+   * is the whole of the Windows bug.
+   */
+  connect?: (port: number, host: string) => Socket
   now?: () => number
 }
 
@@ -192,13 +226,31 @@ interface Stream {
 interface Tunnel {
   id: string
   port: number
+  /** The loopback literal `openTunnel` proved this port answers on. */
+  host: string
   openedAt: number
   streams: Set<string>
 }
 
+/**
+ * Which loopbacks to try, in order, for a port the scan described.
+ *
+ * IPv4 first when both are live, because that is what every tunnel did before
+ * this existed and what macOS still resolves to — the fix adds a fallback, it
+ * does not move the common case. A port whose families are unknown gets both,
+ * for the same reason: it behaves exactly as it used to and then tries the one
+ * it never tried.
+ */
+export function loopbackCandidates(families: PortFamilies | undefined): readonly string[] {
+  if (!families) return [LOOPBACK_V4, LOOPBACK_V6]
+  if (families.v4 && families.v6) return [LOOPBACK_V4, LOOPBACK_V6]
+  if (families.v6) return [LOOPBACK_V6]
+  return [LOOPBACK_V4]
+}
+
 export function createTunnelHub(deps: TunnelDeps): TunnelHub {
   const now = deps.now ?? Date.now
-  const connect = deps.connect ?? ((port: number) => createConnection({ host: LOOPBACK, port }))
+  const connect = deps.connect ?? ((port: number, host: string) => createConnection({ host, port }))
   const budget = deps.budget ?? streamBudget(MAX_STREAMS_TOTAL)
   const reserved = new Set(deps.reserved ?? [])
   const tunnels = new Map<string, Tunnel>()
@@ -277,34 +329,70 @@ export function createTunnelHub(deps: TunnelDeps): TunnelHub {
   }
 
   async function offerPorts(): Promise<void> {
-    let ports: LocalPort[]
+    let ports: readonly TunnelPort[]
     try {
       ports = await deps.scan()
     } catch (error) {
       // A scan that failed is not a phone's problem to solve, and an empty list
-      // is the honest answer: this Mac cannot say what is listening.
+      // is the honest answer: this machine cannot say what is listening.
       console.error('[tunnel] port scan failed:', error)
       ports = []
     }
-    deps.send({ t: 'ports', ports: ports.filter((entry) => !reserved.has(entry.port)) })
+    deps.send({
+      t: 'ports',
+      // Rebuilt field by field rather than passed through. The scan carries
+      // more than the wire type does — the address families — and `LocalPort`
+      // is a contract with three clients: whatever this sends becomes what they
+      // are allowed to see. Copying the three named fields makes it impossible
+      // for a field added to the scan to reach a phone by accident.
+      ports: ports
+        .filter((entry) => !reserved.has(entry.port))
+        .map((entry): LocalPort => ({ port: entry.port, process: entry.process, guessed: entry.guessed })),
+    })
   }
 
   /**
-   * Is this a port the Mac is willing to dial?
+   * Is this a port this machine is willing to dial, and where does it answer?
    *
    * Asked against a fresh scan every time rather than against whatever was last
    * offered, and that is the check that keeps this from being a port scanner: a
-   * phone can only reach a port that something on the Mac is *already* serving,
-   * so a `tunnel.open` for a port nothing is listening on is refused before a
-   * socket exists, and cannot be used to learn which ports would have answered.
+   * phone can only reach a port that something here is *already* serving, so a
+   * `tunnel.open` for a port nothing is listening on is refused before a socket
+   * exists, and cannot be used to learn which ports would have answered.
    */
-  async function listening(port: number): Promise<boolean> {
-    if (reserved.has(port)) return false
+  async function listening(port: number): Promise<TunnelPort | null> {
+    if (reserved.has(port)) return null
     try {
-      return (await deps.scan()).some((entry) => entry.port === port)
+      return (await deps.scan()).find((entry) => entry.port === port) ?? null
     } catch {
-      return false
+      return null
     }
+  }
+
+  /**
+   * Connect, then hang up. True when something accepted.
+   *
+   * A whole TCP connection to answer a yes/no question, and worth it: the scan
+   * can only say a socket is bound, and on Windows that is exactly the claim
+   * that turned out not to imply reachability. One of these per `tunnel.open` —
+   * per *tap*, not per browser connection — buys `tunnel.opened` the meaning
+   * "bytes have already gone to this address and come back", which is what lets
+   * the failure be a sentence on the phone instead of a blank page.
+   */
+  function reachable(port: number, host: string): Promise<boolean> {
+    return new Promise((resolve) => {
+      const socket = connect(port, host)
+      let settled = false
+      const done = (answer: boolean): void => {
+        if (settled) return
+        settled = true
+        socket.destroy()
+        resolve(answer)
+      }
+      socket.setTimeout(DIAL_TIMEOUT_MS, () => done(false))
+      socket.once('connect', () => done(true))
+      socket.once('error', () => done(false))
+    })
   }
 
   async function openTunnel(id: string, port: number): Promise<void> {
@@ -322,26 +410,55 @@ export function createTunnelHub(deps: TunnelDeps): TunnelHub {
     }
 
     const pending = { cancelled: false }
+    // Held for the whole of the asynchronous work, not just the scan: the dial
+    // below is the longer half, and a tunnel that is invisible while it is being
+    // proved is one a `tunnel.close` cannot cancel and one `MAX_TUNNELS` cannot
+    // count.
     opening.set(id, pending)
-    let live: boolean
+    let host: string | null = null
+    let tried: readonly string[] = []
     try {
-      live = await listening(port)
+      const entry = await listening(port)
+      if (pending.cancelled) return
+      if (entry === null) {
+        deps.send({
+          t: 'tunnel.closed',
+          id,
+          message: `Nothing is listening on port ${port} on that computer any more.`,
+        })
+        return
+      }
+
+      tried = loopbackCandidates(entry.families)
+      for (const candidate of tried) {
+        if (await reachable(port, candidate)) {
+          host = candidate
+          break
+        }
+        // Re-read after every dial: each one is a turn of the event loop, and a
+        // phone that closed the view is not owed a second five-second timeout.
+        if (pending.cancelled) return
+      }
     } finally {
       opening.delete(id)
     }
 
-    // A close overtook the scan. It has already answered the phone; saying
-    // anything else here would contradict it.
+    // A close overtook the scan or the dial. It has already answered the phone;
+    // saying anything else here would contradict it.
     if (pending.cancelled) return
-    if (!live) {
+
+    if (host === null) {
       deps.send({
         t: 'tunnel.closed',
         id,
-        message: `Nothing is listening on port ${port} on the Mac any more.`,
+        message:
+          `Port ${port} is listed as listening but refused a connection on ` +
+          `${tried.join(' and ')}. Whatever holds it is not accepting connections.`,
       })
       return
     }
-    tunnels.set(id, { id, port, openedAt: now(), streams: new Set() })
+
+    tunnels.set(id, { id, port, host, openedAt: now(), streams: new Set() })
     deps.send({ t: 'tunnel.opened', id, port })
     changed()
   }
@@ -357,7 +474,10 @@ export function createTunnelHub(deps: TunnelDeps): TunnelHub {
       return deps.send({ t: 'net.close', ch })
     }
 
-    const socket = connect(tunnel.port)
+    // `tunnel.host`, not a constant: the address was chosen and proved once at
+    // open, so every connection inside one tunnel goes to the same place and
+    // none of them re-runs the choice.
+    const socket = connect(tunnel.port, tunnel.host)
     const stream: Stream = { id: ch, tunnel: tunnelId, socket, unacked: 0, paused: false, closed: false }
     streams.set(ch, stream)
     tunnel.streams.add(ch)

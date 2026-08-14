@@ -131,7 +131,12 @@ export interface UpdaterLike {
   on(event: 'error', listener: (error: Error) => void): unknown
   checkForUpdates(): Promise<unknown>
   downloadUpdate(): Promise<unknown>
-  quitAndInstall(): void
+  /**
+   * `(isSilent, isForceRunAfter)`. Both optional in the real class and both
+   * supplied here — see {@link installNowArgs} for the measurement that says
+   * the defaults do not work on Windows.
+   */
+  quitAndInstall(isSilent?: boolean, isForceRunAfter?: boolean): void
 }
 
 /**
@@ -148,6 +153,22 @@ export interface UpdateEnvironment {
   execPath: string
   /** Where electron-builder writes the feed: `resourcesPath/app-update.yml`. */
   feedConfigPath: string
+  /**
+   * `process.env.PORTABLE_EXECUTABLE_FILE`, or null.
+   *
+   * The one thing that separates the two Windows artifacts from inside the app.
+   * They are built from the same source and carry the same `app-update.yml`, so
+   * nothing else about them differs at runtime — and the difference matters,
+   * because an update installs by running an NSIS setup that writes to
+   * `%LOCALAPPDATA%\Programs`. A portable exe is not there and is not meant to
+   * be; see {@link PORTABLE_REASON}.
+   *
+   * Set by electron-builder's own portable launcher, which does
+   * `SetEnvironmentVariable("PORTABLE_EXECUTABLE_FILE", "$EXEPATH")` in
+   * `templates/nsis/portable.nsi` before it starts the app. Passed in as data
+   * rather than read here, so the verdict stays a pure function.
+   */
+  portableExecutable?: string | null
 }
 
 /**
@@ -240,6 +261,28 @@ const NO_FEED_REASON =
   'Download new versions from Releases.'
 
 /**
+ * The portable Windows build, which cannot replace itself.
+ *
+ * Not a limitation anyone can work around, and not the same one macOS has. An
+ * update on Windows is an NSIS setup run with `--updated /S`, and that setup
+ * installs into `%LOCALAPPDATA%\Programs\Terminal Deck` — which is not where a
+ * portable exe is. Left unguarded, the portable build reports itself updatable
+ * (it is packaged, and it carries the same `app-update.yml` as the installed
+ * one), downloads 102 MB, and then "installs" by putting a *second*, installed
+ * copy of the app somewhere the user did not choose while the portable exe they
+ * are running stays at the old version. Nothing errors, and the user is left
+ * with two apps and no idea which one they just launched.
+ *
+ * So it is refused up front and says why, which is also what the release notes
+ * have always claimed: "The `-portable.exe` needs no installation and cannot
+ * update itself."
+ */
+export const PORTABLE_REASON =
+  'This is the portable build, so it cannot update itself: an update on Windows runs an ' +
+  'installer, and installing is the thing a portable app does not do. Download the new ' +
+  'portable exe from Releases and replace this one.'
+
+/**
  * Whether this build can update itself, and the sentence to show when it cannot.
  *
  * Order is deliberate: a development build is the common case and says so
@@ -247,11 +290,22 @@ const NO_FEED_REASON =
  * work around — a perfectly configured feed on an unsigned bundle still cannot
  * install — and the missing feed last, because it is the one a rebuild fixes.
  *
- * The signature test only runs on darwin. Windows and Linux have their own
- * rules (electron-updater verifies the publisher itself on Windows, AppImage
- * needs no signature at all), and this project builds neither today —
- * `electron-builder.yml` targets mac arm64 only. Claiming an unsigned Windows
- * build could not update would be inventing a limit nobody has measured.
+ * The signature test only runs on darwin, and that asymmetry is measured rather
+ * than assumed. Windows has its own rule and it is a *weaker* one:
+ * `NsisUpdater.verifySignature` reads `publisherName` out of `app-update.yml`
+ * and **returns null — skipping the check — when there is none**
+ * (`NsisUpdater.js:84`), and an unsigned build writes no `publisherName`. So an
+ * unsigned Windows build really can install its own updates, which was
+ * confirmed end to end on `desktop-ddgmncv`: 0.1.5 found 0.1.6, downloaded
+ * 106,816,797 bytes through electron-updater's own differential downloader, and
+ * the staged setup installed and relaunched at 0.1.6. Claiming an unsigned
+ * Windows build could not update would be inventing a limit that does not
+ * exist.
+ *
+ * The portable build is the one Windows case that genuinely cannot, and it is
+ * checked before the feed because it is a property of *which artifact this is*
+ * rather than of how it was packaged — the portable exe has a perfectly good
+ * `app-update.yml` and that is exactly the problem.
  */
 export function updateSupport(
   environment: UpdateEnvironment,
@@ -266,6 +320,10 @@ export function updateSupport(
     if (!bundle || !fileExists(codeSignaturePath(bundle))) {
       return { supported: false, reason: UNSIGNED_REASON }
     }
+  }
+
+  if (environment.platform === 'win32' && (environment.portableExecutable ?? '') !== '') {
+    return { supported: false, reason: PORTABLE_REASON }
   }
 
   if (!fileExists(environment.feedConfigPath)) return { supported: false, reason: NO_FEED_REASON }
@@ -370,6 +428,41 @@ export const RECHECK_TRIGGER = 'browser-window-focus'
  * rules forbid.
  */
 export const MIN_AUTOMATIC_INTERVAL_MS = 60 * 60 * 1000
+
+/**
+ * What to pass `quitAndInstall`, and why it is not the default.
+ *
+ * `BaseUpdater.quitAndInstall(isSilent = false, isForceRunAfter = false)`, and
+ * on Windows the first of those defaults is a dead end. `NsisUpdater.doInstall`
+ * builds `["--updated"]` and adds `/S` **only** when `isSilent`; without it the
+ * assisted installer — this project sets `oneClick: false`, so the user can
+ * choose a directory on a first install — runs its wizard. `--updated` skips
+ * the licence and directory pages (`skipPageIfUpdated` in
+ * `templates/nsis/assistedInstaller.nsh`) but not the rest, and the install
+ * stops on a page waiting for a click.
+ *
+ * That was watched happening on `desktop-ddgmncv` rather than reasoned about.
+ * Driving the real `update:install` channel on a real 0.1.5 install:
+ *
+ *   - `--updated --force-run` (the old defaults): the app quit, the setup
+ *     process was still alive 50 s later, `Terminal Deck.exe` was still
+ *     0.1.5.0, and there was no app running. The user is left with no app and
+ *     no update — and on a normal desktop, an installer window they never asked
+ *     for, from an app that said "Restart to finish".
+ *   - `--updated /S --force-run` (these): 0.1.6.0 installed and the app was
+ *     back with four processes, no interaction at all.
+ *
+ * `isForceRunAfter` is true for the same reason: it is only consulted when
+ * `isSilent` is set (`quitAndInstall` otherwise substitutes
+ * `autoRunAppAfterInstall`, which the finish page owns), and the button that
+ * got here says **Restart**. An app that quits and does not come back has not
+ * restarted.
+ *
+ * macOS is unaffected either way. `MacUpdater.quitAndInstall()` takes no
+ * arguments and hands off to Squirrel, and this build does not reach it at all
+ * — being unsigned, it updates through {@link ManualStrategy}.
+ */
+export const installNowArgs = { isSilent: true, isForceRunAfter: true } as const
 
 /* --------------------------------------------------------------- control -- */
 
@@ -682,7 +775,7 @@ export function createUpdateController(deps: UpdaterDeps): UpdateController {
       const done = await (manual as ManualStrategy).install(staged.version)
       return done.ok ? staged : set({ phase: 'error', message: done.message })
     }
-    updater.quitAndInstall()
+    updater.quitAndInstall(installNowArgs.isSilent, installNowArgs.isForceRunAfter)
     return staged
   }
 

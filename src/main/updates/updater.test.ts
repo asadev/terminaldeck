@@ -5,9 +5,11 @@ import {
   LAUNCH_DELAY_MS,
   MAX_NOTES_LENGTH,
   MIN_AUTOMATIC_INTERVAL_MS,
+  PORTABLE_REASON,
   UPDATE_STATE_CHANNEL,
   codeSignaturePath,
   createUpdateController,
+  installNowArgs,
   macBundleRoot,
   readNotes,
   readSizeBytes,
@@ -125,8 +127,12 @@ class FakeUpdater implements UpdaterLike {
     return []
   }
 
-  quitAndInstall(): void {
+  /** Every argument list `quitAndInstall` was called with, in order. */
+  readonly quitAndInstallArgs: Array<{ isSilent: boolean | undefined; isForceRunAfter: boolean | undefined }> = []
+
+  quitAndInstall(isSilent?: boolean, isForceRunAfter?: boolean): void {
     this.calls.quitAndInstall += 1
+    this.quitAndInstallArgs.push({ isSilent, isForceRunAfter })
   }
 
   /* The emitter half, driven by the tests. */
@@ -163,6 +169,20 @@ function supportedEnvironment(): UpdateEnvironment {
 
 /** The paths a properly signed, properly packaged build would have. */
 const SUPPORTED_FILES = new Set([codeSignaturePath(SIGNED_BUNDLE), FEED])
+
+const WIN_EXEC = 'C:\\Users\\Imza\\AppData\\Local\\Programs\\Terminal Deck\\Terminal Deck.exe'
+const WIN_FEED = 'C:\\Users\\Imza\\AppData\\Local\\Programs\\Terminal Deck\\resources\\app-update.yml'
+
+/**
+ * The installed Windows build, as it is on `desktop-ddgmncv`.
+ *
+ * The real paths from the real machine, because the point of these cases is the
+ * difference between the installed artifact and the portable one, and a made-up
+ * path could not show it.
+ */
+function windowsEnvironment(): UpdateEnvironment {
+  return { platform: 'win32', isPackaged: true, execPath: WIN_EXEC, feedConfigPath: WIN_FEED }
+}
 
 function info(version: string, extra: Partial<UpdateInfo> = {}): UpdateInfo {
   return {
@@ -320,15 +340,40 @@ describe('whether this build can update itself', () => {
   })
 
   it('does not apply the macOS signature rule to other platforms', () => {
-    // electron-builder.yml builds mac only today; inventing a Windows limit
-    // nobody has measured would be the same kind of guess this module avoids.
-    const windows: UpdateEnvironment = {
-      platform: 'win32',
-      isPackaged: true,
-      execPath: 'C:\\Program Files\\Terminal Deck\\Terminal Deck.exe',
-      feedConfigPath: 'C:\\Program Files\\Terminal Deck\\resources\\app-update.yml',
+    // Not a gap and not a guess: `NsisUpdater.verifySignature` skips the check
+    // outright when `app-update.yml` carries no `publisherName`, which an
+    // unsigned build does not. Confirmed end to end on a real Windows machine —
+    // 0.1.5 found, downloaded and installed 0.1.6 through this very controller.
+    expect(updateSupport(windowsEnvironment(), (path) => path === WIN_FEED)).toEqual({ supported: true })
+  })
+
+  it('refuses the portable Windows build, which has nowhere to install to', () => {
+    // The portable exe is the same build with the same app-update.yml, so
+    // everything above says "yes" for it. Left alone it would download 102 MB
+    // and then quietly install a *second* copy of the app into
+    // %LOCALAPPDATA%\\Programs while the exe the user is running stays old.
+    const portable = {
+      ...windowsEnvironment(),
+      portableExecutable: 'D:\\portable\\terminaldeck-0.1.6-x64-portable.exe',
     }
-    expect(updateSupport(windows, (path) => path === windows.feedConfigPath)).toEqual({ supported: true })
+    const verdict = updateSupport(portable, (path) => path === WIN_FEED)
+    if (verdict.supported) throw new Error('the portable build must not be offered an update')
+    expect(verdict.reason).toBe(PORTABLE_REASON)
+    expect(verdict.reason).toMatch(/portable/i)
+  })
+
+  it('does not read the portable marker on macOS, where it cannot be set', () => {
+    // Belt and braces on a value that comes out of the environment: only the
+    // Windows portable launcher writes it, so only Windows may act on it.
+    const mac = { ...supportedEnvironment(), portableExecutable: '/nonsense' }
+    expect(updateSupport(mac, (path) => SUPPORTED_FILES.has(path))).toEqual({ supported: true })
+  })
+
+  it('treats an empty portable marker as not portable', () => {
+    // An environment variable that exists but is empty is the shape a shell
+    // leaves behind, and it says nothing.
+    const blank = { ...windowsEnvironment(), portableExecutable: '' }
+    expect(updateSupport(blank, (path) => path === WIN_FEED)).toEqual({ supported: true })
   })
 })
 
@@ -533,6 +578,22 @@ describe('state transitions', () => {
     expect(updater.calls.quitAndInstall).toBe(0)
     controller.installNow()
     expect(updater.calls.quitAndInstall).toBe(1)
+  })
+
+  it('installs silently and comes back, because the button said Restart', () => {
+    // Watched failing on desktop-ddgmncv with the library's defaults: the app
+    // quit, the NSIS setup sat on a page nobody could click for fifty seconds,
+    // `Terminal Deck.exe` was still 0.1.5.0 and no app was running. With `/S`
+    // and `--force-run` the same staged installer put 0.1.6.0 in place and the
+    // app was back. So these two arguments are the difference between "Restart
+    // to finish" working and leaving the user with no app at all.
+    const { controller, updater } = harness()
+    updater.emitDownloaded(downloaded('0.2.0'))
+
+    controller.installNow()
+
+    expect(updater.quitAndInstallArgs).toEqual([{ isSilent: true, isForceRunAfter: true }])
+    expect(installNowArgs).toEqual({ isSilent: true, isForceRunAfter: true })
   })
 
   it('does not let a late error event undo a staged update', () => {

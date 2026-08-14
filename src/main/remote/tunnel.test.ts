@@ -1,5 +1,9 @@
 import { createServer, type Server } from 'node:http'
-import { createServer as createTcpServer, type Server as TcpServer } from 'node:net'
+import {
+  createConnection,
+  createServer as createTcpServer,
+  type Server as TcpServer,
+} from 'node:net'
 import { afterEach, describe, expect, it } from 'vitest'
 import { MAX_NET_CHUNK_BYTES, NET_WINDOW_BYTES, type LocalPort, type ServerMessage } from './protocol'
 import { createTunnelHub, streamBudget, type LocalhostMessage, type TunnelHub } from './tunnel'
@@ -45,10 +49,13 @@ afterEach(async () => {
 })
 
 /** A loopback server on a port the OS picked, and that port. */
-async function listen<T extends Server | TcpServer>(server: T): Promise<{ server: T; port: number }> {
+async function listen<T extends Server | TcpServer>(
+  server: T,
+  host = '127.0.0.1',
+): Promise<{ server: T; port: number }> {
   started.push(server)
   server.on('connection', (socket) => accepted.push(socket))
-  await new Promise<void>((settle) => server.listen(0, '127.0.0.1', () => settle()))
+  await new Promise<void>((settle) => server.listen(0, host, () => settle()))
   const address = server.address()
   if (address === null || typeof address === 'string') throw new Error('no port')
   return { server, port: address.port }
@@ -67,13 +74,17 @@ function get(port: number, path = '/'): string {
   ).toString('base64')
 }
 
-function httpServer(handler: (path: string) => { status?: number; body: string }): Promise<{ port: number }> {
+function httpServer(
+  handler: (path: string) => { status?: number; body: string },
+  host = '127.0.0.1',
+): Promise<{ port: number }> {
   return listen(
     createServer((request, response) => {
       const answer = handler(request.url ?? '/')
       response.writeHead(answer.status ?? 200, { 'content-type': 'text/plain; charset=utf-8' })
       response.end(answer.body)
     }),
+    host,
   )
 }
 
@@ -130,10 +141,24 @@ async function until(predicate: () => boolean, what: string, ms = 3000): Promise
  * in the same breath would find no tunnel to open a stream on. The real client
  * waits for `tunnel.opened` before it binds anything, and these read the same
  * way so the ordering they exercise is the ordering that ships.
+ *
+ * A `tunnel.open` is waited on **by its answer** rather than by a count of
+ * ticks, and that is not tidiness. Opening now dials the port to find out which
+ * loopback it answers on, and a real TCP connect takes an I/O turn that no
+ * number of `setImmediate`s is guaranteed to cover — a fixed settle is a flake
+ * with a timer on it. Pass `sent` and the wait becomes the same one the phone
+ * does.
  */
-async function feed(hub: TunnelHub, messages: LocalhostMessage[]): Promise<void> {
+async function feed(hub: TunnelHub, messages: LocalhostMessage[], sent?: ServerMessage[]): Promise<void> {
   for (const message of messages) {
     hub.handle(message)
+    if (message.t === 'tunnel.open' && sent) {
+      const id = message.id
+      await until(
+        () => sent.some((m) => (m.t === 'tunnel.opened' || m.t === 'tunnel.closed') && m.id === id),
+        `an answer to tunnel.open ${id}`,
+      )
+    }
     await settle()
   }
 }
@@ -141,7 +166,7 @@ async function feed(hub: TunnelHub, messages: LocalhostMessage[]): Promise<void>
 describe('what a phone may reach', () => {
   it('refuses a port nothing is listening on, before any socket exists', async () => {
     const { hub, sent } = hubOn([3000])
-    await feed(hub, [{ t: 'tunnel.open', id: 'a', port: 4444 }])
+    await feed(hub, [{ t: 'tunnel.open', id: 'a', port: 4444 }], sent)
 
     expect(of(sent, 'tunnel.opened')).toEqual([])
     expect(of(sent, 'tunnel.closed')[0].message).toContain('4444')
@@ -164,7 +189,7 @@ describe('what a phone may reach', () => {
     expect(of(sent, 'ports')[0].ports.map((entry) => entry.port)).toEqual([3000])
 
     ports.length = 0
-    await feed(hub, [{ t: 'tunnel.open', id: 'a', port: 3000 }])
+    await feed(hub, [{ t: 'tunnel.open', id: 'a', port: 3000 }], sent)
     expect(of(sent, 'tunnel.opened')).toEqual([])
   })
 
@@ -179,7 +204,7 @@ describe('what a phone may reach', () => {
       reserved: [8443],
     })
 
-    await feed(hub, [{ t: 'ports' }, { t: 'tunnel.open', id: 'a', port: 8443 }])
+    await feed(hub, [{ t: 'ports' }, { t: 'tunnel.open', id: 'a', port: 8443 }], sent)
 
     expect(of(sent, 'ports')[0].ports.map((entry) => entry.port)).toEqual([3000])
     expect(of(sent, 'tunnel.opened')).toEqual([])
@@ -204,10 +229,166 @@ describe('what a phone may reach', () => {
       send: (message) => sent.push(message),
     })
 
-    await feed(hub, [{ t: 'ports' }, { t: 'tunnel.open', id: 'a', port: 3000 }])
+    await feed(hub, [{ t: 'ports' }, { t: 'tunnel.open', id: 'a', port: 3000 }], sent)
 
     expect(of(sent, 'ports')).toEqual([{ t: 'ports', ports: [] }])
     expect(of(sent, 'tunnel.opened')).toEqual([])
+  })
+})
+
+describe('which loopback a tunnel dials', () => {
+  /**
+   * The Windows bug, reproduced on whatever machine is running these.
+   *
+   * On Windows `localhost` resolves to `::1` first, so `node --host localhost`
+   * binds `::1` and nothing else — measured on desktop-ddgmncv, where
+   * `netstat` listed `[::1]:5199` and dialling `127.0.0.1:5199` from the same
+   * machine answered `ECONNREFUSED` while `::1` connected. The port was
+   * offered to the phone and then could not be reached, which is worse than
+   * not offering it.
+   *
+   * An IPv6-only listener is not a Windows-only thing to *create*, which is
+   * what makes this testable here: the case below binds `::1` explicitly and
+   * would fail on a Mac too, before the fix.
+   */
+  it('reaches a dev server that is only on ::1, which is the Windows default', async () => {
+    const { port } = await httpServer(() => ({ body: 'served over IPv6 only' }), '::1')
+    const sent: ServerMessage[] = []
+    const hub = createTunnelHub({
+      scan: async () => [{ port, process: 'node', guessed: false, families: { v4: false, v6: true } }],
+      send: (message) => sent.push(message),
+    })
+
+    await feed(hub, [{ t: 'tunnel.open', id: 'a', port }], sent)
+    expect(of(sent, 'tunnel.opened')).toEqual([{ t: 'tunnel.opened', id: 'a', port }])
+
+    await feed(
+      hub,
+      [
+        { t: 'net.open', ch: 'c1', tunnel: 'a' },
+        {
+          t: 'net.data',
+          ch: 'c1',
+          data: Buffer.from(`GET / HTTP/1.1\r\nHost: [::1]:${port}\r\nConnection: close\r\n\r\n`).toString('base64'),
+        },
+      ],
+      sent,
+    )
+
+    await until(() => bytesTo(sent, 'c1').includes('served over IPv6 only'), 'the response')
+  })
+
+  it('dials the family the scan reported, and only that one', async () => {
+    const dialled: string[] = []
+    const { port } = await httpServer(() => ({ body: 'ok' }))
+    const hub = (families: { v4: boolean; v6: boolean }, sent: ServerMessage[]): TunnelHub =>
+      createTunnelHub({
+        scan: async () => [{ port, process: 'node', guessed: false, families }],
+        send: (message) => sent.push(message),
+        connect: (dialPort, host) => {
+          dialled.push(host)
+          return createConnection({ host, port: dialPort })
+        },
+      })
+
+    const v4: ServerMessage[] = []
+    await feed(hub({ v4: true, v6: false }, v4), [{ t: 'tunnel.open', id: 'a', port }], v4)
+    expect(dialled).toEqual(['127.0.0.1'])
+
+    // A v6-only port never has 127.0.0.1 tried at all: that dial is the one
+    // that was silently failing, and a fallback that still tries it first would
+    // pay a connection refusal for every tap.
+    dialled.length = 0
+    const { port: v6Port } = await httpServer(() => ({ body: 'ok' }), '::1')
+    const v6: ServerMessage[] = []
+    await feed(
+      createTunnelHub({
+        scan: async () => [{ port: v6Port, process: 'node', guessed: false, families: { v4: false, v6: true } }],
+        send: (message) => v6.push(message),
+        connect: (dialPort, host) => {
+          dialled.push(host)
+          return createConnection({ host, port: dialPort })
+        },
+      }),
+      [{ t: 'tunnel.open', id: 'a', port: v6Port }],
+      v6,
+    )
+    expect(dialled).toEqual(['::1'])
+  })
+
+  it('falls back to ::1 when a port whose families are unknown refuses IPv4', async () => {
+    // The families are optional so that a stand-in host with only port numbers
+    // still works. "Unknown" has to mean "try both", or the fallback path is
+    // exactly as broken as the thing it replaced.
+    const { port } = await httpServer(() => ({ body: 'v6 after a refusal' }), '::1')
+    const dialled: string[] = []
+    const sent: ServerMessage[] = []
+    const hub = createTunnelHub({
+      scan: async () => [{ port, process: 'node', guessed: false }],
+      send: (message) => sent.push(message),
+      connect: (dialPort, host) => {
+        dialled.push(host)
+        return createConnection({ host, port: dialPort })
+      },
+    })
+
+    await feed(hub, [{ t: 'tunnel.open', id: 'a', port }], sent)
+    expect(dialled).toEqual(['127.0.0.1', '::1'])
+    expect(of(sent, 'tunnel.opened')).toHaveLength(1)
+
+    await feed(
+      hub,
+      [
+        { t: 'net.open', ch: 'c1', tunnel: 'a' },
+        {
+          t: 'net.data',
+          ch: 'c1',
+          data: Buffer.from(`GET / HTTP/1.1\r\nHost: [::1]:${port}\r\nConnection: close\r\n\r\n`).toString('base64'),
+        },
+      ],
+      sent,
+    )
+    await until(() => bytesTo(sent, 'c1').includes('v6 after a refusal'), 'the response')
+    // Every stream goes to the address the open proved, not back through the
+    // refusal. The choice is made once per tunnel, not once per connection.
+    expect(dialled).toEqual(['127.0.0.1', '::1', '::1'])
+  })
+
+  it('refuses with a sentence when the port is listed but nothing accepts', async () => {
+    // A port that `lsof` or `netstat` reports and that then refuses is the
+    // exact shape of the Windows bug, and the old answer to it was a bare
+    // `net.close` with no reason — a blank page on the phone and nothing
+    // anywhere saying why.
+    const { server, port } = await listen(createTcpServer())
+    await new Promise<void>((closed) => server.close(() => closed()))
+
+    const sent: ServerMessage[] = []
+    const hub = createTunnelHub({
+      scan: async () => [{ port, process: 'node', guessed: false, families: { v4: true, v6: true } }],
+      send: (message) => sent.push(message),
+    })
+
+    await feed(hub, [{ t: 'tunnel.open', id: 'a', port }], sent)
+    expect(of(sent, 'tunnel.opened')).toEqual([])
+    const refusal = of(sent, 'tunnel.closed')[0].message
+    expect(refusal).toContain(String(port))
+    expect(refusal).toContain('127.0.0.1')
+    expect(refusal).toContain('::1')
+  })
+
+  it('never puts the address family on the wire', async () => {
+    // `LocalPort` is a contract with three clients and the phone has no use for
+    // this: it names a port, the desktop decides where that port lives. The
+    // list is rebuilt field by field so a field added to the scan cannot reach
+    // a phone by accident.
+    const sent: ServerMessage[] = []
+    const hub = createTunnelHub({
+      scan: async () => [{ port: 5173, process: 'node', guessed: false, families: { v4: false, v6: true } }],
+      send: (message) => sent.push(message),
+    })
+
+    await feed(hub, [{ t: 'ports' }])
+    expect(of(sent, 'ports')[0].ports).toEqual([{ port: 5173, process: 'node', guessed: false }])
   })
 })
 
@@ -216,7 +397,7 @@ describe('carrying bytes', () => {
     const { port } = await httpServer((path) => ({ body: `you asked for ${path}` }))
     const { hub, sent } = hubOn([port])
 
-    await feed(hub, [{ t: 'tunnel.open', id: 'a', port }])
+    await feed(hub, [{ t: 'tunnel.open', id: 'a', port }], sent)
     expect(of(sent, 'tunnel.opened')).toEqual([{ t: 'tunnel.opened', id: 'a', port }])
 
     await feed(hub, [
@@ -243,11 +424,15 @@ describe('carrying bytes', () => {
     const { port } = await httpServer(() => ({ body: 'bye' }))
     const { hub, sent } = hubOn([port])
 
-    await feed(hub, [
-      { t: 'tunnel.open', id: 'a', port },
-      { t: 'net.open', ch: 'c1', tunnel: 'a' },
-      { t: 'net.data', ch: 'c1', data: get(port) },
-    ])
+    await feed(
+      hub,
+      [
+        { t: 'tunnel.open', id: 'a', port },
+        { t: 'net.open', ch: 'c1', tunnel: 'a' },
+        { t: 'net.data', ch: 'c1', data: get(port) },
+      ],
+      sent,
+    )
 
     await until(() => of(sent, 'net.close').length > 0, 'the close')
     expect(of(sent, 'net.close')[0].ch).toBe('c1')
@@ -259,7 +444,7 @@ describe('carrying bytes', () => {
     // so the dial has to fail loudly.
     const { server, port } = await listen(createTcpServer())
     const { hub, sent } = hubOn([port])
-    await feed(hub, [{ t: 'tunnel.open', id: 'a', port }])
+    await feed(hub, [{ t: 'tunnel.open', id: 'a', port }], sent)
     await new Promise<void>((settleClose) => server.close(() => settleClose()))
 
     await feed(hub, [{ t: 'net.open', ch: 'c1', tunnel: 'a' }])
@@ -275,11 +460,15 @@ describe('carrying bytes', () => {
     const { port } = await httpServer(() => ({ body }))
     const { hub, sent } = hubOn([port])
 
-    await feed(hub, [
-      { t: 'tunnel.open', id: 'a', port },
-      { t: 'net.open', ch: 'c1', tunnel: 'a' },
-      { t: 'net.data', ch: 'c1', data: get(port) },
-    ])
+    await feed(
+      hub,
+      [
+        { t: 'tunnel.open', id: 'a', port },
+        { t: 'net.open', ch: 'c1', tunnel: 'a' },
+        { t: 'net.data', ch: 'c1', data: get(port) },
+      ],
+      sent,
+    )
 
     // Acknowledge everything as it arrives, or the window below stalls the read.
     const drain = setInterval(() => {
@@ -306,11 +495,15 @@ describe('carrying bytes', () => {
     const { port } = await httpServer(() => ({ body: 'y'.repeat(4_000_000) }))
     const { hub, sent } = hubOn([port])
 
-    await feed(hub, [
-      { t: 'tunnel.open', id: 'a', port },
-      { t: 'net.open', ch: 'c1', tunnel: 'a' },
-      { t: 'net.data', ch: 'c1', data: get(port) },
-    ])
+    await feed(
+      hub,
+      [
+        { t: 'tunnel.open', id: 'a', port },
+        { t: 'net.open', ch: 'c1', tunnel: 'a' },
+        { t: 'net.data', ch: 'c1', data: get(port) },
+      ],
+      sent,
+    )
 
     await until(() => bytesTo(sent, 'c1').length >= NET_WINDOW_BYTES, 'a full window')
     const stalled = bytesTo(sent, 'c1').length
@@ -346,11 +539,15 @@ describe('carrying bytes', () => {
     const { hub, sent } = hubOn([port])
 
     const payload = Buffer.from('hello from the phone')
-    await feed(hub, [
-      { t: 'tunnel.open', id: 'a', port },
-      { t: 'net.open', ch: 'c1', tunnel: 'a' },
-      { t: 'net.data', ch: 'c1', data: payload.toString('base64') },
-    ])
+    await feed(
+      hub,
+      [
+        { t: 'tunnel.open', id: 'a', port },
+        { t: 'net.open', ch: 'c1', tunnel: 'a' },
+        { t: 'net.data', ch: 'c1', data: payload.toString('base64') },
+      ],
+      sent,
+    )
 
     await until(() => of(sent, 'net.ack').length > 0, 'an acknowledgement')
     expect(of(sent, 'net.ack')[0]).toEqual({ t: 'net.ack', ch: 'c1', bytes: payload.length })
@@ -363,14 +560,13 @@ describe('ending a tunnel', () => {
     const { port } = await httpServer(() => ({ body: 'ok' }))
     const { hub, sent } = hubOn([port])
 
-    await feed(hub, [
-      { t: 'tunnel.open', id: 'a', port },
-      { t: 'net.open', ch: 'c1', tunnel: 'a' },
-    ])
+    await feed(hub, [{ t: 'tunnel.open', id: 'a', port }, { t: 'net.open', ch: 'c1', tunnel: 'a' }], sent)
     expect(hub.list()).toEqual([{ id: 'a', port, streams: 1, openedAt: expect.any(Number) }])
 
-    expect(hub.stop('a', 'Stopped from the Mac.')).toBe(true)
-    expect(of(sent, 'tunnel.closed')).toEqual([{ t: 'tunnel.closed', id: 'a', message: 'Stopped from the Mac.' }])
+    expect(hub.stop('a', 'Stopped from the desktop.')).toBe(true)
+    expect(of(sent, 'tunnel.closed')).toEqual([
+      { t: 'tunnel.closed', id: 'a', message: 'Stopped from the desktop.' },
+    ])
     expect(hub.list()).toEqual([])
     expect(hub.stop('a', 'again')).toBe(false)
   })
@@ -379,13 +575,13 @@ describe('ending a tunnel', () => {
     const { port } = await httpServer(() => ({ body: 'ok' }))
     const { hub, sent } = hubOn([port])
 
-    await feed(hub, [{ t: 'tunnel.open', id: 'a', port }, { t: 'tunnel.close', id: 'a' }])
+    await feed(hub, [{ t: 'tunnel.open', id: 'a', port }, { t: 'tunnel.close', id: 'a' }], sent)
     expect(hub.list()).toEqual([])
 
     // The phone is saying "my page is gone". It should hear the same thing back
     // whether or not this side had already forgotten the tunnel, or it will
     // wait for a confirmation that is never coming.
-    await feed(hub, [{ t: 'tunnel.close', id: 'a' }])
+    await feed(hub, [{ t: 'tunnel.close', id: 'a' }], sent)
     expect(of(sent, 'tunnel.closed')).toHaveLength(2)
   })
 
@@ -396,17 +592,24 @@ describe('ending a tunnel', () => {
         live.push(socket)
       }),
     )
-    const { hub } = hubOn([port])
+    const { hub, sent } = hubOn([port])
 
-    await feed(hub, [
-      { t: 'tunnel.open', id: 'a', port },
-      { t: 'net.open', ch: 'c1', tunnel: 'a' },
-      { t: 'net.open', ch: 'c2', tunnel: 'a' },
-    ])
-    await until(() => live.length === 2, 'both sockets')
+    await feed(
+      hub,
+      [
+        { t: 'tunnel.open', id: 'a', port },
+        { t: 'net.open', ch: 'c1', tunnel: 'a' },
+        { t: 'net.open', ch: 'c2', tunnel: 'a' },
+      ],
+      sent,
+    )
+    // Three, not two: opening a tunnel dials the port once to find out which
+    // loopback it answers on, and that dial is a connection this server sees.
+    // It is already hung up by the time `tunnel.opened` was sent.
+    await until(() => live.length === 3, 'the open dial and both stream sockets')
 
-    hub.stop('a', 'Stopped from the Mac.')
-    await until(() => live.every((socket) => socket.destroyed), 'both sockets to be destroyed')
+    hub.stop('a', 'Stopped from the desktop.')
+    await until(() => live.every((socket) => socket.destroyed), 'every socket to be destroyed')
   })
 
   it('gives its budget back, so a phone that opens and closes forever does not exhaust it', async () => {
@@ -414,7 +617,7 @@ describe('ending a tunnel', () => {
     const { port } = await httpServer(() => ({ body: 'ok' }))
     const { hub, sent } = hubOn([port], { budget })
 
-    await feed(hub, [{ t: 'tunnel.open', id: 'a', port }])
+    await feed(hub, [{ t: 'tunnel.open', id: 'a', port }], sent)
     for (let round = 0; round < 5; round += 1) {
       await feed(hub, [{ t: 'net.open', ch: `c${round}`, tunnel: 'a' }, { t: 'net.close', ch: `c${round}` }])
     }
@@ -427,11 +630,15 @@ describe('ending a tunnel', () => {
     const { port } = await httpServer(() => ({ body: 'ok' }))
     const { hub, sent } = hubOn([port], { budget })
 
-    await feed(hub, [
-      { t: 'tunnel.open', id: 'a', port },
-      { t: 'net.open', ch: 'c1', tunnel: 'a' },
-      { t: 'net.open', ch: 'c2', tunnel: 'a' },
-    ])
+    await feed(
+      hub,
+      [
+        { t: 'tunnel.open', id: 'a', port },
+        { t: 'net.open', ch: 'c1', tunnel: 'a' },
+        { t: 'net.open', ch: 'c2', tunnel: 'a' },
+      ],
+      sent,
+    )
 
     expect(of(sent, 'net.close')).toEqual([{ t: 'net.close', ch: 'c2' }])
   })
@@ -445,15 +652,13 @@ describe('ending a tunnel', () => {
     )
     const { hub, sent } = hubOn([port])
 
-    await feed(hub, [
-      { t: 'tunnel.open', id: 'a', port },
-      { t: 'net.open', ch: 'c1', tunnel: 'a' },
-    ])
-    await until(() => live.length === 1, 'the socket')
+    await feed(hub, [{ t: 'tunnel.open', id: 'a', port }, { t: 'net.open', ch: 'c1', tunnel: 'a' }], sent)
+    // The open dial plus the stream. See the note above about the third socket.
+    await until(() => live.length === 2, 'the open dial and the stream socket')
 
     const before = sent.length
     hub.closeAll()
-    await until(() => live[0].destroyed, 'the socket to be destroyed')
+    await until(() => live.every((socket) => socket.destroyed), 'every socket to be destroyed')
     expect(hub.list()).toEqual([])
     // Nothing is announced: the socket carrying the announcement is the thing
     // that just went away.
@@ -464,26 +669,26 @@ describe('ending a tunnel', () => {
 describe('what the desktop is shown', () => {
   it('redraws the device list when a tunnel or a stream appears', async () => {
     const { port } = await httpServer(() => ({ body: 'ok' }))
-    const { hub, changes } = hubOn([port])
+    const { hub, sent, changes } = hubOn([port])
 
-    await feed(hub, [{ t: 'tunnel.open', id: 'a', port }])
+    await feed(hub, [{ t: 'tunnel.open', id: 'a', port }], sent)
     const afterOpen = changes()
     expect(afterOpen).toBeGreaterThan(0)
 
     await feed(hub, [{ t: 'net.open', ch: 'c1', tunnel: 'a' }])
     expect(changes()).toBeGreaterThan(afterOpen)
 
-    hub.stop('a', 'Stopped from the Mac.')
+    hub.stop('a', 'Stopped from the desktop.')
     expect(changes()).toBeGreaterThan(afterOpen + 1)
   })
 
   it('lists tunnels oldest first, with the port a person would recognise', async () => {
     const first = await httpServer(() => ({ body: 'a' }))
     const second = await httpServer(() => ({ body: 'b' }))
-    const { hub } = hubOn([first.port, second.port])
+    const { hub, sent } = hubOn([first.port, second.port])
 
-    await feed(hub, [{ t: 'tunnel.open', id: 'a', port: first.port }])
-    await feed(hub, [{ t: 'tunnel.open', id: 'b', port: second.port }])
+    await feed(hub, [{ t: 'tunnel.open', id: 'a', port: first.port }], sent)
+    await feed(hub, [{ t: 'tunnel.open', id: 'b', port: second.port }], sent)
 
     expect(hub.list().map((tunnel) => tunnel.port)).toEqual([first.port, second.port])
   })
@@ -494,7 +699,7 @@ describe('what the desktop is shown', () => {
     const { hub, sent } = hubOn(ports)
 
     for (const [index, port] of ports.entries()) {
-      await feed(hub, [{ t: 'tunnel.open', id: `t${index}`, port }])
+      await feed(hub, [{ t: 'tunnel.open', id: `t${index}`, port }], sent)
     }
 
     expect(hub.list()).toHaveLength(4)

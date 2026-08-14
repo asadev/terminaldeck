@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { resetDevPortsCache, scanDevPorts } from './dev-ports'
+import { resetDevPortsCache, scanDevPorts, scanDevPortsDetailed } from './dev-ports'
 
 /**
  * The scan itself, with the operating system faked.
@@ -136,5 +136,41 @@ describe('the cache is shared by both platforms', () => {
     await scanDevPorts(true, 'darwin')
     await scanDevPorts(false, 'darwin')
     expect(state.ran).toEqual(['lsof'])
+  })
+
+  it('answers the detailed and the wire caller off one scan', async () => {
+    // Two scans would mean the list a phone was shown and the list a
+    // `tunnel.open` is checked against could disagree about the same machine.
+    await scanDevPortsDetailed(true, 'darwin')
+    await scanDevPorts(false, 'darwin')
+    expect(state.ran).toEqual(['lsof'])
+  })
+})
+
+describe('which loopbacks a port answers on', () => {
+  it('unions both rows of a dual-stack server rather than keeping the first', async () => {
+    // 5173 is listed twice, IPv4 and IPv6. The *name* has to come from one row
+    // — there is only one honest answer to "what holds this port" — but there
+    // are two honest answers to "where does it answer", and dropping the second
+    // is what left an IPv6-only dev server listed and unreachable on Windows.
+    const ports = await scanDevPortsDetailed(true, 'darwin')
+    expect(ports.find((port) => port.port === 5173)?.families).toEqual({ v4: true, v6: true })
+    expect(ports.find((port) => port.port === 9333)?.families).toEqual({ v4: true, v6: false })
+  })
+
+  it('reports an IPv6-only Windows dev server as IPv6-only', async () => {
+    // The whole bug: `node --host localhost` on Windows binds `::1` and nothing
+    // else, so this is the row the tunnel has to dial `::1` for.
+    state.netstat = [
+      '  Proto  Local Address          Foreign Address        State           PID',
+      '  TCP    [::1]:5173             [::]:0                 LISTENING       12044',
+    ].join('\r\n')
+    const ports = await scanDevPortsDetailed(true, 'win32')
+    expect(ports).toEqual([{ port: 5173, process: 'node', guessed: false, families: { v4: false, v6: true } }])
+  })
+
+  it('keeps the families out of the answer the renderer and the phone get', async () => {
+    const ports = await scanDevPorts(true, 'darwin')
+    expect(ports.every((port) => !('families' in port))).toBe(true)
   })
 })
