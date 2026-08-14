@@ -922,7 +922,12 @@ function Workspace() {
           title: labelOf(activeTab),
           subtitle: activeTab.kind === 'session' ? activeTab.projectPath ?? null : null,
         }
-      : { title: 'Terminal Deck', subtitle: 'Nothing open yet.' }
+      // No subtitle. "Nothing open yet." is the sidebar's line, and it is there to
+      // explain why the list beneath it is empty — a job this heading does not
+      // share. Saying it here too put the same sentence on screen twice, a few
+      // centimetres apart, while the page in the middle was already explaining
+      // the same emptiness with a button. The title alone is enough.
+      : { title: 'Terminal Deck', subtitle: null }
 
   return (
     <div className="app">
