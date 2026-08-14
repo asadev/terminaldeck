@@ -33,7 +33,47 @@ function line(
   })}\n`
 }
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+/**
+ * Wait until the watcher itself reports something, rather than sleeping a span
+ * and hoping.
+ *
+ * These tests drive a real `TranscriptWatcher` over a real directory, so every
+ * append reaches it through an OS filesystem notification — and that
+ * notification carries no latency guarantee. It usually lands in a few
+ * milliseconds; on a machine running the whole suite in parallel it can take
+ * hundreds. A fixed `sleep` therefore encodes a guess about machine speed into
+ * a pass/fail, which is exactly what made the `maxSessions` case below fail
+ * about one run in four: instrumenting the watcher showed the append event had
+ * simply not been delivered yet when the assertions ran, so the file was never
+ * enqueued and never read.
+ *
+ * Waiting on the condition makes the outcome depend on what the watcher did
+ * rather than on how busy the machine was — a slow machine now gets the same
+ * answer, just later. The ceiling is not a tuned timeout: it exists only so a
+ * watcher that genuinely never fires reports a readable failure instead of
+ * hanging until vitest kills the test.
+ */
+async function until(
+  what: string,
+  watcher: TranscriptWatcher,
+  ready: (summary: ProjectSummary) => boolean,
+  ceilingMs = 8_000,
+): Promise<ProjectSummary> {
+  const deadline = Date.now() + ceilingMs
+  for (;;) {
+    const summary = watcher.summary()
+    if (ready(summary)) return summary
+    if (Date.now() >= deadline) {
+      throw new Error(
+        `waited ${ceilingMs}ms for ${what} and it never happened; ` +
+          `requests=${summary.requests} sessions=[${summary.sessions
+            .map((s) => s.sessionId)
+            .join(' ')}]`,
+      )
+    }
+    await new Promise((r) => setTimeout(r, 10))
+  }
+}
 
 describe('TranscriptWatcher against a live file', () => {
   it('picks up appends incrementally', async () => {
@@ -62,15 +102,16 @@ describe('TranscriptWatcher against a live file', () => {
     expect(afterScan.activeSessionId).toBe('sess-live')
 
     // Two more requests arrive while we watch, the second split across three
-    // lines the way a real multi-block response is.
+    // lines the way a real multi-block response is. Each is waited for
+    // separately, which is also what makes them two distinct updates rather
+    // than one coalesced batch.
     appendFileSync(file, line('m2', 1_000_000))
-    await sleep(250)
-    appendFileSync(file, line('m3', 1_000_000))
-    appendFileSync(file, line('m3', 1_000_000))
-    appendFileSync(file, line('m3', 1_000_000))
-    await sleep(400)
+    await until('the second request to be picked up', watcher, (s) => s.requests >= 2)
 
-    const final = watcher.summary()
+    appendFileSync(file, line('m3', 1_000_000))
+    appendFileSync(file, line('m3', 1_000_000))
+    appendFileSync(file, line('m3', 1_000_000))
+    const final = await until('the third request to be picked up', watcher, (s) => s.requests >= 3)
     console.log('after appends:', final.requests, formatUsd(final.cost.cost.total))
     console.log('updates emitted:', updates.length)
     console.log('session:', final.sessions[0]?.sessionId, 'ctx:', final.sessions[0]?.context)
@@ -131,11 +172,15 @@ describe('TranscriptWatcher against a live file', () => {
     await watcher.start()
     expect(watcher.summary().sessions).toHaveLength(2)
 
-    // A third session starts while we are watching.
+    // A third session starts while we are watching. `prune` runs at the end of
+    // the same drain that reads the new file, so the moment sess-c is visible
+    // the cap has already been applied — there is no window in which all three
+    // are resident for this to race against.
     appendFileSync(join(dir, 'sess-c.jsonl'), line('c1', 10, { timestamp: '2026-08-11T12:00:00.000Z' }))
-    await sleep(400)
 
-    const summary = watcher.summary()
+    const summary = await until('the third session to be picked up', watcher, (s) =>
+      s.sessions.some((session) => session.sessionId === 'sess-c'),
+    )
     watcher.stop()
     const ids = summary.sessions.map((s) => s.sessionId)
     console.log('resident sessions:', ids)
