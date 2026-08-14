@@ -115,8 +115,21 @@ export interface CloseWarning {
   detail: string
 }
 
-/** What is actually at stake, in the words of the state it is in. */
-export function closeWarning(status: SessionStatus): CloseWarning {
+/**
+ * What is actually at stake, in the words of the state it is in.
+ *
+ * `count` is how many sessions are going at once. Closing a project takes every
+ * session in it with it — silently, until now — and "this session is still
+ * working" is the wrong sentence for four of them.
+ */
+export function closeWarning(status: SessionStatus, count = 1): CloseWarning {
+  if (count > 1) {
+    return {
+      headline: `${count} sessions here are still going.`,
+      detail:
+        'Closing the project stops every one of them part-way through. Anything they have not already written to disk goes with them.',
+    }
+  }
   if (status === 'input') {
     return {
       headline: 'This session asked you something.',
@@ -139,9 +152,17 @@ export function canResumeProvider(provider: ProviderId | undefined): boolean {
 
 interface Props {
   open: boolean
-  /** The session's tab label, so the dialog names what it is about to close. */
+  /** The session's tab label, or the project's name — what is being closed. */
   title: string
   status: SessionStatus
+  /**
+   * How many sessions this close ends.
+   *
+   * More than one means a project is being closed, which takes every session in
+   * it. That path used to bypass this dialog completely: `removeProject` killed
+   * running agents with no confirmation at all, with the confirm switch on.
+   */
+  count?: number
   /** Used only to say honestly whether the conversation can be resumed. */
   provider?: ProviderId
   onCancel(): void
@@ -154,6 +175,7 @@ export function CloseSessionConfirm({
   open,
   title,
   status,
+  count = 1,
   provider,
   onCancel,
   onConfirm,
@@ -199,12 +221,13 @@ export function CloseSessionConfirm({
   // the fastest way to make every future one of these get clicked through.
   if (!RISKY_STATUSES.has(status)) return null
 
-  const warning = closeWarning(status)
+  const warning = closeWarning(status, count)
+  const project = count > 1
 
   return (
     <Modal
       open={open}
-      title="Close this session?"
+      title={project ? 'Close this project?' : 'Close this session?'}
       description={title}
       onClose={onCancel}
       footer={
@@ -218,7 +241,7 @@ export function CloseSessionConfirm({
             disabled={busy}
             onClick={() => void confirm()}
           >
-            {busy ? 'Closing…' : 'Close session'}
+            {busy ? 'Closing…' : project ? 'Close project' : 'Close session'}
           </button>
         </>
       }

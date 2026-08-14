@@ -2,7 +2,7 @@ import { useCallback, useEffect, useId, useMemo, useState, type FormEvent } from
 import type { ProviderId } from '@shared/types'
 import { folderName } from '../session-title'
 import { Modal } from './Modal'
-import { installedProviders } from './PreferencesModal'
+import { installedProviders } from '../preferences'
 import './ProviderPicker.css'
 
 /**

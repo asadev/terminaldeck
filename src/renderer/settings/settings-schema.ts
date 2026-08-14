@@ -243,15 +243,15 @@ export const SETTINGS: readonly Setting[] = [
     kind: 'toggle',
     default: true,
   },
-  {
-    id: 'general.recordHistory',
-    section: 'general',
-    label: 'Record session history when sessions close',
-    help: 'Keeps a local record of a session once it ends, so search and the inspector can find it. Turning this off stops new records; it deletes nothing.',
-    store: 'extra',
-    kind: 'toggle',
-    default: true,
-  },
+  /*
+   * `general.recordHistory` was here — "Record session history when sessions
+   * close". Nothing in this app has ever recorded a session. Search and the
+   * inspector read Claude Code's own transcripts out of ~/.claude/projects,
+   * which are written by the CLI whether or not this app is running, so the
+   * switch could not have changed anything even in principle. Removed rather
+   * than left as a control over nothing; if an app-side history store is ever
+   * built, this row comes back with it.
+   */
   {
     id: 'general.showInsightAlerts',
     section: 'general',
@@ -416,8 +416,16 @@ export const SETTINGS: readonly Setting[] = [
   {
     id: 'advanced.restoreSessions',
     section: 'advanced',
-    label: 'Restore sessions on launch',
-    help: 'Reopen the projects and tabs that were up when you quit.',
+    /*
+     * This said "Restore sessions on launch" and reopened nothing: the value
+     * was stored and no code on either side of the bridge ever read it. It is
+     * now the switch on the one part of that which is real — the projects come
+     * back, and the label no longer promises the sessions do. A session's pty
+     * dies with the app, so "restoring" one would mean starting a new agent
+     * process per row at launch, which is not what anyone means by restore.
+     */
+    label: 'Reopen your projects on launch',
+    help: 'Puts the projects you had open back in the sidebar. Sessions are not reopened — an agent process ends when the app quits.',
     store: 'prefs',
     prefsKey: 'restoreSessions',
     kind: 'toggle',

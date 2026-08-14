@@ -37,6 +37,13 @@ interface StoreValue {
   removeSession(id: string): void
   setActiveSession(id: string | null): void
   setSessionStatus(id: string, status: SessionStatus): void
+  /**
+   * Rename a session, when something better than the folder name turns up.
+   *
+   * Ignored when the name has not actually changed, so a title derived on
+   * every chunk of output does not re-render the sidebar on every chunk.
+   */
+  setSessionTitle(id: string, title: string): void
   sessionsForProject(path: string): Session[]
 }
 
@@ -94,6 +101,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setSessions((prev) => prev.map((s) => (s.id === id ? { ...s, status } : s)))
   }, [])
 
+  const setSessionTitle = useCallback((id: string, title: string) => {
+    setSessions((prev) =>
+      prev.some((s) => s.id === id && s.title !== title)
+        ? prev.map((s) => (s.id === id ? { ...s, title } : s))
+        : prev,
+    )
+  }, [])
+
   const sessionsForProject = useCallback(
     (path: string) => sessions.filter((s) => s.projectPath === path),
     [sessions],
@@ -110,6 +125,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       removeSession,
       setActiveSession: setActiveSessionId,
       setSessionStatus,
+      setSessionTitle,
       sessionsForProject,
     }),
     [
@@ -121,6 +137,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       addSession,
       removeSession,
       setSessionStatus,
+      setSessionTitle,
       sessionsForProject,
     ],
   )

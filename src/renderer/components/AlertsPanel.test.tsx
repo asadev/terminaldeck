@@ -7,6 +7,7 @@ import {
   groupAlerts,
   SEVERITY_HEADING,
   summarize,
+  withInsights,
   type Alert,
   type AlertReport,
   type AlertsBridge,
@@ -43,6 +44,59 @@ function report(alerts: Alert[]): AlertReport {
     scannedAt: NOW,
   }
 }
+
+describe('withInsights', () => {
+  const report = (...alerts: Alert[]): AlertReport => ({
+    projectPath: '/p',
+    alerts,
+    counts: {
+      info: alerts.filter((a) => a.severity === 'info').length,
+      warning: alerts.filter((a) => a.severity === 'warning').length,
+      critical: alerts.filter((a) => a.severity === 'critical').length,
+    },
+    worst: alerts.some((a) => a.severity === 'critical')
+      ? 'critical'
+      : alerts.some((a) => a.severity === 'warning')
+        ? 'warning'
+        : alerts.length > 0
+          ? 'info'
+          : null,
+    scannedAt: 0,
+  })
+
+  const inferred = alert({ id: 'a', kind: 'context-bloat', severity: 'warning' })
+  const structural = alert({ id: 'b', kind: 'provider-missing', severity: 'critical' })
+
+  it('is the identity when insights are on', () => {
+    const full = report(inferred, structural)
+    expect(withInsights(full, true)).toBe(full)
+  })
+
+  it('drops what it inferred and keeps what it observed', () => {
+    // A missing provider is a fact about the machine that is true whether or
+    // not anyone is working; hiding it would hide a broken setup.
+    const filtered = withInsights(report(inferred, structural), false)
+    expect(filtered.alerts.map((a) => a.id)).toEqual(['b'])
+  })
+
+  it('recomputes the counts and the worst severity', () => {
+    // The summary line is built from these. Two alerts under "3 needing you
+    // now" is worse than either number alone.
+    const filtered = withInsights(report(inferred, structural), false)
+    expect(filtered.counts).toEqual({ info: 0, warning: 0, critical: 1 })
+    expect(filtered.worst).toBe('critical')
+
+    const nothingLeft = withInsights(report(inferred), false)
+    expect(nothingLeft.alerts).toEqual([])
+    expect(nothingLeft.worst).toBeNull()
+    expect(summarize(nothingLeft)).toBe('Nothing needs your attention.')
+  })
+
+  it('returns the same object when it changed nothing', () => {
+    const only = report(structural)
+    expect(withInsights(only, false)).toBe(only)
+  })
+})
 
 describe('groupAlerts', () => {
   it('orders the sections critical, warning, info', () => {
@@ -98,19 +152,23 @@ describe('AlertRow', () => {
     expect(markup).toContain('data-kind="session-blocked"')
   })
 
-  it('renders an action button only when the alert has one', () => {
-    const without = renderToStaticMarkup(<AlertRow alert={alert({ id: 'a' })} />)
-    expect(without).not.toContain('<button')
+  it('renders an action button only when the alert has one and a host to run it', () => {
+    const withAction = alert({
+      id: 'a',
+      action: { kind: 'compact-session' as const, label: 'Compact this session', target: 's1' },
+    })
 
-    const withAction = renderToStaticMarkup(
-      <AlertRow
-        alert={alert({
-          id: 'a',
-          action: { kind: 'compact-session', label: 'Compact this session', target: 's1' },
-        })}
-      />,
-    )
-    expect(withAction).toContain('Compact this session')
+    expect(renderToStaticMarkup(<AlertRow alert={alert({ id: 'a' })} />)).not.toContain('<button')
+
+    // No host, no button. An alert's action is the entire point of the alert,
+    // and one rendered without a handler is a control that eats the click —
+    // which is what "Open the git panel" did for its whole life, right down to
+    // re-running the scan behind it so it looked like something had happened.
+    expect(renderToStaticMarkup(<AlertRow alert={withAction} />)).not.toContain('<button')
+
+    expect(
+      renderToStaticMarkup(<AlertRow alert={withAction} onAction={() => {}} />),
+    ).toContain('Compact this session')
   })
 
   it('escapes a detail string rather than trusting it as markup', () => {

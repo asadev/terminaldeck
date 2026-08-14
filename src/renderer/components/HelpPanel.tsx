@@ -566,6 +566,16 @@ export interface HelpPanelProps {
   isMac?: boolean
   initialSection?: HelpSectionId
   /**
+   * Sections to leave out entirely — out of the sub-nav, out of the search.
+   *
+   * Settings passes `['shortcuts', 'about']`, because that window's own nav
+   * already has a Shortcuts row and an About row, and Help sitting inside it
+   * was offering a second way into both, two panels apart, listing the same
+   * keymap and the same version numbers. The ⌘? dialog is not inside anything
+   * and keeps all five.
+   */
+  hideSections?: readonly HelpSectionId[]
+  /**
    * Seeds the search field. Mostly a test seam: the searching branch — the
    * result count, the empty state, About-as-a-result — is otherwise reachable
    * only by typing, so a static render can never exercise any of it.
@@ -584,7 +594,15 @@ export function HelpPanel({
   initialQuery = '',
   onOpenDebug,
   autoFocus = true,
+  hideSections = [],
 }: HelpPanelProps) {
+  const sections = useMemo(
+    () => SECTIONS.filter((entry) => !hideSections.includes(entry.id)),
+    // The array is a literal at every call site, so compare by contents rather
+    // than by identity — otherwise this re-runs on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [hideSections.join(',')],
+  )
   const [section, setSection] = useState<HelpSectionId>(initialSection)
   const [query, setQuery] = useState(initialQuery)
   const [about, setAbout] = useState<AboutInfo | null>(null)
@@ -617,16 +635,28 @@ export function HelpPanel({
   }, [resolved])
 
   const searching = query.trim().length > 0
-  const matches = useMemo(() => searchHelp(query), [query])
+  const shown = useMemo(
+    () => HELP_TOPICS.filter((topic) => sections.some((entry) => entry.id === topic.section)),
+    [sections],
+  )
+  const matches = useMemo(() => searchHelp(query, shown), [query, shown])
+  const hasShortcuts = sections.some((entry) => entry.id === 'shortcuts')
+  const hasAbout = sections.some((entry) => entry.id === 'about')
   const shortcutMatches = useMemo(
     () => (searching ? searchKeymap(query, KEYMAP, isMac).length : KEYMAP.length),
     [query, searching, isMac],
   )
   const appName = about?.name ?? 'This app'
 
-  const visible = searching ? matches : matches.filter((topic) => topic.section === section)
-  const showShortcuts = searching ? shortcutMatches > 0 : section === 'shortcuts'
-  const showAbout = searching ? matchesAbout(query) : section === 'about'
+  // A hidden `initialSection` would otherwise leave the panel showing nothing
+  // at all, with no row in the nav to click back out of it.
+  const current = sections.some((entry) => entry.id === section) ? section : (sections[0]?.id ?? 'start')
+  const visible = searching ? matches : matches.filter((topic) => topic.section === current)
+  // A hidden section is hidden from the search too. Half-hiding it — no row in
+  // the nav, but its whole shortcut table arriving as a search result — is the
+  // duplication back again, just harder to predict.
+  const showShortcuts = hasShortcuts && (searching ? shortcutMatches > 0 : current === 'shortcuts')
+  const showAbout = hasAbout && (searching ? matchesAbout(query) : current === 'about')
   const nothing = visible.length === 0 && !showShortcuts && !showAbout
   // The About card is a result too — leaving it out meant a search that found
   // only the version details reported "0 results" above the version details.
@@ -665,7 +695,7 @@ export function HelpPanel({
           type="search"
           className="help-input"
           value={query}
-          placeholder="Search help and shortcuts"
+          placeholder={hasShortcuts ? 'Search help and shortcuts' : 'Search help'}
           aria-label="Search help"
           onChange={(event) => setQuery(event.target.value)}
         />
@@ -677,15 +707,15 @@ export function HelpPanel({
       </div>
 
       <div className="help-body">
-        {!searching && (
+        {!searching && sections.length > 1 && (
           <nav className="help-nav" aria-label="Help sections">
-            {SECTIONS.map((entry) => (
+            {sections.map((entry) => (
               <button
                 key={entry.id}
                 type="button"
                 className="help-nav-item"
-                data-active={entry.id === section || undefined}
-                aria-current={entry.id === section ? 'true' : undefined}
+                data-active={entry.id === current || undefined}
+                aria-current={entry.id === current ? 'true' : undefined}
                 onClick={() => setSection(entry.id)}
               >
                 {entry.label}
@@ -696,7 +726,7 @@ export function HelpPanel({
 
         <div className="help-content">
           {!searching && (
-            <p className="help-section-hint">{SECTIONS.find((s) => s.id === section)?.hint}</p>
+            <p className="help-section-hint">{sections.find((s) => s.id === current)?.hint}</p>
           )}
 
           {nothing && <p className="help-empty">Nothing in the help matches “{query.trim()}”.</p>}
@@ -705,7 +735,7 @@ export function HelpPanel({
             <TopicView key={topic.id} topic={topic} appName={appName} />
           ))}
 
-          {!searching && section === 'trouble' && onOpenDebug && (
+          {!searching && current === 'trouble' && onOpenDebug && (
             <button type="button" className="help-link" onClick={onOpenDebug}>
               Open the Debug panel
             </button>

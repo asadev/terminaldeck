@@ -103,21 +103,14 @@
 
 /* --------------------------------------------------------------- messages -- */
 
-.mcp-empty,
 .mcp-note {
   margin: var(--sp-3) 0 0;
   color: var(--text-secondary);
 }
 
-/* Nothing configured is a page state, not a footnote: it says so in the middle
-   of the window, the way every other empty state in the app does. */
-.mcp > .mcp-empty {
-  max-width: 34rem;
-  margin: 10vh auto 0;
-  font-size: var(--t-body);
-  line-height: var(--lh-body);
-  text-align: center;
-}
+/* `.mcp-empty` was here. Nothing configured is a page state, not a footnote,
+   and it is a `PageEmpty` now — the same block, with the same glyph and the
+   same title voice, as every other page in the app with nothing on it. */
 
 .mcp-error {
   margin: var(--sp-2) 0 0;

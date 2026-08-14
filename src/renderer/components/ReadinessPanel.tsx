@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { panelSpec } from '../shell/panels'
+import { PageEmpty } from './PageEmpty'
 import './ReadinessPanel.css'
 
 /* ------------------------------------------------------------------ types -- */
@@ -316,7 +318,10 @@ export function ReadinessPanel({ projectPath, bridge }: ReadinessPanelProps) {
   if (!resolved) {
     return (
       <section className="readiness">
-        <p className="readiness-empty">Readiness is not available in this window.</p>
+        <PageEmpty icon={panelSpec('readiness').icon} title="AI readiness is not available here">
+          This window was opened without the readiness bridge, so there is nothing for this page
+          to scan with.
+        </PageEmpty>
       </section>
     )
   }

@@ -336,34 +336,170 @@ export function downsample(points: ContextPoint[], target: number): ContextPoint
   return out
 }
 
+/**
+ * A readable ceiling for the y-axis, at or above the series peak.
+ *
+ * The axis used to be pinned to 0–100 because the number being plotted is a
+ * percentage *of the context window*, and rescaling it felt like overstating
+ * how full the window was. In practice that drew nothing at all: a healthy
+ * session peaks around four percent, so all 160 points landed within a pixel
+ * of the baseline and the chart was an empty box with a line ruled along the
+ * bottom of it — which is what shipped.
+ *
+ * So the axis scales, and both the tick labels and the caption print the
+ * ceiling, because the honesty problem was never the scale — it was a chart
+ * that said nothing. The ladder is chosen so that half of every rung is also a
+ * clean number, since the middle gridline is labelled too.
+ */
+const AXIS_LADDER = [1, 2, 3, 4, 5, 6, 8, 10, 20, 30, 40, 50, 60, 80, 100]
+
+export function axisMax(peak: number): number {
+  if (!Number.isFinite(peak) || peak <= 0) return 0
+  // Headroom, so the peak is a point on the chart rather than a corner of it.
+  const wanted = peak * 1.15
+  return AXIS_LADDER.find((step) => step >= wanted) ?? 100
+}
+
+/**
+ * A tick label.
+ *
+ * Every rung on the ladder halves to something with at most one decimal, which
+ * is the whole reason the ladder is the shape it is — the middle gridline is
+ * labelled too, and "37.5%" rounded to "38%" on an axis that is not at 38 is a
+ * chart lying about its own scale.
+ */
+export function axisLabel(value: number): string {
+  if (!Number.isFinite(value)) return '—'
+  const rounded = Math.round(value * 10) / 10
+  return `${Number.isInteger(rounded) ? rounded.toFixed(0) : rounded.toFixed(1)}%`
+}
+
+/**
+ * How the context window filled, request by request.
+ *
+ * Drawn as an SVG stretched by `preserveAspectRatio="none"` — so the geometry
+ * follows the container at any width — with every stroke marked
+ * `non-scaling-stroke` so nothing is smeared by that stretch, and every piece
+ * of text and every dot rendered as positioned HTML rather than as SVG, which
+ * is the other half of not being smeared.
+ *
+ * The readout lives in the caption rather than in a floating tooltip: a chip
+ * following the pointer has to be clamped at both ends of a container this
+ * wide, and a line of text that was already there has nowhere to overflow to.
+ */
 function ContextChart({ series }: { series: ContextPoint[] }) {
   const points = useMemo(() => downsample(series, 160), [series])
+  const [hover, setHover] = useState<number | null>(null)
   if (points.length < 2) return null
 
-  const width = 100
-  const height = 34
-  // The chart plots against the window, so the y-axis is fixed at 0–100 and a
-  // prompt that tips over the limit rides the top edge rather than rescaling
-  // every other point around it.
+  const peak = points.reduce((max, point) => (point.percent > max.percent ? point : max), points[0])
+  const max = axisMax(peak.percent)
+
+  // Every request reported an empty prompt. There is no chart to draw and no
+  // scale to draw it against, so the section says that instead of ruling a
+  // line along the floor and calling it a chart.
+  if (max <= 0) {
+    return (
+      <p className="si-empty">
+        No request has reported a prompt size, so there is nothing to plot yet.
+      </p>
+    )
+  }
+
+  const level = levelOf(peak.percent)
+  const xOf = (i: number): number => (i / (points.length - 1)) * 100
+  // Clamped at the ceiling: a prompt past 100% of the window rides the top edge
+  // and the caption keeps saying what it really was.
+  const yOf = (percent: number): number => 100 - (Math.min(max, percent) / max) * 100
+
   const path = points
-    .map((point, i) => {
-      const x = (i / (points.length - 1)) * width
-      const y = height - (Math.min(100, point.percent) / 100) * height
-      return `${i === 0 ? 'M' : 'L'}${x.toFixed(2)},${y.toFixed(2)}`
-    })
+    .map((point, i) => `${i === 0 ? 'M' : 'L'}${xOf(i).toFixed(3)},${yOf(point.percent).toFixed(3)}`)
     .join(' ')
 
-  const peak = points.reduce((max, point) => (point.percent > max.percent ? point : max), points[0])
+  const hovered = hover === null ? null : points[hover]
+  const ticks = [max, max / 2, 0]
 
   return (
-    <figure className="si-chart">
-      <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" aria-hidden="true">
-        <path className="si-chart-area" d={`${path} L${width},${height} L0,${height} Z`} />
-        <path className="si-chart-line" d={path} vectorEffect="non-scaling-stroke" />
-      </svg>
+    <figure
+      className="si-chart"
+      data-level={level}
+      onPointerLeave={() => setHover(null)}
+      onPointerMove={(event) => {
+        const box = event.currentTarget.querySelector('.si-chart-plot')?.getBoundingClientRect()
+        if (!box || box.width === 0) return
+        const ratio = (event.clientX - box.left) / box.width
+        if (ratio < 0 || ratio > 1) return setHover(null)
+        setHover(Math.round(ratio * (points.length - 1)))
+      }}
+    >
+      <div className="si-chart-frame">
+        <div className="si-chart-yaxis" aria-hidden="true">
+          {ticks.map((tick) => (
+            <span key={tick}>{axisLabel(tick)}</span>
+          ))}
+        </div>
+
+        <div className="si-chart-plot">
+          <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+            {ticks.map((tick) => (
+              <line
+                key={tick}
+                className={tick === 0 ? 'si-chart-base' : 'si-chart-rule'}
+                x1="0"
+                x2="100"
+                y1={yOf(tick)}
+                y2={yOf(tick)}
+                vectorEffect="non-scaling-stroke"
+              />
+            ))}
+            <path className="si-chart-area" d={`${path} L100,100 L0,100 Z`} />
+            <path className="si-chart-line" d={path} vectorEffect="non-scaling-stroke" />
+            {hover !== null && (
+              <line
+                className="si-chart-cursor"
+                x1={xOf(hover)}
+                x2={xOf(hover)}
+                y1="0"
+                y2="100"
+                vectorEffect="non-scaling-stroke"
+              />
+            )}
+          </svg>
+          {/* The peak stays marked while the pointer moves, so the reading
+              being hovered always has the session's worst case to sit against. */}
+          <span
+            className="si-chart-dot"
+            style={{ left: `${xOf(points.indexOf(peak))}%`, top: `${yOf(peak.percent)}%` }}
+            aria-hidden="true"
+          />
+          {hover !== null && hovered && (
+            <span
+              className="si-chart-dot si-chart-dot-hover"
+              style={{ left: `${xOf(hover)}%`, top: `${yOf(hovered.percent)}%` }}
+              aria-hidden="true"
+            />
+          )}
+        </div>
+
+        <span />
+        <div className="si-chart-xaxis" aria-hidden="true">
+          <span>request {points[0].index}</span>
+          <span>request {points[points.length - 1].index}</span>
+        </div>
+      </div>
+
       <figcaption>
-        Context per request across the session — peak {formatPercent(peak.percent)} at request{' '}
-        {peak.index}.
+        {hovered ? (
+          <>
+            Request {hovered.index} — {formatPercent(hovered.percent)} of the window,{' '}
+            {formatTokens(hovered.tokens)} in the prompt.
+          </>
+        ) : (
+          <>
+            Context per request across the session — peak {formatPercent(peak.percent)} at request{' '}
+            {peak.index}. The axis tops out at {axisLabel(max)} of the window.
+          </>
+        )}
       </figcaption>
     </figure>
   )

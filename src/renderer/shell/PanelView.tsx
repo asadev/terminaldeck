@@ -1,14 +1,15 @@
 import { FileTree } from '../components/FileTree'
 import { FileViewer } from '../components/FileViewer'
 import { SearchPanel } from '../components/SearchPanel'
-import { GitPanel } from '../components/GitPanel'
+import { GitPanel, type GitFileGroup } from '../components/GitPanel'
 import { GitHubPanel } from '../components/GitHubPanel'
 import { ReadinessPanel } from '../components/ReadinessPanel'
-import { AlertsPanel } from '../components/AlertsPanel'
+import { AlertsPanel, type AlertAction } from '../components/AlertsPanel'
 import { McpInspector } from '../components/McpInspector'
 import { HooksPanel } from '../components/HooksPanel'
 import { PageEmpty } from '../components/PageEmpty'
 import { Dashboard } from '../dashboard/Dashboard'
+import type { WidgetContext } from '../dashboard/widgets'
 import { Board } from '../board/Board'
 import { panelSpec, type PanelId } from './panels'
 import { ErrorBoundary } from './ErrorBoundary'
@@ -21,9 +22,45 @@ interface Props {
       so Source control can hand a file to it. */
   openFile: string | null
   onOpenFile(relPath: string): void
+  /**
+   * Which part of the view was asked for.
+   *
+   * A dashboard tile that counts staged files has to be able to land on the
+   * staged files, not on Source control in general (rule 1.5). The token is
+   * panel-specific and deliberately a plain string: only the panel that
+   * receives it knows what its own sections are called, and inventing a union
+   * covering all ten would put every panel's internals in this file.
+   */
+  focus?: string | null
+  /** General → Show insight alerts. */
+  showInsights?: boolean
+  /**
+   * What an alert's button does.
+   *
+   * Alerts is the one page whose whole purpose is its actions, and nothing was
+   * passing this — "Open the git panel" ran the alert re-check and left you on
+   * Alerts, "See where it went" did nothing at all.
+   */
+  onAlertAction?(action: AlertAction): void
+  /** What the dashboard's widgets can reach. Everything on it is a door. */
+  dashboard?: Omit<WidgetContext, 'projectPath'>
 }
 
-/** Shown instead of a view that has nothing to work with yet. */
+const GIT_GROUPS: readonly GitFileGroup[] = ['conflicted', 'staged', 'unstaged', 'untracked']
+
+function asGitGroup(focus: string | null | undefined): GitFileGroup | undefined {
+  return GIT_GROUPS.find((group) => group === focus)
+}
+
+/**
+ * Shown instead of a view that has nothing to work with yet.
+ *
+ * Deliberately three things and no more: the view's glyph, one line, one
+ * button. It used to print `spec.blurb` in the body as well — the same sentence
+ * the toolbar is already showing two centimetres above it — and then offer a
+ * ⌘O hint under the button, while the sidebar offered "Open a project" twice
+ * more. Four ways to do one thing on one screen, and the subtitle said twice.
+ */
 function NeedsProject({ panel, onOpenProject }: { panel: PanelId; onOpenProject(): void }) {
   const spec = panelSpec(panel)
   return (
@@ -31,14 +68,7 @@ function NeedsProject({ panel, onOpenProject }: { panel: PanelId; onOpenProject(
       icon={spec.icon}
       title={`${spec.label} needs an open project`}
       action={{ label: 'Open a project', onClick: onOpenProject, primary: true }}
-      hint={
-        <>
-          Or press <kbd>⌘</kbd> <kbd>O</kbd>.
-        </>
-      }
-    >
-      {spec.blurb}
-    </PageEmpty>
+    />
   )
 }
 
@@ -81,7 +111,17 @@ function FilesPage({
  * heading bar of its own — a dashboard, a kanban board and a pull-request list,
  * all in a strip narrower than a phone. They get the window now.
  */
-export function PanelView({ panel, projectPath, onOpenProject, openFile, onOpenFile }: Props) {
+export function PanelView({
+  panel,
+  projectPath,
+  onOpenProject,
+  openFile,
+  onOpenFile,
+  focus,
+  showInsights = true,
+  onAlertAction,
+  dashboard,
+}: Props) {
   const spec = panelSpec(panel)
 
   const body = (() => {
@@ -96,7 +136,7 @@ export function PanelView({ panel, projectPath, onOpenProject, openFile, onOpenF
     if (!projectPath) return <NeedsProject panel={panel} onOpenProject={onOpenProject} />
     switch (panel) {
       case 'overview':
-        return <Dashboard projectPath={projectPath} />
+        return <Dashboard projectPath={projectPath} context={dashboard} />
       case 'board':
         return <Board projectPath={projectPath} />
       case 'files':
@@ -107,13 +147,25 @@ export function PanelView({ panel, projectPath, onOpenProject, openFile, onOpenF
         // A changed file opens on the Files page, which is the page that can
         // actually show it — a row that highlights and does nothing is worse
         // than a row that is not clickable at all.
-        return <GitPanel cwd={projectPath} onSelectFile={(file) => onOpenFile(file.path)} />
+        return (
+          <GitPanel
+            cwd={projectPath}
+            onSelectFile={(file) => onOpenFile(file.path)}
+            focusGroup={asGitGroup(focus)}
+          />
+        )
       case 'github':
-        return <GitHubPanel cwd={projectPath} />
+        return <GitHubPanel cwd={projectPath} initialTab={focus === 'issues' ? 'issues' : 'pulls'} />
       case 'readiness':
         return <ReadinessPanel projectPath={projectPath} />
       case 'alerts':
-        return <AlertsPanel projectPath={projectPath} />
+        return (
+          <AlertsPanel
+            projectPath={projectPath}
+            showInsights={showInsights}
+            onAction={onAlertAction}
+          />
+        )
       default:
         return null
     }

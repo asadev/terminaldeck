@@ -134,9 +134,10 @@ describe('the unwired panel', () => {
 })
 
 describe('the wired panel', () => {
-  // showTabs on: the window header owns tabs in the app, so the panel's own
-  // strip is off by default. This case is about the strip's controls.
-  const html = renderToStaticMarkup(<BrowserWorkspace bridge={noopBridge} showTabs />)
+  // The panel had a tab strip of its own until the sidebar took over listing
+  // browser pages. Nothing here opens or closes a tab any more, so the controls
+  // this case names are the toolbar's.
+  const html = renderToStaticMarkup(<BrowserWorkspace bridge={noopBridge} />)
 
   it('gives every control an accessible name', () => {
     for (const label of [
@@ -150,7 +151,6 @@ describe('the wired panel', () => {
       'Responsive sizes',
       'Open devtools for the page',
       'Cookies and site data',
-      'New browser tab',
       'Address and search',
     ]) {
       expect(html, `no control named ${label}`).toContain(`aria-label="${label}"`)

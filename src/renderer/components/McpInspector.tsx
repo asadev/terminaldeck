@@ -6,6 +6,8 @@ import {
   missingRequired,
   pruneArguments,
 } from './McpSchemaForm'
+import { panelSpec } from '../shell/panels'
+import { PageEmpty, PageNote } from './PageEmpty'
 import './McpInspector.css'
 
 /* ------------------------------------------------------------------ types -- */
@@ -425,7 +427,10 @@ export function McpInspector({ projectPath = null, bridge }: McpInspectorProps) 
   if (!api) {
     return (
       <div className="mcp">
-        <p className="mcp-empty">MCP is not wired into this build yet.</p>
+        <PageEmpty icon={panelSpec('mcp').icon} title="MCP is not available here">
+          This window was opened without the MCP bridge, so there is nothing for this page to
+          read.
+        </PageEmpty>
       </div>
     )
   }
@@ -445,8 +450,20 @@ export function McpInspector({ projectPath = null, bridge }: McpInspectorProps) 
 
       {listError && <p className="mcp-error">{listError}</p>}
 
+      {loading && servers.length === 0 && !listError && (
+        <PageNote page busy>
+          Reading your MCP configuration…
+        </PageNote>
+      )}
+
+      {/* The action lives in the CLI, not here — this app reads that file and
+          does not write it — so the block carries the command rather than a
+          button that would have to pretend. The backticks used to be printed
+          literally, which is a markdown source file leaking into a window. */}
       {!loading && servers.length === 0 && !listError && (
-        <p className="mcp-empty">No MCP servers are configured. Add one with `claude mcp add`.</p>
+        <PageEmpty icon={panelSpec('mcp').icon} title="No MCP servers configured">
+          Add one with <code>claude mcp add</code>, then reload.
+        </PageEmpty>
       )}
 
       <ul className="mcp-servers">

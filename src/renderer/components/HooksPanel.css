@@ -115,13 +115,8 @@
   line-height: var(--lh-body);
 }
 
-.hooks-empty {
-  max-width: 34rem;
-  margin: 10vh auto 0;
-  color: var(--text-secondary);
-  line-height: var(--lh-body);
-  text-align: center;
-}
+/* `.hooks-empty` was here — a bespoke centred paragraph doing the job of both
+   `PageEmpty` and `PageNote`, which is what this page uses now. */
 
 /* ------------------------------------------------------------------ rows -- */
 

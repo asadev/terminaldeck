@@ -190,3 +190,67 @@ describe('the browser panel is hidden per tab, parked per dialog', () => {
     expect(propExpression(tag, 'parkPage')).toMatch(/Modal/)
   })
 })
+
+/**
+ * One empty-state treatment, in every panel.
+ *
+ * The app had four: GitHub drew its own centred block with its own glyph and
+ * its own retry button, MCP printed a bare sentence with literal backticks in
+ * it, the Task board dropped inline text into a column, the Overview wrote a
+ * third title-plus-detail-plus-button by hand — four sizes of type and three
+ * greys for the same thought, on four pages of the same window.
+ *
+ * They are all `PageEmpty` (a whole page with nothing on it) and `PageNote`
+ * (one section of a working page, or a page still reading) now. Static like
+ * everything else in this file: what is being pinned is that no panel has gone
+ * back to writing its own, which is a question about the source rather than
+ * about any one render.
+ */
+describe('every panel wears the same blank', () => {
+  /** Class names each panel invented for the job the shared pair now does. */
+  const RETIRED = [
+    'gh-message',
+    'git-message',
+    'mcp-empty',
+    'hooks-empty',
+    'readiness-empty',
+    'dashboard-empty',
+    'column-empty',
+  ]
+
+  const FILES = [
+    'renderer/components/GitPanel.tsx',
+    'renderer/components/GitHubPanel.tsx',
+    'renderer/components/McpInspector.tsx',
+    'renderer/components/HooksPanel.tsx',
+    'renderer/components/ReadinessPanel.tsx',
+    'renderer/components/AlertsPanel.tsx',
+    'renderer/components/FileViewer.tsx',
+    'renderer/dashboard/Dashboard.tsx',
+    'renderer/board/Board.tsx',
+    'renderer/shell/PanelView.tsx',
+  ]
+
+  it.each(FILES)('%s renders the shared blank and none of its own', (file) => {
+    const source = read(file)
+    expect(source, 'no panel should still be hand-rolling an empty state').toMatch(
+      /\b(PageEmpty|PageNote)\b/,
+    )
+    for (const dead of RETIRED) expect(source, dead).not.toContain(`"${dead}"`)
+  })
+
+  /**
+   * The half that is easy to lose: a page that says "Reading…" and then says
+   * what it found has to say both in the same place, or the answer arrives
+   * somewhere the eye is not. `PageNote page` and `PageEmpty` are parked at the
+   * same height in `shell.css` for exactly that.
+   */
+  it('parks the reading line where the answer will land', () => {
+    const css = read('renderer/shell/shell.css')
+    const blank = /\.page-blank \{[^}]*margin:\s*([^;]+);/.exec(css)?.[1]
+    const line = /\.page-blank-line\[data-page\] \{[^}]*margin:\s*([^;]+);/.exec(css)?.[1]
+    expect(blank, '.page-blank has no margin rule').toBeTruthy()
+    expect(line, '.page-blank-line[data-page] has no margin rule').toBeTruthy()
+    expect(line).toBe(blank)
+  })
+})

@@ -144,7 +144,9 @@ describe('CheckRow', () => {
 describe('ReadinessPanel', () => {
   it('says so rather than crashing when the bridge is missing', () => {
     const html = renderToStaticMarkup(<ReadinessPanel projectPath="/tmp/x" />)
-    expect(html).toContain('not available in this window')
+    expect(html).toContain('not available here')
+    // The shared blank, not a bare sentence of its own — see `PageEmpty`.
+    expect(html).toContain('page-blank-title')
   })
 
   it('renders a scanning state before the first report arrives', () => {

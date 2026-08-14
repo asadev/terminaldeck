@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
   closeTab,
-  cycle,
   moveTab,
   newTab,
   openTab,
@@ -74,20 +73,6 @@ describe('moveTab', () => {
     const tabs = strip('a', 'b')
     expect(moveTab(tabs, 'a', 0)).toBe(tabs)
     expect(moveTab(tabs, 'gone', 1)).toBe(tabs)
-  })
-})
-
-describe('cycle', () => {
-  it('wraps in both directions', () => {
-    const tabs = strip('a', 'b', 'c')
-    expect(cycle(tabs, 'a', 1)).toBe('b')
-    expect(cycle(tabs, 'c', 1)).toBe('a')
-    expect(cycle(tabs, 'a', -1)).toBe('c')
-  })
-
-  it('copes with an unknown or empty selection', () => {
-    expect(cycle(strip('a', 'b'), 'gone', 1)).toBe('a')
-    expect(cycle([], 'a', 1)).toBe('')
   })
 })
 

@@ -156,7 +156,9 @@ describe('<McpInspector>', () => {
 
   it('explains itself instead of crashing when the preload bridge is absent', () => {
     const html = renderToStaticMarkup(<McpInspector />)
-    expect(html).toContain('MCP is not wired into this build yet')
+    expect(html).toContain('MCP is not available here')
+    // The shared blank, not a bare sentence of its own — see `PageEmpty`.
+    expect(html).toContain('page-blank-title')
   })
 
   it('renders its frame when a bridge is supplied', () => {

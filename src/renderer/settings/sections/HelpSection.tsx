@@ -21,13 +21,19 @@ import { sectionMeta } from '../settings-schema'
  *  - No `onOpenDebug`. That link opens a panel in the main window, which this
  *    window is sitting in front of; a button that appears to do nothing is
  *    worse than no button.
+ *  - No Shortcuts and no About. This window's own nav already has a row for
+ *    each, two rows below Help, and the panel was drawing a second nav offering
+ *    a second way into both — the same keymap and the same version numbers,
+ *    reachable two ways from one screen.
  */
+export const OWNED_BY_THE_SETTINGS_NAV = ['shortcuts', 'about'] as const
+
 export function HelpSection() {
   const meta = sectionMeta('help')
   return (
     <>
       <SectionHead title={meta.label} blurb={meta.blurb} />
-      <HelpPanel autoFocus={false} />
+      <HelpPanel autoFocus={false} hideSections={OWNED_BY_THE_SETTINGS_NAV} />
     </>
   )
 }

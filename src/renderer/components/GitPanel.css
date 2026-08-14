@@ -137,6 +137,18 @@
   padding: 0 var(--sp-3) var(--sp-1);
 }
 
+/* The group a dashboard count sent you to. A tint rather than a rule: it has
+   to say "this run, here" for a second without becoming a box. */
+.git-group[data-focused] .git-group-label,
+.git-group[data-focused] .git-group-count {
+  color: var(--text-primary);
+}
+
+.git-group[data-focused] .git-list {
+  border-radius: var(--radius-lg);
+  background: var(--fill-quaternary);
+}
+
 /* Sentence case, as the component writes it — "Conflicts", "Staged". */
 .git-group-label {
   font-size: var(--t-footnote);
@@ -279,15 +291,11 @@
    states where the page has nothing to list. One plain sentence, placed the
    way the shell places its own empty states rather than left hanging in the
    top corner of an otherwise blank window. */
-.git-message {
-  max-width: 52ch;
-  margin: 12vh auto 0;
-  padding: 0 var(--sp-6);
-  color: var(--text-secondary);
-  font-size: var(--t-body);
-  line-height: var(--lh-body);
-  text-align: center;
-}
+/* `.git-message` was here — "Reading repository…", "Working tree clean" and
+   "Git is not available" all as one centred paragraph. A clean tree is a page
+   with nothing on it and now wears the app's `PageEmpty`; the read in progress
+   is a `PageNote`, parked at the same height so the answer does not move when
+   it arrives. */
 
 /* ------------------------------------------------------------- density -- */
 

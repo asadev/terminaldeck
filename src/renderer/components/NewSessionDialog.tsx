@@ -23,7 +23,7 @@ import {
 } from '../session-start'
 import { folderName } from '../session-title'
 import { Modal } from './Modal'
-import { normalizePreferences } from './PreferencesModal'
+import { normalizePreferences } from '../preferences'
 import {
   isolationNotice,
   parseProfile,

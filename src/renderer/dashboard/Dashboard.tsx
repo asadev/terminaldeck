@@ -20,6 +20,8 @@ import {
   type WidgetType,
 } from './layout'
 import { getWidgetDefinition, listWidgetDefinitions, type WidgetContext } from './widgets'
+import { PageEmpty } from '../components/PageEmpty'
+import { panelSpec } from '../shell/panels'
 import './Dashboard.css'
 
 /**
@@ -349,30 +351,42 @@ export function Dashboard({ projectPath, context, bridge }: DashboardProps) {
 
   return (
     <section className="dashboard" aria-label="Project dashboard">
-      <header className="dashboard-bar">
-        <span className="dashboard-hint">Drag a widget by its header · Alt+arrows to move</span>
-        <button type="button" className="dashboard-btn" onClick={() => setPicking(true)}>
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
-            <path d="M12 5v14M5 12h14" strokeWidth="2" strokeLinecap="round" />
-          </svg>
-          Add widget
-        </button>
-        <button type="button" className="dashboard-btn ghost" onClick={handleReset}>
-          Reset
-        </button>
-      </header>
+      {/* The bar is about the widgets: how to move them, how to add another,
+          how to put the arrangement back. With none on the page it was telling
+          the reader to drag something that is not there, offering a Reset with
+          nothing to reset, and putting a second Add widget one line above the
+          one in the middle of the window. So the empty page has exactly one of
+          each thing, and the bar comes back with the first widget. */}
+      {!empty && (
+        <header className="dashboard-bar">
+          <span className="dashboard-hint">Drag a widget by its header · Alt+arrows to move</span>
+          <button type="button" className="dashboard-btn" onClick={() => setPicking(true)}>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+              <path d="M12 5v14M5 12h14" strokeWidth="2" strokeLinecap="round" />
+            </svg>
+            Add widget
+          </button>
+          <button type="button" className="dashboard-btn ghost" onClick={handleReset}>
+            Reset
+          </button>
+        </header>
+      )}
 
       <div className="dashboard-scroll">
+        {/* The app's one empty-page block, not a third arrangement of a title,
+            a sentence and a button — and, with the bar above withdrawn, the one
+            place on this page to press. */}
         {empty && (
-          <div className="dashboard-empty">
-            <p className="dashboard-empty-title">Nothing on this dashboard</p>
-            <p className="dashboard-empty-detail">
-              Add a widget to see sessions, spend, git state and the board at a glance.
-            </p>
-            <button type="button" className="dashboard-btn" onClick={() => setPicking(true)}>
-              Add widget
-            </button>
-          </div>
+          <PageEmpty
+            icon={panelSpec('overview').icon}
+            title="Nothing on this dashboard"
+            /* Not `primary`: the accent is reserved for a page that cannot do
+               anything at all until it is pressed, which is Open a project.
+               This one is the only button on the page already. */
+            action={{ label: 'Add widget', onClick: () => setPicking(true) }}
+          >
+            Add a widget to see sessions, spend, git state and the board at a glance.
+          </PageEmpty>
         )}
 
         {/* Rendered even when empty: gridstack initialises against this node

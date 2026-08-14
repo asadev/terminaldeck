@@ -137,13 +137,39 @@ export function sourceNote(source: ValueSource | null): string {
  * The label to print for a reading.
  *
  * There is no fallback to a plausible default here on purpose. When nothing
- * real was read the answer is the word "Unknown", because a control showing a
- * confident value it never read is the failure mode this feature exists to
- * avoid.
+ * real was read the answer says so, because a control showing a confident value
+ * it never read is the failure mode this feature exists to avoid.
  */
-export function displayValue(reading: ControlReading | undefined): string {
-  if (!reading || reading.label === null) return 'Unknown'
+export function displayValue(reading: ControlReading | undefined, control?: ControlId): string {
+  if (!reading || reading.label === null) return unreadLabel(control)
   return reading.label
+}
+
+/**
+ * What a control says when nothing could be read.
+ *
+ * Fast mode gets its own word, and the reason is structural rather than
+ * cosmetic. The other three resolve on essentially every machine: permission
+ * and model are painted in the session's own footer, effort is persisted in
+ * `settings.json`. Fast mode is in neither place — checked against the shipped
+ * CLI, the only write it makes to `fastMode` in user settings is a *clear*,
+ * and the enabled state lives in a store this app does not read — so the screen
+ * is the sole source, and the CLI prints "Fast mode ON/OFF" only at the moment
+ * it *changes*. A session that has never been told either way therefore has
+ * nothing to report, for good, and "Unknown" beside three resolved siblings
+ * reads as this app failing rather than as the CLI never having said.
+ */
+export function unreadLabel(control: ControlId | undefined): string {
+  return control === 'fast' ? 'Not reported' : 'Unknown'
+}
+
+/**
+ * The sentence under an unread control, or null where the plain source note
+ * already covers it. Only fast mode has an explanation worth the line.
+ */
+export function unreadNote(control: ControlId | undefined): string | null {
+  if (control !== 'fast') return null
+  return 'The CLI announces fast mode only when it changes, and keeps the setting out of settings.json — so until this session says so, nothing here can. Pick On or Off to set it.'
 }
 
 /**

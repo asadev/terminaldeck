@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useWhenActive } from '../schedule'
 import { panelSpec } from '../shell/panels'
+import { PageEmpty, PageNote } from './PageEmpty'
 import './GitHubPanel.css'
 
 /* ------------------------------------------------------------------ types -- */
@@ -253,39 +254,68 @@ function Labels({ labels }: { labels: GitHubLabel[] }) {
   )
 }
 
-export function FailureBlock({ failure, onRetry }: { failure: GitHubFailure; onRetry(): void }) {
+/**
+ * A GitHub failure, at either scale.
+ *
+ * `page` means this block *is* the view — nothing loaded at all — and then it
+ * is the same `PageEmpty` every other empty page in the app wears, rather than
+ * a second thing that looks nearly like it. This one used to hand-roll the
+ * glyph, the title and the button, and drifted: its title was a `<p>` where
+ * everywhere else has an `<h2>`, and its retry a differently-sized button.
+ *
+ * Without `page` it is one section of a loaded page — a tab whose list failed
+ * while the other tab is fine — and stays the compact left-aligned notice,
+ * because the full centred block inside a populated page reads as the page
+ * having crashed.
+ */
+export function FailureBlock({
+  failure,
+  onRetry,
+  page,
+}: {
+  failure: GitHubFailure
+  onRetry(): void
+  page?: boolean
+}) {
+  const title = FAILURE_TITLE[failure.kind] ?? FAILURE_TITLE.error
+  const retry = RETRYABLE.has(failure.kind) || failure.action
+  const details = failure.detail ? (
+    <details className="gh-failure-detail">
+      <summary>Details</summary>
+      <pre>{failure.detail}</pre>
+    </details>
+  ) : null
+
+  if (page) {
+    return (
+      <PageEmpty
+        icon={panelSpec('github').icon}
+        title={title}
+        action={retry ? { label: 'Retry', onClick: onRetry } : undefined}
+        extra={details}
+      >
+        {failure.message}
+        {failure.action && (
+          <>
+            {' '}
+            Run <code>{failure.action}</code> in a terminal, then refresh.
+          </>
+        )}
+      </PageEmpty>
+    )
+  }
+
   return (
     <div className="gh-failure" role="status">
-      {/* Shown only when this block *is* the page — see the CSS. An empty page
-          wears the view's own glyph, the way every other one in the app does. */}
-      <svg
-        className="gh-failure-mark"
-        width="30"
-        height="30"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        aria-hidden="true"
-      >
-        <path d={panelSpec('github').icon} />
-      </svg>
-      <p className="gh-failure-title">{FAILURE_TITLE[failure.kind] ?? FAILURE_TITLE.error}</p>
+      <p className="gh-failure-title">{title}</p>
       <p className="gh-failure-message">{failure.message}</p>
       {failure.action && (
         <p className="gh-failure-action">
           Run <code>{failure.action}</code> in a terminal, then refresh.
         </p>
       )}
-      {failure.detail && (
-        <details className="gh-failure-detail">
-          <summary>Details</summary>
-          <pre>{failure.detail}</pre>
-        </details>
-      )}
-      {(RETRYABLE.has(failure.kind) || failure.action) && (
+      {details}
+      {retry && (
         <button type="button" className="gh-retry" onClick={onRetry}>
           Retry
         </button>
@@ -456,7 +486,10 @@ export function GitHubPanel({ cwd, bridge, now, initialTab = 'pulls' }: GitHubPa
   if (!api) {
     return (
       <section className="gh-panel" aria-label="GitHub">
-        <p className="gh-message">GitHub is not available in this build.</p>
+        <PageEmpty icon={panelSpec('github').icon} title="GitHub is not available here">
+          This window was opened without the GitHub bridge, so there is nothing for this page to
+          read.
+        </PageEmpty>
       </section>
     )
   }
@@ -464,7 +497,9 @@ export function GitHubPanel({ cwd, bridge, now, initialTab = 'pulls' }: GitHubPa
   if (loading && !result) {
     return (
       <section className="gh-panel" aria-label="GitHub" aria-busy="true">
-        <p className="gh-message">Reading GitHub…</p>
+        <PageNote page busy>
+          Reading GitHub…
+        </PageNote>
       </section>
     )
   }
@@ -473,6 +508,7 @@ export function GitHubPanel({ cwd, bridge, now, initialTab = 'pulls' }: GitHubPa
     return (
       <section className="gh-panel" aria-label="GitHub">
         <FailureBlock
+          page
           failure={
             result ?? {
               ok: false,
@@ -585,7 +621,7 @@ export function GitHubPanel({ cwd, bridge, now, initialTab = 'pulls' }: GitHubPa
           {isFailure(pulls) ? (
             <FailureBlock failure={pulls} onRetry={refresh} />
           ) : pulls.value.length === 0 ? (
-            <p className="gh-message">No open pull requests.</p>
+            <PageNote>No open pull requests.</PageNote>
           ) : (
             <ul className="gh-list">
               {pulls.value.map((pull) => (
@@ -599,7 +635,7 @@ export function GitHubPanel({ cwd, bridge, now, initialTab = 'pulls' }: GitHubPa
           {isFailure(issues) ? (
             <FailureBlock failure={issues} onRetry={refresh} />
           ) : issues.value.length === 0 ? (
-            <p className="gh-message">No open issues.</p>
+            <PageNote>No open issues.</PageNote>
           ) : (
             <ul className="gh-list">
               {issues.value.map((issue) => (

@@ -78,7 +78,6 @@ describe('the table itself', () => {
       'general.defaultProvider',
       'general.soundOnFinish',
       'general.notifyOnAttention',
-      'general.recordHistory',
       'general.showInsightAlerts',
       'general.autoNameSessions',
       'general.confirmCloseWorking',

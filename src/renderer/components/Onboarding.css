@@ -123,6 +123,12 @@
   color: var(--text-muted);
 }
 
+/* Not a version number — see `.settings-tool-version-none`. */
+.onboarding-version[data-none] {
+  font-family: var(--font-ui);
+  font-style: italic;
+}
+
 .onboarding-purpose {
   font-size: var(--t-callout);
   line-height: var(--lh-body);

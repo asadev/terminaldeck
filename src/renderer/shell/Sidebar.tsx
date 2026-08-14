@@ -223,10 +223,12 @@ export function Sidebar({
             </button>
           </div>
 
+          {/* A statement, not a third way to do the same thing. The ＋ beside
+              the heading opens a project, and the page filling the window says
+              so with a button of its own — this line only has to explain why
+              the list under it is empty. */}
           {projects.length === 0 && browserTabs.length === 0 && (
-            <p className="sb-empty">
-              Nothing open yet. <button type="button" className="sb-link" onClick={onOpenProject}>Open a project</button> to start.
-            </p>
+            <p className="sb-empty">Nothing open yet.</p>
           )}
 
           {projects.map((project) => (

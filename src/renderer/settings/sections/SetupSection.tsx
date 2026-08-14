@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Button, Group, LinkOut, Notice, SectionHead } from '../controls'
+import { Button, Group, LinkOut, Notice, SectionHead, ToolVersion } from '../controls'
 import { sectionMeta } from '../settings-schema'
 import { errorText, missingChannelNote, type SectionProps } from '../settings-bridge'
 import {
@@ -78,7 +78,7 @@ function ToolRow({ tool }: { tool: SetupSnapshot['tools'][number] }) {
       <span className="settings-tool-main">
         <span className="settings-tool-name">
           {tool.label}
-          {tool.version && <span className="settings-tool-version">{tool.version}</span>}
+          <ToolVersion tool={tool} />
         </span>
         <span className="settings-tool-note">{tool.purpose}</span>
         {/* A caveat about a tool that is not even here is noise; the probe and

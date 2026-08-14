@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { panelSpec } from '../shell/panels'
-import { PageEmpty } from './PageEmpty'
+import { PageEmpty, PageNote } from './PageEmpty'
 import './GitPanel.css'
 
 /* ------------------------------------------------------------------ types -- */
@@ -83,6 +83,14 @@ export interface GitPanelProps {
   onSelectFile?(file: GitFile): void
   /** Path of the row to highlight, when the host is showing a diff beside it. */
   selectedPath?: string | null
+  /**
+   * A group to open on, scrolled to and marked.
+   *
+   * The dashboard's git tile counts staged, changed and untracked files, and a
+   * count is a door: clicking "staged 3" has to land on those three rather than
+   * on the top of a page that happens to contain them.
+   */
+  focusGroup?: GitFileGroup
   /** Injectable for tests; defaults to the preload bridge on `window.deck`. */
   bridge?: GitBridge
 }
@@ -157,12 +165,13 @@ export const MAX_ROWS_PER_GROUP = 500
 
 /* -------------------------------------------------------------- component -- */
 
-export function GitPanel({ cwd, onSelectFile, selectedPath, bridge }: GitPanelProps) {
+export function GitPanel({ cwd, onSelectFile, selectedPath, bridge, focusGroup }: GitPanelProps) {
   const api = useMemo(() => bridge ?? resolveBridge(), [bridge])
   const [status, setStatus] = useState<GitStatusResult | null>(null)
   const [loading, setLoading] = useState(true)
   /** The folder currently on screen, so a slow reply for an old one is dropped. */
   const shownCwd = useRef<string | null>(null)
+  const focusRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     if (!api) {
@@ -214,6 +223,17 @@ export function GitPanel({ cwd, onSelectFile, selectedPath, bridge }: GitPanelPr
       .catch(() => undefined)
   }, [api, cwd])
 
+  /**
+   * Bring the asked-for group into view.
+   *
+   * After `status`, not on mount: the groups do not exist until the first read
+   * comes back, so a scroll on mount would have nothing to scroll to.
+   */
+  useEffect(() => {
+    if (!focusGroup || !status?.repo) return
+    focusRef.current?.scrollIntoView({ block: 'nearest' })
+  }, [focusGroup, status])
+
   const groups = useMemo<Group[]>(() => {
     if (!status?.repo) return []
     return (
@@ -229,7 +249,10 @@ export function GitPanel({ cwd, onSelectFile, selectedPath, bridge }: GitPanelPr
   if (!api) {
     return (
       <section className="git-panel" aria-label="Git status">
-        <p className="git-message">Git is not available in this build.</p>
+        <PageEmpty icon={panelSpec('git').icon} title="Source control is not available here">
+          This window was opened without the git bridge, so there is nothing for this page to
+          read.
+        </PageEmpty>
       </section>
     )
   }
@@ -237,7 +260,9 @@ export function GitPanel({ cwd, onSelectFile, selectedPath, bridge }: GitPanelPr
   if (loading && !status) {
     return (
       <section className="git-panel" aria-label="Git status" aria-busy="true">
-        <p className="git-message">Reading repository…</p>
+        <PageNote page busy>
+          Reading repository…
+        </PageNote>
       </section>
     )
   }
@@ -312,12 +337,22 @@ export function GitPanel({ cwd, onSelectFile, selectedPath, bridge }: GitPanelPr
         </button>
       </header>
 
+      {/* The branch is already named in the header above, so the blank does not
+          say it again — it says what "clean" covers, which the two-word version
+          left the reader to assume. */}
       {status.clean ? (
-        <p className="git-message">Working tree clean.</p>
+        <PageEmpty icon={panelSpec('git').icon} title="Working tree clean">
+          Nothing staged, nothing changed, nothing untracked.
+        </PageEmpty>
       ) : (
         <div className="git-groups">
           {groups.map((group) => (
-            <div className="git-group" key={group.key}>
+            <div
+              className="git-group"
+              key={group.key}
+              data-focused={group.key === focusGroup || undefined}
+              ref={group.key === focusGroup ? focusRef : undefined}
+            >
               <div className="git-group-head">
                 <span className="git-group-label">{group.label}</span>
                 <span className="git-group-count">{group.files.length}</span>

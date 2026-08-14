@@ -634,6 +634,13 @@
   color: var(--text-muted);
 }
 
+/* Not a version number, so not set in the numeral face: this slot is saying the
+   tool never answered when it was asked for one. */
+.settings-tool-version-none {
+  font-family: var(--font-ui);
+  font-style: italic;
+}
+
 .settings-tool-note,
 .settings-url-note {
   font-size: var(--t-callout);

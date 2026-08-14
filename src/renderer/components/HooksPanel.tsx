@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { panelSpec } from '../shell/panels'
-import { PageEmpty } from './PageEmpty'
+import { PageEmpty, PageNote } from './PageEmpty'
 import './HooksPanel.css'
 
 /* ------------------------------------------------------------------ types -- */
@@ -315,7 +315,10 @@ export function HooksPanel({ bridge }: HooksPanelProps) {
   if (!resolved) {
     return (
       <section className="hooks">
-        <p className="hooks-empty">Hooks are not available in this window.</p>
+        <PageEmpty icon={panelSpec('hooks').icon} title="Hooks are not available here">
+          This window was opened without the hooks bridge, so there is nothing for this page to
+          read or install.
+        </PageEmpty>
       </section>
     )
   }
@@ -361,7 +364,11 @@ export function HooksPanel({ bridge }: HooksPanelProps) {
         ))}
       </ul>
 
-      {statuses === null && !error ? <p className="hooks-empty">Reading settings files…</p> : null}
+      {statuses === null && !error ? (
+        <PageNote page busy>
+          Reading settings files…
+        </PageNote>
+      ) : null}
 
       {/* An empty array is not the same as "still loading", and it used to
           print nothing at all — a page that ended in silence after the

@@ -357,6 +357,15 @@ export function SettingsPanel({
       </div>
 
       <div
+        /*
+         * Keyed on the section, so switching tabs mounts a fresh pane.
+         *
+         * Without it the scroll position is the *element's*, not the section's:
+         * scrolling Browser down to its cookie list and then clicking Help
+         * opened Help 240px down, in the middle of a sentence. A page keyed on
+         * what it is showing starts where a page starts.
+         */
+        key={section}
         className="settings-panel"
         role="tabpanel"
         id={`${ids}-panel-${section}`}

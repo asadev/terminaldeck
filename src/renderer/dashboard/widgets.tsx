@@ -6,6 +6,7 @@ import { cardsInColumn, COLUMN_IDS, COLUMN_TITLES, parseBoard } from '../board/b
 // pulled into this bundle. Those mirrors of `src/main/git.ts` already exist
 // there; re-declaring them a third time is how the three copies start to drift.
 import type { GitRepoStatus, GitStatusResult } from '../components/GitPanel'
+import type { PanelId } from '../shell/panels'
 import { WIDGET_TYPES, type WidgetType } from './layout'
 
 /**
@@ -174,14 +175,49 @@ function renderState<T>(
   return children(state.data)
 }
 
-/** A label and a value, the unit every widget's summary row is built from. */
-function Stat({ label, value, tone }: { label: string; value: string; tone?: 'warn' | 'crit' }) {
-  return (
-    <div className="widget-stat">
+/**
+ * A label and a value — and, where there is somewhere to go, a door.
+ *
+ * Rule 1.2: a number you cannot click into is a dead end. Every count on this
+ * dashboard is a count *of* something the app can already show, so the tile
+ * says how many and the click says which. `onClick` is optional and the
+ * affordance follows it exactly (rule 1.1): with a destination it is a button
+ * that lifts under the pointer, without one it is text.
+ *
+ * A zero never gets a destination. "Untracked 0" that navigates to an empty
+ * list is a worse answer than a number that sits still.
+ */
+function Stat({
+  label,
+  value,
+  tone,
+  onClick,
+  goes,
+}: {
+  label: string
+  value: string
+  tone?: 'warn' | 'crit'
+  onClick?: () => void
+  /** Where the click lands, for the tooltip. Required whenever onClick is. */
+  goes?: string
+}) {
+  const body = (
+    <>
       <span className={`widget-stat-value${tone ? ` ${tone}` : ''}`}>{value}</span>
       <span className="widget-stat-label">{label}</span>
-    </div>
+    </>
   )
+  if (!onClick) return <div className="widget-stat">{body}</div>
+  return (
+    <button type="button" className="widget-stat is-link" title={goes} onClick={onClick}>
+      {body}
+    </button>
+  )
+}
+
+/** A count that only becomes a door when there is something behind it. */
+function doorIf(open: boolean, run: () => void): (() => void) | undefined {
+  return open ? run : undefined
 }
 
 /* ---------------------------------------------------------------- helpers -- */
@@ -194,19 +230,43 @@ function Stat({ label, value, tone }: { label: string; value: string; tone?: 'wa
  * per number is not worth it for a tile that redraws on every git change.
  */
 function formatUsd(usd: number): string {
-  const abs = Math.abs(usd)
-  if (abs === 0) return '$0.00'
-  if (abs < 0.01) return `$${usd.toFixed(4)}`
-  if (abs < 10) return `$${usd.toFixed(3)}`
-  return `$${usd.toFixed(2)}`
+  return `$${usd.toFixed(usdPrecision([usd]))}`
 }
 
-function formatTokens(tokens: number): string {
+/**
+ * Decimal places for a set of amounts that will be read as a column.
+ *
+ * One precision for all of them, chosen by the largest. A per-value rule is
+ * right for a single headline number and wrong the moment there are several
+ * stacked up: the breakdown behind a project total printed `$27.41`, `$11.02`
+ * and `$3.430` under each other, three different shapes for the same kind of
+ * thing, and the eye reads the ragged one as a different unit.
+ */
+export function usdPrecision(values: readonly number[]): number {
+  const max = values.reduce((most, value) => Math.max(most, Math.abs(value)), 0)
+  if (max === 0) return 2
+  // Below a cent, two places is "$0.00" — which is not what a fraction of a
+  // cent costs, and this dashboard is read by people watching a bill.
+  if (max < 0.01) return 4
+  if (max < 10) return 3
+  return 2
+}
+
+export function formatTokens(tokens: number): string {
   const abs = Math.abs(tokens)
-  // Below this the `k` form rounds to `1000.0` and renders as "1000k".
+  // The M tier used to be the last one, so a project with four billion cached
+  // tokens read "4622.27M" — a number nobody can size at a glance, in a tile
+  // whose whole job is being read at a glance. Each threshold is just under its
+  // unit so the tier below never rounds up into a "1000k".
+  if (abs >= 999_999_500) return `${(tokens / 1_000_000_000).toFixed(2).replace(/\.?0+$/, '')}B`
   if (abs >= 999_950) return `${(tokens / 1_000_000).toFixed(2).replace(/\.?0+$/, '')}M`
   if (abs >= 1000) return `${(tokens / 1000).toFixed(1).replace(/\.0$/, '')}k`
   return String(Math.round(tokens))
+}
+
+/** "1 session", not "1 sessions". */
+export function plural(count: number, singular: string, pluralForm = `${singular}s`): string {
+  return count === 1 ? singular : pluralForm
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -251,8 +311,19 @@ export interface WidgetContext {
    */
   sessions?: readonly DashboardSession[]
   onOpenSession?: (id: string) => void
-  /** Jump to the project's full board, git panel, and so on. */
-  onNavigate?: (target: 'board' | 'git' | 'sessions') => void
+  /**
+   * Open one of the sidebar's views, optionally deep-linked to a section of it
+   * — `('git', 'staged')`, `('github', 'issues')`. Widened from a three-value
+   * union: the dashboard counts things that live on six different pages, and
+   * the ones it could not name were the ones whose counts did nothing.
+   */
+  onNavigate?: (panel: PanelId, focus?: string) => void
+  /** Every session at once — swarm view, which is where a session count goes. */
+  onShowSessions?: () => void
+  /** Session details, which is the page behind a context-window reading. */
+  onOpenInspector?: () => void
+  /** Open a project-relative path on the Files page. */
+  onOpenFile?: (relPath: string) => void
 }
 
 export interface WidgetDefinition {
@@ -266,7 +337,7 @@ export interface WidgetDefinition {
 /* --------------------------------------------------------------- sessions -- */
 
 function SessionsWidget({ context }: { context: WidgetContext }): ReactElement {
-  const { projectPath, sessions, onOpenSession } = context
+  const { projectPath, sessions, onOpenSession, onShowSessions } = context
   const hostSupplied = sessions !== undefined
 
   const { state, reload } = useBridgeData<DashboardSession[]>(
@@ -312,8 +383,22 @@ function SessionsWidget({ context }: { context: WidgetContext }): ReactElement {
     return (
       <>
         <div className="widget-stats">
-          <Stat label="sessions" value={String(rows.length)} />
-          <Stat label="running" value={String(live.length)} />
+          <Stat
+            label={plural(rows.length, 'session')}
+            value={String(rows.length)}
+            goes="Show them all at once"
+            onClick={doorIf(rows.length > 0 && Boolean(onShowSessions), () => onShowSessions?.())}
+          />
+          <Stat
+            label="running"
+            value={String(live.length)}
+            // The first one that is actually doing something, which is what
+            // someone reading "running 2" wants to look at.
+            goes={live[0] ? `Go to ${live[0].title}` : undefined}
+            onClick={doorIf(live.length > 0 && Boolean(onOpenSession), () =>
+              onOpenSession?.(live[0].id),
+            )}
+          />
         </div>
         <ul className="widget-list">
           {rows.map((session) => (
@@ -343,6 +428,15 @@ function SessionsWidget({ context }: { context: WidgetContext }): ReactElement {
 
 /* ------------------------------------------------------------------- cost -- */
 
+/** One row of the breakdown behind the project's totals. */
+interface CostSessionRow {
+  id: string
+  cost: number
+  requests: number
+  tokens: number
+  model: string
+}
+
 interface CostView {
   total: number
   requests: number
@@ -351,10 +445,21 @@ interface CostView {
   contextPercent: number | null
   unpriced: string[]
   scanning: boolean
+  perSession: CostSessionRow[]
 }
 
 function CostWidget({ context }: { context: WidgetContext }): ReactElement {
-  const { projectPath } = context
+  const { projectPath, onOpenInspector } = context
+  /**
+   * Whether the totals are showing what they are made of.
+   *
+   * Cost is the one number on this dashboard with no page of its own to open —
+   * so the drill-in happens here, on the tile, which rule 1.2 allows in as many
+   * words ("switch to the relevant section on the same page"). The rows come
+   * from the same `cost:project` answer the totals do, so opening this costs
+   * nothing and cannot disagree with the number above it.
+   */
+  const [breakdown, setBreakdown] = useState(false)
   const { state, reload } = useBridgeData<CostView>(
     'getProjectCost',
     projectPath,
@@ -384,6 +489,22 @@ function CostWidget({ context }: { context: WidgetContext }): ReactElement {
           ? raw.cost.unpricedModels.filter((m): m is string => typeof m === 'string')
           : []
 
+      const perSession = sessions.filter(isRecord).map((entry, index): CostSessionRow => {
+        const models = Array.isArray(entry.models) ? entry.models : []
+        return {
+          id: typeof entry.sessionId === 'string' ? entry.sessionId : `session-${index}`,
+          cost: numberAt(entry, 'cost', 'cost', 'total'),
+          requests: numberAt(entry, 'requests'),
+          tokens:
+            numberAt(entry, 'usage', 'input') +
+            numberAt(entry, 'usage', 'output') +
+            numberAt(entry, 'usage', 'cacheWrite5m') +
+            numberAt(entry, 'usage', 'cacheWrite1h') +
+            numberAt(entry, 'usage', 'cacheRead'),
+          model: typeof models[0] === 'string' ? models[0] : '',
+        }
+      })
+
       return {
         total: numberAt(raw, 'cost', 'cost', 'total'),
         requests: numberAt(raw, 'requests'),
@@ -392,6 +513,7 @@ function CostWidget({ context }: { context: WidgetContext }): ReactElement {
         contextPercent: context ? numberAt(context, 'percent') : null,
         unpriced,
         scanning: isRecord(raw) && raw.scanning === true,
+        perSession,
       }
     }, [projectPath]),
   )
@@ -412,19 +534,60 @@ function CostWidget({ context }: { context: WidgetContext }): ReactElement {
     const percent = data.contextPercent
     const tone = percent === null ? undefined : percent >= 90 ? 'crit' : percent >= 70 ? 'warn' : undefined
 
+    // All four totals are the same sum seen from four sides, so all four open
+    // the same breakdown rather than pretending to be four destinations.
+    const open = doorIf(data.perSession.length > 0, () => setBreakdown((on) => !on))
+    const goes = breakdown ? 'Hide the per-session breakdown' : 'Show it per session'
+
     return (
       <>
         <div className="widget-stats">
-          <Stat label="spent" value={formatUsd(data.total)} />
-          <Stat label="tokens" value={formatTokens(data.tokens)} />
-          <Stat label="requests" value={String(data.requests)} />
-          <Stat label="sessions" value={String(data.sessions)} />
+          <Stat label="spent" value={formatUsd(data.total)} onClick={open} goes={goes} />
+          <Stat label="tokens" value={formatTokens(data.tokens)} onClick={open} goes={goes} />
+          <Stat
+            label={plural(data.requests, 'request')}
+            value={String(data.requests)}
+            onClick={open}
+            goes={goes}
+          />
+          <Stat
+            label={plural(data.sessions, 'session')}
+            value={String(data.sessions)}
+            onClick={open}
+            goes={goes}
+          />
         </div>
+
+        {breakdown &&
+          (() => {
+            const rows = [...data.perSession].sort((a, b) => b.cost - a.cost)
+            const places = usdPrecision(rows.map((row) => row.cost))
+            return (
+              <ul className="widget-list widget-list-breakdown">
+                {rows.map((row) => (
+                  <li key={row.id}>
+                    <span className="widget-row static">
+                      <span className="widget-row-main mono">{row.id.slice(0, 8)}</span>
+                      <span className="widget-row-side">{row.model || '—'}</span>
+                      <span className="widget-row-side num">{formatTokens(row.tokens)}</span>
+                      <span className="widget-row-side num">${row.cost.toFixed(places)}</span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )
+          })()}
 
         {percent !== null && (
           <div className="widget-meter">
             <div className="widget-meter-head">
-              <span>Context window</span>
+              {onOpenInspector ? (
+                <button type="button" className="widget-meter-link" onClick={onOpenInspector}>
+                  Context window
+                </button>
+              ) : (
+                <span>Context window</span>
+              )}
               <span className={tone ? `widget-stat-value ${tone}` : undefined}>
                 {Math.round(percent)}%
               </span>
@@ -476,7 +639,7 @@ export function visibleGitFiles(
 }
 
 function GitWidget({ context }: { context: WidgetContext }): ReactElement {
-  const { projectPath, onNavigate } = context
+  const { projectPath, onNavigate, onOpenFile } = context
   const { state, reload } = useBridgeData<GitStatusResult>(
     'gitStatus',
     projectPath,
@@ -521,11 +684,26 @@ function GitWidget({ context }: { context: WidgetContext }): ReactElement {
     return (
       <>
         <div className="widget-branch">
-          <span className="widget-branch-name">
-            {status.branch.detached
+          {(() => {
+            const name = status.branch.detached
               ? `detached at ${status.branch.oid?.slice(0, 7) ?? '—'}`
-              : (status.branch.name ?? 'no branch yet')}
-          </span>
+              : (status.branch.name ?? 'no branch yet')
+            // The branch is the tile's heading, so it is also its way in — a
+            // button at the foot saying "Open git panel" repeated a door the
+            // sidebar already has two rows above it.
+            return onNavigate ? (
+              <button
+                type="button"
+                className="widget-branch-name is-link"
+                title="Open Source control"
+                onClick={() => onNavigate('git')}
+              >
+                {name}
+              </button>
+            ) : (
+              <span className="widget-branch-name">{name}</span>
+            )
+          })()}
           {(status.branch.ahead > 0 || status.branch.behind > 0) && (
             <span className="widget-branch-sync">
               {status.branch.ahead > 0 && <span title="Commits to push">↑{status.branch.ahead}</span>}
@@ -539,31 +717,82 @@ function GitWidget({ context }: { context: WidgetContext }): ReactElement {
         ) : (
           <>
             <div className="widget-stats">
-              <Stat label="staged" value={String(status.staged.length)} />
-              <Stat label="changed" value={String(status.unstaged.length)} />
-              <Stat label="untracked" value={String(status.untracked.length)} />
+              {/* Each count lands on its own run of files in Source control,
+                  not on the top of the page — see PanelView's `focus`. */}
+              <Stat
+                label="staged"
+                value={String(status.staged.length)}
+                goes="Open the staged files"
+                onClick={doorIf(status.staged.length > 0 && Boolean(onNavigate), () =>
+                  onNavigate?.('git', 'staged'),
+                )}
+              />
+              <Stat
+                label="changed"
+                value={String(status.unstaged.length)}
+                goes="Open the changed files"
+                onClick={doorIf(status.unstaged.length > 0 && Boolean(onNavigate), () =>
+                  onNavigate?.('git', 'unstaged'),
+                )}
+              />
+              <Stat
+                label="untracked"
+                value={String(status.untracked.length)}
+                goes="Open the untracked files"
+                onClick={doorIf(status.untracked.length > 0 && Boolean(onNavigate), () =>
+                  onNavigate?.('git', 'untracked'),
+                )}
+              />
               {status.conflicted.length > 0 && (
-                <Stat label="conflicts" value={String(status.conflicted.length)} tone="crit" />
+                <Stat
+                  label={plural(status.conflicted.length, 'conflict')}
+                  value={String(status.conflicted.length)}
+                  tone="crit"
+                  goes="Open the conflicts"
+                  onClick={doorIf(Boolean(onNavigate), () => onNavigate?.('git', 'conflicted'))}
+                />
               )}
             </div>
             <ul className="widget-list">
               {shown.map((file) => (
                 <li key={`${file.group}:${file.path}`}>
-                  <span className="widget-row static">
-                    <span className={`widget-code ${file.group}`}>{file.code.trim() || '?'}</span>
-                    <span className="widget-row-main mono">{file.path}</span>
-                  </span>
+                  {/* A path is a door too (rule 1.4) — the Files page can show
+                      any file in the project, so a row that named one and did
+                      nothing was the only dead thing left on this tile. */}
+                  {onOpenFile ? (
+                    <button
+                      type="button"
+                      className="widget-row"
+                      title={`Open ${file.path}`}
+                      onClick={() => onOpenFile(file.path)}
+                    >
+                      <span className={`widget-code ${file.group}`}>{file.code.trim() || '?'}</span>
+                      <span className="widget-row-main mono">{file.path}</span>
+                    </button>
+                  ) : (
+                    <span className="widget-row static">
+                      <span className={`widget-code ${file.group}`}>{file.code.trim() || '?'}</span>
+                      <span className="widget-row-main mono">{file.path}</span>
+                    </span>
+                  )}
                 </li>
               ))}
             </ul>
-            {hidden > 0 && <p className="widget-note">…and {hidden} more.</p>}
+            {hidden > 0 && (
+              <p className="widget-note">
+                …and {hidden} more.{' '}
+                {onNavigate && (
+                  <button
+                    type="button"
+                    className="widget-inline-link"
+                    onClick={() => onNavigate('git')}
+                  >
+                    See them all
+                  </button>
+                )}
+              </p>
+            )}
           </>
-        )}
-
-        {onNavigate && (
-          <button type="button" className="widget-message-action" onClick={() => onNavigate('git')}>
-            Open git panel
-          </button>
         )}
       </>
     )
@@ -602,7 +831,15 @@ function KanbanWidget({ context }: { context: WidgetContext }): ReactElement {
       <>
         <div className="widget-stats">
           {columns.map((column) => (
-            <Stat key={column.id} label={COLUMN_TITLES[column.id]} value={String(column.cards.length)} />
+            <Stat
+              key={column.id}
+              label={COLUMN_TITLES[column.id]}
+              value={String(column.cards.length)}
+              goes={`Open the board at ${COLUMN_TITLES[column.id]}`}
+              onClick={doorIf(column.cards.length > 0 && Boolean(onNavigate), () =>
+                onNavigate?.('board', column.id),
+              )}
+            />
           ))}
         </div>
         {next.length > 0 && (
@@ -644,7 +881,7 @@ function isReadinessStatus(value: unknown): value is ReadinessStatus {
 }
 
 function ReadinessWidget({ context }: { context: WidgetContext }): ReactElement {
-  const { projectPath } = context
+  const { projectPath, onNavigate } = context
   const { state, reload } = useBridgeData<ReadinessView>(
     ['scanReadiness', 'getReadiness', 'readinessScan'],
     projectPath,
@@ -681,8 +918,19 @@ function ReadinessWidget({ context }: { context: WidgetContext }): ReactElement 
     return (
       <>
         <div className="widget-stats">
-          <Stat label={data.band || 'readiness'} value={`${data.score}%`} tone={tone} />
-          <Stat label="passing" value={`${passing.length}/${applicable.length}`} />
+          <Stat
+            label={data.band || 'readiness'}
+            value={`${data.score}%`}
+            tone={tone}
+            goes="Open AI readiness"
+            onClick={doorIf(Boolean(onNavigate), () => onNavigate?.('readiness'))}
+          />
+          <Stat
+            label="passing"
+            value={`${passing.length}/${applicable.length}`}
+            goes="Open AI readiness"
+            onClick={doorIf(Boolean(onNavigate), () => onNavigate?.('readiness'))}
+          />
         </div>
         {data.cappedBy && <p className="widget-note">Held back by: {data.cappedBy}</p>}
         <ul className="widget-list">
@@ -755,7 +1003,7 @@ export function readSection(
 }
 
 function GithubWidget({ context }: { context: WidgetContext }): ReactElement {
-  const { projectPath } = context
+  const { projectPath, onNavigate } = context
   const { state, reload } = useBridgeData<GithubView>(
     ['githubOverview', 'getGitHubOverview', 'githubSummary'],
     projectPath,
@@ -807,8 +1055,24 @@ function GithubWidget({ context }: { context: WidgetContext }): ReactElement {
         ) : (
           <>
             <div className="widget-stats">
-              <Stat label="pull requests" value={String(prs.length)} />
-              <Stat label="issues" value={String(issues.length)} />
+              {/* The GitHub page opens on the list you counted, not on whichever
+                  of its two tabs happens to be first. */}
+              <Stat
+                label={plural(prs.length, 'pull request')}
+                value={String(prs.length)}
+                goes="Open the pull requests"
+                onClick={doorIf(prs.length > 0 && Boolean(onNavigate), () =>
+                  onNavigate?.('github', 'pulls'),
+                )}
+              />
+              <Stat
+                label={plural(issues.length, 'issue')}
+                value={String(issues.length)}
+                goes="Open the issues"
+                onClick={doorIf(issues.length > 0 && Boolean(onNavigate), () =>
+                  onNavigate?.('github', 'issues'),
+                )}
+              />
             </div>
             <ul className="widget-list">
               {data.items.slice(0, MAX_GITHUB_ROWS).map((item) => (

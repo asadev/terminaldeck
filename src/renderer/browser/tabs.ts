@@ -149,21 +149,12 @@ export function moveTab(tabs: WorkspaceTab[], key: string, toIndex: number): Wor
   return next
 }
 
-/** The next tab along, wrapping. Returns the current key when there is nowhere to go. */
-export function cycle(tabs: WorkspaceTab[], activeKey: string, delta: number): string {
-  if (tabs.length === 0) return ''
-  const index = indexOfKey(tabs, activeKey)
-  if (index < 0) return tabs[0].key
-  const size = tabs.length
-  return tabs[(((index + delta) % size) + size) % size].key
-}
-
 /**
- * What the strip writes on a tab.
+ * What a browser page is called.
  *
  * The page's own title first, because that is what the user recognises, then
- * the host, and only then a placeholder — a strip of tabs all reading "New tab"
- * is a strip you cannot use.
+ * the host, and only then a placeholder — a sidebar of rows all reading "New
+ * tab" is a sidebar you cannot use.
  */
 export function tabTitle(tab: WorkspaceTab): string {
   return tab.title.trim() || tab.label.trim() || 'New tab'

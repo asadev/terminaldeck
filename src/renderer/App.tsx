@@ -1,16 +1,18 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { SessionStatus } from '@shared/types'
 import { StoreProvider, useStore } from './state/store'
 import { TerminalView } from './components/TerminalView'
 import { EmptyState } from './components/EmptyState'
 import { SettingsWindow } from './settings/SettingsWindow'
+import type { SectionId } from './settings/settings-schema'
 import { NewSessionDialog } from './components/NewSessionDialog'
 import { HelpDialog } from './components/HelpPanel'
 import { JoinRemoteDialog } from './components/JoinRemoteDialog'
 import { SessionInspector } from './components/SessionInspector'
 import {
   CloseSessionConfirm,
+  CONFIRM_CLOSE_KEY,
   needsCloseConfirm,
-  readConfirmClose,
 } from './components/CloseSessionConfirm'
 import { CommandPalette, type PaletteCommand } from './components/CommandPalette'
 import { ShortcutsSheet } from './components/ShortcutsSheet'
@@ -24,13 +26,15 @@ import { Sidebar } from './shell/Sidebar'
 import { WindowToolbar } from './shell/WindowToolbar'
 import { PanelView } from './shell/PanelView'
 import { useSidebar } from './shell/useSidebar'
-import { panelSpec } from './shell/panels'
+import { panelSpec, type PanelId } from './shell/panels'
 import { nextActiveId, sessionLabel, type WorkspaceTab } from './shell/workspace-tabs'
 import { ErrorBoundary } from './shell/ErrorBoundary'
-import { applyStoredTheme } from './theme'
 import { UnreadTracker } from './unread'
-import { mergeSettings, stringSetting } from './settings/settings-schema'
-import { toStoredSettings } from './settings/settings-bridge'
+import { isProviderId } from './preferences'
+import { AutoTitler } from './auto-title'
+import { useSessionNotifier } from './useSessionNotifier'
+import { useAppSettings } from './settings/useAppSettings'
+import { booleanSetting, numberSetting, stringSetting } from './settings/settings-schema'
 import { resolveCommand, scopeForTarget, tip } from './keymap'
 import './shell/shell.css'
 
@@ -40,6 +44,11 @@ const ICON = {
   swarm: 'M4.5 4.5h6v6h-6zM13.5 4.5h6v6h-6zM4.5 13.5h6v6h-6zM13.5 13.5h6v6h-6z',
   palette: 'M11 4.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zM19.5 19.5l-3.9-3.9',
 }
+
+/** A close waiting on the user: one session, or every session in a project. */
+type PendingClose =
+  | { kind: 'session'; tab: WorkspaceTab }
+  | { kind: 'project'; path: string; name: string; status: SessionStatus; count: number }
 
 /** Last segment of a path, or null. The store's own `folderName`, minus the store. */
 function folderNameOf(path: string | undefined): string | undefined {
@@ -77,6 +86,7 @@ function Workspace() {
     removeSession,
     setActiveSession,
     setSessionStatus,
+    setSessionTitle,
   } = useStore()
 
   /**
@@ -92,6 +102,11 @@ function Workspace() {
   const unread = unreadRef.current
   const [unreadIds, setUnreadIds] = useState<readonly string[]>([])
 
+  /** The same output, read for a better name than the folder's. */
+  const titlerRef = useRef<AutoTitler>(undefined)
+  if (!titlerRef.current) titlerRef.current = new AutoTitler()
+  const titler = titlerRef.current
+
   const sidebar = useSidebar()
   const { panel, selectPanel, clearPanel } = sidebar
   const [extraTabs, setExtraTabs] = useState<WorkspaceTab[]>([])
@@ -99,10 +114,25 @@ function Workspace() {
   const [swarm, setSwarm] = useState(false)
   const [sessionView, setSessionView] = useState<Record<string, SessionViewMode>>({})
   const [openFile, setOpenFile] = useState<string | null>(null)
-  /** The session a close is waiting on, and whether to ask at all. */
-  const [pendingClose, setPendingClose] = useState<WorkspaceTab | null>(null)
-  const [confirmClose, setConfirmClose] = useState(true)
+  /**
+   * The close that is waiting on an answer — one session, or a whole project.
+   *
+   * Both go through the same dialog. Closing a project used to skip it
+   * entirely: `removeProject` killed every session in the project outright,
+   * with "Confirm closing an active session" switched on.
+   */
+  const [pendingClose, setPendingClose] = useState<PendingClose | null>(null)
+  /**
+   * Which part of a view was asked for — a git group, a GitHub list.
+   *
+   * A count on the dashboard is a door (rule 1.2), and a door has to open onto
+   * the thing it counted rather than the page in general (rule 1.5). This is
+   * how "staged: 3" arrives at Source control already looking at the three.
+   */
+  const [panelFocus, setPanelFocus] = useState<string | null>(null)
   const [prefsOpen, setPrefsOpen] = useState(false)
+  /** Which settings section opens. Reset whenever Settings is opened plainly. */
+  const [prefsSection, setPrefsSection] = useState<SectionId>('general')
   const [newSessionOpen, setNewSessionOpen] = useState(false)
   const [helpOpen, setHelpOpen] = useState(false)
   const [joinOpen, setJoinOpen] = useState(false)
@@ -111,6 +141,23 @@ function Workspace() {
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
   const [onboardingDone, setOnboardingDone] = useState(false)
   const [needsOnboarding, setNeedsOnboarding] = useState<boolean | null>(null)
+  /** Whether the app window itself has focus. Half of "is anyone looking". */
+  const [windowFocused, setWindowFocused] = useState(true)
+
+  /**
+   * Every setting that changes how the app behaves, read once.
+   *
+   * Not once per consumer: this used to be three separate reads of the same
+   * file at launch — one for density, one for the confirm-on-close switch, one
+   * inside Settings — and the settings that had no reader at all were invisible
+   * precisely because nobody was looking for them in one place.
+   */
+  const { values: settings, loaded: settingsLoaded, apply: applySettings } = useAppSettings()
+  const confirmClose = booleanSetting(settings, CONFIRM_CLOSE_KEY)
+  const terminalFontSize = numberSetting(settings, 'appearance.terminalFontSize')
+  const terminalFontFamily = stringSetting(settings, 'appearance.terminalFontFamily')
+  const copyOnSelect = booleanSetting(settings, 'general.copyOnSelect')
+  const autoNameSessions = booleanSetting(settings, 'general.autoNameSessions')
 
   /**
    * Any app-level dialog being open.
@@ -167,29 +214,52 @@ function Workspace() {
     )
   }
 
+  /**
+   * Latest sessions and switches, for the callbacks that must not re-register.
+   * Assigned during render, so an effect that runs after it always sees the
+   * values of the render it belongs to.
+   */
+  const sessionsRef = useRef(sessions)
+  sessionsRef.current = sessions
+  const autoNameRef = useRef(autoNameSessions)
+  autoNameRef.current = autoNameSessions
+
   const activeProjectPath =
     activeSession?.projectPath ??
     sessions.find((s) => s.id === activeSessionId)?.projectPath ??
     projects[0]?.path ??
     null
 
-  useEffect(() => {
-    const off = window.deck.onSessionStatus((id, status) => setSessionStatus(id, status))
-    return off
-  }, [setSessionStatus])
-
   useEffect(() => unread.subscribe((snapshot) => setUnreadIds(snapshot.ids)), [unread])
 
   /**
-   * Output on a session nobody is looking at lights its row.
+   * Output on a session nobody is looking at lights its row — and names it.
    *
-   * One app-level subscription, not one per session: `onSessionData` already
-   * broadcasts every chunk with its id, and the tracker's own noise filter is
-   * what keeps a spinner from badging a tab forever.
+   * One app-level subscription, not one per session and not one per job:
+   * `onSessionData` already broadcasts every chunk with its id, and both
+   * readers of that stream want the same chunk. The tracker's own noise filter
+   * is what keeps a spinner from badging a tab forever; the titler's rate limit
+   * is what keeps a title scan off the hot path.
+   *
+   * Everything variable is read through a ref. Depending on `sessions` here
+   * would tear down and re-register the IPC listener every time any session
+   * changed status.
    */
   useEffect(
-    () => window.deck.onSessionData((id, chunk) => unread.recordOutput(id, chunk)),
-    [unread],
+    () =>
+      window.deck.onSessionData((id, chunk) => {
+        unread.recordOutput(id, chunk)
+        if (!autoNameRef.current) return
+        const session = sessionsRef.current.find((s) => s.id === id)
+        // Only while the session is still wearing the folder's name. A title
+        // the user typed, or one the new-session dialog derived from their
+        // first prompt, outranks anything read off a repainting TUI.
+        if (!session || session.title !== folderNameOf(session.projectPath)) return
+        titler.record(id, chunk)
+        const title = titler.titleFor(id, session.projectPath)
+        if (title) setSessionTitle(id, title)
+      }),
+    [unread, titler, setSessionTitle],
   )
 
   /**
@@ -216,11 +286,7 @@ function Workspace() {
    * front; walking away clears nothing.
    */
   useEffect(() => {
-    const sync = () =>
-      unread.setViewing({
-        activeSessionId: showingPanel ? null : activeTab?.id ?? null,
-        windowFocused: document.hasFocus(),
-      })
+    const sync = () => setWindowFocused(document.hasFocus())
     sync()
     window.addEventListener('focus', sync)
     window.addEventListener('blur', sync)
@@ -228,41 +294,29 @@ function Workspace() {
       window.removeEventListener('focus', sync)
       window.removeEventListener('blur', sync)
     }
-  }, [unread, activeTab?.id, showingPanel])
-
-  useEffect(() => {
-    void window.deck.getPreferences().then((p) => applyStoredTheme(p.theme))
   }, [])
 
-  // Whether closing a working session asks first. Read once and kept in step
-  // with Settings, because a disk round-trip inside ⌘W would be felt.
-  useEffect(() => {
-    void readConfirmClose().then(setConfirmClose)
-  }, [])
+  const viewing = useMemo(
+    () => ({
+      activeSessionId: showingPanel ? null : activeTab?.id ?? null,
+      windowFocused,
+    }),
+    [showingPanel, activeTab?.id, windowFocused],
+  )
+
+  useEffect(() => unread.setViewing(viewing), [unread, viewing])
 
   /**
-   * Density, applied at launch.
+   * The projects you had open, put back.
    *
-   * `SettingsWindow` writes this attribute whenever it loads or a control
-   * changes — but only when it has been opened. Until then every
-   * `[data-density='compact']` rule in the app was inert, so choosing Compact
-   * held until the next launch and then quietly stopped applying.
+   * Gated on the setting, and on the setting having actually arrived: doing
+   * this against the schema default would reopen everything for someone who
+   * turned it off, one frame before their answer landed. The switch used to be
+   * called "Restore sessions on launch" and was read by nothing at all.
    */
   useEffect(() => {
-    void window.deck
-      .getSettings()
-      .then((stored) => {
-        document.documentElement.dataset.density = stringSetting(
-          mergeSettings(toStoredSettings(stored)),
-          'appearance.density',
-        )
-      })
-      .catch(() => {
-        // The schema default is what the stylesheets already assume.
-      })
-  }, [])
-
-  useEffect(() => {
+    if (!settingsLoaded) return
+    if (!booleanSetting(settings, 'advanced.restoreSessions')) return
     let cancelled = false
     void window.deck.listProjects().then((saved) => {
       if (cancelled) return
@@ -271,7 +325,7 @@ function Workspace() {
     return () => {
       cancelled = true
     }
-  }, [addProject])
+  }, [addProject, settings, settingsLoaded])
 
   // Show the first-run screen only when no agent is usable. Someone with a
   // working setup should never be made to click through a welcome screen.
@@ -291,25 +345,42 @@ function Workspace() {
     [clearPanel],
   )
 
+  const newSessionIn = useCallback(
+    async (path: string, resume = false) => {
+      /*
+       * The default agent is *sent*, not assumed.
+       *
+       * `session:create` used to go out with no provider at all, so the main
+       * process fell back to Claude Code whatever General said — someone whose
+       * default was Plain shell got Claude from the sidebar button while the
+       * new-session dialog, which does read the setting, pre-selected Shell.
+       * The app disagreed with itself about its own preference.
+       */
+      const provider = stringSetting(settings, 'general.defaultProvider')
+      const meta = await window.deck.createSession({
+        cwd: path,
+        cols: 100,
+        rows: 30,
+        resume,
+        ...(isProviderId(provider) ? { provider } : {}),
+      })
+      addSession(meta)
+      showTab(meta.id)
+    },
+    [addSession, showTab, settings],
+  )
+
   const openProject = useCallback(async () => {
     const path = await window.deck.pickProjectFolder()
     if (!path) return
     addProject(path)
     void window.deck.addProject(path)
-    const meta = await window.deck.createSession({ cwd: path, cols: 100, rows: 30 })
-    addSession(meta)
+    // Through `newSessionIn`, so the first session in a project starts on the
+    // same agent every other one does. This call used to build its own request
+    // and left the provider off it.
+    await newSessionIn(path)
     setOnboardingDone(true)
-    showTab(meta.id)
-  }, [addProject, addSession, showTab])
-
-  const newSessionIn = useCallback(
-    async (path: string, resume = false) => {
-      const meta = await window.deck.createSession({ cwd: path, cols: 100, rows: 30, resume })
-      addSession(meta)
-      showTab(meta.id)
-    },
-    [addSession, showTab],
-  )
+  }, [addProject, newSessionIn])
 
   /** ⌘T and the sidebar's primary button: a session wherever you last were. */
   const newSession = useCallback(
@@ -327,11 +398,63 @@ function Workspace() {
     showTab(id)
   }, [showTab])
 
+  const selectTab = useCallback(
+    (id: string) => {
+      showTab(id)
+      // Terminals key off the store's active session; keep the two in step or
+      // switching to a session shows the previously focused terminal.
+      if (sessions.some((session) => session.id === id)) setActiveSession(id)
+    },
+    [sessions, setActiveSession, showTab],
+  )
+
+  /**
+   * Banners and the finish sound.
+   *
+   * Placed here because clicking a banner has to be able to bring you to the
+   * session it is about, and `selectTab` is what does that.
+   */
+  const notifier = useSessionNotifier({
+    values: settings,
+    viewing,
+    describe: (id) => {
+      const session = sessionsRef.current.find((s) => s.id === id)
+      return {
+        title: session?.title ?? 'Session',
+        project: folderNameOf(session?.projectPath),
+      }
+    },
+    onActivate: (id) => {
+      // The OS gives the app focus when a banner is clicked; the app still has
+      // to land on the session that rang, which may not be the one in front.
+      selectTab(id)
+    },
+  })
+
+  /**
+   * Status changes: the sidebar's dot, and everything that rings.
+   *
+   * One subscription for both. Every change is reported to the notifier, even
+   * the ones nobody wants a banner for — the policy needs the whole sequence to
+   * tell a real transition from the main process re-broadcasting.
+   */
+  useEffect(() => {
+    return window.deck.onSessionStatus((id, status) => {
+      setSessionStatus(id, status)
+      notifier.observe(id, status)
+    })
+  }, [setSessionStatus, notifier])
+
   const closeTabNow = useCallback(
     (id: string) => {
       const tab = tabs.find((t) => t.id === id)
       const following = nextActiveId(tabs, id)
+      // Everything that remembers this session forgets it together: a stale
+      // unread dot is untidy, a banner for a session that no longer exists is
+      // a click that goes nowhere.
       unread.forget(id)
+      notifier.forget(id)
+      titler.forget(id)
       if (tab?.kind === 'session') {
         void window.deck.killSession(id)
         removeSession(id)
@@ -340,7 +463,48 @@ function Workspace() {
       }
       setActiveTabId(following)
     },
-    [tabs, removeSession, unread],
+    [tabs, removeSession, unread, notifier, titler],
+  )
+
+  /**
+   * Close a project and everything running in it.
+   *
+   * The store kills each session's pty, so this is the same loss as closing
+   * every one of those tabs by hand — which is why it now asks first when any
+   * of them has something to lose.
+   */
+  const closeProjectNow = useCallback(
+    (path: string) => {
+      for (const session of sessionsRef.current) {
+        if (session.projectPath !== path) continue
+        unread.forget(session.id)
+        notifier.forget(session.id)
+        titler.forget(session.id)
+      }
+      removeProject(path)
+    },
+    [removeProject, unread, notifier, titler],
+  )
+
+  const closeProject = useCallback(
+    (path: string) => {
+      const risky = sessionsRef.current.filter(
+        (session) =>
+          session.projectPath === path && needsCloseConfirm(session.status, confirmClose),
+      )
+      if (risky.length === 0) {
+        closeProjectNow(path)
+        return
+      }
+      setPendingClose({
+        kind: 'project',
+        path,
+        name: folderNameOf(path) ?? path,
+        status: risky[0].status,
+        count: risky.length,
+      })
+    },
+    [closeProjectNow, confirmClose],
   )
 
   /**
@@ -357,22 +521,12 @@ function Workspace() {
     (id: string) => {
       const tab = tabs.find((t) => t.id === id)
       if (tab?.kind === 'session' && tab.status && needsCloseConfirm(tab.status, confirmClose)) {
-        setPendingClose(tab)
+        setPendingClose({ kind: 'session', tab })
         return
       }
       closeTabNow(id)
     },
     [tabs, confirmClose, closeTabNow],
-  )
-
-  const selectTab = useCallback(
-    (id: string) => {
-      showTab(id)
-      // Terminals key off the store's active session; keep the two in step or
-      // switching to a session shows the previously focused terminal.
-      if (sessions.some((session) => session.id === id)) setActiveSession(id)
-    },
-    [sessions, setActiveSession, showTab],
   )
 
   /** Step through the open sessions and pages, wrapping at each end. */
@@ -386,13 +540,34 @@ function Workspace() {
     [tabs, activeTab, selectTab],
   )
 
+  /** Settings, at a section. Plain routes land on General rather than wherever
+      an alert last sent someone. */
+  const openSettings = useCallback((section: SectionId = 'general') => {
+    setPrefsSection(section)
+    setPrefsOpen(true)
+  }, [])
+
+  /**
+   * Open one of the sidebar's views, optionally already looking at one part of
+   * it — the staged files, the pull requests. `focus` is cleared on every plain
+   * navigation, or the sidebar would keep landing you where a dashboard tile
+   * once sent you.
+   */
+  const showPanel = useCallback(
+    (id: PanelId, focus: string | null = null) => {
+      setPanelFocus(focus)
+      selectPanel(id)
+    },
+    [selectPanel],
+  )
+
   /** Source control hands a file here; the Files page is what can show it. */
   const showFile = useCallback(
     (relPath: string) => {
       setOpenFile(relPath)
-      selectPanel('files')
+      showPanel('files')
     },
-    [selectPanel],
+    [showPanel],
   )
 
   const commands = useMemo<PaletteCommand[]>(
@@ -407,24 +582,28 @@ function Workspace() {
       { id: 'palette.quickOpen', title: 'Open a file…', group: 'Project', shortcut: '⌘P', run: () => setPaletteMode('files') },
       { id: 'view.browser', title: 'New browser tab', group: 'View', run: () => newBrowserTab() },
       { id: 'view.swarm', title: 'Toggle swarm view', group: 'View', shortcut: '⌘\\', run: () => setSwarm((value) => !value) },
-      { id: 'view.overview', title: 'Overview', group: 'View', shortcut: '⌘⇧D', run: () => selectPanel('overview') },
-      { id: 'view.files', title: 'Files', group: 'View', shortcut: '⌘⇧E', run: () => selectPanel('files') },
-      { id: 'view.search', title: 'Search past sessions', group: 'View', shortcut: '⌘⇧F', run: () => selectPanel('search') },
-      { id: 'view.git', title: 'Source control', group: 'View', shortcut: '⌘⇧G', run: () => selectPanel('git') },
-      { id: 'view.board', title: 'Task board', group: 'View', shortcut: '⌘⇧B', run: () => selectPanel('board') },
-      { id: 'view.github', title: 'GitHub', group: 'View', run: () => selectPanel('github') },
-      { id: 'view.alerts', title: 'Alerts', group: 'View', run: () => selectPanel('alerts') },
-      { id: 'view.readiness', title: 'AI readiness', group: 'View', run: () => selectPanel('readiness') },
-      { id: 'view.mcp', title: 'MCP servers', group: 'View', run: () => selectPanel('mcp') },
-      { id: 'view.hooks', title: 'Hooks', group: 'View', run: () => selectPanel('hooks') },
+      // `view.dashboard`, which is the id the keymap binds ⌘⇧D to. The row used
+      // to call itself `view.overview` and print ⌘⇧D anyway: the chord worked,
+      // via an alias in the switch below, but the palette was printing a
+      // shortcut for a command it was not the entry for.
+      { id: 'view.dashboard', title: 'Overview', group: 'View', shortcut: '⌘⇧D', run: () => showPanel('overview') },
+      { id: 'view.files', title: 'Files', group: 'View', shortcut: '⌘⇧E', run: () => showPanel('files') },
+      { id: 'view.search', title: 'Search past sessions', group: 'View', shortcut: '⌘⇧F', run: () => showPanel('search') },
+      { id: 'view.git', title: 'Source control', group: 'View', shortcut: '⌘⇧G', run: () => showPanel('git') },
+      { id: 'view.board', title: 'Task board', group: 'View', shortcut: '⌘⇧B', run: () => showPanel('board') },
+      { id: 'view.github', title: 'GitHub', group: 'View', run: () => showPanel('github') },
+      { id: 'view.alerts', title: 'Alerts', group: 'View', run: () => showPanel('alerts') },
+      { id: 'view.readiness', title: 'AI readiness', group: 'View', run: () => showPanel('readiness') },
+      { id: 'view.mcp', title: 'MCP servers', group: 'View', run: () => showPanel('mcp') },
+      { id: 'view.hooks', title: 'Hooks', group: 'View', run: () => showPanel('hooks') },
       { id: 'view.sidebar', title: 'Show or hide the sidebar', group: 'View', shortcut: '⌘B', run: () => sidebar.toggleCollapsed() },
       { id: 'view.inspector', title: 'Session details', group: 'App', shortcut: '⌘⇧I', run: () => setInspectorOpen(true) },
-      { id: 'app.preferences', title: 'Settings', group: 'App', shortcut: '⌘,', run: () => setPrefsOpen(true) },
+      { id: 'app.preferences', title: 'Settings', group: 'App', shortcut: '⌘,', run: () => openSettings() },
       { id: 'app.help', title: 'Help', group: 'App', run: () => setHelpOpen(true) },
       { id: 'app.join', title: 'Join a remote session', group: 'App', run: () => setJoinOpen(true) },
       { id: 'app.shortcuts', title: 'Keyboard shortcuts', group: 'App', shortcut: '⌘/', run: () => setShortcutsOpen(true) },
     ],
-    [newSession, newBrowserTab, openProject, selectPanel, sidebar],
+    [newSession, newBrowserTab, openProject, showPanel, openSettings, sidebar],
   )
 
   /**
@@ -460,26 +639,29 @@ function Workspace() {
           setPaletteMode('files')
           return true
         case 'panel.search':
-          selectPanel('search')
+          showPanel('search')
           return true
         case 'app.inspector':
           setInspectorOpen(true)
           return true
-        case 'view.dashboard':
-          selectPanel('overview')
+        // The application menu's name for the same view.
+        case 'view.overview':
+          showPanel('overview')
           return true
         case 'view.terminal':
           if (sessions[0]) selectTab(sessions[0].id)
           return true
         case 'app.about':
+          openSettings('about')
+          return true
         case 'app.setup':
-          setPrefsOpen(true)
+          openSettings('setup')
           return true
         default:
           return false
       }
     },
-    [commands, activeTab, closeTab, cycleTab, selectPanel, selectTab, sessions],
+    [commands, activeTab, closeTab, cycleTab, showPanel, openSettings, selectTab, sessions],
   )
 
   // Menu items dispatch the same commands the palette runs, so a menu entry
@@ -534,7 +716,89 @@ function Workspace() {
           projectPath={activeProjectPath}
           onOpenProject={openProject}
           openFile={openFile}
-          onOpenFile={setOpenFile}
+          // `showFile`, not `setOpenFile`: clicking a changed file in Source
+          // control set the Files page's selection and left you looking at
+          // Source control, so the click did nothing you could see.
+          onOpenFile={showFile}
+          focus={panelFocus}
+          showInsights={booleanSetting(settings, 'general.showInsightAlerts')}
+          /*
+           * Every alert's button, given somewhere to go. Each of the five kinds
+           * names a target the app can already show; the panel raised them and
+           * nothing listened, so pressing one re-ran the scan behind it and
+           * left you exactly where you were.
+           */
+          onAlertAction={(action) => {
+            /*
+             * A session-targeted alert names Claude's own conversation id,
+             * taken from the transcript — not this window's tab id, which the
+             * main process mints. They coincide only when the app started the
+             * session. So the match is attempted, and where it fails the action
+             * lands on the inspector, which reads the project's transcripts and
+             * can therefore show the very session the alert is about. What it
+             * never does is guess: `/compact` is a write, and a write to the
+             * wrong session is worse than a button that took you somewhere
+             * slightly broader.
+             */
+            const openSession = sessions.find((session) => session.id === action.target)
+            switch (action.kind) {
+              case 'open-git':
+                showPanel('git')
+                return
+              case 'focus-session':
+                if (openSession) selectTab(openSession.id)
+                else setInspectorOpen(true)
+                return
+              case 'open-inspector':
+                setInspectorOpen(true)
+                return
+              case 'compact-session':
+                // The agent's own command, typed into the session it is about —
+                // the same channel chat mode writes through. Focus follows it,
+                // because a command sent to a terminal you cannot see is a
+                // command you cannot tell ran.
+                if (openSession) {
+                  selectTab(openSession.id)
+                  window.deck.writeToSession(openSession.id, '/compact\r')
+                } else {
+                  setInspectorOpen(true)
+                }
+                return
+              case 'install-provider':
+                // Setup is the section that lists what is installed and what is
+                // missing; landing on General would be a page about something
+                // else (rule 1.5).
+                setPrefsSection('setup')
+                setPrefsOpen(true)
+                return
+            }
+          }}
+          // What makes the dashboard's numbers doors rather than decoration.
+          // Every one of these was undefined until now, which is why the
+          // sessions list rendered its rows disabled and the git and board
+          // tiles hid their "open" buttons entirely.
+          dashboard={{
+            sessions: sessions
+              .filter((session) => session.projectPath === activeProjectPath)
+              .map((session, index) => ({
+                id: session.id,
+                title: sessionLabel(
+                  session.title,
+                  index,
+                  folderNameOf(session.projectPath),
+                ),
+                provider: session.provider,
+                status: session.status,
+              })),
+            onOpenSession: selectTab,
+            onShowSessions: () => {
+              clearPanel()
+              setSwarm(true)
+            },
+            onOpenInspector: () => setInspectorOpen(true),
+            onNavigate: showPanel,
+            onOpenFile: showFile,
+          }}
         />
       )
     }
@@ -556,7 +820,15 @@ function Workspace() {
           // The leftover slots in the grid are a real affordance or they are a
           // row of empty boxes. Without this they were the second thing.
           onNewSession={() => newSession()}
-          renderCell={({ session }) => <TerminalView sessionId={session.id} visible />}
+          renderCell={({ session }) => (
+            <TerminalView
+              sessionId={session.id}
+              visible
+              fontSize={terminalFontSize}
+              fontFamily={terminalFontFamily}
+              copyOnSelect={copyOnSelect}
+            />
+          )}
         />
       )
     }
@@ -577,6 +849,26 @@ function Workspace() {
               // what `parkPage` is.
               visible={tab.id === activeTab.id && !showingPanel}
               parkPage={anyModalOpen}
+              // Settings owns where a page opens; the panel's own button
+              // writes the same setting rather than a copy of it.
+              startUrl={stringSetting(settings, 'browser.startUrl')}
+              onStartUrl={(url) => {
+                applySettings({ ...settings, 'browser.startUrl': url })
+                void window.deck.setSettings({ 'browser.startUrl': url })
+              }}
+              // Otherwise every browser row in the sidebar reads "New tab".
+              onTitle={(title) =>
+                setExtraTabs((prev) =>
+                  // The same array back when nothing changed. `prev.map` always
+                  // builds a new one, and a new array is a new state, which is
+                  // a re-render, which reports the title again.
+                  prev.some((entry) => entry.id === tab.id && entry.label !== title)
+                    ? prev.map((entry) =>
+                        entry.id === tab.id ? { ...entry, label: title } : entry,
+                      )
+                    : prev,
+                )
+              }
               onSendToAgent={(context) => {
                 if (activeSessionId) window.deck.writeToSession(activeSessionId, context)
               }}
@@ -589,7 +881,13 @@ function Workspace() {
             <Fragment key={session.id}>
               {/* The terminal stays mounted in chat mode — only hidden — so
                   scrollback and cursor survive a trip through Chat. */}
-              <TerminalView sessionId={session.id} visible={active && mode === 'terminal'} />
+              <TerminalView
+                sessionId={session.id}
+                visible={active && mode === 'terminal'}
+                fontSize={terminalFontSize}
+                fontFamily={terminalFontFamily}
+                copyOnSelect={copyOnSelect}
+              />
               {active && mode === 'chat' ? (
                 <ChatView
                   cwd={session.projectPath ?? null}
@@ -638,12 +936,12 @@ function Workspace() {
           unread={unreadIds}
           onSelectTab={selectTab}
           onCloseTab={closeTab}
-          onSelectPanel={selectPanel}
+          onSelectPanel={showPanel}
           onNewSession={newSession}
           onNewBrowserTab={newBrowserTab}
           onOpenProject={openProject}
-          onCloseProject={removeProject}
-          onOpenSettings={() => setPrefsOpen(true)}
+          onCloseProject={closeProject}
+          onOpenSettings={() => openSettings()}
           onStartResize={sidebar.startResize}
         />
       )}
@@ -711,25 +1009,49 @@ function Workspace() {
 
       <SettingsWindow
         open={prefsOpen}
+        initialSection={prefsSection}
         onClose={() => setPrefsOpen(false)}
-        // The confirm-on-close switch is read here as well as there, so a
-        // change has to reach this copy or the next ⌘W disagrees with it.
-        onChange={(values) => setConfirmClose(values['general.confirmCloseWorking'] !== false)}
+        // Every behavioural setting is read from one copy up here, so a change
+        // made in the dialog has to land in it — otherwise the next ⌘W, the
+        // next banner and the next terminal all disagree with what is on
+        // screen until the app is restarted.
+        onChange={applySettings}
       />
       <CloseSessionConfirm
         open={pendingClose !== null}
-        title={pendingClose ? labelOf(pendingClose) : ''}
-        status={pendingClose?.status ?? 'idle'}
-        provider={sessions.find((s) => s.id === pendingClose?.id)?.provider}
+        title={
+          pendingClose === null
+            ? ''
+            : pendingClose.kind === 'session'
+              ? labelOf(pendingClose.tab)
+              : pendingClose.name
+        }
+        status={
+          pendingClose === null
+            ? 'idle'
+            : pendingClose.kind === 'session'
+              ? (pendingClose.tab.status ?? 'idle')
+              : pendingClose.status
+        }
+        count={pendingClose?.kind === 'project' ? pendingClose.count : 1}
+        provider={
+          pendingClose?.kind === 'session'
+            ? sessions.find((s) => s.id === pendingClose.tab.id)?.provider
+            : undefined
+        }
         onCancel={() => setPendingClose(null)}
         onConfirm={() => {
           const closing = pendingClose
           setPendingClose(null)
-          if (closing) closeTabNow(closing.id)
+          if (!closing) return
+          if (closing.kind === 'session') closeTabNow(closing.tab.id)
+          else closeProjectNow(closing.path)
         }}
         // The dialog writes the setting itself; this keeps the copy above in
         // step so the very next close does not ask again.
-        onConfirmSettingChange={setConfirmClose}
+        onConfirmSettingChange={(enabled) =>
+          applySettings({ ...settings, [CONFIRM_CLOSE_KEY]: enabled })
+        }
       />
       <NewSessionDialog
         open={newSessionOpen}

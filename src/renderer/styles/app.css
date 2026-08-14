@@ -194,6 +194,91 @@ kbd {
   display: none;
 }
 
+/* xterm measures the element it was opened on, so it gets one of its own with
+   nothing else in it — the find bar floats over the host instead. */
+.terminal-surface {
+  height: 100%;
+}
+
+/* The right edge, which had none.
+   xterm sizes its screen to whole character cells, and the fit addon rounds the
+   column count *up* when the remainder is close — so a 1440px window put the
+   screen's right edge at 1442, two pixels past the frame, and Claude Code's
+   right-aligned status line was clipped by the window while the left had a
+   comfortable 16px. Clipping the surface keeps the gutter symmetrical whatever
+   the rounding decides. */
+.terminal-surface,
+.terminal-surface .xterm .xterm-screen {
+  overflow: hidden;
+}
+
+/* Safari's find bar: a small floating pill in the top-right of the session,
+   the same glass as every other surface, over the text rather than pushing it. */
+.terminal-find {
+  position: absolute;
+  top: var(--sp-3);
+  right: var(--sp-5);
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: var(--sp-1);
+  border: 1px solid var(--material-hairline);
+  border-radius: var(--radius-md);
+  background-color: var(--material-bg-strong);
+  background-image: var(--material-sheen);
+  -webkit-backdrop-filter: var(--material-filter);
+  backdrop-filter: var(--material-filter);
+  box-shadow: var(--shadow-lg), inset 0 1px 0 var(--material-edge);
+}
+
+.terminal-find-input {
+  width: 190px;
+  height: var(--control-h);
+  padding: 0 var(--sp-2);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--fill-tertiary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--t-callout);
+}
+
+.terminal-find-input::placeholder {
+  color: var(--text-muted);
+}
+
+.terminal-find-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.terminal-find-btn {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: var(--icon-btn);
+  height: var(--icon-btn);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--t-callout);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.terminal-find-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.terminal-find-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
 /* ---------------------------------------------------------- empty state -- */
 
 .empty-state {

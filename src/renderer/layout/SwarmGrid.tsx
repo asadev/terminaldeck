@@ -114,9 +114,12 @@ export interface SwarmGridProps {
 }
 
 /**
- * Every running session on screen at once. Unlike the split view there is no
- * tree here — the grid is derived from the session list, so opening or closing
- * a session reflows it without any layout state to keep in sync.
+ * Every running session on screen at once.
+ *
+ * There is no pane tree here, deliberately: the grid is derived from the
+ * session list, so opening or closing a session reflows it with no layout state
+ * to keep in sync with the sidebar. A hand-arranged split view was built once
+ * and deleted for exactly that reason — see ROADMAP.md.
  */
 export function SwarmGrid({
   sessions,

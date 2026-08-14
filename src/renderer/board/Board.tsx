@@ -16,6 +16,7 @@ import {
   type BoardState,
   type ColumnId,
 } from './board-state'
+import { PageNote } from '../components/PageEmpty'
 import './Board.css'
 
 /**
@@ -359,8 +360,11 @@ export function Board({ projectPath, bridge }: BoardProps) {
               onDragOver={(e) => handleColumnDragOver(e, column.id)}
               onDrop={(e) => handleDrop(e, column.id)}
             >
+              {/* A column is a section of a working page, not a page — so it
+                  gets the app's one-line blank rather than the full block with
+                  a glyph, three times over across three columns. */}
               {column.cards.length === 0 && (
-                <p className="column-empty">{filtering ? 'No matches' : 'Nothing here'}</p>
+                <PageNote>{filtering ? 'No matches' : 'Nothing here'}</PageNote>
               )}
 
               {column.cards.map((card, i) => {

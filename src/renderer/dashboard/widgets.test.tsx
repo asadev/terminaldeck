@@ -1,7 +1,54 @@
 import { describe, expect, it } from 'vitest'
 import type { GitFile, GitFileGroup } from '../components/GitPanel'
-import { getWidgetDefinition, listWidgetDefinitions, readSection, visibleGitFiles } from './widgets'
+import {
+  formatTokens,
+  getWidgetDefinition,
+  listWidgetDefinitions,
+  plural,
+  readSection,
+  visibleGitFiles,
+} from './widgets'
 import { WIDGET_TYPES } from './layout'
+
+describe('formatTokens', () => {
+  it('rolls past a million into billions', () => {
+    // A project with four billion cached tokens read "4622.27M" — a number
+    // nobody can size at a glance, in a tile whose whole job is a glance.
+    expect(formatTokens(4_622_270_000)).toBe('4.62B')
+    expect(formatTokens(1_000_000_000)).toBe('1B')
+  })
+
+  it('keeps the tiers it already had', () => {
+    expect(formatTokens(0)).toBe('0')
+    expect(formatTokens(999)).toBe('999')
+    expect(formatTokens(41_800)).toBe('41.8k')
+    expect(formatTokens(1_500_000)).toBe('1.5M')
+  })
+
+  it('never rounds a tier up into the next one', () => {
+    // 999_950 tokens is 1000.0k, which would print as "1000k".
+    expect(formatTokens(999_950)).toBe('1M')
+    expect(formatTokens(999_999_500)).toBe('1B')
+  })
+
+  it('handles a negative the same way', () => {
+    expect(formatTokens(-4_622_270_000)).toBe('-4.62B')
+  })
+})
+
+describe('plural', () => {
+  it('does not print "1 sessions"', () => {
+    expect(plural(1, 'session')).toBe('session')
+    expect(plural(0, 'session')).toBe('sessions')
+    expect(plural(2, 'session')).toBe('sessions')
+  })
+
+  it('takes an irregular plural when one is given', () => {
+    expect(plural(1, 'is', 'are')).toBe('is')
+    expect(plural(3, 'is', 'are')).toBe('are')
+  })
+})
+
 
 /**
  * The widgets themselves need a DOM and a preload bridge, neither of which this

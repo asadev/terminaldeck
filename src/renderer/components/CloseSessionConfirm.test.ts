@@ -100,6 +100,21 @@ describe('closeWarning', () => {
   })
 })
 
+describe('closeWarning for a whole project', () => {
+  it('speaks in the plural once more than one session is going', () => {
+    // Closing a project takes every session in it — silently, until this
+    // dialog learned to cover that path — and "this session is still working"
+    // is the wrong sentence for four of them.
+    const warning = closeWarning('working', 4)
+    expect(warning.headline).toContain('4 sessions')
+    expect(warning.detail).toContain('project')
+  })
+
+  it('still describes one session as one session', () => {
+    expect(closeWarning('input', 1)).toEqual(closeWarning('input'))
+  })
+})
+
 describe('canResumeProvider', () => {
   it('is true for the agents with a resume command', () => {
     expect(canResumeProvider('claude')).toBe(true)

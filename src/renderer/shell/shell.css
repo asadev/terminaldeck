@@ -625,6 +625,50 @@
   color: var(--text-muted);
 }
 
+/* Left-aligned on purpose: what goes in here is a disclosure over a block of
+   tool output, and centred stderr is unreadable. */
+.page-blank-extra {
+  margin-top: var(--sp-5);
+  text-align: left;
+}
+
+/* A command in the body, e.g. "add one with `claude mcp add`". Panels used to
+   print the backticks literally, which is a markdown source file leaking into
+   a window. */
+.page-blank-body code,
+.page-blank-line code {
+  padding: 1px var(--sp-1);
+  border-radius: var(--radius-sm);
+  background: var(--fill-tertiary);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  user-select: text;
+}
+
+/* The other half of the pair: one line, for a *section* of a working page that
+   has nothing in it — a board column, a tab of an otherwise loaded list. The
+   full block above would be shouting at that scale. Alignment is inherited, so
+   it sits the way its container sits. */
+.page-blank-line {
+  margin: 0;
+  padding: var(--sp-3);
+  color: var(--text-muted);
+  font-size: var(--t-callout);
+}
+
+/* Page-level: a whole view that is loading, or has one sentence to say and no
+   glyph worth drawing. Parked where `.page-blank`'s title lands, so a page that
+   says "Reading…" and then says what it found does not move the answer. */
+.page-blank-line[data-page] {
+  max-width: 30rem;
+  margin: 11vh auto 0;
+  padding: 0;
+  font-size: var(--t-body);
+  line-height: var(--lh-body);
+  text-align: center;
+}
+
 /* ------------------------------------------------------------ files page -- */
 
 .files-page {

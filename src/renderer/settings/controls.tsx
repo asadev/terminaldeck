@@ -7,6 +7,7 @@ import {
   type Setting,
   type SettingValues,
 } from './settings-schema'
+import { NO_VERSION, NO_VERSION_HINT, toolVersionLabel, type ToolState } from './setup-status'
 
 /**
  * The controls every section is built from.
@@ -117,6 +118,27 @@ export function Button({
     >
       {children}
     </button>
+  )
+}
+
+/**
+ * The version beside a tool's name, on every screen that lists tools.
+ *
+ * One component rather than the same conditional written out in three files,
+ * because the interesting case is the one all three used to skip: a tool that
+ * was found and still has no version. See `toolVersionLabel`.
+ */
+export function ToolVersion({ tool }: { tool: { state: ToolState; version?: string } }) {
+  const label = toolVersionLabel(tool)
+  if (!label) return null
+  const missing = label === NO_VERSION
+  return (
+    <span
+      className={missing ? 'settings-tool-version settings-tool-version-none' : 'settings-tool-version'}
+      title={missing ? NO_VERSION_HINT : undefined}
+    >
+      {label}
+    </span>
   )
 }
 

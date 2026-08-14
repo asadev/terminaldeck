@@ -240,10 +240,10 @@
   background: var(--bg-active);
 }
 
-.column-empty {
-  margin: var(--sp-2) var(--sp-2) 0;
-  color: var(--text-muted);
-  font-size: var(--t-callout);
+/* `.column-empty` was here. The app has one line for "this bit is empty" now
+   — `PageNote` — and this only has to place it inside the column. */
+.column-body > .page-blank-line {
+  padding: var(--sp-2) var(--sp-2) 0;
 }
 
 /* ----------------------------------------------------------------- cards -- */

@@ -604,10 +604,10 @@ export const KEYMAP: readonly KeyBinding[] = [
   { id: 'view.swarm', keys: ['mod+\\'], label: 'Swarm view', scope: 'global', group: 'Panels' },
   { id: 'view.sidebar', keys: ['mod+b'], label: 'Toggle the sidebar', scope: 'global', group: 'Panels' },
 
-  // Split panes had three chords documented here for a component that is
-  // never rendered (see KNOWN_UNREACHABLE in src/reachable.test.ts). A sheet
-  // that prints a shortcut for a feature nobody can reach is the same lie as a
-  // roadmap that ticks it, so the bindings are gone until the panes are real.
+  // Split panes had three chords documented here for a component that was
+  // never rendered. The chords went first; the component and its pane tree are
+  // gone too now — swarm mode (⌘\) is this app's answer to "several sessions at
+  // once", and see ROADMAP.md for why there is not a second one.
 
   // -- app --
   // The id stays `app.preferences` because the application menu dispatches it;

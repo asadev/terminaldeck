@@ -18,8 +18,13 @@ import './AgentControls.css'
  *
  * The values are read back from the session's own screen, its transcript or the
  * CLI's settings file — never assumed. When nothing could be read the control
- * says "Unknown", which is the point: a row of confident defaults that were
- * never verified would be worse than no row at all.
+ * says so rather than guessing: a row of confident defaults that were never
+ * verified would be worse than no row at all.
+ *
+ * Three of the four resolve on any machine. Fast mode structurally cannot until
+ * the session mentions it — see `unreadLabel` in `catalog.ts` for why — so it
+ * says "Not reported" and its menu explains the difference, instead of showing
+ * the same "Unknown" that everywhere else in this row means "something failed".
  */
 
 export interface AgentControlsBridge {
@@ -247,6 +252,7 @@ export function AgentControls({ sessionId, cwd }: Props) {
           return (
             <ControlPicker
               key={id}
+              control={id}
               name={name}
               reading={reading}
               options={optionsFor(id)}

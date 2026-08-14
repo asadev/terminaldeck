@@ -13,6 +13,12 @@ interface Props {
   action?: { label: string; onClick(): void; busy?: boolean; primary?: boolean }
   /** A quieter line under the action, e.g. the chord that does the same thing. */
   hint?: ReactNode
+  /**
+   * A block after the action, for the rare page whose explanation is not a
+   * sentence — GitHub's failures carry the tool's own stderr in a `<details>`,
+   * and a disclosure widget cannot live inside the `<p>` that `children` is.
+   */
+  extra?: ReactNode
 }
 
 /**
@@ -30,7 +36,7 @@ interface Props {
  * runner does not resolve — importing it from a panel takes that panel's whole
  * test file down with it.
  */
-export function PageEmpty({ icon, title, children, action, hint }: Props) {
+export function PageEmpty({ icon, title, children, action, hint, extra }: Props) {
   return (
     <div className="page-blank" role="status">
       {icon && (
@@ -62,6 +68,37 @@ export function PageEmpty({ icon, title, children, action, hint }: Props) {
         </button>
       )}
       {hint && <p className="page-blank-hint">{hint}</p>}
+      {extra && <div className="page-blank-extra">{extra}</div>}
     </div>
+  )
+}
+
+/**
+ * The one-line half of the same system.
+ *
+ * `PageEmpty` is for a view with nothing in it. This is for the two cases where
+ * that block would be too much: a *section* of a working page that happens to
+ * be empty — a board column, one tab of a loaded list — and a page that is
+ * still reading. Panels each used to write their own: `gh-message`,
+ * `git-message`, `mcp-empty`, `hooks-empty`, `column-empty`, four different
+ * sizes and three different greys for the same sentence.
+ *
+ * `page` puts it where `PageEmpty`'s title lands, so "Reading repository…"
+ * and the answer that replaces it occupy the same spot instead of the page
+ * jumping when the read comes back.
+ */
+export function PageNote({
+  children,
+  page,
+  busy,
+}: {
+  children: ReactNode
+  page?: boolean
+  busy?: boolean
+}) {
+  return (
+    <p className="page-blank-line" data-page={page || undefined} role="status" aria-busy={busy}>
+      {children}
+    </p>
   )
 }

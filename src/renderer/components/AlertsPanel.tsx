@@ -57,6 +57,13 @@ export interface AlertsPanelProps {
   projectPath: string
   /** Invoked when the user takes an alert's action. */
   onAction?: (action: AlertAction, alert: Alert) => void
+  /**
+   * General → "Show insight alerts". Off keeps the alerts that describe the
+   * project itself and drops the ones this panel infers from what sessions are
+   * doing. The switch has existed since the settings window was written and
+   * nothing read it, so turning it off changed nothing on this page.
+   */
+  showInsights?: boolean
   /** Injectable for tests; defaults to the preload bridge on `window.deck`. */
   bridge?: AlertsBridge
   /** Re-scan interval. 0 disables it. Defaults to 60s. */
@@ -154,6 +161,44 @@ export function createScanGate(): ScanGate {
   }
 }
 
+/**
+ * The alert kinds this panel *infers* rather than observes.
+ *
+ * The distinction the setting draws: "provider missing" and "dirty tree" are
+ * facts about the project that are true whether or not anyone is working, and
+ * hiding them would hide a broken setup. The four below are read out of what
+ * sessions have been doing — a context window filling up, a session blocked on
+ * a question, a run that cost more than the rest put together — and those are
+ * the ones somebody may not want raised without being asked.
+ */
+export const INSIGHT_ALERT_KINDS: ReadonlySet<AlertKind> = new Set<AlertKind>([
+  'context-bloat',
+  'pre-context-bloat',
+  'session-blocked',
+  'expensive-session',
+])
+
+export function isInsightAlert(alert: Alert): boolean {
+  return INSIGHT_ALERT_KINDS.has(alert.kind)
+}
+
+/**
+ * Apply the switch to a report, counts and all.
+ *
+ * The counts have to be recomputed rather than passed through: the summary line
+ * is built from them, and a page listing two alerts under "3 needing you now"
+ * is worse than either number on its own.
+ */
+export function withInsights(report: AlertReport, showInsights: boolean): AlertReport {
+  if (showInsights) return report
+  const alerts = report.alerts.filter((alert) => !isInsightAlert(alert))
+  if (alerts.length === report.alerts.length) return report
+  const counts: Record<AlertSeverity, number> = { info: 0, warning: 0, critical: 0 }
+  for (const alert of alerts) counts[alert.severity] += 1
+  const worst = SEVERITY_ORDER.find((severity) => counts[severity] > 0) ?? null
+  return { ...report, alerts, counts, worst }
+}
+
 /** Group alerts for a panel with one section per severity. Empty groups are dropped. */
 export function groupAlerts(alerts: Alert[]): AlertGroup[] {
   return SEVERITY_ORDER.map((severity) => ({
@@ -196,8 +241,13 @@ export function AlertRow({
         <p className="alerts-title">{alert.title}</p>
         <p className="alerts-detail">{alert.detail}</p>
       </div>
-      {action ? (
-        <button type="button" className="alerts-action" onClick={() => onAction?.(action, alert)}>
+      {/* Only when there is a host to act on it. Rule 1.1: an alert's button
+          is the whole point of the alert, and one that renders without a
+          handler is a control that swallows the click and reports nothing —
+          which is exactly how "Open the git panel" spent its life re-running
+          the scan and never navigating. */}
+      {action && onAction ? (
+        <button type="button" className="alerts-action" onClick={() => onAction(action, alert)}>
           {action.label}
         </button>
       ) : null}
@@ -227,7 +277,13 @@ export function AlertRow({
  */
 const DEFAULT_REFRESH_MS = 60_000
 
-export function AlertsPanel({ projectPath, onAction, bridge, refreshMs }: AlertsPanelProps) {
+export function AlertsPanel({
+  projectPath,
+  onAction,
+  bridge,
+  refreshMs,
+  showInsights = true,
+}: AlertsPanelProps) {
   const host = useMemo(() => bridge ?? resolveBridge(), [bridge])
   const [report, setReport] = useState<AlertReport | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -274,22 +330,32 @@ export function AlertsPanel({ projectPath, onAction, bridge, refreshMs }: Alerts
     if (!gate.isBusy()) void scan()
   })
 
-  const groups = useMemo(() => (report ? groupAlerts(report.alerts) : []), [report])
+  /**
+   * Filtered here rather than at fetch time: the switch can be flipped while
+   * this page is open, and re-reading every transcript in the project to hide
+   * four rows would be absurd.
+   */
+  const shown = useMemo(
+    () => (report ? withInsights(report, showInsights) : null),
+    [report, showInsights],
+  )
+
+  const groups = useMemo(() => (shown ? groupAlerts(shown.alerts) : []), [shown])
 
   /* A quiet project is the state this panel is in most of the time, and it
      used to be shown twice: a summary line pinned to the top-left corner and a
      second sentence saying the same thing ten viewport-percent below it. When
      there is nothing to list there is nothing to head, so the page is one
      composed empty state and the rescan button moves into it. */
-  const quiet = host && report !== null && report.alerts.length === 0 && !error
+  const quiet = host && shown !== null && shown.alerts.length === 0 && !error
 
   return (
     <section className="alerts" aria-label="Project alerts">
       {!quiet && (
         <header className="alerts-head">
           <div className="alerts-headline">
-            <p className="alerts-summary" data-worst={report?.worst ?? 'none'}>
-              {error ?? summarize(report)}
+            <p className="alerts-summary" data-worst={shown?.worst ?? 'none'}>
+              {error ?? summarize(shown)}
             </p>
           </div>
           <button
@@ -310,7 +376,11 @@ export function AlertsPanel({ projectPath, onAction, bridge, refreshMs }: Alerts
       ) : quiet ? (
         <PageEmpty
           icon={panelSpec('alerts').icon}
-          title={summarize(report)}
+          /* Not `summarize`, which writes a sentence for the header line and
+             ends it with a full stop. This slot is a title, and every other
+             one in the app is a phrase without one — one treatment includes
+             the punctuation. */
+          title="Nothing needs your attention"
           action={{ label: busy ? 'Checking…' : 'Check again', onClick: () => void scan(), busy }}
         >
           Context is healthy, nothing is blocked, and the tools this project uses are installed.

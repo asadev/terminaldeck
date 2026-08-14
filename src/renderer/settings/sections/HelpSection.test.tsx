@@ -1,8 +1,8 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { HelpSection } from './HelpSection'
+import { HelpSection, OWNED_BY_THE_SETTINGS_NAV } from './HelpSection'
 import { HELP_TOPICS, SECTIONS as HELP_SECTIONS } from '../../components/HelpPanel'
-import { sectionMeta } from '../settings-schema'
+import { sectionMeta, SECTIONS as SETTINGS_SECTIONS } from '../settings-schema'
 
 /**
  * Help is the one section that renders no settings, so what is worth pinning is
@@ -28,12 +28,46 @@ describe('the Help section', () => {
     expect(html).toContain(meta.blurb)
   })
 
-  it('renders the shared panel — every help section and the first topic of each', () => {
+  it('renders the shared panel — every help section this window still owns', () => {
     const html = render()
-    for (const section of HELP_SECTIONS) expect(html, section.id).toContain(section.label)
+    const kept = HELP_SECTIONS.filter(
+      (section) => !OWNED_BY_THE_SETTINGS_NAV.some((id) => id === section.id),
+    )
+    expect(kept.length).toBeGreaterThan(1)
+    for (const section of kept) expect(html, section.id).toContain(section.label)
     // Generated content, so one topic title proves the panel and not a stub.
     const first = HELP_TOPICS[0]
     expect(html).toContain(first.title)
+  })
+
+  /**
+   * The duplication this section was carrying: its own sub-nav offered
+   * Shortcuts and About, and the window's nav offers both two rows below it —
+   * the same keymap and the same version numbers, two ways in from one screen.
+   *
+   * Asserted from the two lists rather than by naming the words, so a rename on
+   * either side is caught here instead of leaving a dead exclusion behind.
+   */
+  it('drops the two sections the window’s own nav already owns', () => {
+    const html = render()
+    for (const id of OWNED_BY_THE_SETTINGS_NAV) {
+      const help = HELP_SECTIONS.find((section) => section.id === id)
+      const own = SETTINGS_SECTIONS.find((section) => section.id === id)
+      // The exclusion only means anything while the settings nav really has a
+      // row of its own for it.
+      expect(own, id).toBeDefined()
+      expect(help, id).toBeDefined()
+      expect(html, id).not.toContain(`>${help!.label}<`)
+    }
+  })
+
+  /**
+   * With Shortcuts and About gone the panel is down to three sections — still
+   * a choice, so the sub-nav stays. It disappears only if that ever reaches
+   * one, which is the case the panel guards against rather than this window.
+   */
+  it('keeps its sub-nav, because three sections is still a choice', () => {
+    expect(render()).toContain('aria-label="Help sections"')
   })
 
   it('carries the search field, which is why autoFocus is off here', () => {

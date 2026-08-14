@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Button, Group, LinkOut, Notice, Row, SectionHead } from '../controls'
+import { Button, Group, LinkOut, Notice, Row, SectionHead, ToolVersion } from '../controls'
 import { sectionMeta } from '../settings-schema'
 import {
   errorText,
@@ -116,7 +116,7 @@ export function AgentsSection({ bridge, goTo }: SectionProps) {
                   <span className="settings-tool-main">
                     <span className="settings-tool-name">
                       {tool.label}
-                      {tool.version && <span className="settings-tool-version">{tool.version}</span>}
+                      <ToolVersion tool={tool} />
                     </span>
                     <span className="settings-tool-note">{tool.remedy ?? tool.purpose}</span>
                   </span>

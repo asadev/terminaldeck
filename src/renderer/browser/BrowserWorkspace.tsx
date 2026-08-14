@@ -3,7 +3,6 @@ import { CapturePanel } from './CapturePanel'
 import { DeviceBar } from './DeviceBar'
 import { RecorderPanel } from './RecorderPanel'
 import { SessionModal } from './SessionModal'
-import { TabStrip } from './TabStrip'
 import { Toolbar } from './Toolbar'
 import {
   missingBridgeMethods,
@@ -38,11 +37,11 @@ import { resolveOmnibox, securityOf } from './omnibox'
 import { StartPage } from './StartPage'
 import {
   closeTab as closeInList,
-  cycle,
   moveTab,
   newTab,
   openTab,
   tabForId,
+  tabTitle,
   withTab,
   withTabId,
   type WorkspaceTab,
@@ -75,13 +74,27 @@ export interface BrowserWorkspaceProps {
    */
   parkPage?: boolean
   /**
-   * Draw this panel's own tab strip.
+   * What this page is called, whenever that changes.
    *
-   * Off when the window header already lists browser tabs — two strips, one
-   * above the other, both listing tabs, is the "doubling up" that made the
-   * layout confusing.
+   * The panel's own tab strip is gone — a browser page is a row in the sidebar
+   * now — so the only place the page's title can be read is that row, and the
+   * row is given a label once, at open. Without this every browser row in the
+   * sidebar reads "New tab" forever, which is precisely the unusable strip
+   * `tabTitle` was written to prevent.
    */
-  showTabs?: boolean
+  onTitle?: (title: string) => void
+  /**
+   * Settings → Browser → Start page: where a new page opens.
+   *
+   * A prop rather than something read here, because it is a declared setting
+   * and the schema is the only place a setting is allowed to live. This panel
+   * used to keep its own copy in localStorage, so "Start page" in Settings and
+   * "Set as home" in the panel were two controls over two different values and
+   * the Settings one changed nothing.
+   */
+  startUrl?: string
+  /** Persist a new start page — the panel's own "set as start page" button. */
+  onStartUrl?: (url: string) => void
   /** Receives a single line for the agent. Absent means no session is focused. */
   onSendToAgent?: (text: string) => void
   /** Injectable for tests; defaults to the preload bridge on `window.deck`. */
@@ -95,42 +108,12 @@ export interface BrowserWorkspaceProps {
   isolation?: IsolationApi
 }
 
-const HOME_KEY = 'terminaldeck.browser.home'
-// Empty, not a guess. Opening a fixed port meant the panel's first screen was
-// Chrome's error page unless you happened to be running something on 3000.
-const DEFAULT_HOME = ''
-
 const EMPTY_RECORDING: RecordingState = {
   recording: false,
   steps: [],
   text: '',
   line: '',
   truncated: false,
-}
-
-/**
- * The home page, remembered per window rather than in the main-process store.
- *
- * Wrapped because `localStorage` is not always the safe global it looks like:
- * node has one of the same name that throws unless the process was started with
- * `--localstorage-file`, which is exactly the environment these components are
- * rendered in under test. A lost preference is not worth taking the panel down
- * for either way.
- */
-function readHome(): string {
-  try {
-    return localStorage.getItem(HOME_KEY) || DEFAULT_HOME
-  } catch {
-    return DEFAULT_HOME
-  }
-}
-
-function writeHome(url: string): void {
-  try {
-    localStorage.setItem(HOME_KEY, url)
-  } catch {
-    // The page still opens; only the preference is lost.
-  }
 }
 
 /** The parts of a main-process state that belong on a strip entry. */
@@ -200,7 +183,9 @@ function without<T>(map: Record<string, T>, key: string): Record<string, T> {
 export function BrowserWorkspace({
   visible = true,
   parkPage = false,
-  showTabs = false,
+  onTitle,
+  startUrl = '',
+  onStartUrl,
   onSendToAgent,
   bridge,
   isolation,
@@ -232,7 +217,10 @@ export function BrowserWorkspace({
   const [notice, setNotice] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
   const [focusToken, setFocusToken] = useState(0)
-  const [home, setHome] = useState(readHome)
+
+  /** Read inside the mount effect, which must not re-run when it changes. */
+  const homeRef = useRef(startUrl)
+  homeRef.current = startUrl
 
   const stageRef = useRef<HTMLDivElement | null>(null)
   const rootRef = useRef<HTMLDivElement | null>(null)
@@ -264,6 +252,22 @@ export function BrowserWorkspace({
   const enqueue = useCallback((work: () => Promise<void>): void => {
     queue.current = queue.current.then(work, work).catch(() => undefined)
   }, [])
+
+  /*
+   * Report the page's name upwards, so the sidebar row can wear it.
+   *
+   * The callback is held in a ref rather than depended on. Hosts pass an inline
+   * arrow — a fresh function identity every render — and an effect that
+   * depended on it would fire on every render, call back into the host, and
+   * render again: this shipped for exactly one screenshot run and produced
+   * "Maximum update depth exceeded" the moment a browser page opened.
+   */
+  const titleRef = useRef(onTitle)
+  titleRef.current = onTitle
+  const pageTitle = active ? tabTitle(active) : ''
+  useEffect(() => {
+    if (pageTitle) titleRef.current?.(pageTitle)
+  }, [pageTitle])
 
   /* -- the device rectangle, recomputed on every layout pass. */
   const deviceSize = useMemo((): Size | null => {
@@ -417,7 +421,7 @@ export function BrowserWorkspace({
   /* -- first tab, and cleanup. */
   useEffect(() => {
     if (!api) return
-    if (tabsRef.current.length === 0) openNewTab(readHome(), false)
+    if (tabsRef.current.length === 0) openNewTab(homeRef.current, false)
     return () => {
       generation.current += 1
       for (const tab of tabsRef.current) {
@@ -617,14 +621,11 @@ export function BrowserWorkspace({
   const onKeyDown = useCallback(
     (event: KeyboardEvent<HTMLDivElement>): void => {
       const mod = event.metaKey || event.ctrlKey
-      // Nothing global is bound here. Cmd-T and Cmd-W already belong to
-      // sessions in KEYMAP, so tabs use the browser's other convention —
-      // Ctrl-Tab — and the address bar uses Cmd-L, which nothing else claims.
-      if (event.ctrlKey && event.key === 'Tab') {
-        event.preventDefault()
-        setActiveKey(cycle(tabsRef.current, activeRef.current, event.shiftKey ? -1 : 1))
-        return
-      }
+      // Nothing global is bound here. Ctrl-Tab used to cycle this panel's own
+      // tabs and is gone with them: it is `session.next` in KEYMAP, and a
+      // handler that swallowed it to cycle a one-tab strip made the documented
+      // chord do nothing whenever a page had focus. Cmd-L is the address bar,
+      // which nothing else claims.
       if (mod && event.key.toLowerCase() === 'l') {
         event.preventDefault()
         setFocusToken((token) => token + 1)
@@ -667,17 +668,6 @@ export function BrowserWorkspace({
 
   return (
     <div className="bw" ref={rootRef} data-visible={visible} onKeyDown={onKeyDown}>
-      {showTabs && (
-        <TabStrip
-          tabs={tabs}
-          activeKey={activeKey}
-          onSelect={setActiveKey}
-          onClose={closeTab}
-          onOpen={() => openNewTab(home)}
-          onReorder={(key, index) => setTabs((prev) => moveTab(prev, key, index))}
-        />
-      )}
-
       <Toolbar
         tab={active}
         security={security}
@@ -693,7 +683,7 @@ export function BrowserWorkspace({
         onForward={() => act((a, id) => a.browserForward(id))}
         onReload={() => act((a, id) => a.browserReload(id))}
         onStop={() => act((a, id) => a.browserStop(id))}
-        onHome={() => navigate(home)}
+        onHome={() => navigate(startUrl)}
         onInspect={() => act((a, id) => a.browserInspect(id, !active?.inspecting))}
         onRecord={toggleRecording}
         onScreenshot={takeScreenshot}
@@ -775,8 +765,12 @@ export function BrowserWorkspace({
 
       {/* Deliberately empty: the native view is painted over this rectangle. */}
       <div className="bw-stage" ref={stageRef} data-framed={deviceSize !== null || undefined}>
+        {/* The plus this used to point at was in the panel's own tab strip. A
+            browser page is a row in the sidebar now, so that is where a second
+            one is opened from — and naming the control that exists is the
+            difference between an empty state and a dead end. */}
         {tabs.length === 0 && (
-          <p className="bw-empty">No tabs open. Press the plus above to open one.</p>
+          <p className="bw-empty">No page open. Use New browser tab in the sidebar to open one.</p>
         )}
         {(() => {
           const active = tabs.find((t) => t.key === activeKey)
@@ -822,14 +816,13 @@ export function BrowserWorkspace({
             type="button"
             className="bw-text-button"
             title="Open this page every time"
+            disabled={!onStartUrl || !active?.url || active.url === startUrl}
             onClick={() => {
               const url = active?.url
-              if (!url) return
-              setHome(url)
-              writeHome(url)
+              if (url) onStartUrl?.(url)
             }}
           >
-            Set as home
+            {active?.url && active.url === startUrl ? 'Start page' : 'Set as start page'}
           </button>
         </div>
 

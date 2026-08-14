@@ -1,8 +1,10 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
-import type { ControlOption, ControlReading } from './catalog'
-import { isCurrent, sourceNote } from './catalog'
+import type { ControlId, ControlOption, ControlReading } from './catalog'
+import { displayValue, isCurrent, sourceNote, unreadNote } from './catalog'
 
 interface Props {
+  /** Which control this is. Decides what it says when it cannot read a value. */
+  control: ControlId
   /** The short name on the button, e.g. "Model". */
   name: string
   reading: ControlReading | undefined
@@ -21,11 +23,16 @@ interface Props {
  * One control: a button showing the value that was actually read, and a menu.
  *
  * The button never shows a value this app has not read from somewhere real —
- * `displayValue` returns "Unknown" instead — and the caption underneath names
- * the source, so "Opus 5" read from the last reply and "Opus 5" assumed from a
- * settings file are never confused for each other.
+ * `displayValue` says so instead — and the caption underneath names the source,
+ * so "Opus 5" read from the last reply and "Opus 5" assumed from a settings
+ * file are never confused for each other.
+ *
+ * An unread control also gets to say *why* where there is a real reason. Fast
+ * mode is the only one that has one, and it is permanent rather than a hiccup —
+ * see `unreadLabel` in `catalog.ts`. Printing "Unknown" beside three siblings
+ * that always resolve made a working control look broken.
  */
-export function ControlPicker({ name, reading, options, reach, busy, disabled, blocked, onPick }: Props) {
+export function ControlPicker({ control, name, reading, options, reach, busy, disabled, blocked, onPick }: Props) {
   const [open, setOpen] = useState(false)
   const [above, setAbove] = useState(true)
   const rootRef = useRef<HTMLDivElement>(null)
@@ -58,9 +65,9 @@ export function ControlPicker({ name, reading, options, reach, busy, disabled, b
     if (box) setAbove(box.top > window.innerHeight - box.bottom)
   }, [open])
 
-  const value = reading && reading.label !== null ? reading.label : 'Unknown'
+  const value = displayValue(reading, control)
   const unknown = !reading || reading.label === null
-  const note = sourceNote(reading?.source ?? null)
+  const note = unknown ? (unreadNote(control) ?? sourceNote(null)) : sourceNote(reading.source)
 
   return (
     <div className="ac-picker" ref={rootRef}>

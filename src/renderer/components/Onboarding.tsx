@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import './Onboarding.css'
 import { BRAND } from '@shared/brand'
+import { NO_VERSION, NO_VERSION_HINT, toolVersionLabel as versionLabel } from '../settings/setup-status'
 
 interface ToolStatus {
   id: string
@@ -79,7 +80,15 @@ export function Onboarding({ onContinue, onOpenProject }: Props) {
                 <div className="onboarding-row-main">
                   <span className="onboarding-name">
                     {tool.label}
-                    {tool.version && <span className="onboarding-version">{tool.version}</span>}
+                    {versionLabel(tool) && (
+                      <span
+                        className="onboarding-version"
+                        data-none={versionLabel(tool) === NO_VERSION || undefined}
+                        title={versionLabel(tool) === NO_VERSION ? NO_VERSION_HINT : undefined}
+                      >
+                        {versionLabel(tool)}
+                      </span>
+                    )}
                   </span>
                   <span className="onboarding-purpose">{tool.remedy ?? tool.purpose}</span>
                 </div>

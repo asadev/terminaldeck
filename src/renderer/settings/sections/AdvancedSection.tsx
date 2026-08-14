@@ -175,6 +175,12 @@ export function AdvancedSection({ values, save, bridge, loading, reload }: Secti
       <Group title="Where things are kept">
         {!bridge.settingsPaths ? (
           <Notice tone="warn">{missingChannelNote('Showing the config paths')}</Notice>
+        ) : files.length === 0 ? (
+          /* A heading over an empty list is a section that looks broken. The
+             read can legitimately come back with nothing — a build whose main
+             process has not registered the channel's contents yet — and saying
+             so is shorter than leaving the reader to wonder. */
+          <p className="settings-prose">No config files have been reported yet.</p>
         ) : (
           <ul className="settings-paths">
             {files.map((entry) => (

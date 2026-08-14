@@ -17,11 +17,17 @@
   width: 920px;
 }
 
-/* Held tall so switching tabs does not resize the dialog under the pointer —
-   but only once there are tabs. A session with no transcript yet has one
-   sentence to show, and it was showing it inside a 720px-tall empty box. */
+/* Held at ONE height so switching tabs does not move the dialog under the
+   pointer — but only once there are tabs. A session with no transcript yet has
+   one sentence to show, and it was showing it inside a 720px-tall empty box.
+
+   `min-height` alone was not enough and the packaged build proved it: the four
+   panels are 96 timeline rows, two tables, one table and a chart, so the tallest
+   still ran past the floor and the sheet re-centred by up to 50px on every tab
+   press. A definite height parks it; the body scrolls, and the tab strip is
+   already sticky at the top of that scroll. */
 .modal-panel:has(.si-tabs) {
-  min-height: min(720px, 100%);
+  height: min(720px, 100%);
 }
 
 .session-inspector {
@@ -451,37 +457,149 @@ th .si-chip {
   color: var(--color-critical);
 }
 
-/* ------------------------------------------------------------------ chart */
+/* ------------------------------------------------------------------ chart
+
+   A plotted series, not a sparkline: scaled y-axis, three gridlines, a marked
+   peak and a caption that reads out whatever the pointer is over.
+
+   The SVG is stretched (`preserveAspectRatio="none"`) so the geometry follows
+   the container at any width. Nothing inside it may therefore carry a size that
+   the stretch would distort — every stroke is `non-scaling-stroke`, and the
+   labels and the dot are HTML positioned over the plot rather than SVG in it.
+   -------------------------------------------------------------------------- */
 
 .si-chart {
+  --si-chart-h: 132px;
+  /* One hue for the whole chart, taking its meaning from the peak: the same
+     ok/warning/critical the meter above it uses, so the two agree. */
+  --si-chart-ink: var(--status-working);
   margin: 0;
+}
+
+.si-chart[data-level='warning'] {
+  --si-chart-ink: var(--color-warning);
+}
+
+.si-chart[data-level='critical'] {
+  --si-chart-ink: var(--color-critical);
+}
+
+.si-chart-frame {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--sp-1) var(--sp-2);
+  align-items: stretch;
+  /* Room for the top tick label, which is nudged up half a line so it sits ON
+     its gridline rather than under it. Without this it clips out of the figure
+     and into the heading above. */
+  padding-top: 0.6em;
+}
+
+.si-chart-yaxis {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  height: var(--si-chart-h);
+  font-size: var(--t-caption);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  text-align: right;
+}
+
+/* Half a line of type each way, so a label sits ON its gridline rather than
+   above the top one and below the bottom one. */
+.si-chart-yaxis span {
+  line-height: 1;
+  transform: translateY(-0.35em);
+}
+
+.si-chart-yaxis span:last-child {
+  transform: translateY(0.35em);
+}
+
+.si-chart-plot {
+  position: relative;
+  height: var(--si-chart-h);
+  background: var(--bg-secondary);
+  border-radius: var(--radius-lg);
 }
 
 .si-chart svg {
   display: block;
   width: 100%;
-  height: 72px;
-  background: var(--bg-secondary);
-  border-radius: var(--radius-lg);
+  height: 100%;
+  /* The area fill runs to the edges; without this it squares off the corners
+     the plot's own radius just rounded. */
+  border-radius: inherit;
+  overflow: hidden;
+}
+
+.si-chart-rule,
+.si-chart-base {
+  stroke: var(--border-subtle);
+  stroke-width: 1;
+}
+
+/* The zero line is the one the eye measures from, so it is the one line here
+   allowed to be more than a hint. */
+.si-chart-base {
+  stroke: var(--border-strong);
+  stroke-width: 1;
 }
 
 .si-chart-line {
   fill: none;
-  stroke: var(--status-working);
-  stroke-width: 1.5;
+  stroke: var(--si-chart-ink);
+  stroke-width: 2;
   stroke-linejoin: round;
+  stroke-linecap: round;
 }
 
 /* Mixed from the line's own colour, so the fill tracks the stroke instead of
    being an unrelated tint that happens to look close. */
 .si-chart-area {
-  fill: color-mix(in srgb, var(--status-working) 14%, transparent);
+  fill: color-mix(in srgb, var(--si-chart-ink) 14%, transparent);
   stroke: none;
+}
+
+.si-chart-cursor {
+  stroke: var(--text-muted);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+
+/* Marks the peak at rest and the hovered request while the pointer is over the
+   plot. Ringed in the surface colour so it reads as sitting on the line. */
+.si-chart-dot {
+  position: absolute;
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-pill);
+  background: var(--si-chart-ink);
+  box-shadow: 0 0 0 2px var(--bg-secondary);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+/* Hollow, so the two dots on screen at once are never confused for each other:
+   filled is the session's peak, ringed is whatever the pointer is over. */
+.si-chart-dot-hover {
+  background: var(--bg-secondary);
+  box-shadow: 0 0 0 2px var(--si-chart-ink);
+}
+
+.si-chart-xaxis {
+  display: flex;
+  justify-content: space-between;
+  font-size: var(--t-caption);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
 }
 
 .si-chart figcaption {
   margin-top: var(--sp-2);
   font-size: var(--t-footnote);
+  font-variant-numeric: tabular-nums;
   color: var(--text-muted);
 }
 

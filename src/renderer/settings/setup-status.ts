@@ -196,6 +196,32 @@ export const TOOL_STATE_LABEL: Record<ToolState, string> = {
   unknown: 'Unknown',
 }
 
+/**
+ * The version chip beside a tool's name — or nothing, where nothing is honest.
+ *
+ * `prerequisites.ts` reads a version by running `<bin> --version` with a closed
+ * stdin and a four-second cap, and reports a failure or a timeout as no version
+ * at all. So a tool can be found on PATH and still have none, which is exactly
+ * what Codex does on this machine: `codex` resolves to a Homebrew shim whose
+ * vendored binary is missing, so `--version` errors and the row printed the
+ * name with a blank where Claude Code and Gemini both print a number.
+ *
+ * That blank read as a rendering bug. It is a finding: something about that
+ * install does not work. So the row says so, in the same slot, rather than
+ * leaving the reader to notice an absence.
+ */
+export const NO_VERSION = 'version not reported'
+
+export const NO_VERSION_HINT =
+  'Found on PATH, but it did not answer when asked for its version — usually a broken or partial install.'
+
+export function toolVersionLabel(tool: { state: ToolState; version?: string }): string | null {
+  if (tool.version) return tool.version
+  // Nothing was found to ask, so there is nothing to report and no finding.
+  if (tool.state === 'missing') return null
+  return NO_VERSION
+}
+
 /** The state of one event inside a provider's block. */
 export type EventState = 'installed' | 'stale' | 'missing'
 

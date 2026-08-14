@@ -400,12 +400,10 @@
 
 /* ------------------------------------------------------------- messages -- */
 
-.gh-message {
-  margin: 0;
-  padding: var(--sp-4) var(--sp-3);
-  color: var(--text-secondary);
-  font-size: var(--t-body);
-}
+/* `.gh-message` was here. "Reading GitHub…", "GitHub is not available in this
+   build", "No open pull requests" — a page state, a page failure and a section
+   emptiness all in one class, at one size, in one grey. They are `PageNote`
+   and `PageEmpty` now, which is what the rest of the app already used. */
 
 .gh-note {
   margin: var(--sp-5) 0 0;
@@ -452,34 +450,9 @@
   line-height: var(--lh-body);
 }
 
-/* When the whole panel is one failure — no remote, not signed in — it is the
-   page's empty state, not a notice inside a list, and it is centred like every
-   other empty state in the app. */
-.gh-panel > .gh-failure,
-.gh-panel > .gh-message {
-  align-items: center;
-  max-width: 34rem;
-  margin: 11vh auto 0;
-  padding: 0;
-  text-align: center;
-}
-
-/* A mark belongs to a page with nothing on it, not to a notice sitting inside
-   a list of pull requests — so it is drawn only in the page-level case. */
-.gh-failure-mark {
-  display: none;
-}
-
-.gh-panel > .gh-failure .gh-failure-mark {
-  display: block;
-  margin-bottom: var(--sp-2);
-  color: var(--text-muted);
-  opacity: 0.55;
-}
-
-.gh-panel > .gh-failure .gh-failure-detail {
-  text-align: left;
-}
+/* The page-level case — no remote, not signed in — is a `PageEmpty` now, so
+   this block only ever renders inside a loaded tab and the centring rules that
+   used to re-shape it there are gone with it. */
 
 .gh-failure-detail {
   width: 100%;

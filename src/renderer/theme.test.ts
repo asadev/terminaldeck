@@ -8,9 +8,9 @@ import {
   type ThemeHost,
   type ThemeMediaQuery,
 } from './theme'
-// The preferences form ships no DOM tests — there is no jsdom here — but its
-// two IPC-boundary reducers are pure, and both are places bad input reaches.
-import { installedProviders, normalizePreferences } from './components/PreferencesModal'
+// The two IPC-boundary reducers that outlived the preferences dialog. Pure,
+// and both are places bad input reaches.
+import { installedProviders, normalizePreferences } from './preferences'
 
 /**
  * A stand-in for <html> plus matchMedia. There is no jsdom in this project, so

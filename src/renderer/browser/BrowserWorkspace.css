@@ -21,8 +21,6 @@
 
 .bw {
   /* Geometry, not scale — the one measure the type tokens have no opinion on. */
-  --bw-tab-w: 184px;
-  --bw-tab-min: 96px;
 
   display: flex;
   flex-direction: column;
@@ -44,166 +42,6 @@
    below the fold, so the tab looked like it had turned into the browser. */
 .bw[data-visible='false'] {
   display: none;
-}
-
-/* ------------------------------------------------------------- tab strip -- */
-
-/* Safari's strip: pills on the toolbar's own ground, no trapezoids, no
-   dividers, and nothing separating the strip from the bar under it. */
-.bw-strip {
-  display: flex;
-  align-items: center;
-  flex-shrink: 0;
-  gap: var(--sp-1);
-  padding: var(--sp-2) var(--sp-3) 0;
-}
-
-.bw-strip-tabs {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-05);
-  min-width: 0;
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-
-.bw-strip-tabs::-webkit-scrollbar {
-  display: none;
-}
-
-.bw-tab {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-05);
-  flex: 0 1 var(--bw-tab-w);
-  min-width: var(--bw-tab-min);
-  height: var(--control-h);
-  padding: 0 var(--sp-1) 0 var(--sp-2);
-  border-radius: var(--radius-md);
-  color: var(--text-secondary);
-  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
-}
-
-.bw-tab:hover {
-  background: var(--fill-quaternary);
-  color: var(--text-primary);
-}
-
-/* The page's own colour, so the front tab reads as the top of the page rather
-   than as a box sitting on top of it. */
-.bw-tab[data-active] {
-  background: var(--bg-primary);
-  color: var(--text-primary);
-}
-
-.bw-tab[data-dragging] {
-  opacity: 0.45;
-}
-
-.bw-tab[data-over] {
-  box-shadow: inset 2px 0 0 0 var(--accent);
-}
-
-.bw-tab-face {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-15);
-  flex: 1;
-  min-width: 0;
-  height: 100%;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-}
-
-.bw-tab-face:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
-  border-radius: var(--radius-sm);
-}
-
-.bw-tab-title {
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-.bw-tab-dot {
-  flex-shrink: 0;
-  width: 7px;
-  height: 7px;
-  border-radius: var(--radius-pill);
-  background: var(--text-muted);
-}
-
-.bw-tab-dot[data-kind='idle'] {
-  background: var(--fill-secondary);
-}
-
-.bw-tab-dot[data-kind='loading'] {
-  background: var(--status-working);
-  animation: bw-pulse 1.1s var(--ease) infinite;
-}
-
-.bw-tab-dot[data-kind='inspecting'] {
-  background: var(--accent);
-}
-
-.bw-tab-dot[data-kind='recording'] {
-  background: var(--color-critical);
-  animation: bw-pulse 1.1s var(--ease) infinite;
-}
-
-@keyframes bw-pulse {
-  50% {
-    opacity: 0.35;
-  }
-}
-
-/* Durations collapse from tokens; a keyframe animation has to be stopped. */
-@media (prefers-reduced-motion: reduce) {
-  .bw-tab-dot {
-    animation: none;
-  }
-}
-
-/* Shown on the tab in front and on whichever tab the pointer is over, the same
-   way `.sb-row-action` behaves in the sidebar. Three close crosses standing at
-   attention across a strip is more chrome than the titles themselves. */
-.bw-tab-close {
-  display: grid;
-  place-items: center;
-  flex-shrink: 0;
-  width: var(--control-h-sm);
-  height: var(--control-h-sm);
-  border-radius: var(--radius-sm);
-  color: var(--text-muted);
-  opacity: 0;
-  transition: opacity var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease),
-    color var(--dur-fast) var(--ease);
-}
-
-.bw-tab:hover .bw-tab-close,
-.bw-tab:focus-within .bw-tab-close,
-.bw-tab[data-active] .bw-tab-close {
-  opacity: 1;
-}
-
-.bw-tab-new {
-  display: grid;
-  place-items: center;
-  flex-shrink: 0;
-  width: var(--icon-btn);
-  height: var(--icon-btn);
-  border-radius: var(--radius-sm);
-  color: var(--text-muted);
-  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
-}
-
-.bw-tab-close:hover,
-.bw-tab-new:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
 }
 
 /* --------------------------------------------------------------- toolbar -- */
@@ -301,15 +139,6 @@
   color: var(--text-muted);
   opacity: 0.4;
   cursor: default;
-}
-
-/* The strip's marker for the same state, for the tabs that are not in front. */
-.bw-tab-isolated {
-  flex-shrink: 0;
-  margin-left: var(--sp-05);
-  color: var(--accent);
-  font-size: var(--t-caption);
-  letter-spacing: var(--t-caption-ls);
 }
 
 /* One field, one radius, no border. */

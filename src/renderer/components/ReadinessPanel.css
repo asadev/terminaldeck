@@ -191,12 +191,11 @@
   font-weight: var(--w-semibold);
 }
 
-.readiness-empty {
+/* The shared empty block, told to ignore the two-column grid it lands in —
+   otherwise it renders inside the 13rem score column. */
+.readiness > .page-blank,
+.readiness > .page-blank-line {
   grid-column: 1 / -1;
-  max-width: 34rem;
-  margin: 12vh auto 0;
-  text-align: center;
-  color: var(--text-secondary);
 }
 
 /* ------------------------------------------------------------------ rows -- */
