@@ -1,5 +1,6 @@
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
+import { machineNoun } from '../platform/host'
 import { findTailscale } from './tailnet'
 
 const run = promisify(execFile)
@@ -33,10 +34,12 @@ export type ServeResult =
  * attempt.
  *
  * Both calls below used to pass no timeout at all, and on macOS that never
- * showed: `serve` answers in well under a second there. On Windows 11 it does
- * not answer at all — measured on `desktop-ddgmncv`, Tailscale 1.102.1, backend
- * Running: `serve --bg --https=8443 http://127.0.0.1:8443` was still alive
- * after 30 seconds and had to be killed, while `serve … off` returned in 28ms.
+ * showed: `serve` answers in well under a second there. On Windows 11 it was
+ * measured still alive after 30 seconds and had to be killed, while
+ * `serve … off` returned in 28ms. That was read as "Windows does not answer",
+ * and it was a misreading — see `NEEDS_ENABLING` below for what it was actually
+ * doing. The bound is still right; it is just no longer how the common case is
+ * discovered.
  *
  * `execFile` with no timeout turns that into a promise that never settles, and
  * the damage is out of all proportion to the cause. `server.ts` awaits this
@@ -64,6 +67,53 @@ const SERVE_TIMEOUT_MS = 15_000
 const SERVE_OFF_TIMEOUT_MS = 10_000
 
 /**
+ * The reason `serve` sits there, and the reason the timeout above was a
+ * misdiagnosis.
+ *
+ * Measured on `desktop-ddgmncv` — Windows 11 26200, Tailscale 1.102.1, backend
+ * Running, elevated — `serve --bg --https=8443 http://127.0.0.1:8443` is not
+ * wedged and is not slow. It writes this, immediately, to **stdout**:
+ *
+ *     Serve is not enabled on your tailnet.
+ *     To enable, visit:
+ *
+ *              https://login.tailscale.com/f/serve?node=nL3GN8Ypuc11CNTRL
+ *
+ * and then waits, indefinitely, for someone to go and click it. It is a prompt,
+ * not a hang. Two things followed from reading it as a hang:
+ *
+ *  - **Every `remote:start` cost the full fifteen seconds**, on a machine where
+ *    the answer was available in milliseconds and was never going to change.
+ *    The panel spun for fifteen seconds on every launch, which is the whole of
+ *    what "the remote thing does not work" looks like from the outside.
+ *  - **The one sentence that names the fix was thrown away.** `execFile`'s
+ *    timeout kills the child and hangs its output off the error object; this
+ *    module read `error.message` and never `error.stdout`. So the user was told
+ *    "Tailscale did not answer", which blames the wrong thing and names no next
+ *    step, instead of "switch Serve on, here is the link".
+ *
+ * So the child is spawned rather than exec'd, and its output is read as it
+ * arrives. The timeout stays for a genuine hang; it just stops being the way
+ * the common case is discovered.
+ */
+const NEEDS_ENABLING = /\bserve is not enabled on your tailnet\b/i
+
+/**
+ * The admin link out of Tailscale's own message.
+ *
+ * `tailnet.ts` redacts `login.tailscale.com` URLs out of anything it shows, and
+ * that is right there: the URL it is redacting is `AuthURL`, a bearer
+ * capability — whoever opens it can join a machine to the tailnet without
+ * further proof. This one is not that. `/f/serve?node=…` is a deep link into
+ * the admin console that does nothing at all without an authenticated tailnet
+ * admin session, and it is the difference between a dead end and one click. So
+ * it is shown, deliberately, and the distinction is written down here rather
+ * than left for someone to rediscover as an inconsistency.
+ */
+const ENABLE_LINK = /https:\/\/login\.tailscale\.com\/f\/serve\?\S+/
+
+
+/**
  * Tailscale's serve config is stored by tailscaled and survives our process.
  * A crash would otherwise leave a proxy pointing at a port nothing is on, so
  * the port is always cleared before it is claimed.
@@ -71,38 +121,47 @@ const SERVE_OFF_TIMEOUT_MS = 10_000
 export async function serveOn(httpsPort: number, localPort: number): Promise<ServeResult> {
   const binary = await findTailscale()
   if (!binary) {
-    return { ok: false, message: 'The tailscale command could not be found on this Mac.' }
+    return { ok: false, message: `The tailscale command could not be found on this ${machineNoun()}.` }
   }
   await serveOff(httpsPort).catch(() => {})
-  try {
-    const { stdout } = await run(
-      binary,
-      ['serve', '--bg', `--https=${httpsPort}`, `http://127.0.0.1:${localPort}`],
-      // `windowsHide` so a console does not flash over whatever the user is
-      // doing; the timeout is the point — see SERVE_TIMEOUT_MS.
-      { timeout: SERVE_TIMEOUT_MS, windowsHide: true },
-    )
-    // The command prints the public URL; taking it from the output rather than
-    // rebuilding it means the name always matches what Tailscale actually
-    // serves, including the port it chose to display.
-    const url = /https:\/\/\S+/.exec(stdout)?.[0] ?? null
-    if (!url) {
-      return {
-        ok: false,
-        message: 'Tailscale accepted the proxy but did not report a URL for it.',
-        detail: stdout.trim().slice(0, 400),
-      }
+  return startServe(binary, ['serve', '--bg', `--https=${httpsPort}`, `http://127.0.0.1:${localPort}`])
+}
+
+/**
+ * Run `serve` and answer the moment the answer is knowable.
+ *
+ * `spawn` rather than `execFile` for one reason: `execFile` buffers and hands
+ * everything over at once, at exit — and the case that matters here is a child
+ * that has already said everything it is going to say and is *not* going to
+ * exit. Reading the pipe as it fills is what turns that from a fifteen-second
+ * timeout into a sub-second answer carrying Tailscale's own words.
+ *
+ * Order matters in the matching below and is not incidental: the "not enabled"
+ * message *contains an https URL*, so a success check that looked for a URL
+ * first would report the failure as a working proxy and hand the panel a link
+ * to the Tailscale admin console as if it were the address of this machine.
+ */
+function startServe(binary: string, args: string[]): Promise<ServeResult> {
+  return new Promise<ServeResult>((resolve) => {
+    // `windowsHide` so a console does not flash over whatever the user is doing.
+    const child = spawn(binary, args, { windowsHide: true })
+    let out = ''
+    let err = ''
+    let settled = false
+
+    const finish = (result: ServeResult): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      // The prompt case never exits on its own. Nothing else in the process is
+      // holding a reference to it, so an unkilled child would sit there for the
+      // life of the app with a pipe nobody reads.
+      child.kill()
+      resolve(result)
     }
-    return { ok: true, url: url.replace(/\/+$/, '/') }
-  } catch (error) {
-    // A timeout arrives here as a killed child, and `execFile` reports that as
-    // a signal rather than as anything mentioning time. Told apart explicitly,
-    // because "tailscale never answered" and "tailscale said no" ask the reader
-    // to do completely different things — and the first one is not their fault.
-    const killed = (error as { killed?: boolean }).killed === true
-    const said = error instanceof Error ? error.message : String(error)
-    if (killed) {
-      return {
+
+    const timer = setTimeout(() => {
+      finish({
         ok: false,
         // Just the cause. The panel that renders this already follows it with
         // "Remote access is still up — everything below is going through the
@@ -111,11 +170,62 @@ export async function serveOn(httpsPort: number, localPort: number): Promise<Ser
         message:
           `Tailscale did not answer within ${Math.round(SERVE_TIMEOUT_MS / 1000)} seconds, so the ` +
           'direct tailnet address is not available.',
-        detail: said.slice(0, 400),
+        detail: (out + err).trim().slice(0, 400),
+      })
+    }, SERVE_TIMEOUT_MS)
+    // A pending timer must not be the reason the process stays alive.
+    timer.unref?.()
+
+    const reread = (): void => {
+      // The refusal is looked for across both streams, because which one
+      // carries it is a detail of the Tailscale build; the URL is taken from
+      // stdout alone, so a link in a warning on stderr can never be mistaken
+      // for this machine's address.
+      if (NEEDS_ENABLING.test(out) || NEEDS_ENABLING.test(err)) {
+        const link = ENABLE_LINK.exec(out + err)?.[0]
+        return finish({
+          ok: false,
+          message:
+            'Serve is switched off for this tailnet, so Tailscale will not put a proxy in front ' +
+            `of the app.${link ? ` Turn it on at ${link}` : ' Turn it on in the Tailscale admin console'}, ` +
+            'then try again.',
+          detail: (out + err).trim().slice(0, 400),
+        })
       }
+      // The command prints the public URL; taking it from the output rather
+      // than rebuilding it means the name always matches what Tailscale
+      // actually serves, including the port it chose to display.
+      const url = /https:\/\/\S+/.exec(out)?.[0]
+      if (url) finish({ ok: true, url: url.replace(/\/+$/, '/') })
     }
-    return { ok: false, message: describe(said), detail: said.slice(0, 400) }
-  }
+
+    child.stdout?.on('data', (chunk: unknown) => {
+      out += String(chunk)
+      reread()
+    })
+    child.stderr?.on('data', (chunk: unknown) => {
+      err += String(chunk)
+      reread()
+    })
+
+    child.on('error', (error: Error) => {
+      finish({ ok: false, message: describe(error.message), detail: error.message.slice(0, 400) })
+    })
+
+    child.on('close', (code) => {
+      if (settled) return
+      const said = (err || out).trim()
+      if (code === 0) {
+        finish({
+          ok: false,
+          message: 'Tailscale accepted the proxy but did not report a URL for it.',
+          detail: out.trim().slice(0, 400),
+        })
+        return
+      }
+      finish({ ok: false, message: describe(said), detail: said.slice(0, 400) })
+    })
+  })
 }
 
 /**
@@ -142,12 +252,12 @@ function describe(said: string): string {
   }
   if (lower.includes('tls') || lower.includes('cert')) {
     return (
-      'Tailscale cannot get a certificate for this Mac. Open https://login.tailscale.com/admin/dns ' +
-      'and turn on HTTPS Certificates, then try again.'
+      `Tailscale cannot get a certificate for this ${machineNoun()}. ` +
+      'Open https://login.tailscale.com/admin/dns and turn on HTTPS Certificates, then try again.'
     )
   }
   if (lower.includes('failed to connect') || lower.includes('is tailscale running')) {
-    return 'Tailscale is not running on this Mac. Start it, then try again.'
+    return `Tailscale is not running on this ${machineNoun()}. Start it, then try again.`
   }
   if (lower.includes('permission') || lower.includes('access denied')) {
     return 'Tailscale refused the request. Serving may be disabled for this tailnet in the admin console.'

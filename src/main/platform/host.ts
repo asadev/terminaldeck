@@ -108,3 +108,27 @@ export function withPath<V extends string | undefined>(
   next[pathKey(env, platform)] = value
   return next
 }
+
+/**
+ * What to call the machine the app is running on, in a sentence shown to a
+ * person.
+ *
+ * This module is otherwise about behaviour, not copy, and a noun does look out
+ * of place here. It is here because it is the same *kind* of fact as everything
+ * above — a platform difference that must be decided in one place and passed in
+ * rather than branched on inline — and because the alternative was worse: the
+ * remote code says "this Mac" in over a hundred sentences, several of which are
+ * sealed up and sent to a phone, and a Windows user reads the app telling them
+ * something plainly untrue about the computer in front of them.
+ *
+ * `tailnet.ts` already forked its whole reason table into `MAC_REASONS` and
+ * `WINDOWS_REASONS` for exactly this, which works when the two sentences differ
+ * in more than a noun and is far too heavy when they do not.
+ *
+ * "PC" rather than "computer" or "machine": it is what a Windows user calls it,
+ * and matching the reader's word is the entire point of doing this at all.
+ */
+export function machineNoun(platform: Platform = currentPlatform()): string {
+  return isWindows(platform) ? 'PC' : 'Mac'
+}
+

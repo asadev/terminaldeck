@@ -32,9 +32,27 @@
  * does with nothing filled in.
  */
 
-import { isAbsolute, normalize, sep } from 'node:path'
+import { posix, win32 } from 'node:path'
 import type { SessionMeta } from '../../shared/types'
+import { currentPlatform, isWindows, machineNoun, type Platform } from '../platform/host'
 import type { CreateOutcome, CreateRequest } from './server'
+
+/**
+ * The path rules for the platform being asked about, rather than for the one
+ * running the test.
+ *
+ * `node:path` is whichever implementation the current OS uses, which is right
+ * in production and useless here: on a Mac `isAbsolute('C:\\Users\\Asad')` is
+ * false and `normalize` leaves backslashes alone, so every Windows case in the
+ * suite would be answered by the POSIX parser and pass or fail for a reason
+ * that has nothing to do with Windows. `platform/tailscale.ts` reaches for
+ * `win32.join` for exactly this reason. Selecting the implementation is what
+ * makes the Windows answer pinnable from the machine this is written on — and
+ * on Windows itself it selects the same code `node:path` would have been.
+ */
+function rules(platform: Platform): typeof posix {
+  return isWindows(platform) ? win32 : posix
+}
 
 /**
  * A terminal a phone has not measured yet.
@@ -72,12 +90,32 @@ export interface SessionStarter {
  * trailing slash and the same folder as a session's `cwd` without one are the
  * same directory, and a refusal over that is a refusal nobody can act on. The
  * root itself keeps its separator, since `''` is not a path.
+ *
+ * ## And on Windows, written two ways again
+ *
+ * NTFS is case-insensitive. `C:\Users\Asad\proj` and `c:\users\asad\proj` are
+ * one directory, and both spellings really do turn up: the drive letter alone
+ * arrives capitalised from some APIs and lower-cased from others, and a folder
+ * a user typed once is stored however they typed it. Comparing them with `===`
+ * makes the allowlist reject a folder that is *visibly on the list the phone is
+ * showing* — and the refusal it produces says "Open it on the Mac first" about
+ * a folder that is already open. That is the worst kind of failure this file
+ * can have: the rule looks broken rather than strict.
+ *
+ * Folded on Windows only. A POSIX filesystem genuinely distinguishes `Proj`
+ * from `proj`, and folding there would let a phone name a *different* directory
+ * than the one the desktop offered, which is the exact hole the allowlist
+ * exists to close.
  */
-function samePath(a: string, b: string): boolean {
-  return trimEnd(normalize(a)) === trimEnd(normalize(b))
+function samePath(a: string, b: string, platform: Platform = currentPlatform()): boolean {
+  const { normalize, sep } = rules(platform)
+  const left = trimEnd(normalize(a), sep)
+  const right = trimEnd(normalize(b), sep)
+  if (!isWindows(platform)) return left === right
+  return left.toLowerCase() === right.toLowerCase()
 }
 
-function trimEnd(path: string): string {
+function trimEnd(path: string, sep: string): string {
   let end = path.length
   while (end > 1 && (path[end - 1] === sep || path[end - 1] === '/')) end -= 1
   return path.slice(0, end)
@@ -91,7 +129,15 @@ function trimEnd(path: string): string {
  * to a phone, and an exception on a socket's data path is how a main process
  * dies.
  */
-export function remoteSessionCreator(starter: SessionStarter): (request: CreateRequest) => Promise<CreateOutcome> {
+export function remoteSessionCreator(
+  starter: SessionStarter,
+  // Passed in rather than read inline, like everything else that branches on
+  // the platform in this codebase — `platform/host.ts` says why at length. It
+  // is what lets one test on a Mac pin the Windows case-folding answer.
+  platform: Platform = currentPlatform(),
+): (request: CreateRequest) => Promise<CreateOutcome> {
+  const here = `This ${machineNoun(platform)}`
+  const { isAbsolute } = rules(platform)
   return async (request: CreateRequest): Promise<CreateOutcome> => {
     const offered = starter.folders()
     let cwd: string
@@ -106,7 +152,10 @@ export function remoteSessionCreator(starter: SessionStarter): (request: CreateR
       // Absolute first: `normalize('projects/..')` is `'.'`, which would then be
       // compared against a list of absolute paths and lose for the wrong
       // reason. Refusing here says the true thing.
-      if (!isAbsolute(request.cwd) || !offered.some((folder) => samePath(folder, request.cwd as string))) {
+      if (
+        !isAbsolute(request.cwd) ||
+        !offered.some((folder) => samePath(folder, request.cwd as string, platform))
+      ) {
         return {
           ok: false,
           code: 'unauthorized',
@@ -114,7 +163,7 @@ export function remoteSessionCreator(starter: SessionStarter): (request: CreateR
           // sentence is both sent over the wire and shown on a phone; quoting
           // attacker-chosen text into it buys nothing and costs an output
           // channel.
-          message: 'This Mac will not start a session in that folder. Open it on the Mac first.',
+          message: `${here} will not start a session in that folder. Open it there first.`,
         }
       }
       cwd = request.cwd
@@ -149,7 +198,7 @@ export function remoteSessionCreator(starter: SessionStarter): (request: CreateR
       return {
         ok: false,
         code: 'unavailable',
-        message: 'This Mac could not start a session there. The folder may have moved.',
+        message: `${here} could not start a session there. The folder may have moved.`,
       }
     }
   }

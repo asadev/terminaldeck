@@ -89,7 +89,7 @@ describe('a request that names one', () => {
     expect(outcome).toEqual({
       ok: false,
       code: 'unauthorized',
-      message: 'This Mac will not start a session in that folder. Open it on the Mac first.',
+      message: 'This Mac will not start a session in that folder. Open it there first.',
     })
     // The assertion that matters. A refusal that had already spawned a shell
     // would be the worst kind of pass.
@@ -178,5 +178,62 @@ describe('the session it reports back', () => {
         exitCode: null,
       },
     })
+  })
+})
+
+/**
+ * The allowlist on the platform where two spellings are one directory.
+ *
+ * Pinned rather than run: every case below is the Windows answer, produced on a
+ * Mac by passing the platform in, which is the whole reason `remoteSessionCreator`
+ * takes one. The bug this guards is not theoretical — the drive letter alone
+ * arrives capitalised from some APIs and lower-cased from others, so a phone
+ * naming a folder that is visibly on its own list was told to go and open it
+ * first.
+ */
+describe('a Windows desktop, where case is not a difference', () => {
+  function windowsStarter(): SessionStarter & { spawn: ReturnType<typeof vi.fn> } {
+    return starter({ folders: () => ['C:\\Users\\Asad\\Projects\\deck'], home: () => 'C:\\Users\\Asad' })
+  }
+
+  it.each([
+    ['the same spelling', 'C:\\Users\\Asad\\Projects\\deck'],
+    ['a lower-cased drive letter', 'c:\\Users\\Asad\\Projects\\deck'],
+    ['a differently cased path', 'C:\\users\\asad\\projects\\Deck'],
+    ['a trailing separator as well', 'c:\\users\\asad\\projects\\deck\\'],
+    ['forward slashes, which Windows accepts', 'C:/Users/Asad/Projects/deck'],
+  ])('accepts %s', async (_label, cwd) => {
+    const deps = windowsStarter()
+    const outcome = await remoteSessionCreator(deps, 'win32')({ cwd, cols: 100, rows: 30 })
+    expect(outcome.ok, `${cwd} was refused`).toBe(true)
+    expect(deps.spawn).toHaveBeenCalledWith({ cwd, cols: 100, rows: 30 })
+  })
+
+  it('still refuses a folder nobody offered', async () => {
+    const deps = windowsStarter()
+    const outcome = await remoteSessionCreator(deps, 'win32')({ cwd: 'C:\\Windows\\System32' })
+    expect(outcome.ok).toBe(false)
+    expect(deps.spawn).not.toHaveBeenCalled()
+  })
+
+  it('tells the reader about the machine they are actually using', async () => {
+    const outcome = await remoteSessionCreator(windowsStarter(), 'win32')({ cwd: 'C:\\Windows' })
+    expect(outcome.ok).toBe(false)
+    // Sealed up and shown on a phone. "This Mac will not start a session" is a
+    // sentence about a computer the reader does not own.
+    if (!outcome.ok) {
+      expect(outcome.message).toContain('This PC')
+      expect(outcome.message).not.toMatch(/\bMac\b/)
+    }
+  })
+
+  it('does not fold case on POSIX, where two spellings are two directories', async () => {
+    // The mirror of the case above, and the reason the fold is not unconditional:
+    // folding here would let a phone name a *different* directory than the one
+    // the desktop offered, which is the hole the allowlist exists to close.
+    const deps = starter({ folders: () => ['/Users/apple/Projects/Deck'], home: () => '/Users/apple' })
+    const outcome = await remoteSessionCreator(deps, 'darwin')({ cwd: '/users/apple/projects/deck' })
+    expect(outcome.ok).toBe(false)
+    expect(deps.spawn).not.toHaveBeenCalled()
   })
 })

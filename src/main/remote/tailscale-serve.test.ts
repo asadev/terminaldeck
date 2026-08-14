@@ -24,6 +24,7 @@
  * destructure throws.
  */
 
+import { EventEmitter } from 'node:events'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 interface Call {
@@ -32,7 +33,23 @@ interface Call {
   options: { timeout?: number; windowsHide?: boolean } | undefined
 }
 
-const calls = vi.hoisted(() => ({ list: [] as Call[], hang: false }))
+/**
+ * What the spawned `serve` writes, and whether it ever exits.
+ *
+ * `off` still goes through `execFile`, so both mocks are needed. `serveOn`
+ * spawns, because the case that matters is a child that has already said
+ * everything it will ever say and then does not exit — which `execFile` cannot
+ * express, since it hands over its buffers at exit and there is not going to be
+ * one.
+ */
+const calls = vi.hoisted(() => ({
+  list: [] as Call[],
+  stdout: '',
+  stderr: '',
+  exit: null as number | null,
+  spawned: [] as { file: string; args: string[]; options: { windowsHide?: boolean } | undefined }[],
+  killed: 0,
+}))
 
 vi.mock('node:child_process', () => {
   const execFile = ((): unknown => undefined) as unknown as Record<symbol, unknown>
@@ -42,21 +59,33 @@ vi.mock('node:child_process', () => {
     options: { timeout?: number } | undefined,
   ): Promise<{ stdout: string; stderr: string }> => {
     calls.list.push({ file, args, options })
-    if (calls.hang && args[1] === '--bg') {
-      // What Node hands back when `timeout` fires: the child is killed, and the
-      // error says so with a signal rather than with anything about time. The
-      // real failure this stands in for is a `tailscale serve` that never
-      // writes a byte, which is precisely what Windows did.
-      const error = Object.assign(new Error('Command failed: tailscale serve'), {
-        killed: true,
-        signal: 'SIGTERM',
-        code: null,
-      })
-      throw error
-    }
-    return { stdout: `https://desktop.tailnet.ts.net:${args[2]?.slice(8) ?? '8443'}/\n`, stderr: '' }
+    return { stdout: '', stderr: '' }
   }
-  return { execFile }
+
+  const spawn = (
+    file: string,
+    args: string[],
+    options: { windowsHide?: boolean } | undefined,
+  ): EventEmitter & { stdout: EventEmitter; stderr: EventEmitter; kill: () => void } => {
+    calls.spawned.push({ file, args, options })
+    const child = Object.assign(new EventEmitter(), {
+      stdout: new EventEmitter(),
+      stderr: new EventEmitter(),
+      kill: (): void => {
+        calls.killed += 1
+      },
+    })
+    // A tick later, so the caller has attached its listeners — which is also
+    // how the real thing behaves and is the ordering the module has to survive.
+    setTimeout(() => {
+      if (calls.stdout !== '') child.stdout.emit('data', calls.stdout)
+      if (calls.stderr !== '') child.stderr.emit('data', calls.stderr)
+      if (calls.exit !== null) child.emit('close', calls.exit)
+    }, 0)
+    return child
+  }
+
+  return { execFile, spawn }
 })
 
 vi.mock('./tailnet', () => ({
@@ -65,20 +94,53 @@ vi.mock('./tailnet', () => ({
 
 const { serveOff, serveOn } = await import('./tailscale-serve')
 
+/** What a working tailnet prints, and then exits. */
+const WORKING = 'https://desktop.tailnet.ts.net:8443/\n'
+
+/**
+ * Captured verbatim from `desktop-ddgmncv` — Windows 11 26200, Tailscale
+ * 1.102.1, backend Running, elevated. This goes to **stdout**, immediately, and
+ * the process then waits forever for someone to open the link. The indentation
+ * and the blank line are Tailscale's, kept because the parser has to survive
+ * the real bytes rather than a tidied version of them.
+ */
+const NOT_ENABLED =
+  'Serve is not enabled on your tailnet.\nTo enable, visit:\n\n' +
+  '\t https://login.tailscale.com/f/serve?node=nL3GN8Ypuc11CNTRL\n\n'
+
 beforeEach(() => {
   calls.list = []
-  calls.hang = false
+  calls.spawned = []
+  calls.killed = 0
+  calls.stdout = WORKING
+  calls.stderr = ''
+  calls.exit = 0
 })
 
 describe('tailscale serve', () => {
-  it('never runs the command without a timeout', async () => {
-    await serveOn(8443, 8443)
-    expect(calls.list.length).toBeGreaterThan(0)
-    for (const call of calls.list) {
-      // The whole bug in one assertion. An `execFile` here with no timeout is a
-      // promise that a wedged CLI never settles, and `open()` awaits it.
-      expect(call.options?.timeout, `\`tailscale ${call.args.join(' ')}\` ran unbounded`)
-        .toBeGreaterThan(0)
+  it('never runs the command without a bound on how long it may take', async () => {
+    calls.stdout = ''
+    calls.exit = null
+    // A fake clock rather than fifteen real seconds. Sleeping for the length of
+    // the bound would make this the slowest file in the suite and would still
+    // only be measuring `setTimeout`; moving the clock asserts the same property
+    // and settles the promises the module is awaiting on the way there.
+    vi.useFakeTimers()
+    try {
+      const pending = serveOn(8443, 8443)
+      // Past the bound, in steps, so the spawn mock's own tick and the two
+      // awaits before it all get their turn.
+      await vi.advanceTimersByTimeAsync(20_000)
+      const result = await pending
+      expect(result.ok).toBe(false)
+      if (result.ok) return
+      expect(result.message).toMatch(/did not answer/i)
+      // And the child does not outlive the answer. The prompt case never exits
+      // on its own, so a `serve` left running would sit there for the life of
+      // the app with a pipe nobody is reading.
+      expect(calls.killed).toBeGreaterThan(0)
+    } finally {
+      vi.useRealTimers()
     }
   })
 
@@ -88,25 +150,66 @@ describe('tailscale serve', () => {
     expect(calls.list[0]?.options?.timeout).toBeGreaterThan(0)
   })
 
-  it('returns an answer when serve never does, rather than hanging', async () => {
-    calls.hang = true
-    // No fake timers and no race: if this ever hangs again the suite hangs with
-    // it, which is a louder failure than an assertion.
+  it('hides the console window on both paths', async () => {
+    await serveOn(8443, 8443)
+    await serveOff(8443)
+    for (const call of calls.spawned) expect(call.options?.windowsHide).toBe(true)
+    for (const call of calls.list) expect(call.options?.windowsHide).toBe(true)
+  })
+
+  it('reads a refusal that Tailscale prints and then waits on, instead of timing out', async () => {
+    calls.stdout = NOT_ENABLED
+    // The process is still alive — that is the whole shape of this failure.
+    calls.exit = null
+
+    const started = Date.now()
+    const result = await serveOn(8443, 8443)
+    // The bound is fifteen seconds. Answering inside one proves the answer came
+    // from reading the output rather than from giving up waiting for it.
+    expect(Date.now() - started).toBeLessThan(1000)
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    // Names the actual cause, not "Tailscale did not answer" — which blames a
+    // timeout for a message that arrived immediately.
+    expect(result.message).toMatch(/serve is switched off/i)
+    expect(result.message).not.toMatch(/did not answer/i)
+    // And carries the one-click fix. This URL is a deep link into the admin
+    // console and needs an authenticated tailnet admin to do anything, which is
+    // what makes it safe to show where `AuthURL` is not.
+    expect(result.message).toContain('https://login.tailscale.com/f/serve?node=nL3GN8Ypuc11CNTRL')
+    expect(calls.killed).toBeGreaterThan(0)
+  })
+
+  it('does not mistake the enable link for this machine’s address', async () => {
+    // The refusal contains an `https://` URL, so a success check that looked for
+    // a URL first would report a working proxy and hand the panel a link to
+    // Tailscale's admin console as if it were the address of this machine.
+    calls.stdout = NOT_ENABLED
+    calls.exit = null
+    const result = await serveOn(8443, 8443)
+    expect(result.ok).toBe(false)
+  })
+
+  it('finds the refusal whichever stream carries it', async () => {
+    calls.stdout = ''
+    calls.stderr = NOT_ENABLED
+    calls.exit = null
     const result = await serveOn(8443, 8443)
     expect(result.ok).toBe(false)
     if (result.ok) return
-    // It names the cause and scopes the damage to the direct path, because that
-    // is all that is damaged — the relay does not go through Tailscale at all.
-    expect(result.message).toMatch(/did not answer/i)
-    expect(result.message).toMatch(/tailnet/i)
-    // And it stops there. The panel adds "Remote access is still up — everything
-    // below is going through the relay" itself, so repeating it here put two
-    // sentences saying one thing next to each other on screen.
-    expect(result.message).not.toMatch(/still (on|up)/i)
+    expect(result.message).toMatch(/serve is switched off/i)
   })
 
-  it('reports a real refusal differently from a timeout', async () => {
+  it('reports a working proxy with the URL Tailscale printed', async () => {
     const result = await serveOn(8443, 8443)
     expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.url).toBe('https://desktop.tailnet.ts.net:8443/')
+  })
+
+  it('clears the port before claiming it, so a crash cannot leave a stale proxy', async () => {
+    await serveOn(8443, 8443)
+    expect(calls.list.map((c) => c.args.join(' '))).toContain('serve --https=8443 off')
   })
 })

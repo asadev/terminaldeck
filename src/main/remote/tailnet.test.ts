@@ -26,9 +26,27 @@ vi.mock('node:child_process', () => {
     file: string,
     args: string[],
   ): Promise<{ stdout: string; stderr: string }> => {
-    // `which tailscale`, answered with a path that is executable everywhere
-    // POSIX, so the lookup does not depend on this machine having Tailscale.
-    if (file === 'which') return { stdout: '/bin/sh\n', stderr: '' }
+    /*
+     * The binary lookup, answered on whichever platform is running the suite.
+     *
+     * `findTailscale` asks `lookupSpec`, which is `which` on POSIX and
+     * `where.exe` on Windows — so matching only `which` left this mock silent on
+     * Windows, the candidate list found no `C:\Program Files\Tailscale`
+     * on a CI runner, and `runTailscale` returned ENOENT *without spawning
+     * anything*. The spawn-count assertion below then read 0 instead of 1 and
+     * the whole release job went red on a machine where Tailscale is simply not
+     * installed — which is a fact about the runner, not about this module.
+     *
+     * The answer is `process.execPath` rather than a path per platform: it is
+     * the Node binary running this test, so it exists and is executable on both,
+     * which is exactly what `executable()` is about to check. Hardcoding
+     * `/bin/sh` made that check pass on POSIX by luck of the filesystem, and
+     * there is no Windows spelling of it that is not a guess about someone
+     * else's machine.
+     */
+    if (file === 'which' || file === 'where.exe') {
+      return { stdout: `${process.execPath}\n`, stderr: '' }
+    }
     if (args?.[0] === 'status') {
       spawns.status += 1
       return { stdout: RUNNING, stderr: VERSION_WARNING }
