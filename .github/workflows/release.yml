@@ -94,12 +94,23 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      # Gating, as of the port. The suite was run to green on a real Windows 11
-      # box before this flag came off — not inferred from the macOS run.
+      # Gating. `continue-on-error` came off here only after the whole of
+      # `npm test` — vitest *and* the Electron crypto probe — was run to green
+      # on a real Windows 11 machine on the merge commit that removed it:
+      # 3654 passed, 108 skipped, 0 failed, plus 18/18 crypto checks and both
+      # tsc projects clean. Not inferred from the macOS run, and not inferred
+      # from the port's own run either: main gained roughly four hundred tests
+      # between the port being written and it being merged, and exactly one of
+      # them was red on Windows.
       #
-      # What it does *not* claim on Windows is written at each skip rather than
-      # here, so the list cannot go stale: POSIX file modes, the POSIX shell the
-      # hook command is written for, and the macOS-only updater.
+      # That last part is the standing hazard now that the gate is real — a
+      # test written on a Mac can only be known to pass here when this job
+      # runs it. That is the point of the job.
+      #
+      # What the suite does *not* claim on Windows is written at each skip
+      # rather than here, so the list cannot go stale: POSIX file modes, the
+      # POSIX shell the hook command is written for, and the macOS-only
+      # updater and its `.app` fixtures.
       - name: Test
         run: npm test
 
