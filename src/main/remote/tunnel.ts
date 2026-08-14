@@ -62,6 +62,27 @@ import {
  * is a thing that can be told to answer with something else — an `/etc/hosts`
  * line, a DNS search domain, a VPN's split resolver. `127.0.0.1` cannot be
  * pointed anywhere. There is deliberately no way for a caller to supply a host.
+ *
+ * ## Known, diagnosed, and not yet fixed: an IPv6-only listener on Windows
+ *
+ * There is no `::1` counterpart here, and on Windows that loses the common
+ * case. `platform/ports.ts` accepts `::1`, `[::1]` and `::` as locally
+ * reachable, so the scan reports a dev server that is listening **only** on
+ * IPv6 — and on Windows that is the normal outcome, because `localhost`
+ * resolves to `::1` first and Vite, Next and `node --host localhost` bind what
+ * the name gave them. The port is then offered to the phone, `listening()`
+ * agrees it is there, and `createConnection({ host: '127.0.0.1' })` is refused.
+ * `openStream` answers that with a bare `net.close` carrying no reason — which
+ * is deliberate, and here means the phone shows a blank page and nothing
+ * anywhere says why. macOS does not see it because the same servers bind
+ * `127.0.0.1` first there.
+ *
+ * The fix is not a second literal in this constant: it is to carry the address
+ * family through from the scan that already knows it, so a tunnel dials the
+ * loopback its port is actually on, and `openTunnel` refuses with a sentence
+ * when neither answers rather than opening one that cannot carry bytes. That
+ * touches `platform/ports.ts`, `dev-ports.ts` and this file, and the wire type
+ * must not gain the field — the phone has no use for it.
  */
 const LOOPBACK = '127.0.0.1'
 
