@@ -464,7 +464,7 @@ async function runTailscale(args: string[], timeout: number): Promise<{ result: 
   if (bin === null) return { result: { stdout: '', stderr: '', code: -1, spawnError: 'ENOENT' }, binary: '' }
 
   try {
-    const { stdout, stderr } = await run(bin, args, { timeout, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 })
+    const { stdout, stderr } = await run(bin, args, { timeout, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024, windowsHide: true })
     return { result: { stdout, stderr, code: 0 }, binary: bin }
   } catch (error) {
     const failure = error as ExecFailure

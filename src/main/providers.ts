@@ -39,18 +39,19 @@ export interface ProviderSpec {
    * is a complete argument tail rather than a suffix, because the caller picks
    * one *or* the other and a shared prefix would be lost on the resume path.
    *
-   * UNVERIFIED on Windows: nothing in this repo can run there. It is written
-   * this way because the alternative is a spawn that certainly fails, not
-   * because it has been watched working.
+   * This is what `startSession` in `src/main/index.ts` reads: it passes
+   * `spawn.command` and whichever of `spawn.args` / `spawn.resumeArgs` applies
+   * straight to the PTY. The field was inert for a while and the note above
+   * that call is where the wiring landed; it also records what spawning `bin`
+   * there actually did on Windows 11, which was a bare "File not found:" and a
+   * tab that died with no message.
    *
-   * NOT YET READ BY ANYTHING. `src/main/index.ts` still spawns `bin` and `args`
-   * in its `session:create` handler, so on Windows a session still tries to
-   * `CreateProcess` a `.cmd` and the tab dies with no message. This field is
-   * the answer to that and is inert until that handler reads it — which is one
-   * two-line edit in a file this change was not allowed to touch. Until then
-   * the Windows agent path is not fixed, only prepared, and `reachable.test.ts`
-   * cannot notice: it checks that modules are imported, not that fields are
-   * used.
+   * Still unverified, and worth keeping straight from the above: nothing in
+   * this repository runs on Windows, so what is checked here is the *shape* —
+   * `providers.test.ts` pins the exact Windows table this builds, so the
+   * `cmd /c` form cannot drift silently — and not the argument lists
+   * themselves. Those are still only as good as the `--help` output they were
+   * read from, which the note on the table below spells out.
    */
   spawn: { command: string; args: string[]; resumeArgs: string[] }
 }

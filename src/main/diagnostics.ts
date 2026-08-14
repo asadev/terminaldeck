@@ -24,10 +24,11 @@
  */
 
 import { arch, freemem, platform, release, totalmem, type as osType } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import { app, type IpcMain, type IpcMainEvent, type IpcMainInvokeEvent, type WebContents } from 'electron'
 import { BRAND } from '../shared/brand'
 import { appLog, logger } from './app-log'
+import { currentPlatform, isWindows, type Env, type Platform } from './platform/host'
 import { checkPrerequisites, type ToolState } from './prerequisites'
 import { loginPath } from './providers'
 import { store } from './store'
@@ -404,6 +405,45 @@ function mb(bytes: number): number {
   return Math.round(bytes / (1024 * 1024))
 }
 
+/* -------------------------------------------------------- environment -- */
+
+/**
+ * PATH as a list, split on the separator *this* platform uses.
+ *
+ * This was a literal `':'`, which is the one character a Windows PATH is
+ * guaranteed to contain and the one it never separates on. Every entry carries
+ * a drive letter, so `C:\Program Files\nodejs;C:\Windows\system32` came out as
+ * `['C', '\Program Files\nodejs;C', '\Windows\system32']` — three fragments,
+ * none of them a directory. The PATH list is what somebody pastes into an issue
+ * when the app cannot find their CLI, so it was garbage on the single platform
+ * where anyone would need to read it.
+ *
+ * The delimiter is a parameter with `path.delimiter` as its default so a test on
+ * a Mac can pin the Windows answer; see `platform/host.ts` on why this codebase
+ * passes the platform in rather than branching on it.
+ */
+export function pathEntries(rawPath: string, separator: string = delimiter): string[] {
+  return rawPath.split(separator).filter(Boolean)
+}
+
+/**
+ * What to report as "the shell", which is not a question Windows has an answer
+ * to.
+ *
+ * `process.env.SHELL` is a POSIX variable; Windows does not set it, so this line
+ * read `shell: ` with nothing after it on every Windows bundle. That is not a
+ * missing value — there is genuinely no login shell there, which is exactly why
+ * `platform/lookup.ts` returns `null` for the login-PATH command — so reporting
+ * an empty string invites the reader to go looking for a setting that does not
+ * exist. What Windows does have, and what this app actually spawns for a shell
+ * tab, is the command processor named by `%COMSPEC%`, so the bundle names that
+ * and says what it is.
+ */
+export function shellName(env: Env, host: Platform): string {
+  if (!isWindows(host)) return env.SHELL ?? ''
+  return `${env.COMSPEC ?? 'cmd.exe'} (COMSPEC — Windows has no login shell)`
+}
+
 export interface CollectOptions {
   /** Needed for the registered-channel list. */
   ipcMain?: IpcMain
@@ -487,8 +527,8 @@ export async function collectDiagnostics(options: CollectOptions = {}): Promise<
     environment: {
       // Split, because the answer to "why can it not find my CLI" is read one
       // entry at a time and a single 900-character line is unreadable.
-      path: rawPath.split(':').filter(Boolean).map(clean),
-      shell: clean(process.env.SHELL ?? ''),
+      path: pathEntries(rawPath).map(clean),
+      shell: clean(shellName(process.env, currentPlatform())),
       term: process.env.TERM ?? '',
       lang: process.env.LANG ?? '',
       secretsPresent: secretEnvNames(),

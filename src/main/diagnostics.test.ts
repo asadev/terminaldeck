@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events'
 import { mkdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, posix, win32 } from 'node:path'
 import { BRAND } from '../shared/brand'
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -55,6 +55,8 @@ const {
   collectDiagnostics,
   formatDiagnostics,
   groupChannels,
+  pathEntries,
+  shellName,
   instrumentIpc,
   ipcInfo,
   recentIpcCalls,
@@ -669,6 +671,78 @@ describe('collectDiagnostics', () => {
     expect(text).toContain(`# ${BRAND.name} diagnostics`)
     expect(text).toContain('## Paths')
     expect(text).toContain('## Log')
+  })
+})
+
+/* --------------------------------------------------------- environment -- */
+
+/**
+ * The environment section is the part of the bundle a user is asked to paste
+ * when the app cannot find their CLI, so it is the part that has to survive
+ * being read on Windows — and it did not.
+ *
+ * Both cases are pinned against a Windows-shaped input rather than against the
+ * host, because the host here is always a Mac and both bugs are invisible from
+ * one.
+ */
+describe('the PATH the bundle prints', () => {
+  // What a real Windows PATH looks like: `;` between entries, `:` inside every
+  // single one of them.
+  const WINDOWS_PATH = 'C:\\Program Files\\nodejs;C:\\Windows\\system32;C:\\Users\\Asad\\AppData\\Roaming\\npm'
+
+  it('splits a Windows PATH into directories, not fragments', () => {
+    expect(pathEntries(WINDOWS_PATH, win32.delimiter)).toEqual([
+      'C:\\Program Files\\nodejs',
+      'C:\\Windows\\system32',
+      'C:\\Users\\Asad\\AppData\\Roaming\\npm',
+    ])
+  })
+
+  it('never leaves a bare drive letter standing in for a directory', () => {
+    // The old `split(':')` produced `['C', '\\Program Files\\nodejs;C', …]`.
+    // Stated as a property: every entry has to still look like a path.
+    for (const entry of pathEntries(WINDOWS_PATH, win32.delimiter)) {
+      expect(entry, entry).not.toBe('C')
+      expect(entry, entry).not.toContain(win32.delimiter)
+    }
+  })
+
+  it('still splits a POSIX PATH the POSIX way', () => {
+    expect(pathEntries('/opt/homebrew/bin:/usr/bin', posix.delimiter)).toEqual([
+      '/opt/homebrew/bin',
+      '/usr/bin',
+    ])
+  })
+
+  it('drops the empty entry a trailing separator leaves behind', () => {
+    expect(pathEntries('/usr/bin:', posix.delimiter)).toEqual(['/usr/bin'])
+  })
+})
+
+describe('the shell the bundle names', () => {
+  it('reports the login shell on a platform that has one', () => {
+    expect(shellName({ SHELL: '/bin/zsh' }, 'darwin')).toBe('/bin/zsh')
+  })
+
+  it('says something true on Windows instead of nothing at all', () => {
+    // `process.env.SHELL` is unset on Windows, so this line used to print
+    // `- shell: ` and send the reader looking for a setting that does not exist.
+    const line = shellName({ COMSPEC: 'C:\\WINDOWS\\system32\\cmd.exe' }, 'win32')
+    expect(line).toContain('C:\\WINDOWS\\system32\\cmd.exe')
+    expect(line).toContain('no login shell')
+    expect(line).not.toBe('')
+  })
+
+  it('names the command processor even when COMSPEC is missing', () => {
+    // A Windows install without COMSPEC is not a thing, but an empty line here
+    // is the failure being fixed, so there is no case that returns one.
+    const line = shellName({}, 'win32')
+    expect(line).toContain('cmd.exe')
+    expect(line).not.toBe('')
+  })
+
+  it('does not invent a shell for a POSIX environment that has none', () => {
+    expect(shellName({}, 'darwin')).toBe('')
   })
 })
 

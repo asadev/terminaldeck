@@ -53,6 +53,45 @@ const PROBE_TIMEOUT_MS = 5000
 const MAX_OUTPUT_CHARS = 240
 const MAX_OUTPUT_LINES = 3
 
+/** What to hand `execFile`, once the platform has had its say. */
+export interface LaunchSpec {
+  /** The `file` argument. Already quoted when `shell` is true. */
+  command: string
+  /** Whether the command processor has to run it. */
+  shell: boolean
+}
+
+/**
+ * How to actually *run* something a lookup found, which is not always "run it".
+ *
+ * On Windows the thing that answers a PATH lookup for an npm-installed agent CLI
+ * is a `.cmd` shim, and Node refuses to spawn a `.bat` or `.cmd` without
+ * `shell: true` — it throws EINVAL, deliberately, since 18.20.2/20.12.2 as the
+ * fix for CVE-2024-27980. Without this every agent CLI reported no version at
+ * all on Windows: the spawn never ran, the catch swallowed it, and the Setup
+ * panel showed a tool it had just found as having no version.
+ *
+ * The quoting is the second half of the same fix and is easy to leave out.
+ * `shell: true` makes Node build `cmd.exe /d /s /c "<file> <args>"` and it does
+ * **not** quote `<file>`, so an absolute path out of `where.exe` —
+ * `C:\Program Files\nodejs\claude.cmd` is the ordinary case, not a corner one —
+ * splits at the space and cmd tries to run `C:\Program`. Quoting the file makes
+ * the line `cmd /d /s /c ""C:\Program Files\nodejs\claude.cmd" --version"`, and
+ * `/s` strips exactly the outer pair, leaving the inner quotes where they are
+ * needed. A `"` cannot appear in a Windows path, so there is nothing to escape.
+ *
+ * When the caller does not know where the binary is, the command processor runs
+ * it either way — a shim or an `.exe` — so that is the safer answer than
+ * guessing. It is only reachable with a `bin` that passed `SAFE_BIN`, which
+ * admits no shell metacharacter, so nothing can be smuggled through cmd.
+ */
+export function launchSpec(bin: string, resolved: string | null, platform: Platform): LaunchSpec {
+  if (!isWindows(platform)) return { command: bin, shell: false }
+  const batch = resolved === null || /\.(cmd|bat)$/i.test(resolved)
+  if (!batch) return { command: bin, shell: false }
+  return { command: `"${resolved ?? bin}"`, shell: true }
+}
+
 function clean(text: string): string {
   return text
     .split('\n')
@@ -151,6 +190,9 @@ export async function probeBinary(
       env: withPath(process.env, PATH, platform),
       timeout: PROBE_TIMEOUT_MS,
       encoding: 'utf8',
+      // The Setup panel probes every tool on open, so without this Windows
+      // flashes a console window per tool over whatever the user is doing.
+      windowsHide: true,
     })
     return toProbeResult(bin, command, { stdout, stderr, exitCode: 0 })
   } catch (error) {
@@ -170,20 +212,31 @@ export async function probeBinary(
  * open an interactive session when run with no arguments and some block on
  * stdin even for `--version`, so this runs with a hard timeout and treats a
  * timeout as "installed, version unknown" rather than as a failure.
+ *
+ * `resolved` is the absolute path a lookup already printed, when the caller has
+ * one. It is what tells `launchSpec` whether this is a Windows `.cmd` shim that
+ * has to go through the command processor; pass it rather than paying for a
+ * second `where.exe`.
  */
 export async function readVersion(
   bin: string,
   PATH: string,
   platform: Platform = currentPlatform(),
+  resolved: string | null = null,
 ): Promise<string | undefined> {
   if (!SAFE_BIN.test(bin)) return undefined
+  const launch = launchSpec(bin, resolved, platform)
   try {
-    const { stdout } = await run(bin, ['--version'], {
+    const { stdout } = await run(launch.command, ['--version'], {
       // `{ ...process.env, PATH }` would leave Windows holding both `Path` and
       // `PATH`; see `platform/host.ts`.
       env: withPath(process.env, PATH, platform),
       timeout: PROBE_TIMEOUT_MS,
       encoding: 'utf8',
+      shell: launch.shell,
+      // A version read happens for every installed tool the panel lists, and a
+      // shelled-out one is a whole `cmd.exe`; neither may put a window on screen.
+      windowsHide: true,
     })
     return stdout.trim().split('\n')[0]?.slice(0, 60) || undefined
   } catch {

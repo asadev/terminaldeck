@@ -5,8 +5,9 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { IpcMain } from 'electron'
 import { loginPath, PROVIDERS } from './providers'
-import { currentPlatform, isWindows, withPath, type Platform } from './platform/host'
+import { currentPlatform, withPath, type Platform } from './platform/host'
 import { firstLookupPath, lookupSpec } from './platform/lookup'
+import { launchSpec } from './tool-probe'
 import type { ProviderId } from '../shared/types'
 
 const run = promisify(execFile)
@@ -74,6 +75,9 @@ async function which(
     const { stdout } = await run(spec.command, spec.args, {
       env: withPath(process.env, PATH, platform),
       timeout: 4000,
+      // `where.exe` is a console program. Without this, checking five tools on
+      // launch flashes five console windows over the desktop.
+      windowsHide: true,
     })
     // `where.exe` prints one CRLF-terminated line per match; `which` prints one.
     return firstLookupPath(stdout)
@@ -99,16 +103,27 @@ async function version(
   // On Windows what satisfies the lookup for an npm-installed agent CLI is a
   // `.cmd` shim, and `CreateProcess` will not run a batch file — Node refuses
   // it outright without `shell: true`. `providers.ts` carries the same
-  // distinction for the PTY path. Run the resolved shim through the command
-  // processor; `resolved` is an absolute path that `where.exe` printed, never
-  // anything the user typed.
-  const shim = isWindows(platform) && resolved !== null && /\.(cmd|bat)$/i.test(resolved)
+  // distinction for the PTY path.
+  //
+  // This used to build that decision inline, and got the quoting wrong: with
+  // `shell: true` Node does not quote the file it puts inside
+  // `cmd /d /s /c "…"`, so `C:\Program Files\nodejs\claude.cmd` — the ordinary
+  // install location, not a corner case — split at the space and cmd ran
+  // `C:\Program`. `launchSpec` is the one place that decision and its quoting
+  // now live, shared with `tool-probe.ts` so the two cannot drift apart again.
+  // `resolved` is an absolute path that `where.exe` printed, never anything the
+  // user typed.
+  const launch = launchSpec(bin, resolved, platform)
   try {
-    const { stdout } = await run(shim ? resolved : bin, ['--version'], {
+    const { stdout } = await run(launch.command, ['--version'], {
       env: withPath(process.env, PATH, platform),
       timeout: 4000,
       encoding: 'utf8',
-      shell: shim,
+      shell: launch.shell,
+      // Every tool in the Setup panel gets a version read on open. Without this
+      // that is one console window flashed per tool, over whatever the user is
+      // doing at the time.
+      windowsHide: true,
     })
     return stdout.trim().split('\n')[0]?.slice(0, 60) || undefined
   } catch {
@@ -151,7 +166,12 @@ async function agentAuth(
     if (platform === 'darwin') {
       try {
         await run('security', ['find-generic-password', '-s', 'Claude Code-credentials'], {
+          // Unreachable on Windows — the branch above is macOS-only — but the
+          // rule is mechanical and has no exceptions, because guards move and
+          // the next reader should not have to work out whether this one still
+          // holds. `tool-probe.test.ts` enforces it by scanning this file.
           timeout: 3000,
+          windowsHide: true,
         })
         return 'ready'
       } catch {

@@ -1,5 +1,18 @@
-import { describe, expect, it } from 'vitest'
-import { copilotToolStatus, hasCopilotExtension, signedIn, type CopilotDetection } from './copilot'
+import { describe, expect, it, vi } from 'vitest'
+
+/**
+ * `tool-probe` is mocked so that `detectCopilot` can be run without spawning
+ * anything, and — the point of the case below — so the arguments it hands on
+ * can be inspected. Its own behaviour is covered in `tool-probe.test.ts`.
+ */
+const { probeBinary, readVersion } = vi.hoisted(() => ({
+  probeBinary: vi.fn(),
+  readVersion: vi.fn(),
+}))
+vi.mock('./tool-probe', () => ({ probeBinary, readVersion }))
+
+const { copilotToolStatus, detectCopilot, hasCopilotExtension, signedIn } = await import('./copilot')
+type CopilotDetection = Awaited<ReturnType<typeof detectCopilot>>
 
 /**
  * Copilot is the one tool in the Setup panel that could not be checked against
@@ -49,6 +62,40 @@ describe('the sign-in signals', () => {
 
   it('says no when nothing at all points at an account', () => {
     expect(signedIn(none)).toBe(false)
+  })
+})
+
+describe('reading the version of an installed Copilot', () => {
+  /**
+   * On Windows `where.exe copilot` answers with a `.cmd` shim, and Node will
+   * not spawn a batch file without going through the command processor — so a
+   * version read that is only told the *name* comes back empty and the Setup
+   * panel shows a blank version for a tool it has just found. The probe already
+   * has the path; this is the assertion that it is passed on rather than
+   * thrown away.
+   */
+  it('hands the version read the path the probe already found', async () => {
+    const shim = 'C:\\Program Files\\nodejs\\copilot.cmd'
+    probeBinary.mockResolvedValue({
+      command: 'where.exe copilot',
+      output: `${shim}\r\n`,
+      exitCode: 0,
+      found: true,
+      line: shim,
+    })
+    readVersion.mockClear()
+    readVersion.mockResolvedValue('1.2.3')
+
+    // `GH_TOKEN` so the sign-in check is answered from the environment and no
+    // `gh auth status` is spawned; this case is about the version, not the login.
+    const detection = await detectCopilot('C:\\Windows\\system32', {
+      home: 'C:\\Users\\nobody',
+      env: { GH_TOKEN: 'ghp_x' },
+      platform: 'win32',
+    })
+
+    expect(detection.version).toBe('1.2.3')
+    expect(readVersion).toHaveBeenCalledWith('copilot', 'C:\\Windows\\system32', 'win32', shim)
   })
 })
 

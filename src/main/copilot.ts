@@ -30,6 +30,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { currentPlatform, withPath, type Platform } from './platform/host'
+import { firstLookupPath } from './platform/lookup'
 import type { ToolState, ToolStatus } from './prerequisites'
 import { probeBinary, readVersion, type ProbeResult } from './tool-probe'
 
@@ -121,6 +122,9 @@ async function ghAuthenticated(PATH: string, platform: Platform): Promise<boolea
     await run('gh', ['auth', 'status'], {
       env: withPath(process.env, PATH, platform),
       timeout: TIMEOUT_MS,
+      // `gh` is a console program, so on Windows this puts a window on screen
+      // for as long as the network call takes unless it is told not to.
+      windowsHide: true,
     })
     return true
   } catch {
@@ -134,6 +138,9 @@ async function ghExtensions(PATH: string, platform: Platform): Promise<string> {
       env: withPath(process.env, PATH, platform),
       timeout: TIMEOUT_MS,
       encoding: 'utf8',
+      // As above: the Setup panel runs this on open, and a console window that
+      // steals focus mid-typing is worse than the answer is useful.
+      windowsHide: true,
     })
     return stdout
   } catch {
@@ -181,7 +188,15 @@ export async function detectCopilot(
   return {
     state: authed ? 'ready' : 'installed-not-authed',
     route,
-    version: route === 'cli' ? await readVersion(COPILOT_BIN, PATH, platform) : undefined,
+    // The probe has already asked the platform where this is — on Windows that
+    // was `where.exe`, and its answer is the `.cmd` shim that `readVersion` has
+    // to route through the command processor to run at all. Handing over the
+    // path we already have costs nothing and is the difference between a
+    // version and a blank column on Windows.
+    version:
+      route === 'cli'
+        ? await readVersion(COPILOT_BIN, PATH, platform, firstLookupPath(probe.output))
+        : undefined,
     probe,
     remedy: authed
       ? undefined
