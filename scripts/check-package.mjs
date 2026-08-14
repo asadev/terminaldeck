@@ -131,13 +131,25 @@ if (resources === null || !existsSync(join(resources, 'app.asar'))) {
     )
   }
 
-  // `@electron/asar` is already a dependency of electron-builder, so listing the
-  // archive costs nothing new. Shelled rather than imported because the CLI is
-  // the stable surface and the module layout is not.
-  const bin = join(ROOT, 'node_modules', '.bin', process.platform === 'win32' ? 'asar.cmd' : 'asar')
+  /*
+   * `@electron/asar` is already a dependency of electron-builder, so listing the
+   * archive costs nothing new. Shelled rather than imported because the CLI is
+   * the stable surface and the module layout is not.
+   *
+   * Run through `process.execPath` against the package's own `bin` entry, not
+   * through `node_modules/.bin/asar`. On Windows that path is a `.cmd` shim, and
+   * Node has refused to spawn `.cmd` without `shell: true` since 18.20.2 —
+   * deliberately, for CVE-2024-27980 — so a `.bin` lookup here would throw
+   * EINVAL on the one platform this check was written for. Which is the same
+   * mistake `tool-probe.ts` was just fixed for, made again one directory over.
+   */
+  const cli = join(ROOT, 'node_modules', '@electron', 'asar', 'bin', 'asar.js')
   let listing = ''
   try {
-    listing = execFileSync(bin, ['list', asar], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
+    listing = execFileSync(process.execPath, [cli, 'list', asar], {
+      encoding: 'utf8',
+      maxBuffer: 64 * 1024 * 1024,
+    })
   } catch (error) {
     problems.push(`could not list app.asar: ${error instanceof Error ? error.message : String(error)}`)
   }
