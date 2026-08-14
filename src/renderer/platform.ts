@@ -87,6 +87,22 @@ export function machineNoun(platform: UiPlatform = detectPlatform()): string {
   return 'computer'
 }
 
+/**
+ * The name of the operating system, for the sentences that are about the OS
+ * rather than the machine.
+ *
+ * "macOS decided not to show it" is a different claim from "this Mac is out of
+ * disk", and only the first one wants this word. `'other'` gets a phrase with
+ * no product name in it rather than a guess, for the same reason `machineNoun`
+ * does: Linux has no build target today and a wrong OS name in an error message
+ * sends someone looking in a settings app they do not have.
+ */
+export function osName(platform: UiPlatform = detectPlatform()): string {
+  if (platform === 'windows') return 'Windows'
+  if (platform === 'mac') return 'macOS'
+  return 'your operating system'
+}
+
 /** "this Mac" / "this PC" / "this computer", for the middle of a sentence. */
 export function thisMachine(platform: UiPlatform = detectPlatform()): string {
   return `this ${machineNoun(platform)}`

@@ -318,6 +318,14 @@ const api = {
   openSettingsPath: (key: string): Promise<unknown> => ipcRenderer.invoke('settings:open-path', key),
   appAbout: (): Promise<unknown> => ipcRenderer.invoke('settings:about'),
   clearBrowserData: (): Promise<unknown> => ipcRenderer.invoke('settings:clear-browser-data'),
+
+  // Notifications: what the OS will admit to, and the way out. A renderer's
+  // own `Notification.permission` is always `granted` and tells you nothing.
+  notificationSupport: (): Promise<unknown> => ipcRenderer.invoke('notifications:support'),
+  openNotificationSettings: (): Promise<unknown> => ipcRenderer.invoke('notifications:open-settings'),
+  notificationDelivery: (sinceMs: number): Promise<unknown> =>
+    ipcRenderer.invoke('notifications:delivery', sinceMs),
+
   browserSessionInfo: (): Promise<unknown> => ipcRenderer.invoke('browser-session:info'),
   browserCookies: (filter?: unknown): Promise<unknown> => ipcRenderer.invoke('browser-session:cookies', filter),
   clearBrowserCache: (): Promise<unknown> => ipcRenderer.invoke('browser-session:clear-cache'),

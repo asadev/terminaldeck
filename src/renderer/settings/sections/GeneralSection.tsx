@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Notice, SectionHead, SettingList, type OptionState } from '../controls'
 import { sectionMeta } from '../settings-schema'
+import { useNotificationCheck } from '../notification-check'
 import {
   errorText,
   toPrerequisites,
@@ -38,6 +39,25 @@ export function GeneralSection({ values, save, bridge, loading, goTo }: SectionP
   const meta = sectionMeta('general')
   const [prereq, setPrereq] = useState<Prerequisites | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const check = useNotificationCheck({ bridge })
+
+  /**
+   * Save, and prove it when a banner setting is the thing being switched on.
+   *
+   * The OS only ever asks for notification authorisation once, and on macOS it
+   * asks *with a banner* whose Allow is hidden under an `Options` control. The
+   * only safe moment to trigger that is while the user is looking at the switch
+   * they just flipped — see `notification-check.ts`. This switch lives in
+   * General and the test button lives in Notifications, so without this the
+   * user could turn banners on here and never once be in front of the prompt.
+   */
+  const saveAndProve = useCallback(
+    (patch: Record<string, unknown>) => {
+      save(patch)
+      if (patch['general.notifyOnAttention'] === true) check.confirmEnabled()
+    },
+    [save, check],
+  )
 
   useEffect(() => {
     if (!bridge.checkPrerequisites) return
@@ -67,7 +87,7 @@ export function GeneralSection({ values, save, bridge, loading, goTo }: SectionP
       <SettingList
         section="general"
         values={values}
-        save={save}
+        save={saveAndProve}
         disabled={loading}
         optionStates={{
           'general.defaultProvider': (value) => optionStateFor(prereq, value),
@@ -83,6 +103,24 @@ export function GeneralSection({ values, save, bridge, loading, goTo }: SectionP
           ),
         }}
       />
+
+      {check.state && (
+        <Notice tone={check.state.tone}>
+          {check.state.text}
+          {check.state.offerSettings && check.canOpenSettings && (
+            <>
+              {' '}
+              <button
+                type="button"
+                className="settings-inline-btn"
+                onClick={check.openSettings}
+              >
+                Open notification settings
+              </button>
+            </>
+          )}
+        </Notice>
+      )}
     </>
   )
 }

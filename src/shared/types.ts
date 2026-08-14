@@ -144,6 +144,17 @@ export interface DeckApi {
   openSettingsPath(key: string): Promise<unknown>
   appAbout(): Promise<unknown>
   clearBrowserData(): Promise<unknown>
+
+  /**
+   * What the OS is prepared to say about notifications, and the way out when
+   * it says nothing. See `src/main/os-notifications.ts` — the short version is
+   * that `Notification.permission` is a lie in a renderer and these three are
+   * the only honest questions left to ask.
+   */
+  notificationSupport(): Promise<unknown>
+  openNotificationSettings(): Promise<unknown>
+  notificationDelivery(sinceMs: number): Promise<unknown>
+
   browserSessionInfo(): Promise<unknown>
   browserCookies(filter?: unknown): Promise<unknown>
 

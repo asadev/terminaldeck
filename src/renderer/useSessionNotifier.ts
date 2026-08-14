@@ -15,7 +15,7 @@ import { booleanSetting, stringSetting, type SettingValues } from './settings/se
  *
  * `notifications.ts` has held a complete, heavily tested notification policy
  * since the day it was written and nobody ever built one: the module was
- * imported — the settings pane borrows `canNotify` off it to draw a permission
+ * imported — the settings pane borrowed `canNotify` off it to draw a permission
  * warning — so it looked wired, while `SessionNotifier` was never constructed
  * and no banner has ever been shown by this app. Five settings pointed at it:
  * "Notify when a session finishes", "Only notify when the app is in the

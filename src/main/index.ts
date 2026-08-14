@@ -51,6 +51,7 @@ import {
 import { registerBrowserSessionIpc } from './browser-session'
 import { registerBrowserViewIpc } from './browser-view'
 import { registerDiagnosticsIpc } from './diagnostics'
+import { registerNotificationIpc } from './os-notifications'
 import { registerLogIpc, logger } from './app-log'
 import { traceIpc, TRACE_SETTING } from './ipc-trace'
 import { buildMenu } from './menu'
@@ -504,6 +505,7 @@ function registerIpc(): void {
   registerBrowserViewIpc(ipcMain)
   registerDiagnosticsIpc(ipcMain)
   registerLogIpc(ipcMain)
+  registerNotificationIpc(ipcMain)
 
   registerAlertsIpc(ipcMain, {
     liveSessions: (projectPath) =>

@@ -127,15 +127,29 @@ export interface NotificationText {
 /**
  * Banner copy. The heading is where the work is, the body is what happened —
  * that ordering means the notification is readable when the OS truncates it.
+ *
+ * The name is dropped from the body when it is the same string as the heading.
+ * A tab keeps the folder name until the conversation has a title of its own, so
+ * the common case — a session started a minute ago in a project — had both
+ * halves saying the same word. Seen on screen, driving a real session to
+ * `input`, the banner read *"terminaldeck / terminaldeck needs your input"*.
+ * Saying it once is the rule; a notification is the worst place to break it,
+ * because it is two short lines and half of one was wasted.
  */
 export function notificationText(
   status: NotifyingStatus,
   descriptor: SessionDescriptor,
 ): NotificationText {
   const name = descriptor.title.trim() || 'Session'
+  const project = descriptor.project?.trim()
+  const heading = project || name
+  const subject = heading === name ? '' : `${name} `
   return {
-    title: descriptor.project?.trim() || name,
-    body: status === 'input' ? `${name} needs your input` : `${name} finished`,
+    title: heading,
+    body:
+      status === 'input'
+        ? `${subject}${subject ? 'needs' : 'Needs'} your input`
+        : `${subject}${subject ? 'finished' : 'Finished'}`,
   }
 }
 
@@ -309,22 +323,30 @@ export class SessionNotifier {
 /* Browser wiring                                                              */
 /* -------------------------------------------------------------------------- */
 
-/** True when the page may show notifications right now. */
-export function canNotify(): boolean {
-  return typeof Notification !== 'undefined' && Notification.permission === 'granted'
-}
-
 /**
- * Ask once, at a moment the user chose — turning the preference on.
+ * True when constructing a `Notification` here will not throw.
  *
- * Chromium only shows the prompt while permission is `default`; asking after a
- * denial is a silent no-op, so there is nothing to retry.
+ * Read what this deliberately does **not** claim. In an Electron renderer
+ * `Notification.permission` is **always `granted`** — Chromium answers it out
+ * of its own permission model and never consults `UNUserNotificationCenter` —
+ * so this is a check that the API exists and Chromium is not refusing, and
+ * nothing more. It says nothing about whether the OS will show the banner.
+ *
+ * That distinction is not pedantry. Treating this as "the user will see it"
+ * is exactly how the settings pane came to print "Sent." for banners macOS was
+ * dropping on the floor, for weeks, with no way to tell from inside the app.
+ * The only honest answer to "did it appear?" comes from the OS afterwards —
+ * see `src/main/os-notifications.ts`.
+ *
+ * There is deliberately no `requestNotificationPermission` beside this. In a
+ * renderer `Notification.requestPermission()` resolves `granted` immediately
+ * without asking anyone, so a button wired to it did nothing while looking
+ * like it had done something. The OS's own prompt is triggered by *posting* a
+ * notification, which is why the settings pane posts one the moment a banner
+ * preference is switched on.
  */
-export async function requestNotificationPermission(): Promise<boolean> {
-  if (typeof Notification === 'undefined') return false
-  if (Notification.permission === 'granted') return true
-  if (Notification.permission === 'denied') return false
-  return (await Notification.requestPermission()) === 'granted'
+export function canNotify(): boolean {
+  return typeof Notification !== 'undefined' && Notification.permission !== 'denied'
 }
 
 /**

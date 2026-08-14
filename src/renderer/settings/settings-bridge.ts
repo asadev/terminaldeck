@@ -200,6 +200,17 @@ export interface SettingsBridgeMethods {
   appAbout(): Promise<unknown>
   clearBrowserData(): Promise<unknown>
 
+  /**
+   * The three notification questions the renderer cannot answer itself.
+   *
+   * `Notification.permission` is always `granted` in an Electron renderer —
+   * Chromium answers from its own model and never asks the OS — so every one
+   * of these has to be asked of the main process or not asked at all.
+   */
+  notificationSupport(): Promise<unknown>
+  openNotificationSettings(): Promise<unknown>
+  notificationDelivery(sinceMs: number): Promise<unknown>
+
   getBrand(): Promise<unknown>
   checkPrerequisites(): Promise<unknown>
   detectProviders(): Promise<unknown>
@@ -247,6 +258,9 @@ const BRIDGE_METHODS: ReadonlyArray<keyof SettingsBridgeMethods> = [
   'openSettingsPath',
   'appAbout',
   'clearBrowserData',
+  'notificationSupport',
+  'openNotificationSettings',
+  'notificationDelivery',
   'getBrand',
   'checkPrerequisites',
   'detectProviders',
@@ -345,6 +359,48 @@ export function toConfigPaths(raw: unknown): ConfigPath[] {
       },
     ]
   })
+}
+
+/* ------------------------------------------------------- notifications -- */
+
+/** Mirrors `NotificationSupport` in `src/main/os-notifications.ts`. */
+export interface NotificationSupport {
+  settingsPane: boolean
+  deliveryReadable: boolean
+}
+
+/**
+ * Narrowed pessimistically on purpose.
+ *
+ * A build whose preload predates these channels answers `undefined`, and the
+ * right reading of that is "no settings page to offer, nothing verifiable" —
+ * which draws no button and claims nothing, rather than a button that goes
+ * nowhere and a sentence that is not true.
+ */
+export function toNotificationSupport(raw: unknown): NotificationSupport {
+  const record = asRecord(raw)
+  return {
+    settingsPane: asBoolean(record?.settingsPane),
+    deliveryReadable: asBoolean(record?.deliveryReadable),
+  }
+}
+
+/** Mirrors `DeliveryReport` in `src/main/os-notifications.ts`. */
+export interface DeliveryReport {
+  verdict: 'delivered' | 'absent' | 'unknown'
+  at: string | null
+}
+
+export function toDeliveryReport(raw: unknown): DeliveryReport {
+  const record = asRecord(raw)
+  const verdict = record?.verdict
+  return {
+    // Anything unrecognised is `unknown`, never `delivered`. The whole module
+    // exists because a success reported by something that did not check is
+    // worse than no answer at all.
+    verdict: verdict === 'delivered' || verdict === 'absent' ? verdict : 'unknown',
+    at: typeof record?.at === 'string' && record.at !== '' ? record.at : null,
+  }
 }
 
 export function toOpenPathResult(raw: unknown): OpenPathResult {

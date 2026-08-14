@@ -115,13 +115,28 @@ describe('notificationText', () => {
   })
 
   it('falls back to the session name when there is no project', () => {
-    expect(notificationText('completed', { title: 'ship the picker' }).title).toBe('ship the picker')
+    expect(notificationText('completed', { title: 'ship the picker' })).toEqual({
+      title: 'ship the picker',
+      body: 'Finished',
+    })
+  })
+
+  /**
+   * Seen on screen before it was fixed: "terminaldeck / terminaldeck needs your
+   * input". A tab keeps the folder name until the conversation has a title of
+   * its own, so this is the common case, not an edge one.
+   */
+  it('does not say the same word twice when the tab is still named after the folder', () => {
+    expect(notificationText('input', { title: 'terminaldeck', project: 'terminaldeck' })).toEqual({
+      title: 'terminaldeck',
+      body: 'Needs your input',
+    })
   })
 
   it('never renders an empty heading', () => {
     expect(notificationText('completed', { title: '   ', project: '  ' })).toEqual({
       title: 'Session',
-      body: 'Session finished',
+      body: 'Finished',
     })
   })
 })
@@ -402,30 +417,34 @@ describe('SessionNotifier', () => {
 /* Browser wiring                                                              */
 /* -------------------------------------------------------------------------- */
 
-describe('permission handling', () => {
-  it('reports no permission when the API is missing entirely', async () => {
-    const { canNotify, requestNotificationPermission } = await import('./notifications')
+describe('canNotify', () => {
+  it('reports nothing available when the API is missing entirely', async () => {
+    const { canNotify } = await import('./notifications')
     vi.stubGlobal('Notification', undefined)
     expect(canNotify()).toBe(false)
-    await expect(requestNotificationPermission()).resolves.toBe(false)
     vi.unstubAllGlobals()
   })
 
-  it('does not re-ask after a denial', async () => {
-    const requestPermission = vi.fn()
-    vi.stubGlobal('Notification', { permission: 'denied', requestPermission })
-    const { requestNotificationPermission } = await import('./notifications')
-    await expect(requestNotificationPermission()).resolves.toBe(false)
-    expect(requestPermission).not.toHaveBeenCalled()
+  it('reports false only when Chromium itself is refusing', async () => {
+    const { canNotify } = await import('./notifications')
+    vi.stubGlobal('Notification', { permission: 'denied' })
+    expect(canNotify()).toBe(false)
     vi.unstubAllGlobals()
   })
 
-  it('asks once while permission is still undecided', async () => {
-    const requestPermission = vi.fn().mockResolvedValue('granted')
-    vi.stubGlobal('Notification', { permission: 'default', requestPermission })
-    const { requestNotificationPermission } = await import('./notifications')
-    await expect(requestNotificationPermission()).resolves.toBe(true)
-    expect(requestPermission).toHaveBeenCalledTimes(1)
+  /**
+   * The state that caused the bug, pinned so nobody "fixes" it back.
+   *
+   * An Electron renderer answers `granted` whatever the OS thinks, so this
+   * returning true has to mean "constructing one will not throw" and nothing
+   * more. If someone ever narrows this to `=== 'granted'` again and calls it
+   * "the user will see it", the comment above it is the argument; this test is
+   * the tripwire.
+   */
+  it('does not treat an undecided permission as a refusal', async () => {
+    const { canNotify } = await import('./notifications')
+    vi.stubGlobal('Notification', { permission: 'default' })
+    expect(canNotify()).toBe(true)
     vi.unstubAllGlobals()
   })
 })
