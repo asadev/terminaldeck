@@ -35,7 +35,7 @@ import { AutoTitler } from './auto-title'
 import { useSessionNotifier } from './useSessionNotifier'
 import { useAppSettings } from './settings/useAppSettings'
 import { booleanSetting, numberSetting, stringSetting } from './settings/settings-schema'
-import { resolveCommand, scopeForTarget, tip } from './keymap'
+import { chordFor, resolveCommand, scopeForTarget, tip } from './keymap'
 import './shell/shell.css'
 
 /** Toolbar icons, 24×24, 1.5 stroke — the same grid the sidebar draws on. */
@@ -570,41 +570,61 @@ function Workspace() {
     [showPanel],
   )
 
-  const commands = useMemo<PaletteCommand[]>(
-    () => [
-      { id: 'session.new', title: 'New session', group: 'Session', shortcut: '⌘T', run: () => newSession() },
-      { id: 'session.resume', title: 'Continue last session', group: 'Session', shortcut: '⌘⇧R', run: () => newSession(undefined, true) },
+  const commands = useMemo<PaletteCommand[]>(() => {
+    /*
+     * No chord is written down here.
+     *
+     * There used to be seventeen of them — `shortcut: '⌘T'`, `shortcut: '⌘⇧R'`
+     * — and every one was a copy of what `keymap.ts` renders, taken on a Mac.
+     * A copy of a platform-dependent fact is wrong on the other platform by
+     * construction, and this one was wrong in the worst way a shortcut can be:
+     * a Windows machine has no ⌘ key, so the palette was printing a character
+     * the reader cannot press next to the command it supposedly runs.
+     * `reachable.test.ts` guarded the copies against drift from the keymap; it
+     * could not guard them against the platform, because it ran on a Mac.
+     *
+     * `chordFor` renders the binding for the platform this window is running
+     * on, and returns null when the keymap has no binding — so the rows that
+     * genuinely have no shortcut (GitHub, Alerts, Help, Join) print nothing
+     * rather than something invented.
+     */
+    const rows: Omit<PaletteCommand, 'shortcut'>[] = [
+      { id: 'session.new', title: 'New session', group: 'Session', run: () => newSession() },
+      { id: 'session.resume', title: 'Continue last session', group: 'Session', run: () => newSession(undefined, true) },
       // The only way to reach the dialog that picks an agent, a prompt and a
       // login was the app menu. A menu is a control, but it is not a findable
       // one, and this is the screen where a session is configured.
-      { id: 'session.newDialog', title: 'New session with options…', group: 'Session', shortcut: '⌘⇧T', run: () => setNewSessionOpen(true) },
-      { id: 'project.open', title: 'Open a project', group: 'Project', shortcut: '⌘O', run: () => void openProject() },
-      { id: 'palette.quickOpen', title: 'Open a file…', group: 'Project', shortcut: '⌘P', run: () => setPaletteMode('files') },
+      { id: 'session.newDialog', title: 'New session with options…', group: 'Session', run: () => setNewSessionOpen(true) },
+      { id: 'project.open', title: 'Open a project', group: 'Project', run: () => void openProject() },
+      { id: 'palette.quickOpen', title: 'Open a file…', group: 'Project', run: () => setPaletteMode('files') },
       { id: 'view.browser', title: 'New browser tab', group: 'View', run: () => newBrowserTab() },
-      { id: 'view.swarm', title: 'Toggle swarm view', group: 'View', shortcut: '⌘\\', run: () => setSwarm((value) => !value) },
-      // `view.dashboard`, which is the id the keymap binds ⌘⇧D to. The row used
-      // to call itself `view.overview` and print ⌘⇧D anyway: the chord worked,
-      // via an alias in the switch below, but the palette was printing a
-      // shortcut for a command it was not the entry for.
-      { id: 'view.dashboard', title: 'Overview', group: 'View', shortcut: '⌘⇧D', run: () => showPanel('overview') },
-      { id: 'view.files', title: 'Files', group: 'View', shortcut: '⌘⇧E', run: () => showPanel('files') },
-      { id: 'view.search', title: 'Search past sessions', group: 'View', shortcut: '⌘⇧F', run: () => showPanel('search') },
-      { id: 'view.git', title: 'Source control', group: 'View', shortcut: '⌘⇧G', run: () => showPanel('git') },
-      { id: 'view.board', title: 'Task board', group: 'View', shortcut: '⌘⇧B', run: () => showPanel('board') },
+      { id: 'view.swarm', title: 'Toggle swarm view', group: 'View', run: () => setSwarm((value) => !value) },
+      // `view.dashboard`, which is the id the keymap binds the Overview chord
+      // to. The row used to call itself `view.overview` and print that chord
+      // anyway: the chord worked, via an alias in the switch below, but the
+      // palette was printing a shortcut for a command it was not the entry for.
+      { id: 'view.dashboard', title: 'Overview', group: 'View', run: () => showPanel('overview') },
+      { id: 'view.files', title: 'Files', group: 'View', run: () => showPanel('files') },
+      { id: 'view.search', title: 'Search past sessions', group: 'View', run: () => showPanel('search') },
+      { id: 'view.git', title: 'Source control', group: 'View', run: () => showPanel('git') },
+      { id: 'view.board', title: 'Task board', group: 'View', run: () => showPanel('board') },
       { id: 'view.github', title: 'GitHub', group: 'View', run: () => showPanel('github') },
       { id: 'view.alerts', title: 'Alerts', group: 'View', run: () => showPanel('alerts') },
       { id: 'view.readiness', title: 'AI readiness', group: 'View', run: () => showPanel('readiness') },
       { id: 'view.mcp', title: 'MCP servers', group: 'View', run: () => showPanel('mcp') },
       { id: 'view.hooks', title: 'Hooks', group: 'View', run: () => showPanel('hooks') },
-      { id: 'view.sidebar', title: 'Show or hide the sidebar', group: 'View', shortcut: '⌘B', run: () => sidebar.toggleCollapsed() },
-      { id: 'view.inspector', title: 'Session details', group: 'App', shortcut: '⌘⇧I', run: () => setInspectorOpen(true) },
-      { id: 'app.preferences', title: 'Settings', group: 'App', shortcut: '⌘,', run: () => openSettings() },
+      { id: 'view.sidebar', title: 'Show or hide the sidebar', group: 'View', run: () => sidebar.toggleCollapsed() },
+      { id: 'view.inspector', title: 'Session details', group: 'App', run: () => setInspectorOpen(true) },
+      { id: 'app.preferences', title: 'Settings', group: 'App', run: () => openSettings() },
       { id: 'app.help', title: 'Help', group: 'App', run: () => setHelpOpen(true) },
       { id: 'app.join', title: 'Join a remote session', group: 'App', run: () => setJoinOpen(true) },
-      { id: 'app.shortcuts', title: 'Keyboard shortcuts', group: 'App', shortcut: '⌘/', run: () => setShortcutsOpen(true) },
-    ],
-    [newSession, newBrowserTab, openProject, showPanel, openSettings, sidebar],
-  )
+      { id: 'app.shortcuts', title: 'Keyboard shortcuts', group: 'App', run: () => setShortcutsOpen(true) },
+    ]
+    return rows.map((row) => {
+      const chord = chordFor(row.id)
+      return chord === null ? row : { ...row, shortcut: chord }
+    })
+  }, [newSession, newBrowserTab, openProject, showPanel, openSettings, sidebar])
 
   /**
    * One dispatcher for every command, whatever fired it: a menu item, a chord

@@ -3,11 +3,12 @@ import { Button, Group, Notice, Row, SectionHead, Switch } from '../settings/con
 import { useAt, useEvery, useWhenActive } from '../schedule'
 import { errorText } from '../settings/settings-bridge'
 import { chooseRoute, pairingPaths, pairingRoutes, type PairPath } from './pairing-link'
+import { detectPlatform, machineNoun, thisMachine, ThisMachine, type UiPlatform } from '../platform'
 import { encodeQr, qrPath, qrViewBox, QR_QUIET_ZONE } from './qr'
 import './RemoteSection.css'
 
 /**
- * Remote access — the settings section that opens this Mac to a phone.
+ * Remote access — the settings section that opens this machine to a phone.
  *
  * What is behind the switch is a shell. A device that gets in can type into any
  * running session, which is the same as sitting at this keyboard: the files, the
@@ -34,7 +35,7 @@ import './RemoteSection.css'
  *
  * ## Two ways in, and they are drawn as two
  *
- * A phone reaches this Mac either straight across the tailnet or through a
+ * A phone reaches this machine either straight across the tailnet or through a
  * rendezvous relay, and the two fail independently. So they are two rows with
  * two states rather than one "remote access is up" light: a Mac that is signed
  * out of Tailscale still pairs and still works, and a panel that printed the
@@ -761,6 +762,17 @@ export interface RemoteViewProps {
   pairPath: PairPath | null
   actions: RemoteActions
   now: number
+  /**
+   * What to call the machine this window is on.
+   *
+   * Passed rather than sniffed at each use site for the reason
+   * `src/main/platform/host.ts` gives about `process.platform`: a branch on the
+   * platform written inline can only be exercised on the platform it was
+   * written on, and everything here is written on a Mac. As a prop, a test can
+   * pin the Windows answer and the macOS answer side by side in one run —
+   * which is how the sentences below are checked at all.
+   */
+  platform?: UiPlatform
 }
 
 const STATE_LABEL: Record<RemoteDeviceState, string> = {
@@ -829,12 +841,18 @@ export function RemoteView({
   pairPath,
   actions,
   now,
+  platform = detectPlatform(),
 }: RemoteViewProps) {
   const ids = useId()
+  // "this Mac" on a Mac, "this PC" on Windows. Every sentence on this screen is
+  // about the machine the reader is sitting at, so the noun has to be the one
+  // they would use for it.
+  const machine = thisMachine(platform)
+  const Machine = ThisMachine(platform)
   const head = (
     <SectionHead
       title="Remote access"
-      blurb="Drive this Mac from a phone — across your tailnet, or through the relay from anywhere."
+      blurb={`Drive ${machine} from a phone — across your tailnet, or through the relay from anywhere.`}
     />
   )
 
@@ -863,7 +881,7 @@ export function RemoteView({
   // Every route that would work this second, and the one on screen. Both are
   // derived rather than remembered: a path that goes away while a code is up has
   // to stop being offered, not stay drawn until something re-renders.
-  const routes = state && pairing ? pairingRoutes(state, pairing.token) : []
+  const routes = state && pairing ? pairingRoutes(state, pairing.token, platform) : []
   const route = chooseRoute(routes, pairPath)
   // Asked without a token, because the button exists before the code does.
   const canPair = state ? pairingPaths(state).length > 0 : false
@@ -877,11 +895,11 @@ export function RemoteView({
           <Row
             label="Let approved devices in"
             // It used to read "Off by default", which was true and is not any
-            // more: this Mac dials out on launch so a paired phone has
+            // more: this machine dials out on launch so a paired phone has
             // something to attach to without anyone opening this panel first.
             // Leaving the old sentence there would have the switch describing
             // the opposite of its own position.
-            help="On, so a paired phone can always reach this Mac. Turn it off and nothing can, until you turn it back on."
+            help={`On, so a paired phone can always reach ${machine}. Turn it off and nothing can, until you turn it back on.`}
             labelId={`${ids}-label`}
             helpId={`${ids}-help`}
             control={
@@ -919,7 +937,8 @@ export function RemoteView({
           // window behind it.
           <div className="settings-confirm">
             <span>
-              Turn on remote access? Approved devices get a shell on this Mac until you turn it off.
+              Turn on remote access? Approved devices get a shell on {machine} until you turn it
+              off.
             </span>
             <Button tone="primary" onClick={actions.confirmEnable}>
               Turn it on
@@ -972,7 +991,7 @@ export function RemoteView({
                   {/* Verbatim, and separate from `reason`: this is why the
                       faster route is missing, not why remote access is down. */}
                   {state?.directReason ??
-                    'This Mac is not serving a tailnet address, and did not say why.'}{' '}
+                    `${Machine} is not serving a tailnet address, and did not say why.`}{' '}
                   {relayLive
                     ? 'Remote access is still up — everything below is going through the relay.'
                     : ''}
@@ -989,7 +1008,7 @@ export function RemoteView({
               name="Through the relay"
               tone={relay === null ? 'off' : relayLive ? 'ok' : 'down'}
               pill={relay === null ? 'Off' : relayLive ? 'Connected' : 'Not connected'}
-              blurb="A rendezvous service this Mac dials out to. It staples two sockets together and carries sealed bytes it cannot read, so a phone on any network can reach this one."
+              blurb={`A rendezvous service ${machine} dials out to. It staples two sockets together and carries sealed bytes it cannot read, so a phone on any network can reach this one.`}
             >
               {relay === null ? (
                 <p className="remote-path-note">
@@ -1004,7 +1023,7 @@ export function RemoteView({
                 <>
                   <Fact label="Host id" value={relay.hostId} />
                   {/* Empty only if the identity is half-published, and an empty
-                      row under "Fingerprint" reads as "this Mac has none". */}
+                      row under "Fingerprint" reads as "this machine has none". */}
                   {relay.fingerprint !== '' && (
                     <Fact label="Fingerprint" value={relay.fingerprint} />
                   )}
@@ -1076,7 +1095,7 @@ export function RemoteView({
                   <div
                     className="remote-choice"
                     role="group"
-                    aria-label="How this phone should reach this Mac"
+                    aria-label={`How this phone should reach ${machine}`}
                   >
                     {routes.map((option) => (
                       <button
@@ -1112,11 +1131,11 @@ export function RemoteView({
                   // learned the key from this code — so a mismatch means the
                   // code being scanned is not the one on this screen.
                   <div className="remote-check">
-                    <span className="remote-check-label">This Mac’s fingerprint</span>
+                    <span className="remote-check-label">{`This ${machineNoun(platform)}’s fingerprint`}</span>
                     <code className="remote-fingerprint">{relay.fingerprint}</code>
                     <span className="remote-check-note">
                       The phone shows the same six groups before it connects. If they do not match,
-                      something else answered to this Mac’s name — cancel, do not approve.
+                      something else answered to {machine}’s name — cancel, do not approve.
                     </span>
                   </div>
                 )}
@@ -1209,7 +1228,7 @@ export function RemoteView({
             // person who has to guess whether "Stop" kills their session will
             // leave a page open on this Mac rather than risk it.
             <p className="settings-prose">
-              A port listed above is being served from this Mac to that phone’s browser, over the
+              A port listed above is being served from {machine} to that phone’s browser, over the
               same connection. <strong>Stop closes the page, and nothing else.</strong> The session
               keeps running, the device stays approved, and the phone can tap the port again.
             </p>
@@ -1226,7 +1245,7 @@ export function RemoteView({
               {pending.length === 1 ? 'A device is' : `${pending.length} devices are`} waiting to be
               let in. Approve only the one you are holding —{' '}
               {pending.some((device) => device.fingerprint !== null)
-                ? 'the phone shows its own fingerprint, and the row below shows what this Mac received.'
+                ? `the phone shows its own fingerprint, and the row below shows what ${machine} received.`
                 : 'this one paired without a key, so there is no fingerprint to compare.'}
             </p>
           )}

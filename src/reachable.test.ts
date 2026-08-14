@@ -1,57 +1,49 @@
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { KEYMAP, chordFor } from './renderer/keymap'
+import { PANELS } from './renderer/shell/panels'
+import { SETTINGS } from './renderer/settings/settings-schema'
+import { TERMINAL_COMMANDS } from './renderer/components/TerminalView'
 
 /**
- * Every module must be reachable from an entry point, or be named here.
+ * Nothing in this app may be advertised without a way to get to it.
  *
- * A module nothing imports is a feature that does not exist, and this project
- * shipped five of those as "Done" on a public roadmap: split panes, unread
- * indicators, notifications on completion, task-derived session titles and
- * restore-on-launch. All five had real code, real tests and no way to reach
- * them from the running app. Two agents then read that roadmap and wrote it
- * onto the marketing site as fact.
+ * This file started as one check — "every module is imported from an entry
+ * point" — written after the project shipped five features as Done on a public
+ * roadmap that had no way in: split panes, unread indicators, notifications on
+ * completion, task-derived session titles and restore-on-launch. All five had
+ * real code, real tests and no path a user could take. Two agents then read
+ * that roadmap and wrote it onto the marketing site as fact.
  *
- * Tests are excluded as importers on purpose. A module imported only by its own
- * test is exactly the shape of the bug — `SplitView.tsx` looked imported for
- * that reason alone.
+ * That check was too weak, and the weakness had a shape. `notifications.ts`
+ * passed it for months: the settings pane imports `canNotify` out of the module
+ * to draw a permission warning, so the file was "reachable" while
+ * `SessionNotifier` — the entire notification engine — was never constructed
+ * and no banner was ever shown. Five settings pointed at it. `session-title.ts`
+ * passed it the same way, `@xterm/addon-search` was a dependency nobody loaded,
+ * and Settings offered a font size that never reached a terminal.
  *
- * The allowlist below is the honest list of code that exists but cannot be
- * reached. Adding to it is allowed; doing so silently is not, and anything that
- * falls off an entry point without being named fails here.
+ * So the question here is no longer "is this module imported". It is "does this
+ * thing have a way in", asked five ways, each of them mechanical:
+ *
+ *   1. every module is reachable from an entry point;
+ *   2. every setting in the schema has something that reads it;
+ *   3. every chord in the keymap has code that answers it;
+ *   4. every command the menu sends is dispatched, and every shortcut the
+ *      palette prints is the one the keymap actually binds;
+ *   5. every view the sidebar offers renders something.
+ *
+ * Anything that genuinely cannot be checked mechanically is listed below with
+ * the reason it is not a lie. Adding to a list is allowed; doing it silently is
+ * not.
  */
 
 const ROOT = resolve(__dirname, '..')
 const ENTRIES = ['src/main/index.ts', 'src/preload/index.ts', 'src/renderer/main.tsx']
 
-/** Unreachable on purpose, each with the reason it is not a lie. */
-const KNOWN_UNREACHABLE: Record<string, string> = {
-  'src/renderer/layout/SplitView.tsx':
-    'split panes: built, never rendered. Listed as not built on the roadmap and the site.',
-  'src/renderer/layout/pane-tree.ts': 'the tree behind SplitView, unreachable for the same reason.',
-  'src/renderer/board/board-session-link.ts':
-    'board cards cannot yet open the session they name.',
-  'src/main/remote/sealed.electron-probe.ts':
-    'unreachable from the app on purpose: it is the body of the Electron-runtime crypto check, ' +
-    'bundled and run under ELECTRON_RUN_AS_NODE by scripts/check-electron-crypto.mjs during ' +
-    '`npm test`. It lives in src/ so that tsc typechecks it against the modules it exercises.',
-}
-
 const SOURCE = /\.tsx?$/
 const isTest = (p: string): boolean => /\.(test|spec)\.tsx?$/.test(p)
-
-/**
- * A repository path, spelled the way the allowlist below spells one.
- *
- * `relative` answers in the host's separator, so on Windows every module came
- * back as `src\renderer\unread.ts` — which matches no key in
- * `KNOWN_UNREACHABLE` and reported all nine allowed modules as new orphans
- * (observed on Windows 11). The keys stay `/`-separated because that is how
- * this repository writes a path everywhere else, including the entry list above.
- */
-function repoPath(absolute: string): string {
-  return relative(ROOT, absolute).split(sep).join('/')
-}
 
 function walk(dir: string, out: string[] = []): string[] {
   for (const name of readdirSync(dir)) {
@@ -60,6 +52,52 @@ function walk(dir: string, out: string[] = []): string[] {
     else if (SOURCE.test(name) && !isTest(name)) out.push(full)
   }
   return out
+}
+
+/**
+ * Every non-test source file, as a path relative to the repo root and always
+ * `/`-separated.
+ *
+ * The separator is not cosmetic. `relative` answers in the host's, so on
+ * Windows every module came back as `src\renderer\unread.ts` — which matches no
+ * key in any of the allowlists below, and reported all nine allowed modules as
+ * new orphans (observed on Windows 11). Every list in this file is written the
+ * way the repository writes a path everywhere else, so this is where the two
+ * spellings are reconciled, once.
+ */
+const SOURCES = walk(join(ROOT, 'src')).map((f) => relative(ROOT, f).split(sep).join('/'))
+
+const read = (rel: string): string => readFileSync(join(ROOT, rel), 'utf8')
+
+/**
+ * Source with its comments removed.
+ *
+ * Several checks below read source as text and ask what it puts on screen, and
+ * a comment is the one part of a file that never reaches a screen. Explaining
+ * that the palette used to say `shortcut: '⌘T'` must not read as the palette
+ * saying it. Only whole-line `//` comments are stripped, so a `wss://` in the
+ * middle of a line survives.
+ */
+const withoutComments = (source: string): string =>
+  source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '')
+
+/** Text of every source file except the ones named, joined. */
+function corpus(except: readonly string[] = []): string {
+  return SOURCES.filter((f) => !except.includes(f))
+    .map((f) => read(f))
+    .join('\n')
+}
+
+/* ============================================================== 1. modules -- */
+
+/** Unreachable on purpose, each with the reason it is not a lie. */
+const KNOWN_UNREACHABLE: Record<string, string> = {
+  'src/renderer/board/board-session-link.ts':
+    'board cards cannot yet open the session they name.',
+  'src/main/remote/sealed.electron-probe.ts':
+    'unreachable from the app on purpose: it is the body of the Electron-runtime crypto check, ' +
+    'bundled and run under ELECTRON_RUN_AS_NODE by scripts/check-electron-crypto.mjs during ' +
+    '`npm test`. It lives in src/ so that tsc typechecks it against the modules it exercises.',
 }
 
 /** Mirrors the tsconfig path aliases; anything bare is a package, not ours. */
@@ -74,9 +112,9 @@ function resolveSpec(spec: string, from: string): string | null {
   // The directory candidates go through `join` rather than string concatenation.
   // `base + '/index.ts'` is a path `existsSync` happily accepts on Windows and
   // that `walk` can never produce, because `walk` builds with `join` and gets a
-  // backslash — so a module reached only through its `index` was in `seen`
-  // under one spelling and looked for under another, and reported itself an
-  // orphan. `src/renderer/chat/usage/index.ts` did exactly that.
+  // backslash — so a module reached only through its `index` was in `seen` under
+  // one spelling and looked for under another, and reported itself an orphan.
+  // `src/renderer/chat/usage/index.ts` did exactly that.
   for (const candidate of [`${base}.ts`, `${base}.tsx`, join(base, 'index.ts'), join(base, 'index.tsx'), base]) {
     if (candidate && existsSync(candidate) && SOURCE.test(candidate)) return candidate
   }
@@ -96,6 +134,11 @@ function importsOf(file: string): string[] {
 }
 
 describe('every module is reachable from an entry point', () => {
+  /*
+   * Tests are excluded as importers on purpose. A module imported only by its
+   * own test is exactly the shape of the bug — `SplitView.tsx` looked imported
+   * for that reason alone, for its whole life, and has since been deleted.
+   */
   it('has no unlisted orphans', () => {
     const seen = new Set<string>()
     const stack = ENTRIES.map((e) => join(ROOT, e))
@@ -106,9 +149,7 @@ describe('every module is reachable from an entry point', () => {
       stack.push(...importsOf(file))
     }
 
-    const orphans = walk(join(ROOT, 'src'))
-      .filter((f) => !seen.has(f))
-      .map(repoPath)
+    const orphans = SOURCES.filter((f) => !seen.has(join(ROOT, f)))
       .filter((f) => !(f in KNOWN_UNREACHABLE))
       .sort()
 
@@ -125,4 +166,281 @@ describe('every module is reachable from an entry point', () => {
     const missing = Object.keys(KNOWN_UNREACHABLE).filter((f) => !existsSync(join(ROOT, f)))
     expect(missing, 'listed as unreachable but no longer present').toEqual([])
   })
+})
+
+/* ============================================================= 2. settings -- */
+
+/**
+ * Settings whose only reader is the settings window itself, and why that is
+ * honest rather than a switch over nothing.
+ */
+const SETTINGS_WITHOUT_READERS: Record<string, string> = {
+  'general.language':
+    'deliberately one option. The row exists to answer "can I have this in my language" — ' +
+    'the honest answer being no, not yet — and a setting with a single value has nothing to ' +
+    'read. It becomes a real setting the day a second language does.',
+}
+
+/** Files that only ever *declare* or *render* settings, so cannot count as readers. */
+const SETTINGS_UI = [
+  'src/renderer/settings/settings-schema.ts',
+  'src/renderer/settings/controls.tsx',
+]
+
+describe('every setting has something that reads it', () => {
+  /*
+   * The failure this catches, four times over in one audit: "Restore sessions
+   * on launch" restored nothing, "Record session history" recorded nothing,
+   * "Show insight alerts" filtered nothing, and "Terminal font size" reached no
+   * terminal. Every one of them stored a value perfectly.
+   *
+   * A reader is any source file outside the schema and the generic control
+   * renderer that names the setting's id, or — for the four settings backed by
+   * `store.ts` — names the preferences key the main process reads it by. That
+   * is a low bar deliberately: it cannot prove the value is *obeyed*, only that
+   * something, somewhere, asks for it. A switch nobody even asks about is the
+   * bug this has actually shipped.
+   */
+  const haystack = corpus(SETTINGS_UI)
+
+  for (const setting of SETTINGS) {
+    const excuse = SETTINGS_WITHOUT_READERS[setting.id]
+    it(`${setting.id} is read by something${excuse ? ' — or is honestly excused' : ''}`, () => {
+      const byId = haystack.includes(`'${setting.id}'`)
+      const byPrefsKey =
+        setting.store === 'prefs' &&
+        setting.prefsKey !== undefined &&
+        new RegExp(`\\b${setting.prefsKey}\\b`).test(haystack)
+      const read = byId || byPrefsKey
+
+      if (excuse) {
+        expect(
+          read,
+          `${setting.id} is listed in SETTINGS_WITHOUT_READERS but something now reads it — ` +
+            'delete the excuse.',
+        ).toBe(false)
+        return
+      }
+
+      expect(
+        read,
+        `Nothing outside the settings window mentions ${setting.id}. It is a control the user ` +
+          'can change that changes nothing. Wire it up, delete the row, or add it to ' +
+          'SETTINGS_WITHOUT_READERS with the reason.',
+      ).toBe(true)
+    })
+  }
+
+  it('keeps no excuse for a setting that no longer exists', () => {
+    const ids = new Set(SETTINGS.map((s) => s.id))
+    expect(Object.keys(SETTINGS_WITHOUT_READERS).filter((id) => !ids.has(id))).toEqual([])
+  })
+})
+
+/* ============================================================== 3. keymap -- */
+
+const APP = 'src/renderer/App.tsx'
+
+/**
+ * Command ids `App.tsx` dispatches: the palette's table plus the switch that
+ * catches everything else. Read out of the source because there is no DOM here
+ * to mount the app in — the same reason `wiring.test.ts` is static.
+ */
+function appCommandIds(): Set<string> {
+  const source = read(APP)
+  const ids = new Set<string>()
+  for (const m of source.matchAll(/\bid:\s*'([a-z][\w.]*)'/g)) ids.add(m[1])
+  for (const m of source.matchAll(/\bcase\s+'([a-z][\w.]*)':/g)) ids.add(m[1])
+  // ⌘1–9 is a range, so the digit is read off the event rather than dispatched.
+  for (const m of source.matchAll(/id === '([a-z][\w.]*)'/g)) ids.add(m[1])
+  return ids
+}
+
+/**
+ * Bindings answered somewhere other than the app-wide dispatcher, and where.
+ *
+ * The named file has to mention the id, so this is a pointer rather than a
+ * promise: move the handler and the test says so.
+ */
+const HANDLED_ELSEWHERE: Record<string, string> = {
+  'terminal.find': 'src/renderer/components/TerminalView.tsx',
+  'terminal.clear': 'src/renderer/components/TerminalView.tsx',
+  'terminal.copy': 'src/renderer/components/TerminalView.tsx',
+}
+
+/**
+ * Bindings that describe what a dialog already does, rather than naming a
+ * command anything dispatches.
+ *
+ * These four are in the keymap so the shortcuts sheet can print them — a sheet
+ * that cannot say "Escape closes this" is missing the key people look for
+ * first. `Modal.tsx` binds Escape and `CommandPalette.tsx` binds the arrows and
+ * Enter directly, because a dialog's own keyboard cannot go through a global
+ * dispatcher: while a modal is open, `bindingsInScope` deliberately excludes
+ * every global binding, which is what stops ⌘W closing a session behind it.
+ */
+const DOCUMENTED_ONLY: Record<string, string> = {
+  'modal.close': 'src/renderer/components/Modal.tsx',
+  'modal.confirm': 'src/renderer/components/CommandPalette.tsx',
+  'modal.next': 'src/renderer/components/CommandPalette.tsx',
+  'modal.previous': 'src/renderer/components/CommandPalette.tsx',
+}
+
+describe('every chord in the keymap has code that answers it', () => {
+  const dispatched = appCommandIds()
+
+  for (const binding of KEYMAP) {
+    if (binding.passthrough) continue
+    it(`${binding.id} (${binding.keys[0]}) is handled`, () => {
+      if (binding.id in HANDLED_ELSEWHERE) {
+        const file = HANDLED_ELSEWHERE[binding.id]
+        expect(read(file), `${file} no longer mentions ${binding.id}`).toContain(binding.id)
+        return
+      }
+      if (binding.id in DOCUMENTED_ONLY) {
+        expect(existsSync(join(ROOT, DOCUMENTED_ONLY[binding.id]))).toBe(true)
+        return
+      }
+      expect(
+        dispatched.has(binding.id),
+        `The shortcuts sheet prints ${binding.keys[0]} for "${binding.label}" and nothing in ` +
+          `${APP} dispatches ${binding.id}. Implement it, or take the binding out of KEYMAP.`,
+      ).toBe(true)
+    })
+  }
+
+  it('claims no handler for a binding that is gone', () => {
+    const ids = new Set(KEYMAP.map((b) => b.id))
+    const stale = [...Object.keys(HANDLED_ELSEWHERE), ...Object.keys(DOCUMENTED_ONLY)].filter(
+      (id) => !ids.has(id),
+    )
+    expect(stale, 'listed as handled but no longer in the keymap').toEqual([])
+  })
+
+  it('every command TerminalView claims is a real binding', () => {
+    const ids = new Set(KEYMAP.map((b) => b.id))
+    expect(TERMINAL_COMMANDS.filter((id) => !ids.has(id))).toEqual([])
+  })
+})
+
+/* =========================================== 4. the menu and the palette -- */
+
+describe('the menu and the palette agree with the app', () => {
+  it('dispatches every command the application menu sends', () => {
+    // The menu is in the main process and speaks an older dialect — `app.palette`
+    // for what the keymap calls `palette.commands`. Aliases are fine; a menu item
+    // that reaches a dispatcher with no case for it is a dead menu item.
+    const menu = read('src/main/menu.ts')
+    const sent = [...menu.matchAll(/send\('([a-z][\w.]*)'\)/g)].map((m) => m[1])
+    expect(sent.length, 'no menu commands found — has menu.ts changed shape?').toBeGreaterThan(10)
+
+    const dispatched = appCommandIds()
+    expect(sent.filter((id) => !dispatched.has(id))).toEqual([])
+  })
+
+  it('writes down no chord of its own', () => {
+    /*
+     * The palette used to carry its chords as literal strings — `shortcut:
+     * '⌘⇧R'` — and this test compared each of them with `chordFor(id, true)`.
+     * That check caught drift from the keymap and could not, even in principle,
+     * catch the bug that was actually shipping: `true` is hard-coded, so it
+     * asserted the *macOS* rendering, and a Windows user was reading ⌘ glyphs
+     * for a key their keyboard does not have.
+     *
+     * A literal cannot be made platform-correct, so there are no literals any
+     * more; the palette maps its rows through `chordFor`, which renders for
+     * whichever platform the window is on. What is left to guard is that nobody
+     * puts one back.
+     */
+    const source = withoutComments(read(APP))
+    const literals = [...source.matchAll(/shortcut:\s*'([^']+)'/g)].map((m) => m[1])
+    expect(
+      literals,
+      'a chord typed into the palette is a copy of keymap.ts taken on one platform, ' +
+        'and it is wrong on the other. Let `chordFor` render it.',
+    ).toEqual([])
+  })
+
+  it('still prints a chord for every palette row the keymap binds', () => {
+    // The literals are gone, so the check moves up a level: each row names a
+    // command id, and a row whose id the keymap binds must be able to render
+    // one. This is what stops the rows being renamed out of the keymap's reach
+    // and quietly losing their shortcuts.
+    const source = withoutComments(read(APP))
+    const ids = [...source.matchAll(/\{\s*id:\s*'([a-z][\w.]*)',\s*title:/g)].map((m) => m[1])
+    expect(ids.length, 'no palette rows found — has App.tsx changed shape?').toBeGreaterThan(15)
+
+    const bound = new Set(KEYMAP.filter((b) => !b.passthrough).map((b) => b.id))
+    const silent = ids.filter((id) => bound.has(id) && chordFor(id, true) === null)
+    expect(silent, 'the keymap binds these, and the palette would print nothing').toEqual([])
+  })
+})
+
+/* ================================================== 4b. platform-correct -- */
+
+/**
+ * No Apple-only glyph is typed into anything a person reads.
+ *
+ * Terminal Deck runs on Windows now. ⌘ is not a key a Windows keyboard has, so
+ * a ⌘ in a label, a tooltip, an empty state or a hint is not a shortcut —
+ * it is a character the reader cannot press, printed next to the command it
+ * claims to run. This had happened in four places: seventeen literals in the
+ * command palette, the first-run empty state, the screenshot hint in the image
+ * picker, and the find bar's ⇧↩ / ↩.
+ *
+ * Two files are allowed to hold the glyphs, because they are the two that
+ * choose between them: `keymap.ts` renders a chord per platform and
+ * `platform.ts` answers "how does this reader take a screenshot". Everything
+ * else asks one of them.
+ *
+ * Comments are stripped first. Explaining a chord in prose is not printing one.
+ */
+describe('nothing prints a key that only exists on a Mac', () => {
+  const ALLOWED = new Set(['src/renderer/keymap.ts', 'src/renderer/platform.ts'])
+  const GLYPHS = /[⌘⌥⌃⇧↩⌫⌦⇥⇞⇟↖↘]/
+
+  // `SOURCES` is already every non-test source, spelled with forward slashes.
+  const offenders: string[] = []
+  for (const file of SOURCES.filter((f) => f.startsWith('src/renderer/'))) {
+    if (ALLOWED.has(file)) continue
+    withoutComments(read(file))
+      .split('\n')
+      .forEach((line, index) => {
+        if (GLYPHS.test(line)) offenders.push(`${file}:${index + 1} ${line.trim()}`)
+      })
+  }
+
+  it('has no hand-typed Mac glyph outside keymap.ts and platform.ts', () => {
+    expect(
+      offenders,
+      'Ask `formatChord`/`chordFor` for the chord, or `screenshotShortcut` for the ' +
+        'screenshot key. A glyph written here is wrong on Windows.',
+    ).toEqual([])
+  })
+})
+
+/* =============================================================== 5. views -- */
+
+describe('every view the sidebar offers renders something', () => {
+  const panelView = read('src/renderer/shell/PanelView.tsx')
+
+  for (const panel of PANELS) {
+    it(`${panel.id} has a case in PanelView`, () => {
+      expect(
+        panelView.includes(`case '${panel.id}':`),
+        `The sidebar lists "${panel.label}" and PanelView has no case for it, so clicking the ` +
+          'row shows an empty page.',
+      ).toBe(true)
+    })
+
+    it(`${panel.id} names a keymap binding it can honour`, () => {
+      // `command` is what the row's tooltip prints a chord from. Naming one the
+      // keymap does not have puts a shortcut on screen that does nothing.
+      if (!panel.command) return
+      expect(
+        KEYMAP.some((binding) => binding.id === panel.command),
+        `${panel.id} claims the command ${panel.command}, which is not in the keymap.`,
+      ).toBe(true)
+    })
+  }
 })

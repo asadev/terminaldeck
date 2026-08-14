@@ -17,6 +17,7 @@ import {
   segmentByRanges,
   type MatchRange,
 } from '../fuzzy'
+import { formatChord } from '../keymap'
 import './CommandPalette.css'
 
 /**
@@ -552,7 +553,10 @@ export function CommandPalette({
             <kbd>↓</kbd> navigate
           </span>
           <span>
-            <kbd>⏎</kbd> {commandMode ? 'run' : 'open'}
+            {/* Through `formatChord` so the footer and the shortcuts sheet
+                agree: ↩ on a Mac, the word Enter on a keyboard that prints
+                Enter on the key. */}
+            <kbd>{formatChord('enter')}</kbd> {commandMode ? 'run' : 'open'}
           </span>
           <span>
             <kbd>esc</kbd> close

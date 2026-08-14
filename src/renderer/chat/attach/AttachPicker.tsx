@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { clampRanges, rankMatches, segmentByRanges, type MatchRange } from '../../fuzzy'
 import { foldersFrom, isImagePath, type Attachment } from './mentions'
+import { detectPlatform, screenshotShortcut, type UiPlatform } from '../../platform'
 
 /**
  * Choosing what to attach, from inside the project.
@@ -72,10 +73,28 @@ const COPY: Record<PickerMode, { title: string; placeholder: string; empty: stri
   image: {
     title: 'Add an image',
     placeholder: 'Search images in this project…',
+    // The screenshot chord is filled in per platform at render — see
+    // `copyFor`. Writing ⇧⌘4 here told a Windows user to press two keys their
+    // keyboard does not have.
     empty:
-      'No images in this project yet. Take a screenshot with ⇧⌘4, save it inside the project folder, and it will appear here.',
+      'No images in this project yet. Take a screenshot with {shot}, save it inside the project folder, and it will appear here.',
     noMatch: 'No image matches that.',
   },
+}
+
+/**
+ * The copy for a mode, with the one platform-dependent hole filled.
+ *
+ * A placeholder rather than a second `COPY` table: exactly one sentence in this
+ * component differs between platforms, and forking the whole table for it is
+ * how `tailnet.ts` ended up with two nearly identical reason lists.
+ */
+export function copyFor(
+  mode: PickerMode,
+  platform: UiPlatform = detectPlatform(),
+): { title: string; placeholder: string; empty: string; noMatch: string } {
+  const copy = COPY[mode]
+  return { ...copy, empty: copy.empty.replace('{shot}', screenshotShortcut(platform)) }
 }
 
 /**
@@ -203,7 +222,7 @@ export function AttachPicker({ root, mode, attachments, onPick, onBack, bridge }
     if (row instanceof HTMLElement) row.scrollIntoView({ block: 'nearest' })
   }, [cursor])
 
-  const copy = COPY[mode]
+  const copy = useMemo(() => copyFor(mode), [mode])
 
   return (
     <div className="at-panel">

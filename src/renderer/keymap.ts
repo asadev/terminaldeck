@@ -16,6 +16,8 @@
  * can document it, marked `passthrough` so the matcher never claims it.
  */
 
+import { detectPlatform } from './platform'
+
 /* ------------------------------------------------------------------ types -- */
 
 export type KeyScope = 'global' | 'terminal' | 'modal'
@@ -296,11 +298,16 @@ export interface ResolveOptions {
   bindings?: readonly KeyBinding[]
 }
 
-/** True on macOS. Guarded so the module imports cleanly under vitest's node env. */
+/**
+ * True on macOS.
+ *
+ * Delegated to `platform.ts` so the app sniffs the platform in exactly one
+ * place: the glyphs in this file and the nouns in the remote panel are answers
+ * to the same question, and two sniffs would eventually disagree about the same
+ * machine.
+ */
 export function detectMac(): boolean {
-  const nav = (globalThis as { navigator?: { platform?: string; userAgent?: string } }).navigator
-  if (!nav) return false
-  return /Mac|iPhone|iPad/.test(nav.platform ?? nav.userAgent ?? '')
+  return detectPlatform() === 'mac'
 }
 
 /**

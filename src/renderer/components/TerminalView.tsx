@@ -3,7 +3,7 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { SearchAddon } from '@xterm/addon-search'
 import { WebLinksAddon } from '@xterm/addon-web-links'
-import { chordFor } from '../keymap'
+import { chordFor, formatChord } from '../keymap'
 
 interface Props {
   sessionId: string
@@ -296,7 +296,9 @@ export function TerminalView({
             type="button"
             className="terminal-find-btn"
             aria-label="Previous match"
-            title="Previous match (⇧↩)"
+            // ⇧↩ is Apple's way of writing it and means nothing on a Windows
+            // keyboard, where the same two keys are printed Shift and Enter.
+            title={`Previous match (${formatChord('shift+enter')})`}
             onClick={() => step(true)}
           >
             ↑
@@ -305,7 +307,7 @@ export function TerminalView({
             type="button"
             className="terminal-find-btn"
             aria-label="Next match"
-            title="Next match (↩)"
+            title={`Next match (${formatChord('enter')})`}
             onClick={() => step(false)}
           >
             ↓
