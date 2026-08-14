@@ -57,17 +57,36 @@ final class DeckModel {
     var addingHost = false
 
     /**
-     * The name being typed into the rename alert, or nil when it is not up.
+     * Whether the rename alert is up, and what is typed in it.
      *
-     * Here rather than in `SessionListView`'s `@State`, and that is a fix rather
-     * than a preference. Every paired machine holds a socket, so this model
-     * publishes on any of them changing — a reconnect, a session list, a port
-     * scan — and a `@State` on a view SwiftUI rebuilds goes back to nil, taking
-     * the alert with it. The symptom was not a reset field: the alert appeared
-     * and vanished inside the same second, which reads as Rename not working at
-     * all. It survives here because the model does.
+     * Two plain properties rather than one optional, and both on the model rather
+     * than in `SessionListView`, because of how this failed. An `@State` optional
+     * behind a *computed* `Binding` — `get: { value != nil }` — was dismissed
+     * within a second of appearing: every paired machine holds a socket, so this
+     * model publishes constantly, and each rebuild ran that binding's setter and
+     * nilled the value out from under the presentation. The symptom read as
+     * Rename simply not working.
+     *
+     * `addingHost` next door never had the problem because it is a `Bool` behind
+     * a real `@Bindable` projection. This is the same shape, for the same reason,
+     * and the alert is presented from `RootView` — which does not get rebuilt —
+     * rather than from the list.
      */
-    var renamingTo: String?
+    var renamingHost = false
+    var renameText = ""
+
+    /// Raise the rename alert for the machine on screen.
+    func beginRename() {
+        guard let current else { return }
+        renameText = current.label
+        renamingHost = true
+    }
+
+    /// Commit whatever is in `renameText` to the machine on screen.
+    func commitRename() {
+        if let id = current?.id { rename(id, to: renameText) }
+        renamingHost = false
+    }
 
     /// Why the app is at the pairing screen, when it did not start there.
     private(set) var pairingNotice: String?

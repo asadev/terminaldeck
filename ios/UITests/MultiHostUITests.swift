@@ -98,6 +98,63 @@ final class MultiHostUITests: XCTestCase {
         + "TEST_RUNNER_TD_CONTROL_A and TEST_RUNNER_TD_CONTROL_B."
 
     /**
+     * Put text into the terminal that is on screen, and wait for the far end to
+     * echo it back.
+     *
+     * **The keyboard is raised through the app's own button, not by tapping the
+     * terminal.** A tap on a `TerminalView` does not make it first responder in
+     * the Simulator, so `typeText` had nowhere to go: the characters were never
+     * typed, nothing was sent, and the failure arrived twenty seconds later as
+     * "the machine on the other end did not echo what was typed" — which
+     * describes a broken transport and was nothing of the kind. The toolbar's
+     * keyboard toggle is the control a person would use for the same reason.
+     *
+     * The echo is the round trip. Nothing echoes locally in this app —
+     * `TerminalBridge` sends keystrokes out and draws only what comes back
+     * through `feed` — so a character on screen came from a shell on the far end.
+     */
+    private func type(_ text: String, into session: String) throws {
+        let keyboard = app.buttons["terminal.keyboard"]
+        XCTAssertTrue(keyboard.waitForExistence(timeout: 20), "the terminal toolbar should be up")
+        keyboard.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 10),
+                      "the keyboard toggle should raise a keyboard to type into")
+        app.typeText(text)
+        let marker = text.split(separator: " ").last.map(String.init) ?? text
+        XCTAssertTrue(waitForText(containing: marker, timeout: 25),
+                      "the machine on the other end did not echo what was typed")
+    }
+
+    /**
+     * The id of the one session that host is running.
+     *
+     * Seeded before the run by the harness's own `/start`, so the expectation
+     * comes from the machine rather than from the phone:
+     *
+     *     curl '127.0.0.1:8891/start?cwd=/tmp/td/StudioMac'
+     *     curl '127.0.0.1:8893/start?cwd=/tmp/td/WorkPC'
+     */
+    private func onlySessionId(on control: String) throws -> String {
+        guard let url = URL(string: "http://\(control)/scrollback") else {
+            throw XCTSkip("\(control) is not an address")
+        }
+        var answer: String?
+        let done = expectation(description: "sessions")
+        URLSession.shared.dataTask(with: url) { data, _, _ in
+            if let data,
+               let rows = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+                answer = rows.first?["id"] as? String
+            }
+            done.fulfill()
+        }.resume()
+        wait(for: [done], timeout: 20)
+        guard let answer, !answer.isEmpty else {
+            throw XCTSkip("\(control) has no session — seed one with /start. \(Self.notRunning)")
+        }
+        return answer
+    }
+
+    /**
      * Mint a code on one of the hosts, now.
      *
      * `/pair` on the harness control server, which calls the desk's own `create`
@@ -188,15 +245,27 @@ final class MultiHostUITests: XCTestCase {
      * is a character a shell on the far end echoed.
      */
     func testSessionsStaySeparateAndTypingGoesToTheRightMachine() throws {
+        /*
+         * The two ids come from the two machines, not from the phone.
+         *
+         * Reading them off the session list looked simpler and quietly begged the
+         * question: after pairing the second machine the list is briefly still the
+         * first machine's, so "the id at the top" was sometimes the Mac's while
+         * the PC was selected — and the test then asserted the PC should be
+         * showing a row it never should have. Asking each host which session it
+         * has makes the expectation independent of the thing being tested.
+         */
+        let macSession = try onlySessionId(on: controlA)
+        let pcSession = try onlySessionId(on: controlB)
+        XCTAssertNotEqual(macSession, pcSession, "two machines cannot have the same session")
+
         try pair(freshCode(from: controlA))
         try waitForConnected(timeout: 60)
-        let macSession = try startSession()
+        XCTAssertTrue(app.buttons["session.\(macSession)"].waitForExistence(timeout: 20),
+                      "the Mac's own session should be listed under the Mac")
 
         try pairAnother(freshCode(from: controlB))
         try waitForConnected(timeout: 60)
-        let pcSession = try startSession()
-
-        XCTAssertNotEqual(macSession, pcSession, "two machines cannot have started the same session")
 
         // The PC is current, and it lists its own session and not the Mac's.
         XCTAssertTrue(app.buttons["session.\(pcSession)"].waitForExistence(timeout: 15))
@@ -207,10 +276,7 @@ final class MultiHostUITests: XCTestCase {
         // Type into the PC's session. A marker rather than a command, and no
         // Return: nothing here submits anything to a shell on somebody's machine.
         app.buttons["session.\(pcSession)"].tap()
-        let terminal = app.otherElements["terminal.view"]
-        XCTAssertTrue(terminal.waitForExistence(timeout: 20))
-        terminal.tap()
-        app.typeText("echo TD-WORKPC-MARKER")
+        try type("echo TD-WORKPC-MARKER", into: pcSession)
         capture("05-typed-into-pc")
         // Echoed back by the shell on the far end, which is the round trip.
         XCTAssertTrue(waitForText(containing: "TD-WORKPC-MARKER", timeout: 20),
@@ -233,14 +299,11 @@ final class MultiHostUITests: XCTestCase {
         capture("06-mac-list")
 
         app.buttons["session.\(macSession)"].tap()
-        let macTerminal = app.otherElements["terminal.view"]
-        XCTAssertTrue(macTerminal.waitForExistence(timeout: 20))
+        XCTAssertTrue(app.otherElements["terminal.view"].waitForExistence(timeout: 20))
         // The marker typed into the *other* machine must not be on this one.
         XCTAssertFalse(waitForText(containing: "TD-WORKPC-MARKER", timeout: 4),
                        "a keystroke meant for one machine reached the other")
-        macTerminal.tap()
-        app.typeText("echo TD-STUDIO-MARKER")
-        XCTAssertTrue(waitForText(containing: "TD-STUDIO-MARKER", timeout: 20))
+        try type("echo TD-STUDIO-MARKER", into: macSession)
         capture("07-typed-into-mac")
 
         // Held on screen long enough for the host-side check to run against

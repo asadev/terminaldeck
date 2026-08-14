@@ -62,6 +62,26 @@ struct RootView: View {
             PairingView(model: model, adding: true) { model.addingHost = false }
                 .preferredColorScheme(.dark)
         }
+        /*
+         * Naming a machine, presented from here rather than from the list.
+         *
+         * This view is the one thing in the app that is not rebuilt on every
+         * model change, and that is the whole reason it is here. On the list it
+         * was dismissed within a second of appearing: a computed `Binding` over
+         * an optional had its setter run on each rebuild, and with several
+         * machines paired something publishes constantly. Both properties are
+         * plain and bound through `@Bindable`, exactly like `addingHost` beside
+         * it, which never had the problem.
+         */
+        .alert("Name this machine", isPresented: $model.renamingHost) {
+            TextField("MacBook, Work PC…", text: $model.renameText)
+                .accessibilityIdentifier("rename.field")
+            Button("Cancel", role: .cancel) { model.renamingHost = false }
+            Button("Save") { model.commitRename() }
+                .accessibilityIdentifier("rename.save")
+        } message: {
+            Text("A host id is 26 characters of base32. A name is what you will actually recognise it by.")
+        }
     }
 
     private var awaitingApproval: Bool {
