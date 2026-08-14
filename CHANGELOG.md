@@ -10,7 +10,88 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+## [0.1.4] — 2026-08-14
+
+### Added
+
+- **One phone, several machines.** A phone paired to a second computer used to
+  quietly drop the first — the relay was always a map of host ids and the wire
+  cannot tell a Mac from a Windows PC, so the only thing that was ever single
+  was the phone's own storage. Pairing now *adds* a machine: each one owns its
+  own transport, its own sealed channel against that machine's static key and
+  its own sessions, so two machines cannot read each other's work. All of them
+  stay connected, so switching needs no handshake, and the keepalive they need
+  is folded into one app-wide tick — 144 radio wake-ups an hour at one machine
+  and at five, measured rather than asserted.
+
+- **Tap an element on the tunnelled page and send the change to the agent.**
+  The desktop browser's inspect mode, now on the phone: tap, say what should
+  change, and it lands in a terminal on this Mac as exactly one line. The rule
+  is transcribed from the desktop's `CapturePanel`, not approximated, so both
+  clients hand the agent identical strings — a newline would submit the prompt
+  early and an ESC would repaint the terminal it arrived in.
+
+### Changed
+
+- **Every page has one blank, and it is the same blank.** Empty states were
+  four different designs across ten panels — GitHub drew its own glyph, title
+  and button, MCP printed a bare sentence with literal backticks in it, the
+  board dropped inline text into a column, the Overview hand-rolled a third
+  variation. There are two now: one for a page with nothing on it, one for a
+  section of a working page or a page still reading — parked at the same
+  height, so the answer lands exactly where "Reading…" was.
+
+- **No-project screens ask once.** They used to reprint the toolbar subtitle
+  and offer four different ways to open a project; the empty Overview added a
+  drag hint for widgets that were not there, a Reset with nothing to reset, and
+  a second Add widget one line above the first.
+
+- **Settings → Help no longer duplicates the window's own menu.** It drew its
+  own sub-navigation offering Shortcuts and About two rows above the window's
+  Shortcuts and About — the same keymap, the same version numbers, two ways in
+  from one screen.
+
+- **Context → "How it filled" draws something.** It plotted a percentage of the
+  context window against a fixed 0–100 axis, and a healthy session peaks near
+  four percent, so every point landed within a pixel of the baseline. The axis
+  scales to the peak now, on a ladder whose rungs halve cleanly, with gridlines,
+  a marked peak, a cursor and a readout that follows the pointer — and both the
+  ticks and the caption print the ceiling, because the honesty problem was never
+  the scale, it was a chart that drew nothing.
+
+- **"Unknown" is gone where the answer was never knowable.** Fast mode said
+  Unknown beside three siblings that always resolve, which read as this app
+  failing; the CLI announces fast mode only when it changes and keeps it out of
+  `settings.json`, so a session that has never been told has nothing to report.
+  It says "Not reported" and the menu says why. Codex's blank version row is the
+  same fix — it is found on PATH and its `--version` errors, so the row says
+  "version not reported".
+
+- **A release build can be produced from a commit without publishing it.** The
+  release workflow can be dispatched by hand, and publishing stays gated on a
+  version tag. Building an installer locally to check something meant packaging
+  whatever the working tree happened to hold at that moment.
+
+- **The installer is checked for what is inside it, not just that it exists.**
+  A platform `files:` list in electron-builder replaces the root allowlist
+  rather than extending it, which shipped the whole repository — a 1.0 GB app —
+  until it was caught. Both platform blocks were fixed, and CI now fails if any
+  build carries `ios/`, `android/`, `relay/`, `src/` or `build/`, if the app
+  cannot start, or if an artifact lands outside a sane size band.
+
 ### Fixed
+
+- **The inspector stopped jumping under the pointer.** It re-centred on every
+  tab press: the four panels are 96 timeline rows, two tables, and one table
+  plus a chart, so the tallest ran past the floor and the sheet moved 50px each
+  time. A definite height parks it and the body scrolls.
+
+- **The phone's Connected badge no longer claims a connection the app does not
+  have.** Observed against the live relay: no guest attached for a sustained
+  forty seconds while the app read Connected. Resuming was a no-op while the
+  state said online — but "online" was decided before the phone went in a
+  pocket, and nothing tells a socket that a carrier NAT reclaimed it. Resuming
+  now doubts the channel, says "Checking", and probes immediately.
 
 - **Quitting with a live session no longer prints a wall of errors.** Stopping
   the app while a terminal was still producing output threw
@@ -39,6 +120,44 @@ A release with nothing under Unreleased is refused rather than shipped blank.
   spellings of `PATH`, with no rule about which one the child would search.
   Affected the GitHub panel, the git status poller, the readiness checks, the
   Copilot detection and every stdio MCP server.
+
+- **Turning remote access on is instant on Windows again, and says something
+  useful when the tailnet cannot help.** It used to sit for fifteen seconds on
+  every launch with the panel spinning, then report "Tailscale did not answer".
+  Tailscale had answered, immediately: `serve` prints *"Serve is not enabled on
+  your tailnet"* with a link to switch it on, and then waits forever for
+  somebody to click it. The wait was being read as a hang and the sentence
+  naming the fix was thrown away. The output is now read as it arrives, so the
+  refusal comes back in under a second carrying Tailscale's own words and the
+  link. Remote access was never actually blocked by this — the relay does not go
+  through Tailscale — but nothing said so for fifteen seconds.
+
+- **Starting a session from a phone no longer refuses a folder that is on the
+  list the phone is showing.** Two spellings of one Windows folder — a
+  lower-cased drive letter is enough — compared as different directories, and
+  the refusal said "open it on the Mac first" about a folder already open.
+
+- **Agent CLIs report their version on Windows.** They are `.cmd` shims there,
+  which Node refuses to spawn without a shell, so every version column was
+  blank. The shim path is quoted too, or the fix would still have failed for
+  anyone whose Node lives under `C:\Program Files`.
+
+- **No more console windows flashing over your screen.** Seven child processes —
+  including the Tailscale status check that runs whenever the remote panel is
+  open — were spawned without `windowsHide`.
+
+- **Windows has Settings, Keyboard Shortcuts, About and Exit again.** All four
+  lived only in the macOS application menu, which Windows drops wholesale, so
+  the menu bar had no way to reach Settings and no way to quit, and `Ctrl+,` and
+  `Ctrl+/` were unregistered along with them.
+
+- **The diagnostics bundle's PATH is readable on Windows.** It was split on the
+  POSIX separator, so every entry was torn apart at its drive letter — in the
+  one file somebody attaches to an issue that says a CLI cannot be found.
+
+- **A Windows user is no longer told about their Mac.** The sentences on the
+  remote paths above said "this Mac", including ones sealed up and sent to a
+  phone. Not yet every one of them; the rest now have one place to come from.
 
 ## [0.1.3] — 2026-08-14
 
@@ -176,6 +295,7 @@ First cut. macOS 12+, Apple silicon, unsigned.
 - Preferences with live dark/light theming
 - Session resume (`⌘⇧T`)
 
-[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/asadev/terminaldeck/releases/tag/v0.1.4
 [0.1.3]: https://github.com/asadev/terminaldeck/releases/tag/v0.1.3
 [0.1.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.1.0
