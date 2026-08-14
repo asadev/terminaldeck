@@ -166,7 +166,10 @@ describe('off', () => {
 
   it('says what is behind the switch before it is pressed', () => {
     expect(html).toMatch(/<strong>shell<\/strong>/)
-    expect(html).toContain('Off by default')
+    // Not "off by default" any more — the app dials out on launch, and a help
+    // line describing the opposite of the switch beside it is worse than none.
+    expect(html).toContain('Turn it off and nothing can')
+    expect(html).not.toContain('Off by default')
   })
 
   it('leaves the switch off', () => {

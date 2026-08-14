@@ -2018,8 +2018,53 @@ export interface RemoteIpcDeps {
   relayUrl?: string | null
   /** False keeps the Mac off any relay, direct-on-tailnet only. */
   relayEnabled?: boolean
+  /**
+   * Whether to dial out as soon as the app launches. **Default true.**
+   *
+   * The requirement is that there is no online/offline switch to find — remote
+   * access "just works". For a long time this file did the opposite: `start()`
+   * ran only when someone pressed a button in Settings, nothing re-ran it on
+   * the next launch, and so a Mac that had been restarted was simply not
+   * reachable. Every phone paired to it saw a host that was never there.
+   *
+   * Dialling exposes nothing on its own. The relay learns that a host is
+   * online and nothing else, and a phone still has to be paired *and* approved
+   * before one frame is delivered — see `authenticatorFor`.
+   *
+   * False is what a person who turned it off gets. The caller owns
+   * remembering that, through {@link onEnabledChange}; this flag is only the
+   * answer it read back.
+   */
+  autoStart?: boolean
+  /**
+   * Told when remote access is switched on or off, so the caller can remember
+   * the answer and hand it back as {@link autoStart} next launch.
+   *
+   * Not called for the launch dial itself — that is not a decision anyone made.
+   */
+  onEnabledChange?(on: boolean): void
+  /**
+   * Told when the launch dial does not come up, with the reason.
+   *
+   * There is no user waiting on a reply to it, which is exactly why it needs
+   * somewhere to go: the last time a remote failure had no listener it was the
+   * BoringSSL cipher throw, and it cost a day of every handshake failing with
+   * nothing on the wire and nothing in any log.
+   */
+  onStartFailure?(reason: string): void
   /** Reads the environment. Injected so a test can set one without setting one. */
   env?: NodeJS.ProcessEnv
+  /**
+   * The same two test seams `createRemoteServerOptions` carries, forwarded.
+   *
+   * They matter more here than they do there. Registering the IPC now dials on
+   * its own, so a test that constructs this on a developer's Mac would bind a
+   * loopback port and ask the real Tailscale for a real proxy — a unit test
+   * reaching into the machine it runs on. Overriding them is how a test says
+   * "no tailnet" without unplugging one.
+   */
+  readTailnet?: RemoteServerOptions['readTailnet']
+  serve?: RemoteServerOptions['serve']
 }
 
 export interface RemoteIpc {
@@ -2100,9 +2145,10 @@ export function registerRemoteIpc(ipcMain: IpcMain, deps: RemoteIpcDeps): Remote
   const env = deps.env ?? process.env
 
   // Built here rather than inside the server, because this is the only place
-  // that holds the trust store and the storage directory. Nothing is dialled and
-  // no key is written until `start()`, which only runs when the user turns the
-  // feature on.
+  // that holds the trust store and the storage directory. Building it dials
+  // nothing and writes no key on its own — `start()` at the bottom of this
+  // function is what does both, on every launch unless this Mac was switched
+  // off.
   const relay = relayEnabled(env, deps.relayEnabled)
     ? relayFor(deps.storageDir, relayUrl(env, deps.relayUrl), auth, desk)
     : null
@@ -2116,11 +2162,44 @@ export function registerRemoteIpc(ipcMain: IpcMain, deps: RemoteIpcDeps): Remote
     port: deps.port,
     onConnections: (connections) => deps.broadcast(REMOTE_CONNECTIONS_CHANNEL, connections),
     ...(relay ? { relay } : {}),
+    ...(deps.readTailnet ? { readTailnet: deps.readTailnet } : {}),
+    ...(deps.serve ? { serve: deps.serve } : {}),
   })
 
   ipcMain.handle('remote:status', (): RemoteStatus => server.status())
-  ipcMain.handle('remote:start', (): Promise<RemoteStatus> => server.start())
-  ipcMain.handle('remote:stop', (): Promise<RemoteStatus> => server.stop())
+  ipcMain.handle('remote:start', async (): Promise<RemoteStatus> => {
+    const status = await server.start()
+    // Only a start that took is worth remembering. Recording the press instead
+    // would arm the next launch to retry something that has already been told
+    // it cannot work.
+    if (status.running) deps.onEnabledChange?.(true)
+    return status
+  })
+  ipcMain.handle('remote:stop', async (): Promise<RemoteStatus> => {
+    const status = await server.stop()
+    deps.onEnabledChange?.(false)
+    return status
+  })
+
+  // On unless the user turned it off. See `autoStart` for why this is not a
+  // switch anybody has to find, and why dialling out exposes nothing by itself.
+  //
+  // Not awaited: `open()` shells out to Tailscale and dials a relay across the
+  // internet, and the window must not wait on either. Both branches report —
+  // a rejected promise and a resolved-but-not-running status are the same
+  // failure to a person, and neither has a caller to return to.
+  if (deps.autoStart !== false) {
+    void server.start().then(
+      (status) => {
+        if (!status.running) {
+          deps.onStartFailure?.(status.reason ?? 'Remote access did not start, and did not say why.')
+        }
+      },
+      (error: unknown) => {
+        deps.onStartFailure?.(error instanceof Error ? error.message : String(error))
+      },
+    )
+  }
 
   ipcMain.handle('remote:pair', (): PairingToken => desk.create())
   ipcMain.handle('remote:pair:cancel', (): { cancelled: true } => {

@@ -543,6 +543,17 @@ export function aboutInfo(): AboutInfo {
  */
 export const BROWSER_PERSIST_KEY = 'browser.persistSession'
 
+/**
+ * Whether this Mac dials out for remote access when the app launches.
+ *
+ * A *missing* key means yes. That direction matters: remote access is meant to
+ * need no switch at all, so the only state worth storing is the one where
+ * someone deliberately turned it off. Written by `index.ts` when a start or a
+ * stop takes, never by the panel directly — the panel asks the main process to
+ * do something, and what actually happened is what gets remembered.
+ */
+export const REMOTE_ENABLED_KEY = 'remote.enabled'
+
 export interface ClearResult {
   cleared: boolean
   message: string

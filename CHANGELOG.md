@@ -10,6 +10,34 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Remote access now works without anyone switching it on — which is the whole
+  point of it.** The relay had existed for a day and this Mac had never dialled
+  it once outside a test. `start()` ran only from a two-press switch in
+  Settings → Remote, and nothing re-ran it on the next launch, so a computer
+  that had been restarted simply was not reachable. Measured on the machine this
+  was found on: the host identity on disk, two paired iPhones in the trust
+  store, the relay up — and not one socket to it. A phone attaching to that host
+  was attaching to something that was not there, which is exactly what
+  "connected, but showing me old output" looks like from the sofa.
+
+  It dials at launch now, every launch, unless this Mac was deliberately
+  switched off — and that off is remembered, so off still means off. Dialling
+  exposes nothing by itself: the relay learns that a host is online and no more,
+  and a device still has to be paired *and* approved before one byte moves. A
+  launch dial that fails says so in the log rather than failing silently,
+  because there is no user waiting on a reply to it.
+
+  Proven on the packaged app rather than asserted: an established socket from
+  its own process to the relay, the panel reading Connected against this Mac's
+  host id, and the relay's host count rising when the app launches and falling
+  when it quits.
+
+- **The Remote switch no longer describes the opposite of its own position.** It
+  read "Off by default. Nothing can reach this Mac while it is off." beside a
+  switch that is now on.
+
 ## [0.1.4] — 2026-08-14
 
 ### Added

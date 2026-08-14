@@ -876,7 +876,12 @@ export function RemoteView({
         <div className="settings-item">
           <Row
             label="Let approved devices in"
-            help="Off by default. Nothing can reach this Mac while it is off."
+            // It used to read "Off by default", which was true and is not any
+            // more: this Mac dials out on launch so a paired phone has
+            // something to attach to without anyone opening this panel first.
+            // Leaving the old sentence there would have the switch describing
+            // the opposite of its own position.
+            help="On, so a paired phone can always reach this Mac. Turn it off and nothing can, until you turn it back on."
             labelId={`${ids}-label`}
             helpId={`${ids}-help`}
             control={

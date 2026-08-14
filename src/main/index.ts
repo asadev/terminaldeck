@@ -41,11 +41,17 @@ import { registerMcpIpc } from './mcp-client'
 import { registerBrowserIpc } from './browser-tab'
 import { registerChromeImportIpc } from './chrome-import'
 import { registerPrerequisitesIpc } from './prerequisites'
-import { registerSettingsIpc, clearBrowserDataIfNotPersisting, storedValue } from './settings-extra'
+import {
+  registerSettingsIpc,
+  clearBrowserDataIfNotPersisting,
+  patchStoredSettings,
+  storedValue,
+  REMOTE_ENABLED_KEY,
+} from './settings-extra'
 import { registerBrowserSessionIpc } from './browser-session'
 import { registerBrowserViewIpc } from './browser-view'
 import { registerDiagnosticsIpc } from './diagnostics'
-import { registerLogIpc } from './app-log'
+import { registerLogIpc, logger } from './app-log'
 import { traceIpc, TRACE_SETTING } from './ipc-trace'
 import { buildMenu } from './menu'
 import { registerSetupIpc } from './setup'
@@ -432,10 +438,30 @@ function registerIpc(): void {
     broadcast: (channel, state) => send(channel, state),
   })
   registerTailnetIpc(ipcMain, { certDir: join(app.getPath('userData'), 'tailnet-certs') })
-  // Off until the user turns it on: this serves a shell. The server itself
-  // binds only to the tailnet address and refuses to start without one.
+  // On unless this Mac has been told otherwise.
+  //
+  // It used to be off until someone pressed a button, and nothing pressed it
+  // again on the next launch — so a Mac that had been restarted held no relay
+  // connection at all, and every phone paired to it was attaching to a host
+  // that was not there. That is not a missing feature to a person holding a
+  // phone; it is the app not working. Measured on this machine: the identity
+  // and two paired devices on disk, and not one socket to the relay.
+  //
+  // The comment that used to sit here — "this serves a shell", "binds only to
+  // the tailnet address" — was written before the relay existed, when starting
+  // meant opening a listener. Dialling out opens nothing, and a phone still
+  // has to be paired and approved before a byte moves.
   const remote = registerRemoteIpc(ipcMain, {
     sessions: remoteSessions,
+    autoStart: storedValue(REMOTE_ENABLED_KEY) !== false,
+    onEnabledChange: (on) => {
+      patchStoredSettings({ [REMOTE_ENABLED_KEY]: on })
+    },
+    onStartFailure: (reason) => {
+      // Nobody is waiting on a reply to the launch dial, so this is the only
+      // place it can surface. Loud on purpose.
+      logger.error('remote', 'remote access did not come up at launch', { reason })
+    },
     webRoot: join(app.getAppPath(), 'pwa', 'dist'),
     storageDir: join(app.getPath('userData'), 'remote'),
     // Where a photo or a file sent from a phone lands. The user's downloads
