@@ -47,7 +47,36 @@ npm-debug.log*
 # Where `scripts/remote-host.sh` keeps its bundle, this Mac's relay identity and
 # the trust store it pairs phones into. Machine state, and one of those files is
 # a private key.
-.harness/.remote-host/
+#
+# The glob, not just the bare name: `--name b` gives a second host a directory of
+# its own — that is what makes two of them two *machines* rather than one started
+# twice — and proving multi-host means running at least two. A pattern that only
+# covered the default would have committed the second machine's private key.
+.harness/.remote-host*/
+
+# The same bundle, built to a folder of its own by the two-host recipe at the top
+# of `ios/UITests/MultiHostUITests.swift`. Half a megabyte of esbuild output.
+.harness/.multi-host/
+
+# The GUEST side of the same harness — and the gap the rules above did not cover.
+#
+# The comment on `.remote-host*/` is proud of catching the second machine's
+# private key. It did. Then the guest stand-in wrote its own keypair and its own
+# pairing credential to a directory with no leading dot, so none of these
+# patterns saw it, and `.harness/guest/device-key.json` — a 32-byte X25519
+# private key — was committed to a PUBLIC repository, along with the credential
+# naming the host it had paired to.
+#
+# What saved it was luck rather than design: the host it named was an ephemeral
+# `--fresh` stand-in that no longer exists, so the leaked pair authorises nothing
+# today. The next run against a real desktop would not have been so harmless.
+#
+# Ignore the artefacts by name rather than the folder, because `guest.ts` and
+# `guest.mjs` are the harness itself and belong in the repo.
+.harness/guest/device-key.json
+.harness/guest/credential.txt
+.harness/**/device-key.json
+.harness/**/credential.txt
 
 # Editors
 .vscode/
