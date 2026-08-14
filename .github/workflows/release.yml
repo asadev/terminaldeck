@@ -64,14 +64,24 @@ jobs:
       - name: Test
         run: npm test
 
-      # `dist:mac` is `npm run build && electron-builder … --publish never`, and
-      # both halves matter. electron-builder packages whatever is in `out/` and
-      # does not produce it — a run without the build step fails the asar sanity
-      # check ("out/main/index.js … was not found in this archive"), which is
-      # verified behaviour, not a guess. `--publish never` is the other half:
-      # electron-builder infers a GitHub publish target from the `repository`
-      # field and would upload on its own. Uploading happens below instead,
-      # explicitly, with the artifacts chosen here.
+      # `dist:mac` is `npm run build && npm run build:pwa && electron-builder …
+      # --publish never`, and all three parts matter. electron-builder packages
+      # whatever is in `out/` and does not produce it — a run without the build
+      # step fails the asar sanity check ("out/main/index.js … was not found in
+      # this archive"), which is verified behaviour, not a guess.
+      #
+      # `build:pwa` is the part that was missing until 0.1.6, and it took three
+      # releases to notice. `pwa/dist` is build output, so it is gitignored, so
+      # a clean CI checkout does not have it, so the electron-builder allowlist
+      # line `pwa/dist/**/*` matched zero files — and an allowlist entry that
+      # matches nothing looks exactly like one whose files were all excluded.
+      # Nothing warned. Three releases shipped with the phone client absent and
+      # the address the Remote panel prints answering with nothing.
+      #
+      # `--publish never` is the last part: electron-builder infers a GitHub
+      # publish target from the `repository` field and would upload on its own.
+      # Uploading happens below instead, explicitly, with the artifacts chosen
+      # here.
       - name: Build the mac artifacts
         run: npm run dist:mac
 

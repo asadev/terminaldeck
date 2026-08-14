@@ -189,6 +189,34 @@ if (resources === null || !existsSync(join(resources, 'app.asar'))) {
       note('ok    out/main/index.js is present')
     }
   }
+
+  /*
+   * The phone client, which no release before 0.1.6 ever contained.
+   *
+   * `pwa/dist` is build output and therefore gitignored, CI checks out clean,
+   * and `npm run dist:mac` built only `out/` — so the allowlist line
+   * `pwa/dist/**\/*` matched nothing at all and electron-builder said nothing
+   * about it. Three releases shipped with `webRoot` pointing at a directory
+   * that was not in the bundle, and the tailnet address the Remote panel prints
+   * for the user to open on their phone answered with nothing.
+   *
+   * It failed silently in the one direction nobody checks — an allowlist entry
+   * matching zero files is indistinguishable from one matching files that are
+   * all excluded. So the check is for the built artifact by name, not for the
+   * folder: an empty `pwa/dist` would satisfy the folder and still serve a 404.
+   *
+   * Checked on disk rather than in the listing because `asarUnpack` puts it in
+   * `app.asar.unpacked/`, which `asar list` never shows.
+   */
+  const phoneClient = join(resources, 'app.asar.unpacked', 'pwa', 'dist', 'index.html')
+  if (!existsSync(phoneClient)) {
+    problems.push(
+      'the phone client is missing — no app.asar.unpacked/pwa/dist/index.html. ' +
+        'Run `npm run build:pwa` before packaging; `npm run build` does not build it.',
+    )
+  } else {
+    note(`ok    the phone client is present (${(statSync(phoneClient).size / 1024).toFixed(1)} KB of index.html)`)
+  }
 }
 
 const installers = readdirSync(RELEASE).filter((f) =>
