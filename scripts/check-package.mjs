@@ -155,8 +155,22 @@ if (resources === null || !existsSync(join(resources, 'app.asar'))) {
   }
 
   if (listing !== '') {
-    // `asar list` prints absolute-looking archive paths: `/out/main/index.js`.
-    const entries = listing.split('\n').map((l) => l.trim().replace(/^\/+/, '')).filter(Boolean)
+    /*
+     * `asar list` prints absolute-looking archive paths — and prints them with
+     * the *host's* separator, so the same archive reads `/out/main/index.js` on
+     * macOS and `\out\main\index.js` on Windows.
+     *
+     * Caught by this check failing on the Windows runner while the mac one
+     * passed, on an installer that was in fact correct. Which is the joke: a
+     * script written to stop a POSIX assumption reaching Windows had one in it.
+     * The false negative was the worse half — `startsWith('ios/')` would never
+     * have matched `ios\…`, so the check would have waved through exactly the
+     * 1.0 GB build it exists to stop.
+     */
+    const entries = listing
+      .split('\n')
+      .map((l) => l.trim().replace(/\\/g, '/').replace(/^\/+/, ''))
+      .filter(Boolean)
     note(`app.asar holds ${entries.length} entries`)
 
     for (const forbidden of FORBIDDEN) {
