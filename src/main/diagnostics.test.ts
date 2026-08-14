@@ -586,7 +586,15 @@ describe('debug:diagnostics — what the renderer is allowed to ask for', () => 
     expect((await collect({}, { includeClis: false })).log.lines).toHaveLength(200)
     expect((await collect({}, { includeClis: false, logLines: null })).log.lines).toHaveLength(200)
     expect((await collect({}, 'nonsense')).log.lines.length).toBeGreaterThan(0)
-  })
+    // Not a race, and not a guess: this case writes 400 log lines and then
+    // builds seven whole bundles, each of which redacts every line it returns.
+    // That is a little over four seconds of straight-line work on a developer
+    // machine — measured, with a scrubbed environment, so it is the redaction
+    // and not somebody's env. Against vitest's 5s default it passed only while
+    // nothing else was running, and failed every time the suite was under load.
+    // The number below is headroom for a CPU-bound case, not a widened wait for
+    // something that might not have happened yet.
+  }, 20_000)
 
   /**
    * The handler used to spread the raw argument into `CollectOptions`, so the
