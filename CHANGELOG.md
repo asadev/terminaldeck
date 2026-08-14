@@ -10,6 +10,8 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+## [0.1.6] — 2026-08-14
+
 ### Fixed
 
 - **The phone client is in the app.** It never has been. `webRoot` points at
@@ -341,7 +343,8 @@ First cut. macOS 12+, Apple silicon, unsigned.
 - Preferences with live dark/light theming
 - Session resume (`⌘⇧T`)
 
-[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.1.5...HEAD
+[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.1.6...HEAD
+[0.1.6]: https://github.com/asadev/terminaldeck/releases/tag/v0.1.6
 [0.1.5]: https://github.com/asadev/terminaldeck/releases/tag/v0.1.5
 [0.1.4]: https://github.com/asadev/terminaldeck/releases/tag/v0.1.4
 [0.1.3]: https://github.com/asadev/terminaldeck/releases/tag/v0.1.3
