@@ -21,6 +21,7 @@ import {
 } from './layout'
 import { getWidgetDefinition, listWidgetDefinitions, type WidgetContext } from './widgets'
 import { PageEmpty } from '../components/PageEmpty'
+import { useFeatures } from '../features/FeaturesProvider'
 import { panelSpec } from '../shell/panels'
 import './Dashboard.css'
 
@@ -76,6 +77,7 @@ function windowBridge(): DashboardBridge | null {
 }
 
 export function Dashboard({ projectPath, context, bridge }: DashboardProps) {
+  const features = useFeatures()
   const [layout, setLayout] = useState<DashboardLayout>(() => defaultLayout(projectPath))
   const [loaded, setLoaded] = useState(false)
   const [picking, setPicking] = useState(false)
@@ -346,7 +348,17 @@ export function Dashboard({ projectPath, context, bridge }: DashboardProps) {
     [context, projectPath],
   )
 
-  const available = listWidgetDefinitions()
+  /*
+   * The tiles this install has.
+   *
+   * Three of the five belong to features — Cost to Cost and usage, GitHub to
+   * GitHub, AI readiness to its own — and a saved layout outlives an uninstall,
+   * so both ends need the check: the picker must not offer a tile the app
+   * cannot draw, and a layout that already contains one must skip it rather
+   * than render a panel for a feature that is gone. Skipping is the same thing
+   * that already happens to a widget type this build does not recognise.
+   */
+  const available = listWidgetDefinitions().filter((definition) => features.widgetOn(definition.type))
   const empty = countWidgets(layout) === 0
 
   return (
@@ -366,8 +378,15 @@ export function Dashboard({ projectPath, context, bridge }: DashboardProps) {
             </svg>
             Add widget
           </button>
-          <button type="button" className="dashboard-btn ghost" onClick={handleReset}>
-            Reset
+          {/* A button, drawn like one, and named after what it does.
+
+              It was a "ghost": no fill, no border, `--text-secondary` — which
+              beside a filled Add widget reads as a static grey caption rather
+              than as a control, so the affordance ran backwards. And "Reset" on
+              its own does not say what it resets; on a page with widgets, a
+              project and a layout, that is three plausible answers. */}
+          <button type="button" className="dashboard-btn" onClick={handleReset}>
+            Reset the layout
           </button>
         </header>
       )}
@@ -395,7 +414,7 @@ export function Dashboard({ projectPath, context, bridge }: DashboardProps) {
         <div ref={rootRef} className="grid-stack dashboard-grid" hidden={empty}>
           {layout.widgets.map((widget) => {
             const definition = getWidgetDefinition(widget.type)
-            if (!definition) return null
+            if (!definition || !features.widgetOn(widget.type)) return null
             const { Component } = definition
             return (
               // No `style` and no `gs-*` attributes: gridstack writes both, and

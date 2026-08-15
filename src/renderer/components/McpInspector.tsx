@@ -464,6 +464,17 @@ export function McpInspector({ projectPath = null, bridge }: McpInspectorProps) 
 
   return (
     <div className="mcp">
+      {/*
+        The intro and the Reload button stand down while the page is a blank.
+
+        They are a left-aligned paragraph and a button pinned to the far right
+        of the window; the empty state under them is a centred block. Nothing on
+        the page shared an edge with anything else. With no servers there is
+        also nothing for either of them to be about — the empty state says what
+        an MCP server is and offers the same two ways to get one — so the page
+        becomes one composition instead of three alignments.
+      */}
+      {!blank && (
       <header className="mcp-head">
         <div>
           {/* Both halves of this are load-bearing. Adding works from here now,
@@ -494,6 +505,7 @@ export function McpInspector({ projectPath = null, bridge }: McpInspectorProps) 
           </button>
         </div>
       </header>
+      )}
 
       {adding && (
         <McpAddForm
@@ -547,6 +559,14 @@ export function McpInspector({ projectPath = null, bridge }: McpInspectorProps) 
             <>
               Or run <code>claude mcp add</code> in a terminal.
             </>
+          }
+          /* The reload the header would have carried, kept where the rest of
+             the page is: somebody who has just added a server from a terminal
+             needs it, and it is the only reason to reread an empty list. */
+          extra={
+            <button type="button" className="mcp-refresh" onClick={() => void refresh()} disabled={loading}>
+              {loading ? 'Reading…' : 'Reload'}
+            </button>
           }
         >
           An MCP server is a tool your agents can reach — a database, a browser, an API.

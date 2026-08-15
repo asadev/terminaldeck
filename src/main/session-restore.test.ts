@@ -461,6 +461,15 @@ describe('restoreOpenSessions', () => {
 
 describe('restoring is wired to launch', () => {
   const index = readFileSync(join(ROOT, 'src/main/index.ts'), 'utf8')
+  /*
+   * The ledger moved to `host-core.ts` when the headless build arrived, because
+   * remembering what was open is about the machine and not about a window — and
+   * it matters more there than here: WSL shuts a distribution down whenever the
+   * last terminal closes, so on that host "the process died with sessions open"
+   * is the ordinary case rather than the crash case.
+   */
+  const core = readFileSync(join(ROOT, 'src/main/host-core.ts'), 'utf8')
+  const headless = readFileSync(join(ROOT, 'src/headless/host.ts'), 'utf8')
 
   it('runs a restore from a window lifecycle event, not from a command', () => {
     /*
@@ -510,19 +519,32 @@ describe('restoring is wired to launch', () => {
     expect(call).toMatch(/spawn: startSession,/)
   })
 
-  it('does not empty the remembered list while the app is quitting', () => {
-    // `before-quit` kills every pty, each kill fires an exit, and reconciling on
-    // those exits would write down that nothing was open — on every clean quit.
-    const remember = index.slice(index.indexOf('function rememberOpenSessions'))
-    expect(remember.slice(0, 200)).toMatch(/if \(quitting\) return/)
+  it('does not empty the remembered list while it is shutting down', () => {
+    // Shutting down kills every pty, each kill fires an exit, and reconciling on
+    // those exits would write down that nothing was open — on every clean stop.
+    const flush = core.slice(core.indexOf('  flush(): void {'))
+    expect(flush.slice(0, 120)).toMatch(/if \(this\.frozen\) return/)
+    // And each shell has to freeze it, after one last honest write.
+    expect(index).toMatch(/ledger\.flush\(\)\s*\n\s*ledger\.freeze\(\)/)
+    expect(headless).toMatch(/core\.ledger\.flush\(\)\s*\n\s*core\.ledger\.freeze\(\)/)
   })
 
   it('writes the remembered list as sessions open and close, not only at quit', () => {
     // The case this exists for is a machine that restarted. Nothing runs at
     // quit then, so a list that is only written on the way out is a list that is
     // empty exactly when it is needed.
-    expect(index).toMatch(/openSessionRecords\.set\(/)
-    expect(index).toMatch(/openSessionRecords\.delete\(/)
+    expect(core).toMatch(/ledger\.note\(meta\.id, \{/)
+    expect(core).toMatch(/ledger\.forget\(id\)/)
+  })
+
+  it('restores from starting the headless host, not from a command', () => {
+    // The same assertion as the window's, for the shell that has no window. A
+    // restore reachable only from `terminaldeck status` would be a restore that
+    // never runs on the machine it was written for.
+    const main = readFileSync(join(ROOT, 'src/headless/daemon.ts'), 'utf8')
+    expect(main).toMatch(/await host\.restore\(\)/)
+    expect(headless).toMatch(/restoreOpenSessions\(/)
+    expect(headless).toMatch(/spawn: core\.startSession,/)
   })
 
   it('never writes a restore banner into a session', () => {

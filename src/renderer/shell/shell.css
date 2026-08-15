@@ -124,7 +124,23 @@
   bottom: 0;
   left: 0;
   z-index: 20;
-  box-shadow: var(--shadow-lg);
+  /*
+    A real edge, because this one is floating over a terminal.
+
+    Pinned, the rail sits *beside* the content and its own hairline is enough.
+    Peeked, the content has already reflowed to the full window width and is
+    running underneath — so the boundary falls in the middle of a line of
+    monospaced output and cuts characters in half. With `--border-subtle` on the
+    inside edge (rgba(56,56,56,0.055) on paper) and a soft shadow, there was
+    nothing to see: the panel was #fafafa, the page was #ffffff, and the seam
+    read as a rendering fault rather than as a panel.
+
+    So the peeked state takes the stronger material and the strong border, and
+    keeps the large shadow — a surface that is over something has to look like
+    it. The brief asked for "a better separation" on exactly this edge.
+  */
+  background-color: var(--material-bg-strong);
+  box-shadow: inset -1px 0 0 var(--border-strong), var(--shadow-lg);
   animation: sidebar-peek-in var(--dur-fast) var(--ease);
 }
 
@@ -201,15 +217,30 @@
   -webkit-app-region: drag;
 }
 
+/*
+  The one control that opens and closes the rail, and it has to be findable.
+
+  It was `--text-muted` at a 1.5px stroke, twelve pixels from the green traffic
+  light — measured as the lowest-contrast control in the window, and it is the
+  control that reveals and pins the whole sidebar. Secondary ink and a slightly
+  heavier stroke keep it chrome-quiet while making it something the eye can
+  actually land on; the stroke is set here rather than on the glyph because a
+  presentation attribute loses to a stylesheet, which is what lets one rule
+  thicken this arrow and no other.
+*/
 .sidebar-arrow {
   display: grid;
   place-items: center;
   width: var(--control-h);
   height: var(--control-h);
   border-radius: var(--radius-sm);
-  color: var(--text-muted);
+  color: var(--text-secondary);
   -webkit-app-region: no-drag;
   transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.sidebar-arrow .sb-glyph {
+  stroke-width: 1.9;
 }
 
 .sidebar-arrow:hover {
@@ -674,9 +705,55 @@
   box-shadow: inset 0 -1px 0 var(--border-subtle);
 }
 
-/* With the sidebar hidden the traffic lights land on the toolbar instead. */
+/*
+  With the sidebar hidden the traffic lights land on the toolbar instead, and
+  the control that brings the rail back appears beside them.
+
+  That button is positioned rather than laid out (`.toolbar-reveal` below), so
+  the pad here is only what keeps the *heading* clear of it: 82px for the
+  lights, plus the button and its gap. Written as one number rather than a sum
+  so the two rules that override it below stay readable.
+*/
 .toolbar[data-sidebar-collapsed] {
-  padding-left: 82px;
+  padding-left: 118px;
+}
+
+/* Parked over the traffic-light strip, out of the flow. In the flow it moved
+   with the heading's indent, which put the reveal button 350px from where the
+   rail's own arrow draws it — the same control in two places depending on which
+   state you are in. */
+.toolbar-reveal {
+  position: absolute;
+  left: 82px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+/*
+  Over a page, the title sits on the page's own left edge.
+
+  Measured in the running app: every panel page centres itself in a 940px
+  measure, so on an 1800px window its content began at x=562 — while the
+  toolbar's title stood at x=280, a hundred and eighty pixels adrift, an
+  orphaned heading floating out over the margin of its own page. The
+  arithmetic here is `.panel-page`'s, character for character, and it works
+  because the two are siblings in `.main`: percentages in both resolve against
+  the same containing block, so they land on the same pixel rather than nearly.
+
+  Files is exempt because it is the one page that is deliberately full-bleed —
+  a tree and a viewer filling the window — so its content starts at the window
+  edge and its title belongs there too. A session is exempt by having no
+  `data-page` at all: a terminal fills the window, and its title belongs at the
+  window's own margin.
+*/
+.toolbar[data-page]:not([data-page='files']) {
+  padding-left: max(var(--sp-8), calc((100% - var(--page-measure)) / 2));
+}
+
+.toolbar[data-sidebar-collapsed][data-page]:not([data-page='files']) {
+  /* The lights and the reveal button still have to clear, whatever the measure
+     works out to on a narrow window. */
+  padding-left: max(118px, calc((100% - var(--page-measure)) / 2));
 }
 
 .toolbar-lead {
@@ -1012,12 +1089,12 @@
    300px column — a dashboard, a kanban board and a pull-request list, all in a
    strip narrower than a phone. */
 .panel-page {
-  /* A measure, centred. Left-aligned in a 1600px window these pages put a
-     search field, a score ring or a two-line notice in the top-left corner
-     with an ocean of empty paper to their right — the layout of a document
-     that overflowed, not one that was designed. The gutter never falls below
-     --sp-8, so nothing changes on a narrow window. */
-  --page-measure: 940px;
+  /* A measure, centred, and `--page-measure` is declared in tokens.css because
+     the toolbar reads it too — see `.toolbar[data-page]`. Left-aligned in a
+     1600px window these pages put a search field, a score ring or a two-line
+     notice in the top-left corner with an ocean of empty paper to their right —
+     the layout of a document that overflowed, not one that was designed. The
+     gutter never falls below --sp-8, so nothing changes on a narrow window. */
   position: absolute;
   inset: 0;
   overflow: auto;
@@ -1026,10 +1103,12 @@
   padding-inline: max(var(--sp-8), calc((100% - var(--page-measure)) / 2));
 }
 
-/* A grid of widgets earns more width than a column of prose. */
-.panel-page[data-panel='overview'] {
-  --page-measure: 1240px;
-}
+/* The Overview used to take 1240px on the argument that a grid of widgets earns
+   more width than a column of prose. It does, in the abstract — but the price
+   was that its left edge stood 150px inside every other page's, so moving
+   between Overview and Alerts shifted the whole window sideways and no two
+   pages in the app agreed where a page starts. One measure is worth more than
+   the extra column. */
 
 /* Two panes and no page scroll of its own. */
 .panel-page[data-panel='files'] {
@@ -1153,18 +1232,35 @@
 }
 
 /* Left-aligned on purpose: what goes in here is a disclosure over a block of
-   tool output, and centred stderr is unreadable. */
+   tool output, and centred stderr is unreadable. A lone control is the other
+   thing that lands here — MCP's Reload, when the page has no list for the
+   header to belong to — and a button is not stderr, so it sits on the page's
+   own centre line with everything else. */
 .page-blank-extra {
   margin-top: var(--sp-5);
   text-align: left;
 }
 
+.page-blank-extra:has(> button:only-child) {
+  text-align: center;
+}
+
 /* A command in the body, e.g. "add one with `claude mcp add`". Panels used to
    print the backticks literally, which is a markdown source file leaking into
    a window. */
+/* Inline code inside running text.
+
+   The padding used to be a full --sp-1 each side and, added to the word space
+   either side of it, opened a visible double gap in the middle of a sentence —
+   "run `claude mcp add` in a terminal" read as though somebody had hit the
+   space bar twice. A tint and a mono face are what mark it as code; the
+   breathing room comes back as a negative margin so the run of text keeps its
+   own rhythm. */
 .page-blank-body code,
-.page-blank-line code {
-  padding: 1px var(--sp-1);
+.page-blank-line code,
+.page-blank-hint code {
+  padding: 1px 3px;
+  margin-inline: -1px;
   border-radius: var(--radius-sm);
   background: var(--fill-tertiary);
   color: var(--text-primary);

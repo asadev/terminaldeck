@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
-import { Notice, Row, SectionHead, Switch } from '../controls'
+import { Explain, Notice, Row, SectionHead, Switch } from '../controls'
 import { sectionMeta } from '../settings-schema'
 import { errorText } from '../settings-bridge'
 import { detectPlatform, machineNoun, osName, ThisMachine, thisMachine, type UiPlatform } from '../../platform'
@@ -354,13 +354,21 @@ export function PowerView({
               />
             }
           />
-          {caution && (
-            <div className="settings-item-extra">
-              <span className="settings-help">{caution}</span>
-            </div>
-          )}
         </div>
       )}
+
+      {/*
+        The standing warning, given a line of its own.
+
+        It used to be a third piece of grey type stacked inside the switch's
+        card, immediately under a help line that was already three sentences —
+        so the row a reader most needed to slow down for was the one that looked
+        most like a paragraph with no shape. Same words (`lidAwakeCaution` is
+        unchanged and its wording is pinned by this section's test), same place
+        in the reading order, directly under the control it is about. What it
+        gains is a title to scan and space around it.
+      */}
+      {!unavailable && caution && <Explain title="Heat and battery">{caution}</Explain>}
 
       {changing && (
         <Notice tone="info">

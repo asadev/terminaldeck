@@ -57,7 +57,7 @@
  * change — without a keyboard.
  */
 
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
+import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { createServer as createHttpServer } from 'node:http'
 import { connect as netConnect, type Socket } from 'node:net'
 import { createRequire } from 'node:module'
@@ -622,6 +622,17 @@ class Channel {
     sealed: SealedTransport | null = null
     deviceId: string | null = null
     greeted = false
+    /**
+     * What the phone said it can do, in its `hello`.
+     *
+     * Recorded rather than ignored because the credential proxy is the one
+     * exchange that runs desktop→phone, and `server.ts` will not send a
+     * `credential.request` to a connection that did not claim the name. A
+     * harness that asked regardless would prove the phone can answer a frame it
+     * would never be sent — the same shape of false confidence the header of
+     * this file is about.
+     */
+    claimed: string[] = []
     readonly handles = new Set<string>()
 
     constructor(readonly key: string, readonly channel: Buffer, private readonly link: HostLink) {}
@@ -648,10 +659,14 @@ class Channel {
      * `ProtocolErrorCode`, not a hand-written subset of it.
      *
      * The subset that used to be here — four of the codes, spelled out — went
-     * stale the moment `protocol.ts` grew `unavailable`, and the only reason
-     * nobody saw the type error is that no tsconfig in this repository includes
-     * `ios/Harness`. The one caller already forwards a code straight out of
-     * `parseClientMessage`, so the honest parameter is the whole union.
+     * stale the moment `protocol.ts` grew `unavailable`, and the reason nobody
+     * saw the type error is that no tsconfig in this repository included
+     * `ios/Harness`: it was TypeScript that the compiler was never pointed at.
+     * That hole is closed — `tsconfig.node.json` now includes this directory,
+     * so `npm run typecheck` compiles it, and `src/typecheck-coverage.test.ts`
+     * fails if the include is ever dropped again. The one caller already
+     * forwards a code straight out of `parseClientMessage`, so the honest
+     * parameter is the whole union.
      */
     refuse(code: ProtocolErrorCode, message: string): void {
         this.send({ t: 'error', code, message })
@@ -754,7 +769,9 @@ class Channel {
             }
 
             this.deviceId = outcome.device.id
-            log(`${outcome.device.name} is in (${outcome.device.id})`)
+            this.claimed = message.capabilities ?? []
+            log(`${outcome.device.name} is in (${outcome.device.id})`
+                + `${this.claimed.length ? ` claiming [${this.claimed.join(', ')}]` : ' claiming nothing'}`)
             this.send({
                 t: 'welcome',
                 protocol: PROTOCOL_VERSION,
@@ -900,9 +917,72 @@ class Channel {
             }
             case 'ping':
                 return this.send({ t: 'pong' })
+
+            /* ---- capability `credential` ------------------------------- */
+            /*
+             * The phone answering a question this host asked.
+             *
+             * Recorded rather than acted on: nothing here is doing a `git push`,
+             * so there is nothing to hand a login to. What `/credential` needs
+             * to report is *what the phone said*, which is the only thing a UI
+             * test on the other side cannot see for itself.
+             *
+             * The secret is never written down and never logged — only its
+             * length, which is enough to tell "a token arrived" from "an empty
+             * string arrived" and is not enough to be a leak. `credentials.ts`
+             * has the same rule and states it at more length.
+             */
+            case 'credential.ack': {
+                const record = credentialAsks.get(message.id)
+                if (record) record.acked = true
+                log(`credential ${message.id.slice(0, 8)} acknowledged`)
+                return
+            }
+            case 'credential.answer': {
+                const record = credentialAsks.get(message.id)
+                if (record) {
+                    record.answer = {
+                        username: message.username,
+                        secretBytes: Buffer.byteLength(message.password, 'utf8'),
+                        remember: message.remember === true,
+                    }
+                }
+                log(`credential ${message.id.slice(0, 8)} answered as ${message.username}`
+                    + ` (${Buffer.byteLength(message.password, 'utf8')} byte secret`
+                    + `${message.remember === true ? ', remember' : ''})`)
+                return
+            }
+            case 'credential.deny': {
+                const record = credentialAsks.get(message.id)
+                if (record) record.denied = message.reason ?? 'denied'
+                log(`credential ${message.id.slice(0, 8)} refused: ${message.reason ?? 'denied'}`)
+                return
+            }
         }
     }
 }
+
+/* -------------------------------------------------------------------------- */
+/* Credential proxy, from this side                                            */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * What a phone said about one question, for `/credential` to report.
+ *
+ * There is no login here and there never will be: this host is not running
+ * `git`, so an answer has nowhere to go. What it is for is proving the phone's
+ * half — that the frame was understood, that a read was answered without
+ * anybody being asked, that a write raised a prompt, and that Deny reaches the
+ * far end as a code rather than as silence.
+ */
+interface CredentialAsk {
+    id: string
+    acked: boolean
+    answer: { username: string; secretBytes: number; remember: boolean } | null
+    denied: string | null
+}
+
+const credentialAsks = new Map<string, CredentialAsk>()
 
 const channels = new Map<string, Channel>()
 
@@ -1266,12 +1346,80 @@ createHttpServer((req, res) => {
             log(`folders → [${granted.join(', ')}] (told ${told})`)
             return reply({ folders: granted, told })
         }
+        /**
+         * Be the `git` that needs a login, and report what the phone said.
+         *
+         *     curl '127.0.0.1:8788/credential?repo=asadev/terminaldeck'      a push
+         *     curl '127.0.0.1:8788/credential?op=read&prompt=0'              a fetch
+         *     curl '127.0.0.1:8788/credential?repo=&prompt=1'                no repo name
+         *
+         * This is the only way to exercise the phone's half at all. The desktop
+         * sends `credential.request` from `credentials.ts`, which needs a real
+         * `git` process, a guest session and a loopback askpass endpoint —
+         * none of which a phone can see and none of which say anything about
+         * whether the phone answers. What the phone owes is on this wire, and
+         * this puts it there.
+         *
+         * It refuses to ask a connection that did not claim the capability,
+         * which is what `server.ts` does: a phone that never advertised
+         * `credential` is one a real desktop would leave alone, and a harness
+         * that asked anyway would manufacture confidence in a negotiation that
+         * is not happening.
+         */
+        case '/credential': {
+            const params = new URL(req.url ?? '/', 'http://127.0.0.1').searchParams
+            // Absent means the ordinary case; **present and empty** means the
+            // desktop could not name the repository, which is a real answer the
+            // phone has to render rather than invent a name for.
+            const rawRepo = params.get('repo')
+            const repo = rawRepo === null ? 'asadev/terminaldeck' : (rawRepo === '' ? null : rawRepo)
+            const operation = params.get('op') === 'read' ? 'read' as const : 'write' as const
+            const prompt = params.get('prompt') !== '0'
+            const gitHost = params.get('host') || 'github.com'
+            const wait = Number(params.get('wait') ?? '8000')
+
+            const asked: string[] = []
+            const skipped: string[] = []
+            for (const channel of channels.values()) {
+                if (!channel.deviceId) continue
+                if (!channel.claimed.includes('credential')) {
+                    skipped.push(channel.deviceId)
+                    continue
+                }
+                const id = randomBytes(8).toString('hex')
+                credentialAsks.set(id, { id, acked: false, answer: null, denied: null })
+                channel.send({ t: 'credential.request', id, host: gitHost, repo, operation, prompt })
+                asked.push(id)
+            }
+            log(`credential ${operation} ${repo ?? '(unnamed repo)'} → ${asked.length} device(s)`
+                + `${skipped.length ? `, skipped ${skipped.length} that never claimed it` : ''}`)
+
+            // Polled rather than awaited on a promise, so a request that nobody
+            // answers ends in a report saying exactly that instead of hanging
+            // the script that asked.
+            const deadline = Date.now() + Math.max(0, Math.min(wait, 120_000))
+            const settled = () => asked.every((id) => {
+                const record = credentialAsks.get(id)
+                return record !== undefined && (record.answer !== null || record.denied !== null)
+            })
+            const finish = () => reply({
+                asked: asked.map((id) => credentialAsks.get(id)),
+                skipped,
+            })
+            const tick = () => {
+                if (asked.length === 0 || settled() || Date.now() >= deadline) return finish()
+                setTimeout(tick, 100)
+            }
+            return tick()
+        }
+
         case '/state':
             return reply({
                 hostId: HOST_ID,
                 fingerprint: fingerprint(macStatic.publicKey),
                 channels: channels.size,
                 devices: [...devices.values()].map(({ id, name, approved }) => ({ id, name, approved })),
+                claimed: [...channels.values()].filter((c) => c.deviceId).map((c) => c.claimed),
                 sessions: list().map(({ id, title, status }) => ({ id, title, status })),
             })
         case '/quit':

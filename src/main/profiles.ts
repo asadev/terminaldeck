@@ -44,10 +44,11 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
-import { app, type IpcMain, type IpcMainInvokeEvent } from 'electron'
+import type { IpcMain, IpcMainInvokeEvent } from 'electron'
 import type { ProviderId } from '../shared/types'
 import { profileIsolation, type ProfileIsolation } from './platform/credential-store'
 import { currentPlatform, type Platform } from './platform/host'
+import { userDataDir } from './platform/paths'
 import { claudeConfigDir, transcriptDir } from './transcript'
 
 /* ---------------------------------------------------------------- model -- */
@@ -188,7 +189,7 @@ export function canonicalProjectKey(projectPath: string): string {
 /* --------------------------------------------------------------- paths -- */
 
 function userData(): string {
-  return app.getPath('userData')
+  return userDataDir()
 }
 
 /** Where profiles this app created live. Nothing outside it is ever deleted. */

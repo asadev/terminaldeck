@@ -355,7 +355,17 @@ export function AgentControls({ sessionId, cwd, provider, extra }: Props) {
           : null}
 
         {/* One affordance for everything folded away, and it says so on hover
-            rather than making the word "More" carry the whole explanation. */}
+            rather than making the word "More" carry the whole explanation.
+
+            Not drawn when there is nothing folded away. On a plain shell every
+            picker is withdrawn and the usage strip is withheld, so the sheet
+            could only ever open onto a paragraph explaining its own emptiness —
+            "Model, effort, fast mode and permission modes belong to an agent
+            CLI, there is nothing here to set them on" — which is the dead
+            control the brief forbids, and a near-copy of the empty state
+            already on screen in the middle of the same pane. A control earns
+            its place by having something behind it. */}
+        {(usable || extra) && (
         <button
           type="button"
           className="cc-chip ac-more"
@@ -373,6 +383,7 @@ export function AgentControls({ sessionId, cwd, provider, extra }: Props) {
             <path d="M2.5 4.5 6 8l3.5-3.5" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
           </svg>
         </button>
+        )}
       </div>
 
       {open ? (

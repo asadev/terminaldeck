@@ -279,12 +279,22 @@ describe('routing an answer back', () => {
 
 describe('nobody has to press anything', () => {
   const index = readFileSync(join(ROOT, 'src', 'main', 'index.ts'), 'utf8')
+  /*
+   * The proxy is built by `host-core.ts` now, and that is the point of the move
+   * rather than an accident of it: a guest session must not inherit the
+   * machine's git login on a headless host either, and a second assembly for the
+   * shell with no window would have been the exact place that guarantee got
+   * dropped. Both shells hand the *same* object to `registerRemoteIpc`.
+   */
+  const core = readFileSync(join(ROOT, 'src', 'main', 'host-core.ts'), 'utf8')
+  const headless = readFileSync(join(ROOT, 'src', 'headless', 'host.ts'), 'utf8')
 
   it('builds the proxy at launch and hands it to the server', () => {
-    expect(index).toContain('createCredentialProxy')
+    expect(core).toContain('createCredentialProxy')
     // The join that makes the sockets and the desk the same feature. Without it
     // every push is refused as unreachable and nothing anywhere says why.
-    expect(index).toMatch(/credentials:\s*credentialProxy\(\)/)
+    expect(index).toMatch(/credentials:\s*core\.credentials/)
+    expect(headless).toMatch(/credentials:\s*core\.credentials/)
   })
 
   it('gives every session started for a device its own git', () => {
@@ -292,13 +302,13 @@ describe('nobody has to press anything', () => {
     // and no session ever has a key — so `git push` in a granted folder falls
     // through to the machine owner's credential helper, which is the hole all
     // of this exists to close.
-    expect(index).toMatch(/openGuestSession\(input\.deviceId\)/)
-    expect(index).toContain('guest.started(meta.id)')
-    expect(index).toContain('guest.close()')
+    expect(core).toMatch(/openGuestSession\(input\.deviceId\)/)
+    expect(core).toContain('guest.started(meta.id)')
+    expect(core).toContain('guest.close()')
   })
 
   it('closes a session’s key when the session exits', () => {
-    expect(index).toMatch(/credentialProxyIfMade\(\)\?\.sessionEnded\(id\)/)
+    expect(core).toMatch(/credentials\.sessionEnded\(id\)/)
   })
 
   it('actually applies the removals, which a spread cannot express', () => {

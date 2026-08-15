@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { installPaths, resetPaths } from './platform/paths'
 import { store } from './store'
 import type { SavedSession } from './session-restore'
 
@@ -19,15 +20,47 @@ import type { SavedSession } from './session-restore'
 const USER_DATA = join(tmpdir(), `terminaldeck-store-test-${process.pid}`)
 const STATE = join(USER_DATA, 'state.json')
 
-vi.mock('electron', async () => {
-  const { tmpdir: tmp } = await import('node:os')
-  const { join: j } = await import('node:path')
-  return { app: { getPath: () => j(tmp(), `terminaldeck-store-test-${process.pid}`) } }
+/*
+ * The store asks `platform/paths.ts` where userData is, not Electron, so a test
+ * says where by installing a provider — which is what both shells do at boot.
+ * This used to be `vi.mock('electron')`, and it is worth noting the replacement
+ * is not a workaround: mocking a whole runtime to redirect one directory was
+ * always heavier than the question deserved.
+ */
+function pointAt(dir: string): void {
+  resetPaths()
+  installPaths(atDir(dir))
+}
+
+const atDir = (dir: string): Parameters<typeof installPaths>[0] => ({
+  userData: () => dir,
+  home: () => dir,
+  downloads: () => dir,
+  appRoot: () => dir,
 })
 
-afterAll(() => rmSync(USER_DATA, { recursive: true, force: true }))
+/**
+ * A store re-imported from scratch, pointed at `dir`.
+ *
+ * `vi.resetModules()` throws away `platform/paths` along with the store, so the
+ * provider has to be installed on the *fresh* copy of that module — installing
+ * it on this file's copy leaves the new store asking a module that nobody told
+ * anything, and it throws by design.
+ */
+async function freshStore(dir: string): Promise<typeof import('./store')> {
+  vi.resetModules()
+  const paths = await import('./platform/paths')
+  paths.installPaths(atDir(dir))
+  return await import('./store')
+}
+
+afterAll(() => {
+  resetPaths()
+  rmSync(USER_DATA, { recursive: true, force: true })
+})
 
 beforeEach(() => {
+  pointAt(USER_DATA)
   mkdirSync(USER_DATA, { recursive: true })
   store().setOpenSessions([])
 })
@@ -102,14 +135,13 @@ describe('a state file written by an older build', () => {
       'utf8',
     )
 
-    vi.resetModules()
-    vi.doMock('electron', () => ({ app: { getPath: () => dir } }))
-    const fresh = await import('./store')
+    // A fresh module, because the store is a singleton over one path and this
+    // case is about what a *first* read of an older file does.
+    const fresh = await freshStore(dir)
     try {
       expect(fresh.store().getOpenSessions()).toEqual([])
       expect(fresh.store().getProjects()).toHaveLength(1)
     } finally {
-      vi.doUnmock('electron')
       vi.resetModules()
       rmSync(dir, { recursive: true, force: true })
     }
@@ -124,13 +156,10 @@ describe('a state file written by an older build', () => {
       'utf8',
     )
 
-    vi.resetModules()
-    vi.doMock('electron', () => ({ app: { getPath: () => dir } }))
-    const fresh = await import('./store')
+    const fresh = await freshStore(dir)
     try {
       expect(fresh.store().getOpenSessions()).toEqual([])
     } finally {
-      vi.doUnmock('electron')
       vi.resetModules()
       rmSync(dir, { recursive: true, force: true })
     }

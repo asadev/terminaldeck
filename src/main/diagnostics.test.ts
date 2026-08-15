@@ -3,7 +3,7 @@ import { mkdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join, posix, win32 } from 'node:path'
 import { BRAND } from '../shared/brand'
-import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 /**
  * The redaction tests are the point of this file.
@@ -36,6 +36,26 @@ vi.mock('electron', async () => {
     },
     shell: { openPath: async () => '' },
   }
+})
+
+/*
+ * The app log reaches for `platform/paths.ts` rather than Electron since the
+ * headless split, so mocking `app` no longer redirects it. Installing a provider
+ * is the same thing both shells do at boot; `collectDiagnostics` asks the log
+ * where its file is, and without this it throws the "nobody installed any"
+ * error from inside a diagnostics bundle.
+ */
+beforeAll(async () => {
+  const { installPaths } = await import('./platform/paths')
+  const { tmpdir: tmp } = await import('node:os')
+  const { join: j } = await import('node:path')
+  const root = j(tmp(), `terminaldeck-diagnostics-test-${process.pid}`)
+  installPaths({
+    userData: () => j(root, 'userData'),
+    home: () => root,
+    downloads: () => j(root, 'downloads'),
+    appRoot: () => root,
+  })
 })
 
 /*

@@ -227,6 +227,38 @@ enum WireCodec {
             return .ok(.uploadFailed(id: id, message: string(object["message"]) ?? "That file did not arrive."),
                        activity: [:])
 
+        /* ---- capability `credential` --------------------------------------- */
+
+        case "credential.request":
+            guard let id = string(object["id"]), !id.isEmpty,
+                  let host = string(object["host"]), !host.isEmpty,
+                  host.count <= Wire.maxCredentialHostLength,
+                  let raw = string(object["operation"]),
+                  let operation = CredentialOperation(rawValue: raw) else {
+                return .failed(reason: "incomplete credential.request")
+            }
+            /*
+             * A missing `repo` and an unusable one are the same answer, and it
+             * is nil rather than a failure.
+             *
+             * The desktop sends JSON null when git gave it no path to derive a
+             * name from, which is a legitimate outcome it passes along rather
+             * than papering over — so refusing the frame here would turn "this
+             * machine does not know what the repository is called" into "that
+             * push is not answerable at all". What the prompt does with nil is
+             * say so; see `CredentialPromptView`.
+             */
+            let repo = string(object["repo"]).flatMap { name in
+                name.isEmpty || name.count > Wire.maxCredentialRepoLength ? nil : name
+            }
+            // `prompt` is an instruction to interrupt a person, so it is acted on
+            // only when the desktop said it in so many words. Anything else —
+            // absent, a string, a number — reads as false, which answers silently.
+            let prompt = (object["prompt"] as? Bool) == true
+            return .ok(.credentialRequest(id: id, host: host, repo: repo,
+                                          operation: operation, prompt: prompt),
+                       activity: [:])
+
         default:
             return .failed(reason: "unknown message type")
         }
@@ -312,12 +344,18 @@ enum WireCodec {
     static func encode(_ message: ClientMessage) -> String {
         let object: [String: Any]
         switch message {
-        case let .hello(version, token, device):
+        case let .hello(version, token, device, capabilities):
             object = [
                 "t": "hello",
                 "protocol": version,
                 "token": token,
                 "device": ["name": device.name, "platform": device.platform],
+                // Always written, even when empty. A desktop old enough not to
+                // read the field ignores it, and one that reads it gets a
+                // definite answer rather than having to treat "absent" and
+                // "nothing" as the same thing on a frame it may act on
+                // immediately.
+                "capabilities": capabilities,
             ]
         case .list:
             object = ["t": "list"]
@@ -375,6 +413,19 @@ enum WireCodec {
             object = ["t": "upload.end", "id": id, "sha256": digest]
         case let .uploadCancel(id):
             object = ["t": "upload.cancel", "id": id]
+        case let .credentialAck(id):
+            object = ["t": "credential.ack", "id": id]
+        case let .credentialAnswer(id, username, password, remember):
+            var answer: [String: Any] = ["t": "credential.answer", "id": id,
+                                         "username": username, "password": password]
+            // Written only when true. `parseClientMessage` reads it as
+            // `remember === true`, so a `false` on the wire would be a field
+            // that says nothing while carrying somebody's consent as its name —
+            // and this is the one frame worth being literal on.
+            if remember { answer["remember"] = true }
+            object = answer
+        case let .credentialDeny(id, reason):
+            object = ["t": "credential.deny", "id": id, "reason": reason.rawValue]
         }
         guard let data = try? JSONSerialization.data(withJSONObject: object, options: []),
               let text = String(data: data, encoding: .utf8) else {
@@ -386,8 +437,10 @@ enum WireCodec {
         return text
     }
 
-    static func hello(token: String, device: DeviceDescriptor) -> ClientMessage {
-        .hello(protocolVersion: Wire.protocolVersion, token: token, device: device)
+    static func hello(token: String, device: DeviceDescriptor,
+                      capabilities: [String] = WireCapability.claimed) -> ClientMessage {
+        .hello(protocolVersion: Wire.protocolVersion, token: token, device: device,
+               capabilities: capabilities)
     }
 
     /**

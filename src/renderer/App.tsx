@@ -46,9 +46,13 @@ import { WindowToolbar } from './shell/WindowToolbar'
 import { FolderChip } from './shell/FolderChip'
 import { PanelView } from './shell/PanelView'
 import { useSidebar } from './shell/useSidebar'
-import { panelSpec, type PanelId } from './shell/panels'
+import { PANELS, panelSpec, type PanelId } from './shell/panels'
+import { FeaturesProvider, useFeatures } from './features/FeaturesProvider'
+import { useControlOffer } from './features/offer'
+import { availableFeatures } from './features/state'
 import { nextActiveId, sessionLabel, type WorkspaceTab } from './shell/workspace-tabs'
 import { ErrorBoundary } from './shell/ErrorBoundary'
+import { Tooltips } from './shell/Tooltips'
 import { UnreadTracker } from './unread'
 import { isProviderId } from './preferences'
 import { AutoTitler } from './auto-title'
@@ -104,6 +108,25 @@ function Workspace() {
   const titlerRef = useRef<AutoTitler>(undefined)
   if (!titlerRef.current) titlerRef.current = new AutoTitler()
   const titler = titlerRef.current
+
+  /**
+   * Which features this install has, and therefore which halves of this window
+   * exist at all.
+   *
+   * Read here, once, and asked *by surface* everywhere below — `commandOn`,
+   * `panelOn`, `on('browser')` — rather than by keeping a list of what to hide.
+   * The registry owns which surface belongs to which feature; this file only
+   * has to remember to ask.
+   */
+  const features = useFeatures()
+  /**
+   * What the globe beside New session says when the browser pane is not there.
+   *
+   * Null while the feature is on, which is what tells the sidebar to draw an
+   * ordinary control. The rail is deliberately not allowed to ask the registry
+   * anything itself — every decision about what exists is made here.
+   */
+  const browserOffer = useControlOffer('sidebar.browser')
 
   const sidebar = useSidebar()
   const { panel, selectPanel, clearPanel } = sidebar
@@ -194,7 +217,17 @@ function Workspace() {
       projectPath: session.projectPath,
       closable: true,
     })),
-    ...extraTabs,
+    /*
+     * Pages other than sessions — which today means browser tabs, and only
+     * while the browser is installed.
+     *
+     * Hidden rather than closed. Uninstalling is not meant to throw away what
+     * you have open: the tab list is kept exactly as it was, so installing the
+     * browser again brings the same pages back, which is the same promise the
+     * store makes about everything else — the code never left, so neither did
+     * this.
+     */
+    ...extraTabs.filter((tab) => tab.kind !== 'browser' || features.on('browser')),
   ]
 
   const activeTab = tabs.find((t) => t.id === activeTabId) ?? tabs[0] ?? null
@@ -287,6 +320,26 @@ function Workspace() {
   useEffect(() => {
     setPanes((current) => pruneClosedSessions(current, sessions))
   }, [sessions])
+
+  /**
+   * A layout that belongs to a feature that has just gone.
+   *
+   * Uninstalling split view or swarm from the store while the window is showing
+   * one of them would otherwise leave the feature on screen, running, with
+   * nothing in the app left to turn it off — the mode switch has no Split
+   * segment to press by then, and the palette row is gone. Off has to mean gone
+   * from what is in front of you, not only from the menus.
+   *
+   * Both fall back to the single-session view, which is what the window is
+   * without either of them.
+   */
+  useEffect(() => {
+    // The same layout back when there is nothing to collapse: a fresh object
+    // here would be a new state, and a new state is a render, on every change
+    // to any feature.
+    if (!features.on('split')) setPanes((current) => (isSplit(current) ? emptyLayout() : current))
+    if (!features.on('swarm')) setSwarm(false)
+  }, [features])
 
   /**
    * Output on a session nobody is looking at lights its row — and names it.
@@ -518,10 +571,20 @@ function Workspace() {
   )
 
   const newBrowserTab = useCallback(() => {
+    /*
+     * Asking for a browser tab you do not have installs the pane and opens one.
+     *
+     * The same bargain `setMode('split')` makes, and for the same reason: the
+     * globe beside New session is drawn as an offer in that state (see
+     * `useControlOffer`), so this is not a surprise — and a pane appearing under
+     * the pointer that asked for it is a better "where to find it" than any
+     * sentence about somewhere else.
+     */
+    if (!features.on('browser')) features.install('browser')
     const id = `browser:${Date.now()}`
     setExtraTabs((prev) => [...prev, { id, kind: 'browser', label: 'New tab', closable: true }])
     showTab(id)
-  }, [showTab])
+  }, [showTab, features])
 
   const selectTab = useCallback(
     (id: string) => {
@@ -742,6 +805,15 @@ function Workspace() {
   const setMode = useCallback(
     (next: WorkspaceMode) => {
       if (next === 'split') {
+        /*
+         * Asking for split you do not have installs it and splits.
+         *
+         * The segment is drawn as an offer in that state, so this is not a
+         * surprise — and it is the best "where to find it" the store could
+         * possibly give, because the thing appears under the pointer that asked
+         * for it rather than in a sentence about somewhere else.
+         */
+        if (!features.on('split')) features.install('split')
         splitPanes()
         return
       }
@@ -756,7 +828,7 @@ function Workspace() {
         setSessionView((views) => ({ ...views, [focusedId]: next }))
       }
     },
-    [splitPanes, closeSplit, focusedId, setActiveSession],
+    [splitPanes, closeSplit, focusedId, setActiveSession, features],
   )
 
   /** Arrow-key travel between panes, geometric rather than by tree order. */
@@ -866,11 +938,53 @@ function Workspace() {
       { id: 'app.join', title: 'Join a remote session', group: 'App', run: () => setJoinOpen(true) },
       { id: 'app.shortcuts', title: 'Keyboard shortcuts', group: 'App', run: () => setShortcutsOpen(true) },
     ]
-    return rows.map((row) => {
+    /*
+     * Every uninstalled feature, offered by name.
+     *
+     * This is the palette's half of the discoverability fix, and it is the half
+     * that matters most: the palette is where people look for a capability they
+     * cannot see. Without these rows, typing "split" into a window whose split
+     * view is uninstalled returns nothing at all, and nothing at all is how
+     * somebody concludes the app cannot do it. With them it returns "Install
+     * Split view", which is the same keystroke answering the same question.
+     *
+     * The description rides along as keywords, so "cost" finds Cost and usage
+     * and "microphone" finds voice dictation without either word having to be
+     * squeezed into the title.
+     */
+    const offers: Omit<PaletteCommand, 'shortcut'>[] = availableFeatures(features.state).map(
+      (entry) => ({
+        id: `features.install.${entry.id}`,
+        title: `Install ${entry.name}`,
+        group: 'Features',
+        keywords: entry.summary,
+        run: () => features.install(entry.id),
+      }),
+    )
+
+    return [...rows, ...offers].map((row) => {
       const chord = chordFor(row.id)
-      return chord === null ? row : { ...row, shortcut: chord }
+      return {
+        ...row,
+        // A row for a feature that is not installed is not offered as though it
+        // worked. It is not silently dropped either — `run` below turns the
+        // same command into the store, so the menu item and the chord that
+        // reach this id land somewhere that explains itself.
+        enabled: features.commandOn(row.id),
+        ...(chord === null ? {} : { shortcut: chord }),
+      }
     })
-  }, [newSession, newBrowserTab, openProject, showPanel, openSettings, sidebar, splitPanes, closeSplit])
+  }, [
+    newSession,
+    newBrowserTab,
+    openProject,
+    showPanel,
+    openSettings,
+    sidebar,
+    splitPanes,
+    closeSplit,
+    features,
+  ])
 
   /**
    * One dispatcher for every command, whatever fired it: a menu item, a chord
@@ -879,6 +993,21 @@ function Workspace() {
    */
   const run = useCallback(
     (id: string): boolean => {
+      /*
+       * A command whose feature is not installed opens the store instead.
+       *
+       * The chord is the case this exists for: the palette row is hidden and
+       * the sidebar row is gone, but ⌘D is muscle memory and the keymap still
+       * answers to it. Doing nothing at all would be indistinguishable from a
+       * broken shortcut. Landing in Features says what happened and offers the
+       * thing back, one click away, which is the same answer every other empty
+       * place in this window gives.
+       */
+      const owner = features.featureForCommand(id)
+      if (owner && !features.on(owner)) {
+        openSettings('features')
+        return true
+      }
       const command = commands.find((c) => c.id === id)
       if (command) {
         void command.run()
@@ -947,6 +1076,7 @@ function Workspace() {
       selectTab,
       sessions,
       focusNeighbour,
+      features,
     ],
   )
 
@@ -1077,11 +1207,22 @@ function Workspace() {
                 status: session.status,
               })),
             onOpenSession: selectTab,
-            onShowSessions: () => {
-              clearPanel()
-              closeSplit()
-              setSwarm(true)
-            },
+            /*
+             * The session count is a door onto swarm view, so it is only a door
+             * while swarm is installed. Omitted rather than passed and ignored:
+             * the widget draws the number as plain text when it has nowhere to
+             * go, which is exactly right — the count is still true, it just
+             * stops promising a click.
+             */
+            ...(features.on('swarm')
+              ? {
+                  onShowSessions: () => {
+                    clearPanel()
+                    closeSplit()
+                    setSwarm(true)
+                  },
+                }
+              : {}),
             onOpenInspector: () => setInspectorOpen(true),
             onNavigate: showPanel,
             onOpenFile: showFile,
@@ -1366,6 +1507,13 @@ function Workspace() {
           tabs={tabs}
           activeTabId={focusedId ?? activeTab?.id ?? null}
           activePanel={panel}
+          // The rows this install has. A view whose feature is uninstalled has
+          // no row at all rather than a disabled one — and the palette offers
+          // it back by name, which is where somebody looks for a thing they
+          // cannot see.
+          panels={PANELS.filter((entry) => features.panelOn(entry.id))}
+          browser={features.on('browser')}
+          browserOffer={browserOffer?.title ?? null}
           unread={unreadIds}
           peeking={sidebar.peeking && sidebar.collapsed}
           // Above Settings, in the foot. Mounted here rather than inside the
@@ -1413,6 +1561,9 @@ function Workspace() {
            * while it is out — the same control, in the same place, either way.
            */
           sidebarHidden={sidebar.collapsed}
+          // Which page is under the toolbar, so the heading can line up with
+          // it. Null for a session, whose terminal fills the window.
+          page={showingPanel ? panel : null}
           onRevealSidebar={sidebar.pin}
           onEdgeEnter={sidebar.beginPeek}
         >
@@ -1426,7 +1577,7 @@ function Workspace() {
             screen.
           */}
           {(activeSession || splitting) && !showingPanel && !swarm ? (
-            <ModeSwitch mode={mode} onChange={setMode} />
+            <ModeSwitch mode={mode} onChange={setMode} splitOffer={!features.on('split')} />
           ) : null}
         </WindowToolbar>
 
@@ -1520,6 +1671,15 @@ function Workspace() {
           showFile(selection.path)
         }}
       />
+      {/*
+        Every hover label in the window, in the app's own type instead of the
+        OS's. It takes no props and renders nothing until something is hovered:
+        being mounted *is* the wiring, which is why `wiring.test.ts` asserts the
+        tag rather than any attribute of it. Last in the tree so its portal is
+        appended after the dialogs' — a tooltip inside a modal has to win the
+        stacking race against the sheet it is drawn on.
+      */}
+      <Tooltips />
     </div>
   )
 }
@@ -1527,7 +1687,19 @@ function Workspace() {
 export function App() {
   return (
     <StoreProvider>
-      <Workspace />
+      {/*
+        Which features this install has, above everything that draws one.
+
+        Mounted here rather than resolved where it is used, and read from
+        `localStorage` during the first render, because every one of its answers
+        decides whether a piece of chrome exists: a sidebar row, a segment of
+        the mode switch, the ＋ menu's connectors. An answer that arrives one
+        frame late is a window that rearranges itself in front of the user on
+        every launch — see `features/state.ts`.
+      */}
+      <FeaturesProvider>
+        <Workspace />
+      </FeaturesProvider>
     </StoreProvider>
   )
 }

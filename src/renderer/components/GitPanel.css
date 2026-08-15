@@ -12,7 +12,22 @@
 
 .git-panel {
   --git-added: var(--status-completed);
-  --git-modified: var(--status-waiting);
+  /*
+    Neutral, and deliberately not the warning amber it used to be.
+
+    A working tree mid-change is *nothing to worry about* — it is the normal
+    state of a repository somebody is working in — and painting every modified
+    file with the colour this app uses for a warning produced a column of about
+    thirty orange-brown markers down the left of the page. Measured at
+    rgb(143,88,0), it was by a distance the loudest thing in a window that is
+    otherwise grey and one blue, and it said "careful" thirty times about a fact
+    that means "you have been working".
+
+    The letter is the information; the colour was never carrying it. Added and
+    deleted keep theirs, because green-for-gained and red-for-gone are the two
+    every reader already knows and there are rarely thirty of either at once.
+  */
+  --git-modified: var(--text-primary);
   --git-deleted: var(--color-critical);
   /* --status-working, not --accent: a rename is a status like the four around
      it, and the blue in this app means focus rather than "renamed". */

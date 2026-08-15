@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Button, Group, Notice, Row, SectionHead, Switch } from '../settings/controls'
+import { Button, Explain, Group, Notice, Row, SectionHead, Switch } from '../settings/controls'
 import { useAt, useEvery, useWhenActive } from '../schedule'
 import { errorText } from '../settings/settings-bridge'
 import { chooseRoute, pairingPaths, pairingRoutes, type PairPath } from './pairing-link'
@@ -309,6 +309,30 @@ const DEVICE_STATES = new Set<string>(['pending', 'approved', 'revoked'])
  * wrong in one direction leaves an Approve button on a row; in the other it
  * lists a stranger as trusted, which is the same mistake as letting them in.
  */
+/**
+ * A device's name, as a person would recognise it.
+ *
+ * The name comes off the wire from whatever the client reports about itself,
+ * and Android reports its *build target*: a real paired device showed up here
+ * as "Google sdk_gphone64_arm64", which is the emulator's system-image name and
+ * is not something anybody would recognise as their phone. It sat as the title
+ * of a card whose entire job is answering "which of your devices is this".
+ *
+ * Two rules, and nothing invented beyond them. The Android emulator's model
+ * string is a known constant, so it is called what it is. Everything else keeps
+ * its own name with underscores read as the spaces they stand in for — a build
+ * identifier is written `SM_G991B`, a name is written with spaces.
+ *
+ * Nothing here is identity: a device is identified by its id everywhere it
+ * matters, and this is only what the row prints.
+ */
+export function deviceLabel(raw: string): string {
+  const name = raw.trim()
+  if (name === '') return 'Unnamed device'
+  if (/^(google\s+)?sdk_gphone/i.test(name)) return 'Android emulator'
+  return name.replace(/_/g, ' ').replace(/\s+/g, ' ').trim()
+}
+
 export function toRemoteDevices(raw: unknown): RemoteDevice[] {
   return (Array.isArray(raw) ? raw : []).flatMap((entry): RemoteDevice[] => {
     const device = asRecord(entry)
@@ -317,7 +341,7 @@ export function toRemoteDevices(raw: unknown): RemoteDevice[] {
     return [
       {
         id: device.id,
-        name: asString(device.name, device.id),
+        name: deviceLabel(asString(device.name, device.id)),
         state: DEVICE_STATES.has(state)
           ? (state as RemoteDeviceState)
           : // The flags are the same fact written twice; revocation outranks
@@ -364,9 +388,11 @@ export function toRemoteConnections(raw: unknown, devices: readonly RemoteDevice
       {
         id: connection.id,
         deviceId,
-        deviceName: asString(
-          connection.deviceName,
-          devices.find((device) => device.id === deviceId)?.name ?? 'Unnamed device',
+        deviceName: deviceLabel(
+          asString(
+            connection.deviceName,
+            devices.find((device) => device.id === deviceId)?.name ?? 'Unnamed device',
+          ),
         ),
         platform: asString(connection.platform),
         address: asString(connection.address),
@@ -917,14 +943,24 @@ export function RemoteView({
           />
         </div>
 
-        <p className="settings-prose">
+        {/*
+          The most important paragraph in the window, given something to hang on.
+
+          It is unchanged, down to the emphasis — this section's test pins
+          `<strong>shell</strong>`, and rightly: it is the one word that decides
+          whether somebody should press the switch above. What it did not have
+          was a title, so it arrived as six lines of grey running the full width
+          of the column, in a section that then goes on to four more paragraphs.
+          A reader who is skimming has to be able to stop here on purpose.
+        */}
+        <Explain title="What you are turning on">
           What is on the other side of this switch is a <strong>shell</strong>. A device you approve
           can type into any session running here — your files, your keys, your git remotes — exactly
           as if it were sitting at this keyboard. Nothing is published to the internet: on your
           tailnet the traffic never leaves your own network, and through the relay it is sealed end
           to end, so the service in the middle routes bytes it holds no key for. Neither path lets
           anything in on its own — a code you mint here and an approval you give here do.
-        </p>
+        </Explain>
 
         {state === null && problem === null && (
           // Said once, and it resolves into a state or into the error below.

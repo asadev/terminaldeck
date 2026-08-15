@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Button, Group, LinkOut, Notice, Row, SectionHead, ToolVersion } from '../controls'
+import { Button, Explain, Group, LinkOut, Notice, Row, SectionHead, ToolVersion } from '../controls'
 import { sectionMeta } from '../settings-schema'
 import {
   errorText,
@@ -97,12 +97,21 @@ export function AgentsSection({ bridge, goTo }: SectionProps) {
 
       {error && <Notice tone="error">{error}</Notice>}
 
-      <Notice tone="info">
-        Which one runs by default is in General, with the other day-to-day settings.{' '}
+      {/*
+        An explanation, not an alert.
+
+        This was a `Notice tone="info"` — a tinted block with a rule down its
+        side — for a sentence that is permanently true and was the first thing
+        in the section. Two of those on one pane is how a page of settings comes
+        to read as a page of warnings. Nothing it offers has moved: the button
+        is the same button and still goes to General.
+      */}
+      <Explain title="Which agent runs by default">
+        That choice is in General, with the other day-to-day settings.{' '}
         <button type="button" className="settings-inline-btn" onClick={() => goTo('general')}>
           Choose the default coding tool
         </button>
-      </Notice>
+      </Explain>
 
       <Group title="What is installed">
         {!bridge.checkPrerequisites ? (
@@ -200,13 +209,13 @@ export function AgentsSection({ bridge, goTo }: SectionProps) {
                 </span>
               }
             />
-            <Notice tone="info">
-              Profiles isolate Claude Code by pointing it at a different config directory. The other
-              agents do not support that yet, so they ignore this and use their normal login.{' '}
+            <Explain title="Only Claude Code is isolated by a profile">
+              A profile points Claude Code at a different config directory. The other agents do not
+              support that yet, so they ignore this and use their normal login.{' '}
               <button type="button" className="settings-inline-btn" onClick={() => goTo('profiles')}>
                 Manage profiles
               </button>
-            </Notice>
+            </Explain>
           </>
         )}
       </Group>

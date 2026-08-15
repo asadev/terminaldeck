@@ -500,11 +500,27 @@ describe('bloat warnings', () => {
 })
 
 describe('formatting', () => {
-  it('keeps sub-cent spends visible', () => {
+  /**
+   * Two places, always — the way money is written.
+   *
+   * Three places is what this used to print below ten dollars, and on screen
+   * "$2.101" read as two thousand one hundred and one to anybody whose
+   * thousands separator is a full stop. The precision was never the point; the
+   * point is that a spend too small to show must not read as nothing, which is
+   * why the sub-cent case says so in words instead of rounding to $0.00.
+   */
+  it('writes money the way money is written', () => {
     expect(formatUsd(0)).toBe('$0.00')
-    expect(formatUsd(0.0004)).toBe('$0.0004')
-    expect(formatUsd(0.2972875)).toBe('$0.297')
+    expect(formatUsd(0.2972875)).toBe('$0.30')
+    expect(formatUsd(2.1013)).toBe('$2.10')
     expect(formatUsd(12.3456)).toBe('$12.35')
+  })
+
+  it('says "less than a cent" rather than rounding a real spend to nothing', () => {
+    expect(formatUsd(0.0004)).toBe('<$0.01')
+    // Half a cent is the boundary: what rounds *to* a cent prints as one.
+    expect(formatUsd(0.006)).toBe('$0.01')
+    expect(formatUsd(-0.0004)).toBe('-<$0.01')
   })
 
   it('abbreviates token counts', () => {

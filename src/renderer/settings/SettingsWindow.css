@@ -194,6 +194,52 @@
   font-size: var(--t-callout);
   line-height: var(--lh-loose);
   color: var(--text-secondary);
+  /* A measure, not the column. The panel's column is 720px, which at 12px is
+     around a hundred characters a line — roughly twice what an eye tracks back
+     across reliably, and the reason three sections were reported as walls of
+     text. The rows above stay full width; this is a text column inset in them,
+     which is what every settings pane worth reading does. */
+  max-width: 62ch;
+}
+
+/* An explanation that stands on its own: a line to hang it on, then the
+   paragraph, then room before whatever comes next.
+
+   The brief's treatment for text with a long description — brighter title,
+   dimmer body, more space — which the app already applies *inside* a row
+   (`.settings-label` over `.settings-help`). The three sections reported as
+   walls of text are the ones whose standing prose was outside a row, where
+   there was no title to scan and nothing to skip. Two of them were wearing the
+   `Notice` treatment instead, which is a tinted alert block; a page of alerts
+   for things that are permanently true teaches you to ignore the ones that are
+   not. */
+.settings-explain {
+  margin: var(--sp-6) 0;
+}
+
+.settings-explain-title {
+  margin: 0 0 var(--sp-15);
+  font-size: var(--t-body);
+  font-weight: var(--w-semibold);
+  color: var(--text-primary);
+}
+
+.settings-explain-body {
+  margin: 0;
+  max-width: 62ch;
+  font-size: var(--t-callout);
+  line-height: var(--lh-loose);
+  /* A step below `--text-secondary`, the same drop `.settings-help` takes and
+     for the same reason: secondary is what the rest of the window's prose is
+     set in, so a description in it weighs the same as everything around it. */
+  color: var(--text-muted);
+}
+
+/* Emphasis inside a dimmed paragraph has to come back up to the title's ink, or
+   it is a bold word that is still grey and reads as a rendering mistake. */
+.settings-explain-body strong {
+  font-weight: var(--w-semibold);
+  color: var(--text-primary);
 }
 
 /* ------------------------------------------------------------------ rows -- */
@@ -478,6 +524,21 @@
   background: var(--accent-dim);
 }
 
+/*
+  A disabled primary is not painted like the action of the screen.
+
+  Opacity alone left Create sitting there in accent blue with an empty name
+  field beside it — a button that looks pressable, is not, and is wearing the
+  one colour in the app that means "this is the thing to press". It falls back
+  to the ordinary button fill, so what is left to say is only "not yet", which
+  is what the 45% from the rule above says.
+*/
+.settings-btn[data-tone='primary']:disabled {
+  background: var(--fill-tertiary);
+  color: var(--text-primary);
+  box-shadow: none;
+}
+
 .settings-btn[data-tone='danger'] {
   color: var(--color-critical);
 }
@@ -516,23 +577,33 @@
 
 /* An explanation is a sentence, so it is set as one. Only a warning or an error
    earns a surface of its own, and the dot is what says which. */
-.settings-notice {
-  /* Space below as well as above: a notice with a surface sits directly against
-     the row block that follows it otherwise, and the two read as one. */
-  margin: var(--sp-3) 0;
-  padding: 0;
-  border: none;
-  background: none;
-  font-size: var(--t-callout);
-  line-height: var(--lh-body);
-  color: var(--text-secondary);
-}
+/*
+  Every notice wears the same block, whatever its tone.
 
-.settings-notice[data-tone='warn'],
-.settings-notice[data-tone='error'] {
+  An `info` notice used to be bare prose with no container while `warn` and
+  `error` sat in a tinted card, and Power is where that showed: four blocks in
+  one short section wearing three different treatments — a filled card for the
+  switch, naked prose for "Heat and battery", a floating unstyled line about
+  something that was already on before the app started, and then a card again
+  for the battery. The section read as unrelated fragments rather than one page.
+  Compare General, where every row shares one card.
+
+  What separates the tones is the dot below, which is exactly the difference
+  they carry: something wants your attention, or something is simply true.
+  (Something permanently true and long belongs in `Explain` instead — that is a
+  different component for a different job.)
+
+  Space below as well as above: a notice with a surface sits directly against
+  the row block that follows it otherwise, and the two read as one.
+*/
+.settings-notice {
+  margin: var(--sp-3) 0;
   padding: var(--sp-3) var(--sp-4);
+  border: none;
   border-radius: var(--radius-md);
   background: var(--bg-secondary);
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
   color: var(--text-primary);
 }
 

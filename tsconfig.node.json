@@ -22,7 +22,10 @@
     "src/main/**/*",
     "src/preload/**/*",
     "src/shared/**/*",
+    "src/headless/**/*",
     "relay/**/*",
-    "electron.vite.config.ts"
+    "ios/Harness/**/*",
+    "electron.vite.config.ts",
+    "vite.headless.config.ts"
   ]
 }

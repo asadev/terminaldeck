@@ -742,20 +742,36 @@ describe('wired at launch, not to a button', () => {
    * The assertion this repository cares about most, and the reason it is a
    * string match rather than a mock: the failure being guarded against is a
    * feature that works perfectly when somebody opens a settings pane and is
-   * never reached at boot. Only `src/main/index.ts` can make it true.
+   * never reached at boot. Only an entry point can make it true.
    *
    * Three things break if the reading is deferred: restore-on-launch runs before
    * any window paints and has to know which side each remembered folder is on; a
    * phone can ask for a folder list seconds after launch; and a stored
    * distribution that has since been unregistered has to be noticed before a
    * session tries to use it.
+   *
+   * Two files now, because there are two shells. `index.ts` is the Electron one;
+   * the session-spawning half moved to `host-core.ts` when the headless build
+   * arrived, and `headless/host.ts` does the launch-time read that `whenReady`
+   * does here. Each assertion below reads whichever file owns the thing it is
+   * about — pointing them all at one file would have quietly stopped checking
+   * half of them.
    */
   const index = readFileSync(join(__dirname, 'index.ts'), 'utf8')
+  const core = readFileSync(join(__dirname, 'host-core.ts'), 'utf8')
+  const headless = readFileSync(join(__dirname, '..', 'headless', 'host.ts'), 'utf8')
 
   it('reads the machine from whenReady', () => {
     expect(index).toContain('wsl.refresh()')
     const ready = index.slice(index.indexOf('app.whenReady()'))
     expect(ready).toContain('wsl.refresh()')
+  })
+
+  it('reads it from starting the headless host too', () => {
+    // Same requirement, other shell. A host started by systemd inside WSL has to
+    // know which side a remembered folder is on before it restores anything, and
+    // it has no window and no settings pane to be prompted by.
+    expect(headless).toContain('core.wsl.refresh()')
   })
 
   it('registers its channels', () => {
@@ -765,10 +781,14 @@ describe('wired at launch, not to a button', () => {
   it('routes every new session through the folder’s own side of the boundary', () => {
     // startSession has to ask, or the whole module is a settings pane that
     // changes nothing.
-    const start = index.slice(index.indexOf('async function startSession'))
+    const start = core.slice(core.indexOf('async function startSession'))
     expect(start).toContain('wslTargetFor(input.cwd)')
     // The provider probe has to be aimed at the same side the session runs on.
-    expect(start).toContain('detectProviders(currentPlatform(), target)')
+    // The platform is a parameter of `createHostCore` now rather than read
+    // inline — it defaults to `currentPlatform()` — which is what lets a test on
+    // this Mac pin the Windows answer. What matters here is unchanged: the
+    // second argument is the folder's own side.
+    expect(start).toContain('detectProviders(platform, target)')
     // And the Windows-side working directory has to reach the pty.
     expect(start).toContain('hostCwd: spec.spawn.hostCwd')
   })
@@ -782,9 +802,16 @@ describe('wired at launch, not to a button', () => {
     // is, so restore-on-launch would drop every WSL session as "folder gone".
     expect(index).toContain('folderExists: (cwd) => folderExists(statablePath(cwd))')
     expect(index).toContain('existsSync(statablePath(session.cwd))')
+    // And the headless restore, which is the one that matters on WSL: the distro
+    // is shut down whenever the last terminal closes, so this path runs far more
+    // often there than a desktop relaunch ever does.
+    expect(headless).toContain('folderExists(core.statablePath(cwd))')
+    expect(headless).toContain('existsSync(core.statablePath(session.cwd))')
   })
 
   it('offers a phone the distribution’s home rather than the Windows one', () => {
-    expect(index).toContain('wsl.home() ?? app.getPath(\'home\')')
+    // `homeDir()` rather than `app.getPath('home')` since the split: the core
+    // asks `platform/paths.ts`, which each shell answers for itself.
+    expect(core).toContain('wsl.home() ?? homeDir()')
   })
 })

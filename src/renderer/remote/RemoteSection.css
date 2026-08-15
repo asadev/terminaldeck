@@ -93,9 +93,20 @@
   color: var(--status-completed);
 }
 
-/* Amber rather than red: a relay that is retrying is a wait, not a fault. */
+/*
+  Neutral, not amber.
+
+  It was `--color-warning`, and it was the loudest thing on an otherwise
+  blue-and-grey settings page — a warm pill in the corner of Remote reading "Not
+  connected". Amber was the wrong claim as well as the wrong weight: a relay
+  that has not been dialled, or is between attempts, is a *fact about where
+  things stand*, not a fault anybody has to act on, and the path it belongs to
+  already recedes (`.remote-path[data-state='down']`). Red is reserved for
+  something broken, amber for something that wants attention, and this is
+  neither — so it reads in the quiet ink, like the "Off" beside it.
+*/
 .remote-pill[data-state='down'] {
-  color: var(--color-warning);
+  color: var(--text-secondary);
 }
 
 /* A path that is not up recedes, so the one that works is what the eye lands

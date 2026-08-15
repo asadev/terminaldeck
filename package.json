@@ -13,6 +13,8 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "build:pwa": "npm --prefix pwa ci && npm --prefix pwa run build",
+    "build:headless": "vite build --config vite.headless.config.ts",
+    "dist:headless": "node scripts/build-headless.mjs",
     "preview": "electron-vite preview",
     "test": "vitest run && npm run test:electron",
     "test:electron": "node scripts/check-electron-crypto.mjs",

@@ -2,17 +2,17 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { app, BrowserWindow, dialog, ipcMain, powerMonitor, session, shell } from 'electron'
 import { BRAND } from '../shared/brand'
-import type { CreateSessionInput, SessionMeta } from '../shared/types'
-import { PtyManager } from './pty-manager'
-import { detectProviders, loginPath, providersFor, PROVIDERS } from './providers'
+import type { CreateSessionInput } from '../shared/types'
+import { createHostCore } from './host-core'
+import { detectProviders, PROVIDERS } from './providers'
 import { currentPlatform } from './platform/host'
+import { electronPaths, installPaths } from './platform/paths'
 import {
   conversationOnDisk,
   folderExists,
   planRestore,
   restoreOpenSessions,
   type RestoreDecision,
-  type SavedSession,
 } from './session-restore'
 import { store, type Preferences } from './store'
 import { pinUserData } from './user-data'
@@ -29,11 +29,7 @@ import { registerUpdateIpc } from './updates/updater'
 import { createManualStrategy } from './updates/manual-strategy'
 import { registerTailnetIpc } from './remote/tailnet'
 import { registerRemoteIpc } from './remote/server'
-import { SessionFanout } from './remote/session-fanout'
-import { remoteSessionStart } from './remote/session-create'
-import { FolderGrants, foldersForDevice } from './remote/folder-grants'
-import { createCredentialProxy, type CredentialProxy } from './remote/credentials'
-import type { GuestGitEnv } from './remote/git-guest'
+import { registerMachinesIpc } from './remote/machines/ipc'
 import {
   dropPlanSession,
   notePlanOutput,
@@ -45,7 +41,7 @@ import { registerReadinessIpc } from './readiness'
 import { registerDashboardIpc } from './dashboard-store'
 import { registerSessionSearchIpc } from './session-search'
 import { registerAlertsIpc } from './alerts'
-import { registerProfilesIpc, getState as profilesState, resolveProfile, sessionEnv } from './profiles'
+import { registerProfilesIpc, getState as profilesState, resolveProfile } from './profiles'
 import { registerDeckignoreIpc } from './deckignore'
 import { registerHooksIpc } from './hooks'
 import { registerHookServer, stopHookServer } from './hook-server'
@@ -65,22 +61,39 @@ import { registerBrowserViewIpc } from './browser-view'
 import { registerDiagnosticsIpc } from './diagnostics'
 import { registerNotificationIpc } from './os-notifications'
 import { registerLidAwakeIpc } from './lid-awake'
-import { registerLogIpc, logger } from './app-log'
+import { logger } from './app-log'
+import { registerLogIpc } from './app-log-ipc'
 import { traceIpc, TRACE_SETTING } from './ipc-trace'
 import { buildMenu } from './menu'
 import { registerSetupIpc } from './setup'
 import { registerCookieImportIpc } from './cookie-import'
 import { registerBrowserIsolationIpc } from './browser-isolation'
-import {
-  WslLink,
-  isLinuxPath,
-  linuxPathFromUnc,
-  registerWslIpc,
-  wslEnvBridge,
-  wslUncPath,
-  type WslTarget,
-} from './wsl'
+import { linuxPathFromUnc, registerWslIpc } from './wsl'
 import type { SessionStatus } from '../shared/types'
+
+/*
+ * Say which shell this is, and pin the directory — both before any other line of
+ * this module runs.
+ *
+ * These sat at the bottom of the file while everything that reads a path was
+ * lazy. They cannot stay there now: `createHostCore` below is constructed at
+ * module scope and its `FolderGrants` reads its file in its constructor, so a
+ * pin that happened afterwards would have the grants loaded from the *unpinned*
+ * directory — the "renaming the app silently moved everyone's data" failure that
+ * `user-data.ts` exists to close, arriving through a different door.
+ *
+ * The store, the profiles, the log and the trust store all reach for
+ * `platform/paths.ts`, which has no default and throws if nothing installed one
+ * — see the header there for why a default would be worse than a crash. This is
+ * the Electron answer; `src/headless/daemon.ts` installs the plain-Node one.
+ *
+ * `electronPaths` forwards on every call rather than capturing, which is what
+ * lets `pinUserData` move the directory on the next line and still be obeyed.
+ * Both are safe before `whenReady`: `getPath('userData')` and `setPath` do not
+ * need a ready app.
+ */
+installPaths(electronPaths(app))
+pinUserData(app)
 
 const isDev = !!process.env.ELECTRON_RENDERER_URL
 
@@ -212,77 +225,36 @@ const SESSION_CREATED_CHANNEL = 'session:created'
 /** Everything remote access keeps on disk: the trust store, this Mac's relay identity, the grants. */
 const remoteStorageDir = (): string => join(app.getPath('userData'), 'remote')
 
-/**
- * Which folders each paired device may start a session in.
- *
- * Lazy because its constructor reads a file and this module is evaluated before
- * the app is ready, and a singleton because two instances would be two in-memory
- * copies of one file — the panel writing to one while every `create` is checked
- * against the other. `registerRemoteIpc` is handed this same object.
- */
-let grantStore: FolderGrants | null = null
-function folderGrants(): FolderGrants {
-  grantStore ??= new FolderGrants(remoteStorageDir())
-  return grantStore
-}
-
-/**
- * The GitHub credential proxy: their account, from their device, never held here.
- *
- * A singleton and lazy for the same two reasons `folderGrants` is — it makes
- * directories and binds a loopback listener, neither of which may happen while
- * this module is being evaluated, and two of them would be two sets of session
- * keys with the sockets routed to one and the sessions keyed against the other.
- *
- * It is constructed **at launch** rather than by whatever asks for it first, and
- * that is deliberate: everything else about remote access is on unless the user
- * turned it off, and a proxy that only came into being when the first phone
- * pushed would be a feature whose first use is the one that fails. `whenReady`
- * calls this before `registerRemoteIpc`, so `credentialProxyIfMade` below can
- * stay honest about the case where nothing has been started at all.
- */
-let credentialDesk: CredentialProxy | null = null
-function credentialProxy(): CredentialProxy {
-  credentialDesk ??= createCredentialProxy({ dir: join(remoteStorageDir(), 'guest-git') })
-  return credentialDesk
-}
-
-/**
- * The proxy, but only if there already is one.
- *
- * Used from the paths that run for *every* session, remote or not — a pty
- * exiting, the app quitting. Reaching for `credentialProxy()` there would build
- * one, and binding a port because somebody closed a local terminal tab is the
- * opposite of what the laziness is for.
- */
-function credentialProxyIfMade(): CredentialProxy | null {
-  return credentialDesk
-}
-
-/**
- * Which key the machine's WSL distribution is stored under.
- *
- * `settings.json` rather than a file of its own: it is one string, it belongs to
- * this machine rather than to a project or a device, and that is exactly what
- * `settings-extra.ts` is. It is deliberately not in the renderer's settings
- * schema — the schema declares controls with fixed options, and the list of
- * installed distributions is discovered rather than declared.
- */
+/** Which key the machine's WSL distribution is stored under. See `core` below. */
 export const WSL_DISTRO_KEY = 'wsl.distro'
 
 /**
- * WSL, as far as this app is concerned: what is installed, which distribution
- * is the machine's, and where its home directory is.
+ * The machine itself: sessions, the folder grants, the credential proxy, the WSL
+ * boundary.
  *
- * Constructed at module scope with no I/O — the constructor only stores its
- * arguments — so it is safe here, before the app is ready. The reading happens
- * in `whenReady`, and the fact that it happens there rather than when a settings
- * pane asks is the whole point: a Windows machine whose projects live in Linux
- * has to be able to start a session at launch, from a restored tab or from a
- * phone, without anybody having opened a settings window first.
+ * All of it used to be written out here. It moved to `host-core.ts` when the
+ * headless build arrived, because every line of it is about the computer this
+ * process is running on and none of it is about a window — and a second copy for
+ * a shell with no window would be a session that is subtly not the same kind of
+ * session. `src/headless/host.ts` calls this same function. What stays here is
+ * the wiring that only a window needs: the broadcasts below, and the plan-limit
+ * and alert bookkeeping that only a renderer reads.
+ *
+ * Constructed at module scope, as its pieces were, and safe there for the same
+ * reason: nothing in the constructor reads a file or binds a socket.
  */
-const wsl = new WslLink({
-  store: {
+const core = createHostCore({
+  storageDir: remoteStorageDir(),
+  /*
+   * Where the machine's WSL distribution is remembered.
+   *
+   * `settings.json` rather than a file of its own: it is one string, it belongs
+   * to this machine rather than to a project or a device, and that is exactly
+   * what `settings-extra.ts` is. It is deliberately not in the renderer's
+   * settings schema — the schema declares controls with fixed options, and the
+   * list of installed distributions is discovered rather than declared.
+   */
+  wslStore: {
     read: () => {
       const stored = storedValue(WSL_DISTRO_KEY)
       return typeof stored === 'string' && stored !== '' ? stored : null
@@ -291,196 +263,34 @@ const wsl = new WslLink({
       patchStoredSettings({ [WSL_DISTRO_KEY]: distro })
     },
   },
-})
-
-/**
- * The one place that decides whether a folder is a Linux folder.
- *
- * Everything downstream — the provider table, the pty's working directory,
- * which side gets asked whether Claude Code is installed — hangs off this
- * answer, so it is asked once per session, in one function, rather than
- * re-derived at each of those three points.
- */
-function wslTargetFor(cwd: string): WslTarget | null {
-  return wsl.targetFor(cwd)
-}
-
-/**
- * A path a Windows API can stat, for a folder that may live inside a distro.
- *
- * `existsSync('/home/asad/proj')` on Windows is false however real the folder
- * is, so restore-on-launch would decide every WSL session's folder had been
- * deleted and quietly drop the lot — the app losing a day's tabs and saying
- * nothing. `\\wsl.localhost\Ubuntu\home\asad\proj` is the same directory as
- * Windows can see it, and reading a directory entry is the one crossing of the
- * boundary that costs nothing: it is a stat, not a build.
- */
-function statablePath(cwd: string): string {
-  const distro = wsl.active()
-  if (!isLinuxPath(cwd) || distro === null) return cwd
-  return wslUncPath(distro, cwd)
-}
-
-/**
- * Fans each session's output out to the window and to any attached phone.
- * Declared before `ptys` because the PtyManager callbacks below feed it, and
- * pointed at `ptys` afterwards — the two genuinely reference each other.
- *
- * `create` is the same call the window's own New Session makes, with the same
- * PATH, the same profile and the same provider detection — see `startSession`.
- * A remote-only spawn path would be a second way to start a session, and the
- * two would drift the first time either changed.
- */
-const remoteSessions = new SessionFanout({
-  list: () => ptys.list(),
-  write: (id, data) => ptys.write(id, data),
-  resize: (id, cols, rows) => ptys.resize(id, cols, rows),
-  scrollback: (id) => ptys.scrollback(id),
-  // Both halves out of one starter, so the list the phone's picker is drawn from
-  // is the list `create` checks against rather than a second computation of the
-  // same idea. See `remoteSessionStart`.
-  ...remoteSessionStart({
-    // What a person chose for this device — and, only when nobody has chosen
-    // anything for it, what this desktop is offering everyone: its projects
-    // most-recently-opened first, then the folders sessions are running in. That
-    // fallback is what every device got before grants existed, and it is kept so
-    // that a phone paired before this feature is not locked out by it.
-    //
-    // Live sessions come after the projects: a session can be running in a
-    // folder that was never added as a project, and the phone can see it in its
-    // own list, so refusing to start a second one beside it would be arbitrary.
-    folders: (deviceId) =>
-      foldersForDevice(
-        folderGrants(),
-        deviceId,
-        () => [
-          ...store().getProjects().map((project) => project.path),
-          ...ptys.list().map((session) => session.cwd),
-        ],
-        /*
-         * The home directory a phone lands in when nothing has been chosen for
-         * it — on the same side of the boundary as everything else.
-         *
-         * `app.getPath('home')` is `C:\Users\Asad` on Windows, and starting a
-         * phone's session there on a machine whose work is all in Linux hands it
-         * the one folder with nothing in it. The distro's own `$HOME` is the
-         * right answer and is used when it is known; it is not always known,
-         * because asking for it means starting a stopped distribution and this
-         * app does not boot a virtual machine to fill in a default. The Windows
-         * home is the fallback — a real folder, on the wrong side, which is
-         * better than a path that resolves to nothing.
-         */
-        () => wsl.home() ?? app.getPath('home'),
-      ),
-    spawn: async (input) => {
-      /*
-       * A session started from somebody else's device does not get this
-       * machine's git login.
-       *
-       * Without this the session is an ordinary child process of this app, which
-       * means it inherits the owner's credential helper, their `gh` token and
-       * their ssh agent — so anyone granted a folder can push as them. That is
-       * not a subtle failure and it is not theoretical: `git credential fill` in
-       * a granted folder answered with the owner's real GitHub token on the
-       * machine this was written on.
-       *
-       * The guest gets its own git configuration instead, per device, and a
-       * credential helper that asks *their* device for *their* login. See
-       * `git-guest.ts` for the four doors that closes and the one it cannot.
-       */
-      const guest = await credentialProxy().openGuestSession(input.deviceId)
-      let meta: SessionMeta
-      try {
-        meta = await startSession(
-          {
-            ...input,
-            // The phone does not choose an agent — it has no honest way to know
-            // which are installed. The desktop's own default is the answer, and it
-            // falls back to a plain shell in `startSession` when that CLI is not
-            // there, exactly as the window's button does.
-            provider: store().getPreferences().defaultProvider,
-          },
-          guest.env,
-        )
-      } catch (error) {
-        // The key was minted before the spawn, because it has to be in the
-        // environment the spawn is handed. A spawn that then failed would leave
-        // a live key belonging to no session, which is one more thing that can
-        // ask a stranger's phone for a password.
-        guest.close()
-        throw error
-      }
-      guest.started(meta.id)
-      // The window has to be told, or the session is running on this Mac and
-      // only the phone knows about it.
-      send(SESSION_CREATED_CHANNEL, meta)
-      return meta
-    },
-  }),
-})
-
-/**
- * What each live session would need to be started again, keyed by session id.
- *
- * `ptys.list()` cannot answer this on its own: `SessionMeta` carries the
- * *resolved* provider and no profile at all, and neither of those is what a
- * relaunch should repeat. Insertion order is tab order, which is why this is a
- * Map and not an object.
- */
-const openSessionRecords = new Map<string, SavedSession>()
-
-/**
- * Write the open-session list to disk.
- *
- * ## The trap
- *
- * `before-quit` calls `ptys.killAll()`, and killing a pty fires `onExit` for
- * every session. Reconciling on those exits would empty the remembered list
- * during the last second of the app's life — so the app would faithfully
- * remember, on every clean quit, that nothing was open. The whole feature would
- * work only after a crash. `quitting` is set before `killAll` for exactly this
- * class of problem (see `send`), so it is the guard here too.
- *
- * Writes go straight through rather than being batched behind a timer. This
- * fires when a session opens or closes — a human-paced event, a handful of
- * times an hour — and the store already writes through a temp file and a
- * rename, so a write costs one small file and cannot leave a torn one. A timer
- * would buy nothing and could lose the last change to a power cut, which is the
- * exact event this list exists to survive.
- */
-function rememberOpenSessions(): void {
-  if (quitting) return
-  store().setOpenSessions([...openSessionRecords.values()])
-}
-
-const ptys = new PtyManager(
-  (id, data) => {
+  onData: (id, data) => {
     // Plan limits are read off the same bytes the terminal draws — the CLI
     // reports them in its own output, so there is nothing else to ask.
     notePlanOutput(id, data)
-    remoteSessions.noteData(id, data)
     send('session:data', id, data)
   },
-  (id, exitCode) => {
+  onExit: (id, exitCode) => {
     liveStatus.delete(id)
     dropPlanSession(id)
-    openSessionRecords.delete(id)
-    rememberOpenSessions()
-    remoteSessions.noteExit(id, exitCode)
-    // The key that let this session ask a phone for a GitHub login stops working
-    // the moment the session does. A key that outlived its session would be a
-    // credential request with nothing behind it — and every other process on this
-    // machine runs as the same account, so "nothing behind it" is not a
-    // theoretical caller.
-    credentialProxyIfMade()?.sessionEnded(id)
     send('session:exit', id, exitCode)
   },
-  (id, status) => {
+  onStatus: (id, status) => {
     liveStatus.set(id, { status, at: Date.now() })
-    remoteSessions.noteStatus(id, status)
     send('session:status', id, status)
   },
-)
+  // The window has to be told, or a session a phone started is running on this
+  // Mac and only the phone knows about it.
+  onSessionCreated: (meta) => send(SESSION_CREATED_CHANNEL, meta),
+})
+
+/*
+ * The names the rest of this file already used, pointed at the core.
+ *
+ * Aliases rather than a rewrite on purpose: everything below reads `ptys`,
+ * `startSession` and the rest exactly as it did, so the move is a move and not
+ * seven hundred lines of incidental churn.
+ */
+const { ptys, wsl, sessions: remoteSessions, ledger, startSession, statablePath } = core
 
 function createWindow(): void {
   const saved = store().getState().windowBounds
@@ -577,154 +387,6 @@ function createWindow(): void {
   } else {
     void mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
-}
-
-/**
- * Start a session. The one place that does, for the window and for a phone.
- *
- * Was inline in the `session:create` handler until a phone needed to start one
- * too. Everything here is load-bearing and none of it is obvious from the
- * outside — the login shell's PATH, the fallback when the requested CLI is not
- * installed, the profile's redirected config directory — so a second copy for
- * the remote path would be a session that is subtly not the same kind of
- * session: no agent CLI on PATH, or two "separate" logins quietly sharing one
- * config directory.
- *
- * `guest` is set for exactly one caller — a session a paired device asked for —
- * and it is what stops that session inheriting this machine's git login. It is a
- * parameter rather than something resolved in here because whose session this is
- * is not a fact this function has: the window's own New Session and a restored
- * tab both belong to the person at the keyboard, and giving *those* an isolated
- * git would break the app for its owner to protect them from themselves.
- */
-async function startSession(input: CreateSessionInput, guest?: GuestGitEnv): Promise<SessionMeta> {
-  const path = await loginPath()
-  /*
-   * Which side of the WSL boundary this session lives on, decided by its folder
-   * and by nothing else.
-   *
-   * A Linux path cannot be opened by cmd.exe under any circumstance, so this is
-   * not a preference being consulted — it is the only way that folder can run.
-   * `targetFor` answers without waiting for the distro probe for exactly that
-   * reason; see its comment.
-   */
-  const target = wslTargetFor(input.cwd)
-  // Asked of the side the session will actually run on. Asking Windows whether
-  // `claude` exists, on a machine where it is installed inside Ubuntu, is the
-  // bug this whole path exists to fix: every agent reported missing, and every
-  // tab silently downgraded to a shell.
-  const available = await detectProviders(currentPlatform(), target)
-  // Fall back to a plain shell rather than spawning a binary that isn't there,
-  // which would flash a dead tab with no explanation.
-  const requested = input.provider ?? 'claude'
-  const provider = available[requested] ? requested : 'shell'
-  // `PROVIDERS` is the table for this machine; a WSL session needs the table for
-  // this machine *and this folder*, because `wsl.exe --cd` is part of the launch.
-  const spec = target === null ? PROVIDERS[provider] : providersFor(currentPlatform(), process.env, target)[provider]
-
-  // Resolve the profile the session should run as and hand the PTY its
-  // config-dir override. Without this the picker records a choice that never
-  // reaches the process, and two "separate" logins quietly share one.
-  const profile = resolveProfile(profilesState(), {
-    sessionProfileId: input.profileId ?? undefined,
-    projectPath: input.cwd,
-  })
-
-  /*
-   * The profile's config-dir override, plus — inside WSL — the one variable that
-   * lets any of it cross the boundary.
-   *
-   * WSL does not inherit the Windows environment: a variable arrives only if
-   * `WSLENV` names it. Without this the session marker never reaches the agent
-   * (so the app cannot tell its own sessions apart from a nested one) and a
-   * profile's config directory never reaches it either, which is the "two
-   * separate logins quietly sharing one directory" failure this function warns
-   * about two comments up — reappearing on Windows only, and only inside Linux.
-   *
-   * The profile's directory is a real `C:\Users\…` folder, so it is listed as a
-   * path and WSL rewrites it to `/mnt/c/…` on the way in. That is the one thing
-   * this feature deliberately leaves on the Windows side of the boundary: it is
-   * small, read once, and the alternative is a login that silently is not the
-   * one the user picked.
-   */
-  const profileEnv = { ...sessionEnv(profile, provider), ...(guest?.set ?? {}) }
-  /*
-   * The guest's git variables have to cross the WSL boundary too, and they are
-   * split the same way everything else here is: a path is translated, a plain
-   * value is copied. `git-guest.ts` says which of its own variables are paths
-   * rather than this end guessing from the value.
-   *
-   * The one part of it that does not survive the crossing is the helper's path
-   * *inside* the `credential.helper` value, which is a shell command and not a
-   * variable, so `WSLENV` has nothing to translate. That fails in the safe
-   * direction — the entry that clears every other helper still applies, so a
-   * guest session inside WSL has no credential helper at all and a push is
-   * refused rather than answered with the owner's login. It is a real gap, and
-   * it is a gap in the *proxy*, not in the isolation.
-   */
-  const guestPaths = guest?.paths ?? []
-  const env =
-    target === null
-      ? profileEnv
-      : {
-          ...profileEnv,
-          WSLENV: wslEnvBridge(process.env, {
-            plain: [
-              BRAND.sessionEnvVar,
-              'TERM',
-              'COLORTERM',
-              ...Object.keys(guest?.set ?? {}).filter((name) => !guestPaths.includes(name)),
-            ],
-            paths: [...Object.keys(sessionEnv(profile, provider)), ...guestPaths],
-          }),
-        }
-
-  // `spec.spawn`, not `spec.bin`. They are the same thing on macOS and are not
-  // on Windows, where the name that answers a PATH lookup for an npm-installed
-  // agent CLI is a `.cmd` shim and `CreateProcess` will not run a batch file.
-  // Spawning `bin` there failed with a bare "File not found:" and a tab that
-  // died with no message — observed on Windows 11, which is what this comment
-  // is replacing a guess with. `providers.ts` has carried the launchable form
-  // in `spawn` the whole time, unread. Inside WSL they diverge further still:
-  // `spawn` is a whole `wsl.exe` invocation and `bin` is the CLI's own name,
-  // which is what the far side looks up.
-  const meta = ptys.create(input, {
-    provider,
-    command: spec.spawn.command,
-    args:
-      input.resume && spec.spawn.resumeArgs.length > 0 ? spec.spawn.resumeArgs : spec.spawn.args,
-    path,
-    env,
-    ...(guest ? { removeEnv: guest.remove } : {}),
-    // Set only for a WSL launch, where the session's own folder is a Linux path
-    // that node-pty would resolve into a Windows directory that does not exist.
-    hostCwd: spec.spawn.hostCwd,
-  })
-
-  /*
-   * Remember the tab, so a relaunch can put it back.
-   *
-   * `requested`, not `provider`: the two differ when the chosen CLI is not
-   * installed and the fallback above turns the tab into a plain shell. Writing
-   * the fallback down would make the downgrade permanent — install Claude Code
-   * tomorrow and every restored tab would still be a shell, with nothing on
-   * screen explaining why.
-   *
-   * `input.profileId`, not the resolved `profile`: a null here means "whatever
-   * this project's default profile is", and that is a question worth asking
-   * again next launch rather than freezing today's answer.
-   */
-  openSessionRecords.set(meta.id, {
-    cwd: input.cwd,
-    provider: requested,
-    profileId: input.profileId ?? null,
-    cols: input.cols,
-    rows: input.rows,
-    lastSeenAt: Date.now(),
-  })
-  rememberOpenSessions()
-
-  return meta
 }
 
 /** True once the sessions from the previous run have been dealt with, win or lose. */
@@ -1012,12 +674,12 @@ function registerIpc(): void {
     // The same object the folder rule above closes over, never a second one:
     // the panel edits what `create` is checked against, or it edits a copy and
     // the phone keeps the folders the user just removed until the next launch.
-    folders: folderGrants(),
+    folders: core.grants,
     // Likewise the same proxy the spawn path above hands each guest session a
     // key from. This is also where it is brought into being: the endpoint binds
     // at launch, with nobody pressing anything, so the first push a phone makes
     // is not the one that discovers the feature had never been started.
-    credentials: credentialProxy(),
+    credentials: core.credentials,
     // Where a photo or a file sent from a phone lands. The user's downloads
     // folder, in a folder named after the app — somewhere a person already looks,
     // rather than application support, which they never do and which an
@@ -1031,7 +693,28 @@ function registerIpc(): void {
   // usually dead and TCP will not admit it for minutes — minutes in which a
   // phone cannot reach this Mac. `powerMonitor` already knows; asking it is
   // free, and it is exactly one event instead of a timer that runs forever.
-  powerMonitor.on('resume', () => remote.server.wake())
+  // The other half of remote access, and the half this app did not have: every
+  // machine *this* one has paired to. Registering it dials each of them, which
+  // is deliberate and is asserted by `machines/boot.test.ts` — a link that only
+  // came up when somebody opened the Machines page would be a page that reports
+  // its own screen as the state of the world.
+  //
+  // It shares the pairing desk with the host half above, because there is one
+  // code on screen at a time whether a phone or a second desktop is about to
+  // read it.
+  const machines = registerMachinesIpc(ipcMain, {
+    storageDir: remoteStorageDir(),
+    desk: remote.desk,
+    status: () => remote.server.status(),
+    broadcast: (channel, payload) => send(channel, payload),
+  })
+  powerMonitor.on('resume', () => {
+    remote.server.wake()
+    // A guest link that slept through a suspend is as dead as a host one, and
+    // for the same reason: TCP will not admit it for minutes. One event, both
+    // halves.
+    machines.wake()
+  })
   // The GitHub sign-in stores a token of its own when the user connects from
   // inside the app, so this registration is the one that needs to know where
   // this build keeps its data. `registerGitHubIpc` wires the auth channels too.
@@ -1095,8 +778,7 @@ function registerIpc(): void {
     // would turn typing into disk traffic for a field that is a tiebreak. The
     // freshened value reaches the file on the next open or close, and on
     // `before-quit` — which is where a clean shutdown makes it exact.
-    const record = openSessionRecords.get(id)
-    if (record) record.lastSeenAt = Date.now()
+    ledger.touch(id)
     ptys.write(id, data)
   })
   ipcMain.on('session:resize', (_e, id: string, cols: number, rows: number) => {
@@ -1110,16 +792,12 @@ function registerIpc(): void {
     // would clean up on its own, but it arrives *later*: a closed tab would
     // stay in the remembered list for that gap, and a crash inside it would
     // reopen a session the user had just closed.
-    openSessionRecords.delete(id)
-    rememberOpenSessions()
+    ledger.forget(id)
     return ptys.kill(id)
   })
   ipcMain.handle('session:list', () => ptys.list())
 }
 
-// Before anything reads userData — the store, the trace log and Chromium's own
-// profile all resolve their paths from it.
-pinUserData(app)
 
 app.whenReady().then(() => {
   if (process.platform === 'darwin') app.setName(BRAND.name)
@@ -1162,12 +840,13 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   // Before `quitting`, deliberately. Every session is still live at this
   // instant, which makes this the most accurate the remembered list ever gets —
-  // and one line further down `quitting` closes `rememberOpenSessions` for the
-  // rest of the run, because `killAll` fires an exit per session and reconciling
-  // on those would write down that nothing was open. A crash never reaches this
+  // and one line further down `ledger.freeze()` closes the list for the rest of
+  // the run, because `killAll` fires an exit per session and reconciling on
+  // those would write down that nothing was open. A crash never reaches this
   // line, which is fine: the list is already correct from the last open or
   // close, and that is the case this whole feature is for.
-  rememberOpenSessions()
+  ledger.flush()
+  ledger.freeze()
 
   // First, and before `killAll`. Killing a PTY makes it flush, exit and push a
   // status, and all three of those broadcast — into a render frame that is
@@ -1183,6 +862,6 @@ app.on('before-quit', () => {
   // clean up — this only closes the loopback listener and answers anything a git
   // is still waiting on, rather than leaving it to time out against an app that
   // has gone.
-  void credentialProxyIfMade()?.stop()
+  void core.credentials.stop()
   void clearBrowserDataIfNotPersisting()
 })

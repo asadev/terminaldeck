@@ -102,6 +102,17 @@ struct LocalhostBrowser: View {
             // controller holds the handler. Neither should outlive the screen.
             browser.tearDown()
         }
+        /*
+         * The credential prompt's second home.
+         *
+         * This screen is a `fullScreenCover`, so while it is up the copy of this
+         * modifier on `RootView` has nothing to present from — a sheet asked for
+         * by an ancestor of a cover simply does not appear. `DeckModel.covered`
+         * disarms that one and arms this one, so a machine that asks for a login
+         * while somebody is looking at a tunnelled page still gets an answer
+         * rather than a minute of silence.
+         */
+        .credentialPrompt(model)
     }
 
     /// Copy, paste and "sent to an agent" are silent by nature; without this the

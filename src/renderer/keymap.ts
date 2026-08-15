@@ -405,6 +405,25 @@ const PC_NAMES: Readonly<Record<string, string>> = {
   shift: 'Shift',
 }
 
+/**
+ * Every string a modifier can be printed as, on either platform.
+ *
+ * Exported for the tooltip layer, which has to recognise a chord it did not
+ * format. `tip()` joins a label and a chord into one `title` string and the
+ * bubble splits them apart again so the chord can be set the way a menu sets
+ * one — dimmer, off to the side — and telling "this trailing parenthesis is a
+ * shortcut" from "this folder is called `renderer (old)`" means knowing what a
+ * modifier looks like.
+ *
+ * Derived from the two tables rather than written out beside them for the
+ * reason `reachable.test.ts` enforces from the other side: a ⌘ typed anywhere
+ * but this file is a glyph that will still say ⌘ on Windows. A second list
+ * would also go stale the first time these tables gain a key.
+ */
+export const MODIFIER_LABELS: readonly string[] = [
+  ...new Set([...Object.values(MAC_SYMBOLS), ...Object.values(PC_NAMES)]),
+]
+
 const MAC_KEY_GLYPHS: Readonly<Record<string, string>> = {
   enter: '↩',
   escape: 'Esc',

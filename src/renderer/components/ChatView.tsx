@@ -4,6 +4,7 @@ import DOMPurify from 'dompurify'
 import { ChatComposer } from './ChatComposer'
 import { AgentControls } from '../chat/controls/AgentControls'
 import { UsageStrip, useTranscriptChanges } from '../chat/usage'
+import { useFeatures } from '../features/FeaturesProvider'
 import { useEvery } from '../schedule'
 import { useSessionTranscript, type SessionScope } from '../session-transcript'
 import type { ProviderId } from '@shared/types'
@@ -489,6 +490,7 @@ export function ChatView({
   provider,
 }: ChatViewProps) {
   const resolved = bridge ?? resolveBridge()
+  const features = useFeatures()
   const liveSessionId = useLiveSessionId(cwd, sessionId)
   // Scoped to the session when there is one. An explicit path always wins.
   const scoped = session != null && !transcriptPath
@@ -710,6 +712,12 @@ export function ChatView({
         // been typed in the terminal view — so the box must not call it a
         // message to an agent that is not there.
         placeholder={shell ? 'Run a command in this shell…' : undefined}
+        // Everything behind the Add menu is an `@"path"` mention an agent
+        // expands and a shell would type at its prompt, so the plus is not
+        // drawn here at all. The pane already says this session is a shell;
+        // offering "the agent gets its listing" two centimetres under that
+        // sentence is the window arguing with itself.
+        shell={shell}
         controls={
           <AgentControls
             sessionId={liveSessionId}
@@ -719,8 +727,11 @@ export function ChatView({
             // falls back to the project's most recent session, which is how a
             // pane that had never been prompted came to report somebody else's
             // spend. No transcript, no readout.
+            // …and it belongs to Cost and usage, which can be uninstalled. Two
+            // separate reasons for the same absence, kept separate: one is
+            // about this session, the other about this install.
             extra={
-              shell ? undefined : (
+              shell || !features.controlOn('chat.usage') ? undefined : (
                 <UsageStrip cwd={cwd} transcriptPath={target ?? undefined} sessionId={sessionId} />
               )
             }

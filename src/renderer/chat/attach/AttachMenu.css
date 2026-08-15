@@ -56,6 +56,15 @@
   transition: background var(--dur-fast) var(--ease);
 }
 
+/* The shared offer mark (app.css) parks itself in a control's top-right corner,
+   which is right for a button and stray on a full-width menu row. On a row it
+   belongs beside the text it is about, on the row's own centre line. */
+.at-item[data-offer]::after {
+  top: 50%;
+  right: var(--sp-2);
+  transform: translateY(-50%);
+}
+
 .at-item:hover {
   background: var(--bg-hover);
 }

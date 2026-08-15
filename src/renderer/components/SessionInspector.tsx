@@ -181,14 +181,15 @@ interface InsightsBridge {
 
 /**
  * Mirrors `formatUsd`/`formatTokens` in `src/main/cost.ts` — same reason the
- * types are mirrored. Sub-cent spends must still read as non-zero, so the
- * precision follows the magnitude.
+ * types are mirrored, and the reasoning is written out there: two places,
+ * because a three-place figure reads as thousands wherever the full stop is the
+ * group separator, and a spend under half a cent says `<$0.01` rather than
+ * rounding to nothing.
  */
 function formatUsd(usd: number): string {
   const abs = Math.abs(usd)
   if (abs === 0) return '$0.00'
-  if (abs < 0.01) return `$${usd.toFixed(4)}`
-  if (abs < 10) return `$${usd.toFixed(3)}`
+  if (abs < 0.005) return usd < 0 ? '-<$0.01' : '<$0.01'
   return `$${usd.toFixed(2)}`
 }
 

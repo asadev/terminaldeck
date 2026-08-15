@@ -164,6 +164,35 @@ export interface DeckApi {
   loadDashboard(projectPath: string): Promise<unknown>
   saveDashboard(projectPath: string, layout: unknown): Promise<void>
   clearDashboard(projectPath: string): Promise<void>
+
+  /**
+   * Other machines: the ones this desktop has paired *to*.
+   *
+   * The mirror of the `remote*` half, which is about devices reaching in. These
+   * cross the bridge as `unknown` like every other feature module, and
+   * `renderer/machines/` narrows them against the main-process types that own
+   * the definitions.
+   *
+   * There is deliberately nothing here that returns a credential or a key.
+   * `MachineStore` keeps both and publishes neither — the window has no use for
+   * either, and a bridge that carried a bearer secret is one screenshot away
+   * from publishing it.
+   */
+  listMachines(): Promise<unknown>
+  startMachineCode(): Promise<unknown>
+  cancelMachineCode(): Promise<unknown>
+  pairMachine(code: string): Promise<unknown>
+  forgetMachine(id: string): Promise<unknown>
+  renameMachine(id: string, name: string): Promise<unknown>
+  connectMachine(id: string): Promise<unknown>
+  disconnectMachine(id: string): Promise<unknown>
+  attachMachineSession(id: string, sessionId: string, cols: number, rows: number): Promise<unknown>
+  detachMachineSession(id: string, sessionId: string): Promise<unknown>
+  writeToMachineSession(id: string, sessionId: string, data: string): Promise<unknown>
+  resizeMachineSession(id: string, sessionId: string, cols: number, rows: number): Promise<unknown>
+  createMachineSession(id: string, cwd?: string, provider?: string): Promise<unknown>
+  onMachinesState(cb: (view: unknown) => void): () => void
+  onMachineOutput(cb: (chunk: unknown) => void): () => void
 }
 
 declare global {

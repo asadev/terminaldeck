@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi, type Mock } from 'vitest'
 import { remoteSessionCreator, remoteSessionStart, type SessionStarter } from './session-create'
 import type { SessionMeta } from '../../shared/types'
 
@@ -31,17 +31,37 @@ const META: SessionMeta = {
 /** The device asking, when a test does not care which one it is. */
 const PHONE = 'device-phone'
 
-function starter(overrides: Partial<SessionStarter> = {}): SessionStarter & { spawn: ReturnType<typeof vi.fn> } {
-  const spawn = vi.fn(async (input: { cwd: string; cols: number; rows: number }) => ({ ...META, cwd: input.cwd }))
-  const base: SessionStarter = {
-    folders: () => ['/Users/apple/Projects/terminaldeck', '/Users/apple/Projects/imza'],
-    spawn,
-  }
-  // Kept after the spread so a test overriding `folders` still gets the spy,
-  // and so the returned object's `spawn` is the same function the test asserts
-  // against rather than a second one.
-  return { ...base, ...overrides, spawn: overrides.spawn ?? spawn } as SessionStarter & {
-    spawn: ReturnType<typeof vi.fn>
+/**
+ * The helper's `spawn`, typed from the interface rather than described again.
+ *
+ * `ReturnType<typeof vi.fn>` used to stand here, which is `Mock<Procedure>` —
+ * a spy that accepts anything and returns anything. That is what forced the
+ * `as SessionStarter & { … }` on the return: the object being built genuinely
+ * did not have the type it claimed, because its `spawn` took three fields and
+ * the interface's takes four. The cast hid a real drift. `deviceId` had already
+ * been added to `SessionStarter['spawn']` for git isolation and the fake in
+ * this file never grew it, so every `toHaveBeenCalledWith` below was checked
+ * against a signature the product had left behind.
+ */
+type SpawnSpy = Mock<SessionStarter['spawn']>
+
+/** What the default `spawn` answers: the fixture, relocated to the folder asked for. */
+const defaultSpawn: SessionStarter['spawn'] = async (input) => ({ ...META, cwd: input.cwd })
+
+/**
+ * A `SessionStarter` whose `spawn` is always a spy, whatever the test supplied.
+ *
+ * Wrapping an override in `vi.fn` rather than passing it through is what lets
+ * the return type promise a spy without asserting one: a test that hands in a
+ * plain throwing function still gets back an object whose `spawn` can be
+ * asserted against, and the promise is kept by construction instead of by a
+ * cast.
+ */
+function starter(overrides: Partial<SessionStarter> = {}): SessionStarter & { spawn: SpawnSpy } {
+  return {
+    folders:
+      overrides.folders ?? (() => ['/Users/apple/Projects/terminaldeck', '/Users/apple/Projects/imza']),
+    spawn: vi.fn(overrides.spawn ?? defaultSpawn),
   }
 }
 
@@ -175,7 +195,7 @@ describe('a request that names one', () => {
  */
 describe('who is asking', () => {
   /** Two devices, two lists, one desktop — the arrangement the panel produces. */
-  function twoPhones(): SessionStarter & { spawn: ReturnType<typeof vi.fn> } {
+  function twoPhones(): SessionStarter & { spawn: SpawnSpy } {
     return starter({
       folders: (deviceId) =>
         deviceId === 'device-a' ? ['/Users/apple/Projects/alpha'] : ['/Users/apple/Projects/beta'],
@@ -267,7 +287,7 @@ describe('the two halves handed out together', () => {
     expect(folders).toHaveBeenCalledTimes(2)
   })
 
-  function twoLists(): SessionStarter & { spawn: ReturnType<typeof vi.fn> } {
+  function twoLists(): SessionStarter & { spawn: SpawnSpy } {
     return starter({
       folders: (deviceId) =>
         deviceId === 'device-a' ? ['/Users/apple/Projects/alpha'] : ['/Users/apple/Projects/beta'],
@@ -336,7 +356,7 @@ describe('the session it reports back', () => {
  * first.
  */
 describe('a Windows desktop, where case is not a difference', () => {
-  function windowsStarter(): SessionStarter & { spawn: ReturnType<typeof vi.fn> } {
+  function windowsStarter(): SessionStarter & { spawn: SpawnSpy } {
     return starter({ folders: () => ['C:\\Users\\Asad\\Projects\\deck'] })
   }
 

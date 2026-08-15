@@ -11,6 +11,7 @@ import {
   RemoteAuth,
   type Device,
 } from './device-auth'
+import { isCode } from '../../shared/short-code'
 
 /**
  * These tests are the attacker's half of `auth.ts`. The happy path is two
@@ -80,9 +81,13 @@ describe('pairing tokens', () => {
 
     const { token, expiresAt } = auth.createPairingToken()
     expect(expiresAt).toBe(time.now() + PAIRING_TTL_MS)
-    expect(token.length).toBeGreaterThanOrEqual(40)
-    // base64url only: a token that needs escaping is a token that gets mangled
-    // somewhere between a screen, a phone and a query string.
+    // The short code from `shared/short-code.ts`, because the other end of a
+    // pairing is now sometimes a second desktop with no camera and a person
+    // typing. Forty bits, guarded by the sixty seconds above, a single use and
+    // five wrong answers — the arithmetic is written out in that file.
+    expect(isCode(token)).toBe(true)
+    // Still base64url-safe, so nothing between a screen, a phone and a query
+    // string has to escape it. The hyphen is in that alphabet.
     expect(token).toMatch(/^[A-Za-z0-9_-]+$/)
 
     time.advance(PAIRING_TTL_MS - 1)

@@ -1,6 +1,6 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { app } from 'electron'
+import { userDataDir } from './platform/paths'
 import type { ProviderId } from '../shared/types'
 import type { SavedSession } from './session-restore'
 
@@ -61,7 +61,7 @@ class Store {
   private state: PersistedState
 
   constructor() {
-    this.file = join(app.getPath('userData'), 'state.json')
+    this.file = join(userDataDir(), 'state.json')
     this.state = this.load()
   }
 
@@ -160,7 +160,12 @@ class Store {
 
 let instance: Store | null = null
 
-/** Constructed lazily — app.getPath() is only valid after the app is ready. */
+/**
+ * Constructed lazily, because the directory is not known at import time in
+ * either shell: Electron answers `getPath` only once the app is ready, and the
+ * headless daemon installs its own answer at the top of `main()`. See
+ * `platform/paths.ts`.
+ */
 export function store(): Store {
   if (!instance) instance = new Store()
   return instance

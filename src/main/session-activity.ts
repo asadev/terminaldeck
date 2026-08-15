@@ -115,6 +115,12 @@ export class ActivityTracker {
   private status: SessionStatus = 'idle'
   private timer: NodeJS.Timeout | undefined
   private exited = false
+  /**
+   * True unless the host has been told nobody is attached. Defaults to watched,
+   * so the desktop — which has a window in front of a person from the moment a
+   * session exists — behaves exactly as it did before idle mode was written.
+   */
+  private watched = true
 
   constructor(
     private readonly id: string,
@@ -127,7 +133,14 @@ export class ActivityTracker {
 
   push(chunk: string): void {
     if (this.exited) return
+    // Written even while unwatched, and this is the half that must not be
+    // skipped. The emulator is the session's screen; a gap in what it was fed
+    // is a screen that no longer matches the real terminal, and no later byte
+    // repairs it — an agent sitting at a prompt sends nothing at all. Idling is
+    // allowed to stop *asking what the screen says*; it is not allowed to lose
+    // the screen.
     this.term.write(chunk)
+    if (!this.watched) return
     this.set('working')
 
     clearTimeout(this.timer)
@@ -135,6 +148,33 @@ export class ActivityTracker {
       // Flush pending writes before reading, or the viewport lags the output.
       this.term.write('', () => this.set(classify(this.visibleText(), false)))
     }, SETTLE_MS)
+  }
+
+  /**
+   * Whether anybody is listening to the status this tracker produces.
+   *
+   * The headless host's idle mode drives this from the attach and detach events
+   * — see `idle.ts`. With nothing attached there is no window and no phone to
+   * receive a status change, so classifying every settle is work done for
+   * nobody: a timer armed per output chunk, and a full sweep of the viewport
+   * each time it fires, on every live session, forever.
+   *
+   * Going unwatched cancels the pending classification. Coming back runs one
+   * immediately rather than waiting for the next byte, because the case that
+   * matters is exactly the one where no next byte is coming: an agent that
+   * finished and is waiting for an answer produces no output, and a phone
+   * attaching to it must not be told the session is still working because the
+   * last thing this tracker heard was output.
+   */
+  setWatched(watched: boolean): void {
+    if (watched === this.watched) return
+    this.watched = watched
+    if (this.exited) return
+    clearTimeout(this.timer)
+    if (!watched) return
+    this.timer = setTimeout(() => {
+      this.term.write('', () => this.set(classify(this.visibleText(), false)))
+    }, 0)
   }
 
   resize(cols: number, rows: number): void {

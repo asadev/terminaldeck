@@ -488,12 +488,33 @@ export function preContextWarning(
   }
 }
 
-/** Money, at a precision that suits the magnitude. Sub-cent spends still read as non-zero. */
+/**
+ * Money, the way money is written: two decimal places.
+ *
+ * It used to print three below ten dollars and four below a cent, on the
+ * argument that a bill worth watching deserves the precision. What that
+ * produced on screen was "$2.101" and "$1.741" beside "$12.35", and in half the
+ * world the full stop is the thousands separator — so the number this whole
+ * feature exists to make legible read, at a glance, as two thousand one hundred
+ * and one. Against the bar Asad set for the app: *"stupid simple, for every
+ * stupid person to easily understand what is what."*
+ *
+ * A spend too small to show still must not read as nothing, which is what
+ * `$0.00` would be. It says so in words instead: `<$0.01`. The threshold is
+ * half a cent, so anything that would round *to* a cent prints as one and only
+ * what would round to zero gets the "less than".
+ *
+ * Three copies of this exist in the renderer (`usage-model.ts`,
+ * `SessionInspector.tsx`, `dashboard/widgets.tsx`) because the renderer's
+ * tsconfig cannot see `src/main`. They say so, and they say the same thing.
+ */
 export function formatUsd(usd: number): string {
   const abs = Math.abs(usd)
   if (abs === 0) return '$0.00'
-  if (abs < 0.01) return `$${usd.toFixed(4)}`
-  if (abs < 10) return `$${usd.toFixed(3)}`
+  // The sign is kept rather than dropped. No cost in this app is negative
+  // today, and a formatter that silently turns one positive is worse than an
+  // ugly string nobody will ever see.
+  if (abs < 0.005) return usd < 0 ? '-<$0.01' : '<$0.01'
   return `$${usd.toFixed(2)}`
 }
 

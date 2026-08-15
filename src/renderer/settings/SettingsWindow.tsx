@@ -28,7 +28,9 @@ import {
   type SectionProps,
   type SettingsBridge,
 } from './settings-bridge'
+import { useFeatures } from '../features/FeaturesProvider'
 import { GeneralSection } from './sections/GeneralSection'
+import { FeaturesSection } from './sections/FeaturesSection'
 import { AppearanceSection } from './sections/AppearanceSection'
 import { NotificationsSection } from './sections/NotificationsSection'
 import { AgentsSection } from './sections/AgentsSection'
@@ -91,6 +93,7 @@ const LinuxSectionView: ComponentType<SectionProps> = () => <LinuxSection />
 
 const SECTION_VIEWS: Record<SectionId, ComponentType<SectionProps>> = {
   general: GeneralSection,
+  features: FeaturesSection,
   appearance: AppearanceSection,
   notifications: NotificationsSection,
   agents: AgentsSection,
@@ -172,15 +175,36 @@ export function SettingsPanel({
   onSaveState,
 }: SettingsPanelProps) {
   const bridge = useMemo(() => injected ?? resolveSettingsBridge(), [injected])
-  // The rail for this machine. A section that exists nowhere on this platform is
-  // not drawn disabled — it is not drawn.
-  const sections = useMemo(() => sectionsFor(platform), [platform])
-  const [section, setSection] = useState<SectionId>(() =>
+  const features = useFeatures()
+  /*
+   * The rail for this machine, and for the features it has.
+   *
+   * A section that exists nowhere on this platform is not drawn disabled — it is
+   * not drawn — and the same is now true of a section belonging to an
+   * uninstalled feature. Leaving "Browser" in the rail with the browser
+   * uninstalled would be a settings pane for something the window does not have,
+   * which is the dead control the design brief forbids, wearing a different hat.
+   */
+  const sections = useMemo(
+    () => sectionsFor(platform).filter((entry) => features.sectionOn(entry.id)),
+    [platform, features],
+  )
+  const [chosen, setSection] = useState<SectionId>(() =>
     // A section can be asked for that this platform does not have — a deep link,
     // or a remembered choice from a machine that did have it. Landing on an
     // empty pane with no rail entry selected is worse than landing on General.
     sections.some((entry) => entry.id === initialSection) ? initialSection : sections[0].id,
   )
+  /*
+   * What is actually on screen.
+   *
+   * The rail can lose the selected entry while the window is open: uninstalling
+   * the browser from Features takes the Browser section with it, and the pane
+   * behind it was still rendering, with nothing in the rail selected. Resolved
+   * on render rather than repaired in an effect, because the wrong pane must
+   * never be shown for even one frame.
+   */
+  const section = sections.some((entry) => entry.id === chosen) ? chosen : sections[0].id
   const [values, setValues] = useState<SettingValues>(() => mergeSettings({}))
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)

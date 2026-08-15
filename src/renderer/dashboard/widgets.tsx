@@ -227,28 +227,21 @@ function doorIf(open: boolean, run: () => void): (() => void) | undefined {
  * git types: the renderer tsconfig cannot see `src/main`. The `cost:format`
  * channel exists for the exact strings, but a round trip to the main process
  * per number is not worth it for a tile that redraws on every git change.
- */
-function formatUsd(usd: number): string {
-  return `$${usd.toFixed(usdPrecision([usd]))}`
-}
-
-/**
- * Decimal places for a set of amounts that will be read as a column.
  *
- * One precision for all of them, chosen by the largest. A per-value rule is
- * right for a single headline number and wrong the moment there are several
- * stacked up: the breakdown behind a project total printed `$27.41`, `$11.02`
- * and `$3.430` under each other, three different shapes for the same kind of
- * thing, and the eye reads the ragged one as a different unit.
+ * This file used to carry a second idea as well — `usdPrecision`, one shared
+ * number of decimal places for a column of figures, so that `$27.41`, `$11.02`
+ * and `$3.430` did not stack up in three different shapes. Two places
+ * everywhere makes the column line up by construction, so the whole notion is
+ * gone: it existed only to reconcile a variable precision with itself.
  */
-export function usdPrecision(values: readonly number[]): number {
-  const max = values.reduce((most, value) => Math.max(most, Math.abs(value)), 0)
-  if (max === 0) return 2
-  // Below a cent, two places is "$0.00" — which is not what a fraction of a
-  // cent costs, and this dashboard is read by people watching a bill.
-  if (max < 0.01) return 4
-  if (max < 10) return 3
-  return 2
+export function formatUsd(usd: number): string {
+  const abs = Math.abs(usd)
+  if (abs === 0) return '$0.00'
+  // Under half a cent, said in words rather than rounded to `$0.00` — which is
+  // the one thing a dashboard read by somebody watching a bill must not print
+  // for money that was actually spent.
+  if (abs < 0.005) return usd < 0 ? '-<$0.01' : '<$0.01'
+  return `$${usd.toFixed(2)}`
 }
 
 export function formatTokens(tokens: number): string {
@@ -549,8 +542,19 @@ function CostWidget({ context }: { context: WidgetContext }): ReactElement {
             onClick={open}
             goes={goes}
           />
+          {/*
+            "sessions recorded", not "sessions".
+
+            This counts transcripts in the folder — every session that has ever
+            written one, including yesterday's and ones this app did not start.
+            The Sessions tile 350 pixels away counts the sessions that are open
+            right now. Both said "sessions", one said 7 and the other said 4,
+            on the same screen, with nothing to say which was which. Two numbers
+            that disagree in public need different words, and the word has to be
+            the one that explains where the number came from.
+          */}
           <Stat
-            label={plural(data.sessions, 'session')}
+            label={`${plural(data.sessions, 'session')} recorded`}
             value={String(data.sessions)}
             onClick={open}
             goes={goes}
@@ -560,7 +564,6 @@ function CostWidget({ context }: { context: WidgetContext }): ReactElement {
         {breakdown &&
           (() => {
             const rows = [...data.perSession].sort((a, b) => b.cost - a.cost)
-            const places = usdPrecision(rows.map((row) => row.cost))
             return (
               <ul className="widget-list widget-list-breakdown">
                 {rows.map((row) => (
@@ -569,7 +572,7 @@ function CostWidget({ context }: { context: WidgetContext }): ReactElement {
                       <span className="widget-row-main mono">{row.id.slice(0, 8)}</span>
                       <span className="widget-row-side">{row.model || '—'}</span>
                       <span className="widget-row-side num">{formatTokens(row.tokens)}</span>
-                      <span className="widget-row-side num">${row.cost.toFixed(places)}</span>
+                      <span className="widget-row-side num">{formatUsd(row.cost)}</span>
                     </span>
                   </li>
                 ))}

@@ -66,6 +66,7 @@ import { createHash, randomBytes, scrypt as scryptCallback, timingSafeEqual } fr
 import { readFileSync, renameSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { fingerprint } from '../../shared/sealed'
+import { CODE_ENTROPY_BYTES, codeFromBytes } from '../../shared/short-code'
 import { writeSecretFile } from './secret-file'
 
 /* -------------------------------------------------------------------------- */
@@ -187,7 +188,6 @@ const MAX_TRACKED_KEYS = 1024
  */
 const LAST_SEEN_WRITE_MS = 60_000
 
-const TOKEN_BYTES = 32
 const CREDENTIAL_BYTES = 32
 const DEVICE_ID_BYTES = 12
 const SALT_BYTES = 16
@@ -487,12 +487,35 @@ export class RemoteAuth {
    *
    * Only the token's digest is kept, so nothing in this process holds a live
    * bearer secret after the call returns — the caller shows it and drops it.
+   *
+   * ## Why this is eight characters and not forty-three
+   *
+   * It used to be `randomBytes(32).toString('base64url')`, which is 256 bits and
+   * unreadable. That was fine while the only thing on the other end was a phone
+   * with a camera: the token went into a QR code and nobody ever saw it.
+   *
+   * A second desktop has no camera. The way one machine pairs to another is that
+   * a person reads a code off one screen and types it into the other, and 43
+   * characters of base64url with its case mattering is not something anybody
+   * types twice. So the token is now the short code in `shared/short-code.ts`,
+   * for every device: a phone still scans it inside the same link, and a Mac,
+   * a PC or a phone with a cracked camera can be told it out loud.
+   *
+   * The entropy argument is written out in full over there, with the numbers.
+   * The short version is that forty bits is guarded by a sixty-second life, a
+   * single use, and five wrong answers killing the code — which puts a guess at
+   * about 4.5 × 10⁻¹² per pairing — and that redeeming it still only produces a
+   * *pending* device somebody has to approve.
+   *
+   * Nothing downstream cares about the shape: the token is hashed here, matched
+   * as an opaque string, and told apart from a credential by the dot a code
+   * cannot contain.
    */
   createPairingToken(): PairingToken {
     const now = this.now()
     this.pruneTokens(now)
 
-    const token = randomBytes(TOKEN_BYTES).toString('base64url')
+    const token = codeFromBytes(randomBytes(CODE_ENTROPY_BYTES))
     const hash = sha256(token)
     const expiresAt = now + PAIRING_TTL_MS
     this.tokens.set(hash.toString('hex'), { hash, expiresAt, usedAt: null })

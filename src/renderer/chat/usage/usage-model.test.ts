@@ -203,9 +203,10 @@ describe('context readout', () => {
 })
 
 describe('formatting', () => {
-  it('keeps a sub-cent spend visible', () => {
-    expect(formatUsd(0.0004)).toBe('$0.0004')
+  it('agrees with `cost.ts`: two places, and never $0.00 for a real spend', () => {
+    expect(formatUsd(0.0004)).toBe('<$0.01')
     expect(formatUsd(0)).toBe('$0.00')
+    expect(formatUsd(2.1013)).toBe('$2.10')
     expect(formatUsd(12.345)).toBe('$12.35')
   })
 

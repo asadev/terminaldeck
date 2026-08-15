@@ -97,8 +97,8 @@
   padding: 0 var(--sp-3);
   border: none;
   border-radius: var(--radius-pill);
-  background: var(--fill-quaternary);
-  color: var(--text-secondary);
+  background: transparent;
+  color: var(--text-muted);
   font-family: inherit;
   font-size: var(--t-callout);
   cursor: pointer;
@@ -110,8 +110,19 @@
   color: var(--text-primary);
 }
 
+/*
+  On and off, tellable apart.
+
+  The step used to be `--fill-quaternary` (0.045 alpha) to `--bg-active` (0.09)
+  — four and a half hundredths of a tint between "this filter is on" and "this
+  filter is off", which is invisible on a screenshot and very nearly invisible
+  on glass. Off gives up its fill entirely and its ink drops a step; on takes
+  the strongest neutral fill and the brightest ink. Neutral rather than accent
+  because five of these can be on at once, and five blue chips is a screen with
+  no accent left.
+*/
 .search-chip[data-on='true'] {
-  background: var(--bg-active);
+  background: var(--fill-secondary);
   color: var(--text-primary);
   font-weight: var(--w-medium);
 }
@@ -121,16 +132,14 @@
   outline-offset: 1px;
 }
 
-.search-chip-mono {
-  font-family: var(--font-mono);
-}
-
 /* ---------------------------------------------------------------- status -- */
 
+/* Flush left with the field and the filters above it — the page's own edge,
+   which the toolbar's title now sits on too. */
 .search-status {
   flex-shrink: 0;
   margin: 0;
-  padding: var(--sp-3) var(--sp-3) var(--sp-4);
+  padding: var(--sp-3) 0 var(--sp-4);
   color: var(--text-muted);
   font-size: var(--t-footnote);
   /* Reserves the line so results do not jump every time the text changes. */

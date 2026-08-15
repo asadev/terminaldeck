@@ -39,12 +39,33 @@
 </main>
 <div id="hmr">socket: connecting…</div>
 <script type="module">
-  // A real WebSocket to the same origin, so the tunnel is proved to carry one.
+  /*
+   * Two probes, one line, and each of them owns its own half of it.
+   *
+   * This used to be `el.textContent = …` in the socket's handler and
+   * `el.textContent += …` in the fetch's, which is a race that destroys the
+   * evidence the page exists to produce: whichever finished second won, and when
+   * the socket opened *after* the fetch returned the line read `HMR socket OPEN`
+   * with the fetch's result wiped off it. The tunnel was carrying both, the page
+   * said so for a moment, and the assertion looking for `OK,` saw a page that had
+   * overwritten its own answer.
+   *
+   * It cost a UI test that fails while everything works, which is the most
+   * expensive kind. Now each result is a variable and the element is rendered
+   * from both, so neither probe can erase the other and the order they finish in
+   * stops mattering.
+   */
   const el = document.getElementById('hmr')
+  let socketState = 'socket: connecting…'
+  let fetchState = ''
+  const render = () => { el.textContent = socketState + fetchState }
+
+  // A real WebSocket to the same origin, so the tunnel is proved to carry one.
   const socket = new WebSocket(`ws://${location.host}/__probe`)
-  socket.onopen = () => { el.textContent = 'HMR socket OPEN' }
-  socket.onerror = () => { el.textContent = 'socket failed' }
+  socket.onopen = () => { socketState = 'HMR socket OPEN'; render() }
+  socket.onerror = () => { socketState = 'socket failed'; render() }
   fetch('/__probe.json').then((r) => r.json()).then((j) => {
-    el.textContent += `  ·  OK, ${j.served}`
-  }).catch(() => { el.textContent += '  ·  fetch failed' })
+    fetchState = `  ·  OK, ${j.served}`
+    render()
+  }).catch(() => { fetchState = '  ·  fetch failed'; render() })
 </script>

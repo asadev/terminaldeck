@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react'
+import { useFeatures } from '../features/FeaturesProvider'
 import {
   settingsIn,
   valueOf,
@@ -76,6 +77,38 @@ export function Row({
         )}
       </div>
       <div className="settings-row-control">{control}</div>
+    </div>
+  )
+}
+
+/**
+ * A paragraph that has to be read, with a line to hang it on.
+ *
+ * Three sections were reported as walls of text — Power, Remote and Agents —
+ * and the reason is the same in all three: the standing explanations had no
+ * entry point. A screen-wide paragraph with nothing above it is a paragraph the
+ * eye cannot skip, cannot come back to, and cannot tell apart from the
+ * paragraph under it. Two of them were also wearing `Notice tone="info"`, which
+ * is the *alert* treatment: a tinted block with a rule down its side, used for
+ * something that is permanently true. A section of those reads as a page of
+ * warnings.
+ *
+ * The treatment is the brief's, and it is the one the app already uses inside a
+ * row (`.settings-label` over `.settings-help`) — brighter title, dimmer body,
+ * space around the block:
+ *
+ *   Title    the brightest ink, and short enough to scan in one go
+ *   Body     a step dimmer than body copy, held to a readable measure
+ *
+ * Not a control and never interactive itself. An action that belongs to the
+ * explanation goes inside it as an inline button, exactly as it did in the
+ * notices this replaces, so nothing that could be clicked before has moved.
+ */
+export function Explain({ title, children }: { title?: string; children: ReactNode }) {
+  return (
+    <div className="settings-explain">
+      {title && <h5 className="settings-explain-title">{title}</h5>}
+      <p className="settings-explain-body">{children}</p>
     </div>
   )
 }
@@ -503,7 +536,17 @@ export interface SettingListProps {
   omit?: readonly string[]
 }
 
-/** Every setting declared for a section, in table order. */
+/**
+ * Every setting declared for a section, in table order — minus any whose
+ * feature is not installed.
+ *
+ * The feature check is here rather than in each section for the same reason the
+ * rows are generated at all: a section lists what it shows and nothing else, so
+ * a setting changing hands cannot leave one pane still drawing it. Insight
+ * alerts is the live case — the switch belongs to Alerts and sits in General, so
+ * uninstalling Alerts has to take a row out of a section that knows nothing
+ * about it.
+ */
 export function SettingList({
   section,
   values,
@@ -513,10 +556,11 @@ export function SettingList({
   optionStates,
   omit,
 }: SettingListProps) {
+  const features = useFeatures()
   return (
     <>
       {settingsIn(section)
-        .filter((setting) => !omit?.includes(setting.id))
+        .filter((setting) => !omit?.includes(setting.id) && features.settingOn(setting.id))
         .map((setting) => (
           <SettingControl
             key={setting.id}

@@ -127,8 +127,19 @@ export function withPath<V extends string | undefined>(
  *
  * "PC" rather than "computer" or "machine": it is what a Windows user calls it,
  * and matching the reader's word is the entire point of doing this at all.
+ *
+ * Linux answers "machine", and that is not a fourth opinion — it is the same
+ * table every client already uses. `welcome.hostPlatform` maps darwin→Mac,
+ * win32→PC, linux→machine and an absent value→desktop, in all four clients, and
+ * all four deliberately refuse to guess Mac. This function is the host end of
+ * that table and used to be the one place that still said "Mac" whatever it was
+ * running on — which the headless build makes visible, because its whole reason
+ * to exist is Linux servers and WSL, and a Debian box telling its owner "this
+ * Mac could not save its key" is the app being obviously wrong about the
+ * computer in front of them.
  */
 export function machineNoun(platform: Platform = currentPlatform()): string {
-  return isWindows(platform) ? 'PC' : 'Mac'
+  if (isWindows(platform)) return 'PC'
+  return platform === 'darwin' ? 'Mac' : 'machine'
 }
 

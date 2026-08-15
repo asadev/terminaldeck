@@ -35,6 +35,18 @@ export interface ModeSwitchProps {
   mode: WorkspaceMode
   onChange(mode: WorkspaceMode): void
   label?: string
+  /**
+   * Draw Split as an offer rather than as a mode, because the feature is not
+   * installed.
+   *
+   * This is the one place split view would have been, so it is the one place
+   * worth offering it — a store that quietly removes a segment teaches people
+   * the app cannot do the thing, which is the failure a feature store actually
+   * causes. The segment is not dead: pressing it still asks for split, and the
+   * window above installs the feature and splits, so the confirmation of where
+   * to find it is the thing appearing under the pointer.
+   */
+  splitOffer?: boolean
 }
 
 /**
@@ -56,21 +68,31 @@ export function ModeSwitch({
   mode,
   onChange,
   label = 'What this window is showing',
+  splitOffer = false,
 }: ModeSwitchProps) {
   return (
     <div className="mode-switch" role="group" aria-label={label}>
       {MODES.map((entry) => {
         const active = entry.id === mode
+        const offered = splitOffer && entry.id === 'split'
         return (
           <button
             key={entry.id}
             type="button"
-            className={active ? 'ms-option ms-on' : 'ms-option'}
+            className={`ms-option${active ? ' ms-on' : ''}${offered ? ' ms-offer' : ''}`}
+            // The window's one mark for "this is available, press to add it",
+            // shared with the globe in the sidebar and the microphone in the
+            // chat box (`[data-offer]` in app.css). It replaces dimming the
+            // segment, which said the opposite of what was meant.
+            data-offer={offered || undefined}
             // A pressed state, not a tab: `role="tab"` promises arrow-key
             // navigation between the segments, which this does not implement,
             // and a promise a control does not keep is worse than no promise.
             aria-pressed={active}
-            title={entry.hint}
+            // The offer says what it is and what pressing it does. Without this
+            // the segment is a mode that behaves like an install, which is the
+            // one thing a segmented control must never be.
+            title={offered ? `${entry.hint} — not installed. Press to install it.` : entry.hint}
             onClick={() => {
               if (!active) onChange(entry.id)
             }}

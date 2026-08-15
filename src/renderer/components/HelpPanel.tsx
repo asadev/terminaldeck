@@ -88,6 +88,7 @@ export const PANEL_HELP: Record<PanelId, string> = {
   alerts: 'Things worth knowing without watching: a session filling its context window, a tool failing repeatedly, work that has stalled.',
   mcp: 'Connect to MCP servers, browse the tools, resources and prompts they expose, and call one by hand to see what it returns.',
   hooks: 'Installs callbacks into each agent CLI’s own settings file, so the app knows what the agent is doing without scraping the terminal.',
+  machines: 'Your other computers. Pair one by reading an eight-character code off its screen and typing it into this one, then open its sessions here as if they were running locally.',
 }
 
 const GETTING_STARTED: HelpTopic[] = [
@@ -137,7 +138,10 @@ const GETTING_STARTED: HelpTopic[] = [
       {
         kind: 'steps',
         items: [
-          'Press the ＋ beside “Open” at the bottom of the sidebar, or use the Open a project shortcut.',
+          // A plain +, not U+FF0B: a fullwidth plus is the only fullwidth
+          // character in this window and it sets twice as wide as the type
+          // around it.
+          'Press the + beside “Open” in the sidebar, or use the Open a project shortcut.',
           'Pick the root of the repo you want to work in — the folder the agent should treat as its working directory.',
           'It stays in the list, most recent first, until you remove it.',
         ],

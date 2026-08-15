@@ -197,6 +197,38 @@ export function generateStatic(): StaticKeyPair {
 }
 
 /**
+ * The one identity that is *derived* rather than invented, and why that exists.
+ *
+ * Every other static key in this app comes out of `generateStatic` and is kept.
+ * This one is computed from a seed by both ends of a pairing, which is a
+ * different and much narrower thing: two machines that share nothing but a
+ * typed code have to end up holding the same responder identity, or the code
+ * cannot authenticate anything.
+ *
+ * `remote/machines.ts` is the only caller and its comment carries the argument.
+ * The short version is that a rendezvous whose responder key anyone could
+ * choose is a rendezvous the relay can answer for, and the point of Noise IK is
+ * that it cannot. Deriving the key from the code moves "does this machine know
+ * the code" into the handshake itself, where a wrong answer is a failed decrypt
+ * rather than a message somebody has to be trusted about.
+ *
+ * The seed must be memory-hard on the way in — a code is forty bits, and a
+ * relay that recorded a handshake could otherwise walk the whole space. That is
+ * the caller's job because it is the caller that knows what the seed is worth;
+ * this function only turns bytes into a key pair.
+ *
+ * X25519 clamps the scalar internally, so any 32 bytes are a usable private
+ * key and the public half is derived from what OpenSSL actually uses. Two
+ * machines feeding in identical seeds therefore get identical pairs, which is
+ * the entire requirement.
+ */
+export function staticFromSeed(seed: Buffer): StaticKeyPair {
+  if (seed.length !== KEY_BYTES) throw new Error(`an x25519 seed must be ${KEY_BYTES} bytes`)
+  const privateKey = privateKeyObject(seed)
+  return { publicKey: rawPublic(createPublicKey(privateKey)), privateKey: rawPrivate(privateKey) }
+}
+
+/**
  * X25519 keys travel as 32 raw bytes, not as DER or PEM.
  *
  * Node speaks `KeyObject`; CryptoKit and Android speak 32 bytes. Converting at

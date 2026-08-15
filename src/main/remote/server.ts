@@ -51,8 +51,13 @@ import { createServer as createPlainServer, type Server as LocalServer } from 'n
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Duplex } from 'node:stream'
 import { extname, join, normalize, resolve, sep } from 'node:path'
-import type { IpcMain } from 'electron'
-import { RemoteAuth, type Device, type PairingToken } from './device-auth'
+// The one method of `IpcMain` this file uses, named rather than imported. That
+// is the whole of the "unpick ipcMain" step in HEADLESS.md: the headless daemon
+// registers these same handlers against a desk that keeps them in a Map, and its
+// CLI invokes them by the same channel names the preload uses — one
+// implementation of pairing, folders and status, two callers. See ../ipc-seam.
+import type { InvokeRegistrar } from '../ipc-seam'
+import { MAX_FAILED_ATTEMPTS, RemoteAuth, type Device, type PairingToken } from './device-auth'
 // Type-only, deliberately. The store is built by `index.ts` and handed to
 // `registerRemoteIpc`; importing the class here would put a second constructor
 // for the same file in the one module that must not own it.
@@ -1827,7 +1832,7 @@ export interface PairingDesk {
 }
 
 export function pairingDesk(auth: RemoteAuth, now: () => number = Date.now): PairingDesk {
-  let live: { digest: Buffer; expiresAt: number } | null = null
+  let live: { digest: Buffer; expiresAt: number; misses: number } | null = null
   const digestOf = (value: string): Buffer => createHash('sha256').update(value).digest()
   const expired = (): boolean => {
     if (!live) return true
@@ -1842,7 +1847,7 @@ export function pairingDesk(auth: RemoteAuth, now: () => number = Date.now): Pai
       // Only the digest is kept, for the same reason `RemoteAuth` keeps only a
       // digest: nothing in this process should hold a live bearer secret after
       // the call that showed it has returned.
-      live = { digest: digestOf(minted.token), expiresAt: minted.expiresAt }
+      live = { digest: digestOf(minted.token), expiresAt: minted.expiresAt, misses: 0 }
       return minted
     },
     cancel(): void {
@@ -1850,7 +1855,30 @@ export function pairingDesk(auth: RemoteAuth, now: () => number = Date.now): Pai
     },
     offers(token: string): boolean {
       if (expired() || !live) return false
-      return timingSafeEqual(digestOf(token), live.digest)
+      if (timingSafeEqual(digestOf(token), live.digest)) return true
+      /*
+       * A wrong answer costs the code one of five lives.
+       *
+       * `RemoteAuth` already limits guesses per source address, and on the
+       * tailnet that is the guesser's IP. Through the relay it is not: there is
+       * no address to have, so `relay-client.ts` uses the device's authenticated
+       * public key instead — a far better identity for a *device*, and no
+       * identity at all for somebody guessing, who mints a fresh key per attempt
+       * and lands in a fresh bucket every time.
+       *
+       * That did not matter while the token was 256 bits from `randomBytes`,
+       * which is why the caller below is allowed to refuse a wrong code without
+       * ever reaching the limiter. It matters now that the token is a
+       * forty-bit code a person can type. So the count lives with the code
+       * itself, where the guesser cannot get away from it: five wrong answers
+       * and the code is dead, whoever sent them and from wherever.
+       *
+       * That is also the fifth line of the arithmetic in `shared/short-code.ts`,
+       * and it is the one that was not true until this counter existed.
+       */
+      live.misses += 1
+      if (live.misses >= MAX_FAILED_ATTEMPTS) live = null
+      return false
     },
     open(): boolean {
       return !expired()
@@ -2308,6 +2336,19 @@ export interface RemoteIpcDeps {
 export interface RemoteIpc {
   server: RemoteServer
   auth: RemoteAuth
+  /**
+   * The one code that is on screen, whoever put it there.
+   *
+   * Handed out because pairing a second *desktop* needs the same code and the
+   * same window as pairing a phone, and there is deliberately only one of each.
+   * `remote/machines.ts` publishes a rendezvous while a code is live and takes
+   * it down again the moment the code is spent or cancelled, and it can only do
+   * that if it is looking at the same desk this file's `remote:pair` handler
+   * writes to. A second desk would mean two codes could be open at once and
+   * only one of them would be believed — which is the shape of a pairing screen
+   * that says a code is valid while the machine refuses it.
+   */
+  desk: PairingDesk
 }
 
 /**
@@ -2377,7 +2418,7 @@ function relayFor(storageDir: string, url: string, auth: RemoteAuth, desk: Pairi
  * revoke land — and a fire-and-forget send that silently routes nowhere is the
  * bug this codebase keeps re-finding.
  */
-export function registerRemoteIpc(ipcMain: IpcMain, deps: RemoteIpcDeps): RemoteIpc {
+export function registerRemoteIpc(ipcMain: InvokeRegistrar, deps: RemoteIpcDeps): RemoteIpc {
   const auth = new RemoteAuth(deps.storageDir)
   const desk = pairingDesk(auth)
   const env = deps.env ?? process.env
@@ -2512,5 +2553,5 @@ export function registerRemoteIpc(ipcMain: IpcMain, deps: RemoteIpcDeps): Remote
     },
   )
 
-  return { server, auth }
+  return { server, auth, desk }
 }

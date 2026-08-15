@@ -13,6 +13,16 @@ interface Props {
   meta?: ReactNode
   /** Whether the rail is off screen entirely: pinned away and not being peeked. */
   sidebarHidden: boolean
+  /**
+   * The sidebar view filling the window, or null while a session is.
+   *
+   * Only the stylesheet reads it, and only to indent the heading onto the
+   * page's own left edge — see `.toolbar[data-page]` in shell.css. The title
+   * used to stand at the window's margin while every page centred itself in a
+   * measure 280 pixels to the right of it, so each page had a heading floating
+   * out over its own gutter.
+   */
+  page?: string | null
   onRevealSidebar(): void
   /** The pointer reaching the window's left edge, which peeks the rail out. */
   onEdgeEnter(): void
@@ -44,17 +54,27 @@ export function WindowToolbar({
   subtitle,
   meta,
   sidebarHidden,
+  page = null,
   onRevealSidebar,
   onEdgeEnter,
   children,
 }: Props) {
   return (
-    <header className="toolbar" data-sidebar-collapsed={sidebarHidden || undefined}>
+    <header
+      className="toolbar"
+      data-sidebar-collapsed={sidebarHidden || undefined}
+      data-page={page ?? undefined}
+    >
       <div className="toolbar-lead">
         {sidebarHidden && (
           <button
             type="button"
-            className="toolbar-btn"
+            // `toolbar-reveal` takes it out of the flow and parks it beside the
+            // traffic lights — see shell.css. It has to stay put whatever the
+            // heading beside it does, because it is the same control the rail's
+            // own gutter draws in that same spot, and a button that jumps 350px
+            // when you press it is a button people stop trusting.
+            className="toolbar-btn toolbar-reveal"
             onClick={onRevealSidebar}
             // The same hover that peeks the rail out from the window edge, so
             // reaching for this button reveals the thing it opens before the

@@ -7,7 +7,10 @@ import { ReadinessPanel } from '../components/ReadinessPanel'
 import { AlertsPanel, type AlertAction } from '../components/AlertsPanel'
 import { McpInspector } from '../components/McpInspector'
 import { HooksPanel } from '../components/HooksPanel'
+import { MachinesPanel } from '../machines/MachinesPanel'
 import { PageEmpty } from '../components/PageEmpty'
+import { FeatureOffer } from '../features/FeatureOffer'
+import { useFeatures } from '../features/FeaturesProvider'
 import { Dashboard } from '../dashboard/Dashboard'
 import type { WidgetContext } from '../dashboard/widgets'
 import { panelSpec, type PanelId } from './panels'
@@ -122,13 +125,33 @@ export function PanelView({
   dashboard,
 }: Props) {
   const spec = panelSpec(panel)
+  const features = useFeatures()
 
   const body = (() => {
+    /*
+     * The view's own feature, missing.
+     *
+     * This is the place a feature store goes wrong: the row is gone from the
+     * sidebar, so the only way to arrive here is to have been here already —
+     * the rail remembers the last view across launches, and uninstalling
+     * something while looking at it lands you exactly here. A blank page at
+     * that moment teaches the reader that the app cannot do the thing. The
+     * offer teaches them where it went and gives them it back in one click.
+     */
+    const owner = features.featureForPanel(panel)
+    if (owner && !features.on(owner)) return <FeatureOffer id={owner} icon={spec.icon} />
+
     switch (panel) {
       case 'hooks':
         return <HooksPanel />
       case 'mcp':
         return <McpInspector projectPath={projectPath} />
+      case 'machines':
+        // Above the project check, with Hooks and MCP. The machines this
+        // desktop is paired to have nothing to do with which folder is open —
+        // asking somebody to open a project before they can reach their other
+        // computer would be a rule invented by this switch statement.
+        return <MachinesPanel />
       default:
         break
     }

@@ -1,7 +1,8 @@
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeEach, describe, expect, it } from 'vitest'
+import { installPaths, resetPaths } from './platform/paths'
 import {
   canonicalProjectKey,
   createProfile,
@@ -48,19 +49,29 @@ const ON_WINDOWS = process.platform === 'win32'
 
 const USER_DATA = join(tmpdir(), `terminaldeck-profiles-test-${process.pid}`)
 
-vi.mock('electron', async () => {
-  const { tmpdir: tmp } = await import('node:os')
-  const { join: j } = await import('node:path')
-  return { app: { getPath: () => j(tmp(), `terminaldeck-profiles-test-${process.pid}`) } }
-})
-
+/*
+ * Profiles ask `platform/paths.ts` where userData is, not Electron, so a test
+ * says where by installing a provider — the same call both shells make at boot.
+ * This replaced a `vi.mock('electron')`: mocking a whole runtime to redirect one
+ * directory was always heavier than the question deserved.
+ */
 beforeEach(() => {
+  resetPaths()
+  installPaths({
+    userData: () => USER_DATA,
+    home: () => USER_DATA,
+    downloads: () => USER_DATA,
+    appRoot: () => USER_DATA,
+  })
   rmSync(USER_DATA, { recursive: true, force: true })
   mkdirSync(USER_DATA, { recursive: true })
   resetProfilesCache()
 })
 
-afterAll(() => rmSync(USER_DATA, { recursive: true, force: true }))
+afterAll(() => {
+  resetPaths()
+  rmSync(USER_DATA, { recursive: true, force: true })
+})
 
 /* ----------------------------------------------------------- pure state -- */
 

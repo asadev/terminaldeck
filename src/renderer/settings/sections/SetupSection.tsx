@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Button, Group, LinkOut, Notice, SectionHead, ToolVersion } from '../controls'
+import { Button, Explain, Group, LinkOut, Notice, SectionHead, ToolVersion } from '../controls'
+import { useFeatures } from '../../features/FeaturesProvider'
 import { sectionMeta } from '../settings-schema'
 import { errorText, missingChannelNote, type SectionProps } from '../settings-bridge'
 import {
@@ -183,8 +184,34 @@ function HookBlock({
   )
 }
 
-export function SetupSection({ bridge }: SectionProps) {
+/**
+ * The agent CLIs, which Settings → Agents already lists in full.
+ *
+ * The same three rows were drawn twice in one window, under two different
+ * headings — "Coding tools" here and "What is installed" there — with the same
+ * skeleton, the same versions and the same "Checking… / Check again" button
+ * under each. Two copies of one fact in one dialog is worse than either copy
+ * alone: a reader who notices has to work out which one is stale, and the
+ * answer (neither) is not visible from the screen.
+ *
+ * Agents keeps them, because that section is *about* them and carries the
+ * profile each one runs as. Setup keeps everything else it probes — git and the
+ * GitHub CLI — and points at Agents for these.
+ */
+export const AGENT_TOOL_IDS: readonly string[] = ['claude', 'codex', 'gemini']
+
+export function SetupSection({ bridge, goTo }: SectionProps) {
   const meta = sectionMeta('setup')
+  /*
+   * Hooks are a feature, and an uninstalled feature gets no settings block.
+   *
+   * `hooks` declares no `sections` of its own — its surface is a sidebar page —
+   * so nothing gated this one, and three paragraphs plus a status line about
+   * session hooks were drawn on the Setup page while Hooks was still sitting in
+   * the store's Available list. FEATURE-STORE.md engineering rule 2: "no
+   * settings sections for something uninstalled".
+   */
+  const features = useFeatures()
   const [snapshot, setSnapshot] = useState<SetupSnapshot | null>(null)
   const [checking, setChecking] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -251,7 +278,10 @@ export function SetupSection({ bridge }: SectionProps) {
     )
   }
 
-  const tools = snapshot?.tools ?? []
+  // Minus the agents — see `AGENT_TOOL_IDS`. What is left is git and the GitHub
+  // CLI, which is what "what this app needs on your machine" means once the
+  // agents have a section of their own.
+  const tools = (snapshot?.tools ?? []).filter((tool) => !AGENT_TOOL_IDS.includes(tool.id))
   const hooks = snapshot?.hooks ?? []
   const endpoint = snapshot?.endpoint ?? { running: false, port: null }
   const canWrite = Boolean(bridge.installHooks && bridge.removeHooks)
@@ -270,7 +300,20 @@ export function SetupSection({ bridge }: SectionProps) {
         </Notice>
       )}
 
-      <Group title="Coding tools">
+      <Explain title="The agent CLIs are in Agents">
+        Claude Code, Codex and Gemini are listed there, with the login each one runs as — the same
+        three rows used to be drawn here as well, under a second heading.{' '}
+        <button type="button" className="settings-inline-btn" onClick={() => goTo('agents')}>
+          Open Agents
+        </button>
+      </Explain>
+
+      {/* What is left after the three: the coding tools this app can find and
+          cannot start a session with. GitHub Copilot is the one today — it has
+          no entry in `providers.ts`, which is exactly why it has no row in
+          Agents and would have disappeared from the window altogether if this
+          section had simply dropped its list. */}
+      <Group title="Other coding tools">
         <ul className="settings-tools">
           {tools.map((tool) => (
             <ToolRow key={tool.id} tool={tool} />
@@ -288,7 +331,12 @@ export function SetupSection({ bridge }: SectionProps) {
           */}
           {tools.length === 0 &&
             (checking ? (
-              [0, 1, 2].map((n) => (
+              // One row, because one is what lands once the three agent CLIs
+              // have moved to their own section: GitHub Copilot.
+              // The agents moved to their own section and the placeholder has
+              // to keep being shaped like the answer, or the panel jumps when
+              // the probe returns.
+              [0].map((n) => (
                 <li key={n} className="settings-tool settings-tool-ghost" aria-hidden="true">
                   <span className="settings-tool-main">
                     <span className="settings-ghost-line" />
@@ -311,6 +359,7 @@ export function SetupSection({ bridge }: SectionProps) {
         </div>
       </Group>
 
+      {features.on('hooks') && (
       <Group title="Session hooks">
         <p className="settings-prose">
           A hook is a command the CLI runs at each step of a session. Ours posts that event to a
@@ -340,6 +389,7 @@ export function SetupSection({ bridge }: SectionProps) {
           />
         ))}
       </Group>
+      )}
     </>
   )
 }

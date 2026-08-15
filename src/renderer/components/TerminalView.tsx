@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Terminal } from '@xterm/xterm'
+import { Terminal, type ITheme } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { SearchAddon } from '@xterm/addon-search'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { chordFor, formatChord } from '../keymap'
+import { subscribeTheme } from '../theme'
 
 interface Props {
   sessionId: string
@@ -27,6 +28,40 @@ function token(name: string, fallback: string): string {
 }
 
 export const DEFAULT_TERMINAL_FONT_SIZE = 13
+
+/**
+ * The four colours a terminal takes from the app, resolved to literals.
+ *
+ * xterm paints on a canvas, so it cannot read a CSS custom property — the theme
+ * has to be resolved to real values every time it is applied. The second
+ * argument to each `token` call is only used when the variable is missing,
+ * which happens exactly when tokens.css has not been applied to the document
+ * yet.
+ *
+ * These fallbacks are kept in step with the dark theme in tokens.css on
+ * purpose. They spent a long time as the purple-blue of a palette that had been
+ * replaced twice over (#0e0f13 / #8588f2), so on the rare boot where they did
+ * fire, the terminal came up in a colour scheme the rest of the app had not
+ * used for months and nobody could reproduce it. If the dark theme's
+ * --terminal-bg / --terminal-fg / --accent / --accent-soft change, change these
+ * too — `tokens.test.ts` reads these three lines and fails when they drift.
+ *
+ * Exported because `RemoteTerminal` draws a session from another machine and
+ * has to look identical to a local one; it is the same terminal to look at,
+ * which is the whole promise of opening a remote session from here.
+ */
+export function terminalTheme(): ITheme {
+  return {
+    /* `--terminal-bg` / `--terminal-fg` rather than the app's canvas and ink.
+       They are the same values in the dark theme and deliberately not in the
+       light one, where the chrome is white and a white terminal on it stops
+       looking like a terminal at all. */
+    background: token('--terminal-bg', '#191919'),
+    foreground: token('--terminal-fg', '#ededed'),
+    cursor: token('--accent', '#3b8fee'),
+    selectionBackground: token('--accent-soft', 'rgba(59,143,238,0.16)'),
+  }
+}
 
 /**
  * The keymap ids this component implements.
@@ -115,30 +150,7 @@ export function TerminalView({
       cursorBlink: true,
       allowProposedApi: true,
       scrollback: 10_000,
-      /*
-       * xterm paints on a canvas, so it cannot read a CSS variable — the theme
-       * has to be resolved to literal colours once, here. The second argument
-       * is only used if the variable is missing, which happens exactly when
-       * tokens.css has not been applied to the document yet.
-       *
-       * These fallbacks are kept in step with the dark theme in tokens.css on
-       * purpose. They spent a long time as the purple-blue of a palette that
-       * had been replaced twice over (#0e0f13 / #8588f2), so on the rare boot
-       * where they did fire, the terminal came up in a colour scheme the rest
-       * of the app had not used for months and nobody could reproduce it. If
-       * the dark theme's --bg-primary / --text-primary / --accent /
-       * --accent-soft change, change these too.
-       */
-      theme: {
-        /* `--terminal-bg` / `--terminal-fg` rather than the app's canvas and
-           ink. They are the same values in the dark theme and deliberately not
-           in the light one, where the chrome is white and a white terminal on
-           it stops looking like a terminal at all. */
-        background: token('--terminal-bg', '#191919'),
-        foreground: token('--terminal-fg', '#ededed'),
-        cursor: token('--accent', '#3b8fee'),
-        selectionBackground: token('--accent-soft', 'rgba(59,143,238,0.16)'),
-      },
+      theme: terminalTheme(),
     })
 
     const fit = new FitAddon()
@@ -207,12 +219,34 @@ export function TerminalView({
       if (copyRef.current) copySelection(term)
     })
 
+    /**
+     * Repaint when the app's theme changes, not only when a terminal is built.
+     *
+     * The colours above are literals by the time xterm has them, so switching
+     * Appearance → Theme left every terminal that was already on screen in the
+     * old palette: flip to Light and an open session was a black slab in a
+     * white window; flip back and a session made while light was a white slab
+     * in a black one. Remounting fixed it, which is why the same session looked
+     * right in Split mode — a different tree, a new terminal — and wrong in
+     * Terminal mode a second later. Nothing in the code says "colour" at that
+     * moment, which is exactly why it survived: it is invisible in a diff and
+     * unmissable in a screenshot.
+     *
+     * `subscribeTheme` has existed for this since the theme controller was
+     * written ("e.g. to recolour the terminals") and nothing had ever called
+     * it. `wiring.test.ts` now pins the two together.
+     */
+    const offTheme = subscribeTheme(() => {
+      term.options.theme = terminalTheme()
+    })
+
     // Restore anything printed before this component mounted.
     void window.deck.getScrollback(sessionId).then((buf) => {
       if (buf) term.write(buf)
     })
 
     return () => {
+      offTheme()
       offData()
       offExit()
       inputDisposable.dispose()

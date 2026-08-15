@@ -152,7 +152,17 @@ export function ProfilesSection({ bridge, goTo }: SectionProps) {
                   <>
                     <span className="settings-profile-name">
                       {profile.name}
-                      {isDefault && <span className="settings-badge">Default</span>}
+                      {/* The badge only says something when there is a choice.
+
+                          With one profile — which is every fresh install, and
+                          that profile is *called* Default — the row printed the
+                          word "Default" twice, eight pixels apart: once as the
+                          name and once as a badge marking it out from the
+                          nothing beside it. A badge is a comparison, so it
+                          needs something to compare with. */}
+                      {isDefault && profiles.length > 1 && (
+                        <span className="settings-badge">Default</span>
+                      )}
                       {profile.system && <span className="settings-badge quiet">Your own install</span>}
                     </span>
                     <span className="settings-profile-path" title={profile.configDir}>
@@ -226,7 +236,11 @@ export function ProfilesSection({ bridge, goTo }: SectionProps) {
             <input
               className="settings-input wide"
               value={draft}
-              placeholder="Work"
+              // Not "Work". A single plausible word in an empty field reads as
+              // a value somebody has already typed — the same trick the pairing
+              // code's placeholder was playing — and a person who leaves it
+              // alone expecting a profile called Work gets nothing at all.
+              placeholder="Name this profile"
               maxLength={MAX_NAME_LENGTH}
               aria-label="Name for the new profile"
               onChange={(event) => setDraft(event.target.value)}

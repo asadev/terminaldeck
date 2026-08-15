@@ -190,13 +190,33 @@
   inset: 0;
   z-index: 2;
   pointer-events: none;
-  border: 2px solid transparent;
+  /*
+    The *unfocused* edge, which was `transparent` — so the pane that is not
+    focused had no edge at all and its right-hand side bled into the window with
+    nothing marking where it ended. Two panes did not read as two of the same
+    thing: one was a card with a bright ring and the other was the background.
+
+    `--pane-unfocus` was written for this and referenced nowhere in the renderer
+    until now, which is the same class of miss as the ring below.
+  */
+  border: 2px solid var(--pane-unfocus);
   border-radius: inherit;
   transition: border-color var(--dur-fast) var(--ease);
 }
 
+/*
+  The focused pane, in the token written for it.
+
+  It painted the raw `--accent`, and on paper that is a saturated blue rectangle
+  running the full height of the window — measured, and by a distance the
+  loudest thing on the screen, louder than any content it was pointing at.
+  `--pane-focus` is the same hue at two thirds of the weight in the light theme
+  and the accent verbatim in the dark one, where a mid blue on near-black reads
+  as a mark rather than a shout. It has existed in tokens.css, with that
+  explanation attached, since before this ring was drawn.
+*/
 .pane-leaf[data-focused='true']::after {
-  border-color: var(--accent);
+  border-color: var(--pane-focus);
 }
 
 /* A single pane is not a split, so the ring and the corner are noise — the

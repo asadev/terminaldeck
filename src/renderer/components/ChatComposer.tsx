@@ -11,6 +11,7 @@ import {
 } from '../chat/attach/mentions'
 import { appendSpoken } from '../chat/voice/dictation'
 import { DictateButton } from '../chat/voice/DictateButton'
+import { useControlOffer } from '../features/offer'
 import './ChatComposer.css'
 
 interface Props {
@@ -30,6 +31,19 @@ interface Props {
    * they are drawn changes.
    */
   controls?: ReactNode
+  /**
+   * Whether this session is a plain shell rather than an agent CLI.
+   *
+   * It decides whether the Add menu is drawn at all, and that is not a
+   * cosmetic choice. Every entry behind that plus adds an `@"path"` mention,
+   * which an agent expands on submit and a shell types verbatim at its prompt —
+   * so on a shell the menu offered "Add files — sent as a reference the agent
+   * reads" on the same screen the pane was saying "This session is a shell",
+   * and pressing it would have put a broken command line in front of somebody.
+   * Connectors are an agent's tools for the same reason. A shell gets the box
+   * and nothing that lies about what is on the other end of it.
+   */
+  shell?: boolean
 }
 
 const MAX_ROWS = 12
@@ -72,11 +86,28 @@ const NOTICE_MS = 4000
  * that stay glyphs — the microphone and send — are the pair every chat app in
  * the world draws in that corner, and both say what they are on hover.
  */
-export function ChatComposer({ onSend, cwd, disabled = false, placeholder, controls }: Props) {
+export function ChatComposer({
+  onSend,
+  cwd,
+  disabled = false,
+  placeholder,
+  controls,
+  shell = false,
+}: Props) {
   const [text, setText] = useState('')
   const [attachments, setAttachments] = useState<Attachment[]>([])
   const [notice, setNotice] = useState<string | null>(null)
   const boxRef = useRef<HTMLTextAreaElement>(null)
+  /**
+   * What the microphone's place says when voice dictation is not installed.
+   *
+   * Null while it is on, and then the real button is drawn. Uninstalling used
+   * to leave nothing at all here — half the store's features disappearing
+   * without a trace is the failure FEATURE-STORE.md is most worried about, and
+   * a corner of a chat box is exactly where somebody looks for a microphone and
+   * concludes the app has none.
+   */
+  const voiceOffer = useControlOffer('chat.dictate')
 
   const root = cwd ?? ''
 
@@ -190,18 +221,44 @@ export function ChatComposer({ onSend, cwd, disabled = false, placeholder, contr
 
         <div className="cc-foot">
           <div className="cc-foot-left">
-            <AttachMenu
-              root={root}
-              attachments={attachments}
-              onAdd={add}
-              onInsert={insert}
-              onClose={focusBox}
-              disabled={off || root === ''}
-            />
+            {/* Everything behind the plus is written for an agent — see the
+                `shell` prop. A shell gets no plus rather than a menu whose every
+                entry contradicts the sentence in the middle of the pane. */}
+            {!shell && (
+              <AttachMenu
+                root={root}
+                attachments={attachments}
+                onAdd={add}
+                onInsert={insert}
+                onClose={focusBox}
+                disabled={off || root === ''}
+              />
+            )}
             {controls}
           </div>
           <div className="cc-foot-right">
-            <DictateButton onFocusComposer={focusBox} disabled={off} />
+            {/* The microphone belongs to voice dictation, which can be
+                uninstalled — and where it would have been, it offers itself
+                back. It used to simply vanish, which teaches the reader that
+                this app cannot dictate. Pressing the offer installs the feature
+                and the real microphone is under the pointer a frame later. */}
+            {voiceOffer === null ? (
+              <DictateButton onFocusComposer={focusBox} disabled={off} />
+            ) : (
+              <button
+                type="button"
+                className="cc-tool"
+                data-offer
+                aria-label={voiceOffer.title}
+                title={voiceOffer.title}
+                onClick={voiceOffer.accept}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+                  <rect x="9" y="3" width="6" height="11" rx="3" strokeWidth="1.7" />
+                  <path d="M5 11a7 7 0 0 0 14 0M12 18v3" strokeWidth="1.7" strokeLinecap="round" />
+                </svg>
+              </button>
+            )}
             <button
               type="button"
               className="cc-send"

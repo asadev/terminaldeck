@@ -144,6 +144,44 @@ const api = {
     ipcRenderer.on('remote:connections', handler)
     return () => ipcRenderer.off('remote:connections', handler)
   },
+  /* --------------------------------------------------------- machines -- */
+  /*
+   * The guest half of remote access: the machines *this* desktop reaches out
+   * to, rather than the devices that reach in. Same shape as the block above —
+   * every one is an `ipcMain.handle`, so every one is `invoke()` — with two
+   * pushed channels, because a session's output and a link coming and going are
+   * events nobody asked a question to get.
+   */
+  listMachines: (): Promise<unknown> => ipcRenderer.invoke('machines:list'),
+  startMachineCode: (): Promise<unknown> => ipcRenderer.invoke('machines:code'),
+  cancelMachineCode: (): Promise<unknown> => ipcRenderer.invoke('machines:code:cancel'),
+  pairMachine: (code: string): Promise<unknown> => ipcRenderer.invoke('machines:pair', code),
+  forgetMachine: (id: string): Promise<unknown> => ipcRenderer.invoke('machines:forget', id),
+  renameMachine: (id: string, name: string): Promise<unknown> =>
+    ipcRenderer.invoke('machines:rename', id, name),
+  connectMachine: (id: string): Promise<unknown> => ipcRenderer.invoke('machines:connect', id),
+  disconnectMachine: (id: string): Promise<unknown> => ipcRenderer.invoke('machines:disconnect', id),
+  attachMachineSession: (id: string, sessionId: string, cols: number, rows: number): Promise<unknown> =>
+    ipcRenderer.invoke('machines:attach', id, sessionId, cols, rows),
+  detachMachineSession: (id: string, sessionId: string): Promise<unknown> =>
+    ipcRenderer.invoke('machines:detach', id, sessionId),
+  writeToMachineSession: (id: string, sessionId: string, data: string): Promise<unknown> =>
+    ipcRenderer.invoke('machines:input', id, sessionId, data),
+  resizeMachineSession: (id: string, sessionId: string, cols: number, rows: number): Promise<unknown> =>
+    ipcRenderer.invoke('machines:resize', id, sessionId, cols, rows),
+  createMachineSession: (id: string, cwd?: string, provider?: string): Promise<unknown> =>
+    ipcRenderer.invoke('machines:create', id, cwd ?? '', provider ?? ''),
+  onMachinesState: (cb: (view: unknown) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, view: unknown) => cb(view)
+    ipcRenderer.on('machines:state', handler)
+    return () => ipcRenderer.off('machines:state', handler)
+  },
+  onMachineOutput: (cb: (chunk: unknown) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, chunk: unknown) => cb(chunk)
+    ipcRenderer.on('machines:output', handler)
+    return () => ipcRenderer.off('machines:output', handler)
+  },
+
   tailnetStatus: (force?: boolean): Promise<unknown> =>
     ipcRenderer.invoke('tailnet:status', force === true),
   tailnetCert: (dnsName: string): Promise<unknown> => ipcRenderer.invoke('tailnet:cert', dnsName),

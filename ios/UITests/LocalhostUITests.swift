@@ -9,20 +9,49 @@
  * look at one from a phone at all.
  *
  * These drive `scripts/remote-host.sh`, which is the **real** desktop endpoint
- * and the real tunnel hub in a plain Node process, and a dev server of your own
- * on the port the test names:
+ * and the real tunnel hub in a plain Node process, and the harness dev server:
  *
- *     scripts/remote-host.sh --fresh &
- *     npx vite <some site> --port 3000       # anything that serves and pushes
- *     xcrun simctl openurl booted "$(cat .harness/.remote-host/pairing.txt)"
- *     # wait for the approval, then:
+ *     node .harness/.devsite/server.mjs &     # serves on 127.0.0.1:3210
+ *     scripts/remote-host.sh --fresh --approve-after 2000 &
+ *     # pair the Simulator with that host, then:
  *     xcodebuild test -project ios/TerminalDeck.xcodeproj -scheme TerminalDeck \
  *       -destination 'platform=iOS Simulator,name=iPhone 17' \
  *       -only-testing:TerminalDeckUITests/LocalhostUITests
  *
+ * The pairing is not done here, and that is the one awkward thing about this
+ * file: `simctl openurl` raises a system *Open in …?* confirmation that nothing
+ * in XCUITest can reach, so the code has to be typed into the pairing field.
+ * `InspectUITests` does exactly that against the same control server, so running
+ * it first leaves this suite a paired app to work with — and it wants the same
+ * dev server, which is the other reason the two now name one port:
+ *
+ *     TEST_RUNNER_TD_CONTROL=127.0.0.1:8788 xcodebuild test … \
+ *       -only-testing:TerminalDeckUITests/InspectUITests \
+ *       -only-testing:TerminalDeckUITests/LocalhostUITests
+ *
+ * ## The port used to be 3000, and that was the bug
+ *
+ * The instructions above used to read `npx vite <some site> --port 3000`, from
+ * back when this file only checked that *a* page rendered. They stopped being
+ * true the moment the assertions were tightened onto this repository's own dev
+ * server — every string checked below (`Served from the Mac`, `HMR socket OPEN`,
+ * `OK,`) is printed by `.harness/.devsite/index.html` and by nothing else — and
+ * that page is served by `server.mjs`, which listens on **3210** and cannot be
+ * told otherwise.
+ *
+ * So the file asked for a port nothing in this repository binds. Every case
+ * failed at its first assertion, and the first one alphabetically —
+ * `testClosingTheViewLeavesNoPageBehind` — failed with a bare *"XCTAssertTrue
+ * failed"*, which reads like a broken app and is a missing dev server. The
+ * number is now the one number, and the assertions that were silent now say what
+ * they were looking for.
+ *
  * Every case skips rather than fails when there is nothing to talk to, for the
  * same reason as `LiveSessionUITests`: a suite that goes red on a laptop with no
- * server running is a suite that gets deleted.
+ * server running is a suite that gets deleted. A *missing dev server* is
+ * deliberately not one of those cases — it is a failure, because the whole
+ * subject of this file is a page crossing the tunnel and there is nothing to
+ * check without one.
  *
  * ## The Simulator serves the page on `[::1]`, and that is expected
  *
@@ -39,9 +68,17 @@ import XCTest
 
 final class LocalhostUITests: XCTestCase {
 
-    /// The port the dev server is on. One number, in one place, because it has
-    /// to be the same on both sides of the tunnel — that is the feature.
-    private static let port = 3000
+    /**
+     * The port the dev server is on. One number, in one place, because it has
+     * to be the same on both sides of the tunnel — that is the feature.
+     *
+     * `.harness/.devsite/server.mjs`, the same server `InspectUITests` names and
+     * for the same reason: the assertions below are about *that page*, not about
+     * any page, and `server.mjs` binds this port and no other. A number chosen
+     * independently of the thing that serves it is a suite that fails on a
+     * machine where everything works.
+     */
+    private static let port = 3210
 
     private var app: XCUIApplication!
     private static var reachable: Bool?
@@ -58,9 +95,13 @@ final class LocalhostUITests: XCTestCase {
         try XCTSkipUnless(connected, Self.notRunning)
     }
 
+    /// The skip, and it names both halves of the setup — the host *and* the dev
+    /// server — because the two failures look identical from here and the fix
+    /// for one is not the fix for the other.
     private static let notRunning =
-        "This phone is not connected to a running host. Start scripts/remote-host.sh, then: "
-        + "xcrun simctl openurl booted \"$(cat .harness/.remote-host/pairing.txt)\" and approve the device."
+        "This phone is not paired with a running host. Start scripts/remote-host.sh and "
+        + "node .harness/.devsite/server.mjs, then pair the Simulator — running "
+        + "InspectUITests against the same control server does it, and see the header."
 
     // MARK: - The list
 
@@ -131,17 +172,25 @@ final class LocalhostUITests: XCTestCase {
      * claim dressed as a stronger one.
      */
     func testClosingTheViewLeavesNoPageBehind() throws {
+        // Every assertion here says what it was looking for. They used to say
+        // nothing, and the first one is alphabetically the first assertion in
+        // the whole suite — so a dev server that was not running reported itself
+        // as a bare "XCTAssertTrue failed" on a line that reads like the app is
+        // broken. See the header.
         let row = portRow()
-        XCTAssertTrue(row.waitForExistence(timeout: 20))
+        XCTAssertTrue(row.waitForExistence(timeout: 20),
+                      "no row for port \(Self.port) — is .harness/.devsite/server.mjs running?")
         row.tap()
 
         let done = app.buttons["localhost.done"]
-        XCTAssertTrue(done.waitForExistence(timeout: 15))
-        XCTAssertTrue(app.staticTexts["Served from the Mac"].waitForExistence(timeout: 30))
+        XCTAssertTrue(done.waitForExistence(timeout: 15), "the browser screen should open on the tap")
+        XCTAssertTrue(app.staticTexts["Served from the Mac"].waitForExistence(timeout: 30),
+                      "the page never rendered — the tunnel did not carry the document")
         done.tap()
 
-        XCTAssertTrue(portRow().waitForExistence(timeout: 10))
-        XCTAssertFalse(app.staticTexts["Served from the Mac"].exists)
+        XCTAssertTrue(portRow().waitForExistence(timeout: 10), "closing should come back to the list")
+        XCTAssertFalse(app.staticTexts["Served from the Mac"].exists,
+                       "the page is still on screen after the tunnel was closed")
     }
 
     // MARK: - Helpers

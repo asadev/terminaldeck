@@ -130,6 +130,44 @@ progress {
   transform: scale(0.985);
 }
 
+/* --------------------------------------------------------------- offers -- */
+
+/*
+  The mark on a control that is standing in for a feature you do not have.
+
+  Three places in the window can lose a control to the store — the globe beside
+  New session, the microphone in the chat box, the Split segment of the mode
+  switch — and all three used to solve it differently or not at all. The globe
+  and the microphone simply vanished; Split stayed but was painted *dimmer than
+  the segments beside it*, which is the universal convention for "unavailable",
+  so the one offer that existed read as a disabled control and taught people the
+  app could not split.
+
+  So: an offered control keeps the ink of a live one, and takes a small accent
+  dot in its corner — the "there is something new here" mark, which is the
+  opposite claim to a grey-out. It is five pixels of accent, which is what the
+  accent is for: this genuinely is the thing to press.
+
+  One rule for all three because they must read as one idea. `data-offer` is set
+  by the host that draws the control, and `useControlOffer` supplies the words.
+*/
+[data-offer] {
+  position: relative;
+}
+
+[data-offer]::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 5px;
+  height: 5px;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  /* The dot sits over the control it marks; a click has to reach the control. */
+  pointer-events: none;
+}
+
 kbd {
   display: inline-block;
   min-width: 18px;
@@ -146,12 +184,26 @@ kbd {
 
 /* ----------------------------------------------------------- status dot -- */
 
+/*
+  The resting mark, and it is deliberately hollow.
+
+  `idle` and `waiting` are one situation to a reader — nothing is happening and
+  it is your turn — so they look the same and say the same word (see
+  `StatusDot.tsx`). They used to be a filled grey dot and an open ring
+  respectively, which is the convention backwards twice over: filled means
+  active everywhere else in software, and the two words that mean the same thing
+  were the two marks that differed.
+
+  Everything with something to say fills in: `working` pulses blue, `input` is
+  the loud one, `completed` is green.
+*/
 .status-dot {
   width: 7px;
   height: 7px;
   border-radius: 50%;
   flex-shrink: 0;
-  background: var(--status-idle);
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--status-idle);
 }
 
 .status-dot[data-status='working'] {
@@ -159,26 +211,18 @@ kbd {
   animation: pulse 1.6s var(--ease) infinite;
 }
 /*
-  "At a prompt, ready for you" — the resting state of every session in the app,
-  and therefore the one status that must not shout.
+  "At a prompt, ready for you" — and now the same mark as `idle`, which is the
+  base rule above and needs no second declaration.
 
   It was painted `--status-waiting`, the same amber the app uses for a warning.
-  Two things wrong with that. It made a freshly-spawned `zsh` sitting quietly at
-  its own prompt the single warmest thing in a window that is otherwise grey and
-  one blue — the only non-blue colour on the default screen, drawing the eye to
-  the healthiest session in the list. And it said "warning" about nothing at
-  all: this state is reached by `SessionStart`, and by a shell prompt matching
-  in `session-activity.ts`, neither of which is a problem.
-
-  So it carries no colour: an open ring in the idle grey, which stays tellable
-  apart from `idle` (filled) at 7px without spending the palette on it. The
-  states that have genuinely earned colour keep it — `working` pulses blue,
-  `input` (the agent asked you something) is the loud one, `completed` is green.
+  That made a freshly-spawned `zsh` sitting quietly at its own prompt the
+  warmest thing in a window that is otherwise grey and one blue, and it said
+  "warning" about nothing at all — this state is reached by `SessionStart` and
+  by a shell prompt matching in `session-activity.ts`, neither of which is a
+  problem. The colour went then; the ring stayed, and `idle` kept a *filled*
+  dot, which left the two states nobody can tell apart in words as the two
+  states drawn differently. Both are hollow now.
 */
-.status-dot[data-status='waiting'] {
-  background: transparent;
-  box-shadow: inset 0 0 0 1.5px var(--status-idle);
-}
 .status-dot[data-status='input'] {
   background: var(--status-input);
 }

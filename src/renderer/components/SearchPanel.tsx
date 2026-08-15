@@ -454,25 +454,34 @@ export function SearchPanel({
           </button>
         ))}
         <span className="search-filler" />
+        {/* Words, not glyphs.
+
+            These were "Aa" and ".*" — two unexplained marks sitting on their
+            own at the end of the row, which is precisely the row of icons this
+            window was asked to stop drawing, and ".*" is regex notation on a
+            screen whose bar is "every stupid person can easily understand what
+            is what". They are the same chip as the five filters beside them
+            now, because they are the same kind of thing: a switch that changes
+            what the search matches. */}
         <button
           type="button"
-          className="search-chip search-chip-mono"
+          className="search-chip"
           data-on={caseSensitive ? 'true' : undefined}
           aria-pressed={caseSensitive}
-          title="Match case"
+          title="Tell capitals and small letters apart"
           onClick={() => setCaseSensitive((on) => !on)}
         >
-          Aa
+          Match case
         </button>
         <button
           type="button"
-          className="search-chip search-chip-mono"
+          className="search-chip"
           data-on={regex ? 'true' : undefined}
           aria-pressed={regex}
-          title="Regular expression"
+          title="Read what you typed as a regular expression"
           onClick={() => setRegex((on) => !on)}
         >
-          .*
+          Regex
         </button>
       </div>
 

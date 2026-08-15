@@ -648,6 +648,14 @@ export function createRelayClient(options: RelayClientOptions): RelayLink {
 
     if (live) {
       live.removeAllListeners()
+      // A no-op error listener, on *after* the others come off. The socket is
+      // ended below and then destroyed a second later, and in that window it can
+      // still deliver one last read error — `ECONNRESET` when the far end pulled
+      // the plug rather than closing. A Node socket with no `error` listener
+      // turns that into an uncaught exception, which in the main process is the
+      // whole app going down because a relay went away rudely. There is nothing
+      // left to report by then: the panel already has the reason.
+      live.on('error', () => {})
       try {
         // `end` rather than `destroy`: `stop()` has just queued a close frame,
         // and destroying in the same tick discards it — leaving the relay
@@ -837,6 +845,10 @@ export function createRelayClient(options: RelayClientOptions): RelayLink {
       clearTimeout(timer)
       dialling = false
       live.removeAllListeners()
+      // Same reason as in `drop`: a socket being torn down can still raise one
+      // last read error, and an unlistened `error` on a socket is an uncaught
+      // exception rather than a rejected promise.
+      live.on('error', () => {})
       live.destroy()
       reason = `Could not reach the relay: ${error instanceof Error ? error.message : String(error)}.`
       schedule()
@@ -853,6 +865,7 @@ export function createRelayClient(options: RelayClientOptions): RelayLink {
     // good: nothing reconnects it, and nothing is left holding it to close.
     if (stopped) {
       live.removeAllListeners()
+      live.on('error', () => {})
       live.destroy()
       return
     }

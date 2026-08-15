@@ -294,6 +294,14 @@
 
   --tab-active: #191919;
   --tab-inactive: #202020;
+  /* The focused pane's ring, and its unfocused twin. Written out here rather
+     than inherited from the light block, because the light block's `--pane-focus`
+     is a 62% mix and the note attached to it says the dark theme keeps the
+     accent verbatim — which was only true if this pair existed. On near-black a
+     mid blue reads as a mark; on paper the same rule is a saturated rectangle,
+     which is the whole reason the two themes differ here. */
+  --pane-focus: var(--accent);
+  --pane-unfocus: var(--border);
   /* The canvas, copied by value rather than by `var()`: `tokens.test.ts` reads
      these declarations as text, so a reference would be unreadable to it — and
      the test that keeps the two in step is what makes writing it twice safe. */
@@ -407,6 +415,11 @@
   --tabbar-height: 38px;
   --rail-width: 44px;
   --content-measure: 720px;
+  /* The measure every page from the sidebar is set to, and the reason it lives
+     here rather than on `.panel-page`: the toolbar has to indent its title to
+     the same column, and the two boxes are siblings. One number, so no two
+     pages disagree about where their left edge is. */
+  --page-measure: 940px;
 }
 
 /* One place decides how long anything moves for. */

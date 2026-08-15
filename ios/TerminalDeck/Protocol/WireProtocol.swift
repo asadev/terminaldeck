@@ -83,6 +83,33 @@ enum Wire {
      * one thing a paste must never do.
      */
     static let maxPasteBytes = 1024 * 1024
+
+    /**
+     * Longest `host` and `repo` on an inbound `credential.request`.
+     *
+     * The desktop bounds what it will *say* with the same two numbers. They are
+     * repeated here rather than trusted because these two strings are the entire
+     * content of a prompt somebody reads before approving a push — the one
+     * screen in this feature that must not be able to lie about what it is
+     * naming — and a hostname that will not fit on a phone is not one git
+     * resolved. A hostname cannot exceed 253 characters and a GitHub
+     * `owner/name` comes nowhere near 256.
+     */
+    static let maxCredentialHostLength = 253
+    static let maxCredentialRepoLength = 256
+
+    /**
+     * Longest username and secret this client will put on the wire.
+     *
+     * `parseClientMessage` refuses anything longer and answers a refused frame
+     * by closing the socket, so a token past this would cost the connection
+     * rather than one push. Generous rather than tight, because what is in the
+     * second field is somebody's GitHub token and the shape of those is not ours
+     * to pin: 40 characters for a classic one, over 90 for a fine-grained one,
+     * longer still for an installation token.
+     */
+    static let maxCredentialUsernameLength = 128
+    static let maxCredentialSecretLength = 4096
 }
 
 /// WebSocket close codes used by this protocol, RFC 6455 §7.4.1 plus our own.
@@ -223,6 +250,71 @@ enum WireCapability {
      * not send its bytes would have nothing to show for it.
      */
     static let upload = "upload"
+
+    /**
+     * Git on the desktop may ask **this phone** for a login.
+     *
+     * The only capability that runs backwards, and that changes what the string
+     * means on each side. Every other name here is a verb this phone sends and
+     * the desktop serves; this one is a question the desktop asks and this phone
+     * answers. So it is advertised in *both* directions — the desktop puts it in
+     * `welcome.capabilities` to say "I may ask you", and this client puts it in
+     * `hello.capabilities` to say "I can answer" — and both halves are load
+     * bearing. A desktop that asked a phone which had never heard of the frame
+     * would sit there until a timer gave up, which is exactly the thirty-second
+     * stall on a `git push` that the feature exists to not have.
+     */
+    static let credential = "credential"
+
+    /**
+     * What this build tells a desktop it can do, in `hello.capabilities`.
+     *
+     * Only names that run desktop→phone belong here. `create`, `localhost` and
+     * `upload` are things this phone *asks for* and are gated by what the
+     * desktop advertised, so claiming them would say nothing; `credential` is a
+     * frame the desktop will only send once it has been told somebody is
+     * listening for it.
+     */
+    static let claimed: [String] = [credential]
+}
+
+/**
+ * What git was doing when it asked for a login.
+ *
+ * A port of `CREDENTIAL_OPERATIONS`. Two values because there are exactly two
+ * answers a person cares about, and the difference between them is the whole of
+ * the prompting policy: a fetch or a clone is a **read**, is reversible, and
+ * asking about one buys nothing but fatigue; a push is a **write**, is not
+ * reversible, and is the moment somebody should get to see whose name goes on
+ * it.
+ *
+ * It arrives as a fact, not as an instruction. What this client is asked to *do*
+ * is the separate `prompt` flag on the same frame — see `credentialRequest`.
+ */
+enum CredentialOperation: String, Equatable {
+    case read
+    case write
+}
+
+/**
+ * Why this device would not answer, as a code rather than a sentence.
+ *
+ * A port of `CREDENTIAL_DENIALS`, and the direction is the point: this string is
+ * written *here* and read on somebody else's **desktop**, where it is printed
+ * into a terminal. The desktop owns the words that appear in its own terminal —
+ * it is the side that knows whether the reader is looking at a push or a fetch,
+ * and it is the side that must not pipe text chosen by a phone into a PTY. So
+ * this end says which of two things happened and the desktop writes the
+ * sentence.
+ *
+ * `noAccount` is not a refusal. It means no GitHub is connected in this app yet,
+ * which is a different thing to be told and has a different fix — and the
+ * desktop's wording for it points at this phone rather than at the person who
+ * pushed.
+ */
+enum CredentialDenial: String, Equatable {
+    case denied
+    case noAccount = "no-account"
 }
 
 /**
@@ -241,7 +333,16 @@ struct LocalPort: Equatable, Identifiable, Hashable {
 }
 
 enum ClientMessage: Equatable {
-    case hello(protocolVersion: Int, token: String, device: DeviceDescriptor)
+    /**
+     * `capabilities` is this client's half of the negotiation.
+     *
+     * It rides on the `hello` rather than on a later frame because the desktop
+     * may need it before this phone has said anything else: a session started
+     * from this device can be running `git push` a second after it connects, and
+     * the desktop has to know by then whether there is anything here that will
+     * answer. See `WireCapability.claimed` for why the list is short.
+     */
+    case hello(protocolVersion: Int, token: String, device: DeviceDescriptor, capabilities: [String])
     case list
     /**
      * Start a session. **Only** legal when the desktop advertised `create`.
@@ -322,6 +423,38 @@ enum ClientMessage: Equatable {
     case uploadEnd(id: String, sha256: String)
     /// Stop, and throw away what has landed. The Cancel button on the progress row.
     case uploadCancel(id: String)
+
+    /* ---- capability `credential`. The one exchange that starts over there. -- */
+
+    /**
+     * "I heard you, and I am dealing with it."
+     *
+     * The one frame here that exists purely for a failure mode, and it is the
+     * failure mode the whole feature is judged on. Without it the desktop cannot
+     * tell a phone that is asleep from a person who is thinking — both look like
+     * silence — so it would have to wait out the *human* deadline before it
+     * could say "your device isn't reachable". That is a thirty-second stall on
+     * a push with nothing on screen, which is how people stop trusting a
+     * feature.
+     *
+     * Sent for silent requests too, where it costs nothing, because a client
+     * that only acked when it was about to prompt would be one more thing that
+     * has to be right.
+     */
+    case credentialAck(id: String)
+    /**
+     * The login, for this one operation.
+     *
+     * `remember` is the second button on the prompt — "Always for this repo" —
+     * and it is a *scope*, not a stored secret: it tells the desktop it may stop
+     * asking about this repository from this device. Every push still comes back
+     * here for the credential itself, because the desktop has never held one.
+     * The desktop ignores it on a request nobody was asked about, so a silent
+     * answer sends it false.
+     */
+    case credentialAnswer(id: String, username: String, password: String, remember: Bool)
+    /// No. Carries a code rather than a sentence — see `CredentialDenial`.
+    case credentialDeny(id: String, reason: CredentialDenial)
 }
 
 enum ServerMessage: Equatable {
@@ -409,6 +542,34 @@ enum ServerMessage: Equatable {
     /// There is no file, and `message` says why. One frame for a refusal, a
     /// failure and a cancel, because to this end they are one event.
     case uploadFailed(id: String, message: String)
+
+    /* ---- capability `credential` ------------------------------------------ */
+
+    /**
+     * Git on the desktop needs a login for a repository, and this phone holds it.
+     *
+     * The only frame the desktop sends as a *question*. Everything else it sends
+     * is an answer or an event; this one is waiting on a reply, and the two ways
+     * to reply are `credentialAnswer` and `credentialDeny` — with a
+     * `credentialAck` first, always, so the desktop can tell a live phone from
+     * one that is in a drawer.
+     *
+     * `repo` is `owner/name`, or **nil** when git gave the desktop no path to
+     * derive one from — a gist, a wiki, a self-hosted layout. Nil is not a
+     * detail to paper over: a prompt that cannot name the repository is asking
+     * somebody to approve "a push, somewhere", and this client says exactly that
+     * rather than inventing a name. It is also why "always for this repo"
+     * disappears in that case: there is no repo to attach the always to, and the
+     * desktop refuses to record one.
+     *
+     * `prompt` is the instruction and `operation` is the fact, and they are two
+     * fields because they answer two different questions. `operation` says what
+     * git is doing, always. `prompt` says whether a person should be asked —
+     * false for every read, and false for a write against a repository this
+     * device has already approved on that machine.
+     */
+    case credentialRequest(id: String, host: String, repo: String?,
+                           operation: CredentialOperation, prompt: Bool)
 }
 
 enum ProtocolErrorCode: String, CaseIterable, Equatable {

@@ -63,6 +63,11 @@ const SCROLLBACK_LIMIT = 4000
  */
 export class PtyManager {
   private sessions = new Map<string, Session>()
+  /**
+   * Whether anything is listening to session status. True unless a headless
+   * host has said otherwise; see {@link setWatched}.
+   */
+  private watched = true
 
   constructor(
     private readonly onData: (id: string, data: string) => void,
@@ -157,6 +162,7 @@ export class PtyManager {
     })
 
     const activity = new ActivityTracker(id, this.onStatus, input.cols, input.rows)
+    activity.setWatched(this.watched)
     const session: Session = { meta, proc, scrollback: [], activity }
     this.sessions.set(id, session)
 
@@ -223,6 +229,21 @@ export class PtyManager {
 
   list(): SessionMeta[] {
     return [...this.sessions.values()].map((s) => s.meta)
+  }
+
+  /**
+   * Tell every live session whether anybody is listening to its status.
+   *
+   * The headless host calls this from the attach and detach events — see
+   * `idle.ts`. Nothing else does: a desktop has a window in front of a person
+   * for as long as it is running, so it never leaves the watched state it starts
+   * in. Applied to sessions started later too, in `create`, or a session opened
+   * from a phone while the host is idle would be the one tracker still
+   * classifying for nobody.
+   */
+  setWatched(watched: boolean): void {
+    this.watched = watched
+    for (const session of this.sessions.values()) session.activity.setWatched(watched)
   }
 
   killAll(): void {

@@ -240,17 +240,25 @@ export function AlertRow({
       <div className="alerts-body">
         <p className="alerts-title">{alert.title}</p>
         <p className="alerts-detail">{alert.detail}</p>
+        {/* Under the sentence it belongs to, not out at the row's right edge.
+
+            The body fills the row and the detail wraps at its own measure, so a
+            right-aligned button ended up 143px clear of the last word it was
+            about — pointing at nothing, and further from its own text than from
+            the alert above it. Proximity is what says which text a button acts
+            on.
+
+            Only when there is a host to act on it. Rule 1.1: an alert's button
+            is the whole point of the alert, and one that renders without a
+            handler is a control that swallows the click and reports nothing —
+            which is exactly how "Open the git panel" spent its life re-running
+            the scan and never navigating. */}
+        {action && onAction ? (
+          <button type="button" className="alerts-action" onClick={() => onAction(action, alert)}>
+            {action.label}
+          </button>
+        ) : null}
       </div>
-      {/* Only when there is a host to act on it. Rule 1.1: an alert's button
-          is the whole point of the alert, and one that renders without a
-          handler is a control that swallows the click and reports nothing —
-          which is exactly how "Open the git panel" spent its life re-running
-          the scan and never navigating. */}
-      {action && onAction ? (
-        <button type="button" className="alerts-action" onClick={() => onAction(action, alert)}>
-          {action.label}
-        </button>
-      ) : null}
     </li>
   )
 }
@@ -395,7 +403,16 @@ export function AlertsPanel({
                 knowing" was printed three times inside the top 150px of the
                 panel — twice as words and once as a bare digit. The summary
                 counts them; the rows underneath *are* them. */}
-            <h3 className="alerts-group-head">{SEVERITY_HEADING[group.severity]}</h3>
+            {/* The heading is dropped when it is the only one.
+
+                With a single group the summary line above has already said
+                "1 worth knowing", and this printed "Worth knowing" fifty pixels
+                under it — the same words, stacked, as though the page had two
+                titles. A group heading earns its place by telling one group
+                from another; with nothing to tell it from, it is a repeat. */}
+            {groups.length > 1 && (
+              <h3 className="alerts-group-head">{SEVERITY_HEADING[group.severity]}</h3>
+            )}
             <ul className="alerts-list">
               {group.alerts.map((alert) => (
                 <AlertRow key={alert.id} alert={alert} onAction={onAction} />

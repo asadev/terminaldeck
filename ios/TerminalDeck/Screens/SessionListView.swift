@@ -57,6 +57,9 @@ struct SessionListView: View {
             // Covers the swipe-down as well as the Done button: whichever way
             // the sheet goes away, the port stops being reachable.
             if dismissed { model.closeLocalhost() }
+            // And whichever way it goes away, the credential prompt's two
+            // possible homes swap over. See `CredentialPromptHost`.
+            model.covered = !dismissed
         }
         .navigationTitle(Brand.name)
         .navigationBarTitleDisplayMode(.inline)
@@ -111,6 +114,18 @@ struct SessionListView: View {
                     }
                     .disabled(model.current == nil)
                     .accessibilityIdentifier("sessions.rename")
+
+                    // In its own section because it is the one item here that is
+                    // not about the machine on screen: there is one GitHub
+                    // account on this phone, and it answers for every machine.
+                    Section {
+                        Button {
+                            DispatchQueue.main.async { model.showingGitHub = true }
+                        } label: {
+                            Label(gitHubLabel, systemImage: "person.crop.circle")
+                        }
+                        .accessibilityIdentifier("sessions.github")
+                    }
 
                     if let endpoint = model.endpointSummary {
                         Section("Paired with") { Text(endpoint) }
@@ -197,6 +212,14 @@ struct SessionListView: View {
             .accessibilityLabel("New session")
             .accessibilityIdentifier("sessions.new")
         }
+    }
+
+    /// The account, when there is one, so the menu answers "am I connected"
+    /// without being opened. A row that only ever read "GitHub account" would
+    /// make somebody tap it to find out nothing had changed.
+    private var gitHubLabel: String {
+        guard let account = model.gitHubAccount else { return "Connect GitHub" }
+        return "GitHub: @\(account.login)"
     }
 
     /// The folder's own name. A full path does not fit in a menu row and the

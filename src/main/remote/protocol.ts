@@ -1427,3 +1427,234 @@ export function chunkOutput(data: string, size = OUTPUT_CHUNK_BYTES): string[] {
   if (start < data.length) out.push(data.slice(start))
   return out
 }
+
+/* ============================================================================ */
+/* The other direction: what a client makes of what the desktop sent            */
+/* ============================================================================ */
+
+/**
+ * ## Why this lives here and not in whichever client needed it first
+ *
+ * Everything above narrows what arrives *at* the desktop. This section narrows
+ * what arrives at a **client**, and until recently there was no client in this
+ * repository that ran on Node — the phone app parses `welcome` in Swift, the
+ * Android app in Kotlin and the web app in `pwa/src/protocol-client.ts`.
+ *
+ * A desktop can now be a guest of another desktop (`src/main/remote/machines.ts`),
+ * which means the main process has to read a `welcome` too. There was a fourth
+ * copy of this parser available for the taking — `pwa/src/protocol-client.ts` is
+ * plain TypeScript and imports its types from this very file — and taking it is
+ * not possible: `tsconfig.node.json` is a composite project that does not
+ * include `pwa/`, so an import across that boundary fails to compile rather than
+ * merely looking untidy.
+ *
+ * So the parser moves to where the vocabulary already lives, which is here. That
+ * leaves the browser client holding a copy for now; it should import this one
+ * and delete its own, and that is a change to `pwa/` rather than to this file.
+ * Two implementations of one wire are safe when something fails on the drift —
+ * `protocol.test.ts` is where that happens for this side.
+ *
+ * ## What is checked, and why a client checks anything at all
+ *
+ * The desktop on the other end is not hostile, but it is not always what
+ * answers. A captive portal on hotel wifi replies to every request with its own
+ * login page, and the first thing an unguarded client does with that is
+ * `JSON.parse` an HTML document and read `.sessions` off the result. Validating
+ * here means the guest says "that is not this app" instead of throwing inside a
+ * socket handler and leaving a machine row that never explains itself.
+ *
+ * One bad row does not discard a list. A guest showing four of five sessions is
+ * useful; one showing none because the fifth had a null title is not.
+ */
+
+export type ServerParse =
+  | { ok: true; message: ServerMessage }
+  | { ok: false; reason: string }
+
+/** One session row, or null. Null rows are skipped rather than fatal. */
+export function parseSession(value: unknown): RemoteSession | null {
+  if (!isRecord(value)) return null
+  const id = asString(value.id)
+  const title = asString(value.title)
+  const cwd = asString(value.cwd)
+  const provider = asString(value.provider)
+  const status = asString(value.status)
+  if (id === null || id === '' || title === null || cwd === null) return null
+  if (provider === null || status === null) return null
+  const exitCode = value.exitCode === null ? null : asWhole(value.exitCode)
+  return { id, title, cwd, provider, status, exitCode }
+}
+
+function asString(value: unknown): string | null {
+  return typeof value === 'string' ? value : null
+}
+
+function asWhole(value: unknown): number | null {
+  return typeof value === 'number' && Number.isInteger(value) ? value : null
+}
+
+function sessionRows(value: unknown): RemoteSession[] | null {
+  if (!Array.isArray(value)) return null
+  const rows: RemoteSession[] = []
+  for (const entry of value) {
+    const session = parseSession(entry)
+    if (session !== null) rows.push(session)
+  }
+  return rows
+}
+
+/**
+ * Short strings, dropped individually.
+ *
+ * Used for both `capabilities` and `folders`, which have the same rule for the
+ * same reason: one unreadable entry must not cost the frame carrying it. They
+ * differ in what *absent* means, and that difference is handled by the caller —
+ * see the `welcome` branch.
+ */
+function stringList(value: unknown, maxLength: number): string[] | null {
+  if (!Array.isArray(value)) return null
+  const out: string[] = []
+  for (const entry of value) {
+    if (typeof entry === 'string' && entry !== '' && entry.length <= maxLength) out.push(entry)
+  }
+  return out
+}
+
+function asErrorCode(value: unknown): ProtocolErrorCode | null {
+  const code = asString(value)
+  if (code === null) return null
+  const found = PROTOCOL_ERROR_CODES.find((known) => known === code)
+  return found ?? null
+}
+
+/** The only door inbound text comes through on a client, mirroring `parseClientMessage`. */
+export function parseServerMessage(raw: unknown): ServerParse {
+  if (typeof raw !== 'string') return { ok: false, reason: 'not text' }
+  if (overBytes(raw, MAX_MESSAGE_BYTES)) return { ok: false, reason: 'larger than the message cap' }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return { ok: false, reason: 'not JSON' }
+  }
+  if (!isRecord(parsed)) return { ok: false, reason: 'not an object' }
+
+  switch (parsed.t) {
+    case 'welcome': {
+      const protocol = asWhole(parsed.protocol)
+      const deviceId = asString(parsed.deviceId)
+      const deviceName = asString(parsed.deviceName)
+      const sessions = sessionRows(parsed.sessions)
+      if (protocol === null || deviceId === null || deviceName === null || sessions === null) {
+        return { ok: false, reason: 'incomplete welcome' }
+      }
+      // A null token means "you already had one"; a string means "store this".
+      // A missing field is neither, and guessing which it meant is how a guest
+      // ends up believing it is paired while holding nothing.
+      const token = parsed.token === null ? null : asString(parsed.token)
+      if (token === null && parsed.token !== null) {
+        return { ok: false, reason: 'welcome without a token field' }
+      }
+      const message: Extract<ServerMessage, { t: 'welcome' }> = {
+        t: 'welcome',
+        protocol,
+        deviceId,
+        deviceName,
+        token,
+        sessions,
+        capabilities: stringList(parsed.capabilities, MAX_CAPABILITY_LENGTH) ?? [],
+      }
+      // Both of the optional fields are assigned only when they are there, and
+      // `folders` is the one where it matters: an absent list and an empty one
+      // are two different facts about this device. Absent means the desktop
+      // never mentioned folders — every build older than the field — and the
+      // guest must keep doing whatever it did before. Empty means somebody
+      // chose no folders for *this* device, which is a real state with a real
+      // remedy, and flattening the two turns "your other machine is old" into
+      // "you have been shut out".
+      const hostPlatform = asString(parsed.hostPlatform)
+      if (hostPlatform !== null) message.hostPlatform = hostPlatform
+      const folders = stringList(parsed.folders, MAX_CWD_BYTES)
+      if (folders !== null) message.folders = folders
+      return { ok: true, message }
+    }
+    case 'sessions': {
+      const sessions = sessionRows(parsed.sessions)
+      return sessions === null
+        ? { ok: false, reason: 'sessions without a list' }
+        : { ok: true, message: { t: 'sessions', sessions } }
+    }
+    case 'attached': {
+      const id = asString(parsed.id)
+      return id === null || id === ''
+        ? { ok: false, reason: 'attached without an id' }
+        : { ok: true, message: { t: 'attached', id } }
+    }
+    case 'detached': {
+      const id = asString(parsed.id)
+      return id === null || id === ''
+        ? { ok: false, reason: 'detached without an id' }
+        : { ok: true, message: { t: 'detached', id } }
+    }
+    case 'output': {
+      const id = asString(parsed.id)
+      const data = asString(parsed.data)
+      if (id === null || id === '' || data === null) {
+        return { ok: false, reason: 'output without id and data' }
+      }
+      return {
+        ok: true,
+        message: parsed.replay === true ? { t: 'output', id, data, replay: true } : { t: 'output', id, data },
+      }
+    }
+    case 'status': {
+      const id = asString(parsed.id)
+      const status = asString(parsed.status)
+      if (id === null || id === '' || status === null) {
+        return { ok: false, reason: 'status without id and status' }
+      }
+      return { ok: true, message: { t: 'status', id, status } }
+    }
+    case 'exit': {
+      const id = asString(parsed.id)
+      const exitCode = asWhole(parsed.exitCode)
+      if (id === null || id === '' || exitCode === null) {
+        return { ok: false, reason: 'exit without id and code' }
+      }
+      return { ok: true, message: { t: 'exit', id, exitCode } }
+    }
+    case 'created': {
+      // Refused rather than half-read, unlike a row inside a list: a `sessions`
+      // frame missing one entry is still a useful list, whereas this frame *is*
+      // the one session, and a client that accepted a nameless one would open an
+      // id the desktop never minted.
+      const session = parseSession(parsed.session)
+      return session === null
+        ? { ok: false, reason: 'created without a session' }
+        : { ok: true, message: { t: 'created', session } }
+    }
+    case 'folders': {
+      // Refused when it carries no list at all. Unlike the optional field in
+      // `welcome` there is nothing else in this frame, so reading it as "no
+      // folders" would take the picker away on the strength of a malformed
+      // message.
+      const folders = stringList(parsed.folders, MAX_CWD_BYTES)
+      return folders === null
+        ? { ok: false, reason: 'folders without a list' }
+        : { ok: true, message: { t: 'folders', folders } }
+    }
+    case 'error': {
+      const code = asErrorCode(parsed.code)
+      if (code === null) return { ok: false, reason: 'error with an unknown code' }
+      return { ok: true, message: { t: 'error', code, message: asString(parsed.message) ?? '' } }
+    }
+    case 'pong':
+      return { ok: true, message: { t: 'pong' } }
+    default:
+      // Deliberately a refusal rather than a silent skip. Everything past
+      // version 1 is negotiated through `welcome.capabilities`, so a frame this
+      // build has never heard of is one it never asked for — and the guest that
+      // reads this only ever asks for the v1 verbs.
+      return { ok: false, reason: 'unknown message type' }
+  }
+}

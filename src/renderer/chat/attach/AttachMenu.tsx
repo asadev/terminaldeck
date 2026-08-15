@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { AttachPicker, type PickerMode } from './AttachPicker'
 import { McpServers } from './McpServers'
+import { useControlOffer } from '../../features/offer'
 import type { Attachment } from './mentions'
 import './AttachMenu.css'
 
@@ -84,6 +85,23 @@ export function AttachMenu({ root, attachments, onAdd, onInsert, onClose, disabl
   const [surface, setSurface] = useState<AttachSurface | 'menu' | null>(null)
   const hostRef = useRef<HTMLDivElement>(null)
   const buttonRef = useRef<HTMLButtonElement>(null)
+  /*
+   * Connectors belongs to the MCP servers feature, which can be uninstalled.
+   *
+   * The row stays either way, and what changes is what pressing it does: with
+   * the feature installed it opens the connector list; without it, it installs
+   * MCP servers and then opens the list. That is the store's own rule — where a
+   * feature would have been, offer it — and a menu is the easiest place in an
+   * app to break it, because deleting the entry costs one line and looks tidy.
+   *
+   * The *button's* name still only promises connectors when they are there. A
+   * label is a description of what this menu can do now; the row inside it is
+   * an offer, which is a different claim.
+   */
+  const connectorsOffer = useControlOffer('chat.connectors')
+  const label = connectorsOffer === null
+    ? 'Add files, folders, images or connectors to this message'
+    : 'Add files, folders or images to this message'
 
   const close = useCallback(() => {
     setSurface(null)
@@ -139,17 +157,32 @@ export function AttachMenu({ root, attachments, onAdd, onInsert, onClose, disabl
         <div className="at-pop" role="dialog" aria-label="Attach to this message">
           {surface === 'menu' ? (
             <ul className="at-menu">
-              {ITEMS.map((item) => (
-                <li key={item.surface}>
-                  <button type="button" className="at-item" onClick={() => setSurface(item.surface)}>
-                    <span className="at-item-icon">{item.icon}</span>
-                    <span className="at-item-text">
-                      <span className="at-item-label">{item.label}</span>
-                      <span className="at-item-hint">{item.hint}</span>
-                    </span>
-                  </button>
-                </li>
-              ))}
+              {ITEMS.map((item) => {
+                const offer = item.surface === 'mcp' ? connectorsOffer : null
+                return (
+                  <li key={item.surface}>
+                    <button
+                      type="button"
+                      className="at-item"
+                      data-offer={offer !== null || undefined}
+                      title={offer?.title}
+                      onClick={() => {
+                        // Install, then open: the list behind this row is the
+                        // confirmation that the install landed, which is a
+                        // better "where to find it" than a sentence.
+                        offer?.accept()
+                        setSurface(item.surface)
+                      }}
+                    >
+                      <span className="at-item-icon">{item.icon}</span>
+                      <span className="at-item-text">
+                        <span className="at-item-label">{item.label}</span>
+                        <span className="at-item-hint">{offer ? offer.title : item.hint}</span>
+                      </span>
+                    </button>
+                  </li>
+                )
+              })}
             </ul>
           ) : surface === 'mcp' ? (
             <McpServers root={root} onInsert={insert} onBack={() => setSurface('menu')} />
@@ -175,8 +208,8 @@ export function AttachMenu({ root, attachments, onAdd, onInsert, onClose, disabl
         disabled={disabled}
         aria-haspopup="dialog"
         aria-expanded={surface !== null}
-        aria-label="Add files, folders, images or connectors to this message"
-        title="Add files, folders, images or connectors to this message"
+        aria-label={label}
+        title={label}
         onClick={() => (surface === null ? setSurface('menu') : close())}
       >
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">

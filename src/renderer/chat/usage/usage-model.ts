@@ -273,13 +273,15 @@ export function tokenTotals(usage: TokenUsage): TokenTotals {
 
 /**
  * Mirrors `formatUsd` in `src/main/cost.ts` — same reason the types are
- * mirrored. Sub-cent spends must still read as non-zero.
+ * mirrored, and the reasoning for the shape is written out there: two decimal
+ * places, because "$2.101" reads as a four-figure sum to anybody whose
+ * thousands separator is a full stop. A spend too small to show says so in
+ * words rather than rounding to `$0.00`.
  */
 export function formatUsd(usd: number): string {
   const abs = Math.abs(usd)
   if (abs === 0) return '$0.00'
-  if (abs < 0.01) return `$${usd.toFixed(4)}`
-  if (abs < 10) return `$${usd.toFixed(3)}`
+  if (abs < 0.005) return usd < 0 ? '-<$0.01' : '<$0.01'
   return `$${usd.toFixed(2)}`
 }
 

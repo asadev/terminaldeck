@@ -104,16 +104,6 @@
   outline-offset: 1px;
 }
 
-.dashboard-btn.ghost {
-  background: none;
-  color: var(--text-secondary);
-}
-
-.dashboard-btn.ghost:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
-}
-
 /* ------------------------------------------------------------------ grid -- */
 
 .dashboard-scroll {
@@ -475,7 +465,8 @@ button.widget-stat:focus-visible {
   margin-bottom: var(--sp-4);
 }
 
-/* Figures in a column line up and share one precision — see `usdPrecision`. */
+/* Figures in a column line up: tabular figures, and one precision for money
+   everywhere in the app — two places, see `formatUsd`. */
 .widget-row-side.num {
   font-variant-numeric: tabular-nums;
 }

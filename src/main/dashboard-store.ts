@@ -9,11 +9,15 @@ import { app } from 'electron'
  * One JSON file per project under `<userData>/dashboards/`, so a corrupt or
  * oversized layout can only ever affect the project it belongs to.
  *
- * Like `board-store.ts`, this is a deliberately dumb, durable store: it guards
- * the *shape* of what it writes and hands back whatever it read. Repair,
- * migration and collision fixing live in `src/renderer/dashboard/layout.ts`
- * beside their tests, and the main-process bundle has no reason to reach into
- * renderer code to do them.
+ * This is a deliberately dumb, durable store: it guards the *shape* of what it
+ * writes and hands back whatever it read. Repair, migration and collision
+ * fixing live in `src/renderer/dashboard/layout.ts` beside their tests, and the
+ * main-process bundle has no reason to reach into renderer code to do them.
+ *
+ * The sentence above used to begin "Like `board-store.ts`" — a file deleted
+ * with the task board it served. A comparison to something that no longer
+ * exists reads as a missing file rather than as prose that outlived its
+ * subject, and the next person to look for it spends the search either way.
  */
 
 /** Refuse anything larger. A real layout is a few hundred bytes. */

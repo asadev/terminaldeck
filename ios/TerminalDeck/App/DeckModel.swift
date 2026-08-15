@@ -101,6 +101,28 @@ final class DeckModel {
     private let makeTransport: ((String, CredentialStore, DeviceDescriptor) -> Transport)?
 
     /**
+     * The GitHub account this phone holds, and the thing that answers with it.
+     *
+     * App-wide rather than per machine, and that is the shape of the feature
+     * rather than a convenience: it is *one person's* GitHub, and the whole
+     * point is that it stays here while they work on several other people's
+     * computers. A per-machine account would be a token per machine, which is
+     * the thing this exists to avoid.
+     */
+    private let gitHubAccounts: GitHubAccountStore
+    let credentialResponder: CredentialResponder
+
+    /// Whether something is covering the session list — today the localhost
+    /// browser, which is a `fullScreenCover`. Read by `RootView` so its copy of
+    /// the credential prompt stands down while the browser's copy is the one
+    /// that can actually present. See `CredentialPromptHost`.
+    var covered = false
+
+    /// Whether the GitHub account sheet is up. A flag rather than a route,
+    /// because it is raised from a menu that exists on every screen.
+    var showingGitHub = false
+
+    /**
      * A route names the machine as well as the session.
      *
      * Session ids are unique per host and nothing guarantees they are unique
@@ -116,10 +138,20 @@ final class DeckModel {
     /// scripted transport rather than a socket.
     init(credentials: CredentialStore,
          device: DeviceDescriptor,
+         gitHubAccounts: GitHubAccountStore? = nil,
          makeTransport: ((String, CredentialStore, DeviceDescriptor) -> Transport)? = nil) {
         self.credentials = credentials
         self.device = device
+        let accounts = gitHubAccounts ?? KeychainGitHubStore()
+        self.gitHubAccounts = accounts
+        self.credentialResponder = CredentialResponder(accounts: accounts)
         self.makeTransport = makeTransport
+        // Wired after the stored properties, in the same shape `HostLink`'s
+        // callbacks use: the two are mutually recursive and neither can name the
+        // other in its initialiser.
+        credentialResponder.route = { [weak self] hostId, answer in
+            self?.host(hostId)?.answer(answer)
+        }
         for record in credentials.all() { adopt(record) }
         currentHostId = restoredSelection ?? hosts.first?.id
     }
@@ -194,6 +226,13 @@ final class DeckModel {
             // all — connected, waiting, pending approval, refused. `.connecting`
             // is the one state that means it is still in flight.
             if state.phase != .connecting && state.phase != .offline { self?.isPairing = false }
+            // A machine that has gone cannot be answered, so its question comes
+            // off the screen rather than staying up as buttons that reach
+            // nothing. The desktop has already settled it for the same reason.
+            if !state.isLive { self?.credentialResponder.machineLost(record.hostId) }
+        }
+        link.onCredentialRequest = { [weak self] request in
+            self?.credentialResponder.receive(request)
         }
         link.onCreated = { [weak self] sessionId in
             self?.open(session: sessionId, on: record.hostId)
@@ -364,6 +403,37 @@ final class DeckModel {
 
     func dismissCollectionError() {
         collectionError = nil
+    }
+
+    // MARK: - GitHub, and the questions machines ask about it
+
+    /// The account the approval prompt names, or nil. Never the token — nothing
+    /// on screen holds that.
+    var gitHubAccount: GitHubAccount? { credentialResponder.account }
+
+    /// The question on screen, if a machine is waiting on an answer.
+    var credentialPrompt: CredentialRequest? { credentialResponder.asking }
+
+    func approveCredential(remember: Bool) { credentialResponder.approve(remember: remember) }
+    func denyCredential() { credentialResponder.deny() }
+
+    /**
+     * Forget the GitHub account.
+     *
+     * The revocation that works from this end, and it is total by design: with
+     * no token here, nothing on this phone can answer a credential request from
+     * any machine. Approvals a machine is holding are a *scope* rather than a
+     * secret — every push still comes back here — so removing the secret removes
+     * what they were scoping.
+     */
+    func disconnectGitHub() {
+        gitHubAccounts.disconnect()
+    }
+
+    /// A sign-in flow for the account screen. Made here so the screen never
+    /// builds its own store and cannot end up writing to a second drawer.
+    func makeGitHubSignIn() -> GitHubSignIn {
+        GitHubSignIn(accounts: gitHubAccounts)
     }
 
     // MARK: - Navigation

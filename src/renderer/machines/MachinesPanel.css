@@ -1,0 +1,440 @@
+/* ============================================================================
+   Machines — the desktops this one can open a session on.
+
+   Terminal in the content, Apple in the chrome, drawn the way the brief asks:
+   space separates things rather than borders, hierarchy comes from weight and
+   colour rather than from six type sizes, and the one accent is spent on the
+   single button that starts the only thing this page cannot do without.
+
+   Everything set in mono is data that is exact and countable — the pairing
+   code, the key fingerprint, session ids and folder paths. Nothing else is,
+   including every label and every button.
+   ============================================================================ */
+
+.machines {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-8);
+  min-height: 0;
+  max-width: 82rem;
+  color: var(--text-secondary);
+  font-size: var(--t-body);
+}
+
+/* The toolbar above this page already says "Machines" in the title voice.
+   Saying it again in the body is the same word twice; it stays in the document
+   for anything reading the structure rather than looking at it. */
+.machines-heading {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------------------- pairing -- */
+
+/* Two halves, in the order a person does them: show a code here, type one
+   there. They sit on one row because somebody pairing is standing between two
+   keyboards and needs both instructions in one glance. */
+.machines-pair {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr));
+  gap: var(--sp-8);
+}
+
+.machines-pair-half {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-3);
+}
+
+/* Brighter title, dimmer description, and space between them — the treatment
+   the brief asks for wherever an option needs a paragraph. */
+.machines-pair-title {
+  margin: 0;
+  font-size: var(--t-title3);
+  letter-spacing: var(--t-title3-ls);
+  font-weight: var(--w-semibold);
+  color: var(--text-primary);
+}
+
+.machines-pair-body {
+  margin: 0;
+  max-width: 46ch;
+  line-height: var(--lh-body);
+  color: var(--text-secondary);
+}
+
+/* The code is the one thing on this page somebody has to read character by
+   character and then type somewhere else, so it is set the way a terminal sets
+   things: mono, tracked out, and large enough to read from a step back. */
+.machines-code {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--t-title1);
+  letter-spacing: 0.16em;
+  font-weight: var(--w-medium);
+  color: var(--text-primary);
+  user-select: text;
+}
+
+/* How long the code has left, and the two things you can do with it. Quiet:
+   the code itself is what the eye is meant to land on. */
+.machines-code-life {
+  margin: 0;
+  font-size: var(--t-footnote);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.machines-code-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+/* ------------------------------------------------------------- controls -- */
+
+/*
+ * Every secondary button on this page, in one rule.
+ *
+ * `app.css` strips buttons back to text — no background, no padding, no border
+ * — so a `<button>` with no class of its own is a control that looks like a
+ * label and answers to nothing. A hover state is a promise, and the promise has
+ * to be made somewhere.
+ *
+ * `.btn-primary` is excluded because the accent belongs to exactly one control
+ * here: the one that starts the only thing this page cannot do without. The
+ * session rows are excluded because they are rows rather than buttons, and are
+ * styled as such further down.
+ */
+.machines button:not(.btn-primary):not(.machines-session-open) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: var(--control-h);
+  padding: 0 var(--sp-3);
+  border-radius: var(--radius-md);
+  background: var(--fill-tertiary);
+  font-size: var(--t-body);
+  font-weight: var(--w-medium);
+  white-space: nowrap;
+  color: var(--text-primary);
+  transition: background var(--dur-fast) var(--ease), opacity var(--dur-fast) var(--ease);
+}
+
+.machines button:not(.btn-primary):not(.machines-session-open):hover:not(:disabled) {
+  background: var(--fill-secondary);
+}
+
+.machines button:not(.btn-primary):not(.machines-session-open):active:not(:disabled) {
+  background: var(--bg-active);
+}
+
+.machines button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Disabled is a real state, not an absent one: it has to look unavailable and
+   stop offering the cursor that says otherwise. */
+.machines button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.machines-add {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.machines-input {
+  width: 12rem;
+  height: var(--control-h-lg);
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--t-body);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* The hint is prose, not data: the app's own UI face, no tracking, no
+   uppercasing. The field is mono and uppercase because a pairing code is exact
+   and countable — a *placeholder* set the same way reads as a code already
+   typed in, which is what "H4K9-2FQT" was doing here. */
+.machines-input::placeholder {
+  font-family: var(--font-ui);
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--text-muted);
+}
+
+.machines-input:focus-visible {
+  outline: none;
+  border-color: var(--accent-line);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.machines-input:disabled {
+  opacity: 0.5;
+}
+
+.machines-error {
+  margin: 0;
+  max-width: 52ch;
+  line-height: var(--lh-body);
+  color: var(--color-critical);
+}
+
+/*
+  Why pairing cannot happen yet — a fact, drawn as a fact.
+
+  It was a whole paragraph set in the warning amber, which on a page that is
+  otherwise grey and one blue made it the loudest thing on screen and the first
+  thing the eye went to, ahead of the two things you actually came here to do.
+  A sentence explaining a state is not an alarm. It keeps its own block so it is
+  clearly not body copy about the buttons above it, and the ink is the app's
+  own — the same treatment a settings notice gets.
+*/
+.machines-blocked {
+  margin: 0;
+  max-width: 62ch;
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--radius-md);
+  background: var(--fill-quaternary);
+  line-height: var(--lh-body);
+  color: var(--text-secondary);
+}
+
+/* ---------------------------------------------------------------- list -- */
+
+.machines-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-6);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* A surface on a surface rather than a box: depth by layering, which is what
+   keeps a list of four machines from reading as four rectangles. */
+.machines-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-4) var(--sp-5);
+  border-radius: var(--radius-lg);
+  background: var(--fill-quaternary);
+}
+
+.machines-row-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-3);
+}
+
+/* One dot, coloured by state. The only colour in a row, so the eye finds the
+   machine that needs something without reading a word. */
+.machines-dot {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: var(--radius-pill);
+  align-self: center;
+  background: var(--text-muted);
+}
+
+.machines-row[data-state='online'] .machines-dot {
+  background: var(--status-completed);
+}
+
+.machines-row[data-state='connecting'] .machines-dot {
+  background: var(--status-working);
+}
+
+.machines-row[data-state='awaiting-approval'] .machines-dot {
+  background: var(--status-waiting);
+}
+
+.machines-row[data-state='error'] .machines-dot {
+  background: var(--color-critical);
+}
+
+.machines-name {
+  font-size: var(--t-title3);
+  letter-spacing: var(--t-title3-ls);
+  font-weight: var(--w-semibold);
+  color: var(--text-primary);
+}
+
+/*
+ * Both sit beside the machine rather than at the far edge of the row.
+ *
+ * Right-aligned status is a fine macOS pattern in a narrow list and a poor one
+ * here: this page is up to 82rem wide, and pushing "Connected" to the other end
+ * of that leaves the name and the one fact about it a hand's width apart. Read
+ * as one phrase — dot, name, kind, state — it scans in a glance.
+ */
+.machines-kind,
+.machines-state {
+  font-size: var(--t-footnote);
+  color: var(--text-muted);
+}
+
+.machines-reason,
+.machines-note {
+  margin: 0;
+  max-width: 62ch;
+  line-height: var(--lh-body);
+  color: var(--text-secondary);
+}
+
+/* The key, in the form a person compares with the other screen. Data, so mono;
+   quiet, because it is only read when somebody is checking. */
+.machines-key {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--t-footnote);
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  user-select: text;
+}
+
+/* ------------------------------------------------------------ sessions -- */
+
+.machines-sessions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-05);
+  margin: var(--sp-2) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.machines-session-open {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-3);
+  width: 100%;
+  min-height: var(--row-h);
+  padding: 0 var(--sp-2);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+/* A hover state is a promise, so it is only on the control that keeps it. */
+.machines-session-open:hover {
+  background: var(--bg-hover);
+}
+
+.machines-session-open:active {
+  background: var(--bg-active);
+}
+
+.machines-session-open[aria-pressed='true'] {
+  background: var(--accent-soft);
+}
+
+.machines-session-open:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.machines-session-title {
+  font-weight: var(--w-medium);
+  color: var(--text-primary);
+}
+
+/* A path is exact and countable, so it is mono. The label beside it is not. */
+.machines-session-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: var(--t-footnote);
+  color: var(--text-muted);
+}
+
+.machines-session-status {
+  font-size: var(--t-footnote);
+  color: var(--text-muted);
+}
+
+/* ------------------------------------------------------------- actions -- */
+
+.machines-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+}
+
+.machines-confirm {
+  color: var(--text-secondary);
+}
+
+.machines-danger {
+  color: var(--color-critical);
+}
+
+/* --------------------------------------------------------------- pane -- */
+
+/* The session itself, under the list. Full width, because a terminal squeezed
+   into a column is the thing this app's whole layout pass was about. */
+.machines-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 22rem;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background: var(--terminal-bg);
+}
+
+.machines-pane-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--fill-quaternary);
+}
+
+.machines-pane-title {
+  font-weight: var(--w-medium);
+  color: var(--text-primary);
+}
+
+.machines-pane-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: var(--t-footnote);
+  color: var(--text-muted);
+}
+
+.machines-terminal {
+  flex: 1;
+  min-height: 0;
+  padding: var(--sp-2);
+}

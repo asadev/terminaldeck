@@ -39,6 +39,18 @@ export const SECTIONS = [
     label: 'General',
     blurb: 'How sessions behave day to day.',
   },
+  /*
+   * The store. Second in the rail rather than first: someone who never opens it
+   * should never notice it exists, and the fresh-install defaults are what make
+   * that true. It sits above the sections it can take away — Browser is one of
+   * them — because the order of the rail is the order of the questions, and
+   * "which features do I have" comes before "how is that one set up".
+   */
+  {
+    id: 'features',
+    label: 'Features',
+    blurb: 'What this app has. Everything ships inside it; installing one switches it on.',
+  },
   {
     id: 'appearance',
     label: 'Appearance',

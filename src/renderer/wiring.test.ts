@@ -95,6 +95,18 @@ const SEAMS: Array<{ file: string; child: string; props: string[]; why: string }
     // shipped update nobody in the app is ever told about.
     why: 'it is the only place in the app that says an update exists or asks for the restart',
   },
+  {
+    file: 'renderer/App.tsx',
+    child: 'Tooltips',
+    props: [],
+    // Props would be the wrong thing to assert here: it takes none, listens on
+    // the document and finds its own targets. Not being rendered does not break
+    // anything visibly — every `title=` in the window simply goes back to being
+    // an OS tooltip in the wrong font — which is exactly the shape of failure
+    // this table exists for: a component that is built, tested, correct and
+    // mounted nowhere.
+    why: 'unmounted, every hover label in the app reverts to the OS tooltip the design brief replaced',
+  },
 ]
 
 describe('components that are built are also wired', () => {
@@ -255,5 +267,50 @@ describe('every panel wears the same blank', () => {
     expect(blank, '.page-blank has no margin rule').toBeTruthy()
     expect(line, '.page-blank-line[data-page] has no margin rule').toBeTruthy()
     expect(line).toBe(blank)
+  })
+})
+
+/**
+ * A terminal follows the theme after it is built, not only while it is built.
+ *
+ * xterm paints on a canvas, so its colours are resolved to literals the moment
+ * a terminal is constructed and never look at the stylesheet again. Switching
+ * Appearance → Theme therefore left every session that was already open in the
+ * old palette — a black slab on a white app, and a white slab on a black one
+ * for a session made the other way round. Remounting repaired it, which is why
+ * the same session read correctly in Split mode and wrongly in Terminal mode a
+ * second later: nothing was broken except the one thing nobody had written.
+ *
+ * `subscribeTheme` was exported for this from the day the theme controller was
+ * written — its own comment says "e.g. to recolour the terminals" — and no
+ * caller ever existed. That is this repository's signature bug: built, tested,
+ * correct, wired to nothing. So the wiring is what gets pinned, in both files
+ * that own a terminal.
+ */
+describe('every terminal repaints when the theme changes', () => {
+  const OWNERS = [
+    'renderer/components/TerminalView.tsx',
+    'renderer/machines/RemoteTerminal.tsx',
+  ]
+
+  it.each(OWNERS)('%s subscribes to the theme', (file) => {
+    const source = read(file)
+    expect(
+      source,
+      'a terminal that never re-reads the palette stays in the theme it was born in',
+    ).toMatch(/subscribeTheme\(/)
+    expect(source, 'subscribing without writing options.theme changes nothing').toMatch(
+      /options\.theme\s*=\s*terminalTheme\(\)/,
+    )
+  })
+
+  it('both terminals resolve the palette through one function', () => {
+    // Two hand-copied colour tables is how the app came to have a purple-blue
+    // terminal months after that palette was retired. `tokens.test.ts` checks
+    // the literals in TerminalView against the sheet; this checks that the
+    // other terminal has none of its own to drift.
+    expect(read('renderer/machines/RemoteTerminal.tsx')).toMatch(
+      /import \{ terminalTheme \} from '\.\.\/components\/TerminalView'/,
+    )
   })
 })

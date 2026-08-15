@@ -40,7 +40,23 @@ import { TERMINAL_COMMANDS } from './renderer/components/TerminalView'
  */
 
 const ROOT = resolve(__dirname, '..')
-const ENTRIES = ['src/main/index.ts', 'src/preload/index.ts', 'src/renderer/main.tsx']
+/**
+ * Every way into this codebase.
+ *
+ * Five, not three, since the headless build: it is a second shell around the
+ * same core, with two bins of its own — `src/headless/main.ts` is the four
+ * commands a person types and `src/headless/daemon.ts` is the process a service
+ * manager starts. Neither is reachable from the Electron entry and neither
+ * reaches the other, which is the point: they are separate programs that happen
+ * to ship in one package.
+ */
+const ENTRIES = [
+  'src/main/index.ts',
+  'src/preload/index.ts',
+  'src/renderer/main.tsx',
+  'src/headless/main.ts',
+  'src/headless/daemon.ts',
+]
 
 const SOURCE = /\.tsx?$/
 const isTest = (p: string): boolean => /\.(test|spec)\.tsx?$/.test(p)

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   attachedFor,
   connectionNote,
+  deviceLabel,
   deviceStateAfter,
   missingRemoteMethods,
   remoteActions,
@@ -1223,5 +1224,39 @@ describe('pairing', () => {
     await h.settled()
     expect(h.pairing).toBeNull()
     expect(h.notices).toEqual([{ ok: false, text: expect.stringContaining('did not return') }])
+  })
+})
+
+
+describe('what a device is called on screen', () => {
+  /**
+   * A real paired phone arrived here as "Google sdk_gphone64_arm64" — Android's
+   * system-image build target, reported as the model — and that string was the
+   * title of a card whose whole job is answering "which of your devices is
+   * this".
+   */
+  it('names the Android emulator instead of printing its build target', () => {
+    expect(deviceLabel('Google sdk_gphone64_arm64')).toBe('Android emulator')
+    expect(deviceLabel('sdk_gphone64_x86_64')).toBe('Android emulator')
+  })
+
+  it('reads an underscored identifier as the words it stands for', () => {
+    expect(deviceLabel('SM_G991B')).toBe('SM G991B')
+  })
+
+  it('leaves a name somebody would recognise exactly as it is', () => {
+    expect(deviceLabel('Pixel 7')).toBe('Pixel 7')
+    expect(deviceLabel("Asad's iPhone")).toBe("Asad's iPhone")
+  })
+
+  it('says so rather than drawing an empty title', () => {
+    expect(deviceLabel('   ')).toBe('Unnamed device')
+  })
+
+  it('is applied where the rows read it, not only where it is defined', () => {
+    const [device] = toRemoteDevices([
+      { id: 'd1', name: 'Google sdk_gphone64_arm64', approved: true },
+    ])
+    expect(device.name).toBe('Android emulator')
   })
 })

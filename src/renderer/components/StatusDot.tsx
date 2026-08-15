@@ -9,9 +9,20 @@ import type { SessionStatus } from '@shared/types'
  * the opposite of what it means: the session is waiting on **you**, which is
  * simply what a prompt is. "Ready" is the same fact said the way a person would
  * say it, and it is the reason the dot beside it carries no colour.
+ *
+ * `idle` says the same word, on purpose. It is `classify`'s fallback — the
+ * screen matched no prompt it knows and no question it knows — and to the
+ * person reading the sidebar that is the identical situation: nothing is
+ * happening and it is your turn. Two near-synonyms, "Idle" and "Ready", told
+ * nobody anything they could act on, and the two dots beside them had *inverted
+ * fills*: "Ready" was an open ring and "Idle" a solid dot, so the state that
+ * sounds emptier was drawn the more emphatic of the two, against every
+ * convention where a filled mark means something is going on. Verified live: a
+ * shell genuinely sitting at a `read` prompt classifies as `idle`, and "Ready"
+ * is the truer of the two words for it.
  */
 const LABELS: Record<SessionStatus, string> = {
-  idle: 'Idle',
+  idle: 'Ready',
   working: 'Working',
   waiting: 'Ready',
   input: 'Needs input',

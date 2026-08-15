@@ -10,6 +10,7 @@ export type PanelId =
   | 'readiness'
   | 'mcp'
   | 'hooks'
+  | 'machines'
 
 /**
  * Where a view sits in the sidebar.
@@ -129,6 +130,20 @@ export const PANELS: PanelSpec[] = [
     group: 'integrations',
     icon: 'M9.2 5.2a2.8 2.8 0 1 1 5.6 0v8.6a4 4 0 1 1-8 0v-1.1',
     blurb: 'Commands this project runs around every agent action.',
+  },
+  {
+    id: 'machines',
+    label: 'Machines',
+    // The foot, with Alerts and Settings, rather than Integrations. Another
+    // machine is not something this project integrates with — it is the app
+    // talking about itself, the same category as an alert or an update notice,
+    // and it is deliberately not part of "what am I doing in this project": the
+    // machines you can reach do not change when you open a different folder.
+    group: 'foot',
+    // Two rectangles, one behind the other, joined by a line. Screens, not
+    // servers: the thing on the other end of this page is somebody's desk.
+    icon: 'M3.5 5.5h11v8h-11zM9 17.5h11v-8h-5.5M6.5 17.5h2.5M9 13.5v4',
+    blurb: 'Other machines you can open a session on.',
   },
 ]
 

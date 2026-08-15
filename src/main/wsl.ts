@@ -57,6 +57,7 @@
 
 import { execFile } from 'node:child_process'
 import { win32 } from 'node:path'
+import type { InvokeRegistrar } from './ipc-seam'
 import { currentPlatform, isWindows, type Env, type Platform } from './platform/host'
 
 /** The command. Named with `.exe` for the reason `lookup.ts` gives for `where.exe`. */
@@ -889,10 +890,13 @@ export const WSL_CHOOSE_CHANNEL = 'wsl:choose'
  * and `as unknown as IpcMain` in a test is a cast that also throws away the
  * check that the two channel names are the ones the preload calls.
  * Electron's own `IpcMain` satisfies this, so production passes it unchanged.
+ *
+ * The shape itself now lives in `ipc-seam.ts`: this file, `remote/server.ts` and
+ * `remote/machines/ipc.ts` had each written it out separately, and the headless
+ * build needs all three to be the same type. The alias stays so every existing
+ * caller and test reads the same.
  */
-export interface IpcInvokeHandlers {
-  handle(channel: string, listener: (event: unknown, ...args: unknown[]) => unknown): void
-}
+export type IpcInvokeHandlers = InvokeRegistrar
 
 /**
  * Two channels, and no listener for changes.

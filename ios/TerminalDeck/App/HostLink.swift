@@ -97,6 +97,18 @@ final class HostLink: Identifiable {
     /// A session was started on this machine at this phone's request.
     var onCreated: ((String) -> Void)?
 
+    /**
+     * Git on this machine wants a GitHub login, and this phone is the thing
+     * holding one.
+     *
+     * Handed straight up rather than answered here, because the answer is not a
+     * per-machine decision: there is one account on this phone, one question on
+     * screen at a time, and a person looking at two machines must not be asked
+     * two things at once by two objects that do not know about each other. See
+     * `CredentialResponder`.
+     */
+    var onCredentialRequest: ((CredentialRequest) -> Void)?
+
     private let credentials: CredentialStore
     private let device: DeviceDescriptor
     private var transport: Transport?
@@ -534,6 +546,27 @@ final class HostLink: Identifiable {
         for line in lines { sendInput(id, line) }
     }
 
+    // MARK: - Credentials
+
+    /**
+     * Answer a credential question this machine asked.
+     *
+     * A narrow door on purpose. Everything else in this app reaches the socket
+     * through a method that names what it is doing, and the one thing that must
+     * not appear is a general "send this frame" seam that a view could reach —
+     * the prompt *is* a view. `CredentialAnswer` has three cases and every one
+     * of them carries an id the desktop minted, so nothing can be said through
+     * here that was not asked for.
+     *
+     * The reply is dropped when the socket is down rather than queued. There is
+     * nothing to queue for: the desktop settles a request the moment its own
+     * connection to this device goes, and a reply arriving on a later socket
+     * would be answering a question that no longer exists.
+     */
+    func answer(_ answer: CredentialAnswer) {
+        transport?.send(answer.message)
+    }
+
     // MARK: - Outbound
 
     private func sendInput(_ id: String, _ text: String) {
@@ -665,6 +698,20 @@ final class HostLink: Identifiable {
 
         case let .ports(list):
             ports = list
+
+        case let .credentialRequest(id, origin, repo, operation, prompt):
+            // The machine's *name* travels with the question, not just its id.
+            // The prompt's third line is which machine asked, and by the time it
+            // is drawn this link may not be the one on screen — a phone paired
+            // with three machines can be looking at any of them when a fourth
+            // thing happens on a fourth.
+            onCredentialRequest?(CredentialRequest(id: id,
+                                                   machineId: self.id,
+                                                   machineName: label,
+                                                   origin: origin,
+                                                   repo: repo,
+                                                   operation: operation,
+                                                   prompt: prompt))
 
         case .tunnelOpened, .tunnelClosed, .netData, .netAck, .netClose:
             break

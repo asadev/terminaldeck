@@ -55,3 +55,25 @@
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
+
+/* A segment that is an offer rather than a mode.
+
+   Split view can be uninstalled, and this is the one place in the window it
+   would have been — so it stays, and pressing it installs the feature and
+   splits.
+
+   It used to be *dimmed*: `--text-muted` at rest, measured at rgb(143,143,143)
+   against rgb(168,168,168) for the inactive "Chat" beside it. Quieter than an
+   inactive segment is the universal convention for "unavailable", so the one
+   offer this window had read as a disabled control — a person scanning the
+   toolbar concluded the app could not split, which is exactly the
+   undiscoverability the store was supposed to avoid. The explanation was in a
+   tooltip, where nobody looks for a fact they think they already know.
+
+   So it keeps the ink of the segment next to it and takes the shared offer dot
+   (`[data-offer]` in app.css): the mark that means "there is something here",
+   not "there is nothing here". Hover still goes accent, because pressing it
+   really is an action rather than a mode change. */
+.ms-offer:hover {
+  color: var(--accent);
+}

@@ -62,6 +62,20 @@ struct RootView: View {
             PairingView(model: model, adding: true) { model.addingHost = false }
                 .preferredColorScheme(.dark)
         }
+        .sheet(isPresented: $model.showingGitHub) {
+            GitHubAccountView(model: model) { model.showingGitHub = false }
+        }
+        /*
+         * A machine asking this phone for a GitHub login.
+         *
+         * Armed only while nothing is covering the session list. The localhost
+         * browser is a `fullScreenCover` presented from inside this stack, and a
+         * sheet asked for by an ancestor of a cover has nothing to present from
+         * — so that screen carries its own copy of this modifier and this one
+         * stands down while it is up. Exactly one is armed at a time, which is
+         * what stops the same question being presented twice.
+         */
+        .credentialPrompt(model, armed: !model.covered)
         /*
          * Naming a machine, presented from here rather than from the list.
          *

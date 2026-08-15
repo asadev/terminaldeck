@@ -22,9 +22,8 @@
 
 import { appendFileSync, existsSync, mkdirSync, renameSync, rmSync, statSync, readFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
-import { app, shell, type IpcMain } from 'electron'
 import { BRAND } from '../shared/brand'
-import { redactLines } from './redact'
+import { userDataDir } from './platform/paths'
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error'
 
@@ -257,11 +256,18 @@ export function createAppLog(options: AppLogOptions): AppLog {
 let instance: AppLog | null = null
 
 /**
- * The app's log. Constructed lazily because `app.getPath` is only valid once
- * the app is ready, and this module is imported at the top of main.
+ * The app's log. Constructed lazily because the directory is not known at import
+ * time in either shell — Electron answers only once the app is ready, and the
+ * headless daemon installs its own answer at the top of `main()`.
+ *
+ * The headless build needs this more than the window does, and that is why the
+ * IPC half moved out to `app-log-ipc.ts`: a background process writes to nobody,
+ * so a rotated file on disk is the only place its story exists. Nothing in here
+ * imports Electron, which is what lets the daemon use the same log rather than
+ * printing to a stdout that systemd or `wsl.exe` has already thrown away.
  */
 export function appLog(): AppLog {
-  if (!instance) instance = new AppLog({ dir: join(app.getPath('userData'), 'logs') })
+  if (!instance) instance = new AppLog({ dir: join(userDataDir(), 'logs') })
   return instance
 }
 
@@ -279,34 +285,4 @@ export const logger = {
   info: (scope: string, message: string, data?: unknown): void => appLog().info(scope, message, data),
   warn: (scope: string, message: string, data?: unknown): void => appLog().warn(scope, message, data),
   error: (scope: string, message: string, data?: unknown): void => appLog().error(scope, message, data),
-}
-
-export function registerLogIpc(ipcMain: IpcMain): void {
-  ipcMain.handle('log:recent', (_event, limit?: number) => {
-    const log = appLog()
-    const count = Math.min(Math.max(Number(limit) || 200, 1), 2000)
-    // Redacted on the way out, not on the way in: the file is as trusted as
-    // the rest of userData, but everything the panel shows can be screenshotted.
-    return { file: redactLines([log.file])[0], lines: redactLines(log.tail(count)) }
-  })
-
-  ipcMain.handle('log:status', () => {
-    const status = appLog().status()
-    return { ...status, dir: redactLines([status.dir])[0], file: redactLines([status.file])[0] }
-  })
-
-  /** Opens the folder in the OS file manager. Returns '' on success. */
-  ipcMain.handle('log:open-folder', async () => {
-    const log = appLog()
-    try {
-      mkdirSync(log.dir, { recursive: true })
-    } catch {
-      /* openPath will report it */
-    }
-    return shell.openPath(log.dir)
-  })
-
-  ipcMain.handle('log:clear', () => {
-    appLog().clear()
-  })
 }

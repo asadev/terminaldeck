@@ -54,8 +54,18 @@
 /* Virtual cursor: the row the keyboard is on, which is not always the selected
    row — hence a ring rather than a fill, and it keeps the accent because it is
    the tree's focus rather than its selection. The two states can co-occur, so
-   they have to be told apart at a glance. */
-.file-tree-row[data-focused='true'] {
+   they have to be told apart at a glance.
+
+   Drawn only while the tree itself has focus. The cursor starts on row one so
+   the keyboard works the moment you Tab in, and the ring was painted from that
+   first frame — so opening Files put a bright accent rectangle around `.github`
+   before anything had been clicked, reading as an open or selected file while
+   the viewer beside it said "No file open". Two panes, one screen, opposite
+   claims. A focus mark for a container nobody is in is not a focus mark, it is
+   a selection nobody made. `:focus` rather than `:focus-visible`: clicking into
+   the tree really does put the keyboard in it, and the cursor has to be visible
+   for the arrow keys that follow. */
+.file-tree:focus .file-tree-row[data-focused='true'] {
   box-shadow: inset 0 0 0 2px var(--accent);
 }
 

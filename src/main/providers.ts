@@ -336,6 +336,23 @@ async function detectInsideDistro(
  * wrong side is the whole reported bug — `where.exe claude` answers "not found",
  * every agent is reported missing, and every session quietly becomes a cmd.exe
  * shell on a machine with a perfectly good Claude Code install six inches away.
+ *
+ * ## Why the three agents are named rather than derived
+ *
+ * This used to open with `(Object.keys(table) as ProviderId[]).filter(id => id
+ * !== 'shell')` and fill a `{} as Record<ProviderId, boolean>` key by key. Both
+ * casts were assertions nothing checked. `Object.keys` answers `string[]` no
+ * matter what it was handed, so renaming a key in `providersFor` would have
+ * left this iterating a name that no longer existed — every agent reported
+ * missing, which is the exact symptom the function exists to prevent — and the
+ * empty-object cast promised a complete record while the loop that filled it
+ * ran later, so an early `return` would have shipped `{ shell: true }` to a UI
+ * that believed it had four answers.
+ *
+ * Naming them costs three words per branch and buys a real check: `table.codex`
+ * stops compiling if the key is renamed, and both returns are object literals
+ * measured against `Record<ProviderId, boolean>`, so a provider added to the
+ * union fails *here* instead of being silently skipped.
  */
 export async function detectProviders(
   platform: Platform = currentPlatform(),
@@ -351,38 +368,50 @@ export async function detectProviders(
   // boundary. Passing the target would build a whole `wsl.exe` launch line for
   // a question that only needs three words out of it.
   const table = providersFor(platform, process.env)
-  const agents = (Object.keys(table) as ProviderId[]).filter((id) => id !== 'shell')
 
   if (wsl !== null && isWindows(platform)) {
-    const found = await detectInsideDistro(wsl, agents.map((id) => table[id].bin), process.env)
-    const inside = {} as Record<ProviderId, boolean>
-    // The shell is always available: `wsl.exe` resolves the user's login shell
-    // on the far side, and a distro without one is not a distro.
-    inside.shell = true
-    for (const id of agents) inside[id] = found.has(table[id].bin)
-    return inside
+    const found = await detectInsideDistro(
+      wsl,
+      [table.claude.bin, table.codex.bin, table.gemini.bin],
+      process.env,
+    )
+    return {
+      claude: found.has(table.claude.bin),
+      codex: found.has(table.codex.bin),
+      gemini: found.has(table.gemini.bin),
+      // The shell is always available: `wsl.exe` resolves the user's login shell
+      // on the far side, and a distro without one is not a distro.
+      shell: true,
+    }
   }
 
   const PATH = await loginPath(platform)
   // Never `{ ...process.env, PATH }`: on Windows that leaves two spellings of
   // the same variable in one object. `withPath` removes the ambiguity.
   const env = withPath(process.env, PATH, platform)
-  const found = {} as Record<ProviderId, boolean>
-  // The shell is never looked up: it is a path this table already resolved.
-  found.shell = true
 
-  await Promise.all(
-    agents.map(async (id) => {
-      const spec = lookupSpec(platform, table[id].bin)
-      try {
-        const { stdout } = await run(spec.command, spec.args, { env, windowsHide: true })
-        // `where.exe` exits 0 having printed nothing only in cases that are not
-        // a match; requiring a path keeps "found" meaning "there is a file".
-        found[id] = firstLookupPath(stdout) !== null
-      } catch {
-        found[id] = false
-      }
-    }),
-  )
-  return found
+  /**
+   * Does this name resolve on that PATH? Never throws: `which`/`where.exe`
+   * exiting non-zero *is* the "not installed" answer, and a rejected promise
+   * here would take the whole table down over the ordinary case.
+   */
+  const onPath = async (bin: string): Promise<boolean> => {
+    const spec = lookupSpec(platform, bin)
+    try {
+      const { stdout } = await run(spec.command, spec.args, { env, windowsHide: true })
+      // `where.exe` exits 0 having printed nothing only in cases that are not
+      // a match; requiring a path keeps "found" meaning "there is a file".
+      return firstLookupPath(stdout) !== null
+    } catch {
+      return false
+    }
+  }
+
+  const [claude, codex, gemini] = await Promise.all([
+    onPath(table.claude.bin),
+    onPath(table.codex.bin),
+    onPath(table.gemini.bin),
+  ])
+  // The shell is never looked up: it is a path this table already resolved.
+  return { claude, codex, gemini, shell: true }
 }

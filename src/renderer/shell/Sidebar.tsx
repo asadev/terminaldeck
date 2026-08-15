@@ -2,7 +2,7 @@ import { useState, type MouseEvent, type ReactNode } from 'react'
 import { StatusDot } from '../components/StatusDot'
 import type { Project } from '../state/store'
 import { tip } from '../keymap'
-import { PANEL_GROUPS, PANELS, type PanelId } from './panels'
+import { PANEL_GROUPS, PANELS, type PanelId, type PanelSpec } from './panels'
 import { KIND_ICON, sessionLabel, type WorkspaceTab } from './workspace-tabs'
 
 interface Props {
@@ -13,6 +13,36 @@ interface Props {
   activeTabId: string | null
   /** The view covering the window, or null when a session/page is on screen. */
   activePanel: PanelId | null
+  /**
+   * The views to list, which is every view whose feature is installed.
+   *
+   * A prop rather than a read of the feature state, because this component is
+   * the window's inventory of what you have open and the decision about what
+   * exists belongs one level up, with the rest of the gating. It defaults to all
+   * of them so that rendering a `Sidebar` on its own — a test, a harness — shows
+   * the app rather than a fresh install's subset of it.
+   */
+  panels?: readonly PanelSpec[]
+  /**
+   * Whether the browser feature is installed and on, i.e. whether the globe
+   * beside New session opens a pane or offers one.
+   *
+   * It used to decide whether the button was drawn at all, and the result was
+   * the failure a feature store actually causes: uninstalling the browser pane
+   * deleted the globe with nothing in its place, so the app looked like one
+   * that had never had a browser. The button stays either way — see
+   * `browserOffer`.
+   */
+  browser?: boolean
+  /**
+   * The hover label for the globe when the feature is *not* on, from
+   * `useControlOffer`. Null when it is on and the globe is an ordinary control.
+   *
+   * A string rather than a feature id for the same reason `panels` is a list
+   * rather than a lookup: this component is the window's inventory of what you
+   * have open, and every decision about what exists is made one level up.
+   */
+  browserOffer?: string | null
   /** Session ids with output nobody has looked at yet. */
   unread?: readonly string[]
   badges?: Partial<Record<PanelId, number>>
@@ -110,6 +140,9 @@ export function Sidebar({
   tabs,
   activeTabId,
   activePanel,
+  panels = PANELS,
+  browser = true,
+  browserOffer = null,
   unread = [],
   badges,
   peeking = false,
@@ -189,7 +222,7 @@ export function Sidebar({
   )
 
   /** Views that live at the foot rather than in a labelled run. */
-  const footPanels = PANELS.filter((panel) => panel.group === 'foot')
+  const footPanels = panels.filter((panel) => panel.group === 'foot')
 
   return (
     <aside
@@ -235,46 +268,64 @@ export function Sidebar({
           <Glyph path={PLUS} size={16} />
           <span>New session</span>
         </button>
-        <button
-          type="button"
-          className="sb-new-alt"
-          onClick={onNewBrowserTab}
-          aria-label="New browser tab"
-          title="New browser tab"
-        >
-          <Glyph path={KIND_ICON.browser} size={16} />
-        </button>
+        {/*
+          Drawn whether or not the feature is installed, and it does the right
+          thing either way: with the browser pane on it opens a tab, without it
+          the same press installs the pane and opens one. What changes is the
+          hover label and the offer dot — the shared mark in app.css — so the
+          button reads as "there is something here" rather than as a control
+          that is greyed out or, as it was, as nothing at all.
+        */}
+        {(browser || browserOffer !== null) && (
+          <button
+            type="button"
+            className="sb-new-alt"
+            data-offer={browserOffer !== null || undefined}
+            onClick={onNewBrowserTab}
+            aria-label={browserOffer ?? 'New browser tab'}
+            title={browserOffer ?? 'New browser tab'}
+          >
+            <Glyph path={KIND_ICON.browser} size={16} />
+          </button>
+        )}
       </div>
 
       <div className="sidebar-scroll">
-        {PANEL_GROUPS.map((group) => (
-          <section key={group.id} className="sb-group">
-            <h2 className="sb-group-label">{group.label}</h2>
-            <ul className="sb-list">
-              {PANELS.filter((panel) => panel.group === group.id).map((panel) => {
-                const count = badges?.[panel.id] ?? 0
-                return (
-                  <li key={panel.id}>
-                    <button
-                      type="button"
-                      className={`sb-row sb-nav${activePanel === panel.id ? ' active' : ''}`}
-                      aria-current={activePanel === panel.id}
-                      // Read out of the keymap for this platform, never typed
-                      // here: the rail used to carry its own ⌘1/⌘2/⌘3 tooltips
-                      // and every one of them was wrong.
-                      title={panel.command ? tip(panel.label, panel.command) : panel.label}
-                      onClick={() => onSelectPanel(panel.id)}
-                    >
-                      <Glyph path={panel.icon} />
-                      <span className="sb-label">{panel.label}</span>
-                      {count > 0 && <span className="sb-badge">{count > 99 ? '99+' : count}</span>}
-                    </button>
-                  </li>
-                )
-              })}
-            </ul>
-          </section>
-        ))}
+        {PANEL_GROUPS.map((group) => {
+          const inGroup = panels.filter((panel) => panel.group === group.id)
+          // A heading over nothing. Uninstalling every integration used to leave
+          // the word "Integrations" sitting above a gap, which reads as a list
+          // that failed to load rather than one that is empty on purpose.
+          if (inGroup.length === 0) return null
+          return (
+            <section key={group.id} className="sb-group">
+              <h2 className="sb-group-label">{group.label}</h2>
+              <ul className="sb-list">
+                {inGroup.map((panel) => {
+                  const count = badges?.[panel.id] ?? 0
+                  return (
+                    <li key={panel.id}>
+                      <button
+                        type="button"
+                        className={`sb-row sb-nav${activePanel === panel.id ? ' active' : ''}`}
+                        aria-current={activePanel === panel.id}
+                        // Read out of the keymap for this platform, never typed
+                        // here: the rail used to carry its own ⌘1/⌘2/⌘3 tooltips
+                        // and every one of them was wrong.
+                        title={panel.command ? tip(panel.label, panel.command) : panel.label}
+                        onClick={() => onSelectPanel(panel.id)}
+                      >
+                        <Glyph path={panel.icon} />
+                        <span className="sb-label">{panel.label}</span>
+                        {count > 0 && <span className="sb-badge">{count > 99 ? '99+' : count}</span>}
+                      </button>
+                    </li>
+                  )
+                })}
+              </ul>
+            </section>
+          )
+        })}
 
         <section className="sb-group">
           <div className="sb-group-head">

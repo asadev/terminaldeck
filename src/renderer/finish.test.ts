@@ -115,15 +115,25 @@ describe('a scrolling region fades instead of slicing', () => {
 
 describe('the only colour in the chrome is the blue', () => {
   it('does not paint a session at its own prompt in the warning amber', () => {
-    const dot = rule(read('renderer/styles/app.css'), ".status-dot[data-status='waiting']")
-    expect(dot, 'the waiting dot has no rule any more').toBeTruthy()
-    expect(dot).not.toContain('--status-waiting')
+    const css = read('renderer/styles/app.css')
+    // The `waiting` dot has no rule of its own any more: it is the base
+    // `.status-dot`, which is the same hollow ring `idle` gets. What has to
+    // stay true is that neither of them is painted the warning colour.
+    expect(rule(css, ".status-dot[data-status='waiting']")).toBeNull()
+    const base = rule(css, '.status-dot')
+    expect(base, '.status-dot lost its base rule').toBeTruthy()
+    expect(base).not.toContain('--status-waiting')
+    expect(base, 'the resting mark is a ring, not a filled dot').toContain('inset 0 0 0 1.5px')
   })
 
-  it('calls that state what it is', () => {
+  it('calls that state what it is, and says the same of the state beside it', () => {
     // "Waiting" reads as blocked on something. It is reached by SessionStart
     // and by a shell sitting at `%`, which is a session in perfect health.
-    expect(read('renderer/components/StatusDot.tsx')).toMatch(/waiting:\s*'Ready'/)
+    // "Idle" is the classifier's fallback and means the same thing to a reader
+    // — two words for one situation is one word too many.
+    const source = read('renderer/components/StatusDot.tsx')
+    expect(source).toMatch(/waiting:\s*'Ready'/)
+    expect(source).toMatch(/idle:\s*'Ready'/)
   })
 
   it('does not spend a session-status token on a GitHub notification', () => {

@@ -97,7 +97,7 @@ describe('what the strip reports', () => {
     expect(html).toContain('mystery-model')
     // On the figure itself, not only in a note: notes are capped at two and this
     // one is third in line behind a refusal and a context warning.
-    expect(html).toContain('≥ $0.500')
+    expect(html).toContain('≥ $0.50')
   })
 
   it('keeps the floor mark on the figure when the note is crowded out', () => {
@@ -117,7 +117,7 @@ describe('what the strip reports', () => {
     // The refusal and the context warning fill both note slots…
     expect(html).not.toContain('Spend is a floor')
     // …so the caveat has to survive on the number.
-    expect(html).toContain('≥ $0.500')
+    expect(html).toContain('≥ $0.50')
   })
 
   it('marks today as an upper bound when a session began before today', () => {
