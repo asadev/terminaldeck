@@ -236,8 +236,21 @@ describe.skipIf(!onMac)('a confined session, run for real', () => {
   it('still has the tools, which live outside the folder', async () => {
     // Rule five: a confinement that breaks node or git is not usable. Both are
     // outside the granted folder by construction and must stay reachable.
+    /*
+     * Colour stripped before matching, and the reason is the harness rather
+     * than the boundary.
+     *
+     * These cases run the shell under a real pty — they have to, because a
+     * confinement that only holds for a pipe is not the thing being claimed —
+     * and node colourises its output when it believes it is talking to a
+     * terminal. So a correct answer arrived as `[33m42[39m` and
+     * failed a test about whether node runs at all. The escape codes are proof
+     * the pty is real; they are not part of the answer.
+     */
     const node = await sh('command -v node >/dev/null 2>&1 && node -e "console.log(6*7)" || echo skipped')
-    expect(node.stdout.trim()).toMatch(/^(42|skipped)$/)
+    // eslint-disable-next-line no-control-regex
+    const plain = node.stdout.replace(/\[[0-9;]*m/g, '').trim()
+    expect(plain).toMatch(/^(42|skipped)$/)
     const git = await sh('git --version')
     expect(git.stdout).toMatch(/^git version/)
     // And the shim noise is gone: without the xcrun cache rule every git command

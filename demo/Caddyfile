@@ -1,0 +1,35 @@
+# TLS for the broker, on a name we can prove control of without touching DNS.
+#
+# terminaldeck.dev's nameservers are at GoDaddy and this repository has no
+# credential for them, so `demo.terminaldeck.dev` is not something that can be
+# created from here. `sslip.io` resolves any dotted-or-dashed address in its own
+# domain to that address, which means Let's Encrypt's HTTP-01 challenge answers
+# on this machine and issues a real certificate for it. Coolify on the relay box
+# already runs on an sslip.io name, so this is not a new idea in this estate.
+#
+# It is a hostname the reviewer never sees: it is the origin the review page
+# fetches from, not anything anybody types. When a real subdomain becomes
+# available, changing this line and the one in the page is the whole migration.
+178-105-239-176.sslip.io {
+	encode zstd gzip
+
+	# The broker is on loopback and has no TLS of its own. Everything it is
+	# allowed to answer is in `broker.mjs`; this proxies the lot rather than
+	# listing routes twice and letting the two lists disagree.
+	reverse_proxy 127.0.0.1:8787
+
+	header {
+		# The review page is the only caller, and it holds no session of any
+		# kind — there is nothing here worth a cookie, a token or a login.
+		-Server
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+	}
+
+	log {
+		output file /var/log/caddy/demo.log {
+			roll_size 10MiB
+			roll_keep 3
+		}
+	}
+}

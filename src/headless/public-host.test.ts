@@ -10,12 +10,14 @@
  * vulnerability rather than a demo.
  */
 
-import { readdirSync, readFileSync } from 'node:fs'
+import { mkdtempSync, readdirSync, readFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
-import type { Device } from '../main/remote/device-auth'
+import { RemoteAuth, type Device } from '../main/remote/device-auth'
 import { CAPABILITIES, CAPABILITY } from '../main/remote/protocol'
+import { authenticatorFor, pairingDesk } from '../main/remote/server'
 import {
   createPublicHost,
   PUBLIC_HOST_DEFAULTS,
@@ -87,6 +89,83 @@ describe('a device that redeems a code the demo host just minted', () => {
     })
     host.paired(device())
     expect(granted).toEqual([{ id: 'dev-1', folders: ['/home/visitor/playground'] }])
+  })
+})
+
+describe('the whole trade, against the real trust store', () => {
+  /*
+   * The unit tests above watch the policy call `approve`. This watches what
+   * `approve` *does*, through the objects that actually run in a demo container:
+   * a real `RemoteAuth` on a real file, a real `PairingDesk`, and the real
+   * `authenticatorFor` that decides whether a device gets in.
+   *
+   * It exists because the interesting claim in this whole feature is one
+   * sentence long — "a device that redeems a code this host just minted is let
+   * in, and one that does not is not" — and a test that stubbed the trust store
+   * could assert it while the wiring underneath was cut. That is the failure
+   * this repository keeps re-finding.
+   */
+  const harnessed = async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'td-public-host-'))
+    const auth = new RemoteAuth(dir)
+    // `startBeacon` replaced: a unit test may not publish a rendezvous slot at
+    // the live relay, and the beacon is not what is under test here. These tests
+    // mint with `create`, which never publishes, so it is never called — the
+    // stub is there so that a future `show` cannot quietly dial out.
+    const desk = pairingDesk(auth, Date.now, () => null)
+    const policy = createPublicHost({
+      config: CONFIG,
+      approve: (id) => auth.approveDevice(id),
+      grant: () => undefined,
+      end: () => undefined,
+    })
+    const authenticator = authenticatorFor(auth, desk, (device) => policy.paired(device))
+    return { dir, auth, desk, authenticator }
+  }
+
+  const device = { name: 'Reviewer iPhone', platform: 'ios' as const }
+
+  it('lets in a device that redeemed the code this host minted', async () => {
+    const { auth, desk, authenticator } = await harnessed()
+    const token = desk.create().token
+
+    // First contact: the code is spent, a credential comes back, and the
+    // connection is still refused — that is the product's behaviour and it does
+    // not change here. What changes is what the roster says afterwards.
+    const paired = await authenticator.authenticate(token, device, '1.2.3.4')
+    expect(paired.ok).toBe(false)
+    expect(paired.credential).toBeTruthy()
+
+    const roster = auth.listDevices()
+    expect(roster).toHaveLength(1)
+    expect(roster[0].approved).toBe(true)
+
+    // Second contact, with the credential it was given: now it is in. On a host
+    // anybody owns this would still be refused until a human pressed Approve.
+    const back = await authenticator.authenticate(paired.credential as string, device, '1.2.3.4')
+    expect(back.ok).toBe(true)
+  })
+
+  it('refuses a code this host did not mint, demo or not', async () => {
+    const { auth, authenticator } = await harnessed()
+    const guessed = await authenticator.authenticate('AAAA-BBBB', device, '1.2.3.4')
+    expect(guessed.ok).toBe(false)
+    expect(guessed.credential).toBeFalsy()
+    // And nothing was created, so there is nothing to have been approved.
+    expect(auth.listDevices()).toEqual([])
+  })
+
+  it('refuses the same code twice, so a shoulder-surfer gets nothing', async () => {
+    // Single use is the property auto-approval leans on hardest: the broker
+    // allocated this container for one visitor, and the code is how that visitor
+    // is recognised. A second redemption would be a second stranger.
+    const { auth, desk, authenticator } = await harnessed()
+    const token = desk.create().token
+    await authenticator.authenticate(token, device, '1.2.3.4')
+    const again = await authenticator.authenticate(token, device, '5.6.7.8')
+    expect(again.ok).toBe(false)
+    expect(again.credential).toBeFalsy()
+    expect(auth.listDevices()).toHaveLength(1)
   })
 })
 

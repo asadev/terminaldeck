@@ -1,0 +1,27 @@
+[Unit]
+# The broker hands out one throwaway container per visitor. See demo/deploy.sh.
+Description=Terminal Deck demo broker
+After=docker.service td-demo-firewall.service
+Requires=docker.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/node /opt/terminaldeck-demo/broker/broker.mjs
+WorkingDirectory=/opt/terminaldeck-demo
+Restart=on-failure
+RestartSec=5
+# It only ever talks to the Docker socket and to loopback, so it gets nothing
+# else. `ProtectHome` is not decorative here: there is nothing in any home
+# directory on this box that a broker has any business reading.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=full
+# Every visitor's container dies with the broker on purpose — see the SIGTERM
+# handler in broker.mjs. Long enough for `docker kill` on four of them.
+TimeoutStopSec=20
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

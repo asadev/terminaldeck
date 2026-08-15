@@ -1,0 +1,168 @@
+#!/bin/bash
+#
+# The login shell a visitor gets, and the fence around it.
+#
+# `providers.ts` starts a plain shell session as `$SHELL -l`, and the image sets
+# `SHELL=/usr/local/bin/demo-shell`. So this file is what every session on the
+# demo machine actually runs, and it is the only thing standing between an
+# anonymous stranger and the process that let them in.
+#
+# It lives here rather than in `src/` on purpose. `confinementKind()` answers
+# 'none' on Linux and CONFINEMENT.md rule 1 forbids shipping an unmeasured
+# boundary to make something look good — so the demo does not claim in-app
+# confinement. The fence is an ordinary mechanism, built out of ordinary tools,
+# placed outside the product where it can be measured with `demo/escapes.sh` and
+# where nobody can mistake it for a feature the app has.
+#
+# ## What it does, and why in this order
+#
+#  1. **A private mount namespace.** `unshare --mount --propagation private` so
+#     nothing done below is visible to the host process or to any other session.
+#     Needs CAP_SYS_ADMIN, which the container is given and which step 4 takes
+#     away again before the visitor ever sees a prompt.
+#
+#  2. **A tmpfs over /home, with the playground bound back in.** This is the
+#     mechanism CONFINEMENT.md measured on Asad's WSL Ubuntu: `ls $HOME` shows
+#     only the granted folder, a canary elsewhere is unreadable, and git and node
+#     still run. The playground is bound to a holding point *first*, because the
+#     tmpfs is about to cover the path it currently lives at.
+#
+#  3. **A private /proc, in its own PID namespace.** Not part of the WSL
+#     measurement and worth more here than there: without it `/proc/1/root` and
+#     `/proc/1/environ` are paths to the process that owns the pairing state, and
+#     the demo host has no privilege separation of its own — a session it spawns
+#     runs as the same uid it does. With it, the visitor's shell is PID 1 of a
+#     namespace that contains nothing else.
+#
+#  4. **setpriv, and this is the load-bearing line.** `--bounding-set=-all
+#     --inh-caps=-all` is what CONFINEMENT.md measured as the difference between
+#     a boundary and a decoration: without it `umount /home` succeeds and the
+#     canary in the owner's home is read. `--reuid/--regid` drops from the
+#     container's root to an unprivileged visitor, which is what makes /root —
+#     where the host keeps its 0600 control token beside its 0700 state dir —
+#     unreadable by ordinary file permissions as well.
+#
+# Every one of those is checked by `demo/escapes.sh`, which runs the escape table
+# from CONFINEMENT.md against a live container rather than against this comment.
+set -u
+
+VISITOR_UID="${DEMO_VISITOR_UID:-1001}"
+VISITOR_GID="${DEMO_VISITOR_GID:-1001}"
+VISITOR_HOME="${DEMO_VISITOR_HOME:-/home/visitor}"
+PLAYGROUND="${DEMO_PLAYGROUND:-$VISITOR_HOME/playground}"
+MOTD="${DEMO_MOTD:-/run/terminaldeck-demo/motd}"
+
+# Re-entered inside the namespace by the exec below. Splitting the file in two
+# would mean two paths to keep in step; a flag in the environment means the
+# second half cannot be run on its own by accident either, because nothing else
+# ever sets it.
+if [ "${DEMO_SHELL_INSIDE:-}" != "1" ]; then
+  export DEMO_SHELL_INSIDE=1
+  exec unshare --mount --propagation private --pid --fork --mount-proc \
+    /usr/local/bin/demo-shell "$@"
+fi
+
+# --------------------------------------------------------------- the fence --
+
+# The playground has to survive the tmpfs that is about to cover its parent, so
+# it is bound somewhere outside /home first and moved back afterwards. A copy
+# would work too and would be wrong: the visitor's writes have to land in the
+# container's own tmpfs, where they are thrown away with it.
+#
+# The holding point is under /run, and getting there took two measured failures.
+# The container's root filesystem is read-only, so `mkdir /mnt/playground` was
+# refused; creating the directory in the image instead got past that and then
+# `mount --bind` onto it was refused too, because the kernel will not mount over
+# a directory that lives on a read-only mount. /run is one of the three tmpfs
+# mounts this container has, it is mode 0755 and root-owned so the visitor cannot
+# write there, and binding onto it works — measured, in that order.
+die() {
+  echo "The demo shell could not build its confinement: $1" >&2
+  echo "Refusing to start a session rather than starting an unconfined one." >&2
+  exit 1
+}
+
+HOLD=/run/terminaldeck-demo/hold
+mkdir -p "$HOLD" || die "could not make a holding point under /run"
+mount --bind "$PLAYGROUND" "$HOLD" || die "could not hold on to the playground"
+mount -t tmpfs -o size=32m,mode=0755,nosuid,nodev tmpfs /home || die "could not cover /home"
+mkdir -p "$PLAYGROUND" || die "could not lay out the new /home"
+mount --move "$HOLD" "$PLAYGROUND" || die "could not put the playground back"
+
+# The home directory itself, so `cd ~` lands somewhere that exists and the shell
+# can write its history without reaching outside. Owned by the visitor; the
+# tmpfs is this namespace's alone, so nothing here is visible to anything else.
+#
+# Mode before owner. The container holds CAP_CHOWN and not CAP_FOWNER, so once
+# this belongs to the visitor the permissions can no longer be changed — the
+# reverse order failed on the real box with "Operation not permitted".
+chmod 0711 "$VISITOR_HOME" 2>/dev/null || true
+chown "$VISITOR_UID:$VISITOR_GID" "$VISITOR_HOME" 2>/dev/null || true
+
+# ---------------------------------------------------- interactive or asked --
+
+# A login shell has to answer `-c`, and forgetting that wedged the whole box.
+#
+# `loginPathSpec` in `src/main/platform/lookup.ts` runs `$SHELL -lic 'echo -n
+# "$PATH"'` to find out what a login shell's PATH is, and `findTailscale` calls
+# it on the way to `server.start()`. The first version of this file ignored its
+# arguments and always started an interactive bash — so that command never
+# returned, `start()` never finished, the relay was never dialled, and the demo
+# host sat there looking healthy while `remote:status` answered `running: false`
+# with no reason at all. It took a control-socket probe inside a live container
+# to see it.
+#
+# So arguments are passed through. `-l` is dropped because the environment below
+# is built here rather than by a profile, and the motd is printed only when there
+# is a person to read it: `echo -n "$PATH"` with a paragraph in front of it is a
+# PATH with a paragraph in it.
+ARGS=()
+INTERACTIVE=1
+for arg in "$@"; do
+  case "$arg" in
+    -l | --login) ;;
+    -lic | -li | -ic)
+      # The exact spelling `loginPathSpec` uses, and the shapes near it. The
+      # login and interactive halves are ours to decide; the `-c` is not.
+      ARGS+=(-c)
+      INTERACTIVE=0
+      ;;
+    -c)
+      ARGS+=(-c)
+      INTERACTIVE=0
+      ;;
+    *) ARGS+=("$arg") ;;
+  esac
+done
+
+# Greet them before dropping privileges, because /run is about to stop being
+# readable in the general case and because a shell that prints nothing looks
+# like a shell that did not start.
+if [ "$INTERACTIVE" = "1" ] && [ -r "$MOTD" ]; then cat "$MOTD"; fi
+if [ "$INTERACTIVE" = "1" ]; then ARGS+=(-i); fi
+
+# ------------------------------------------------------------------- setpriv --
+
+# `--clear-groups` as well as the uid and gid: a leftover supplementary group is
+# a set of files this visitor was never meant to reach, and it is the part of a
+# privilege drop that is easiest to forget.
+#
+# Everything after `--` runs with an empty capability bounding set. Nothing it
+# execs can regain a capability, including a setuid binary, which is why the
+# container is also run with `--security-opt no-new-privileges`.
+exec setpriv \
+  --reuid="$VISITOR_UID" \
+  --regid="$VISITOR_GID" \
+  --clear-groups \
+  --bounding-set=-all \
+  --inh-caps=-all \
+  env -i \
+    HOME="$VISITOR_HOME" \
+    USER=visitor \
+    LOGNAME=visitor \
+    SHELL=/bin/bash \
+    PATH=/usr/local/bin:/usr/bin:/bin \
+    TERM="${TERM:-xterm-256color}" \
+    LANG=C.UTF-8 \
+    PS1='\w \$ ' \
+    /bin/bash --noprofile --norc "${ARGS[@]+"${ARGS[@]}"}"

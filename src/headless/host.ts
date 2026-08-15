@@ -299,6 +299,32 @@ export async function createHeadlessHost(
   const waiting = new Set<(device: Device | null) => void>()
 
   const notePaired = (device: Device): void => {
+    /*
+     * The public host's decision, taken here because here is where the event
+     * lands — and this line's absence was the whole demo.
+     *
+     * Measured on 2026-08-16 by erasing a simulator, installing 0.1.8 and
+     * following App Review Information word for word: the page minted a real
+     * code in three seconds, the phone redeemed it, and then the app sat on
+     * *"Waiting for approval — approve it in the desktop app, then reconnect"*
+     * for as long as anybody cared to watch. The demo container's own log said
+     * `a device redeemed a pairing code` and never said `a visitor paired and
+     * was let in`, and `status` on the box answered `Devices (1) — pending,
+     * never seen`. `createPublicHost` was built, its policy was correct and its
+     * unit tests passed, because those tests wire `policy.paired` to the
+     * authenticator themselves. The shipping assembly never wired it to
+     * anything, so `PublicHost.paired` had exactly one caller in the entire
+     * repository and that caller was the test file. A reviewer would have met
+     * the same Guideline 2.1 dead end §1 of APPSTORE.md was written to remove,
+     * one screen later and with the review notes now promising it worked.
+     *
+     * It runs before the waiters because a waiter is `terminaldeck pair`
+     * printing "approved" to a person: telling them so before the trust store
+     * has been written would be a race that reads as a lie on the day it loses.
+     * `publicHost` is `null` on every host that is not the demo — this is the
+     * closure the `let` at the top of the file exists for.
+     */
+    publicHost?.paired(device)
     paired.push(device)
     logger.info('headless', 'a device redeemed a pairing code', { device: device.name })
     for (const wake of [...waiting]) {

@@ -246,3 +246,52 @@ describe('both shells say where the files are, at boot', () => {
     expect(source).toContain('installPaths(nodePaths(')
   })
 })
+
+describe('the demo host actually approves the visitor it decided to approve', () => {
+  /*
+   * The seam that was open, and it was open all the way to a live server.
+   *
+   * `public-host.ts` is a decision object: it is handed `approve` and `grant`
+   * and it calls them when a device redeems a code. Its own tests pass, and one
+   * of them drives a real `RemoteAuth`, a real `PairingDesk` and the real
+   * `authenticatorFor` — but it builds that wiring itself, with
+   * `authenticatorFor(auth, desk, (device) => policy.paired(device))`. So the
+   * only caller of `PublicHost.paired` in the whole repository was the test
+   * file, and nobody noticed, because everything that could be tested about the
+   * policy was green.
+   *
+   * What that cost, measured on 2026-08-16 against the live demo box: a fresh
+   * simulator running the 0.1.8 TestFlight build followed App Review
+   * Information word for word, redeemed a real code from the real page, and
+   * then sat on "Waiting for approval — approve it in the desktop app, then
+   * reconnect" forever. The container's log said `a device redeemed a pairing
+   * code` and never said `a visitor paired and was let in`; `status` on the box
+   * said `Devices (1) — pending, never seen`. The reviewer's dead end, which is
+   * the entire thing the demo exists to remove, had simply moved one screen
+   * later.
+   *
+   * A source assertion rather than a live one, and the limit is worth stating:
+   * this proves the call is written, not that it fires. Proving that it fires
+   * needs a device on the far end of a Noise handshake, which is
+   * `ios/Harness/live-transfer.sh`'s job and not a unit test's. Written is the
+   * property that was missing, and it is the one that can be lost again by an
+   * ordinary edit.
+   */
+  it('wires the policy to the event that a device redeemed a code', () => {
+    const source = readSource('src/headless/host.ts')
+    expect(source).toContain('publicHost?.paired(device)')
+  })
+
+  it('approves before it wakes whoever is waiting to hear about the pairing', () => {
+    /*
+     * `terminaldeck pair` waits on this event and prints that the device is in.
+     * Telling a person so before the trust store has been written is a race
+     * that reads as a lie on the day it loses.
+     */
+    const source = readSource('src/headless/host.ts')
+    const approve = source.indexOf('publicHost?.paired(device)')
+    const wake = source.indexOf('for (const wake of [...waiting])')
+    expect(approve).toBeGreaterThan(-1)
+    expect(wake).toBeGreaterThan(approve)
+  })
+})
