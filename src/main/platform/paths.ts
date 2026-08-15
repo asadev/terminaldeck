@@ -50,7 +50,22 @@
  */
 
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { posix as posixPath, win32 as win32Path } from 'node:path'
+
+/**
+ * Join for the platform being ASKED ABOUT, not the one we are running on.
+ *
+ * `node:path`'s bare `join` follows the host: on a Windows runner it answers
+ * `\Users\asad\Library\Application Support\…` for the *darwin* branch, and
+ * the whole point of taking `platform` as a parameter is that the answer must
+ * not depend on where the question is asked. This is not hypothetical — it is
+ * how the Windows CI release build failed: two assertions that pass on every
+ * developer's Mac and cannot pass on the runner that actually builds the
+ * installer.
+ */
+function joinFor(platform: Platform, ...parts: string[]): string {
+  return platform === 'win32' ? win32Path.join(...parts) : posixPath.join(...parts)
+}
 import { BRAND } from '../../shared/brand'
 import { currentPlatform, type Env, type Platform } from './host'
 
@@ -164,16 +179,16 @@ export function nodePaths(input: NodePathsInput = {}): PlatformPaths {
   const appRoot = input.appRoot ?? process.cwd()
 
   const userData = ((): string => {
-    if (platform === 'darwin') return join(home, 'Library', 'Application Support', BRAND.id)
+    if (platform === 'darwin') return joinFor(platform, home, 'Library', 'Application Support', BRAND.id)
     if (platform === 'win32') {
       const appData = env.APPDATA
-      return join(appData && appData !== '' ? appData : join(home, 'AppData', 'Roaming'), BRAND.id)
+      return joinFor(platform, appData && appData !== '' ? appData : joinFor(platform, home, 'AppData', 'Roaming'), BRAND.id)
     }
     const xdg = env.XDG_DATA_HOME
     // Absolute or nothing. POSIX says a relative XDG value must be ignored, and
     // a service manager's working directory is not somewhere to put a key.
-    if (xdg !== undefined && xdg.startsWith('/')) return join(xdg, BRAND.id)
-    return join(home, '.local', 'share', BRAND.id)
+    if (xdg !== undefined && xdg.startsWith('/')) return joinFor(platform, xdg, BRAND.id)
+    return joinFor(platform, home, '.local', 'share', BRAND.id)
   })()
 
   const downloads = ((): string => {
@@ -181,7 +196,7 @@ export function nodePaths(input: NodePathsInput = {}): PlatformPaths {
       const xdg = env.XDG_DOWNLOAD_DIR
       if (xdg !== undefined && xdg.startsWith('/')) return xdg
     }
-    return join(home, 'Downloads')
+    return joinFor(platform, home, 'Downloads')
   })()
 
   return {
