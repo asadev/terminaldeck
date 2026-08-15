@@ -34,7 +34,7 @@
 import { timingSafeEqual } from 'node:crypto'
 import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { createConnection, createServer, type Server, type Socket } from 'node:net'
-import { join } from 'node:path'
+import { join, posix } from 'node:path'
 import { BRAND } from '../shared/brand'
 import { writeSecretFile } from '../main/remote/secret-file'
 import type { Platform } from '../main/platform/host'
@@ -110,7 +110,12 @@ export function controlPaths(
     const tag = stateDir.replace(/[^A-Za-z0-9]+/g, '-').replace(/^-+|-+$/g, '').toLowerCase()
     return { socket: `\\\\.\\pipe\\${BRAND.id}-${tag || 'host'}`, record }
   }
-  return { socket: join(stateDir, 'host.sock'), record }
+  // `posix.join`, not the host's. This branch is the POSIX answer and it is
+  // reached by asking for a POSIX platform — including from a Windows machine,
+  // which a test doing exactly that proved by receiving
+  // `\home\asad\.local\share\terminaldeck\host.sock`. The named-pipe branch
+  // above is already correct; only the joiner followed the wrong thing.
+  return { socket: posix.join(stateDir, 'host.sock'), record }
 }
 
 /* ----------------------------------------------------------------- record -- */

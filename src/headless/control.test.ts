@@ -64,7 +64,14 @@ describe('the daemon record', () => {
     const read = readDaemonRecord(dir)
     expect(read?.pid).toBe(4242)
     expect(read?.token).toBe('abc')
-    expect(statSync(join(dir, 'host.json')).mode & 0o777).toBe(0o600)
+    // Checked where the check means something. Windows has no POSIX permission
+    // bits — `fs` reports 0666 for any read-write file — so this record, which
+    // holds the daemon's control TOKEN, is NOT mode-protected there; what
+    // protects it is the NTFS ACL of the directory it sits in, which nothing
+    // here sets. Asserting 0600 on Windows would assert a falsehood.
+    if (process.platform !== 'win32') {
+      expect(statSync(join(dir, 'host.json')).mode & 0o777).toBe(0o600)
+    }
   })
 
   it('reads a missing record as "no host has run here"', () => {
@@ -138,7 +145,24 @@ describe('framing', () => {
   })
 })
 
-describe('a live control socket', () => {
+/*
+ * POSIX hosts only, and not because the feature is POSIX-only — it is not.
+ *
+ * These cases pass `platform: 'linux'` and then genuinely BIND, which is the
+ * point: they are the ones that prove framing, tokens and refusals against a
+ * real socket rather than a fake. A Unix domain socket needs a POSIX host to
+ * bind on, so on Windows the whole block fails with
+ * `listen EACCES … \td-control-…\host.sock` — the runner faithfully doing what
+ * it was told, in a place Windows has no such thing.
+ *
+ * Windows is not left unproven by this. It has its own transport — a named pipe,
+ * `\\.\pipe\<brand>-<tag>` — and `controlPaths` above pins that name, its
+ * uniqueness per install, and the fact that it is not a filesystem path at all.
+ * What is genuinely NOT covered anywhere is a live named pipe end to end, and
+ * that needs a Windows runner deliberately exercising the win32 branch rather
+ * than this block pretending to.
+ */
+describe.skipIf(process.platform === 'win32')('a live control socket', () => {
   it('carries a command and its answer', async () => {
     const dir = tempDir()
     const socket = join(dir, 'host.sock')
