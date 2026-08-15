@@ -12,7 +12,7 @@
 
 import { mkdtempSync, readdirSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
 import { RemoteAuth, type Device } from '../main/remote/device-auth'
@@ -352,7 +352,11 @@ describe('the mode cannot be entered by a host anybody owns', () => {
     // not match, because a type is not a caller.
     const found = walk(SRC)
       .filter((file) => /\bpublicHost:\s*\{/.test(readFileSync(file, 'utf8')))
-      .map((file) => file.slice(SRC.length + 1))
+      // Separators folded to `/` before comparing. This is a list of source
+      // paths written as prose in an assertion, and on Windows the same file is
+      // `headless\demo.ts` — so the check failed on the runner that builds the
+      // Windows installer while passing everywhere a developer would look.
+      .map((file) => file.slice(SRC.length + 1).split(sep).join('/'))
       .sort()
     expect(found).toEqual(['headless/demo.ts'])
   })

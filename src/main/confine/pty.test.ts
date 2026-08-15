@@ -87,7 +87,21 @@ afterAll(() => {
  * signal: what is being measured is what a person would see on screen, and a
  * person waits too.
  */
-async function terminal(steps: ReadonlyArray<readonly [string, number]>): Promise<string> {
+/**
+ * Drive a confined login shell and return everything it printed.
+ *
+ * Each step is `[what to type, how long to wait]`, and the wait is a CEILING
+ * rather than a sleep: an optional third element is what the step is waiting
+ * FOR, and the moment it appears the step is done. A fixed sleep passes on a
+ * fast machine and fails on a slow one — which is exactly what happened, on
+ * the CI runner, to the case checking that `node` still works inside the
+ * boundary. It captured the echoed command and none of the answer, and read as
+ * "the confinement broke node" when the truth was "2.5 seconds was not enough
+ * on a shared runner".
+ */
+async function terminal(
+  steps: ReadonlyArray<readonly [string, number] | readonly [string, number, RegExp]>,
+): Promise<string> {
   const pty = await import('node-pty')
   const launch = seatbeltCommand(profile, '/bin/zsh', ['-l'])
   const proc = pty.spawn(launch.command, launch.args, {
@@ -102,9 +116,18 @@ async function terminal(steps: ReadonlyArray<readonly [string, number]>): Promis
   proc.onData((data) => {
     out += data
   })
-  for (const [text, wait] of steps) {
+  for (const step of steps) {
+    const [text, wait] = step
+    const until = step.length === 3 ? step[2] : null
     proc.write(text)
-    await new Promise((resolve) => setTimeout(resolve, wait))
+    if (until === null) {
+      await new Promise((resolve) => setTimeout(resolve, wait))
+      continue
+    }
+    const deadline = Date.now() + wait
+    while (!until.test(out) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
   }
   try {
     proc.kill()
@@ -149,7 +172,10 @@ describe.skipIf(!onMac)('a confined session in a real terminal', () => {
     // Rule five: a confinement that breaks node or git is not usable. Both are
     // outside the granted folder by construction, and this is the arrangement
     // they have to work in.
-    const seen = await terminal([['git --version && node -e "console.log(6*7)"\r', 2500]])
+    // 15s ceiling, satisfied the instant 42 appears — see `terminal`.
+    const seen = await terminal([
+      ['git --version && node -e "console.log(6*7)"\r', 15_000, /42/],
+    ])
     expect(seen).toMatch(/git version/)
     expect(seen).toContain('42')
   }, 20_000)
