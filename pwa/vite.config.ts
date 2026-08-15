@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { readFileSync, readdirSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { defineConfig, type Plugin } from 'vite'
 
 const here = (rel: string): string => fileURLToPath(new URL(rel, import.meta.url))
@@ -155,7 +155,17 @@ function checkBuffer(): Plugin {
   return {
     name: 'terminaldeck-buffer-check',
     async buildStart() {
-      const { Buffer: Shim } = (await import(bufferModule)) as { Buffer: typeof Buffer }
+      // `pathToFileURL`, because `bufferModule` is an ABSOLUTE PATH and ESM only
+      // accepts file:, data: and node: URLs. On macOS and Linux a leading `/`
+      // happens to parse, so `import('/Users/…/buffer/index.js')` works and this
+      // read like ordinary code. On Windows the same string is `D:\…`, whose
+      // first two characters ESM parses as the scheme — the Windows release
+      // build failed with "Received protocol 'd:'" before the client compiled a
+      // single module. A check that cannot run is worse than no check: this one
+      // exists because a broken `buffer` breaks every Noise nonce silently.
+      const { Buffer: Shim } = (await import(pathToFileURL(bufferModule).href)) as {
+        Buffer: typeof Buffer
+      }
       const nonce = Shim.alloc(12)
       if (typeof nonce.writeBigUInt64LE !== 'function') {
         this.error(
