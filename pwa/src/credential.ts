@@ -13,11 +13,8 @@
  * the person joining a folder; the machine they are working on must never be
  * able to get it.
  *
- * **This page is served by that machine.** `src/main/index.ts` hands the remote
- * server `webRoot: <app>/pwa/dist` and it serves these files over the tailnet;
- * the QR code somebody scans is `https://<machine>.<tailnet>.ts.net/#t=…`. So
- * the HTML and the JavaScript running in this tab come from the same computer
- * that would be asking for the token, on that computer's own origin.
+ * **A browser has no place to put one.** This is true of every route and it is
+ * the argument that does not depend on how the page arrived:
  *
  * Nothing a browser offers survives that:
  *
@@ -31,12 +28,21 @@
  * - There is no OS keychain a web page can reach. That is the whole difference
  *   between this client and the other two.
  *
- * A token here would therefore be a token the machine owner can take at will,
- * silently, by changing one line of the page they are serving — with no prompt,
- * no approval and nothing on screen. That is not a weaker version of the
- * feature. It is the exact thing the feature exists to prevent, wearing the
- * feature's clothes, and shipping it would make the promise on the other two
- * clients unbelievable.
+ * And the whole point of a web client is the computer somebody does not own — a
+ * work laptop, a borrowed desktop. A token there is a token in a browser profile
+ * that outlives the person using it, on hardware whose owner can read it.
+ *
+ * **On the direct route it is worse still, and worth saying separately.** There,
+ * `src/main/index.ts` hands the remote server `webRoot: <app>/pwa/dist` and the
+ * machine serves these files itself, on its own origin — so the HTML and the
+ * JavaScript running in this tab come from the same computer that would be
+ * asking for the token. A token here would be a token that machine's owner could
+ * take at will, silently, by changing one line of the page they are serving, with
+ * no prompt and nothing on screen.
+ *
+ * That is not a weaker version of the feature. It is the exact thing the feature
+ * exists to prevent, wearing the feature's clothes, and shipping it would make
+ * the promise on the other two clients unbelievable.
  *
  * So: no token store here, no Approve button, and no settings row that hints one
  * is coming. What is shipped instead is the half that is honest and is not
@@ -152,13 +158,19 @@ export function credentialHeadline(notice: CredentialNotice, machine: string): s
  * The sentence the desktop cannot write, because it does not know what kind of
  * client is on the other end of the socket.
  *
- * It says the true thing and no more: not that the browser is insecure, not that
- * anything went wrong, but that this page comes from the machine that is asking
- * — which is a fact about the deployment and is the entire reason there is no
- * token here. Then it names both ways forward, because a refusal with no route
- * out is a dead end.
+ * It used to read *"This page is served by that machine, so a token kept here
+ * would be a token it could read."* That was true when a tailnet address was the
+ * only way this client existed — the machine served the page — and it stopped
+ * being reliably true the moment this client learned to dial the relay, where
+ * the page can come from anywhere. A sentence explaining a refusal has to be one
+ * the reader can check, so it now states the reason that holds on every route: a
+ * browser has nowhere safe to keep one, on a computer that may not be theirs.
+ *
+ * Then it names both ways forward, because a refusal with no route out is a dead
+ * end.
  */
 export const CREDENTIAL_EXPLANATION =
-  'This page is served by that machine, so a token kept here would be a token it ' +
-  'could read. Answer from the app on a phone or another computer, or push with a ' +
-  'fine-grained token scoped to that one repository.'
+  'A browser has no keychain — a token kept here would sit in storage on this ' +
+  'computer, readable by anything running on this page. Answer from the app on a ' +
+  'phone or another computer, or push with a fine-grained token scoped to that ' +
+  'one repository.'

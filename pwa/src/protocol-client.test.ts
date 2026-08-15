@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   MAX_INPUT_BYTES,
   MAX_MESSAGE_BYTES,
@@ -263,6 +263,37 @@ describe('one parser, not two', () => {
       const theirs = parseServerMessage(frame)
       expect(mine.ok, frame).toBe(theirs.ok)
       if (mine.ok && theirs.ok) expect(mine.message, frame).toEqual(theirs.message)
+    }
+  })
+
+  it('decodes an inbound frame once, whatever it turns out to be', () => {
+    /*
+     * Three readers wanted the same frame — the credential probe, the shared
+     * parser, and the activity-time reader — and each used to decode the text
+     * for itself. Every `output` frame was parsed twice and a `welcome` three
+     * times, on a socket that delivers one frame per 32 KiB of scrollback. This
+     * counts the parses rather than timing them: a stopwatch on a decode this
+     * small measures the machine, and a count either is one or is not.
+     */
+    const parse = vi.spyOn(JSON, 'parse')
+    try {
+      for (const frame of [
+        JSON.stringify({ t: 'output', id: 'abc-123', data: 'hi' }),
+        welcome(),
+        JSON.stringify({ t: 'sessions', sessions: [session] }),
+        JSON.stringify({ t: 'credential.request', id: 'req-1', host: 'github.com' }),
+        '{"t":"nope"}',
+      ]) {
+        parse.mockClear()
+        decodeServerMessage(frame)
+        expect(parse, frame).toHaveBeenCalledTimes(1)
+      }
+      // And a frame it refuses before reading is not decoded at all.
+      parse.mockClear()
+      decodeServerMessage(JSON.stringify({ t: 'output', id: 'a', data: 'x'.repeat(MAX_MESSAGE_BYTES) }))
+      expect(parse).not.toHaveBeenCalled()
+    } finally {
+      parse.mockRestore()
     }
   })
 

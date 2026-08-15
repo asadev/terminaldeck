@@ -14,7 +14,25 @@
     "isolatedModules": true,
     "noEmit": true,
     "baseUrl": "..",
-    "paths": { "@shared/*": ["src/shared/*"] }
+    /*
+     * `node:crypto` resolves to the browser's primitive floor, not to Node's.
+     *
+     * The client imports `src/shared/sealed.ts` — the product's only
+     * implementation of the sealed channel — and that file imports
+     * `node:crypto`. Rather than fork it, the browser supplies the five
+     * primitives it uses; `pwa/vite.config.ts` makes the bundler agree, and this
+     * line makes the compiler agree, so the shared code is type-checked against
+     * the implementation the browser will actually run.
+     *
+     * `"types": []` above stays exactly as it was, and still does its job: it is
+     * what stops a Node built-in *nobody planned for* reaching this bundle. This
+     * mapping is the one that was planned for, written down, and cross-checked
+     * against Node byte for byte by `pwa/tests/node-crypto.test.ts`.
+     */
+    "paths": {
+      "@shared/*": ["src/shared/*"],
+      "node:crypto": ["pwa/src/runtime/node-crypto.ts"]
+    }
   },
   "include": ["src/**/*"]
 }

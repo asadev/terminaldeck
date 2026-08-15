@@ -74,25 +74,25 @@ const RELAY: RemoteRelay = {
   retryAt: null,
 }
 
-/** Both ways in, which is the state a healthy Mac on a tailnet is in. */
+/** Both ways in, which is the state a Mac that also runs a mesh VPN is in. */
 const RUNNING: RemoteState = {
   running: true,
   url: 'https://asads-macbook-pro-1.taile59277.ts.net:8443',
   address: '100.86.107.119',
   reason: null,
-  directReason: null,
   relay: RELAY,
   devices: [],
   connections: [],
 }
 
-/** The Mac the relay was built for: no tailnet, and remote access still up. */
+/**
+ * The ordinary Mac, and the one the relay was built for: no direct route, and
+ * remote access entirely up. Nearly every machine running this is in this state.
+ */
 const RELAY_ONLY: RemoteState = {
   ...RUNNING,
   url: null,
   address: null,
-  directReason:
-    'Tailscale is installed but this Mac is logged out of the tailnet. Open the Tailscale menu bar icon and sign in, then turn this on again.',
 }
 
 const PHONE = {
@@ -234,11 +234,15 @@ describe('serving, with nothing paired', () => {
     expect(html).toContain('same tailnet')
   })
 
-  it('draws both ways in, each with its own state', () => {
+  it('draws both ways in, each with its own state, and the relay first', () => {
     expect(html).toContain('Direct on your tailnet')
     expect(html).toContain('Through the relay')
     expect(html).toContain('>Ready<')
     expect(html).toContain('>Connected<')
+    // Order is an argument about what matters. The relay is what carries almost
+    // every phone and needs nothing installed, so it leads even on the machine
+    // that has both.
+    expect(html.indexOf('Through the relay')).toBeLessThan(html.indexOf('Direct on your tailnet'))
   })
 
   it('names this Mac at the relay, and the key a phone will check it by', () => {
@@ -258,11 +262,13 @@ describe('serving, with nothing paired', () => {
 })
 
 /**
- * The state this whole feature exists for.
+ * The state this whole feature exists for, and the state nearly every machine
+ * is in.
  *
- * A Mac with no tailnet has no URL, and the panel used to disable Pair on
- * exactly that — so the users the relay was built for were the one group who
- * could never reach it. Every assertion here is that regression.
+ * A Mac with no mesh VPN has no direct URL, and the panel used to disable Pair
+ * on exactly that — so the users the relay was built for were the one group who
+ * could never reach it. Then it kept the row and drew it grey. Every assertion
+ * here is one of those two regressions.
  */
 describe('reachable only through the relay', () => {
   const html = render({ state: RELAY_ONLY })
@@ -271,18 +277,37 @@ describe('reachable only through the relay', () => {
     expect(html).toMatch(/<button(?![^>]*disabled)[^>]*>Pair a device<\/button>/)
   })
 
-  it('says why the faster path is missing without calling remote access broken', () => {
-    expect(html).toContain('logged out of the tailnet')
-    expect(html).toContain('Remote access is still up')
-    // That sentence belongs to the direct row. Printed as *the* reason it would
-    // tell somebody their working feature had failed.
+  it('does not draw a route this machine does not have', () => {
+    /*
+     * The rule, stated as a test: a route that does not exist here is not a
+     * route that is down, and this panel says nothing about its absence.
+     *
+     * The row used to be permanent. It sat above the relay wearing an
+     * "Unavailable" pill and quoting Tailscale's own complaint — "logged out of
+     * the tailnet", or "Tailscale refused the request. Serving may be disabled
+     * for this tailnet in the admin console" — beside a phone that was working
+     * perfectly through the relay. Asad: *"a lot of users will not even know
+     * about Tailscale."* To that reader it is a fault in this product, and it
+     * sends them to an admin console to fix a machine that is fine.
+     *
+     * The softer version that replaced it — the row still there, pill reading
+     * "Not in use", a sentence explaining that Tailscale would be faster — is
+     * also gone. It still put a product the reader has not installed at the top
+     * of the one section that answers "how does my phone get in".
+     */
+    expect(html).not.toContain('Direct on your tailnet')
+    expect(html).not.toContain('Tailscale')
+    expect(html).not.toContain('tailnet')
+    expect(html).not.toContain('>Not in use<')
+    expect(html).not.toContain('>Unavailable<')
+    // Nothing has failed, so nothing says so.
     expect(html).not.toContain('Not serving')
   })
 
-  it('marks the tailnet unavailable and the relay connected, in that order', () => {
-    expect(html).toContain('>Unavailable<')
+  it('shows the relay, connected, as the whole answer', () => {
+    expect(html).toContain('Through the relay')
     expect(html).toContain('>Connected<')
-    expect(html.indexOf('Direct on your tailnet')).toBeLessThan(html.indexOf('Through the relay'))
+    expect(html).toContain(RELAY.hostId)
   })
 })
 
@@ -305,10 +330,30 @@ describe('the relay is not connected', () => {
     expect(html).toContain('Trying again in 8s')
   })
 
+  it('still says nothing about the route this machine does not have', () => {
+    /*
+     * The last place the complaint survived, and the argument for keeping it was
+     * the best one available: with the relay down and no direct address, nothing
+     * can get in, so the missing direct route looked like half the diagnosis.
+     *
+     * It is not half of anything. This host has one problem — the relay is not
+     * connected — and the row above states it in the relay's own words, with a
+     * retry time. The additional news that a mesh VPN the reader has never
+     * installed is also not installed is a second, unrelated errand, and the one
+     * they are most likely to go and run because it is the one that sounds like
+     * a cause.
+     */
+    expect(html).not.toContain('Unavailable')
+    expect(html).not.toContain('Tailscale')
+    expect(html).not.toContain('tailnet')
+  })
+
   it('refuses to hand out a code for a path that is down, and says why', () => {
     // A code minted here produces a phone that scans, waits, and fails.
     expect(html).toMatch(/<button[^>]*disabled[^>]*>Pair a device<\/button>/)
-    expect(html).toContain('Neither way in is up')
+    // Not "neither way in": on this machine only one row was ever drawn, and
+    // "neither" sent the reader looking for a second one.
+    expect(html).toContain('Nothing above is up')
   })
 
   it('never claims the identity of a link that could not be used', () => {
@@ -731,13 +776,24 @@ describe('narrowing the relay half of the status', () => {
     expect(relay?.retryAt).toBeNull()
   })
 
-  it('keeps the two "why" fields apart, because they are two different facts', () => {
+  it('drops the direct route’s excuse on the floor, in every state', () => {
+    /*
+     * The main process still computes `directReason` — it is a real diagnosis
+     * and `tailnet.ts` writes it carefully. This side does not narrow it, does
+     * not keep it, and therefore cannot draw it by accident later.
+     *
+     * Pinned on the narrowing rather than only on the markup because that is
+     * what makes it stay true: a field that survived into `RemoteState` would be
+     * one JSX line away from being on screen again, and the JSX tests only cover
+     * the states somebody thought to write down.
+     */
     const state = toRemoteState(
       { running: true, reason: null, directReason: 'Tailscale is logged out.' },
       [],
     )
     expect(state?.reason).toBeNull()
-    expect(state?.directReason).toBe('Tailscale is logged out.')
+    expect(JSON.stringify(state)).not.toContain('Tailscale')
+    expect(Object.keys(state ?? {})).not.toContain('directReason')
   })
 
   it('reads a device that has no key as having none, rather than inventing one', () => {

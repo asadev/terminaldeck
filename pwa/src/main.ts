@@ -18,34 +18,51 @@ import '@xterm/xterm/css/xterm.css'
 import './styles.css'
 
 import { BRAND } from '../../src/shared/brand'
-import { Connection, type ConnectionState } from './connection'
+import { Connection, type ConnectionState, type SocketLike } from './connection'
 import {
   CREDENTIAL_EXPLANATION,
   credentialHeadline,
   type CredentialNotice,
 } from './credential'
+import {
+  DIRECT,
+  hostKeyBytes,
+  loadDeviceIdentity,
+  type DeckEndpoint,
+} from './endpoint'
 import { folderOffer, foldersAfter, noFoldersSentence, pickerRows } from './folders'
 import { machineNoun, readHostPlatform, type HostPlatform } from './host-platform'
 import { createKeyBar, type KeyBarHandle } from './keybar'
 import {
-  clearCredential,
+  clearPairing,
   describeDevice,
-  loadCredential,
-  readPairInput,
-  saveCredential,
+  loadPairing,
+  readPairing,
+  REMEMBERED_TTL_MS,
+  renewed,
+  savePairing,
   takePairToken,
   type StoredCredential,
 } from './pair'
+import { browserStores, type Remember } from './remember'
+import { relaySocket } from './relay-socket'
+import { lookupMachine } from './rendezvous'
 import { chunkInput, type RemoteSession, type ServerMessage } from './protocol-client'
 import { formatSince, sessionTone, shortenPath, sortSessions, statusLabel } from './sessions'
 import { createTerminal, type TerminalHandle } from './terminal'
 
 /**
- * Where the desktop answers.
+ * Where a *direct* connection answers.
  *
- * Same origin as this page, always: the client is served by the very process it
- * then talks to, so there is nothing to configure and no way to point a paired
- * phone at a different desktop by editing a field.
+ * Same origin as this page, always: on this route the client is served by the
+ * very process it then talks to, so there is nothing to configure and no way to
+ * point a paired browser at a different machine by editing a field.
+ *
+ * This used to be the only route, which meant this client worked for exactly one
+ * kind of person — somebody already running Tailscale, because that is what
+ * terminates the TLS on the address it is served from. It is now the fallback.
+ * The relay is the product's network and `relay-socket.ts` is how this client
+ * reaches it; `endpoint.ts` decides which of the two a given pairing is.
  */
 // Kept in step with `WS_PATH` in src/main/remote/server.ts by hand, because
 // that module is main-process code — importing it here would drag node:http
@@ -108,6 +125,72 @@ class Deck {
 
   private connection: Connection | null = null
   private state: ConnectionState = { phase: 'offline', detail: 'Not connected.', retryAt: null, attempts: 0 }
+  /**
+   * How this browser reaches the machine it is paired with.
+   *
+   * Held beside the credential rather than read off the connection, for the same
+   * reason `hostPlatform` is: the pair screen has no socket by definition, and
+   * the credential is written from more than one place. `DIRECT` until something
+   * says otherwise, which is both the unpaired state and the state of every
+   * browser that paired before the relay existed.
+   */
+  private endpoint: DeckEndpoint = DIRECT
+  /**
+   * The two places a pairing can live, and the rule about which.
+   *
+   * See `remember.ts`. Resolved once, because probing `localStorage` on a
+   * browser that refuses it throws and the fallback has to be the same object
+   * every time — a store that was memory on one call and real on the next would
+   * lose a credential between writing it and reading it back.
+   */
+  private readonly stores = browserStores()
+  /**
+   * How long this pairing is meant to last, as the person answered it.
+   *
+   * `this-tab` is the default and it is the safe one. The premise of a browser
+   * client is the computer you do not own, and the question is asked before
+   * anything is written — so an unanswered state cannot exist, and if one
+   * somehow did it would be the one that leaves nothing behind.
+   *
+   * Seeded from the pairing already in storage when there is one, so somebody
+   * re-pairing a browser they had remembered is not asked to decide the same
+   * thing twice. `forget` puts it back, because that is the person saying this
+   * is not their machine any more.
+   */
+  private remember: Remember = 'this-tab'
+  /**
+   * This browser's own X25519 identity, as the machine knows it.
+   *
+   * Loaded once at startup rather than per connection. It is what
+   * `isKnownDevice` on the machine matches every reconnect against, so a client
+   * that generated a fresh one per socket would pair successfully and then be
+   * refused by its own next attempt.
+   *
+   * Made in memory when there is none stored, and written only when a pairing
+   * is — into the store that pairing chose. Opening this page on a borrowed
+   * computer and closing it again leaves nothing.
+   */
+  private deviceKeys = loadDeviceIdentity(this.stores)
+  /** Set while a typed code is being looked up at the relay. */
+  private looking = false
+  /**
+   * A token that arrived in the URL, held until the person has answered where
+   * the pairing it buys should be kept.
+   *
+   * A scanned link used to connect straight from `start()`, which meant one of
+   * the two ways into this client wrote a durable credential onto a computer
+   * without ever asking whose computer it was. It is one tap on a flow that
+   * already involves walking to the desktop to approve — and it makes the rule
+   * absolute rather than usual: **nothing is stored until somebody has said
+   * where.**
+   *
+   * Taken out of the address bar the instant it arrives, whether or not it is
+   * used — see `takePairToken`. So a reload before the tap loses it and the code
+   * has to be scanned again, which is the right way round: the alternative is
+   * writing a live pairing token into storage on a computer nobody has yet said
+   * is theirs, to save sixty seconds.
+   */
+  private scanned: string | null = null
   private screen: Screen = 'pair'
   private sessions: RemoteSession[] = []
   private activity = new Map<string, number>()
@@ -186,18 +269,33 @@ class Deck {
   start(): void {
     // Taken, not read: the fragment is rewritten in the same breath, so the
     // one-time token is not left in the address bar or the back-forward list.
-    const scanned = takePairToken(window.location, window.history)
-    this.credential = loadCredential(window.localStorage)
+    // Taken *before* anything is decided, so it is out of the URL even on the
+    // paths that go on to ignore it.
+    this.scanned = takePairToken(window.location, window.history)
+
+    const found = loadPairing(this.stores, Date.now())
+    this.credential = found?.credential ?? null
+    this.remember = found?.remember ?? 'this-tab'
     this.hostPlatform = this.credential?.hostPlatform ?? 'unknown'
+    this.endpoint = this.credential?.endpoint ?? DIRECT
 
     // A freshly scanned code wins over a stored credential. Someone standing at
     // the desktop scanning a new QR is re-pairing, most likely because the old
     // device row was revoked, and using the stale credential would fail in a
-    // way that looks like the QR not working.
-    const token = scanned ?? this.credential?.token ?? null
-    this.screen = token === null ? 'pair' : 'sessions'
-    this.render()
-    if (token !== null) this.connect(token)
+    // way that looks like the QR not working. It does not connect on its own,
+    // though — see `scanned`.
+    if (this.scanned !== null) {
+      this.credential = null
+      this.screen = 'pair'
+      this.render()
+    } else if (this.credential !== null) {
+      this.screen = 'sessions'
+      this.render()
+      this.connect(this.credential.token, this.endpoint)
+    } else {
+      this.screen = 'pair'
+      this.render()
+    }
 
     this.watchViewport()
     this.watchWakeups()
@@ -208,11 +306,54 @@ class Deck {
     }, 1000)
   }
 
-  private connect(token: string): void {
+  /**
+   * Point the connection at a machine, by whichever of the two routes it is.
+   *
+   * The route decides one thing — what `open` returns — and nothing else.
+   * `connection.ts` above it is untouched: the banner, the heartbeat, the
+   * backoff, the refusal to buffer a keystroke and the whole pairing-approval
+   * dance are the same code whether the bytes went through a relay or straight
+   * down a tailnet. That seam is what made giving this client the relay a small
+   * change rather than a second client.
+   */
+  private connect(token: string, endpoint: DeckEndpoint): void {
     this.connection?.stop()
+    this.endpoint = endpoint
+
+    let open: ((url: string) => SocketLike) | undefined
+    let url = socketUrl(window.location)
+    if (endpoint.kind === 'relay') {
+      const hostPublicKey = hostKeyBytes(endpoint.hostKey)
+      if (hostPublicKey === null) {
+        // `asEndpoint` decodes the key before it will call something a relay
+        // endpoint, so this is unreachable from storage — and it is checked
+        // anyway, because the alternative to a sentence here is a handshake that
+        // fails for a reason nobody can see.
+        this.state = {
+          phase: 'offline',
+          detail: `That pairing is missing the ${this.noun}'s key, so nothing can be reached. Pair again.`,
+          retryAt: null,
+          attempts: 0,
+        }
+        this.renderBanner()
+        return
+      }
+      const relay = endpoint
+      url = relay.url
+      open = () =>
+        relaySocket({
+          relayUrl: relay.url,
+          hostId: relay.hostId,
+          hostPublicKey,
+          deviceKeys: this.deviceKeys,
+        })
+    }
+
     this.connection = new Connection({
-      url: socketUrl(window.location),
+      url,
       token,
+      reach: endpoint.kind,
+      open,
       device: describeDevice(navigator.userAgent),
       handlers: {
         onState: (state) => this.onState(state),
@@ -258,8 +399,11 @@ class Deck {
 
     if (state.phase === 'rejected') {
       // The credential is no good. Holding on to it would mean every launch
-      // fails the same way with no route back to pairing.
-      clearCredential(window.localStorage)
+      // fails the same way with no route back to pairing — and on a computer
+      // that is not this person's, it would be a dead secret left in a profile
+      // somebody else will open. Both stores, because the tab's copy and the
+      // durable one are the same pairing.
+      clearPairing(this.stores)
       this.credential = null
       this.attachedId = null
       // Everything the refused machine told us about itself goes with it. A
@@ -284,14 +428,35 @@ class Deck {
   }
 
   private onCredential(token: string): void {
+    const now = Date.now()
     this.credential = {
       token,
       deviceId: this.credential?.deviceId ?? '',
       deviceName: this.credential?.deviceName ?? 'This device',
-      pairedAt: Date.now(),
+      pairedAt: now,
       hostPlatform: this.hostPlatform,
+      // Written with the credential, not after it. The credential is what the
+      // next launch reconnects with and the endpoint is where it reconnects to;
+      // saving one without the other leaves a browser holding a secret for a
+      // machine it can no longer find.
+      endpoint: this.endpoint,
+      expiresAt: now + REMEMBERED_TTL_MS,
     }
-    saveCredential(window.localStorage, this.credential)
+    this.keep()
+  }
+
+  /**
+   * Put the credential where the person said, or nowhere at all.
+   *
+   * One method rather than a `savePairing` call at each of the two places a
+   * credential is minted or refreshed, because the argument that is easy to get
+   * wrong is `this.remember` — and a single miss writes a durable secret onto a
+   * machine whose owner answered "just for this visit". The device key rides
+   * along inside `savePairing` for the same reason.
+   */
+  private keep(): void {
+    if (this.credential === null || this.credential.token === '') return
+    savePairing(this.stores, this.remember, this.credential, this.deviceKeys)
   }
 
   /**
@@ -334,14 +499,23 @@ class Deck {
         // than waiting for a socket.
         this.hostPlatform = readHostPlatform(message.hostPlatform)
         this.capabilities = message.capabilities
-        this.credential = {
-          token: this.credential?.token ?? '',
-          deviceId: message.deviceId,
-          deviceName: message.deviceName,
-          pairedAt: this.credential?.pairedAt ?? Date.now(),
-          hostPlatform: this.hostPlatform,
-        }
-        if (this.credential.token !== '') saveCredential(window.localStorage, this.credential)
+        this.credential = renewed(
+          {
+            token: this.credential?.token ?? '',
+            deviceId: message.deviceId,
+            deviceName: message.deviceName,
+            pairedAt: this.credential?.pairedAt ?? Date.now(),
+            hostPlatform: this.hostPlatform,
+            endpoint: this.endpoint,
+            expiresAt: this.credential?.expiresAt ?? 0,
+          },
+          // A welcome is the only frame that proves this browser actually
+          // reached the machine, which is what the sliding window measures. A
+          // socket that merely opened proves nothing — the relay will open one
+          // against a host id whose owner revoked this device an hour ago.
+          Date.now(),
+        )
+        this.keep()
         this.applySessions(message.sessions, activity)
         if (this.screen === 'pair') this.screen = 'sessions'
         this.render()
@@ -496,7 +670,16 @@ class Deck {
       return
     }
     this.title.textContent = BRAND.name
-    this.subtitle.textContent = this.credential === null ? 'Not paired' : window.location.host
+    // Named by the route it is actually on. Printing `location.host` for a relay
+    // pairing was true of this page and false of the machine — the browser can
+    // be served from anywhere now, and a subtitle that reads like an address is
+    // read as one.
+    this.subtitle.textContent =
+      this.credential === null
+        ? 'Not paired'
+        : this.endpoint.kind === 'relay'
+          ? this.endpoint.hostId.slice(0, 6)
+          : window.location.host
   }
 
   private renderBanner(): void {
@@ -524,8 +707,31 @@ class Deck {
     this.content.replaceChildren(this.screen === 'pair' ? this.pairScreen() : this.sessionsScreen())
   }
 
+  /**
+   * Pair, by the only two things a person can be holding — and the one question
+   * this client has to ask that the phones do not.
+   *
+   * A **link**, which the desktop shows as a QR code and which carries the relay,
+   * the machine's id, its public key and the token — everything needed to reach
+   * it from anywhere. Or a **code**, eight characters read off the other screen,
+   * which carries none of that and has to be looked up at the relay first; see
+   * `rendezvous.ts` for why that lookup is safe against a relay that would like
+   * to answer in the machine's place.
+   *
+   * One field for both, deliberately. Two fields would mean a person has to know
+   * which of two things they are holding before they can paste it, and telling
+   * them apart is a job for `readPairing` rather than for the reader — the design
+   * brief's bar is that a screen is readable by somebody who has never used it.
+   *
+   * A scanned link lands here too, with the field gone and the token already in
+   * hand. See `scanned`: every route into a pairing passes the question below,
+   * which is what makes "nothing is stored until somebody said where" a property
+   * of this client rather than a description of one of its paths.
+   */
   private pairScreen(): HTMLElement {
     const screen = element('div', 'screen')
+    const held = this.scanned !== null
+
     screen.append(
       // Neutral on a fresh install and neutral by design: nothing has answered
       // yet, so nothing here may claim to know what kind of computer is at the
@@ -535,58 +741,221 @@ class Deck {
       element(
         'p',
         'screen__lead',
-        `${BRAND.name} on the ${this.noun} shows a QR code holding a one-time token. Scanning it opens this page with the token attached, which is all the pairing there is.`,
+        held
+          ? `That code is ready. Before this browser uses it, say how long it should stay paired — then approve it on the ${this.noun}.`
+          : `${BRAND.name} on the ${this.noun} shows a pairing code and a link that holds it. Either one pairs this browser; the ${this.noun} does not need to be on the same network.`,
       ),
     )
 
-    const steps = element('ol', 'steps')
-    for (const step of [
-      `Open the ${this.noun} and show the pairing code.`,
-      'Scan it with this device’s camera.',
-      `Approve this device on the ${this.noun} when it appears — pairing alone does not grant access.`,
-    ]) {
-      steps.append(element('li', undefined, step))
+    if (!held) {
+      const steps = element('ol', 'steps')
+      for (const step of [
+        `Open ${BRAND.name} on the ${this.noun} and show the pairing code.`,
+        'Scan the QR code, or type the eight characters below.',
+        `Approve this browser on the ${this.noun} when it appears — pairing alone does not grant access.`,
+      ]) {
+        steps.append(element('li', undefined, step))
+      }
+      screen.append(steps)
     }
-    screen.append(steps)
 
-    // The camera route does not exist on a desktop browser, and this same
-    // client is meant to work from the Windows box on the tailnet.
-    const label = element('p', 'screen__lead', 'No camera? Paste the link or the code:')
     const input = element('input')
-    input.type = 'text'
-    input.placeholder = 'https://…/#t=…'
-    input.autocapitalize = 'off'
-    input.autocomplete = 'off'
-    input.spellcheck = false
-    input.className = 'button button--quiet'
-    input.style.textAlign = 'left'
+    if (!held) {
+      const label = element('p', 'screen__lead', 'Paste the link, or type the code:')
+      input.type = 'text'
+      input.placeholder = 'H4K9-2FQT'
+      input.autocapitalize = 'characters'
+      input.autocomplete = 'off'
+      input.spellcheck = false
+      input.className = 'button button--quiet'
+      input.style.textAlign = 'left'
+      screen.append(label, input)
+    }
 
-    const submit = element('button', 'button', 'Pair')
+    screen.append(this.rememberChoice())
+
+    const submit = element(
+      'button',
+      'button',
+      this.looking ? 'Looking…' : held ? 'Pair this browser' : 'Pair',
+    )
     submit.type = 'button'
+    submit.disabled = this.looking
     submit.addEventListener('click', () => {
-      const token = readPairInput(input.value)
-      if (token === null) {
-        this.state = {
-          phase: 'offline',
-          detail: 'That does not look like a pairing link.',
-          retryAt: null,
-          attempts: 0,
-        }
-        this.renderBanner()
+      // The held token goes straight through: it has already been read and
+      // taken out of the URL, and there is nothing for `readPairing` to parse.
+      if (held) {
+        const token = this.scanned as string
+        this.scanned = null
+        this.connect(token, DIRECT)
+        this.screen = 'sessions'
+        this.render()
         return
       }
-      this.connect(token)
+      void this.startPairing(input.value)
     })
+    screen.append(submit)
 
-    screen.append(label, input, submit)
     screen.append(
       element(
         'p',
         'note',
-        'The token is good for one minute and one use. It is kept in the page fragment, which browsers never send to a server.',
+        held
+          ? // A token off the fragment arrived in the address of a page the
+            // machine itself served, so there is no relay in this one and the
+            // sentence about one would be a fiction about the connection the
+            // reader is about to make.
+            'A code is good for one minute and one use. This one came from the ' +
+            `${this.noun} itself, so nothing sits between this browser and it.`
+          : 'A code is good for one minute and one use. Everything between this browser and the ' +
+            `${this.noun} is sealed end to end — the relay that carries it holds no key and cannot read a session.`,
       ),
     )
     return screen
+  }
+
+  /**
+   * "Is this browser yours?", asked once, before anything is written.
+   *
+   * ## Why this is on screen at all
+   *
+   * The iOS and Android clients never ask, and they are right not to: their
+   * credential is in the Keychain or the Keystore, on a device that belongs to
+   * the person holding it. This one has neither. What it has is storage any
+   * script on the origin can read, and a reason to exist that is *specifically*
+   * the computer somebody does not own — a work laptop, a machine in a lab, a
+   * friend's desktop. A pairing left behind on one of those is a live shell on
+   * the owner's machine, sitting in a browser profile, for whoever opens it next.
+   *
+   * There is no account to sign out of and there must not be. So the only place
+   * this can be decided is here, at the one moment the person and the computer
+   * are both present, and the honest thing to do is ask rather than guess.
+   *
+   * ## Why "just for this visit" is the default
+   *
+   * Because getting it wrong in that direction costs a re-pair, and getting it
+   * wrong in the other direction leaves a shell on a stranger's machine. The
+   * option that is right for the person's own laptop is one tap away and is
+   * spelled out beside it; the option that is safe on every machine is the one
+   * that happens if they read nothing at all.
+   *
+   * Radios rather than a checkbox because both answers get a sentence. A ticked
+   * or unticked box explains one state and leaves the reader to infer the other,
+   * and the design brief's bar is a screen somebody who has never seen it can
+   * read.
+   */
+  private rememberChoice(): HTMLElement {
+    const days = Math.round(REMEMBERED_TTL_MS / 86_400_000)
+    const group = element('fieldset', 'remember')
+    group.append(element('legend', 'remember__legend', 'Is this browser yours?'))
+
+    const options: Array<{ value: Remember; title: string; note: string }> = [
+      {
+        value: 'this-tab',
+        title: 'Just for this visit',
+        note: 'The pairing is gone the moment you close this tab. Use this on a computer that is not yours.',
+      },
+      {
+        value: 'this-browser',
+        title: 'Remember this browser',
+        note: `Stays paired in this browser until you unpair it, or ${days} days pass without using it. Anyone who uses this browser can open your sessions.`,
+      },
+    ]
+
+    for (const option of options) {
+      const row = element('label', 'remember__option')
+      const radio = element('input')
+      radio.type = 'radio'
+      radio.name = 'terminaldeck-remember'
+      radio.value = option.value
+      radio.checked = this.remember === option.value
+      radio.addEventListener('change', () => {
+        this.remember = option.value
+      })
+
+      const text = element('span', 'remember__text')
+      text.append(
+        element('span', 'remember__title', option.title),
+        element('span', 'remember__note', option.note),
+      )
+      row.append(radio, text)
+      group.append(row)
+    }
+    return group
+  }
+
+  /**
+   * Turn what somebody typed into a connection, or say why not.
+   *
+   * The two link shapes are immediate: they carry an address, so there is
+   * nothing to look up and the connection starts on the next line. A code is
+   * not, and the wait is the whole reason this function is asynchronous — a
+   * memory-hard derivation and a round trip to the relay take about a second
+   * between them, which is a second with nothing on screen unless the button
+   * says so.
+   *
+   * ## Why a code that is not found still tries the direct route
+   *
+   * Because it used to be the only route. Every pairing token this desktop mints
+   * is now a short code, so the eight characters somebody types into a browser
+   * served *by the machine itself* — the tailnet page, no camera, the case this
+   * field was built for — are a legitimate direct token as well as a possible
+   * rendezvous. Trying the relay first and the origin second means the new route
+   * is the default and the old one keeps working, which is the order the product
+   * wants; doing it the other way round would send every code to whatever
+   * happens to be serving this page.
+   *
+   * It is two attempts and one sentence. The fallback is invisible unless it
+   * works, and if neither reaches anything the banner is the connection's own
+   * account of the second attempt rather than a summary written here.
+   */
+  private async startPairing(typed: string): Promise<void> {
+    if (this.looking) return
+    const input = readPairing(typed)
+    if (input === null) {
+      this.pairNotice('That is not a pairing link or a code. A code is eight characters, like H4K9-2FQT.')
+      return
+    }
+
+    if (input.kind === 'relay') {
+      this.connect(input.token, input.endpoint)
+      return
+    }
+    if (input.kind === 'direct') {
+      this.connect(input.token, DIRECT)
+      return
+    }
+
+    this.looking = true
+    this.pairNotice('Looking for that machine…')
+    this.renderContent()
+    let found: Awaited<ReturnType<typeof lookupMachine>> = null
+    try {
+      found = await lookupMachine({ code: input.code })
+    } catch {
+      // `lookupMachine` answers null for every ordinary failure, so reaching
+      // here means the derivation itself could not run — a browser with no
+      // `crypto.getRandomValues`, essentially. Caught rather than left to become
+      // an unhandled rejection, because the only visible effect of one of those
+      // is a button that stops saying "Looking…" and nothing else happening.
+      this.looking = false
+      this.renderContent()
+      this.pairNotice('This browser could not run the pairing crypto, so nothing was sent.')
+      return
+    } finally {
+      this.looking = false
+    }
+    this.renderContent()
+    // The code is the pairing token as well as the address, which is the whole
+    // shape of this scheme: `device-auth.ts` hashes what was typed and never
+    // learns where it was looked up.
+    this.connect(input.code, found ?? DIRECT)
+  }
+
+  /** One sentence on the pair screen, in the banner that is already there. */
+  private pairNotice(detail: string): void {
+    this.state = { phase: 'offline', detail, retryAt: null, attempts: 0 }
+    this.renderBanner()
   }
 
   private sessionsScreen(): HTMLElement {
@@ -638,6 +1007,9 @@ class Deck {
     }
     screen.append(list)
 
+    const lifetime = this.lifetimeBlock()
+    if (lifetime !== null) screen.append(lifetime)
+
     const forget = element('button', 'button button--quiet', `Forget this ${this.noun}`)
     forget.type = 'button'
     forget.style.margin = '20px 16px'
@@ -645,6 +1017,58 @@ class Deck {
     forget.addEventListener('click', () => this.forget())
     screen.append(forget)
     return screen
+  }
+
+  /**
+   * What this browser is holding and for how long, plus the one press that
+   * changes it.
+   *
+   * The question on the pair screen is answered once, in a hurry, by somebody
+   * who is mid-task and standing at a second computer. Leaving it there would
+   * make it a decision with no way back: a person who ticked "remember" on a
+   * machine they later realised was not theirs would have to unpair and repair,
+   * from the desktop, to undo it — and someone who chose "just for this visit"
+   * on their own laptop would re-pair every morning without ever finding out
+   * why.
+   *
+   * So it is stated where the pairing is, in the sentence that says what it
+   * means rather than the name of a setting, and the button is the *action*
+   * rather than a toggle: nobody has to work out which way a switch is pointing.
+   * Nothing here is a second copy of the state — both halves read `remember`,
+   * which is what `loadPairing` found in whichever store answered.
+   */
+  private lifetimeBlock(): HTMLElement | null {
+    if (this.credential === null) return null
+    const days = Math.round(REMEMBERED_TTL_MS / 86_400_000)
+    const remembered = this.remember === 'this-browser'
+
+    const block = element('section', 'lifetime')
+    block.append(
+      element(
+        'p',
+        'lifetime__note',
+        remembered
+          ? `This browser stays paired until you unpair it, or ${days} days pass without using it.`
+          : 'This pairing ends when you close this tab. Nothing is left on this computer.',
+      ),
+    )
+
+    const change = element(
+      'button',
+      'button button--quiet',
+      remembered ? 'Stop remembering this browser' : 'Remember this browser',
+    )
+    change.type = 'button'
+    change.addEventListener('click', () => {
+      this.remember = remembered ? 'this-tab' : 'this-browser'
+      // Moves the credential *and* this browser's key into the other store and
+      // clears the one they came from — `savePairing` is the only thing that
+      // touches either, precisely so the two cannot end up in different places.
+      this.keep()
+      this.renderContent()
+    })
+    block.append(change)
+    return block
   }
 
   /**
@@ -881,8 +1305,16 @@ class Deck {
   }
 
   private forget(): void {
-    clearCredential(window.localStorage)
+    clearPairing(this.stores)
     this.credential = null
+    // Back to the safe answer. The next pairing on this browser asks again, and
+    // it must not inherit "remember" from a machine this person has just said is
+    // not theirs any more.
+    this.remember = 'this-tab'
+    // The route goes with the machine. Keeping a relay endpoint after the user
+    // has said "that is not my machine any more" would put its host id under the
+    // title on the pair screen.
+    this.endpoint = DIRECT
     // Deliberately reset here and deliberately *not* reset on a refusal. This
     // is the user saying "that is not my machine any more", so the next pair
     // screen must not still be naming it; a refused credential, by contrast, is

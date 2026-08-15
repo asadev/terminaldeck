@@ -108,10 +108,22 @@ describe('what the person is told', () => {
     expect(credentialHeadline(notice, 'The Mac')).toContain('sign in to')
   })
 
-  it('explains the deployment rather than blaming the browser, and names both routes out', () => {
-    // The sentence the desktop cannot write, because it does not know what kind
-    // of client answered. It has to say the true thing and no more.
-    expect(CREDENTIAL_EXPLANATION).toContain('served by that machine')
+  it('gives a reason that is true on every route, and names both ways out', () => {
+    /*
+     * The sentence the desktop cannot write, because it does not know what kind
+     * of client answered. It has to say the true thing and no more — and the
+     * true thing changed.
+     *
+     * It used to explain the *deployment*: "this page is served by that machine,
+     * so a token kept here would be a token it could read." That held while a
+     * tailnet address was the only way this client existed. Once it learned to
+     * dial the relay the page can come from anywhere, and a refusal explained by
+     * a fact the reader can check to be false is worse than one with no reason
+     * at all. What holds everywhere is the browser: no keychain, and storage on
+     * a computer that may not be theirs.
+     */
+    expect(CREDENTIAL_EXPLANATION).toContain('no keychain')
+    expect(CREDENTIAL_EXPLANATION).not.toContain('served by that machine')
     expect(CREDENTIAL_EXPLANATION).toContain('app on a phone')
     expect(CREDENTIAL_EXPLANATION).toContain('fine-grained token')
   })

@@ -453,6 +453,102 @@ describe('being turned away', () => {
   })
 })
 
+/*
+ * A revoked device and an unapproved one are refused identically, on purpose:
+ * `authenticatorFor` in `src/main/remote/server.ts` collapses `pending`,
+ * `revoked` and "wrong key" into one answer, because telling a remote caller
+ * which one it hit is a free oracle. So this client cannot tell them apart, and
+ * "keep polling until approved" was therefore also "keep polling forever after
+ * being thrown out" — which is precisely the state a browser pairing left on
+ * somebody else's laptop ends up in the moment its owner revokes it.
+ */
+describe('being refused for an hour', () => {
+  const REFUSED: ServerMessage = {
+    t: 'error',
+    code: 'unauthorized',
+    message: 'Approve this device on the Mac.',
+  }
+
+  /**
+   * Refused, reconnect, refused, for as long as it takes — or until it gives up.
+   *
+   * Stepped to each scheduled retry rather than advanced in fixed lumps, so no
+   * handshake timeout fires in the gaps and every iteration is one round of the
+   * poll this is measuring.
+   */
+  function knock(test: Rig, ms: number): void {
+    const deadline = test.now() + ms
+    test.last().onopen?.()
+    test.last().deliver(REFUSED)
+    while (test.now() < deadline) {
+      const retryAt = test.connection.current().retryAt
+      if (retryAt === null) return
+      test.advance(Math.max(1, retryAt - test.now()))
+      test.last().onopen?.()
+      test.last().deliver(REFUSED)
+    }
+  }
+
+  it('stops asking, rather than knocking at a door that is not going to open', () => {
+    const test = rig()
+    test.connection.start()
+    knock(test, 61 * 60_000)
+
+    const state = test.connection.current()
+    // Still `pending`, which is the phase the retry button stays visible in —
+    // this is a client that has stopped asking, not one that has been told no.
+    expect(state.phase).toBe('pending')
+    expect(state.retryAt).toBeNull()
+    expect(test.pending()).toBe(0)
+    // The machine's own sentence survives; what is added is the fact that this
+    // stopped, which nothing else on screen would say.
+    expect(state.detail).toContain('Approve this device on the Mac.')
+    expect(state.detail).toContain('stopped asking')
+  })
+
+  it('keeps asking for the first hour, because a person may be walking over', () => {
+    const test = rig()
+    test.connection.start()
+    knock(test, 30 * 60_000)
+    expect(test.connection.current().retryAt).not.toBeNull()
+    expect(test.connection.current().detail).toBe('Approve this device on the Mac.')
+  })
+
+  it('starts over when somebody says to try again', () => {
+    // `resume` is the retry button, the tab coming forward and the network
+    // returning. All three are somebody with better information than this
+    // client has, so all three buy a fresh hour rather than hitting a wall it
+    // cannot be talked past without a reload.
+    const test = rig()
+    test.connection.start()
+    knock(test, 61 * 60_000)
+    expect(test.connection.current().retryAt).toBeNull()
+
+    test.connection.resume()
+    test.last().onopen?.()
+    test.last().deliver(REFUSED)
+    expect(test.connection.current().retryAt).not.toBeNull()
+  })
+
+  it('forgets the clock the moment it gets in', () => {
+    const test = rig()
+    test.connection.start()
+    knock(test, 59 * 60_000)
+    test.advance(RECONNECT_BACKOFF.maxMs)
+    test.last().onopen?.()
+    test.last().greet()
+    expect(test.connection.current().phase).toBe('online')
+
+    // An hour of *later* trouble is a fresh hour. Without the reset, a browser
+    // that spent 59 minutes waiting for approval in the morning would give up
+    // one minute into an unrelated wait that evening.
+    test.last().drop()
+    test.advance(RECONNECT_BACKOFF.firstMs)
+    knock(test, 30 * 60_000)
+    expect(test.connection.current().retryAt).not.toBeNull()
+  })
+})
+
 describe('sending', () => {
   it('refuses rather than buffering while the connection is down', () => {
     // A keystroke queued now arrives after the reconnect, at a prompt that has

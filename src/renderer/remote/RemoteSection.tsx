@@ -3,7 +3,7 @@ import { Button, Explain, Group, Notice, Row, SectionHead, Switch } from '../set
 import { useAt, useEvery, useWhenActive } from '../schedule'
 import { errorText } from '../settings/settings-bridge'
 import { chooseRoute, pairingPaths, pairingRoutes, type PairPath } from './pairing-link'
-import { detectPlatform, machineNoun, thisMachine, ThisMachine, type UiPlatform } from '../platform'
+import { detectPlatform, machineNoun, thisMachine, type UiPlatform } from '../platform'
 import { encodeQr, qrPath, qrViewBox, QR_QUIET_ZONE } from './qr'
 import { DeviceFolders, type FolderDevice } from './DeviceFolders'
 import './RemoteSection.css'
@@ -28,21 +28,30 @@ import './RemoteSection.css'
  *
  * ## The switch says "is", not "should be"
  *
- * `remote:start` can succeed at being asked and fail at running — no Tailscale,
- * logged out, no certificate. So the switch is bound to whether the server is
- * *running*, and a start that did not take leaves the switch off with the main
- * process's own sentence underneath it. A switch that stayed on next to a dead
- * server would be the one lie this screen cannot afford.
+ * `remote:start` can succeed at being asked and fail at running — a port in
+ * use, a relay that will not answer. So the switch is bound to whether the
+ * server is *running*, and a start that did not take leaves the switch off with
+ * the main process's own sentence underneath it. A switch that stayed on next to
+ * a dead server would be the one lie this screen cannot afford.
  *
- * ## Two ways in, and they are drawn as two
+ * ## The relay is the network. The direct path is an optimisation.
  *
- * A phone reaches this machine either straight across the tailnet or through a
- * rendezvous relay, and the two fail independently. So they are two rows with
- * two states rather than one "remote access is up" light: a Mac that is signed
- * out of Tailscale still pairs and still works, and a panel that printed the
- * tailnet's complaint as *the* reason would tell that user their working feature
- * is broken. `directReason` exists in the status for exactly this, kept apart
- * from `reason`, and this file keeps them apart on screen.
+ * A phone reaches this machine through a rendezvous relay this machine dials
+ * out to — no install, no account, works from a hotel wifi. That is the product's
+ * network and it is what this panel leads with.
+ *
+ * There is a second, faster route for the small number of people who already run
+ * a mesh VPN: one hop, no third party. It is drawn **only when it genuinely
+ * exists on this machine**, and its absence is reported nowhere. That is not
+ * politeness, it is the correction of a real defect. The panel used to print the
+ * VPN's own complaint — "Tailscale is installed but this Mac is logged out of
+ * the tailnet" — under a connected relay, beside a working phone. Asad, on
+ * finding it: *"a lot of users will not even know about Tailscale."* To a reader
+ * who has never heard of it that sentence is a fault in *this* product, and it
+ * sends someone to fix a machine that is not broken.
+ *
+ * So `directReason` is not part of this panel's world. It is in the main
+ * process's status and it is deliberately not read here — see `toRemoteState`.
  *
  * The corollary is the one thing this panel must never do: draw the relay as
  * connected when `relay.connected` is false. A code handed out for a path that
@@ -52,10 +61,8 @@ import './RemoteSection.css'
  * ## No spinner that never resolves
  *
  * Every "not working" case here is a sentence, quoted verbatim from the main
- * process, which is the only thing that knows what the tailnet is doing. Those
- * sentences are written to be actionable — `tailnet.ts` keeps them in one table
- * so that "every reason says what to do" is a property its own tests check — so
- * this panel prints them and adds nothing of its own.
+ * process, which is the only thing that knows why. Those sentences are written
+ * to be actionable, so this panel prints them and adds nothing of its own.
  *
  * ## Why the rendering is split from the fetching
  *
@@ -168,8 +175,8 @@ export interface RemoteDevice {
    * The device's own key, in the short form a person compares with the phone.
    *
    * Null for a device that paired before there were keys, and that is not
-   * cosmetic: no key means no sealed channel, so that device can only ever come
-   * in across the tailnet. It is said on the row rather than discovered the
+   * cosmetic: no key means no sealed channel, so that device cannot come in
+   * through the relay at all. It is said on the row rather than discovered the
    * first time it fails from a coffee shop.
    */
   fingerprint: string | null
@@ -249,22 +256,15 @@ export interface RemoteState {
   running: boolean
   /**
    * The address for the *direct* path. Null when there is no direct path, which
-   * is the ordinary state of a Mac that is reachable only through the relay —
-   * not an error, and not a reason to refuse to pair.
+   * is the ordinary state of nearly every machine — not an error, not a
+   * degraded mode, and not a reason to refuse to pair. Most people will never
+   * see a value here and must never learn that the field exists.
    */
   url: string | null
-  /** The tailnet address, which is the thing that still works when MagicDNS does not. */
+  /** The raw address behind it, which is what still works when MagicDNS does not. */
   address: string | null
   /** Why nothing at all is running, in the main process's words. Null when it is. */
   reason: string | null
-  /**
-   * Why the *direct* path is not up, while something else may well be.
-   *
-   * Deliberately not merged into `reason`: with the relay carrying the session,
-   * "this Mac is signed out of Tailscale" is a note about a faster route, not a
-   * failure, and printing it as one teaches people to ignore it.
-   */
-  directReason: string | null
   relay: RemoteRelay | null
   devices: RemoteDevice[]
   connections: RemoteConnection[]
@@ -441,7 +441,15 @@ export function toRemoteState(status: unknown, deviceList: unknown): RemoteState
     url: asText(record.url),
     address: asText(record.address),
     reason: asText(record.reason),
-    directReason: asText(record.directReason),
+    // `record.directReason` is in the answer and is deliberately dropped here.
+    // It is the main process's account of why the *optional* direct route is
+    // not up — "Tailscale is installed but this Mac is logged out of the
+    // tailnet" — and there is no state of this panel in which showing it is
+    // right. With the relay carrying the session it reports a fault in a working
+    // feature; with the relay down it invites somebody who has never installed a
+    // mesh VPN to go and install one instead of reading the relay's own sentence
+    // two lines below. Narrowing it into `RemoteState` would leave a field on
+    // this side that nothing may draw, which is how it would creep back.
     relay: toRemoteRelay(record.relay),
     devices,
     connections: toRemoteConnections(record.connections, devices),
@@ -478,7 +486,18 @@ export function retryNote(retryAt: number | null, now: number): string | null {
   return `Trying again in ${minutes} minute${minutes === 1 ? '' : 's'}.`
 }
 
-/** "just now", "5 minutes ago", "12 Aug" — enough to tell a stale device from a live one. */
+/**
+ * "just now", "5 minutes ago", "3 days ago", "12 Aug" — enough to tell a stale
+ * device from a live one.
+ *
+ * The days step was added for the device list rather than for this function.
+ * "paired 12 Aug" is a date a reader has to subtract today from before it means
+ * anything, and the question being asked of that row is *how long has this thing
+ * been able to get in* — which matters most for the pairing somebody left in a
+ * browser on a computer they do not own. "paired 3 days ago" answers it without
+ * arithmetic. Past a month the elapsed count stops being easier than the date
+ * ("paired 74 days ago"), so the date comes back.
+ */
 export function whenSeen(at: number | null, now: number): string {
   if (at === null) return 'never'
   const minutes = Math.round((now - at) / 60_000)
@@ -486,6 +505,8 @@ export function whenSeen(at: number | null, now: number): string {
   if (minutes < 60) return `${minutes} minute${minutes === 1 ? '' : 's'} ago`
   const hours = Math.round(minutes / 60)
   if (hours < 24) return `${hours} hour${hours === 1 ? '' : 's'} ago`
+  const days = Math.round(hours / 24)
+  if (days <= 30) return `${days} day${days === 1 ? '' : 's'} ago`
   return new Date(at).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
 }
 
@@ -568,12 +589,24 @@ function nextRoundStep(since: number, now: number, step: number): number {
   return since + Math.round((Math.floor((now - since) / step + 0.5) + 0.5) * step)
 }
 
-/** When {@link whenSeen} would print something else, or null once it is a date. */
+/**
+ * When {@link whenSeen} would print something else, or null once it is a date.
+ *
+ * Three steps now rather than two, because the label counts days as well as
+ * hours. A daily wake-up for a settings panel somebody left open is nothing —
+ * and without it a window open across a weekend would keep saying "paired 1 day
+ * ago" about a pairing that is three days old, on the one row whose whole job is
+ * to tell you how long something has been able to get in.
+ *
+ * Null past the point the label becomes a fixed date, which is the only reason
+ * this may ever stop: a returning null while the text still moves is a label
+ * frozen with nothing to unfreeze it.
+ */
 function nextWhenSeenStep(at: number | null, now: number): number | null {
   if (at === null) return null
   const elapsed = now - at
-  if (elapsed >= DAY) return null
-  return nextRoundStep(at, now, elapsed >= HOUR ? HOUR : MINUTE)
+  if (elapsed >= 31 * DAY) return null
+  return nextRoundStep(at, now, elapsed >= DAY ? DAY : elapsed >= HOUR ? HOUR : MINUTE)
 }
 
 /**
@@ -875,11 +908,15 @@ export function RemoteView({
   // about the machine the reader is sitting at, so the noun has to be the one
   // they would use for it.
   const machine = thisMachine(platform)
-  const Machine = ThisMachine(platform)
   const head = (
     <SectionHead
       title="Remote access"
-      blurb={`Drive ${machine} from a phone — across your tailnet, or through the relay from anywhere.`}
+      // The relay, and only the relay. This used to read "…across your tailnet,
+      // or through the relay from anywhere", which put a product most readers
+      // have never installed in the first sentence of the section — and named it
+      // first, as though it were the main way in. It is the optional faster one
+      // and it has its own row further down, on the machines that have it.
+      blurb={`Drive ${machine} from a phone, from any network. Nothing to install and no account.`}
     />
   )
 
@@ -956,10 +993,12 @@ export function RemoteView({
         <Explain title="What you are turning on">
           What is on the other side of this switch is a <strong>shell</strong>. A device you approve
           can type into any session running here — your files, your keys, your git remotes — exactly
-          as if it were sitting at this keyboard. Nothing is published to the internet: on your
-          tailnet the traffic never leaves your own network, and through the relay it is sealed end
-          to end, so the service in the middle routes bytes it holds no key for. Neither path lets
-          anything in on its own — a code you mint here and an approval you give here do.
+          as if it were sitting at this keyboard. Nothing is published to the internet: everything
+          is sealed end to end, so the relay that carries it routes bytes it holds no key for
+          {direct === null ? '' : ', and on the direct route below nothing carries it at all'}.
+          {' '}
+          That seal lets nothing in on its own — a code you mint here and an approval you give here
+          do.
         </Explain>
 
         {state === null && problem === null && (
@@ -1017,30 +1056,20 @@ export function RemoteView({
       {running && (
         <Group title="How a phone gets here">
           <ul className="remote-paths">
-            <PathRow
-              name="Direct on your tailnet"
-              tone={direct === null ? 'off' : 'ok'}
-              pill={direct === null ? 'Unavailable' : 'Ready'}
-              blurb="One hop over WireGuard with nothing in the middle. Both devices have to be on the same tailnet."
-            >
-              {direct === null ? (
-                <p className="remote-path-note">
-                  {/* Verbatim, and separate from `reason`: this is why the
-                      faster route is missing, not why remote access is down. */}
-                  {state?.directReason ??
-                    `${Machine} is not serving a tailnet address, and did not say why.`}{' '}
-                  {relayLive
-                    ? 'Remote access is still up — everything below is going through the relay.'
-                    : ''}
-                </p>
-              ) : (
-                <>
-                  <Fact label="Address" value={direct} />
-                  {state?.address && <Fact label="Tailnet IP" value={state.address} />}
-                </>
-              )}
-            </PathRow>
+            {/*
+              The relay first, because for nearly everybody it is the only row
+              here — and because it is what actually carries the session.
 
+              This list used to open with the direct route, permanently, in every
+              state. On a machine with no mesh VPN that meant the first thing
+              under "How a phone gets here" was a route that did not exist,
+              wearing a grey "Unavailable" pill and quoting Tailscale's own
+              complaint underneath it. Everything was working. The relay two rows
+              down was carrying the phone while the panel led with what read as a
+              failure, in the vocabulary of a product the reader had never
+              installed. Ordering is an argument about what matters, and that
+              order made the argument backwards.
+            */}
             <PathRow
               name="Through the relay"
               tone={relay === null ? 'off' : relayLive ? 'ok' : 'down'}
@@ -1052,9 +1081,15 @@ export function RemoteView({
                   {/* `relaying` is only false here when no relay was built at
                       all, which `relayEnabled` decides from the environment or
                       from how the app was assembled. Naming both is honest;
-                      naming one would be a guess. */}
-                  This build is not dialling a relay, so the tailnet is the only way in — either
-                  TERMINALDECK_RELAY is off, or it was assembled without one.
+                      naming one would be a guess.
+
+                      A build with no relay and no direct address never reaches
+                      this row: `createRemoteServer` fails the start outright, so
+                      the panel is showing "Not serving" instead. That is what
+                      lets the sentence below point at the row underneath and be
+                      sure it is there. */}
+                  This build is not dialling a relay — either TERMINALDECK_RELAY is off, or it was
+                  assembled without one. The direct route below is the only way in.
                 </p>
               ) : relayLive ? (
                 <>
@@ -1078,6 +1113,30 @@ export function RemoteView({
                 </p>
               )}
             </PathRow>
+
+            {/*
+              The direct route, drawn only when there is one.
+
+              There is no "off" or "unavailable" state for this row, and that is
+              the whole point: a route that does not exist on this machine is not
+              a route that is down. Rendering it grey with a reason attached is
+              how a panel comes to report the absence of an optimisation nobody
+              asked for as a fault in the product — see this file's header.
+
+              Nothing here has to explain what a tailnet is, because the only
+              people who ever see this row are running one.
+            */}
+            {direct !== null && (
+              <PathRow
+                name="Direct on your tailnet"
+                tone="ok"
+                pill="Ready"
+                blurb={`One hop over WireGuard with nothing in the middle — no relay involved. A phone can use it only from the same tailnet as ${machine}.`}
+              >
+                <Fact label="Address" value={direct} />
+                {state?.address && <Fact label="Tailnet IP" value={state.address} />}
+              </PathRow>
+            )}
           </ul>
         </Group>
       )}
@@ -1097,9 +1156,14 @@ export function RemoteView({
               {!canPair && (
                 // The button is dead on purpose, and a dead button with no
                 // sentence beside it is the panel refusing to say why.
+                //
+                // It no longer says "neither way in is up". On a machine with no
+                // direct route there is only ever one row above this, and
+                // "neither" told the reader to go looking for a second one that
+                // was never drawn.
                 <Notice tone="warn">
-                  Neither way in is up, so a code would point at nothing. The two rows above say
-                  what is wrong with each; fix one and this will mint.
+                  Nothing above is up, so a code would point at nothing. The rows above say what is
+                  wrong; fix that and this will mint.
                 </Notice>
               )}
             </>
@@ -1309,7 +1373,8 @@ export function RemoteView({
                         // all — said here rather than discovered the first time
                         // it is tried from a hotel.
                         <span className="remote-row-note">
-                          No key stored — tailnet only, and it cannot use the relay.
+                          No key stored — this one paired before there were keys, so it cannot come
+                          in through the relay. Pair it again to fix that.
                         </span>
                       ) : (
                         <span className="remote-row-note">

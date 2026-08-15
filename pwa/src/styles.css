@@ -328,6 +328,117 @@ button {
   font-size: 13px;
 }
 
+/* The pairing field.
+
+   It borrows `.button--quiet` for its fill, and used to keep the browser's own
+   2px inset border on top of that — a hard light rectangle in a screen where
+   every other surface is a borderless fill, and the only outlined thing on the
+   pair screen. Depth here comes from layering, so the border goes and the focus
+   ring is the accent, which is also the state a field with no border needs in
+   order to still answer a keyboard. */
+input[type='text'] {
+  border: none;
+  outline: none;
+}
+
+input[type='text']:focus-visible {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+/* The same question, restated after pairing, where the answer can be changed.
+   The session list is edge-to-edge, so this carries its own gutter — the same
+   arrangement `.start` uses above it. */
+.lifetime {
+  margin: 20px 16px 0;
+}
+
+.lifetime__note {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.lifetime .button {
+  width: auto;
+}
+
+/* ------------------------------------------------------- remember this? -- */
+
+/* The one question this client asks that the phone clients do not: whether the
+   pairing about to be minted should outlive the tab. See `rememberChoice` in
+   main.ts for why it exists at all.
+
+   Drawn as two rows of equal weight, not as an option with a default styled to
+   look preferable. Both answers are correct on some computer, the reader is the
+   only one who knows which computer this is, and a screen that visually
+   recommends one of them is a screen that gets tapped through.
+
+   No box around the group. Space separates it from the field above, which is the
+   house rule — the rows themselves are filled because each is a tap target and a
+   tap target has to look like a surface. */
+.remember {
+  /* Space, not a rule, and enough of it that the question reads as its own
+     step rather than as a caption hanging off the field above. */
+  margin: 22px 0 0;
+  padding: 0;
+  border: none;
+}
+
+.remember__legend {
+  padding: 0;
+  margin-bottom: 10px;
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+.remember__option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 8px;
+  padding: 12px;
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  /* The whole row is the label, so the whole row is the target. A radio on a
+     phone is a 13px circle, and a person aiming at one of those on a screen
+     they are holding one-handed misses. */
+  cursor: pointer;
+}
+
+.remember__option:active {
+  background: var(--bg-tertiary);
+}
+
+.remember__option input {
+  /* Aligned to the title's cap height rather than to the row, so it sits with
+     the first line of text instead of floating above two lines of it. */
+  margin-top: 2px;
+  accent-color: var(--accent);
+  flex-shrink: 0;
+}
+
+.remember__text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+/* Brighter title, dimmer description, space between — the treatment the design
+   brief asks for wherever an option needs a paragraph to explain itself. */
+.remember__title {
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.remember__note {
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
 .button {
   display: block;
   width: 100%;

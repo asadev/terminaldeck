@@ -32,7 +32,6 @@ function state(over: Partial<RemoteState> = {}): RemoteState {
     url: 'https://mac.tail.ts.net:7420',
     address: '100.64.0.1',
     reason: null,
-    directReason: null,
     relay: null,
     devices: [],
     connections: [],
@@ -86,10 +85,21 @@ describe('nextClockChange', () => {
     expect(nextClockChange(state(), null, NOW)).toBeNull()
   })
 
-  it('asks for no timer for a device last seen over a day ago', () => {
-    // Past a day `whenSeen` prints a date, and a date does not move.
+  it('keeps a daily timer while the label still counts days', () => {
+    // "paired 3 days ago" moves once a day, so it gets one wake-up a day. A
+    // window left open over a weekend used to freeze that label at "1 day ago"
+    // on the row whose whole job is saying how long something has had a way in.
     const old = state({ devices: [device({ lastSeenAt: NOW - 40 * 3_600_000 })] })
-    expect(nextClockChange(old, null, NOW)).toBeNull()
+    const at = nextClockChange(old, null, NOW)
+    if (at === null) throw new Error('a day-counting label has to tick')
+    expect(at).toBeGreaterThan(NOW)
+    expect(at - NOW).toBeLessThanOrEqual(86_400_000)
+  })
+
+  it('asks for no timer once the label has become a fixed date', () => {
+    // Past a month `whenSeen` prints a date, and a date does not move.
+    const ancient = state({ devices: [device({ lastSeenAt: NOW - 60 * 86_400_000 })] })
+    expect(nextClockChange(ancient, null, NOW)).toBeNull()
   })
 
   it('lands on the second the pairing countdown changes', () => {

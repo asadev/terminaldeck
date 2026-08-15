@@ -249,8 +249,9 @@ export function renderPairCode(
     )
   } else {
     lines.push(
-      '  This host is not on the relay, so nothing can look the code up. It is usable',
-      '  only over a tailnet, from a client that already knows this machine’s address.',
+      '  This host is not on the relay, so nothing can look the code up. It will only',
+      '  work from a client that already knows this machine’s address — see Relay in',
+      `  "${BRAND.id} status" for why the relay is not up.`,
       '',
     )
   }
@@ -270,7 +271,11 @@ export function renderNewDevice(device: Device): string {
   return [
     '',
     `  New device     ${device.name}`,
-    `  Fingerprint    ${device.fingerprint ?? '(none — this device can only be reached over a tailnet)'}`,
+    // No key means no sealed channel, which means this device cannot come in
+    // through the relay — said as the fact it is rather than as the name of the
+    // one transport left, which used to read "can only be reached over a
+    // tailnet" to people who have never installed one.
+    `  Fingerprint    ${device.fingerprint ?? '(none — paired before there were keys, so it cannot use the relay)'}`,
     '',
     '  Check that fingerprint against the one the device is showing.',
     '',
@@ -321,7 +326,11 @@ export function renderStatus(status: HostStatus, now: number): string {
 
   out.push('Relay')
   if (relay === null) {
-    out.push('  off — this host is reachable only over a tailnet.')
+    // Not "reachable only over a tailnet", which named a product this build has
+    // no opinion about and which most readers do not have. What is true is that
+    // nothing is dialling out, so the only way in is an address a client can
+    // already open — and the Direct block below prints one if there is one.
+    out.push('  off — this host is not dialling out, so only a direct address can reach it.')
   } else if (relay.connected) {
     out.push(`  connected      ${relay.url}`)
     out.push(`  host id        ${relay.hostId}`)
@@ -333,10 +342,39 @@ export function renderStatus(status: HostStatus, now: number): string {
   }
   out.push('')
 
-  out.push('Direct')
-  if (remote.url !== null) out.push(`  ${remote.url}`)
-  else out.push(`  none — ${remote.directReason ?? 'no tailnet on this machine.'}`)
-  out.push('')
+  /*
+   * The direct route, printed only when there is one. Its absence is reported
+   * nowhere, in any state.
+   *
+   * This block used to print unconditionally, and what a person with no mesh
+   * VPN installed saw under a perfectly healthy relay was:
+   *
+   *     Direct
+   *       none — Tailscale refused the request. Serving may be disabled for
+   *              this tailnet in the admin console.
+   *
+   * Everything was working. Asad, on reading it: *"a lot of users will not even
+   * know about Tailscale."* That is the whole argument. The relay is this
+   * product's network — no install, no account, and it was carrying the session
+   * while those words were on screen. The direct route is an optional
+   * optimisation for the few people already running the VPN it needs; reporting
+   * the absence of one in the wording of a refusal reads as a fault in *this*
+   * program, sends somebody to an admin console to fix a machine that is not
+   * broken, and teaches the ones who read it properly to skip this section next
+   * time — including the time it matters.
+   *
+   * The intermediate fix printed the complaint only when the relay was down as
+   * well, on the theory that then it was half a diagnosis. It is not. A host
+   * whose relay is down has one problem and the Relay block above states it; the
+   * additional news that a product the reader has never installed is also not
+   * installed is not the other half of anything. `remote.directReason` is in the
+   * status and this file never reads it.
+   */
+  if (remote.url !== null) {
+    out.push('Direct')
+    out.push(`  ${remote.url}`)
+    out.push('')
+  }
 
   /*
    * Idle mode, printed in full.

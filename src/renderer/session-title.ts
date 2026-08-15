@@ -16,7 +16,7 @@
  * conversation itself. Verified against the real transcripts in
  * `~/.claude/projects` on this machine:
  *
- *   {"type":"custom-title","customTitle":"Tailscale infrastructure requirements",…}
+ *   {"type":"custom-title","customTitle":"Relay handshake requirements",…}
  *   {"type":"ai-title","aiTitle":"Build luxury car rental website with WebGL 3D experience",…}
  *   {"type":"last-prompt","lastPrompt":"does it requires a setup like…",…}
  *   {"type":"user","message":{"role":"user","content":"…"},"promptSource":"sdk",…}

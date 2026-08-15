@@ -16,11 +16,12 @@
  * one, which is a frame routed to a session that cannot exist and a bug nobody
  * would have traced back to a decoder.
  *
- * `parseServerMessage` is now the only TypeScript reader of an inbound frame in
- * this repository, so there is exactly one place where "what a host can say" is
+ * `parseServerFrame` is now the only TypeScript reader of an inbound frame in
+ * this repository — `parseServerMessage` is the same reader with the text still
+ * around it — so there is exactly one place where "what a host can say" is
  * written down, and one test suite that fails when it changes.
  *
- * The copy existed for a real reason and the reason has gone. `parseServerMessage`
+ * The copy existed for a real reason and the reason has gone. That parser
  * was added to `protocol.ts` only when a desktop learned to be the *guest* of
  * another desktop and the main process had to read a `welcome` for itself; before
  * that the only client-side reader in this language lived here. The note at the
@@ -38,9 +39,12 @@
  *
  * ## Two behaviours this delegation changes, both deliberately
  *
- * 1. An inbound frame larger than `MAX_MESSAGE_BYTES` is now refused, because
- *    `parseServerMessage` refuses it. Every other reader of this wire already
- *    applied that cap; the browser client was the one that did not.
+ * 1. An inbound frame larger than `MAX_MESSAGE_BYTES` is now refused, in the
+ *    shared wording, before anything decodes it. Every other reader of this
+ *    wire already applied that cap; the browser client was the one that did
+ *    not. `decodeServerMessage` holds it here rather than inheriting it from
+ *    the shared parser, because it is the half that still has the text: once a
+ *    frame is an object there is nothing left to measure.
  * 2. Refusal reasons are the desktop's wording now, and a couple of them are
  *    shorter — the old copy quoted the offending value back. Nothing reads a
  *    reason except a log line and one test, and quoting an unparsed value into a
@@ -64,7 +68,7 @@ import {
   MAX_INPUT_BYTES,
   MAX_MESSAGE_BYTES,
   PROTOCOL_VERSION,
-  parseServerMessage,
+  parseServerFrame,
   parseSession,
   type ClientMessage,
   type CredentialOperation,
@@ -146,27 +150,19 @@ export function decodeLastActivity(value: unknown): number | null {
 /**
  * The activity times riding along with a list frame, keyed by session id.
  *
- * Costs a second `JSON.parse` of text that has just been parsed inside
- * `parseServerMessage`, which is why the caller only reaches this for the two
- * frames that can carry a session list. `output` is the hot path — one frame per
- * 32 KiB of scrollback — and it never gets here.
+ * Takes the decoded frame rather than its text. It used to take the text and
+ * `JSON.parse` it a second time, and the note here defended that cost by
+ * pointing out how rarely it is reached; `decodeServerMessage` parses once now
+ * and hands the same value to everything, so there is no cost left to defend.
+ * The caller still asks only for `welcome` and `sessions`, because they are the
+ * only two frames that can carry a session list to read times off.
  *
  * Only rows that survived `parseSession` are keyed, because the caller stores
  * this map permanently: an entry for a row the parser threw away would be a
  * timestamp for a session that is on nobody's screen, kept until the tab is
  * closed.
  */
-function rowActivity(raw: string): ReadonlyMap<string, number> | null {
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(raw)
-  } catch {
-    // Unreachable: this exact text parsed a moment ago. It is caught rather
-    // than asserted away because an unreachable throw on a socket's data path
-    // is how a client ends up with a blank screen and no message, and "no
-    // activity times" is the right answer for text this function cannot read.
-    return null
-  }
+function rowActivity(parsed: unknown): ReadonlyMap<string, number> | null {
   if (typeof parsed !== 'object' || parsed === null) return null
   const rows = (parsed as { sessions?: unknown }).sessions
   if (!Array.isArray(rows)) return null
@@ -195,12 +191,12 @@ function overMessageCap(raw: string): boolean {
 }
 
 /**
- * `credential.request`, which `parseServerMessage` does not read.
+ * `credential.request`, which `parseServerFrame` does not read.
  *
  * ## Why there is a second reader here, when the whole point above is that there
  * is only one
  *
- * `parseServerMessage` was added to `protocol.ts` for a desktop acting as the
+ * The shared parser was added to `protocol.ts` for a desktop acting as the
  * **guest** of another desktop, and that guest speaks protocol v1 and nothing
  * else: it never advertises a capability, so it can never be sent a frame that
  * needs one, and its parser refuses unknown types on exactly that reasoning —
@@ -211,24 +207,19 @@ function overMessageCap(raw: string): boolean {
  * So this is not a second copy of the shared parser and must never become one.
  * It is one branch, for one frame the shared parser deliberately does not cover,
  * and everything else still falls through to it unchanged. The right home for it
- * is `parseServerMessage` itself, the day the guest also answers credential
+ * is `parseServerFrame` itself, the day the guest also answers credential
  * requests; moving it there deletes this function and changes nothing else.
+ *
+ * Takes the decoded frame, not the text. It used to take the text, check the cap
+ * and `JSON.parse` for itself, which meant every inbound frame — `output`
+ * included, one per 32 KiB of scrollback — was parsed twice: once to find out it
+ * was not a credential request, and once by the shared parser that then read it
+ * properly. The probe is a look at one field; it does not need a parse of its
+ * own.
  *
  * Null means "not that frame", not "bad frame" — the caller then delegates.
  */
-function credentialRequest(raw: string): DecodeResult | null {
-  // Over the cap is not this function's refusal to write. Returning null hands
-  // the frame to `parseServerMessage`, which refuses it in the shared wording
-  // every other reader of this wire uses — and, more to the point, means nothing
-  // here ever calls `JSON.parse` on a megabyte handed to it by whatever answered
-  // the socket.
-  if (overMessageCap(raw)) return null
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(raw)
-  } catch {
-    return null
-  }
+function credentialRequest(parsed: unknown): DecodeResult | null {
   if (typeof parsed !== 'object' || parsed === null) return null
   const frame = parsed as Record<string, unknown>
   if (frame.t !== 'credential.request') return null
@@ -260,17 +251,39 @@ function credentialRequest(raw: string): DecodeResult | null {
   }
 }
 
-/** The only door inbound text comes through, mirroring `parseClientMessage`. */
+/**
+ * The only door inbound text comes through, mirroring `parseClientMessage`.
+ *
+ * One parse, then branches. The three readers below all want the same decoded
+ * frame and used to take the text and decode it for themselves — the credential
+ * probe, the shared parser, and the activity-time reader — so a `welcome`
+ * arrived as three `JSON.parse` calls over identical bytes and every `output`
+ * frame as two. The refusals and their wording are unchanged: the cap is applied
+ * before anything is decoded, which is the property that stops a megabyte from a
+ * captive portal being parsed at all, and the sentences are still the shared
+ * ones every other reader of this wire uses.
+ */
 export function decodeServerMessage(raw: string): DecodeResult {
-  const credential = credentialRequest(raw)
+  // Before the parse, never after. Held here rather than inside the readers
+  // because there is nothing left to measure once text is an object, and a cap
+  // applied after decoding is a cap that has already been paid.
+  if (overMessageCap(raw)) return { ok: false, reason: 'larger than the message cap' }
+  let frame: unknown
+  try {
+    frame = JSON.parse(raw)
+  } catch {
+    // A captive portal answering with its own login page lands here, which is
+    // the case this whole function is defensive for.
+    return { ok: false, reason: 'not JSON' }
+  }
+
+  const credential = credentialRequest(frame)
   if (credential !== null) return credential
-  const parsed = parseServerMessage(raw)
+  const parsed = parseServerFrame(frame)
   if (!parsed.ok) return parsed
   const message = parsed.message
-  // Every other frame type is returned untouched, and returned without a second
-  // parse of its text.
   if (message.t !== 'welcome' && message.t !== 'sessions') return { ok: true, message }
-  const activity = rowActivity(raw)
+  const activity = rowActivity(frame)
   return activity === null ? { ok: true, message } : { ok: true, message, activity }
 }
 

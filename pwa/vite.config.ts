@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto'
 import { readFileSync, readdirSync } from 'node:fs'
+import { createRequire } from 'node:module'
+import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { defineConfig, type Plugin } from 'vite'
 
@@ -68,6 +70,120 @@ function shellAssets(): Plugin {
   }
 }
 
+/**
+ * `Buffer`, bound per module rather than dropped on `globalThis`.
+ *
+ * The shared crypto this client imports — `src/shared/sealed.ts` and
+ * `src/shared/relay-wire.ts` — writes `Buffer` as the global it is under Node.
+ * A browser has none, so one has to arrive from somewhere, and there are two
+ * ways to arrange that.
+ *
+ * The tempting one is a module that assigns `globalThis.Buffer` and is imported
+ * first from the entry point. It works, and it works because of ESM evaluation
+ * order — which means it keeps working only for as long as nobody adds an import
+ * above it, and `sealed.ts` builds two `Buffer.from` constants at module scope,
+ * so getting that wrong is a blank screen at load rather than a warning.
+ *
+ * So the import is injected into each module that mentions the name. Rollup
+ * binds it like any other import, order stops mattering, and nothing is added to
+ * the global scope of a page that did not ask for it. Modules that only mention
+ * `Buffer` in a comment get an unused import, which the bundler removes.
+ */
+/**
+ * The `Buffer` implementation, resolved from *this* directory and checked.
+ *
+ * A bare `import … from 'buffer'` looked obviously correct and was wrong. Module
+ * resolution starts at the importing file, and the importing files are
+ * `src/shared/sealed.ts` and `src/shared/relay-wire.ts` — which sit at the
+ * repository root, where `node_modules/buffer` is **5.7.1**, dragged in years
+ * ago by something else. That version has no `writeBigUInt64LE`, which is the
+ * one method the Noise nonce counter needs, and the symptom was a browser
+ * saying "that address cannot be opened from this page" about a perfectly good
+ * relay URL. `pwa/node_modules/buffer` is 6.0.3 and has it.
+ *
+ * So the path is resolved from here, and the module is then *asked* whether it
+ * can do the two things the crypto depends on. A build that would ship a Buffer
+ * missing either of them fails now, with a sentence, rather than at a handshake
+ * in somebody's browser. This is the same family of bug as the ChaCha that was
+ * not in Electron: the right code, and the wrong implementation underneath it.
+ */
+/*
+ * `'buffer/index.js'`, not `'buffer'`, and that detail is the bug twice over.
+ *
+ * `require.resolve('buffer')` answers `"buffer"` — Node reports the *builtin* by
+ * that name and never looks in `node_modules` at all. An alias built from it is
+ * therefore a no-op that maps `buffer` to `buffer`, and a check built from it
+ * imports Node's own Buffer and passes while the browser gets whatever the
+ * bundler found. Naming a file inside the package is what makes the resolver
+ * walk `node_modules` from here, which is the only place the right version is.
+ */
+const bufferModule = createRequire(import.meta.url).resolve('buffer/index.js')
+
+/**
+ * The crypto packages, resolved from *here* — the same bug as `buffer`, found
+ * the same way, one deploy later.
+ *
+ * `src/shared/sealed.ts` imports `@noble/ciphers/chacha.js`, and it sits at the
+ * repository root, so Node's resolver walks up from `src/shared/` and finds the
+ * **root** `node_modules`. On this Mac that directory is full — the desktop app
+ * lives there — so the build has always worked and always resolved a copy of the
+ * cipher that `pwa/package.json` does not name and `pwa/package-lock.json` does
+ * not pin.
+ *
+ * The first deploy of this client is what said so out loud. Vercel builds with
+ * the Root Directory set to `pwa`, runs `npm ci` there and nowhere else, and
+ * Rollup stopped with "failed to resolve import @noble/ciphers/chacha.js from
+ * src/shared/sealed.ts". Nothing was wrong with the code; the build had been
+ * leaning on a directory that only exists on a machine where somebody has also
+ * installed Electron.
+ *
+ * So each package is pinned to the copy in `pwa/`, which is the one the lockfile
+ * beside this file describes. The versions happen to match today — that is the
+ * point: two resolutions that agree by luck are the ones that part company
+ * silently, and this bundle is the sealed channel.
+ *
+ * Resolved through a **subpath that the package exports**, not through
+ * `package.json`. `@noble/*` ship an `exports` map that lists their modules and
+ * nothing else, so asking for `@noble/ciphers/package.json` throws
+ * ERR_PACKAGE_PATH_NOT_EXPORTED — the directory has to be reached by way of a
+ * file the package admits to having.
+ */
+const nobleDir = (subpath: string): string =>
+  dirname(createRequire(import.meta.url).resolve(subpath))
+
+function checkBuffer(): Plugin {
+  return {
+    name: 'terminaldeck-buffer-check',
+    async buildStart() {
+      const { Buffer: Shim } = (await import(bufferModule)) as { Buffer: typeof Buffer }
+      const nonce = Shim.alloc(12)
+      if (typeof nonce.writeBigUInt64LE !== 'function') {
+        this.error(
+          `the Buffer at ${bufferModule} has no writeBigUInt64LE, so the sealed channel's nonce ` +
+            'counter cannot be written — install buffer@^6 in pwa/',
+        )
+      }
+      if (Shim.from('/w', 'base64').length !== 1) {
+        this.error(`the Buffer at ${bufferModule} does not decode base64, which host keys arrive as`)
+      }
+    },
+  }
+}
+
+function bufferImport(): Plugin {
+  const source = /\.tsx?$/
+  return {
+    name: 'terminaldeck-buffer-import',
+    enforce: 'pre',
+    transform(code, id) {
+      if (id.includes('/node_modules/') || !source.test(id.split('?')[0])) return null
+      if (!/\bBuffer\b/.test(code)) return null
+      if (/^import .*from ['"]buffer['"]/m.test(code)) return null
+      return { code: `import { Buffer } from 'buffer'\n${code}`, map: null }
+    },
+  }
+}
+
 export default defineConfig({
   root: here('.'),
   // Root-absolute, not './'. The desktop serves this at the origin root, and a
@@ -75,11 +191,40 @@ export default defineConfig({
   // base would put the worker somewhere it cannot control the navigation.
   base: '/',
   publicDir: false,
-  plugins: [shellAssets()],
+  plugins: [checkBuffer(), bufferImport(), shellAssets()],
   resolve: {
-    // Only needed if the protocol module reaches for the app's shared types
-    // through the alias the desktop tsconfigs define. Harmless when it does not.
-    alias: { '@shared': here('../src/shared') },
+    alias: {
+      // Only needed if the protocol module reaches for the app's shared types
+      // through the alias the desktop tsconfigs define. Harmless when it does not.
+      '@shared': here('../src/shared'),
+      /*
+       * The sealed channel runs in the browser, so its primitives have to.
+       *
+       * `src/shared/sealed.ts` is the product's only implementation of the Noise
+       * IK handshake and this client imports it rather than writing a second
+       * one — the lesson of the ChaCha bug is that a second implementation
+       * agrees with itself and drifts from everything else. What a browser
+       * cannot provide is `node:crypto`, so `runtime/node-crypto.ts` provides
+       * exactly the five primitives that file asks for, and
+       * `pwa/tests/node-crypto.test.ts` proves under Node that they produce the
+       * same bytes as the ones they stand in for.
+       *
+       * The mapping is exact rather than a prefix: aliasing `node:*` wholesale
+       * would let a genuine mistake — an `import { readFile } from 'node:fs'`
+       * that never belonged in a browser — resolve to something instead of
+       * failing the build, which is the guard `"types": []` exists to be.
+       */
+      'node:crypto': here('src/runtime/node-crypto.ts'),
+      // Pinned to the copy in `pwa/`, for the reason above `checkBuffer`.
+      buffer: bufferModule,
+      // Likewise, for the reason above `nobleDir`. A string `find` is a prefix
+      // here, so `@noble/ciphers/chacha.js` lands on `<dir>/chacha.js` — which
+      // is where these packages keep their modules; the layout is flat and the
+      // exports map is an identity.
+      '@noble/ciphers': nobleDir('@noble/ciphers/chacha.js'),
+      '@noble/curves': nobleDir('@noble/curves/ed25519.js'),
+      '@noble/hashes': nobleDir('@noble/hashes/sha2.js'),
+    },
   },
   build: {
     outDir: 'dist',

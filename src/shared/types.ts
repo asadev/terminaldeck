@@ -27,6 +27,25 @@ export interface SessionMeta {
    * fresh run writes a new file, a continued one appends to an older one.
    */
   resumed?: boolean
+  /**
+   * The account this session actually runs as — the *resolved* profile, not the
+   * one that was asked for.
+   *
+   * Set by the main process at spawn, because that is the only place the answer
+   * exists: `profileId` on the request is frequently null, meaning "whatever
+   * this project's default is", and the resolution chain that turns that into a
+   * profile runs in `host-core.ts`. A window that recomputed it would be
+   * guessing, and would guess wrong for any session it did not start — one
+   * restored at launch, or one a phone asked for.
+   *
+   * Absent when no account applies: a plain shell has no login, and an agent
+   * whose config directory this app cannot redirect runs under whatever login
+   * the machine already has. Showing an account name against either would be a
+   * claim about isolation that is not true. See `supportsProfiles`.
+   */
+  profileId?: string
+  /** The account's name, so a list can show it without a second lookup. */
+  profileName?: string
 }
 
 export interface CreateSessionInput {

@@ -31,9 +31,14 @@
 
 /* ---------------------------------------------------------------- paths -- */
 
-/* The two ways in. Drawn as two rows rather than one verdict because they fail
-   independently: a Mac signed out of Tailscale is not a Mac that has lost
-   remote access, and one combined light would say it had. */
+/* The ways in. Usually one row — the relay — and two on the machines that also
+   have a direct route.
+
+   A list rather than one combined verdict because the two fail independently,
+   and because the second row is drawn only when it exists: a route this machine
+   does not have is not a route that is down, and a permanent grey row saying so
+   is how this panel came to report the absence of an optional faster path as a
+   fault in the product. See RemoteSection.tsx. */
 
 .remote-paths {
   list-style: none;
@@ -170,11 +175,12 @@
    grey, which is what turns a code that reads at arm's length into one that
    needs three tries.
 
-   260px is not decoration, and it grew when the relay arrived. A tailnet link is
+   260px is not decoration, and it grew when the relay arrived. A direct link is
    about ninety bytes and draws a 41×41 symbol; a relay link carries a host id, a
    32-byte key and the token as well, which measures 181 bytes and draws a 57×57
    one — 65 modules across with the quiet zone. At 260px that is four screen
-   pixels per module, which is what the old size gave the smaller code.
+   pixels per module, which is what the old size gave the smaller code. The relay
+   link is the one nearly every scan will be of, so it is the one sized for.
 
    A soft shadow rather than a hairline: on paper the white plate needs an edge,
    and depth is how the rest of this app draws one. */
