@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import { homedir } from 'node:os'
-import { isAbsolute, resolve } from 'node:path'
+import { isAbsolute, normalize } from 'node:path'
 import { promisify } from 'node:util'
 import { currentPlatform, withPath } from './platform/host'
 import { loginPath, PROVIDERS } from './providers'
@@ -150,9 +150,21 @@ export function resolveRequest(raw: unknown): McpAddRequest {
     }
   }
 
+  /*
+   * `normalize`, not `resolve`, and the difference is only visible on Windows.
+   *
+   * The value has already passed `isAbsolute`, so there is no relative path left
+   * to resolve — the two functions agree on everything except one thing:
+   * `resolve` resolves against the *current working directory*, which on Windows
+   * means it attaches the drive of wherever this process happens to be. A
+   * caller's `/work/app` came back as `D:\work\app`, and the Windows CI release
+   * build failed on it.
+   *
+   * Both collapse `.` and `..`, which is the only reason this call exists.
+   */
   const projectPath =
     typeof input.projectPath === 'string' && input.projectPath !== '' && isAbsolute(input.projectPath)
-      ? resolve(input.projectPath)
+      ? normalize(input.projectPath)
       : null
 
   // See the header: these two scopes are addressed by working directory, so

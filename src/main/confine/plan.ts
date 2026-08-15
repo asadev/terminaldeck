@@ -354,6 +354,21 @@ export function sessionPlan(input: SessionPlanInput): ConfinementPlan {
 }
 
 /**
+ * The directory that holds one home per device, inside the app's storage.
+ *
+ * A function rather than a `join` spelled out at each site, because there are
+ * now two sites and they are in different subsystems: the spawn path makes the
+ * homes, and the transcript layer reads them — a confined session's
+ * conversations live under one of these, which is the whole of why chat mode and
+ * the cost pane can see them at all (see `transcript.ts`). Two spellings of one
+ * directory name is how the reader ends up looking somewhere the writer never
+ * writes, which is the bug this function exists to make impossible.
+ */
+export function deviceHomesRoot(storageDir: string): string {
+  return join(storageDir, 'device-home')
+}
+
+/**
  * Where one device's confined home lives.
  *
  * Per device, beside the guest git directories and keyed the same way, so the
@@ -393,5 +408,10 @@ export function deviceHomeDir(root: string, deviceKey: string): string {
  * starts again from nothing, with no second place to remember.
  */
 export function confinedEnv(home: string): Record<string, string> {
-  return { HOME: home, TMPDIR: join(home, 'tmp') }
+  // `posix.join`, not the host's `join`. Confinement exists on macOS and Linux
+  // and nowhere else — `confinementKind('win32')` answers 'none' — so every path
+  // this file composes is a POSIX path by definition. Using the host's joiner
+  // made the Windows CI runner answer `\app-storage\…\tmp` for a boundary
+  // Windows cannot even have, and failed the release build on it.
+  return { HOME: home, TMPDIR: posix.join(home, 'tmp') }
 }
