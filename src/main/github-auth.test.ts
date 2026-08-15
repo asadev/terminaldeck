@@ -545,7 +545,13 @@ describe('the device-code flow', () => {
     // 0600, not 0644. The file is a bearer credential; the mode is the only
     // thing between it and every other account on the machine.
     const file = join(dir, 'github', 'auth.json')
-    expect(statSync(file).mode & 0o777).toBe(0o600)
+    // POSIX only: Windows has no permission bits, `fs` reports 0666 for any
+    // read-write file, and nothing here sets an NTFS ACL — so on Windows this
+    // bearer credential is NOT mode-protected. Asserted where it is true, and
+    // said plainly where it is not.
+    if (process.platform !== 'win32') {
+      expect(statSync(file).mode & 0o777).toBe(0o600)
+    }
     expect(JSON.parse(readFileSync(file, 'utf8')).login).toBe('asadev')
   })
 

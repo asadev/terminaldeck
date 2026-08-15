@@ -1,3 +1,4 @@
+import { normalize } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { addMcpServer, buildAddArgs, resolveRequest, tokenizeCommand, type McpAddRequest } from './mcp-add'
 
@@ -232,7 +233,20 @@ describe('addMcpServer', () => {
       },
     )
     expect(result.ok).toBe(true)
-    expect(sawCwd).toBe('/work/app')
+    /*
+     * `normalize`, not the literal, and the difference only shows on Windows.
+     *
+     * `resolveRequest` canonicalises the project path for the machine it is
+     * running on — that is correct, because this path is a real folder on that
+     * machine and the CLI is about to be run in it. On Windows `normalize`
+     * rewrites separators, so `/work/app` legitimately becomes `\work\app` and
+     * the literal here failed the CI release build.
+     *
+     * The assertion that matters is "the CLI was run in the folder we were
+     * given", not "the string survived byte for byte", so it is written that
+     * way. On POSIX this is still exactly `/work/app`.
+     */
+    expect(sawCwd).toBe(normalize('/work/app'))
     expect(sawArgs).toContain('local')
     // The CLI's own words, not ours: it is the only thing that knows which file
     // it actually wrote.

@@ -34,7 +34,7 @@
 import { timingSafeEqual } from 'node:crypto'
 import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { createConnection, createServer, type Server, type Socket } from 'node:net'
-import { join, posix } from 'node:path'
+import { join, posix, win32 } from 'node:path'
 import { BRAND } from '../shared/brand'
 import { writeSecretFile } from '../main/remote/secret-file'
 import type { Platform } from '../main/platform/host'
@@ -102,7 +102,11 @@ export function controlPaths(
   stateDir: string,
   platform: Platform,
 ): { socket: string; record: string } {
-  const record = join(stateDir, RECORD_FILE)
+  // Both halves follow the PLATFORM ARGUMENT, not the host. The socket line
+  // below was fixed first and this one was missed, which is the same bug twice
+  // in one function: a Windows runner asking for the Linux answer got
+  // `\home\asad\.local\share\terminaldeck\host.json`.
+  const record = (platform === 'win32' ? win32 : posix).join(stateDir, RECORD_FILE)
   if (platform === 'win32') {
     // Named pipes are not files and do not live in a directory. The state
     // directory is still what makes the name unique to this install, so it is

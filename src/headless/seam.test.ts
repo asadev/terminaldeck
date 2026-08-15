@@ -188,7 +188,11 @@ describe('both shells say where the files are, at boot', () => {
    * mount.
    */
   it('the Electron main process installs the Electron paths', () => {
-    const source = readFileSync(join(ROOT, 'src/main/index.ts'), 'utf8')
+    // `.replace(/\r\n/g, '\n')` because git checks this repository out with CRLF
+    // on Windows, so every search below for a string ending in `\n` misses and
+    // `indexOf` answers -1 — which reads as "the call is not there at all".
+    // That is exactly how this assertion failed on the Windows CI runner.
+    const source = readFileSync(join(ROOT, 'src/main/index.ts'), 'utf8').replace(/\r\n/g, '\n')
     expect(source).toContain('installPaths(electronPaths(app))')
   })
 
