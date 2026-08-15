@@ -22,6 +22,25 @@ import { describe, expect, it } from 'vitest'
  */
 
 const ROOT = resolve(__dirname, '..', '..')
+
+/**
+ * Read a source file for inspection, with line endings normalised.
+ *
+ * Every assertion in this file searches the source text, and several search for
+ * a string ending in a newline — which is how they pin that a call is on its own
+ * line rather than mentioned in a comment. Git checks this repository out with
+ * CRLF on Windows, so those searches find nothing and `indexOf` answers -1,
+ * which reads as "the call is not there at all" and fails an ordering assertion
+ * with a number nobody would connect to line endings. It cost two CI rounds:
+ * the first because the cause was not obvious, the second because the fix was
+ * applied to one of six reads and the failing one was a different read.
+ *
+ * So there is one door now, and it cannot be half-fixed.
+ */
+function readSource(relative: string): string {
+  return readFileSync(join(ROOT, relative), 'utf8').replace(/\r\n/g, '\n')
+}
+
 const ENTRIES = ['src/headless/main.ts', 'src/headless/daemon.ts']
 
 function resolveSpec(spec: string, from: string): string | null {
@@ -153,7 +172,7 @@ describe('the headless build never reaches Electron', () => {
   it('imports nothing from electron at runtime', () => {
     const offenders: string[] = []
     for (const file of files) {
-      for (const clause of runtimeElectronImports(readFileSync(join(ROOT, file), 'utf8'))) {
+      for (const clause of runtimeElectronImports(readSource(file))) {
         offenders.push(`${file}: ${clause}`)
       }
     }
@@ -171,7 +190,7 @@ describe('the headless build never reaches Electron', () => {
     // one implementation while users run the other. Plain Node runs the
     // identical code, and that is what makes the headless build's channel the
     // same channel.
-    const sealed = readFileSync(join(ROOT, 'src/shared/sealed.ts'), 'utf8')
+    const sealed = readSource('src/shared/sealed.ts')
     expect(sealed).toContain('@noble/ciphers')
     expect(sealed).not.toContain("require('node:crypto')")
     expect(files).toContain('src/shared/sealed.ts')
@@ -192,7 +211,7 @@ describe('both shells say where the files are, at boot', () => {
     // on Windows, so every search below for a string ending in `\n` misses and
     // `indexOf` answers -1 — which reads as "the call is not there at all".
     // That is exactly how this assertion failed on the Windows CI runner.
-    const source = readFileSync(join(ROOT, 'src/main/index.ts'), 'utf8').replace(/\r\n/g, '\n')
+    const source = readSource('src/main/index.ts')
     expect(source).toContain('installPaths(electronPaths(app))')
   })
 
@@ -208,7 +227,7 @@ describe('both shells say where the files are, at boot', () => {
      * directory, which is `user-data.ts`'s "renaming the app silently moved
      * everyone's data" failure arriving through a different door.
      */
-    const source = readFileSync(join(ROOT, 'src/main/index.ts'), 'utf8')
+    const source = readSource('src/main/index.ts')
     const install = source.indexOf('installPaths(electronPaths(app))')
     const pin = source.indexOf('pinUserData(app)\n')
     const build = source.indexOf('const core = createHostCore(')
@@ -218,12 +237,12 @@ describe('both shells say where the files are, at boot', () => {
   })
 
   it('the daemon installs the plain-Node paths as its first instruction', () => {
-    const source = readFileSync(join(ROOT, 'src/headless/daemon.ts'), 'utf8')
+    const source = readSource('src/headless/daemon.ts')
     expect(source).toContain('installPaths(nodePaths(')
   })
 
   it('the CLI installs them too, because it has to find the state directory', () => {
-    const source = readFileSync(join(ROOT, 'src/headless/main.ts'), 'utf8')
+    const source = readSource('src/headless/main.ts')
     expect(source).toContain('installPaths(nodePaths(')
   })
 })
