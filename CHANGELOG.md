@@ -10,6 +10,8 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+## [0.1.9] — 2026-08-16
+
 Four batches of work since 0.1.8 and **none of it is in a tagged build**. Anyone
 reading this from a downloaded release has none of what follows.
 
@@ -693,7 +695,8 @@ First cut. macOS 12+, Apple silicon, unsigned.
 - Preferences with live dark/light theming
 - Session resume (`⌘⇧T`)
 
-[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.1.8...HEAD
+[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.1.9...HEAD
+[0.1.9]: https://github.com/asadev/terminaldeck/releases/tag/v0.1.9
 [0.1.8]: https://github.com/asadev/terminaldeck/releases/tag/v0.1.8
 [0.1.7]: https://github.com/asadev/terminaldeck/releases/tag/v0.1.7
 [0.1.6]: https://github.com/asadev/terminaldeck/releases/tag/v0.1.6
