@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import { hostIdFor, isHostId } from '../../../shared/relay-wire'
 import { generateStatic, respondToHandshake, startHandshake, SealedRefusal } from '../../../shared/sealed'
-import { encodeOffer, parseOffer, rendezvousIdentity, type MachineOffer } from './rendezvous'
+import {
+  RENDEZVOUS_SALT,
+  encodeOffer,
+  offerFrom,
+  parseOffer,
+  rendezvousIdentity,
+  type MachineOffer,
+} from './rendezvous'
 
 /**
  * The derivation both machines have to agree on, and the frame that rides it.
@@ -19,6 +26,52 @@ const OFFER: MachineOffer = {
   name: 'Studio PC',
   platform: 'win32',
 }
+
+/**
+ * The derivation, as bytes, shared with every other client that has to find the
+ * same slot.
+ *
+ * These are copied from `pwa/src/rendezvous.test.ts`, character for character,
+ * and that duplication is the whole point. The browser client cannot import the
+ * module above — it reaches for `node:crypto` — so it restates the salt and the
+ * scrypt parameters in its own file, and two restatements of one derivation
+ * drift silently: nothing throws, nothing logs, and two machines simply stop
+ * being able to find each other because they are deriving different slots from
+ * the same eight characters.
+ *
+ * Pinning the *output* rather than only the salt is deliberate. It catches a
+ * changed salt, a changed cost parameter, a changed seed length and a changed
+ * split between the slot secret and the responder key — every input to the
+ * agreement, in one assertion, on both sides.
+ */
+const VECTORS = [
+  {
+    code: 'H4K9-2FQT',
+    hostId: 'ZWG39KXXW8GKVHZP6UF2SGUARD',
+    publicKey: 'aQPhyoFeCJkVcrnoSvne9Eft2vkXQrmYitfzy2JowX8=',
+  },
+  {
+    code: 'ABCD-EFGH',
+    hostId: 'BBZFGL6PYFH6W23H5LGX4KERVZ',
+    publicKey: 'NinFdauDs0+5UobA6Txvq2rhXZiyD1c4676VktxUN0A=',
+  },
+] as const
+
+describe('the derivation every client has to agree on', () => {
+  it('is pinned to the salt the browser client restates', () => {
+    // One line, and it is the line that turns a silent disagreement into a red
+    // test. `pwa/src/rendezvous.test.ts` asserts the same literal from its side.
+    expect(RENDEZVOUS_SALT).toBe('terminaldeck-machine-pairing-v1')
+  })
+
+  it('produces the same slot and responder key the browser client produces', () => {
+    for (const vector of VECTORS) {
+      const identity = rendezvousIdentity(vector.code)
+      expect(identity?.hostId).toBe(vector.hostId)
+      expect(identity?.keys.publicKey.toString('base64')).toBe(vector.publicKey)
+    }
+  }, 20_000)
+})
 
 describe('deriving a rendezvous from a code', () => {
   it('lands two machines on the same slot and the same key', () => {
@@ -101,6 +154,38 @@ describe('the offer frame', () => {
     expect(parseOffer(JSON.stringify([1, 2, 3]))).toBeNull()
     expect(parseOffer(42)).toBeNull()
     expect(parseOffer('x'.repeat(5000))).toBeNull()
+  })
+
+  it('is built from the relay link, or not at all', () => {
+    const key = generateStatic().publicKey
+    const relay = {
+      url: 'wss://relay.example',
+      hostId: hostIdFor(Buffer.alloc(32, 7)),
+      publicKey: key.toString('base64url'),
+      fingerprint: 'AAAA-BBBB-CCCC-DDDD-EEEE-FFFF',
+      connected: true,
+      channels: 0,
+      reason: null,
+      retryAt: null,
+    }
+    const offer = offerFrom(relay)
+    if (offer === null) throw new Error('a connected relay has an address to publish')
+    expect(offer.hostId).toBe(relay.hostId)
+    expect(offer.relayUrl).toBe(relay.url)
+    // Re-encoded, not passed through: `RelayState` publishes base64url because
+    // it goes into a URL, and `parseOffer` on the other end decodes plain
+    // base64. The round trip through the parser is the assertion that matters,
+    // because the two spellings differ only for some keys.
+    expect(parseOffer(encodeOffer(offer))?.publicKey).toBe(key.toString('base64'))
+    expect(offer.name).not.toBe('')
+
+    // Nothing to publish is null rather than a half-filled offer: a slot
+    // answering with an empty host id is a machine advertising an address that
+    // routes nowhere.
+    expect(offerFrom(null)).toBeNull()
+    expect(offerFrom({ ...relay, connected: false })).toBeNull()
+    expect(offerFrom({ ...relay, hostId: '' })).toBeNull()
+    expect(offerFrom({ ...relay, publicKey: '' })).toBeNull()
   })
 
   it('keeps a machine whose label is missing, and strips one that is an escape sequence', () => {

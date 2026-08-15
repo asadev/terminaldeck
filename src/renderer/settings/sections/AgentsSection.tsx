@@ -181,14 +181,19 @@ export function AgentsSection({ bridge, goTo }: SectionProps) {
         )}
       </Group>
 
-      <Group title="Default profile">
+      {/* One word for one thing. These used to say "profile" while the screen
+          that manages them says "account", and a feature a person cannot name
+          is a feature they cannot find. The value and the channel are
+          unchanged — `profiles:set-default`, the same one Accounts writes — so
+          the two views cannot disagree. */}
+      <Group title="Default account">
         {!bridge.listProfiles ? (
-          <Notice tone="warn">{missingChannelNote('Profiles')}</Notice>
+          <Notice tone="warn">{missingChannelNote('Accounts')}</Notice>
         ) : (
           <>
             <Row
               label="Run new sessions as"
-              help="A profile is a separate login. Sessions use this one unless a project or the new-session dialog says otherwise."
+              help="An account is a separate login. Sessions use this one unless a folder or the account button beside it says otherwise."
               htmlFor="settings-default-profile"
               control={
                 <span className="settings-select-wrap">
@@ -209,11 +214,11 @@ export function AgentsSection({ bridge, goTo }: SectionProps) {
                 </span>
               }
             />
-            <Explain title="Only Claude Code is isolated by a profile">
-              A profile points Claude Code at a different config directory. The other agents do not
-              support that yet, so they ignore this and use their normal login.{' '}
+            <Explain title="Only Claude Code is kept separate">
+              An account points Claude Code at a different config directory. The other agents do
+              not support that yet, so they ignore this and use their normal login.{' '}
               <button type="button" className="settings-inline-btn" onClick={() => goTo('profiles')}>
-                Manage profiles
+                Manage accounts
               </button>
             </Explain>
           </>

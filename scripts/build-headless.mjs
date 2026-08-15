@@ -111,8 +111,20 @@ const manifest = {
    * contain.
    */
   keywords: [...root.keywords.filter((word) => word !== 'electron'), 'headless', 'wsl', 'server'],
-  // Everything in this directory, which is only ever what the build put there.
-  files: ['*.mjs', '*.mjs.map', 'README.md', 'LICENSE'],
+  /*
+   * Named, rather than `*.mjs`, and the reason is `demo.mjs`.
+   *
+   * The build emits a third program — the public demo host, which approves any
+   * device that redeems a code it minted. That is correct for a throwaway
+   * container on a box we own and is not something to hand to everybody who
+   * types `npm install -g terminaldeck`. A glob would have shipped it the day it
+   * was added, silently, which is exactly how a thing like that ends up on
+   * somebody's server.
+   *
+   * The chunk glob is still a glob because Rollup names shared chunks after
+   * whichever module it picked, and pinning those would break on the next build.
+   */
+  files: ['cli.mjs', 'host.mjs', 'chunk-*.mjs', '*.mjs.map', 'README.md', 'LICENSE'],
   dependencies,
 }
 
@@ -129,6 +141,21 @@ for (const [command, file] of Object.entries(manifest.bin)) {
   chmodSync(path, 0o755)
   console.log(`  ${command} -> ${file}`)
 }
+
+/*
+ * The demo host gets a shebang too, and no `bin` entry.
+ *
+ * `demo/Dockerfile` copies this directory into an image and runs `demo.mjs`
+ * directly, so it needs to be executable — but it must not become a command on
+ * anybody's PATH, and it is not in `files`, so `npm publish` leaves it behind.
+ * Done here rather than in the loop above because the loop is driven by `bin`,
+ * and adding it there is the mistake this comment exists to prevent.
+ */
+const demo = join(OUT, 'demo.mjs')
+const demoSource = readFileSync(demo, 'utf8')
+if (!demoSource.startsWith('#!')) writeFileSync(demo, `#!/usr/bin/env node\n${demoSource}`, 'utf8')
+chmodSync(demo, 0o755)
+console.log('  (demo host, not published) -> ./demo.mjs')
 
 console.log(`\nPackage written to ${OUT}`)
 console.log(`  dependencies: ${needed.join(', ') || 'none'}`)

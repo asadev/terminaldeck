@@ -145,6 +145,21 @@ enum Palette {
     static let terminalForeground = uiKit(Ink.primary)
     static let caret = uiKit(Ink.accent)
 
+    /**
+     * Selected text in the terminal — a long press, or a search match.
+     *
+     * SwiftTerm's own default is a teal, and on a screen whose one accent is
+     * `#3b8fee` it is the only thing that colour anywhere in the product. It is
+     * also not what iOS does: a selection on this platform is blue, with blue
+     * drag handles, which the system draws over the top either way — so the
+     * default left the handles and the highlight in two different colours.
+     *
+     * Half opacity rather than the solid accent, because the glyphs stay on top
+     * of it and a full-strength blue under `#ededed` text is a legibility
+     * problem rather than a highlight.
+     */
+    static let selection = uiKit(Ink.accent).withAlphaComponent(0.5)
+
     /// A key cap at rest. Light on dark rather than a solid grey, so the bar
     /// picks up whatever the keyboard behind it is doing.
     static let key = UIColor(white: 1, alpha: 0.10)

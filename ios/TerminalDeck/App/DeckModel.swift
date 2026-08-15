@@ -100,6 +100,88 @@ final class DeckModel {
     private let device: DeviceDescriptor
     private let makeTransport: ((String, CredentialStore, DeviceDescriptor) -> Transport)?
 
+    /* ------------------------------------------------------------------ */
+    /* Alerts                                                             */
+    /* ------------------------------------------------------------------ */
+
+    /// What each machine's sessions were doing last time anything looked. The
+    /// transitions out of it are the alerts.
+    private let watcher = SessionAlerts()
+    private let alerts: AlertPresenting
+
+    /// Whether the app is on screen. Set by the scene, and read for exactly two
+    /// decisions: whether the session being *looked at* should also interrupt
+    /// with a banner, and whether a reconnect's catch-up is news or a summary.
+    var isForeground = true
+
+    /// What iOS says about notifications. Nil until it has been asked, which is
+    /// a real state — the alerts screen must not claim "off" while it is still
+    /// finding out.
+    private(set) var alertPermission: AlertPermission?
+
+    /**
+     * The one line the list shows after the app has been away, or nil.
+     *
+     * This is the honest half of a feature that cannot promise delivery. A phone
+     * that was suspended for an hour missed every transition in it; the next
+     * connection brings the current state, and rather than firing four banners
+     * about things that are already over — or saying nothing at all, which is
+     * how people conclude the app is not watching — the list says what changed
+     * while nobody was listening.
+     */
+    private(set) var awayReport: String?
+
+    func dismissAwayReport() {
+        awayReport = nil
+    }
+
+    /// Ask iOS what it thinks. Called when the app comes forward, because
+    /// permission can be changed in Settings while this app is not running.
+    func refreshAlertPermission() async {
+        alertPermission = await alerts.permission()
+    }
+
+    /// The system prompt, from the one screen that asks for it.
+    @discardableResult
+    func requestAlertPermission() async -> AlertPermission {
+        let answer = await alerts.request()
+        alertPermission = answer
+        return answer
+    }
+
+    /**
+     * A machine's sessions changed. Decide what a person is told.
+     *
+     * Three rules, and each one exists because of a way this could be annoying
+     * enough to be turned off:
+     *
+     *  1. **Not the session on screen.** Somebody watching a terminal does not
+     *     need a banner over it saying the thing they are watching has
+     *     happened. Only while the app is in front of them — the same session
+     *     with the phone in a pocket is exactly what they want to be told about.
+     *  2. **A catch-up while the app is open is a sentence, not four banners.**
+     *     See `awayReport`.
+     *  3. **The switches are honoured here** rather than at the point of
+     *     posting, so there is one place that decides what is worth saying.
+     */
+    private func alertsChanged(_ host: HostLink, _ sessions: [RemoteSession], _ reason: AlertReason) {
+        let raised = watcher.observe(hostId: host.id, hostName: host.label, sessions: sessions)
+        let wanted = raised.filter { AlertSettings.wants($0.kind) && !isOnScreen($0) }
+        guard !wanted.isEmpty else { return }
+
+        if reason == .catchUp && isForeground {
+            awayReport = AwayReport.sentence(for: wanted)
+            return
+        }
+        for alert in wanted { alerts.present(alert) }
+    }
+
+    /// Whether this alert is about the session the person is already looking at.
+    private func isOnScreen(_ alert: SessionAlert) -> Bool {
+        guard isForeground, case let .session(host, id)? = route.last else { return false }
+        return host == alert.hostId && id == alert.sessionId
+    }
+
     /**
      * The GitHub account this phone holds, and the thing that answers with it.
      *
@@ -122,6 +204,9 @@ final class DeckModel {
     /// because it is raised from a menu that exists on every screen.
     var showingGitHub = false
 
+    /// Whether the alerts sheet is up. Same shape and for the same reason.
+    var showingAlerts = false
+
     /**
      * A route names the machine as well as the session.
      *
@@ -139,9 +224,14 @@ final class DeckModel {
     init(credentials: CredentialStore,
          device: DeviceDescriptor,
          gitHubAccounts: GitHubAccountStore? = nil,
+         alerts: AlertPresenting? = nil,
          makeTransport: ((String, CredentialStore, DeviceDescriptor) -> Transport)? = nil) {
         self.credentials = credentials
         self.device = device
+        // Defaulted here rather than in the signature so a test can hand in a
+        // recorder and never touch `UNUserNotificationCenter` — which in a
+        // simulator would put a permission prompt in front of a test run.
+        self.alerts = alerts ?? NotificationAlerts()
         let accounts = gitHubAccounts ?? KeychainGitHubStore()
         self.gitHubAccounts = accounts
         self.credentialResponder = CredentialResponder(accounts: accounts)
@@ -236,6 +326,10 @@ final class DeckModel {
         }
         link.onCreated = { [weak self] sessionId in
             self?.open(session: sessionId, on: record.hostId)
+        }
+        link.onSessionsChanged = { [weak self, weak link] sessions, reason in
+            guard let self, let link else { return }
+            alertsChanged(link, sessions, reason)
         }
         hosts.append(link)
         return link
@@ -373,6 +467,9 @@ final class DeckModel {
         link.stop()
         hosts.remove(at: index)
         credentials.remove(hostId)
+        // Its sessions are not going to change again. Keeping them would make a
+        // later re-pair look like a machine where everything happened at once.
+        watcher.forget(hostId: hostId)
         route.removeAll { route in
             if case let .session(host, _) = route { return host == hostId }
             return false

@@ -67,7 +67,7 @@ import {
   type StaticKeyPair,
 } from '../../shared/sealed'
 import { HOST_SECRET_BYTES, hostIdFor } from '../../shared/relay-wire'
-import { writeSecretFile } from './secret-file'
+import { protectSecretFile, writeSecretFile } from './secret-file'
 
 export const HOST_IDENTITY_FILE = 'relay-identity.json'
 
@@ -227,6 +227,23 @@ function quarantine(file: string, reason: string): void {
  */
 export function loadHostIdentity(dir: string): HostIdentity {
   const file = join(dir, HOST_IDENTITY_FILE)
+
+  /*
+   * Repair the file's protection before reading it, on Windows.
+   *
+   * This file holds the X25519 PRIVATE KEY that is this machine's identity to
+   * every paired device — the one secret here that is written **once** and from
+   * then on only ever read. Every other secret in this app is rewritten
+   * regularly (a credential on pairing, the daemon record on every start), so
+   * the write path's protection reaches them on its own. This one it never
+   * reaches: an install created by a build that predates that protection keeps
+   * whatever ACL `%APPDATA%` handed down — on a shared PC, routinely readable by
+   * the other accounts on it — and keeps it forever.
+   *
+   * Idempotent, memoised, and a no-op off Windows, so this costs one process on
+   * the first launch after an upgrade and nothing afterwards.
+   */
+  protectSecretFile(dir, file)
 
   let raw: string | null = null
   try {

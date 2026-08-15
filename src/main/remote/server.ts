@@ -101,6 +101,10 @@ import { scanDevPortsDetailed } from '../dev-ports'
 import { currentPlatform, machineNoun } from '../platform/host'
 import { createRelayClient, relayEnabled, relayUrl, type RelayLink, type RelayState } from './relay-client'
 import { loadHostIdentity } from './host-identity'
+// The rendezvous half of a pairing code. It is imported *here*, into the desk
+// that mints codes, because that is what makes "a code this product shows" and
+// "a code another machine can find" the same thing — see `PairingDesk.show`.
+import { offerFrom, startBeacon, type Beacon, type MachineOffer } from './machines/rendezvous'
 import { tailnetStatus, type TailnetStatus } from './tailnet'
 import { serveOff, serveOn } from './tailscale-serve'
 import { FrameReader, OPCODE, acceptKey, encodeFrame } from '../../shared/ws-frame'
@@ -151,6 +155,21 @@ export interface CreateRequest {
   cwd?: string
   cols?: number
   rows?: number
+  /**
+   * Which agent CLI the client asked for, unchecked.
+   *
+   * A `string` rather than a `ProviderId` on purpose, and it is the same
+   * argument `cwd` makes one line up: this is a value off the wire, and typing
+   * it as the narrow union here would be this server *claiming* to have checked
+   * something it has not looked at. The provider table lives in the session
+   * layer, so that is where a name becomes an agent or a refusal — see
+   * `remote/session-create.ts`.
+   *
+   * Absent is the ordinary case and means "whatever this desktop would have
+   * started", which is what every client shipped before the field existed sends
+   * and what the desktop's own New Session button does.
+   */
+  provider?: string
 }
 
 /**
@@ -348,6 +367,26 @@ export interface RemoteEndpointOptions {
    * without either module importing the other.
    */
   credentials?: CredentialProxy
+  /**
+   * The most this host is willing to advertise, whatever it is able to do.
+   *
+   * Absent means "everything you can serve", which is what a desktop and an
+   * ordinary headless install want and is why this is not a required field.
+   *
+   * It exists for one host: the public demo box, where a stranger who has never
+   * met the owner gets a shell. Every other capability on the list is a hole in
+   * that arrangement — `localhost` is a byte pipe to whatever is listening on
+   * loopback, `upload` is a way to fill a disk, `credential` is a proxy for
+   * credentials a demo must not hold — and the demo advertises `create` alone.
+   *
+   * A *ceiling*, deliberately, rather than the list itself. The rules below
+   * still decide what this build can actually serve, and intersecting the two
+   * means a host cannot use this field to promise something it does not have:
+   * naming `upload` here with no `uploadsDir` still advertises nothing, so the
+   * failure mode is a button that never appears rather than one that appears and
+   * is refused.
+   */
+  offer?: readonly string[]
 }
 
 export interface RemoteEndpoint {
@@ -1015,6 +1054,13 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
    * grow methods afterwards, and a `welcome` is not a place to be doing work.
    */
   const advertised: string[] = CAPABILITIES.filter((name) => {
+    // The ceiling first, so a host that named a shorter list gets it whatever
+    // the rules below would have allowed. `localhost` is the reason this test
+    // has to come first: it is the one capability with no object behind it —
+    // every host can serve it, so nothing else in this filter can ever take it
+    // away, and the public demo host must not offer a stranger a byte pipe to
+    // its own loopback.
+    if (options.offer !== undefined && !options.offer.includes(name)) return false
     if (name === CAPABILITY.create) return typeof options.sessions.create === 'function'
     // Same rule, same reason: the thing that makes the feature possible is the
     // thing that decides whether it is offered. A host with nowhere to put a file
@@ -1404,7 +1450,21 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
     connection.creating = true
     let outcome: CreateOutcome
     try {
-      outcome = await start({ deviceId, cwd: message.cwd, cols: message.cols, rows: message.rows })
+      // Every field the frame carried, forwarded by name, and the list has to be
+      // kept complete by hand. That is worth saying out loud because this is the
+      // line the provider went missing on: a field arrived, this hand-off did
+      // not mention it, and nothing anywhere reported a dropped value. There is
+      // no type that catches it — `ClientMessage` is wider than `CreateRequest`
+      // by design — so `server.test.ts` asserts the round trip instead, driving a
+      // real socket and reading what the session layer was handed, which is the
+      // only thing that can fail when the next field is added and forgotten.
+      outcome = await start({
+        deviceId,
+        cwd: message.cwd,
+        cols: message.cols,
+        rows: message.rows,
+        provider: message.provider,
+      })
     } finally {
       connection.creating = false
     }
@@ -1800,6 +1860,20 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
 
 /* ---------------------------------------------------------------- adapters -- */
 
+/** A code that is on screen, and whether eight typed characters can find it. */
+export interface ShownCode {
+  code: PairingToken
+  /**
+   * Is this machine sitting in the rendezvous slot the code names?
+   *
+   * False means the code still works for anything that already knows this
+   * machine's address — a QR carries it inside the link — and does not work for
+   * somebody typing eight characters into another machine, because there is
+   * nothing at the relay for them to look the address up in.
+   */
+  findable: boolean
+}
+
 /**
  * The one pairing code that is on screen.
  *
@@ -1808,9 +1882,49 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
  * code should open the door. Narrowing it here is also what makes Cancel real —
  * the trust store has no way to un-mint a token, and a Cancel button that only
  * stops drawing the code is a button that lies.
+ *
+ * ## Why the rendezvous lives on the desk
+ *
+ * It did not, and the result was two codes that looked identical and behaved
+ * differently. `machines:code` minted from this desk *and* started a beacon at
+ * the relay; the phone pairing on the Remote panel minted from this same desk
+ * and started nothing. Both screens showed eight characters in the same shape,
+ * and only one of them could be typed into another machine — the other fell
+ * through to a direct attempt that most users have no route for. The failure
+ * read as "the relay is broken", three metres from the machine that could have
+ * explained.
+ *
+ * So minting and publishing are one call now, {@link show}, and there is
+ * deliberately no second way to publish a beacon. The slot's life is the code's
+ * life: every path that ends a code here — cancelled, redeemed, expired, or out
+ * of guesses — takes the slot down with it, because a slot that outlives its
+ * code is a machine advertising an address that will refuse whoever dials it.
  */
 export interface PairingDesk {
+  /**
+   * Mint the one code, without publishing it anywhere.
+   *
+   * Kept for the tests, which mint codes against fixtures that have no relay to
+   * publish to. Nothing that ships may call it: a second minting path is how the
+   * two codes drifted apart in the first place, and `published-code.test.ts`
+   * fails the build if one appears.
+   */
   create(): PairingToken
+  /**
+   * Mint the one code and sit in the rendezvous slot it names until it dies.
+   *
+   * `offer` is this machine's address as {@link offerFrom} reads it off the
+   * relay link, or null when the link is not up. Null is not a refusal: the code
+   * is still minted and still redeemable by anything holding the address
+   * already, which is what keeps the QR and the pairing link working on a
+   * machine with no relay. It comes back with `findable: false`, and it is the
+   * caller's business whether that is worth refusing over.
+   *
+   * Resolves only once the slot is claimed, or once it is clear it will not be.
+   * A code shown before its slot lands is a code that answers "no machine is
+   * showing that" to anybody quick enough to type it.
+   */
+  show(offer: MachineOffer | null): Promise<ShownCode>
   cancel(): void
   /** True only for the code currently on screen, and only before it expires. */
   offers(token: string): boolean
@@ -1831,27 +1945,112 @@ export interface PairingDesk {
   open(): boolean
 }
 
-export function pairingDesk(auth: RemoteAuth, now: () => number = Date.now): PairingDesk {
+/**
+ * @param publish The rendezvous seam. Replaced in tests, and only in tests: a
+ * unit test that minted a code would otherwise open a WebSocket to the public
+ * relay from whatever machine it ran on.
+ */
+export function pairingDesk(
+  auth: RemoteAuth,
+  now: () => number = Date.now,
+  publish: typeof startBeacon = startBeacon,
+): PairingDesk {
   let live: { digest: Buffer; expiresAt: number; misses: number } | null = null
+  /** The slot this machine is sitting in for the code above, if it published. */
+  let slot: Beacon | null = null
+  let slotTimer: ReturnType<typeof setTimeout> | null = null
   const digestOf = (value: string): Buffer => createHash('sha256').update(value).digest()
+
+  /**
+   * Leave the rendezvous slot, and disarm the timer that would have.
+   *
+   * Every one of the four ways a code can end goes through `forget` below, which
+   * goes through here — and that funnel is the point. The bug this arrangement
+   * exists to prevent is a beacon still answering for a code the desk has
+   * already thrown away, which is what a second, separate stop always eventually
+   * produces: one of the two gets forgotten.
+   */
+  const takeDown = (): void => {
+    if (slotTimer !== null) clearTimeout(slotTimer)
+    slotTimer = null
+    slot?.stop()
+    slot = null
+  }
+
+  /** The code is over — cancelled, redeemed, expired, or out of guesses. */
+  const forget = (): void => {
+    live = null
+    takeDown()
+  }
+
   const expired = (): boolean => {
     if (!live) return true
     if (now() < live.expiresAt) return false
-    live = null
+    forget()
     return true
   }
 
+  const mint = (): PairingToken => {
+    // A second code replaces the first, so the first one's slot goes now. Left
+    // behind, it would answer for a code the trust store no longer honours.
+    takeDown()
+    const minted = auth.createPairingToken()
+    // Only the digest is kept, for the same reason `RemoteAuth` keeps only a
+    // digest: nothing in this process should hold a live bearer secret after
+    // the call that showed it has returned.
+    live = { digest: digestOf(minted.token), expiresAt: minted.expiresAt, misses: 0 }
+    return minted
+  }
+
   return {
-    create(): PairingToken {
-      const minted = auth.createPairingToken()
-      // Only the digest is kept, for the same reason `RemoteAuth` keeps only a
-      // digest: nothing in this process should hold a live bearer secret after
-      // the call that showed it has returned.
-      live = { digest: digestOf(minted.token), expiresAt: minted.expiresAt, misses: 0 }
-      return minted
+    create: mint,
+    async show(offer: MachineOffer | null): Promise<ShownCode> {
+      const code = mint()
+      // Captured by identity rather than by value. `mint` makes a fresh record
+      // per code, so this is how everything below asks "is the code I minted
+      // still the code on the desk" after an await that a cancel, a redemption
+      // or a second press can land inside.
+      const mine = live
+      if (offer === null) return { code, findable: false }
+
+      const beacon = publish({ code: code.token, offer, relayUrl: offer.relayUrl })
+      // Null means the beacon could not even be constructed, which `startBeacon`
+      // has already written to the log with the reason. There is nothing to add
+      // here that the caller's sentence will not say better.
+      if (beacon === null) return { code, findable: false }
+      slot = beacon
+
+      const claimed = await beacon.ready()
+      if (live !== mine) {
+        // The code died while the slot was being claimed. Whoever ended it has
+        // already run `takeDown`, so this beacon is not `slot` any more and
+        // nothing else will ever stop it.
+        beacon.stop()
+        return { code, findable: false }
+      }
+      if (!claimed) {
+        takeDown()
+        return { code, findable: false }
+      }
+
+      /*
+       * One timer, tied to the life of the code that created it.
+       *
+       * Not a poll: it fires once, at the moment the thing it is waiting for
+       * happens, and every other way the code can end clears it. It is needed
+       * even though `expired()` above checks the clock, because that check only
+       * runs when somebody asks — and on a machine nobody is pairing with, the
+       * next question may be minutes away while the slot answers all of it.
+       */
+      slotTimer = setTimeout(() => {
+        slotTimer = null
+        if (live === mine) forget()
+      }, Math.max(0, code.expiresAt - now()))
+      slotTimer.unref?.()
+      return { code, findable: true }
     },
     cancel(): void {
-      live = null
+      forget()
     },
     offers(token: string): boolean {
       if (expired() || !live) return false
@@ -1877,7 +2076,7 @@ export function pairingDesk(auth: RemoteAuth, now: () => number = Date.now): Pai
        * and it is the one that was not true until this counter existed.
        */
       live.misses += 1
-      if (live.misses >= MAX_FAILED_ATTEMPTS) live = null
+      if (live.misses >= MAX_FAILED_ATTEMPTS) forget()
       return false
     },
     open(): boolean {
@@ -1899,7 +2098,18 @@ export function pairingDesk(auth: RemoteAuth, now: () => number = Date.now): Pai
  * distinguishes unknown from revoked from rate-limited for the desktop's log;
  * telling a remote caller which one it hit is a free oracle.
  */
-export function authenticatorFor(auth: RemoteAuth, desk: PairingDesk): RemoteAuthenticator {
+export function authenticatorFor(
+  auth: RemoteAuth,
+  desk: PairingDesk,
+  /**
+   * Told when a code is spent and a device row exists, before it is approved.
+   *
+   * Optional and ignored by every caller but one. See
+   * {@link RemoteIpcDeps.onDevicePaired} for why a callback beats the loop it
+   * replaces.
+   */
+  onPaired?: (device: Device) => void,
+): RemoteAuthenticator {
   return {
     async authenticate(token, device, address, peerPublicKey): Promise<AuthOutcome> {
       if (token.includes('.')) {
@@ -1967,6 +2177,29 @@ export function authenticatorFor(auth: RemoteAuth, desk: PairingDesk): RemoteAut
       // be known by. Leaving it open for the rest of the minute would leave that
       // door open for a device that is no longer the one being paired.
       desk.cancel()
+
+      /*
+       * Say it happened, before the refusal is written.
+       *
+       * Ordering matters and it is not cosmetic: the message below tells the
+       * device to come back once it is approved, and on a host that approves
+       * automatically the device does exactly that — immediately. A listener
+       * called after the frame had gone out would be racing the reconnect it
+       * caused, and the reconnect would lose, leaving a device that paired,
+       * was refused, and then found itself still pending.
+       *
+       * Thrown errors are swallowed on purpose. This is a notification, and a
+       * listener that fails must not turn a completed pairing into a refusal
+       * with no credential — that would strand the device permanently, since
+       * the code has already been burned and cannot be redeemed twice.
+       */
+      if (onPaired) {
+        try {
+          onPaired(redeemed.device)
+        } catch (error) {
+          console.error('[remote] a listener for a new pairing threw:', error)
+        }
+      }
 
       // Paired, and deliberately not admitted: a token can be read over a
       // shoulder, so a human at the Mac approves the device before it opens
@@ -2272,9 +2505,53 @@ export interface RemoteIpcDeps {
    * mean sockets routed to one desk and sessions keyed against another.
    */
   credentials?: CredentialProxy
+  /**
+   * The ceiling on what this host advertises. See {@link RemoteEndpointOptions.offer}.
+   *
+   * Forwarded rather than recomputed, because the thing that knows a host is a
+   * public demo box is the assembly that built it, and this function is the only
+   * road from there to the endpoint.
+   */
+  offer?: readonly string[]
   port?: number
   /** Push an event at the renderer. `index.ts` already has exactly this function. */
   broadcast(channel: string, payload: unknown): void
+  /**
+   * Told the moment a device redeems a pairing code, with the row that was
+   * created for it. **It is not yet approved when this runs**, and that is the
+   * whole reason the hook exists.
+   *
+   * Until now the only way to find out was to ask: `terminaldeck pair` prints a
+   * code and then asks a *person* to press Enter once the phone says it is
+   * waiting, and its own comment explains why — there was no event to subscribe
+   * to, and the standing rule here is events, not polling. A person is a fine
+   * event when there is one standing at the keyboard. There is not one at a demo
+   * box, and a broker that looped asking "has anything paired yet" would break
+   * the rule for a worse reason than the one it was written for.
+   *
+   * So the daemon says so, once, at the moment it already knows. The desk's
+   * `remote:device:next` channel is what turns it back into an answer, and
+   * `terminaldeck pair` loses its "press Enter" step for everybody as a result.
+   *
+   * Deliberately *not* a place to approve from in the general case: approval is
+   * the second of the two gates and a human owns it. The public demo host is the
+   * one assembly that replaces that human with the broker's allocation, and it
+   * does so in its own file where the trade can be read in one place — see
+   * `src/headless/public-host.ts`.
+   */
+  onDevicePaired?(device: Device): void
+  /**
+   * Told whenever the relay link connects or drops.
+   *
+   * Nothing with a window needs it — a panel reads `remote:status` when it
+   * draws. A headless host does: the public demo container has to tell the
+   * broker that started it when it is genuinely reachable, and "the process is
+   * up" is not that. The first real allocation on the demo box failed exactly
+   * here, with *"this host is not on the relay (no relay at all)"*, because the
+   * container announced itself the moment its control socket was listening and
+   * the relay dial had not finished.
+   */
+  onRelayState?(state: RelayState): void
   /**
    * Where the rendezvous relay lives, when it is not the default.
    *
@@ -2365,7 +2642,13 @@ export interface RemoteIpc {
  * answer is no relay, a sentence in the status, and a tailnet path that is
  * untouched by any of it.
  */
-function relayFor(storageDir: string, url: string, auth: RemoteAuth, desk: PairingDesk): RelayLink {
+function relayFor(
+  storageDir: string,
+  url: string,
+  auth: RemoteAuth,
+  desk: PairingDesk,
+  onState?: (state: RelayState) => void,
+): RelayLink {
   let link: RelayLink | null = null
   let broken: string | null = null
 
@@ -2383,6 +2666,7 @@ function relayFor(storageDir: string, url: string, auth: RemoteAuth, desk: Pairi
             // grants access: the hello that follows still needs a credential,
             // and a human still has to approve.
             isKnownDevice: (key) => auth.knowsDeviceKey(key) || desk.open(),
+            ...(onState ? { onState } : {}),
           })
         } catch (error) {
           console.error('[relay] could not keep this host’s relay identity:', error)
@@ -2429,16 +2713,17 @@ export function registerRemoteIpc(ipcMain: InvokeRegistrar, deps: RemoteIpcDeps)
   // function is what does both, on every launch unless this Mac was switched
   // off.
   const relay = relayEnabled(env, deps.relayEnabled)
-    ? relayFor(deps.storageDir, relayUrl(env, deps.relayUrl), auth, desk)
+    ? relayFor(deps.storageDir, relayUrl(env, deps.relayUrl), auth, desk, deps.onRelayState)
     : null
 
   const server = createRemoteServer({
     sessions: deps.sessions,
-    auth: authenticatorFor(auth, desk),
+    auth: authenticatorFor(auth, desk, deps.onDevicePaired),
     webRoot: deps.webRoot,
     certDir: deps.storageDir,
     ...(deps.uploadsDir ? { uploadsDir: deps.uploadsDir } : {}),
     ...(deps.credentials ? { credentials: deps.credentials } : {}),
+    ...(deps.offer ? { offer: deps.offer } : {}),
     port: deps.port,
     onConnections: (connections) => deps.broadcast(REMOTE_CONNECTIONS_CHANNEL, connections),
     ...(relay ? { relay } : {}),
@@ -2481,8 +2766,31 @@ export function registerRemoteIpc(ipcMain: InvokeRegistrar, deps: RemoteIpcDeps)
     )
   }
 
-  ipcMain.handle('remote:pair', (): PairingToken => desk.create())
+  /**
+   * The code the Remote panel shows a phone, published the same way every other
+   * code this product shows is published.
+   *
+   * It used to be `desk.create()` and nothing else, and that one missing half is
+   * worth writing down. The panel offers two ways to use the same code: scan the
+   * QR, which carries this machine's relay address inside the link, or type the
+   * eight characters into something that has no address at all. The second only
+   * works if this machine is sitting in the rendezvous slot the code names — and
+   * nothing here ever put it there. The characters were valid, the screen was
+   * right, and the other end reported that no machine was showing that code.
+   *
+   * Not refused when there is no address to publish. `show` still mints, and the
+   * QR path is untouched: it never needed the rendezvous, because the address is
+   * already in the link. A machine reachable only over the tailnet is exactly
+   * that case, and refusing there would take away a pairing that works today to
+   * protect one that could not have worked anyway.
+   */
+  ipcMain.handle('remote:pair', async (): Promise<PairingToken> => {
+    const shown = await desk.show(offerFrom(server.status().relay))
+    return shown.code
+  })
   ipcMain.handle('remote:pair:cancel', (): { cancelled: true } => {
+    // Both halves. `cancel` leaves the rendezvous slot as well as forgetting the
+    // code, or Close would be a button that only stops drawing it.
     desk.cancel()
     return { cancelled: true }
   })

@@ -520,6 +520,58 @@ describe('collectAlertInput', () => {
     expect(input.sessions.map((session) => session.sessionId)).toContain('good')
   }, 30_000)
 
+  it('sees a confined session, whose transcript is in its own store', async () => {
+    /*
+     * A session started from a paired device runs with a `HOME` of its own — it
+     * cannot read the account's — so the agent writes its transcript under that
+     * home rather than under `~/.claude`. Alerts read transcripts, so a session
+     * from a phone produced no alerts at all: not "nothing is wrong", but
+     * "nothing was read". A blocked session nobody can see is precisely what
+     * this module exists to prevent.
+     */
+    const project = '/Users/apple/Projects/alerts-confined'
+    const config = await mkdtemp(join(tmpdir(), 'terminaldeck-alerts-cfg-'))
+    const homes = await mkdtemp(join(tmpdir(), 'terminaldeck-alerts-homes-'))
+    temps.push(config, homes)
+    // The owner's store exists and holds nothing for this project — the shape
+    // that used to read as "this project has never been worked on".
+    await mkdir(join(config, 'projects', encodeProjectPath(project)), { recursive: true })
+    const store = join(homes, 'dev-a', '.claude', 'projects', encodeProjectPath(project))
+    await mkdir(store, { recursive: true })
+    await writeFile(join(store, 'phone.jsonl'), usageLine('phone', project) + '\n', 'utf8')
+
+    const input = await collectAlertInput(project, {
+      configDir: config,
+      deviceHomes: homes,
+      now: () => NOW,
+    })
+    expect(input.sessions.map((session) => session.sessionId)).toContain('phone')
+  }, 30_000)
+
+  it('asks only the profile store when told there are no device homes', async () => {
+    // `null` is how a caller says "the owner's own sessions, and nothing else",
+    // and it is what every test that does not care gets by default. It must not
+    // quietly fall back to whatever the app installed at boot.
+    const project = '/Users/apple/Projects/alerts-profile-only'
+    const config = await configWith(project, [
+      { name: 'own.jsonl', body: usageLine('own', project) + '\n' },
+    ])
+    const homes = await mkdtemp(join(tmpdir(), 'terminaldeck-alerts-homes-'))
+    temps.push(homes)
+    const store = join(homes, 'dev-a', '.claude', 'projects', encodeProjectPath(project))
+    await mkdir(store, { recursive: true })
+    await writeFile(join(store, 'phone.jsonl'), usageLine('phone', project) + '\n', 'utf8')
+
+    const input = await collectAlertInput(project, {
+      configDir: config,
+      deviceHomes: null,
+      now: () => NOW,
+    })
+    const ids = input.sessions.map((session) => session.sessionId)
+    expect(ids).toContain('own')
+    expect(ids).not.toContain('phone')
+  }, 30_000)
+
   it('skips a transcript it cannot read rather than losing the whole report', async () => {
     // Regression: a single EACCES under `~/.claude/projects` rejected the scan
     // outright, so one unreadable file meant the panel showed a raw errno in

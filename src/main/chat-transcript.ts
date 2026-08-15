@@ -29,9 +29,9 @@
 
 import type { IpcMain, IpcMainInvokeEvent } from 'electron'
 import { open, stat } from 'node:fs/promises'
-import { basename, extname, resolve, sep } from 'node:path'
+import { basename, resolve } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
-import { claudeConfigDir, newestTranscript, transcriptDir } from './transcript'
+import { isTranscriptPath, listTranscripts, transcriptDirs } from './transcript'
 
 /* -------------------------------------------------------------------------- */
 /* Types                                                                       */
@@ -345,7 +345,7 @@ const MAX_LINE_BYTES = 8 * 1024 * 1024
  * every line without a `usage` block and prose lines have none.
  */
 export class ChatReader {
-  private offset = 0
+  private offset: number
   private partial = ''
   private decoder = new StringDecoder('utf8')
   private readonly collapser = new ChatCollapser()
@@ -361,11 +361,29 @@ export class ChatReader {
   sessionId: string
   cwd = ''
 
+  /**
+   * `startAt` skips the front of the file instead of reading it.
+   *
+   * Zero — the whole conversation — is what chat mode wants and what every
+   * caller got before this existed. The exception is the restore's replay, which
+   * paints a bounded tail onto a terminal at launch: reading a 154 MB transcript
+   * from byte zero to render the last few hundred lines of it would put a
+   * multi-second disk read in front of a window opening, once per restored tab,
+   * for bytes it is about to throw away.
+   *
+   * The cost of starting mid-file is one torn line, and it is already handled:
+   * the first line read is almost certainly a fragment, `JSON.parse` refuses it
+   * and `parseChatLine` returns null — the same path a half-written trailing
+   * line has always taken. What a caller must not do is *claim* the result is
+   * the whole conversation; `session-replay.ts` says so on screen.
+   */
   constructor(
     readonly path: string,
     sessionId = basename(path, '.jsonl'),
+    startAt = 0,
   ) {
     this.sessionId = sessionId
+    this.offset = Math.max(0, Math.trunc(startAt))
   }
 
   get position(): number {
@@ -377,6 +395,15 @@ export class ChatReader {
     return this.collapser.all
   }
 
+  /**
+   * Back to the beginning of the file — byte zero, not the offset this reader
+   * was constructed with.
+   *
+   * Only reached when the file got *shorter*, which means it is a different file
+   * under the same name. A start offset was an optimisation about the file that
+   * was there a moment ago; carrying it into a file that has been replaced would
+   * be seeking past the end of something we know nothing about.
+   */
   private rewind(): void {
     this.offset = 0
     this.partial = ''
@@ -481,11 +508,44 @@ export async function readChatTranscript(path: string): Promise<ChatMessage[]> {
 }
 
 /**
+ * Read a transcript from a byte offset to the end, and return what is there.
+ *
+ * The same reader, entered late. It exists so the one caller that genuinely
+ * wants a tail — the restore's replay, painting a bounded number of lines onto a
+ * terminal while the app is still opening — does not become a second parser of
+ * this format, which is how the two would drift apart on the next surprise the
+ * CLI writes into a line.
+ *
+ * The result is a *fragment* of a conversation whenever `from` is not zero, and
+ * the caller owns saying so. Nothing here can tell how much was skipped: the
+ * bytes before the offset were never read.
+ */
+export async function readChatTail(path: string, from: number): Promise<ChatMessage[]> {
+  const reader = new ChatReader(path, undefined, from)
+  await reader.readAll()
+  return [...reader.conversation]
+}
+
+/**
  * The transcript a project's chat view should open: the one most recently
  * written to, which is the live session.
+ *
+ * Asked of every store, not just the profile's. A session started from a paired
+ * device runs confined, with a `HOME` of its own, and its conversation is
+ * written under that home — so this used to answer "there is no transcript" for
+ * a session that was talking, and chat mode showed an empty conversation with
+ * nothing to explain it. `transcript.ts` says where the stores are; the
+ * comparison here is unchanged, because "most recently written" is the same
+ * question across two directories as it is inside one.
  */
 export async function newestChatTranscript(cwd: string): Promise<string | null> {
-  const newest = await newestTranscript(transcriptDir(resolve(cwd)))
+  const found = await Promise.all(
+    transcriptDirs(resolve(cwd)).map((dir) => listTranscripts(dir)),
+  )
+  let newest: { path: string; modifiedAt: number } | null = null
+  for (const file of found.flat()) {
+    if (newest === null || file.modifiedAt > newest.modifiedAt) newest = file
+  }
   return newest?.path ?? null
 }
 
@@ -513,20 +573,22 @@ const MAX_READERS = 12
  * reads whatever file it is handed and echoes the text back, so an unchecked
  * path is an arbitrary-file-read primitive reachable from page code.
  *
- * Same guard as `session-insights.ts`, duplicated rather than imported for the
- * same reason it duplicated it from `cost-ipc.ts` — that module does not export
- * it. Nested paths are allowed: sub-agent transcripts live one level down.
+ * The membership test now lives in `transcript.ts`. It used to be a copy of the
+ * one in `cost-ipc.ts`, which was a copy of the one in `session-insights.ts`,
+ * and all three said "under `~/.claude/projects`" — which stopped being the whole
+ * truth the day a confined session started writing under its own device home.
+ * Three copies of a rule that has to widen is three chances for one of them to
+ * widen wrong, and the wrong direction here is an open file read. Nested paths
+ * are still allowed: sub-agent transcripts live one level down.
  */
 function assertTranscriptPath(path: unknown): string {
   if (typeof path !== 'string' || path.length === 0) {
     throw new Error('chat: a transcript path is required')
   }
-  const resolved = resolve(path)
-  const root = resolve(claudeConfigDir(), 'projects')
-  if (!resolved.startsWith(root + sep) || extname(resolved) !== '.jsonl') {
+  if (!isTranscriptPath(path)) {
     throw new Error(`chat: refusing to read outside the transcript store: ${path}`)
   }
-  return resolved
+  return resolve(path)
 }
 
 function readerFor(path: string): ChatReader {

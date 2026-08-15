@@ -1,6 +1,8 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { ShortcutsList } from './ShortcutsSheet'
+import { FeaturesProvider } from '../features/FeaturesProvider'
+import { defaultFeatureState, offCommands } from '../features/state'
 import { KEYMAP, type KeyBinding } from '../keymap'
 
 /**
@@ -12,18 +14,54 @@ import { KEYMAP, type KeyBinding } from '../keymap'
  * `isMac` is passed explicitly throughout. Node's global `navigator.platform`
  * reports 'MacIntel' on a Mac, so the default would silently be macOS-mode and
  * the non-mac assertions would pass for the wrong reason.
+ *
+ * Rendered without a `FeaturesProvider` unless a case wants one, which means
+ * the shipped defaults decide what is live — `Every session at once` is off out
+ * of the box, so `⌘\` is not in a default sheet and the expectations below are
+ * built from the same table rather than typed out.
  */
 
 function render(props: Partial<Parameters<typeof ShortcutsList>[0]> = {}): string {
   return renderToStaticMarkup(<ShortcutsList isMac {...props} />)
 }
 
+/** The keymap as a fresh install sees it. */
+const off = offCommands(defaultFeatureState())
+const LIVE = KEYMAP.filter((binding) => !off.includes(binding.id))
+
 describe('ShortcutsList', () => {
-  it('lists every binding in the keymap', () => {
+  it('lists every binding whose feature is installed', () => {
     const html = render()
-    for (const binding of KEYMAP) {
+    for (const binding of LIVE) {
       expect(html, binding.id).toContain(binding.label)
     }
+  })
+
+  it('leaves out a chord whose feature is not installed, and puts it back on install', () => {
+    /*
+     * The sheet is where somebody goes when they are not sure what a chord
+     * does, so a sheet that advertises one the app will not carry out is worse
+     * than no sheet. `Split the window ⌘D` was printed as working with Split
+     * view uninstalled, while the command palette in the same window greyed the
+     * row out and offered "Install Split view" — two answers to one question,
+     * from one keymap.
+     */
+    const withProvider = (split: 'on' | 'uninstalled'): string =>
+      renderToStaticMarkup(
+        <FeaturesProvider storage={null} initial={{ ...defaultFeatureState(), split }}>
+          <ShortcutsList isMac />
+        </FeaturesProvider>,
+      )
+
+    const gone = withProvider('uninstalled')
+    expect(gone).not.toContain('Split the window')
+    expect(gone).not.toContain('<kbd>⌘D</kbd>')
+    // The chords it does not own are untouched.
+    expect(gone).toContain('New session')
+
+    const back = withProvider('on')
+    expect(back).toContain('Split the window')
+    expect(back).toContain('<kbd>⌘D</kbd>')
   })
 
   it('groups by scope in reading order, with a heading and a hint for each', () => {
@@ -47,7 +85,10 @@ describe('ShortcutsList', () => {
     expect(html).toContain('type="search"')
     expect(html).toContain('aria-label="Search shortcuts"')
     expect(html).toContain('aria-live="polite"')
-    expect(html).toContain(`>${KEYMAP.length}<`)
+    // The count is what is on screen, which is the installed half of the
+    // keymap — printing `KEYMAP.length` beside a shorter list is the same lie
+    // in a smaller place.
+    expect(html).toContain(`>${LIVE.length}<`)
   })
 
   it('names the search field as the count it describes', () => {

@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { IpcMain } from 'electron'
@@ -19,6 +19,7 @@ import {
   type HttpResponse,
 } from './github-auth'
 import type { GitHubFailure, RepoRef } from './github'
+import type { Platform } from './platform/host'
 
 /**
  * The six states this module exists to tell apart, plus the ways the device
@@ -159,6 +160,8 @@ function make(options: {
   gh?: (args: string[]) => Promise<{ stdout: string; stderr: string }>
   repo?: RepoRef | GitHubFailure
   now?: () => number
+  /** Windows only where a test is about Windows; everything else is a Mac. */
+  platform?: Platform
 }): GitHubAuthenticator {
   return new GitHubAuthenticator({
     storageDir: options.dir ?? tempDir(),
@@ -166,7 +169,7 @@ function make(options: {
     // have a real GH_TOKEN exported, and it would silently win every
     // precedence test below.
     env: options.env ?? {},
-    platform: 'darwin',
+    platform: options.platform ?? 'darwin',
     http: options.fetch ?? http([userRoute('repo, read:org, notifications')]).fetch,
     gh: options.gh ?? ghMissing,
     now: options.now,
@@ -545,15 +548,66 @@ describe('the device-code flow', () => {
     // 0600, not 0644. The file is a bearer credential; the mode is the only
     // thing between it and every other account on the machine.
     const file = join(dir, 'github', 'auth.json')
-    // POSIX only: Windows has no permission bits, `fs` reports 0666 for any
-    // read-write file, and nothing here sets an NTFS ACL — so on Windows this
-    // bearer credential is NOT mode-protected. Asserted where it is true, and
-    // said plainly where it is not.
+    // POSIX only, because a mode is a POSIX thing: Windows has no permission
+    // bits and `fs` reports 0666 for any read-write file whatever was asked
+    // for, so asserting 0600 there would assert a synthesised number rather
+    // than a protection. What protects this credential on Windows is an NTFS
+    // ACL granting this account and nothing else, set on the file and on its
+    // folder by `writeSecretFile` before the file ever has this name — pinned,
+    // with a stand-in for `icacls`, in `remote/secret-file.test.ts`, since
+    // `icacls` cannot run on the Mac this suite is written on.
     if (process.platform !== 'win32') {
       expect(statSync(file).mode & 0o777).toBe(0o600)
     }
     expect(JSON.parse(readFileSync(file, 'utf8')).login).toBe('asadev')
   })
+
+  /**
+   * The credential is not written when it cannot be protected, and the panel
+   * says so instead of sitting on a spinner.
+   *
+   * Two things are pinned here that nothing else can pin from a Mac. The first
+   * is wiring: this class is *given* a platform — it already needs one for its
+   * `gh` calls — and it has to hand that same one to the writer rather than
+   * letting the writer read the process's, or every Windows decision below it
+   * becomes untestable again. Asking for `win32` here sends `writeSecretFile`
+   * down its Windows path, where it looks for `C:\Windows\System32\icacls.exe`,
+   * which on this machine cannot be started at all — the exact "the tool did
+   * not run" failure, arriving for real rather than through a stand-in.
+   *
+   * The second is the direction of that failure: nothing on disk, and a
+   * sentence. A stored token that could not be locked down would be readable by
+   * every other account on a shared PC, and the sign-in used to end in silence
+   * — the write threw on a background promise whose rejection `connect`
+   * deliberately swallows, so the panel simply never became connected.
+   *
+   * Skipped on Windows itself, where `icacls` exists and the write succeeds.
+   * The refusal path is exercised there — and here — with an injected runner in
+   * `remote/secret-file.test.ts`.
+   */
+  it.skipIf(process.platform === 'win32')(
+    'refuses to store a credential this PC would not lock down, and says why',
+    async () => {
+      const dir = tempDir()
+      const auth = make({ dir, platform: 'win32', fetch: http(flowRoutes({})).fetch })
+      await auth.connect()
+      const state = await auth.awaitConnect('/tmp/project')
+
+      expect(state.connected).toBe(false)
+      // Through `flowFailure`, which is what `registerGitHubAuthIpc` folds into
+      // the state it hands the panel — the same route the "sign-in refused" and
+      // "code expired" sentences take.
+      const reason = auth.flowFailure()
+      expect(reason?.message).toContain('would not store the credential safely')
+      expect(reason?.kind).toBe('not-authenticated')
+      expect(existsSync(join(dir, 'github', 'auth.json'))).toBe(false)
+      // Nothing at all, in fact: a refusal must not leave the temp file that
+      // held the token sitting under a name nobody thinks to look at.
+      expect(readdirSync(join(dir, 'github'))).toEqual([])
+      // And nothing about the failure carries the token into the detail box.
+      expect(JSON.stringify(state)).not.toContain(TOKEN)
+    },
+  )
 
   /**
    * `slow_down` is mandatory, not advisory: ignoring the new interval gets the

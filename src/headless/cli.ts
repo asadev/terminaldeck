@@ -322,6 +322,19 @@ export function renderStatus(status: HostStatus, now: number): string {
   out.push(`  pid ${status.pid}, up ${duration(now - status.startedAt)}`)
   out.push(`  state  ${status.stateDir}`)
   if (!remote.running && remote.reason !== null) out.push(`  ${remote.reason}`)
+  /*
+   * The public-demo sentence, first and in its own block.
+   *
+   * A host that lets anybody in has to say so before it says anything else, and
+   * it has to say it in its own words rather than as a flag beside the relay
+   * state — a reader skimming for "is it up" would never notice a `true`. The
+   * sentence is written by `public-host.ts`, which is also the file that
+   * implements what it describes, so the two cannot drift apart.
+   */
+  if (status.publicHost !== null) {
+    out.push('')
+    for (const line of wrap(status.publicHost, 74)) out.push(`  ${line}`)
+  }
   out.push('')
 
   out.push('Relay')

@@ -5,13 +5,24 @@
  *   node scripts/ios/testflight.mjs 2608132126
  *   node scripts/ios/testflight.mjs            # newest build, whatever it is
  *
- * `release.sh` stops at "uploaded", which is not the same as "testable". Three
+ * `release.sh` stops at "uploaded", which is not the same as "testable". Four
  * things still have to happen, none of which altool does and all of which used
  * to be clicks:
  *
  *   1. wait for Apple to finish processing, which can end in INVALID
  *   2. answer export compliance for this build
- *   3. attach the build to a tester group
+ *   3. tell the tester what changed
+ *   4. attach the build to a tester group
+ *
+ * ## Step 3 is not paperwork
+ *
+ * Builds 1, 2 and 3 all went up with no "What to Test" text at all — the
+ * `betaBuildLocalizations` list for each of them is empty, which is the API's
+ * way of saying the notes field in TestFlight was blank. The consequence was
+ * measured rather than imagined: the tester installed build 3, saw a screen he
+ * could not tell apart from build 2, and reasonably concluded that nothing had
+ * shipped. A build with no notes is a build nobody can verify, so this step
+ * fails the run rather than skipping quietly when the notes are missing.
  *
  * ## Why waiting is a step and not a courtesy
  *
@@ -41,8 +52,30 @@
 import { createSign } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const APP_ID = process.env.TD_ASC_APP_ID || '6801251458';
+
+// What the tester is told this build contains. A file in the repository rather
+// than a flag, because the notes are written while the change is fresh and are
+// then part of the same commit as the change — a paragraph typed at upload time
+// is written by whoever is holding the terminal, from memory, at the end of a
+// long day, which is how "bug fixes and improvements" gets written.
+//
+// 4000 characters is App Store Connect's own ceiling on the field.
+const NOTES_PATH = process.env.TD_TESTFLIGHT_NOTES
+  || resolve(dirname(fileURLToPath(import.meta.url)), '../../ios/WhatToTest.md');
+const NOTES_LIMIT = 4000;
+
+// The locale of the app's primary language, which is `en-GB` and not the
+// `en-US` everything defaults to — read off the app record rather than assumed:
+//
+//   GET /v1/apps/6801251458?fields[apps]=primaryLocale  →  "en-GB"
+//
+// Notes are per-locale, and a localization in a locale the app does not have is
+// accepted by the API, stored, and shown to nobody.
+const NOTES_LOCALE = process.env.TD_TESTFLIGHT_LOCALE || 'en-GB';
 
 // The internal group whose only member is the developer. Internal groups need
 // no Beta App Review, which is why a build reaches a phone minutes after upload
@@ -123,8 +156,23 @@ let build = null;
 
 process.stdout.write(wanted ? `Waiting for build ${wanted}` : 'Waiting for the newest build');
 
+// `sort=-uploadedDate`, and the sort is load-bearing rather than tidy.
+//
+// This read `/v1/apps/{id}/builds` with no sort and took `data[0]` as "the
+// newest", which is an assumption the API does not honour. Measured on this app
+// the moment there were four builds: unsorted, the first row was a build from
+// two days earlier and the one uploaded ten minutes ago was second. So the
+// no-argument form was answering about the wrong build — waiting on a build
+// that had finished processing days ago, reporting it VALID, and attaching it
+// to the tester group in place of the one just uploaded.
+//
+// Sorting needs the top-level `/v1/builds` with `filter[app]`; the relationship
+// path does not take it.
+const BUILDS = `/v1/builds?filter[app]=${APP_ID}&sort=-uploadedDate&limit=20`
+  + '&fields[builds]=version,processingState,uploadedDate,usesNonExemptEncryption';
+
 while (Date.now() < DEADLINE) {
-  const list = await asc('GET', `/v1/apps/${APP_ID}/builds?limit=20&fields[builds]=version,processingState,uploadedDate,usesNonExemptEncryption`);
+  const list = await asc('GET', BUILDS);
   const found = wanted
     ? list.data.find((b) => b.attributes.version === wanted)
     : list.data[0];
@@ -168,7 +216,63 @@ if (build.attributes.usesNonExemptEncryption === null) {
   console.log(`  ✓ export compliance already answered (${build.attributes.usesNonExemptEncryption})`);
 }
 
-// ------------------------------------------------------ 3. attach to group
+// ------------------------------------------------------ 3. what to test
+
+/**
+ * The notes, read off disk and trimmed to what App Store Connect will store.
+ *
+ * Markdown headings and bullets are left exactly as written. TestFlight renders
+ * the field as plain text, so `-` stays a dash and `##` stays two hashes — which
+ * is why `ios/WhatToTest.md` is written to read correctly with no renderer at
+ * all rather than being prose that only looks right once formatted.
+ */
+function readNotes() {
+  let text;
+  try {
+    text = readFileSync(NOTES_PATH, 'utf8').trim();
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err;
+    console.error(`\nerror: no "What to Test" notes at ${NOTES_PATH}`);
+    console.error('A build with an empty notes field is one nobody can verify — see the header');
+    console.error('of this file. Write what changed, then re-run; nothing has to be re-uploaded.');
+    process.exit(1);
+  }
+  if (!text) {
+    console.error(`\nerror: ${NOTES_PATH} is empty.`);
+    process.exit(1);
+  }
+  if (text.length > NOTES_LIMIT) {
+    console.error(`\nerror: the notes are ${text.length} characters; App Store Connect stores ${NOTES_LIMIT}.`);
+    console.error('Truncating them here would cut a sentence in half on somebody\'s phone, so it does not.');
+    process.exit(1);
+  }
+  return text;
+}
+
+const whatsNew = readNotes();
+
+// A localization is created once per build per locale and updated afterwards.
+// POSTing a second time answers 409, so the existing one is looked for first —
+// which also makes re-running this script after a failure safe.
+const localizations = await asc('GET', `/v1/builds/${build.id}/betaBuildLocalizations?fields[betaBuildLocalizations]=locale`);
+const mine = localizations.data.find((l) => l.attributes.locale === NOTES_LOCALE);
+
+if (mine) {
+  await asc('PATCH', `/v1/betaBuildLocalizations/${mine.id}`, {
+    data: { type: 'betaBuildLocalizations', id: mine.id, attributes: { whatsNew } },
+  });
+} else {
+  await asc('POST', '/v1/betaBuildLocalizations', {
+    data: {
+      type: 'betaBuildLocalizations',
+      attributes: { locale: NOTES_LOCALE, whatsNew },
+      relationships: { build: { data: { type: 'builds', id: build.id } } },
+    },
+  });
+}
+console.log(`  ✓ what to test — ${whatsNew.length} characters (${NOTES_LOCALE})`);
+
+// ------------------------------------------------------ 4. attach to group
 
 // POST to the relationship rather than PATCH: adding a build to a group is
 // appending to a set, and PATCH here would replace every build the group

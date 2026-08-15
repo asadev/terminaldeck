@@ -1,5 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { Modal } from './Modal'
+import { useFeatures } from '../features/FeaturesProvider'
 import {
   detectMac,
   formatBinding,
@@ -37,6 +38,36 @@ export interface ShortcutsListProps {
   isMac?: boolean
 }
 
+/**
+ * The bindings this window will actually answer to: the keymap, minus every
+ * chord whose feature is not installed.
+ *
+ * The sheet used to print `KEYMAP` whole, and the result was a reference that
+ * lied in the one direction a reference must not. With Split view uninstalled
+ * it went on advertising "Split the window ⌘D" as a working shortcut, while the
+ * command palette — reading the same registry through `commandOn` — greyed its
+ * row out and offered "Install Split view" instead. Two surfaces, one keymap,
+ * opposite answers; and the sheet is the one people go to precisely because
+ * they are not sure what a chord does.
+ *
+ * Filtered rather than flagged. A row saying "Split the window ⌘D —
+ * unavailable" would be a fourth thing to explain in a list somebody opened to
+ * stop being confused, and the offer already exists in the two places that can
+ * act on it: the palette, which has a row that installs it, and the chord
+ * itself, which `App.tsx` sends to the store rather than letting it do nothing.
+ *
+ * It reads the feature state from context rather than taking it as a prop
+ * because both of the sheet's hosts — the ⌘/ dialog and Settings → Shortcuts —
+ * render this same component, and a filter passed in by the caller is a filter
+ * one of them will eventually forget to pass. Outside a provider this answers
+ * with the shipped defaults, which is the honest answer for a component mounted
+ * on its own in a test.
+ */
+export function useLiveBindings(bindings: readonly KeyBinding[] = KEYMAP): readonly KeyBinding[] {
+  const features = useFeatures()
+  return useMemo(() => bindings.filter((binding) => features.commandOn(binding.id)), [bindings, features])
+}
+
 export function ShortcutsList({
   bindings = KEYMAP,
   handled,
@@ -45,6 +76,7 @@ export function ShortcutsList({
   const [query, setQuery] = useState('')
   const searchRef = useRef<HTMLInputElement>(null)
   const ids = useId()
+  const live = useLiveBindings(bindings)
 
   // Mounted fresh on every open — Modal renders nothing while closed — so the
   // filter starts empty without needing to be reset. A stale filter would look
@@ -55,7 +87,7 @@ export function ShortcutsList({
     return () => cancelAnimationFrame(frame)
   }, [])
 
-  const matches = useMemo(() => searchKeymap(query, bindings, isMac), [query, bindings, isMac])
+  const matches = useMemo(() => searchKeymap(query, live, isMac), [query, live, isMac])
   const groups = useMemo(() => groupedKeymap(matches), [matches])
 
   const wired = useMemo(() => (handled ? new Set(handled) : null), [handled])
@@ -88,7 +120,7 @@ export function ShortcutsList({
         {/* Announced politely so a screen reader hears the count settle rather
             than every keystroke's worth of it. */}
         <span className="sheet-count" id={`${ids}-count`} role="status" aria-live="polite">
-          {searching ? `${matches.length} of ${bindings.length}` : `${bindings.length}`}
+          {searching ? `${matches.length} of ${live.length}` : `${live.length}`}
         </span>
       </div>
 
@@ -166,7 +198,10 @@ export function ShortcutsSheet({ open, onClose, ...list }: ShortcutsSheetProps) 
     <Modal
       open={open}
       title="Keyboard shortcuts"
-      description="Every shortcut the app knows about, straight from its keymap."
+      // "this window answers to", not "the app knows about": the sheet leaves
+      // out the chords whose feature is uninstalled, so the old sentence
+      // promised a completeness it no longer has.
+      description="Every shortcut this window answers to, straight from its keymap."
       onClose={onClose}
       size="lg"
     >

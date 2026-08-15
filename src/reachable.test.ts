@@ -56,6 +56,19 @@ const ENTRIES = [
   'src/renderer/main.tsx',
   'src/headless/main.ts',
   'src/headless/daemon.ts',
+  /*
+   * The third program in the headless bundle, and the reason it is listed here
+   * rather than allowed as an orphan.
+   *
+   * `src/headless/demo.ts` is a real entry point — `vite.headless.config.ts`
+   * builds it, and `demo/Dockerfile` runs it as the process inside a visitor's
+   * container. What it is *not* is a command anybody installs: it is kept out of
+   * the npm package's `bin` and `files` because it is the only assembly that can
+   * turn on public-host mode, which approves any device that redeems a code it
+   * just minted. `src/headless/public-host.test.ts` is what keeps that line, by
+   * asserting that nothing else in the tree enters the mode.
+   */
+  'src/headless/demo.ts',
 ]
 
 const SOURCE = /\.tsx?$/

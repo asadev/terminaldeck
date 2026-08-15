@@ -303,11 +303,33 @@ const api = {
   createProfile: (name: string): Promise<unknown> => ipcRenderer.invoke('profiles:create', name),
   renameProfile: (id: string, name: string): Promise<unknown> =>
     ipcRenderer.invoke('profiles:rename', id, name),
-  deleteProfile: (id: string): Promise<void> => ipcRenderer.invoke('profiles:delete', id),
-  resolveProfile: (projectPath: string, sessionChoice?: string): Promise<unknown> =>
-    ipcRenderer.invoke('profiles:resolve', projectPath, sessionChoice),
-  setDefaultProfile: (id: string): Promise<void> => ipcRenderer.invoke('profiles:set-default', id),
+  // The options object is forwarded rather than dropped. It was not, and
+  // `profiles:delete` reads `deleteFiles` off it — so a caller that asked for a
+  // profile's files to be deleted got the profile removed from the list and the
+  // directory left on disk, with a confirmation that said otherwise.
+  deleteProfile: (id: string, options?: { deleteFiles?: boolean }): Promise<unknown> =>
+    ipcRenderer.invoke('profiles:delete', id, options),
+  /*
+   * One argument, an object, because that is what `profiles:resolve` reads:
+   * `{ sessionProfileId?, projectPath? }`. The signature here used to be
+   * `(projectPath: string, sessionChoice?: string)`, which no caller ever used
+   * and which would have resolved the *global* default for every project — the
+   * handler takes anything that is not an object as no input at all.
+   */
+  resolveProfile: (input: {
+    projectPath?: string | null
+    sessionProfileId?: string | null
+  }): Promise<unknown> => ipcRenderer.invoke('profiles:resolve', input),
+  setDefaultProfile: (id: string | null): Promise<unknown> =>
+    ipcRenderer.invoke('profiles:set-default', id),
   profileStatus: (id: string): Promise<unknown> => ipcRenderer.invoke('profiles:status', id),
+  /**
+   * Whether an account is signed in, read from the agent's own CLI under that
+   * account's config directory. `refresh` skips the main process's short memo,
+   * which is what a "Check again" button passes.
+   */
+  profileSignIn: (id: string, options?: { refresh?: boolean }): Promise<unknown> =>
+    ipcRenderer.invoke('profiles:signin', id, options),
 
   /* ------------------------------------------------------ deckignore -- */
 

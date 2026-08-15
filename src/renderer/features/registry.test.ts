@@ -143,11 +143,21 @@ describe('every surface a feature claims is a real one', () => {
    *
    * Read out of `App.tsx` as text for the same reason `reachable.test.ts` reads
    * it that way: there is no DOM here to mount the app in.
+   *
+   * **Both** spellings count, because `run()` has always had two arms and this
+   * check only knew about one. A command either appears in the `commands`
+   * table as `id: 'x'` or is handled by the `switch (id)` below it as
+   * `case 'x':` — `pane.split` takes the first route and `pane.focusLeft` the
+   * second. Testing only the table form meant a genuinely dispatched command
+   * could not be declared here without failing, which is how the two pane-focus
+   * chords ended up ownerless and advertised while their feature was off.
    */
   it('names commands the app dispatches', () => {
     for (const entry of FEATURES) {
       for (const command of entry.commands) {
-        expect(APP.includes(`id: '${command}'`), `${entry.id} → ${command}`).toBe(true)
+        const dispatched =
+          APP.includes(`id: '${command}'`) || APP.includes(`case '${command}':`)
+        expect(dispatched, `${entry.id} → ${command}`).toBe(true)
       }
     }
   })
@@ -160,6 +170,28 @@ describe('every surface a feature claims is a real one', () => {
     for (const command of ['pane.split', 'view.swarm']) {
       expect(bound.has(command), command).toBe(true)
       expect(featureOwningCommand(command), command).not.toBeNull()
+    }
+  })
+
+  /*
+   * Every chord that only means something inside a split has to belong to the
+   * split feature — not just the one that creates the split.
+   *
+   * `commands: ['pane.split']` was the whole declaration, so with Split view
+   * uninstalled the shortcuts sheet still listed "Focus the pane to the left"
+   * and "Focus the pane to the right", and both chords fell through the
+   * dispatcher to `focusNeighbour`, which had no second pane to move to. A
+   * chord that is advertised and then does nothing is the exact failure the
+   * note beside ⌘D in `keymap.ts` was written against.
+   *
+   * Asserted over the keymap's own group rather than over a list spelled out
+   * here, so a fourth pane chord added later cannot quietly arrive ownerless.
+   */
+  it('gives every pane chord to the split feature', () => {
+    const paneChords = KEYMAP.filter((binding) => binding.group === 'Panes')
+    expect(paneChords.length).toBeGreaterThan(1)
+    for (const binding of paneChords) {
+      expect(featureOwningCommand(binding.id), binding.label).toBe('split')
     }
   })
 

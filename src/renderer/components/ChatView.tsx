@@ -712,11 +712,10 @@ export function ChatView({
         // been typed in the terminal view — so the box must not call it a
         // message to an agent that is not there.
         placeholder={shell ? 'Run a command in this shell…' : undefined}
-        // Everything behind the Add menu is an `@"path"` mention an agent
-        // expands and a shell would type at its prompt, so the plus is not
-        // drawn here at all. The pane already says this session is a shell;
-        // offering "the agent gets its listing" two centimetres under that
-        // sentence is the window arguing with itself.
+        // Switches the menu behind the plus from mentions to plain quoted
+        // paths, and withdraws the two rows that need an agent to mean
+        // anything. It used to withdraw the menu outright, which left a shell
+        // composer with a microphone and a send button — see the `shell` prop.
         shell={shell}
         controls={
           <AgentControls
@@ -732,7 +731,25 @@ export function ChatView({
             // about this session, the other about this install.
             extra={
               shell || !features.controlOn('chat.usage') ? undefined : (
-                <UsageStrip cwd={cwd} transcriptPath={target ?? undefined} sessionId={sessionId} />
+                /*
+                 * `scoped` travels with the path, not instead of it.
+                 *
+                 * Without it the strip could not tell "show me this project"
+                 * from "show me this session, which has written nothing yet" —
+                 * both arrive as an absent `transcriptPath` — so it fell back to
+                 * the project's most recent session and printed its money under
+                 * the heading "This session". A session opened under a second
+                 * account, with no transcript of its own, reported $1.74 and a
+                 * 77.1k context while the conversation beside it correctly said
+                 * "Nothing from this session yet". Two halves of one pane
+                 * disagreeing about whether the session had done anything.
+                 */
+                <UsageStrip
+                  cwd={cwd}
+                  transcriptPath={target ?? undefined}
+                  scoped={scoped}
+                  sessionId={sessionId}
+                />
               )
             }
           />

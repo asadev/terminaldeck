@@ -70,7 +70,24 @@ import { getState as profilesState, resolveProfile } from '../main/profiles'
 import { PROVIDERS } from '../main/providers'
 import { store } from '../main/store'
 import { ChannelDesk } from './desk'
+import {
+  createPublicHost,
+  PUBLIC_HOST_OFFER,
+  type PublicHost,
+  type PublicHostConfig,
+} from './public-host'
 import { hostVersion } from './version'
+
+/**
+ * The longest `remote:device:next` will hold a caller before answering `null`.
+ *
+ * Three minutes rather than sixty seconds, even though a pairing code dies in
+ * sixty: `terminaldeck pair` mints a second code when the first expires and asks
+ * again, and a wait that ended on the same schedule as the code would turn every
+ * ordinary "I fumbled the first one" into an extra round trip. It is a ceiling on
+ * a caller's request, not a policy — see the channel for why there is one at all.
+ */
+export const MAX_PAIRING_WAIT_MS = 3 * 60_000
 
 /* ----------------------------------------------------------------- status -- */
 
@@ -104,6 +121,15 @@ export interface HostStatus {
    * indistinguishable from an idle mode that forgot three.
    */
   neverRunning: string[]
+  /**
+   * The public-demo sentence, or null on every host anybody owns.
+   *
+   * A field rather than a flag, because the honest thing to print is what the
+   * mode *does* — auto-approves, grants one folder, ends itself — and a boolean
+   * would leave `status` describing that in prose written somewhere else, where
+   * it could drift away from the policy. `public-host.ts` owns both.
+   */
+  publicHost: string | null
 }
 
 export interface HeadlessHostOptions {
@@ -118,6 +144,35 @@ export interface HeadlessHostOptions {
   relayEnabled?: boolean
   readTailnet?: Parameters<typeof registerRemoteIpc>[1]['readTailnet']
   serve?: Parameters<typeof registerRemoteIpc>[1]['serve']
+  /**
+   * Turn this host into the public demo machine. **Absent on every real host.**
+   *
+   * Passing it is the whole switch, and it is a parameter rather than an
+   * environment variable on purpose: an environment variable is something a
+   * machine can inherit, a systemd drop-in can set and a container image can
+   * carry by accident, and the thing it would turn on is "approve any device
+   * that redeems a code". A caller has to write this out in source to get it,
+   * and exactly one file does — `src/headless/demo.ts`, which is not in the
+   * npm package's `bin` and is not linked by the desktop.
+   *
+   * `end` is how the mode stops: on a demo box the host is one visitor's
+   * container under `docker run --rm`, so exiting the process is the reset.
+   * Injected because *this* module must not be the thing that calls
+   * `process.exit` — a test that wanted to exercise the lifecycle would then
+   * take the test runner down with it.
+   */
+  publicHost?: {
+    config: PublicHostConfig
+    end(reason: string): void
+  }
+  /**
+   * Told when the relay link comes up or goes down.
+   *
+   * Forwarded rather than watched, because the only caller that needs it is
+   * `demo.ts`, whose broker has to hear "this machine is reachable" and for whom
+   * "the process started" is a different and misleading fact.
+   */
+  onRelayState?: Parameters<typeof registerRemoteIpc>[1]['onRelayState']
 }
 
 export interface HeadlessHost {
@@ -144,6 +199,14 @@ export interface HeadlessHost {
   /** Put back the sessions that were open when this host last stopped. */
   restore(): Promise<void>
   stop(): Promise<void>
+  /**
+   * The public-demo policy, or null on every host anybody owns.
+   *
+   * Handed back so that `demo.ts` can read the motd it is about to write to
+   * disk out of the same object that decided the rules, rather than keeping a
+   * second copy of that sentence next to the first.
+   */
+  publicHost: PublicHost | null
 }
 
 /* --------------------------------------------------------------- assembly -- */
@@ -185,10 +248,63 @@ export async function createHeadlessHost(
    * connection silently and the socket dies without it. One heartbeat layer, not
    * two.
    */
+  /*
+   * Assigned below, once the trust store and the grants it needs exist — and
+   * declared up here, before the closure that reads it.
+   *
+   * A `const` further down would have been in its temporal dead zone for as long
+   * as construction takes, and construction includes `registerRemoteIpc` dialling
+   * the relay. A connection arriving in that window is unlikely and is exactly
+   * the kind of unlikely this codebase has been bitten by; `null` is a value the
+   * closure can survive reading, a dead zone is a ReferenceError.
+   */
+  let publicHost: PublicHost | null = null
+
   const broadcast = (channel: string, payload: unknown): void => {
     if (channel !== REMOTE_CONNECTIONS_CHANNEL || !Array.isArray(payload)) return
     const mode = idle.attached(payload.length)
     logger.debug('headless', `now ${mode}`, { attached: payload.length })
+    // The same event, read for a second question. Idle mode asks "is anybody
+    // watching"; the demo machine asks "is my visitor still here", and the
+    // answer arrives from the connection list rather than from a timer for
+    // exactly the reason idle mode's does.
+    publicHost?.attached(payload.length)
+  }
+
+  /*
+   * Devices that have redeemed a code since this host started, and whoever is
+   * waiting to hear about the next one.
+   *
+   * This is the small thing that deletes "Press Enter once the device says it
+   * is waiting to be approved" from `terminaldeck pair`. That prompt exists
+   * because there was no event to subscribe to and the standing rule here is
+   * events, not polling — so a person at a keyboard was used as the event. It
+   * works, and it stops working the moment the thing waiting is a broker on a
+   * demo box, which cannot press anything and must not loop asking.
+   *
+   * The list is kept as well as the waiters because of a race that is the
+   * ordinary case rather than a corner: `pair` mints a code, prints it, and only
+   * then asks to be told about the next device — and a fast reader with the
+   * phone already open can redeem inside that gap. A waiter alone would miss it
+   * and wait out its whole timeout with the device sitting there paired.
+   */
+  const paired: Device[] = []
+  /**
+   * The waiters take `null` as well as a device, and that is not a convenience.
+   * A host that is stopping has to be able to answer everyone still holding a
+   * control connection, and "nothing paired" is the true answer to give them —
+   * the alternative is a `pair` command left hanging against a host that has
+   * already closed its socket.
+   */
+  const waiting = new Set<(device: Device | null) => void>()
+
+  const notePaired = (device: Device): void => {
+    paired.push(device)
+    logger.info('headless', 'a device redeemed a pairing code', { device: device.name })
+    for (const wake of [...waiting]) {
+      waiting.delete(wake)
+      wake(device)
+    }
   }
 
   const core = createHostCore({
@@ -205,7 +321,19 @@ export async function createHeadlessHost(
   const remote = registerRemoteIpc(desk, {
     sessions: core.sessions,
     folders: core.grants,
-    credentials: core.credentials,
+    /*
+     * The git credential proxy, on every host except the public one.
+     *
+     * Withholding it is what stops the `credential` capability being advertised
+     * at all, which is the shape every capability in this build uses: the object
+     * that makes the feature possible is the thing that decides whether it is
+     * offered. A demo host that advertised it would be telling a stranger's
+     * phone it may be asked for a GitHub login by a machine that has no business
+     * ever asking anyone for one.
+     */
+    ...(options.publicHost ? {} : { credentials: core.credentials }),
+    ...(options.publicHost ? { offer: PUBLIC_HOST_OFFER } : {}),
+    onDevicePaired: notePaired,
     storageDir: remoteStorageDir,
     // Served only if it was shipped. A headless install on a server may not
     // carry the web client at all, and a missing directory is a 404 on the
@@ -216,13 +344,22 @@ export async function createHeadlessHost(
     // folder named after the app — somewhere a person already looks, rather than
     // the state directory, which they never do. Passing it is also what
     // advertises the capability.
-    uploadsDir: options.uploadsDir ?? join(downloadsDir(), BRAND.name),
+    //
+    // A public demo host is given none, so it does not advertise `upload` and
+    // there is nowhere for a stranger to send a file even if it did. Filling a
+    // disk is the cheapest attack on a machine that hands out shells, and the
+    // container's quota already bounds it — but a capability that is off is
+    // better than one that is bounded.
+    ...(options.publicHost
+      ? {}
+      : { uploadsDir: options.uploadsDir ?? join(downloadsDir(), BRAND.name) }),
     // Always on, and there is no switch to find. `stop` stops the process; a
     // host that was running but refusing to answer would be the worst of both.
     autoStart: true,
     onStartFailure: (reason) => {
       logger.error('headless', 'remote access did not come up at launch', { reason })
     },
+    ...(options.onRelayState ? { onRelayState: options.onRelayState } : {}),
     ...(options.relayEnabled === undefined ? {} : { relayEnabled: options.relayEnabled }),
     ...(options.readTailnet ? { readTailnet: options.readTailnet } : {}),
     ...(options.serve ? { serve: options.serve } : {}),
@@ -237,6 +374,77 @@ export async function createHeadlessHost(
     desk: remote.desk,
     status: () => remote.server.status(),
     broadcast,
+  })
+
+  /*
+   * The public demo policy, built last because it needs both halves.
+   *
+   * Approving lives in the trust store that `registerRemoteIpc` just built;
+   * granting lives in the folder store the core built before it. Neither exists
+   * when the options are read, which is why the policy is handed functions
+   * rather than objects — and why `public-host.ts` can be tested without either.
+   */
+  if (options.publicHost) {
+    publicHost = createPublicHost({
+      config: options.publicHost.config,
+      approve: (id) => remote.auth.approveDevice(id),
+      grant: (id, folders) => core.grants.set(id, folders),
+      end: options.publicHost.end,
+      log: (message, detail) => logger.info('public-host', message, detail),
+    })
+    publicHost.begin()
+    logger.warn('public-host', publicHost.sentence())
+  }
+
+  /*
+   * Tell the caller about the next device to redeem a code.
+   *
+   * A channel rather than a push, because the desk answers `invoke` and nothing
+   * else — every channel in this build wants an answer, and a fire-and-forget
+   * send that routes nowhere is the bug this codebase keeps re-finding. So the
+   * caller asks once and this does not answer until there is something to say.
+   *
+   * That is a held connection, not a poll: nothing wakes up on an interval,
+   * nothing asks the host a question it has already asked, and the reply is
+   * written the instant `authenticatorFor` reports the redemption. The deadline
+   * exists only so a caller that walked away cannot hold a socket forever, and
+   * `null` is a real answer — "nothing paired in the time you gave me" — rather
+   * than an error.
+   *
+   * `seen` is how a caller says which devices it already knows about. `pair`
+   * passes the roster it read before printing the code, which is what makes the
+   * device that redeemed during the printing show up immediately instead of
+   * being waited for a second time.
+   */
+  desk.handle('remote:device:next', async (_event, seen: unknown, timeoutMs: unknown) => {
+    const known = new Set(
+      Array.isArray(seen) ? seen.filter((id): id is string => typeof id === 'string') : [],
+    )
+    const already = paired.find((device) => !known.has(device.id))
+    if (already !== undefined) return already
+
+    // Bounded here rather than trusted from the caller: the control socket is a
+    // local caller, but a wait a caller can set to infinity is a file descriptor
+    // a caller can leak.
+    const wait =
+      typeof timeoutMs === 'number' && Number.isFinite(timeoutMs) && timeoutMs > 0
+        ? Math.min(timeoutMs, MAX_PAIRING_WAIT_MS)
+        : MAX_PAIRING_WAIT_MS
+
+    return await new Promise<Device | null>((answer) => {
+      const wake = (device: Device | null): void => {
+        clearTimeout(timer)
+        answer(device)
+      }
+      const timer = setTimeout(() => {
+        waiting.delete(wake)
+        answer(null)
+      }, wait)
+      // Never keeps the process alive on its own. A host whose only remaining
+      // work is somebody's abandoned `pair` should still be able to stop.
+      timer.unref?.()
+      waiting.add(wake)
+    })
   })
 
   /*
@@ -324,6 +532,7 @@ export async function createHeadlessHost(
         'transcript tailing (a window feature; the clients read their own)',
         'cost polling (a window feature; nothing here draws a chart)',
       ],
+      publicHost: publicHost?.sentence() ?? null,
     }
   }
 
@@ -374,6 +583,17 @@ export async function createHeadlessHost(
               }).configDir,
             conversation: conversationOnDisk,
           }),
+        /*
+         * The picture, which this host needs more than the desktop does rather
+         * than less.
+         *
+         * There is no window here, and the paint is not for one: it goes into
+         * the session's scrollback, and the scrollback is what an attaching
+         * phone is sent — already flagged `replay: true` by `server.ts`. So the
+         * machine that restarts on its own is exactly the machine where a
+         * reconnecting device would otherwise find a live conversation behind a
+         * blank screen.
+         */
         // The same starter a phone's New Session goes through. A restore path
         // with its own spawn would be a second kind of session that only appears
         // after a restart, which is the hardest kind of difference to notice.
@@ -391,6 +611,17 @@ export async function createHeadlessHost(
   }
 
   async function stop(): Promise<void> {
+    // Deadlines first. A twenty-minute cap that fired during teardown would call
+    // `end` on a host that is already ending, and on the demo box `end` is
+    // `process.exit`.
+    publicHost?.dispose()
+    // Nobody is coming. A `pair` waiting on the next device would otherwise hold
+    // its control connection open until its own deadline, against a host that
+    // has stopped answering anything else.
+    for (const wake of [...waiting]) {
+      waiting.delete(wake)
+      wake(null)
+    }
     // The list is at its most accurate right now, with every session still
     // alive — and killing them fires an exit each, which would otherwise write
     // down that nothing was open. Freeze immediately after the honest flush.
@@ -415,6 +646,7 @@ export async function createHeadlessHost(
     status,
     restore,
     stop,
+    publicHost,
   }
 }
 

@@ -5,8 +5,11 @@
    those, and a usage readout under that — three rows of chrome below the thing
    you were actually typing into. Now the two that get used sit on the box's own
    bottom row wearing `cc-chip` (defined in ChatComposer.css, so the plus, the
-   pickers and the send button are one family), and everything else lives behind
-   one "More" button in a glass panel that opens upward.
+   pickers and the send button are one family), and all four of them — plus the
+   usage readout — live in a glass panel that opens upward from one chip called
+   Options. The panel holds everything, not the remainder: a button whose
+   contents are not named is how the folded controls came to be reported as
+   deleted.
 
    Nothing in here draws a strip, a border or a surface of its own. The panel is
    the app's glass — the same material every dialog, menu and popover wears.
@@ -21,10 +24,14 @@
   min-width: 0;
 }
 
+/* Wraps for the same reason `.cc-foot-left` does: a flex row that cannot wrap
+   does not scroll when it runs out of room, it overlaps — and the control that
+   loses is the last one, which here is the button holding everything else. */
 .ac-row {
   display: flex;
   align-items: center;
-  gap: var(--sp-05);
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-05);
   min-width: 0;
 }
 
@@ -73,12 +80,16 @@
   color: var(--text-muted);
 }
 
-.ac-more {
+/* The chip that opens the panel. Named for what it does rather than for the
+   word on it: `.ac-options` is already taken, further down, by the radiogroup
+   *inside* the panel — and two rules with one name is how this button briefly
+   inherited `flex-direction: column` and drew its caret under its label. */
+.ac-open {
   gap: var(--sp-1);
   color: var(--text-secondary);
 }
 
-.ac-more[aria-expanded='true'] {
+.ac-open[aria-expanded='true'] {
   color: var(--text-primary);
 }
 
@@ -228,10 +239,24 @@
   gap: var(--sp-5);
   width: 360px;
   max-width: 100%;
-  /* Both halves are needed. The pixel cap keeps it from becoming a wall on a
-     tall display; the viewport half keeps it inside a short window, where it
-     grows upward out of a composer that is already 150px from the bottom. */
-  max-height: min(50vh, 460px);
+  /* Two caps, and the second one is arithmetic rather than a guess.
+
+     560px is taste: the panel scrolls whatever this says — four controls and a
+     usage readout are taller than any cap worth setting — so the number only
+     decides how much is in view before anyone has to move, and 560 is the first
+     two sections and the head of the third.
+
+     The other cap is the space that actually exists above the box. It used to
+     be a fraction of the viewport, and a fraction cannot know how tall the
+     composer under it is: at 50vh the panel hung off the top of any window
+     shorter than 640px, and raising it to 60vh moved that line to 800px, which
+     is an ordinary window. `100%` here is the height of `.cc-box` — the
+     containing block, since that is what this is positioned against — so
+     `100vh - 100% - the two gaps` is the room between the top of the window and
+     the top of the box, exactly, at any composer height. Measured in the
+     composer harness at 820px tall, where the fraction clipped it by 4px and
+     this does not. */
+  max-height: min(560px, calc(100vh - 100% - var(--sp-2) - var(--sp-6)));
   padding: var(--sp-4) var(--sp-3);
   overflow-y: auto;
   border-radius: var(--radius-lg);
@@ -345,7 +370,11 @@
 .ac-sheet .usage-strip-empty {
   max-width: none;
   margin: 0;
-  padding: 0;
+  /* `--ac-label`, not zero: every other block in this panel starts where an
+     option's words start, and the readout was beginning 50px to the left of the
+     "This session" heading directly above it. Nobody can name that when they
+     see it; they just read the panel as two things stapled together. */
+  padding: 0 var(--sp-2) 0 var(--ac-label);
   /* It paints the pane's own background, because it used to be the bottom band
      of the pane. On the glass that reads as a solid slab dropped into the
      panel — the one thing a frosted surface must never contain. */

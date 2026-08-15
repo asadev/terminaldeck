@@ -12,9 +12,10 @@
  * two options. A guest has to hold a bearer credential in plaintext — that is
  * what a credential *is*, and a hash of one authenticates nobody — exactly the
  * way the phone client holds its own in `localStorage`. So the file is written
- * 0600 through `writeSecretFile`, alongside the private key next door, and this
- * comment says plainly what it contains rather than leaving somebody to work it
- * out from a field name.
+ * through `writeSecretFile`, alongside the private key next door — 0600 on
+ * POSIX and, since the mode means nothing on NTFS, an ACL granting this account
+ * and no other on Windows — and this comment says plainly what it contains
+ * rather than leaving somebody to work it out from a field name.
  *
  * Losing it costs pairings and nothing else: the machines on the other end still
  * hold their side, and a device that disappears from here is one somebody
@@ -51,7 +52,7 @@ import { readFileSync, renameSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { fingerprint, generateStatic, type StaticKeyPair } from '../../../shared/sealed'
 import { isHostId } from '../../../shared/relay-wire'
-import { writeSecretFile } from '../secret-file'
+import { protectSecretFile, writeSecretFile } from '../secret-file'
 
 export const MACHINES_FILE = 'machines.json'
 
@@ -369,6 +370,13 @@ export class MachineStore {
   }
 
   private load(): void {
+    // A file this app wrote before it knew how to set an NTFS ACL is still
+    // sitting there readable by every account on the PC, and it holds a bearer
+    // credential per paired machine. The write path repairs it on the next
+    // commit; this repairs it now, on the way in, for the desktop that pairs
+    // once and is never touched again. No-op off Windows, and it reports rather
+    // than throws — `secret-file.ts` says why.
+    protectSecretFile(this.dir, this.file)
     let raw: string
     try {
       const { size } = statSync(this.file)

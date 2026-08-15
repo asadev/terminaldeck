@@ -2,9 +2,12 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { ModeSwitch } from './ModeSwitch'
 import { FolderChip, folderLabel } from './FolderChip'
+import { AccountChip } from './AccountChip'
 import { WindowToolbar } from './WindowToolbar'
 import { Sidebar } from './Sidebar'
 import { PANELS } from './panels'
+import { placeMenu } from './chip-menu'
+import { accountsWorthShowing, type WorkspaceTab } from './workspace-tabs'
 
 /**
  * The window chrome, actually rendered.
@@ -112,6 +115,160 @@ describe('FolderChip', () => {
     expect(folderLabel('/Users/apple/Projects/terminaldeck')).toBe('terminaldeck')
     expect(folderLabel('C:\\work\\app')).toBe('app')
     expect(folderLabel('/trailing/slash/')).toBe('slash')
+  })
+})
+
+describe('AccountChip', () => {
+  /**
+   * The other half of the same line: the folder chip says *where* a session
+   * runs, this says *who* it runs as. Both were asked for together — "I can
+   * choose any of my logged in account and the folder and I can start a new
+   * session" — and the promise this one must not break is the same one the
+   * folder chip keeps: it starts a session, it does not switch the running one.
+   *
+   * There is no bridge in a test process, so the list is empty here and the
+   * chip renders its closed state. That is deliberately the case worth pinning
+   * — an account name on the button before anything has been read would be a
+   * name the app invented.
+   */
+  const html = renderToStaticMarkup(
+    <AccountChip
+      current={{ id: 'work', name: 'Work' }}
+      projectPath={projects[0].path}
+      onPick={noop}
+      onManage={noop}
+    />,
+  )
+
+  it('names the account the session on screen is actually running as', () => {
+    expect(html).toContain('Work')
+  })
+
+  it('is closed until it is asked for', () => {
+    expect(html).toContain('aria-expanded="false"')
+    expect(html).not.toContain('folder-menu')
+  })
+
+  it('says what the button does without implying the session will change', () => {
+    // A process's environment cannot be rewritten after it starts, so the
+    // account of a running session is fixed for its life. Copy that suggested
+    // otherwise would be promising a switch that can only be done by killing a
+    // session that may have work in it.
+    expect(html).toContain('start one under a different account')
+    for (const lie of ['Switch this session', 'Change account of', 'Move this session']) {
+      expect(html).not.toContain(lie)
+    }
+  })
+
+  it('says nothing about an account when there is no session and nothing loaded', () => {
+    const empty = renderToStaticMarkup(
+      <AccountChip current={null} projectPath={null} onPick={noop} onManage={noop} />,
+    )
+    // The neutral word, not a guessed name — the list has not been read yet.
+    expect(empty).toContain('>Account<')
+  })
+
+  /**
+   * An account is a `CLAUDE_CONFIG_DIR` handed to the agent at spawn, so it
+   * means nothing to an agent that does not read one. With the default coding
+   * tool set to Plain shell — a setting, not an edge case — this menu used to
+   * offer the accounts anyway: the click started a session, `host-core.ts`
+   * correctly declined to label it, and the chip snapped back to the default
+   * account's name having said nothing at all.
+   *
+   * The closed button is all a static render can see, so that is what these
+   * pin: the tooltip is the chip's one line of explanation before the menu is
+   * ever opened, and it has to change with the agent.
+   */
+  it('explains itself on the button when the agent has no login to isolate', () => {
+    for (const [provider, expected] of [
+      ['shell', 'no login to isolate'],
+      ['codex', 'only apply to Claude'],
+      ['gemini', 'only apply to Claude'],
+    ] as const) {
+      const blocked = renderToStaticMarkup(
+        <AccountChip
+          current={null}
+          projectPath={projects[0].path}
+          provider={provider}
+          onPick={noop}
+          onManage={noop}
+        />,
+      )
+      expect(blocked, provider).toContain(expected)
+      // The promise it must not still be making while the choice cannot land.
+      expect(blocked, provider).not.toContain('Choose which account a new session here uses')
+    }
+  })
+
+  it('keeps the ordinary invitation for the one agent that does read a config directory', () => {
+    const claude = renderToStaticMarkup(
+      <AccountChip
+        current={null}
+        projectPath={projects[0].path}
+        provider="claude"
+        onPick={noop}
+        onManage={noop}
+      />,
+    )
+    expect(claude).toContain('Choose which account a new session here uses')
+    expect(claude).not.toContain('no login to isolate')
+  })
+})
+
+describe('placeMenu', () => {
+  const viewport = { width: 1200, height: 800 }
+
+  it('hangs the menu under its button', () => {
+    const at = placeMenu({ left: 100, top: 40, bottom: 58 }, { width: 300, height: 200 }, viewport)
+    expect(at.top).toBe(58 + 8)
+    expect(at.left).toBe(96)
+  })
+
+  it('keeps a menu near the right edge inside the window', () => {
+    const at = placeMenu({ left: 1150, top: 40, bottom: 58 }, { width: 300, height: 200 }, viewport)
+    expect(at.left + 300).toBeLessThanOrEqual(viewport.width)
+  })
+
+  it('flips above only when there is genuinely no room below', () => {
+    // A menu that flips on a window one pixel too short is worse than one that
+    // is a little tight at the bottom.
+    const tight = placeMenu({ left: 20, top: 700, bottom: 718 }, { width: 300, height: 300 }, viewport)
+    expect(tight.top).toBeLessThan(700)
+    const roomy = placeMenu({ left: 20, top: 40, bottom: 58 }, { width: 300, height: 300 }, viewport)
+    expect(roomy.top).toBe(66)
+  })
+})
+
+describe('accountsWorthShowing', () => {
+  const session = (id: string, account?: { id: string; name: string }): WorkspaceTab => ({
+    id,
+    kind: 'session',
+    label: id,
+    projectPath: '/w/app',
+    closable: true,
+    ...(account ? { account } : {}),
+  })
+  const work = { id: 'work', name: 'Work' }
+  const home = { id: 'home', name: 'Home' }
+
+  it('stays quiet while every session is on the same account', () => {
+    // A label that appears on every row carries no information, and this is the
+    // ordinary install.
+    expect(accountsWorthShowing([session('a', work), session('b', work)])).toBe(false)
+  })
+
+  it('speaks up the moment two accounts are in play', () => {
+    // Two sessions in one folder under two logins are otherwise the same row
+    // twice, which is exactly what a person must not have to guess about.
+    expect(accountsWorthShowing([session('a', work), session('b', home)])).toBe(true)
+  })
+
+  it('does not count a session that has no account', () => {
+    // A plain shell tab is not a disagreement about accounts; letting it flip
+    // every row into carrying a name would make the label mean "you opened a
+    // shell".
+    expect(accountsWorthShowing([session('a', work), session('b')])).toBe(false)
   })
 })
 
@@ -229,6 +386,90 @@ describe('Sidebar', () => {
     const foot = /class="sidebar-foot">([\s\S]*?)<div\s+class="sidebar-resize"/.exec(html)?.[1] ?? ''
     expect(foot).toContain('Alerts')
     expect(foot.indexOf('Alerts')).toBeLessThan(foot.indexOf('Settings'))
+  })
+
+  it('tells two sessions in one folder apart by their account', () => {
+    /*
+     * The case this exists for: the same folder, the same status dot, the same
+     * derived title — and two different logins. Without the account on the row
+     * the two are the same row twice, and picking the wrong one is the mistake
+     * the whole feature exists to prevent.
+     */
+    const twoAccounts = renderToStaticMarkup(
+      <Sidebar
+        width={264}
+        projects={projects}
+        tabs={[
+          {
+            id: 's1',
+            kind: 'session',
+            label: 'Fix the parser',
+            projectPath: projects[0].path,
+            account: { id: 'work', name: 'Work' },
+            closable: true,
+          },
+          {
+            id: 's2',
+            kind: 'session',
+            label: 'Fix the parser',
+            projectPath: projects[0].path,
+            account: { id: 'home', name: 'Home' },
+            closable: true,
+          },
+        ]}
+        activeTabId={null}
+        activePanel={null}
+        onSelectTab={noop}
+        onCloseTab={noop}
+        onSelectPanel={noop}
+        onNewSession={noop}
+        onNewBrowserTab={noop}
+        onOpenProject={noop}
+        onCloseProject={noop}
+        onOpenSettings={noop}
+        onToggleCollapsed={noop}
+        onPeekStart={noop}
+        onPeekEnd={noop}
+        onStartResize={noop}
+      />,
+    )
+    expect(twoAccounts).toContain('class="sb-account">Work<')
+    expect(twoAccounts).toContain('class="sb-account">Home<')
+    expect(twoAccounts).toContain('signed in as Work')
+  })
+
+  it('says nothing about accounts while there is only one', () => {
+    const oneAccount = renderToStaticMarkup(
+      <Sidebar
+        width={264}
+        projects={projects}
+        tabs={[
+          {
+            id: 's1',
+            kind: 'session',
+            label: 'Fix the parser',
+            projectPath: projects[0].path,
+            account: { id: 'work', name: 'Work' },
+            closable: true,
+          },
+        ]}
+        activeTabId={null}
+        activePanel={null}
+        onSelectTab={noop}
+        onCloseTab={noop}
+        onSelectPanel={noop}
+        onNewSession={noop}
+        onNewBrowserTab={noop}
+        onOpenProject={noop}
+        onCloseProject={noop}
+        onOpenSettings={noop}
+        onToggleCollapsed={noop}
+        onPeekStart={noop}
+        onPeekEnd={noop}
+        onStartResize={noop}
+      />,
+    )
+    expect(oneAccount).not.toContain('sb-account')
   })
 
   it('renders every panel exactly once, wherever it belongs', () => {

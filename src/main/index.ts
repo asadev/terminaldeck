@@ -16,7 +16,7 @@ import {
 } from './session-restore'
 import { store, type Preferences } from './store'
 import { pinUserData } from './user-data'
-import { registerCostIpc } from './cost-ipc'
+import { refreshCostWatchers, registerCostIpc } from './cost-ipc'
 import { registerGitIpc, stopAllGitWatches } from './git'
 import { registerFsIpc } from './fs-tree'
 import { registerSearchIpc } from './file-search'
@@ -42,6 +42,7 @@ import { registerDashboardIpc } from './dashboard-store'
 import { registerSessionSearchIpc } from './session-search'
 import { registerAlertsIpc } from './alerts'
 import { registerProfilesIpc, getState as profilesState, resolveProfile } from './profiles'
+import { registerSignInIpc } from './profiles-signin'
 import { registerDeckignoreIpc } from './deckignore'
 import { registerHooksIpc } from './hooks'
 import { registerHookServer, stopHookServer } from './hook-server'
@@ -280,7 +281,23 @@ const core = createHostCore({
   },
   // The window has to be told, or a session a phone started is running on this
   // Mac and only the phone knows about it.
-  onSessionCreated: (meta) => send(SESSION_CREATED_CHANNEL, meta),
+  onSessionCreated: (meta) => {
+    send(SESSION_CREATED_CHANNEL, meta)
+    /*
+     * And the cost pane has to be told where to look.
+     *
+     * A session a device started runs confined, with a home of its own, so its
+     * transcript is written under that home rather than under `~/.claude`. The
+     * first session a *new* device starts creates a store that every open cost
+     * pane has already finished looking for — and this is the moment the app
+     * knows it exists, because the app is what made it.
+     *
+     * Wired here, at the hook that already fires for exactly these sessions,
+     * rather than behind a timer that re-reads the disk hoping to find one. See
+     * `refreshCostWatchers`.
+     */
+    refreshCostWatchers()
+  },
 })
 
 /*
@@ -492,6 +509,31 @@ async function hydrateRenderer(): Promise<void> {
               }).configDir,
             conversation: conversationOnDisk,
           }),
+        /*
+         * No picture is painted here, and that is a measured decision rather
+         * than an omission.
+         *
+         * A restored session was briefly seeded with its own transcript so the
+         * screen would not be empty. It was built, it worked, and it is
+         * invisible: Claude Code switches to the ALTERNATE SCREEN
+         * (`ESC[?1049h` then `ESC[2J`) the moment its interface starts, about
+         * half a second after the spawn, so anything seeded into the normal
+         * buffer is underneath it and unreachable for the life of the session.
+         * There is no ordering that fixes that — the CLI owns the screen.
+         *
+         * And it is not needed: `--continue` re-reads the whole transcript and
+         * the CLI repaints the conversation itself, which is what a user
+         * actually sees. Proved by watching identical turns come back in the
+         * CLI's own styling with fresh spinner verbs.
+         *
+         * A plain shell has no transcript to replay either — nothing records
+         * what it printed, and its scrollback lives only in memory. Persisting
+         * every terminal's output to disk was considered and rejected: no
+         * terminal on any platform does it, the shell already saves the
+         * COMMANDS, and a file holding everything a terminal ever printed is
+         * the same liability as the three secret files this app just spent an
+         * afternoon locking down.
+         */
         // The same `startSession` the window's own button and a paired phone
         // use. A restore path with its own spawn would be a second kind of
         // session — different PATH, different profile handling — that only
@@ -723,6 +765,9 @@ function registerIpc(): void {
   registerDashboardIpc(ipcMain)
   registerSessionSearchIpc(ipcMain)
   registerProfilesIpc(ipcMain)
+  // The one profile question that cannot be answered by reading a directory:
+  // whether an account is signed in. See `profiles-signin.ts`.
+  registerSignInIpc(ipcMain)
   registerDeckignoreIpc(ipcMain)
   registerHooksIpc(ipcMain)
   registerMcpIpc(ipcMain)

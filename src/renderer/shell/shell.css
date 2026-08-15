@@ -432,6 +432,19 @@
   text-overflow: ellipsis;
 }
 
+/* Which account a session belongs to, on its row in the rail.
+   Drawn only when more than one account is in play — see
+   `accountsWorthShowing`. A label every row carries says nothing. */
+.sb-account {
+  flex-shrink: 0;
+  max-width: 12ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--t-caption);
+  color: var(--text-muted);
+}
+
 .sb-badge {
   flex-shrink: 0;
   min-width: 18px;
@@ -940,6 +953,122 @@
 .folder-menu-browse {
   margin-top: var(--sp-1);
   color: var(--text-secondary);
+}
+
+/* ---------------------------------------------------------- account chip -- */
+
+/* Where, and who. Two chips on the one line under the session's name, because
+   they are the two halves of the same decision and the brief asks for both in
+   one place, before anything is typed. */
+.toolbar-chips {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+
+/* Space would do the separating on its own if the two chips were not both
+   quiet grey words; this is the one place a mark earns its keep. */
+.toolbar-chip-sep {
+  width: 3px;
+  height: 3px;
+  flex-shrink: 0;
+  border-radius: var(--radius-pill);
+  background: var(--text-muted);
+  opacity: 0.5;
+}
+
+.account-chip {
+  position: relative;
+  min-width: 0;
+}
+
+/* An account name is a name a person typed, not data — so it stays in the UI
+   face while the folder's path beside it is mono. That line runs through the
+   whole window. */
+.account-chip-name {
+  max-width: 18ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--t-caption);
+}
+
+.account-chip-dot {
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  border-radius: var(--radius-pill);
+  /* Overridden inline with the account's own colour. This is the fallback for
+     the moment before the list has loaded, where a coloured dot would be
+     claiming to stand for an account nobody has read yet. */
+  background: var(--fill-secondary);
+}
+
+.account-menu-item {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+
+.account-menu-line {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+/* The right-hand column: the address the agent named, or one word for the
+   state it reported. Dimmer than the name, because the name is what you are
+   choosing and this is how you tell two of them apart. */
+.account-menu-state {
+  flex-shrink: 0;
+  max-width: 24ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--t-caption);
+  color: var(--text-muted);
+}
+
+.account-menu-state[data-state='signed-in'] {
+  color: var(--status-completed);
+}
+
+.account-menu-empty,
+.account-menu-foot {
+  margin: 0;
+  padding: var(--sp-1) var(--sp-3) var(--sp-2);
+  font-size: var(--t-caption);
+  line-height: 1.4;
+  color: var(--text-muted);
+}
+
+/* Why the accounts below cannot be picked. Set brighter than the footer and
+   above the list rather than under it, because it is the reason the list looks
+   the way it does — read after the rows, it only explains a click that has
+   already gone nowhere. */
+.account-menu-blocked {
+  margin: 0;
+  padding: 0 var(--sp-3) var(--sp-2);
+  font-size: var(--t-caption);
+  line-height: 1.4;
+  color: var(--text-secondary);
+}
+
+/* An account listed for reference while nothing can act on it. No hover, no
+   pointer, no press — a hover state is a promise, and there is nothing here to
+   promise. */
+.account-menu-item.is-inert {
+  display: flex;
+  margin: 0;
+  cursor: default;
+  opacity: 0.55;
+}
+
+.account-menu-item.is-inert:hover {
+  background: none;
 }
 
 .toolbar-drag {

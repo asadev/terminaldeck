@@ -12,7 +12,7 @@
  */
 
 import type { IpcMain, IpcMainInvokeEvent, WebContents } from 'electron'
-import { extname, resolve, sep } from 'node:path'
+import { resolve } from 'node:path'
 import {
   addUsage,
   emptyUsage,
@@ -25,12 +25,13 @@ import {
   type TokenUsage,
 } from './cost'
 import {
-  claudeConfigDir,
   DEFAULT_MAX_AGE_MS,
   DEFAULT_MAX_SESSIONS,
+  isTranscriptPath,
   listTranscripts,
   readTranscript,
   transcriptDir,
+  transcriptDirs,
   TranscriptWatcher,
   type ProjectSummary,
   type SessionSummary,
@@ -69,19 +70,23 @@ function projectKey(cwd: unknown): string {
  *
  * `cost:session` reads whatever file it is handed and reports fields lifted out
  * of it, so an unchecked path is an arbitrary-file-read primitive reachable from
- * the renderer. Transcripts only ever live under `<config>/projects`, so anything
- * that escapes that root — `../`, an absolute path elsewhere — is refused.
+ * the renderer. Anything that escapes the transcript stores — `../`, an absolute
+ * path elsewhere — is refused.
+ *
+ * The membership test moved into `transcript.ts` when there stopped being one
+ * store. A confined session writes under its own device home, so a path that is
+ * a perfectly real transcript now lives outside `~/.claude` — and widening this
+ * check by hand here, and again in `chat-transcript.ts`, is how two copies of
+ * one rule drift apart. The copy that drifts *open* is the one nobody notices.
  */
 function assertTranscriptPath(path: unknown): string {
   if (typeof path !== 'string' || path.length === 0) {
     throw new Error('cost: a transcript path is required')
   }
-  const resolved = resolve(path)
-  const root = resolve(claudeConfigDir(), 'projects')
-  if (!resolved.startsWith(root + sep) || extname(resolved) !== '.jsonl') {
+  if (!isTranscriptPath(path)) {
     throw new Error(`cost: refusing to read outside the transcript store: ${path}`)
   }
-  return resolved
+  return resolve(path)
 }
 
 function broadcast(entry: Entry, summary: ProjectSummary): void {
@@ -139,6 +144,35 @@ function releaseAll(contents: WebContents): void {
 }
 
 /**
+ * Tell every live watcher to look for a store that was not there before.
+ *
+ * Called when a session starts, and it exists for exactly one case: a session a
+ * paired device asked for. Those run confined, with a home of their own, and
+ * their transcripts land in that home rather than in `~/.claude` — so the first
+ * session a *new* device starts creates a store that every open cost pane is
+ * already past having looked for.
+ *
+ * An event rather than a poll, and an event the app already has rather than a
+ * new one: the app made that home itself, one function call earlier. The
+ * alternative is waiting for the filesystem to mention it, which
+ * `TranscriptWatcher.refresh` explains is measurably unreliable at the moment it
+ * matters most.
+ *
+ * A no-op when nothing is being watched, which is the ordinary case — nobody has
+ * the cost pane open on the folder a phone just picked.
+ */
+export function refreshCostWatchers(): void {
+  for (const entry of entries.values()) {
+    void entry.watcher.refresh().catch((err: unknown) => {
+      // One project's re-read must not take the others down with it, and there
+      // is nothing for a user to do about it — the numbers simply refresh on the
+      // next change instead.
+      console.error('[cost] could not refresh a watcher:', err)
+    })
+  }
+}
+
+/**
  * Register the cost/context IPC handlers.
  *
  * Channels:
@@ -165,7 +199,13 @@ export function registerCostIpc(ipcMain: IpcMain): void {
     // has ever produced is unbounded work on the main process — some of these
     // directories hold hundreds of files and hundreds of megabytes.
     const cutoff = Date.now() - DEFAULT_MAX_AGE_MS
-    const files = (await listTranscripts(transcriptDir(key)))
+    // Every store, merged and then capped, for the reason `TranscriptWatcher`
+    // gives at the same point: the cap is an answer about the project, so
+    // applying it per directory would make the number depend on how many devices
+    // had been paired.
+    const files = (await Promise.all(transcriptDirs(key).map((dir) => listTranscripts(dir))))
+      .flat()
+      .sort((a, b) => b.modifiedAt - a.modifiedAt)
       .filter((file) => file.modifiedAt >= cutoff)
       .slice(0, DEFAULT_MAX_SESSIONS)
 
@@ -182,8 +222,15 @@ export function registerCostIpc(ipcMain: IpcMain): void {
 
   ipcMain.handle(
     'cost:sessions',
-    (_e: IpcMainInvokeEvent, cwd: string): Promise<TranscriptFile[]> =>
-      listTranscripts(transcriptDir(projectKey(cwd))),
+    async (_e: IpcMainInvokeEvent, cwd: string): Promise<TranscriptFile[]> => {
+      const found = await Promise.all(
+        transcriptDirs(projectKey(cwd)).map((dir) => listTranscripts(dir)),
+      )
+      // `listTranscripts` sorts each directory newest first; the merge has to
+      // re-sort, or a device's sessions would all land after the owner's however
+      // recent they are.
+      return found.flat().sort((a, b) => b.modifiedAt - a.modifiedAt)
+    },
   )
 
   ipcMain.handle('cost:watch', async (event: IpcMainInvokeEvent, cwd: string) => {

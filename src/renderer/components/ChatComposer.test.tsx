@@ -72,6 +72,35 @@ describe('no bare icons', () => {
   })
 })
 
+describe('a shell keeps its options, in the form a shell can read', () => {
+  const html = render({
+    onSend: () => {},
+    cwd: '/tmp/project',
+    shell: true,
+    placeholder: 'Run a command in this shell…',
+  })
+
+  it('still draws the menu behind the plus', () => {
+    // The regression, in the words it was reported in: "you actually removed
+    // everything rather than making it simple". The plus was withdrawn from
+    // shell sessions outright, and what was left in the box was a microphone
+    // and a send button. Picking a file out of the project was never an agent
+    // feature; only the `@"path"` mention it produced was.
+    expect(html, 'a shell composer has no menu at all').toContain('cc-chip')
+    expect(html).toContain('Path')
+  })
+
+  it('promises nothing about an agent that is not in the session', () => {
+    expect(html.toLowerCase()).not.toContain('agent')
+  })
+
+  it('still names every button', () => {
+    for (const button of html.match(/<button[^>]*>/g) ?? []) {
+      expect(button).toMatch(/aria-label="|title="/)
+    }
+  })
+})
+
 describe('when there is nothing to write to', () => {
   const html = render({ cwd: '/tmp/project' })
 

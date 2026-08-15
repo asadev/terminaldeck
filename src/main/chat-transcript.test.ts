@@ -1,3 +1,4 @@
+import { mkdirSync, mkdtempSync, writeFileSync, utimesSync } from 'node:fs'
 import { mkdtemp, rm, writeFile, appendFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -6,10 +7,17 @@ import {
   ChatReader,
   collapseChat,
   mayCarryChat,
+  newestChatTranscript,
   parseChatLine,
   readChatTranscript,
   type ChatLine,
 } from './chat-transcript'
+import {
+  encodeProjectPath,
+  installDeviceHomes,
+  isTranscriptPath,
+  resetDeviceHomes,
+} from './transcript'
 
 /**
  * Fixtures are cut from real lines in `~/.claude/projects` on this machine, with
@@ -404,5 +412,83 @@ describe('the pre-parse gate', () => {
     expect(mayCarryChat(JSON.stringify({ type: 'attachment', attachment: { type: 'file' } }))).toBe(false)
     expect(mayCarryChat(JSON.stringify({ type: 'queue-operation', operation: 'add' }))).toBe(false)
     expect(mayCarryChat(JSON.stringify({ type: 'ai-title', aiTitle: 'Chat view' }))).toBe(false)
+  })
+})
+
+/* ------------------------------------------------- where chat mode looks -- */
+
+/**
+ * The regression that made chat mode blank for a session started from a phone.
+ *
+ * Such a session runs confined, with a `HOME` of its own, and the CLI follows
+ * `HOME` — so its conversation is written under `<deviceHome>/.claude/projects`
+ * and not under the owner's `~/.claude` at all. This function was reading only
+ * the profile's store, so it answered "no transcript" for a session that was
+ * talking, and the view showed the empty state with nothing to explain it.
+ *
+ * Nothing here copies or links anything: the session writes where it was always
+ * going to write, and `transcript.ts` is told where the homes are.
+ */
+describe('the transcript chat mode opens', () => {
+  const made: string[] = []
+
+  function scratch(prefix: string): string {
+    const dir = mkdtempSync(join(tmpdir(), prefix))
+    made.push(dir)
+    return dir
+  }
+
+  afterAll(async () => {
+    for (const dir of made) await rm(dir, { recursive: true, force: true })
+  })
+
+  const CWD = '/Users/apple/Projects/terminaldeck'
+
+  it('finds a confined session, whose conversation is in its own store', async () => {
+    const config = scratch('deck-chat-config-')
+    const homes = scratch('deck-chat-homes-')
+    installDeviceHomes(homes)
+    try {
+      const store = join(homes, 'dev-a', '.claude', 'projects', encodeProjectPath(CWD))
+      mkdirSync(store, { recursive: true })
+      const path = join(store, 'sess-phone.jsonl')
+      writeFileSync(path, `${prompt('what is failing?')}\n${reply('the build.')}\n`)
+
+      // The owner's own store exists and is empty for this project, which is the
+      // shape that used to produce "no transcript at all".
+      mkdirSync(join(config, 'projects', encodeProjectPath(CWD)), { recursive: true })
+      expect(await newestChatTranscript(CWD)).toBe(path)
+      // And the guard lets the reader open it, rather than treating a real
+      // transcript outside `~/.claude` as an escape attempt.
+      expect(isTranscriptPath(path)).toBe(true)
+    } finally {
+      resetDeviceHomes()
+    }
+  })
+
+  it('still prefers whichever store was written to most recently', async () => {
+    // Both stores hold a conversation for this project. "The live session" is a
+    // question about time, not about which directory it happens to be in.
+    const homes = scratch('deck-chat-homes-2-')
+    installDeviceHomes(homes)
+    try {
+      const store = join(homes, 'dev-a', '.claude', 'projects', encodeProjectPath(CWD))
+      mkdirSync(store, { recursive: true })
+      const older = join(store, 'sess-old.jsonl')
+      writeFileSync(older, `${prompt('yesterday')}\n`)
+      utimesSync(older, new Date(1_700_000_000_000), new Date(1_700_000_000_000))
+
+      const newer = join(store, 'sess-new.jsonl')
+      writeFileSync(newer, `${prompt('today')}\n`)
+      expect(await newestChatTranscript(CWD)).toBe(newer)
+    } finally {
+      resetDeviceHomes()
+    }
+  })
+
+  it('answers nothing when there is no store at all, rather than throwing', async () => {
+    // Every machine where nobody has paired a device, and every unit test.
+    resetDeviceHomes()
+    expect(await newestChatTranscript('/nowhere/at/all')).toBeNull()
   })
 })

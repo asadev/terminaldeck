@@ -115,11 +115,22 @@
 }
 
 /* The left half gives way first: it holds the model name, which can be long,
-   while the right half holds two fixed-width controls that must never move. */
+   while the right half holds two fixed-width controls that must never move.
+
+   It wraps, and that is a bug fix rather than a nicety. Measured in the
+   composer harness: in a 520px pane — an ordinary width in split view, or with
+   the sidebar pinned open — this row wanted 214px inside 174px, and a flex row
+   that cannot wrap does not scroll, it overlaps. The Options button was the one
+   that lost, sitting underneath the Permission chip and refusing every click,
+   which is a control that exists and cannot be reached: the exact failure this
+   whole pass is about, arrived at through CSS instead of through a deletion.
+   Wrapping spends a line of height in a narrow pane and keeps everything
+   pressable at every width. */
 .cc-foot-left {
   display: flex;
   align-items: center;
-  gap: var(--sp-05);
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-05);
   flex: 1;
   min-width: 0;
 }

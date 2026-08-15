@@ -190,34 +190,50 @@ async function showStatus(record: DaemonRecord): Promise<number> {
 /**
  * The whole onboarding: show a code, wait, confirm.
  *
- * The waiting is done by the person pressing Enter, and that is a decision
- * rather than a shortcut. There is no event this process can subscribe to — the
- * device redeems its code against the *daemon*, which refuses the connection on
- * purpose and tells the device to get itself approved — and the alternative to a
- * person is a loop asking the host every second whether anything has happened
- * yet. The standing rule here is events, not polling, and a human at a keyboard
- * is the most reliable event in this whole flow.
+ * ## The "press Enter" step is gone, and the reason it was ever here matters
+ *
+ * This used to print the code and then ask a person to press Enter once their
+ * phone said it was waiting to be approved. That was not laziness: the device
+ * redeems its code against the *daemon*, which is a different process, and there
+ * was no event to subscribe to — so the alternatives were a human at a keyboard
+ * or a loop asking the host every second whether anything had happened yet. The
+ * standing rule is events, not polling, and a human is a very good event.
+ *
+ * A human is also the one thing a demo box does not have. Building the public
+ * host in `public-host.ts` needed a broker to know the instant a device redeemed,
+ * and a broker cannot press Enter — so the daemon now says so, once, at the
+ * moment it already knows (`onDevicePaired` in `server.ts`, surfaced as the
+ * `remote:device:next` channel). This command asks that channel and waits.
+ *
+ * The connection is held open until there is something to say. That is not a
+ * poll: nothing wakes on an interval, nothing asks twice, and the answer is
+ * written the instant the redemption happens. The roster read before the code
+ * was printed is passed along so that a device which redeemed while the code was
+ * still being drawn is reported immediately rather than waited for.
  */
 async function pair(record: DaemonRecord): Promise<number> {
   const before = await devices(record)
   if (!before.ok) return fail(before.answer)
 
   /*
-   * Minted through `machines:code`, not `remote:pair`, and the difference is the
-   * whole usefulness of the printed code.
+   * Minted through `machines:code`, not `remote:pair`, and what differs now is
+   * only the refusal.
    *
-   * Both mint from the same desk — there is one code on screen at a time — but
-   * `machines:code` also publishes a rendezvous beacon at the relay for the life
-   * of that code, which is what lets another machine find this one from eight
-   * characters and nothing else. `remote:pair` alone produces a code that only a
-   * client already holding this host's address and key can use, which on a
-   * server nobody has ever connected to is a code that cannot work.
+   * Both mint from the same desk — there is one code at a time — and both
+   * publish the same rendezvous beacon at the relay for the life of that code,
+   * which is what lets another machine find this one from eight characters and
+   * nothing else. That was not always true: `remote:pair` used to publish
+   * nothing, so a code printed here through it could not be looked up at all.
+   * `PairingDesk.show` is one call for both halves now, and there is no path
+   * that mints without publishing.
    *
-   * It refuses when the relay is down, with a sentence, and that refusal is
-   * correct rather than an obstacle: a code nobody can look up is a code that
-   * fails after somebody has typed it. `remote:pair` is the fallback for exactly
-   * that case, because a tailnet client that already knows this machine can
-   * still use one.
+   * What is left is which failure each channel treats as fatal. `machines:code`
+   * refuses outright when there is nothing to publish, with a sentence, and that
+   * refusal is correct rather than an obstacle: on a box whose only route is the
+   * relay, a code nobody can look up is a code that fails after somebody has
+   * typed it. `remote:pair` mints anyway, which is right for a client that
+   * already knows this machine's address — a tailnet client, or a QR — and is
+   * the fallback printed below when the relay is down.
    */
   const status = await ask(record, 'status')
   if (!status.ok) return fail(status)
@@ -250,41 +266,48 @@ async function pair(record: DaemonRecord): Promise<number> {
     return 0
   }
 
-  const known = new Set(before.devices.map((device) => device.id))
-  for (;;) {
-    await question('  Press Enter once the device says it is waiting to be approved. ')
-    const after = await devices(record)
-    if (!after.ok) return fail(after.answer)
-    const fresh = after.devices.filter((device) => !known.has(device.id) && !device.revoked)
+  process.stdout.write('  Waiting for a device to use it…\n')
 
-    if (fresh.length === 0) {
-      process.stdout.write(
-        '\n  Nothing new has paired yet. The code is only good for a minute — if it has\n' +
-          `  expired, press Ctrl-C and run "${BRAND.id} pair" again.\n\n`,
-      )
-      continue
-    }
+  const known = before.devices.map((device) => device.id)
+  const heard = await ask(
+    record,
+    // Longer than the control socket's usual ten seconds, because this call is
+    // *meant* to be slow — it answers when a person on the other side of the
+    // room has finished typing. The host bounds it too; this is the shorter of
+    // the two, so a caller can always tell a quiet minute from a wedged host.
+    { cmd: 'remote:device:next', timeoutMs: PAIR_WAIT_MS + 5_000 },
+    known,
+    PAIR_WAIT_MS,
+  )
+  if (!heard.ok) return fail(heard)
 
-    for (const device of fresh) {
-      process.stdout.write(renderNewDevice(device))
-      const answer = (await question('  Approve it? [y/N] ')).trim().toLowerCase()
-      if (answer !== 'y' && answer !== 'yes') {
-        process.stdout.write(
-          `\n  Left unapproved. It stays paired and locked out; approve it later by\n` +
-            `  running "${BRAND.id} pair" again, or forget it from another device.\n`,
-        )
-        continue
-      }
-      const approved = await ask(record, 'remote:device:approve', device.id)
-      if (!approved.ok) return fail(approved)
-      process.stdout.write(
-        `\n  Approved. ${device.name} can reach this host now — it may need to reconnect once.\n` +
-          `  It starts with the folders this host has open; "${BRAND.id} folders add <path>"\n` +
-          '  narrows that to exactly what you choose.\n',
-      )
-    }
+  const device = heard.value as Device | null
+  if (device === null) {
+    process.stdout.write(
+      '\n  Nothing paired. The code is only good for a minute, so it has expired by now —\n' +
+        `  run "${BRAND.id} pair" again when the device is ready.\n`,
+    )
+    return 1
+  }
+
+  process.stdout.write(renderNewDevice(device))
+  const answer = (await question('  Approve it? [y/N] ')).trim().toLowerCase()
+  if (answer !== 'y' && answer !== 'yes') {
+    process.stdout.write(
+      `\n  Left unapproved. It stays paired and locked out; approve it later by\n` +
+        `  running "${BRAND.id} pair" again, or forget it from another device.\n`,
+    )
     return 0
   }
+
+  const approved = await ask(record, 'remote:device:approve', device.id)
+  if (!approved.ok) return fail(approved)
+  process.stdout.write(
+    `\n  Approved. ${device.name} can reach this host now — it may need to reconnect once.\n` +
+      `  It starts with the folders this host has open; "${BRAND.id} folders add <path>"\n` +
+      '  narrows that to exactly what you choose.\n',
+  )
+  return 0
 }
 
 async function stop(record: DaemonRecord): Promise<number> {
@@ -375,11 +398,37 @@ async function changeFolders(
 
 /* ---------------------------------------------------------------- plumbing -- */
 
-async function ask(record: DaemonRecord, cmd: string, ...args: unknown[]): Promise<ControlResponse> {
+/**
+ * How long `pair` waits for a device before giving up and saying so.
+ *
+ * Two minutes, which is longer than a pairing code lives on purpose: a person
+ * who fumbles the first code types the second one inside the same wait, and
+ * ending the command at exactly sixty seconds would have made every second
+ * attempt a fresh invocation. The host caps this as well, at three minutes, so
+ * whichever number is changed the shorter one still wins.
+ */
+const PAIR_WAIT_MS = 120_000
+
+/**
+ * Send one control message.
+ *
+ * `what` is a bare command name for the eight calls that answer in
+ * milliseconds, and an object for the one that does not: `remote:device:next`
+ * is *meant* to be slow, and giving it the same ten-second deadline as `status`
+ * would have reported a wedged host every time somebody took their phone out of
+ * their pocket.
+ */
+async function ask(
+  record: DaemonRecord,
+  what: string | { cmd: string; timeoutMs: number },
+  ...args: unknown[]
+): Promise<ControlResponse> {
+  const cmd = typeof what === 'string' ? what : what.cmd
   const answer = await callControl({
     socket: record.socket,
     token: record.token,
     cmd,
+    ...(typeof what === 'string' ? {} : { timeoutMs: what.timeoutMs }),
     /*
      * Every argument is JSON, including the ones that are plainly strings.
      *

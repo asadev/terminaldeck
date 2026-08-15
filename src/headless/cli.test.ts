@@ -195,7 +195,12 @@ describe('renderNewDevice', () => {
   })
 
   it('says plainly when a device has no key rather than printing nothing', () => {
-    expect(renderNewDevice(device({ fingerprint: null }))).toContain('tailnet')
+    const text = renderNewDevice(device({ fingerprint: null }))
+    // The consequence, not the name of the transport that is left. "Can only be
+    // reached over a tailnet" told somebody with no mesh VPN that their device
+    // was unreachable, in the vocabulary of a product they do not run.
+    expect(text).toContain('cannot use the relay')
+    expect(text).not.toContain('tailnet')
   })
 })
 
@@ -244,6 +249,10 @@ const status = (patch: Partial<HostStatus> = {}): HostStatus => ({
   folders: [],
   sessions: [],
   neverRunning: ['cost polling (a window feature)'],
+  // Null is what every host anybody owns answers. A test whose default was the
+  // demo sentence would have every unrelated assertion running against the one
+  // machine in the world this build treats differently.
+  publicHost: null,
   ...patch,
 })
 
@@ -267,12 +276,71 @@ describe('renderStatus', () => {
     expect(text).toContain('wsl.exe --shutdown')
   })
 
-  it('separates a missing direct path from a failure', () => {
-    // With a relay carrying the session, "no Tailscale" is a note about a faster
-    // route and not a failure. Printing it as one teaches people to ignore it.
+  it('says nothing about Tailscale while the relay is carrying the session', () => {
+    /*
+     * The relay is the default route: no install, no account, works from a
+     * hotel wifi. Tailscale is an optional faster one. Printing "Direct: none —
+     * Tailscale refused the request" under a connected relay reports the
+     * absence of an optimisation nobody asked for in the wording of a fault,
+     * and sends a person whose host is working to a Tailscale admin console.
+     */
     const text = renderStatus(status(), 0)
-    expect(text).toContain('not signed in to Tailscale')
     expect(text).toContain('connected      wss://relay.terminaldeck.dev')
+    expect(text).not.toContain('Tailscale')
+    expect(text).not.toContain('Direct')
+  })
+
+  it('prints the direct address when the tailnet is actually serving one', () => {
+    const base = status()
+    const text = renderStatus(
+      status({
+        remote: {
+          ...base.remote,
+          url: 'https://asads-macbook-pro.taild11505.ts.net:8443/',
+          address: '100.86.107.119',
+          directReason: null,
+        },
+      }),
+      0,
+    )
+    expect(text).toContain('Direct')
+    expect(text).toContain('https://asads-macbook-pro.taild11505.ts.net:8443/')
+  })
+
+  it('still says nothing about it when the relay is down as well', () => {
+    /*
+     * This was the last place the complaint survived, on the argument that with
+     * nothing carrying the session the missing direct route was half the
+     * diagnosis. It is not half of anything. This host has one problem — the
+     * relay is not connected — and the Relay block says it in the relay's own
+     * words. Adding that a mesh VPN the reader has never installed is also not
+     * installed hands them a second errand, and it is the one they will run,
+     * because it is the one that sounds like a cause.
+     */
+    const base = status()
+    const text = renderStatus(
+      status({
+        remote: {
+          ...base.remote,
+          relay: { ...base.remote.relay!, connected: false, reason: 'No network.', retryAt: null },
+        },
+      }),
+      0,
+    )
+    expect(text).not.toContain('Tailscale')
+    expect(text).not.toContain('Direct')
+    expect(text).toContain('not connected  No network.')
+  })
+
+  it('never mentions the direct route in a build with no relay at all', () => {
+    // `relay: null` is a build assembled without one. What is true is that
+    // nothing is dialling out; naming the transport somebody would need instead
+    // is the same mistake in a quieter place.
+    const base = status()
+    const text = renderStatus(status({ remote: { ...base.remote, relay: null } }), 0)
+    expect(text).toContain('off — this host is not dialling out')
+    expect(text).not.toContain('tailnet')
+    expect(text).not.toContain('Tailscale')
   })
 
   it('says why nothing is serving when nothing is', () => {

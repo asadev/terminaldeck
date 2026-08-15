@@ -7,12 +7,48 @@
  * event. This module locates that directory for a project, tails the files
  * incrementally, and feeds `cost.ts`. It never re-reads bytes it has already
  * seen, so a live session costs a stat plus the bytes that actually arrived.
+ *
+ * ## One project, more than one store
+ *
+ * `~/.claude` is where *this account's own* sessions write, and for a long time
+ * that was the whole answer. Two features have moved it since, and both moved it
+ * the same way — by changing where the CLI thinks its files go — so this module
+ * answers with a *list* of directories rather than one:
+ *
+ *  1. **Profiles.** `CLAUDE_CONFIG_DIR` relocates the config directory, and the
+ *     transcripts go with it. `profiles.ts` has always passed the profile's
+ *     directory in as `configDir`, which is the first argument of every function
+ *     here that takes one.
+ *  2. **Confinement.** A session started from a paired device is held inside its
+ *     granted folder, and the account's home is outside that boundary — so the
+ *     session runs with a `HOME` of its own, one per device. The CLI follows
+ *     `HOME`, which puts its transcripts under `<deviceHome>/.claude/projects`
+ *     and *not* under the owner's `~/.claude` at all.
+ *
+ * The second one arrived without this file being told, and the result was a
+ * whole class of session the app could not see: chat mode showed an empty
+ * conversation, the cost pane showed nothing, alerts never fired, and none of
+ * them was wrong — they were reading the right directory for a session that was
+ * writing to a different one. Measured rather than assumed, with the real CLI
+ * (2.1.233) on this machine:
+ *
+ *     HOME=/tmp/homeprobe claude config ls
+ *       → /tmp/homeprobe/.claude.json          (config, one level up)
+ *       → /tmp/homeprobe/.claude/projects/…    (transcripts, here)
+ *
+ * So {@link installDeviceHomes} tells this module where the app keeps those
+ * per-device homes, and {@link transcriptDirs} answers with every directory a
+ * project's transcripts can be in. Nothing is copied and nothing is symlinked:
+ * the confined session keeps writing where it was always going to write, and the
+ * readers learn to look there. See `confine/index.ts` for why the home has to
+ * move in the first place.
  */
 
 import { watch, type FSWatcher } from 'chokidar'
+import { existsSync, readdirSync } from 'node:fs'
 import { open, readdir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { basename, extname, join, resolve } from 'node:path'
+import { basename, dirname, extname, join, resolve, sep } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 import {
   addUsage,
@@ -60,15 +96,163 @@ export function encodeProjectPath(cwd: string): string {
   return resolve(cwd).replace(/[^a-zA-Z0-9]/g, '-')
 }
 
+/**
+ * The Claude CLI's config directory *under a given home*.
+ *
+ * A function rather than an inlined `join` because two callers now need it and
+ * they must not disagree: the default install below, and a confined session's
+ * own home. Note what is **not** in here — `.claude.json` sits beside this
+ * directory rather than inside it, one level up, which is the trap
+ * `profiles.ts` documents at length and the reason setting
+ * `CLAUDE_CONFIG_DIR=$HOME/.claude` is not the no-op it looks like. Transcripts
+ * are the part that lives inside, and transcripts are all this module wants.
+ */
+export function claudeConfigDirIn(home: string): string {
+  return join(home, '.claude')
+}
+
 /** Root of the Claude CLI's config. `CLAUDE_CONFIG_DIR` is how profiles are isolated. */
 export function claudeConfigDir(): string {
   const override = process.env.CLAUDE_CONFIG_DIR?.trim()
-  return override && override.length > 0 ? override : join(homedir(), '.claude')
+  return override && override.length > 0 ? override : claudeConfigDirIn(homedir())
 }
 
 /** Directory holding every transcript for a project. May not exist yet. */
 export function transcriptDir(cwd: string, configDir = claudeConfigDir()): string {
   return join(configDir, 'projects', encodeProjectPath(cwd))
+}
+
+/* ------------------------------------------------- the app's own homes -- */
+
+/**
+ * Where this app keeps one home per device for confined sessions, or null when
+ * nothing has said.
+ *
+ * Installed rather than computed, and the argument is the one
+ * `platform/paths.ts` makes for `installPaths`: the path is
+ * `<userData>/remote/device-home`, `userData` is an Electron question in one
+ * shell and an environment question in the other, and this module is imported by
+ * neither shell — it is imported by four readers, a test suite that never boots
+ * an app, and the headless build. Reaching for `userDataDir()` from here would
+ * make every one of those depend on a seam being installed first, to answer a
+ * question most of them are not asking.
+ *
+ * Null is a real answer and means "no confined sessions exist here", which is
+ * the truth in every unit test and on any machine where nobody has ever paired a
+ * device. It reads as an empty list rather than as an error, because a missing
+ * *extra* store must never stop the ordinary one being read.
+ */
+let deviceHomes: string | null = null
+
+/** Called once at assembly by whichever shell built the host core. */
+export function installDeviceHomes(root: string): void {
+  deviceHomes = root
+}
+
+/** Forget it. Exported for tests, which point it at a scratch directory per case. */
+export function resetDeviceHomes(): void {
+  deviceHomes = null
+}
+
+/** Where confined homes live, or null. */
+export function deviceHomesRoot(): string | null {
+  return deviceHomes
+}
+
+export interface TranscriptScope {
+  /** The profile's config directory. Defaults to this app's own. */
+  configDir?: string
+  /**
+   * Where per-device confined homes live. Defaults to whatever was installed;
+   * pass `null` to ask about the profile's store alone.
+   */
+  deviceHomes?: string | null
+}
+
+/**
+ * Which config directories to consult for one project, the profile's first.
+ *
+ * `configDir` is the profile's — the caller's existing argument, unchanged and
+ * still first, because a session running under a named profile writes there and
+ * that is the answer for nearly everything. What follows it is one entry per
+ * device home that exists on disk.
+ *
+ * Read from the filesystem on every call rather than cached. The list changes
+ * when a device is paired and its first session runs, which is not an event this
+ * module hears about, and the read is a `readdir` of a directory holding one
+ * entry per paired device — a handful, on the machine this was written on. A
+ * cache would trade nothing measurable for a class of bug where the app cannot
+ * see a session until it is restarted.
+ */
+export function configDirs(options: TranscriptScope = {}): string[] {
+  const primary = options.configDir ?? claudeConfigDir()
+  const root = options.deviceHomes === undefined ? deviceHomes : options.deviceHomes
+  if (root === null) return [primary]
+
+  const dirs = [primary]
+  let entries: string[]
+  try {
+    entries = readdirSync(root, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => join(root, entry.name))
+  } catch {
+    // No devices have ever been paired, or the directory is unreadable. Either
+    // way the owner's own store is still the answer for their own sessions, and
+    // failing the whole read over a missing *extra* store would take the working
+    // half down with the absent one.
+    return dirs
+  }
+
+  for (const home of entries) {
+    const dir = claudeConfigDirIn(home)
+    // A device home exists from the moment a device first starts a session; its
+    // `.claude` exists only once an agent has actually run in it. Skipping the
+    // ones with nothing in them keeps the watcher from subscribing to
+    // directories that will never have a transcript.
+    if (existsSync(dir)) dirs.push(dir)
+  }
+  return dirs
+}
+
+/**
+ * Every directory that can hold a transcript for one project.
+ *
+ * The single-directory {@link transcriptDir} is left exactly as it was and is
+ * still the right call wherever a caller has a config directory in hand and
+ * means that one. This is for the four readers that mean "wherever this
+ * project's conversations are" — chat mode, cost, alerts, agent controls — each
+ * of which was asking the first question and using the answer for the second.
+ */
+export function transcriptDirs(cwd: string, options: TranscriptScope = {}): string[] {
+  const encoded = encodeProjectPath(cwd)
+  return configDirs(options).map((dir) => join(dir, 'projects', encoded))
+}
+
+/**
+ * Is this path inside one of the stores this app reads transcripts from?
+ *
+ * The guard behind `chat:load` and `cost:session`, which take a path from the
+ * renderer, read whatever file it names and hand its contents back — so an
+ * unchecked path there is an arbitrary-file-read reachable from page code. Both
+ * had their own copy of this check against `claudeConfigDir()` alone, which was
+ * correct until a confined session's transcripts started living somewhere else:
+ * widening it by hand in two files is how the two spellings drift apart, and the
+ * one that drifts *open* is the one nobody notices.
+ *
+ * Still deliberately strict about the shape. `startsWith(root + sep)` refuses
+ * the root itself and refuses a sibling directory whose name merely begins with
+ * the root's; the extension check refuses everything that is not a transcript.
+ * Nested paths are allowed on purpose — sub-agent transcripts live one level
+ * down.
+ */
+export function isTranscriptPath(path: string, options: TranscriptScope = {}): boolean {
+  if (typeof path !== 'string' || path.length === 0) return false
+  const resolved = resolve(path)
+  if (extname(resolved) !== '.jsonl') return false
+  return configDirs(options).some((dir) => {
+    const root = resolve(dir, 'projects')
+    return resolved.startsWith(root + sep)
+  })
 }
 
 export interface TranscriptFile {
@@ -129,6 +313,29 @@ export async function listTranscripts(dir: string): Promise<TranscriptFile[]> {
 export async function newestTranscript(dir: string): Promise<TranscriptFile | null> {
   const files = await listTranscripts(dir)
   return files[0] ?? null
+}
+
+/**
+ * The most recently written transcript in a directory that has anything in it.
+ *
+ * Not the same question as {@link newestTranscript}, and the difference is a
+ * zero-byte file. The CLI opens a transcript before it has a turn to put in it,
+ * so an empty file is a session that started and said nothing — which is not a
+ * conversation, however recent it is. `session-restore.ts` has always had to
+ * skip those (sending `--continue` at nothing kills the tab), and the restore's
+ * replay has to paint the same file the restore decided to continue, or the
+ * screen would show one conversation while the CLI attached to another.
+ *
+ * So both ask this, rather than each filtering a listing its own way. Two
+ * spellings of "the conversation for this folder" is how the picture and the
+ * context drift apart, and the drift is invisible: both halves look right on
+ * their own.
+ */
+export async function newestConversation(dir: string): Promise<TranscriptFile | null> {
+  const files = await listTranscripts(dir)
+  // `listTranscripts` sorts most-recently-written first, so the first file with
+  // bytes in it is the newest conversation.
+  return files.find((file) => file.bytes > 0) ?? null
 }
 
 /* -------------------------------------------------------------------------- */
@@ -621,6 +828,14 @@ export async function readTranscript(path: string): Promise<SessionSummary> {
 
 export interface ProjectSummary {
   cwd: string
+  /**
+   * The *profile's* directory for this project, which is no longer the only one
+   * the sessions below came from — a confined session's transcript is in its own
+   * device's store. Kept as-is rather than widened to a list because nothing
+   * renders it: it is a diagnostic, and the honest thing for a diagnostic to
+   * name is the store a person would go and look in first. `transcriptDirs` is
+   * the answer when a caller means all of them.
+   */
   transcriptDir: string
   /** Sessions, most recently active first. */
   sessions: SessionSummary[]
@@ -638,6 +853,11 @@ export interface TranscriptWatcherOptions {
   /** Absolute path to the project folder. */
   cwd: string
   configDir?: string
+  /**
+   * Where per-device confined homes live. Defaults to whatever was installed;
+   * pass `null` to watch the profile's store alone. See {@link installDeviceHomes}.
+   */
+  deviceHomes?: string | null
   /** Called on every change, and repeatedly during the initial scan. */
   onUpdate: (summary: ProjectSummary) => void
   /** Coalesce bursts of appends. Default 300ms. */
@@ -662,18 +882,60 @@ export const DEFAULT_MAX_SESSIONS = 40
 const READY_TIMEOUT_MS = 5_000
 
 /**
- * Watches one project's transcript directory and reports cost as it changes.
+ * Watches one project's transcript directories and reports cost as it changes.
  *
  * The initial pass runs newest-first and emits after each file, so the live
  * session's numbers appear immediately and history fills in behind it rather
  * than blocking on a directory that can hold hundreds of megabytes.
+ *
+ * ## Three watches, and each one is aimed at a directory that already exists
+ *
+ * That last clause is the whole design, and it was arrived at by measurement
+ * rather than by reading chokidar's documentation. Two findings shaped it, both
+ * reproduced on this Mac against the real library:
+ *
+ *  1. **A watch aimed at a path that does not exist yet reports nothing when the
+ *     path appears.** The directory and a file inside it were created and no
+ *     event arrived at all, while `getWatched()` cheerfully listed the directory
+ *     as watched. Not late — never.
+ *  2. **A watch that has to *ignore* part of a busy tree can be killed by a write
+ *     into the ignored part.** The first shape of this code watched the
+ *     device-homes root five levels deep with an `ignored` predicate pruning
+ *     everything off the `.claude/projects` path. Writing one file into the
+ *     device's `tmp` — which is that session's `TMPDIR`, so a real session does
+ *     it constantly — produced **zero events for the whole watcher**, including
+ *     the directory events on the path that was *not* ignored. With a single
+ *     event-loop tick between the writes it recovered, which is exactly the kind
+ *     of "works on a slow machine" boundary that must not be depended on.
+ *
+ * So nothing here prunes and nothing here points at a directory that is not
+ * there yet:
+ *
+ *  - **The profile's project directory**, `depth: 0`, exactly as it always was.
+ *    It is the big store — 28 project directories and about 2 GB on the machine
+ *    this was written on — and descending into it would be watching hundreds of
+ *    files to learn nothing.
+ *  - **Each device's `.claude/projects`**, `depth: 1`. Small by construction: the
+ *    folders that one device has actually worked in. It always exists, because
+ *    `prepareDeviceHome` makes it when the home is made, and nothing busy lives
+ *    under it. Events for other projects are dropped in the handler, which costs
+ *    a `basename` and cannot take the watcher down with it.
+ *  - **The device-homes root**, `depth: 0`, whose only job is to notice a device
+ *    starting its first session ever. A new home is a directory appearing
+ *    directly inside a directory that already exists, which is the case
+ *    measurement showed to be reliable.
  */
 export class TranscriptWatcher {
   private readonly dir: string
+  private readonly homesRoot: string | null
+  /** The encoded directory name this project's transcripts live under. */
+  private readonly encoded: string
   private readonly tails = new Map<string, TranscriptTail>()
   private readonly aggregators = new Map<string, SessionAggregator>()
   private readonly queue = new Set<string>()
-  private watcher: FSWatcher | null = null
+  private readonly watchers: FSWatcher[] = []
+  /** The `depth: 1` watch over every device's store. Made when there is one. */
+  private stores: FSWatcher | null = null
   private timer: NodeJS.Timeout | undefined
   private draining = false
   private scanning = true
@@ -681,10 +943,147 @@ export class TranscriptWatcher {
 
   constructor(private readonly options: TranscriptWatcherOptions) {
     this.dir = transcriptDir(options.cwd, options.configDir)
+    this.encoded = encodeProjectPath(options.cwd)
+    this.homesRoot = options.deviceHomes === undefined ? deviceHomesRoot() : options.deviceHomes
+  }
+
+  /** Which stores this watcher answers about. Fixed for its lifetime. */
+  private get scope(): TranscriptScope {
+    return {
+      ...(this.options.configDir === undefined ? {} : { configDir: this.options.configDir }),
+      deviceHomes: this.homesRoot,
+    }
+  }
+
+  /**
+   * Read the stores off disk again and queue anything that is not already
+   * queued.
+   *
+   * The catch-up, and it is here because a watch is not enough on its own. A
+   * confined store comes into existence *while this is running* — a device's
+   * first session makes its home, the agent then makes the project directory
+   * inside it — and a watcher establishing itself on a tree that is being built
+   * underneath it can miss a level. Measured on this Mac, not inferred: a burst
+   * that created home, store and transcript in one go left the transcript
+   * undelivered eight seconds later, and it was still undelivered when the test
+   * gave up. Not slow — missed, which is the same failure mode the primary
+   * watch's `ready` wait exists for.
+   *
+   * A `readdir` cannot miss what is already on disk, so any directory appearing
+   * under the device-homes root triggers one. It costs a listing of a handful of
+   * directories, it runs when a device starts its first session in a folder
+   * rather than on a timer, and `enqueue`'s own `Set` means a file that is
+   * already waiting is not queued twice.
+   */
+  private async rescanned(): Promise<void> {
+    if (this.stopped) return
+    try {
+      const found = await Promise.all(
+        transcriptDirs(this.options.cwd, this.scope).map((dir) => listTranscripts(dir)),
+      )
+      for (const file of found.flat()) this.enqueue(file.path)
+    } catch (err) {
+      console.error('[transcript] could not re-read the confined stores:', err)
+    }
+  }
+
+  /**
+   * A file event from a device's store, kept only when it is this project's.
+   *
+   * The store holds one directory per folder that device has worked in, so most
+   * of what arrives belongs to somebody else's project. Filtered here rather
+   * than by an `ignored` pattern on the watch, and that is not a style
+   * preference — a watch that has to ignore part of a tree was measured taking
+   * itself down when the ignored part was written to. A `basename` in a handler
+   * cannot do that.
+   */
+  private enqueueFromStore(path: string): void {
+    if (basename(dirname(path)) !== this.encoded) return
+    this.enqueue(path)
+  }
+
+  /**
+   * Start watching one device's store, making the watcher if this is the first.
+   *
+   * Created on demand rather than up front with an empty list, because a watcher
+   * with nothing to watch is a thing whose `ready` behaviour would have to be
+   * measured to be relied on, and there is no reason to have one: a machine with
+   * no paired devices has no stores, and the moment it has one this runs.
+   */
+  private watchStore(store: string): void {
+    if (this.stopped) return
+    if (this.stores) {
+      this.stores.add(store)
+      return
+    }
+    const stores = watch(store, { ignoreInitial: true, depth: 1, persistent: true })
+    this.stores = stores
+    this.watchers.push(stores)
+    stores.on('add', (path: string) => this.enqueueFromStore(path))
+    stores.on('change', (path: string) => this.enqueueFromStore(path))
+    stores.on('unlink', (path: string) => this.forget(path))
+    stores.on('error', (err: unknown) =>
+      console.error('[transcript] confined store watch failed:', store, err),
+    )
+  }
+
+  /**
+   * A directory appeared under the device-homes root: a device has just started
+   * its first session ever.
+   *
+   * The **second** way that is noticed, and the weaker one. The app makes that
+   * home itself and says so through {@link refresh}, which is where the work
+   * actually happens; this covers the case where nothing told us — a home made
+   * by a run of the app that has since been restarted, or by the headless host
+   * while the desktop was watching. It is not relied on, because a directory
+   * created in the same tick a watch became ready was measured arriving most of
+   * the time and not always.
+   */
+  private adopt(home: string): void {
+    if (this.stopped || this.homesRoot === null) return
+    // Only a device's own home, not something further down. `depth: 0` should
+    // mean nothing else arrives; this is the guard that keeps that true rather
+    // than assumed.
+    if (dirname(home) !== this.homesRoot) return
+    void this.refresh()
   }
 
   get directory(): string {
     return this.dir
+  }
+
+  /**
+   * Look again: a store may have appeared since this watcher started.
+   *
+   * Called when the app itself starts a confined session, which is the honest
+   * trigger — the app *made* that device's home, so it does not have to find out
+   * from the filesystem that one exists. `cost-ipc.ts` fans this out to every
+   * live watcher and `index.ts` calls it from the same hook that tells the
+   * window a session appeared.
+   *
+   * The `addDir` watch on the device-homes root does the same job for the case
+   * where nothing told us, and it is kept for that reason — but it must not be
+   * the only path. Measured on this Mac: a directory created in the same tick
+   * that a watch became ready is delivered most of the time and not always,
+   * which is precisely the kind of "works until the machine is busy" behaviour a
+   * user-visible number should not rest on. This method does not race with
+   * anything, because it reads the directory rather than waiting to be told
+   * about it.
+   */
+  async refresh(): Promise<void> {
+    if (this.stopped) return
+    const homes = this.homesRoot
+    if (homes !== null) {
+      const primary = this.options.configDir ?? claudeConfigDir()
+      for (const dir of configDirs(this.scope)) {
+        if (dir === primary) continue
+        const store = join(dir, 'projects')
+        // `watchStore` is idempotent by way of chokidar's own `add`, which is a
+        // no-op for a path it already holds.
+        if (existsSync(store)) this.watchStore(store)
+      }
+    }
+    await this.rescanned()
   }
 
   async start(): Promise<void> {
@@ -692,7 +1091,21 @@ export class TranscriptWatcher {
     const maxSessions = this.options.maxSessions ?? DEFAULT_MAX_SESSIONS
     const cutoff = maxAge > 0 ? Date.now() - maxAge : 0
 
-    const files = (await listTranscripts(this.dir))
+    /*
+     * Every store this project's transcripts can be in, not just the profile's.
+     *
+     * The cap and the age filter are applied to the merged list rather than per
+     * directory, because they are answers about *the project* — "the forty most
+     * recent conversations" means forty, whichever store each of them is in. Per
+     * directory it would mean forty each, and the number on screen would quietly
+     * depend on how many devices had ever been paired.
+     */
+    const found = await Promise.all(
+      transcriptDirs(this.options.cwd, this.scope).map((dir) => listTranscripts(dir)),
+    )
+    const files = found
+      .flat()
+      .sort((a, b) => b.modifiedAt - a.modifiedAt)
       .filter((file) => file.modifiedAt >= cutoff)
       .slice(0, maxSessions)
 
@@ -705,12 +1118,40 @@ export class TranscriptWatcher {
       depth: 0,
       persistent: true,
     })
-    this.watcher = watcher
+    this.watchers.push(watcher)
     watcher.on('add', (path: string) => this.enqueue(path))
     watcher.on('change', (path: string) => this.enqueue(path))
     watcher.on('unlink', (path: string) => this.forget(path))
     watcher.on('error', (err: unknown) => console.error('[transcript] watch failed:', this.dir, err),
     )
+
+    /*
+     * The confined stores: one watch over every device's `.claude/projects`, and
+     * one over the root that holds the homes.
+     *
+     * Both are aimed at directories that already exist, which is the rule the
+     * class comment explains at length. The root watch does exactly one job — a
+     * device pairing and starting its first session while this pane is already
+     * open — and it is the only way that can be noticed without a timer.
+     */
+    const homes = this.homesRoot
+    if (homes !== null && existsSync(homes)) {
+      const primary = this.options.configDir ?? claudeConfigDir()
+      for (const dir of configDirs(this.scope)) {
+        // The profile's own store is already watched above, at the project
+        // directory rather than at the store, so it must not be watched twice.
+        if (dir === primary) continue
+        const store = join(dir, 'projects')
+        if (existsSync(store)) this.watchStore(store)
+      }
+
+      const root = watch(homes, { ignoreInitial: true, depth: 0, persistent: true })
+      this.watchers.push(root)
+      root.on('addDir', (path: string) => this.adopt(path))
+      root.on('error', (err: unknown) =>
+        console.error('[transcript] device-home watch failed:', homes, err),
+      )
+    }
 
     /*
      * `watch()` returns before it is actually watching, and with
@@ -722,21 +1163,36 @@ export class TranscriptWatcher {
      * delivered at all.
      *
      * So the comment above is now true rather than aspirational: `start()` does
-     * not resolve until the watcher says it is ready. Bounded, because a watcher
-     * that never becomes ready must degrade to "the periodic drain still works"
-     * rather than leave `start()` — which the app awaits before showing a
+     * not resolve until the watchers say they are ready. Bounded, because a
+     * watcher that never becomes ready must degrade to "the periodic drain still
+     * works" rather than leave `start()` — which the app awaits before showing a
      * project — pending for the life of the process.
+     *
+     * **Every** watcher, and that is not belt and braces. The confined-store
+     * watch was written to skip this on the reasoning that it is only an extra
+     * store and a few milliseconds of gap would cost at most one delayed update.
+     * That reasoning was wrong and a test caught it on this Mac, not on a
+     * Windows runner: a device home created immediately after `start()` resolved
+     * landed inside the gap, and the watch then reported *nothing at all* — not
+     * late, never. Waiting is what makes "the pane was open when the phone
+     * started its first session" work, which is the exact case this watch exists
+     * for.
      */
-    await new Promise<void>((settle) => {
-      const done = (): void => {
-        clearTimeout(guard)
-        settle()
-      }
-      const guard = setTimeout(done, READY_TIMEOUT_MS)
-      guard.unref?.()
-      watcher.once('ready', done)
-      watcher.once('error', done)
-    })
+    await Promise.all(
+      this.watchers.map(
+        (each) =>
+          new Promise<void>((settle) => {
+            const done = (): void => {
+              clearTimeout(guard)
+              settle()
+            }
+            const guard = setTimeout(done, READY_TIMEOUT_MS)
+            guard.unref?.()
+            each.once('ready', done)
+            each.once('error', done)
+          }),
+      ),
+    )
 
     await this.drain()
     this.scanning = false
@@ -746,8 +1202,8 @@ export class TranscriptWatcher {
   stop(): void {
     this.stopped = true
     clearTimeout(this.timer)
-    void this.watcher?.close()
-    this.watcher = null
+    for (const watcher of this.watchers) void watcher.close()
+    this.watchers.length = 0
   }
 
   /** Current numbers without waiting for the next change. */

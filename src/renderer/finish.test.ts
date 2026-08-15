@@ -37,6 +37,13 @@ function rule(css: string, selector: string): string | null {
 describe('the folder chip can actually be used', () => {
   const shell = read('renderer/shell/shell.css')
   const chip = read('renderer/shell/FolderChip.tsx')
+  /*
+   * There are two chips under the session's name now — the folder it runs in
+   * and the account it runs as — and the menu mechanics below are shared by
+   * both. They live in `chip-menu.ts` for the reason this whole file exists: a
+   * second hand-written copy is the one that would keep the old bug.
+   */
+  const menuMechanics = read('renderer/shell/chip-menu.ts')
 
   /**
    * The stacking half.
@@ -76,8 +83,20 @@ describe('the folder chip can actually be used', () => {
     // The menu is no longer inside the chip's own element, so a check against
     // the chip alone would treat a click on one of the menu's rows as a click
     // outside and close it before the row's handler ran.
-    expect(chip).toMatch(/menuRef\.current\?\.contains/)
-    expect(chip).toMatch(/hostRef\.current\?\.contains/)
+    expect(menuMechanics).toMatch(/menuRef\.current\?\.contains/)
+    expect(menuMechanics).toMatch(/hostRef\.current\?\.contains/)
+  })
+
+  it('gives both chips the same menu, rather than a second copy of it', () => {
+    // The account chip opens the same kind of menu in the same place. Written
+    // twice, the fixes above would have to be made twice — and the copy that
+    // gets forgotten is the one a person actually clicks.
+    const account = read('renderer/shell/AccountChip.tsx')
+    for (const source of [chip, account]) {
+      expect(source).toContain('useChipMenu')
+      expect(source).toContain('createPortal')
+      expect(source).toContain('document.body')
+    }
   })
 })
 

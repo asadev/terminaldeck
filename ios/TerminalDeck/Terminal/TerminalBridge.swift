@@ -48,7 +48,7 @@ import UIKit
 // states that rather than dropping the isolation to satisfy the checker.
 // Without it this is a warning today and an error in Swift 6 language mode.
 @MainActor
-final class TerminalBridge: NSObject, @preconcurrency TerminalViewDelegate {
+final class TerminalBridge: NSObject, @preconcurrency TerminalViewDelegate, TerminalSearching {
 
     let view: DeckTerminalView
 
@@ -61,6 +61,21 @@ final class TerminalBridge: NSObject, @preconcurrency TerminalViewDelegate {
 
     private(set) var size: TerminalSize?
 
+    /// The size changed, so the screen can say what it changed to. A pinch has
+    /// no other confirmation than the number — see `TerminalScreen.show`.
+    var onTextSizeChanged: ((CGFloat) -> Void)?
+
+    /// The terminal was touched. The screen uses it to put the find bar away —
+    /// a tap into the terminal destroys the selection SwiftTerm was using as the
+    /// match highlight, so a find bar left standing would be counting matches
+    /// nobody can see any more.
+    var onTapped: (() -> Void)?
+
+    /// The point size the terminal is drawn at. Changed by pinching; see
+    /// `TextSize` for why it is a phone-wide setting rather than a per-session
+    /// one, and what it costs on the wire.
+    private(set) var textSize: CGFloat
+
     private let accessory: KeyboardAccessory
     private let grid: KeyGridView
     private var gestures: TerminalGestures?
@@ -71,7 +86,14 @@ final class TerminalBridge: NSObject, @preconcurrency TerminalViewDelegate {
         // measures its column count from the advance width, and a font whose
         // metrics change with the user's Dynamic Type setting would change the
         // session's column count when they change their text size.
-        let font = UIFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        //
+        // The *size* is the one the person chose, read here rather than
+        // defaulted, so a session opened after the choice comes up already the
+        // right size instead of resizing itself a frame later — which the far
+        // end would see as a second `resize` and an agent's box would repaint
+        // twice for. See `TextSize`.
+        textSize = TextSize.stored
+        let font = UIFont.monospacedSystemFont(ofSize: textSize, weight: .regular)
         view = DeckTerminalView(frame: .zero, font: font)
         // Any width will do for either: a `UIInputView` with `allowsSelfSizing`
         // is laid out by the keyboard system against the real screen, and
@@ -86,6 +108,9 @@ final class TerminalBridge: NSObject, @preconcurrency TerminalViewDelegate {
         view.nativeBackgroundColor = Palette.terminalBackground
         view.nativeForegroundColor = Palette.terminalForeground
         view.caretColor = Palette.caret
+        // A selection is blue on this platform, and this app's blue is the
+        // icon's. See `Palette.selection` for what the library's default did.
+        view.selectedTextBackgroundColor = Palette.selection
         // Nothing here is a shell running locally, so there is no bell worth
         // ringing on a phone in someone's pocket.
         view.bellStyle = .none
@@ -110,6 +135,23 @@ final class TerminalBridge: NSObject, @preconcurrency TerminalViewDelegate {
             // Tapping into the terminal means "I want to type", so a grid
             // standing where the keyboard should be is the wrong answer to it.
             self?.closeGrid()
+            self?.onTapped?()
+        }
+        // Pinching is the gesture people already try on a terminal they cannot
+        // read. It is two fingers, so it cannot be confused with the one-finger
+        // drag that scrolls or the long press that selects.
+        gestures.onPinch = { [weak self] scale in
+            guard let self else { return }
+            setTextSize(TextSize.scaled(pinchStart ?? textSize, by: scale))
+        }
+        gestures.onPinchBegan = { [weak self] in
+            guard let self else { return }
+            pinchStart = textSize
+        }
+        gestures.onPinchEnded = { [weak self] in
+            guard let self else { return }
+            pinchStart = nil
+            TextSize.save(textSize)
         }
         self.gestures = gestures
 
@@ -353,6 +395,32 @@ final class TerminalBridge: NSObject, @preconcurrency TerminalViewDelegate {
         return lines.joined(separator: "\n")
     }
 
+    /**
+     * Everything the terminal is holding, screen and scrollback together.
+     *
+     * `visibleText()` above is what Copy falls back to and it is deliberately
+     * only the screen — copying is usually "give me the thing I am looking at".
+     * Sharing is the opposite question: the reason to send a session's output to
+     * somebody is almost always the error that has already scrolled off the top,
+     * and a share that quietly stopped at the top of the screen would be the
+     * wrong half of the story every time.
+     *
+     * SwiftTerm's own `getBufferAsData` reads the active buffer's lines,
+     * right-trimmed, in order — the real buffer rather than anything this app
+     * kept a copy of. Trailing blank lines come off for the reason they come off
+     * `visibleText`: a terminal is thirty-odd rows whether or not anything is on
+     * them.
+     */
+    func scrollbackText() -> String {
+        let data = view.getTerminal().getBufferAsData()
+        var lines = String(decoding: data, as: UTF8.self).split(separator: "\n",
+                                                                omittingEmptySubsequences: false)
+        while let last = lines.last, last.trimmingCharacters(in: .whitespaces).isEmpty {
+            lines.removeLast()
+        }
+        return lines.joined(separator: "\n")
+    }
+
     func feed(_ text: String) {
         view.feed(text: text)
     }
@@ -386,6 +454,89 @@ final class TerminalBridge: NSObject, @preconcurrency TerminalViewDelegate {
     func blur() -> Bool {
         closeGrid()
         return view.resignFirstResponder()
+    }
+
+    // MARK: - Finding text
+
+    /**
+     * `TerminalSearching`, forwarded to SwiftTerm's own search.
+     *
+     * Thin on purpose. The rules — which direction a keystroke searches in, what
+     * the counter says, when the highlight is held — are in `FindSession`, where
+     * they can be tested; this is the four calls that reach the emulator.
+     */
+    @discardableResult
+    func findNext(_ term: String) -> Bool {
+        view.findNext(term)
+    }
+
+    @discardableResult
+    func findPrevious(_ term: String) -> Bool {
+        view.findPrevious(term)
+    }
+
+    func matchSummary(_ term: String) -> (index: Int, total: Int) {
+        view.searchMatchSummary(term, limit: FindSession.countLimit)
+    }
+
+    func clearFind() {
+        view.clearSearch()
+    }
+
+    /**
+     * Stop output wiping the match.
+     *
+     * `allowMouseReporting` decides two things inside SwiftTerm, and the second
+     * is the one that matters here: whether a feed clears the selection. It
+     * does, on every frame of output, and the search result *is* the selection —
+     * so on a session that is printing, a match found at 12:00:01 is gone at
+     * 12:00:02 and the find bar is left counting something invisible.
+     *
+     * Turned off only while the find bar is open, and turned back on when it
+     * closes, because the same flag is how a finger drives vim and htop. Reading
+     * is a mode; it ends.
+     */
+    func holdHighlight(_ hold: Bool) {
+        view.allowMouseReporting = !hold
+    }
+
+    // MARK: - Text size
+
+    /// Where a pinch started from, so the gesture scales the size it began with
+    /// rather than compounding on itself twenty times a second.
+    private var pinchStart: CGFloat?
+
+    /**
+     * Draw the terminal at a different size.
+     *
+     * This is a real change to the session, not a zoom: the column count comes
+     * from the width divided by the advance of one character, so a smaller face
+     * means more columns, and SwiftTerm reports the new size through the same
+     * delegate a rotation goes through — which sends a `resize` and makes the
+     * far end reflow. That is the honest behaviour and it is what makes the
+     * setting worth having: at 10 point a phone in landscape reaches eighty
+     * columns and stops wrapping the agent's tables.
+     *
+     * A no-op when the size has not changed, and that guard is load bearing:
+     * setting `font` at all makes SwiftTerm soft-reset the emulator, which drops
+     * application-cursor mode — so an unnecessary set would make the arrow keys
+     * send the wrong bytes inside vim until the program repainted.
+     */
+    func setTextSize(_ size: CGFloat) {
+        let clamped = TextSize.clamp(size)
+        guard clamped != textSize else { return }
+        textSize = clamped
+        view.font = UIFont.monospacedSystemFont(ofSize: clamped, weight: .regular)
+        // The pinch has no other visible confirmation than the size itself, and
+        // the *number* is what tells somebody they have reached the end of the
+        // range.
+        onTextSizeChanged?(clamped)
+    }
+
+    /// Adopt the stored size. Called when a session appears, so a terminal
+    /// created before the person changed the setting catches up.
+    func applyStoredTextSize() {
+        setTextSize(TextSize.stored)
     }
 
     // MARK: - TerminalViewDelegate

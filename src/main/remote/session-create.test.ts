@@ -1,6 +1,12 @@
 import { describe, expect, it, vi, type Mock } from 'vitest'
 import { ConfinementUnavailableError } from '../confine'
-import { remoteSessionCreator, remoteSessionStart, type SessionStarter } from './session-create'
+import {
+  knownProvider,
+  providerNames,
+  remoteSessionCreator,
+  remoteSessionStart,
+  type SessionStarter,
+} from './session-create'
 import type { SessionMeta } from '../../shared/types'
 
 /**
@@ -354,6 +360,107 @@ describe('when it cannot start one', () => {
     })
     expect(outcome.ok).toBe(false)
     if (!outcome.ok) expect(outcome.message).not.toContain('script')
+  })
+})
+
+/**
+ * Which agent, and the substitution that must never happen again.
+ *
+ * The bug, measured on a real Windows PC: a request for `shell` produced a
+ * `claude` session. Four layers were involved and none of them was wrong on its
+ * own — the client sent `provider`, `parseClientMessage` did not list the field
+ * and dropped it, the request arrived naming no agent, and the spawn filled the
+ * hole with the desktop's default. The lesson is the one this file already
+ * enforces about folders: a value this desktop cannot honour is refused with a
+ * sentence, never replaced with a different one.
+ */
+describe('which agent it starts', () => {
+  it('forwards the agent the client asked for', async () => {
+    const deps = starter()
+    const outcome = await remoteSessionCreator(deps)({ deviceId: PHONE, provider: 'shell' })
+    expect(outcome.ok).toBe(true)
+    expect(deps.spawn).toHaveBeenCalledWith(expect.objectContaining({ provider: 'shell' }))
+  })
+
+  it('says nothing about an agent when the client named none', async () => {
+    /*
+     * Absent has to stay absent rather than becoming a value here. The spawn
+     * reads `input.provider ?? <this desktop's default>`, so a `provider:
+     * undefined` this file invented would be harmless and a `provider: 'claude'`
+     * it invented would take the desktop's own preference away from it — a
+     * person whose default is a plain shell would get an agent because a phone
+     * said nothing at all.
+     */
+    const deps = starter()
+    await remoteSessionCreator(deps)({ deviceId: PHONE })
+    const [input] = deps.spawn.mock.calls[0]
+    expect('provider' in input).toBe(false)
+  })
+
+  it('refuses a name it does not have, and starts nothing', async () => {
+    const deps = starter()
+    const outcome = await remoteSessionCreator(deps)({ deviceId: PHONE, provider: 'copilot' })
+    expect(outcome.ok).toBe(false)
+    if (!outcome.ok) {
+      expect(outcome.code).toBe('unauthorized')
+      // The sentence has to be actionable, which means naming what it *can*
+      // start. "Could not start a session" would send someone to retry a request
+      // that will never work.
+      expect(outcome.message).toContain('shell')
+      expect(outcome.message).toContain('claude')
+    }
+    // The whole point: refused means nothing started, rather than something else
+    // starting.
+    expect(deps.spawn).not.toHaveBeenCalled()
+  })
+
+  it('never echoes the requested name back in the sentence it sends', async () => {
+    // Same rule the folder refusal follows: this text goes over the wire and
+    // onto a phone, and quoting attacker-chosen input into it buys nothing and
+    // costs an output channel.
+    const deps = starter()
+    const outcome = await remoteSessionCreator(deps)({ deviceId: PHONE, provider: 'evilagent' })
+    expect(outcome.ok).toBe(false)
+    if (!outcome.ok) expect(outcome.message).not.toContain('evilagent')
+  })
+
+  it('accepts every agent this build has, so the list and the rule cannot disagree', async () => {
+    // `providerNames` is what the refusal above prints. If it ever listed
+    // something `knownProvider` refuses, the sentence would be telling people to
+    // ask for a thing that is then refused — which is the folder-picker failure
+    // this file exists to prevent, wearing a different hat.
+    for (const name of providerNames()) {
+      const deps = starter()
+      const outcome = await remoteSessionCreator(deps)({ deviceId: PHONE, provider: name })
+      expect(outcome.ok).toBe(true)
+      expect(deps.spawn).toHaveBeenCalledWith(expect.objectContaining({ provider: name }))
+    }
+  })
+
+  it('narrows a name rather than trusting one', () => {
+    // The function the refusal hangs off, checked directly. It is the only place
+    // a `string` off the wire becomes a `ProviderId`, so it is the only place a
+    // name that is not one could get through.
+    expect(knownProvider('shell')).toBe('shell')
+    for (const name of ['', 'Claude', 'claude ', 'copilot', 'toString', '__proto__', 'constructor']) {
+      expect(knownProvider(name)).toBeNull()
+    }
+  })
+
+  it('checks the folder before the agent, so the worse refusal wins', async () => {
+    // Both wrong at once. The folder is the one that matters — it is about
+    // access rather than about a typo — and reporting the agent instead would
+    // send someone to fix a name while the real answer is that this device may
+    // not use that folder at all.
+    const deps = starter()
+    const outcome = await remoteSessionCreator(deps)({
+      deviceId: PHONE,
+      cwd: '/etc',
+      provider: 'copilot',
+    })
+    expect(outcome.ok).toBe(false)
+    if (!outcome.ok) expect(outcome.message).toContain('folder')
+    expect(deps.spawn).not.toHaveBeenCalled()
   })
 })
 

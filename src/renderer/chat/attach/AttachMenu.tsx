@@ -12,76 +12,122 @@ import './AttachMenu.css'
  * rather than three floating surfaces, because every one of these ends the same
  * way: something is added to the message and focus goes back to the box the
  * user was typing in.
+ *
+ * ## Two modes, because there are two things on the other end of the box
+ *
+ * `mention` is for an agent CLI: a pick becomes an `@"path"` mention the CLI
+ * expands on submit, and connectors are its tools.
+ *
+ * `path` is for a plain shell, and it exists because this menu was once deleted
+ * outright on a shell session. The reasoning was sound as far as it went — a
+ * shell would type `@"…"` verbatim at its prompt and get `command not found` —
+ * but the conclusion was not: it left the shell composer with a microphone and
+ * a send button and nothing else, which is the "you removed everything" this
+ * mode repairs. Picking a path out of the project is not an agent feature. Only
+ * the form was, so in `path` mode the pick lands in the command line as a
+ * shell-quoted path (see `shellQuote`) and the menu offers nothing an agent
+ * would be needed to honour.
  */
 
 export type AttachSurface = PickerMode | 'mcp'
 
+/** What the box on the other end of this menu understands. */
+export type AttachMode = 'mention' | 'path'
+
 interface Props {
   root: string
   attachments: readonly Attachment[]
-  /** Project-relative path chosen in the picker. The composer validates it. */
+  /**
+   * Project-relative path chosen in the picker. The composer decides what to do
+   * with it — a mention in `mention` mode, a quoted path in `path` mode — and
+   * validates it either way.
+   */
   onAdd: (relPath: string, isDirectory: boolean) => void
   /** Free text to drop into the message, used by the connector list. */
   onInsert: (text: string) => void
   /** Called on every close so the composer can take focus back. */
   onClose: () => void
   disabled?: boolean
+  mode?: AttachMode
 }
 
-interface MenuItem {
+export interface MenuItem {
   surface: AttachSurface
   label: string
   hint: string
-  icon: ReactNode
 }
 
-const ITEMS: MenuItem[] = [
-  {
-    surface: 'file',
-    label: 'Add files',
-    hint: 'Sent as a reference the agent reads',
-    icon: (
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
-        <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" strokeWidth="1.6" strokeLinejoin="round" />
-        <path d="M14 3v5h5" strokeWidth="1.6" strokeLinejoin="round" />
-      </svg>
-    ),
-  },
-  {
-    surface: 'folder',
-    label: 'Add folder',
-    hint: 'The agent gets its listing',
-    icon: (
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
-        <path d="M3 7a2 2 0 0 1 2-2h3.6l1.8 2H19a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" strokeWidth="1.6" strokeLinejoin="round" />
-      </svg>
-    ),
-  },
-  {
-    surface: 'image',
-    label: 'Add an image',
-    hint: 'Screenshots included — the agent sees them',
-    icon: (
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
-        <rect x="3" y="5" width="18" height="14" rx="2" strokeWidth="1.6" />
-        <path d="M3 16l5-4 4 3 3-2 6 4" strokeWidth="1.6" strokeLinejoin="round" />
-      </svg>
-    ),
-  },
-  {
-    surface: 'mcp',
-    label: 'Connectors',
-    hint: 'MCP servers this session can reach',
-    icon: (
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
-        <path d="M12 3v6M12 15v6M5 12h14" strokeWidth="1.6" strokeLinecap="round" />
-        <circle cx="12" cy="12" r="2.6" strokeWidth="1.6" />
-      </svg>
-    ),
-  },
+/**
+ * One glyph per surface, held apart from the rows so the two modes cannot drift
+ * into drawing the same thing two ways.
+ */
+const ICONS: Record<AttachSurface, ReactNode> = {
+  file: (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+      <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" strokeWidth="1.6" strokeLinejoin="round" />
+      <path d="M14 3v5h5" strokeWidth="1.6" strokeLinejoin="round" />
+    </svg>
+  ),
+  folder: (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+      <path d="M3 7a2 2 0 0 1 2-2h3.6l1.8 2H19a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" strokeWidth="1.6" strokeLinejoin="round" />
+    </svg>
+  ),
+  image: (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+      <rect x="3" y="5" width="18" height="14" rx="2" strokeWidth="1.6" />
+      <path d="M3 16l5-4 4 3 3-2 6 4" strokeWidth="1.6" strokeLinejoin="round" />
+    </svg>
+  ),
+  mcp: (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+      <path d="M12 3v6M12 15v6M5 12h14" strokeWidth="1.6" strokeLinecap="round" />
+      <circle cx="12" cy="12" r="2.6" strokeWidth="1.6" />
+    </svg>
+  ),
+}
+
+const MENTION_ITEMS: MenuItem[] = [
+  { surface: 'file', label: 'Add files', hint: 'Sent as a reference the agent reads' },
+  { surface: 'folder', label: 'Add folder', hint: 'The agent gets its listing' },
+  { surface: 'image', label: 'Add an image', hint: 'Screenshots included — the agent sees them' },
+  { surface: 'mcp', label: 'Connectors', hint: 'MCP servers this session can reach' },
 ]
 
-export function AttachMenu({ root, attachments, onAdd, onInsert, onClose, disabled = false }: Props) {
+/**
+ * The shell's two. No image row and no connectors: an image is only a separate
+ * kind of thing because an agent *sees* it, and MCP servers are an agent's
+ * tools — offering either at a `/bin/zsh` prompt would be the window claiming
+ * something it cannot do, which is the failure the deletion was trying to avoid
+ * in the first place.
+ */
+const PATH_ITEMS: MenuItem[] = [
+  { surface: 'file', label: 'Insert a file path', hint: 'Quoted, so a space cannot split the command' },
+  { surface: 'folder', label: 'Insert a folder path', hint: 'Quoted, so a space cannot split the command' },
+]
+
+/**
+ * The rows this menu offers, for the mode it is in.
+ *
+ * Exported so the two lists can be checked without a DOM — this project renders
+ * components to strings in its tests, and a popover that is shut renders
+ * nothing at all, so the only way to assert that a shell still has rows behind
+ * its plus is to ask for them directly. That assertion is the point: the list
+ * being empty is exactly the regression this mode exists to close.
+ */
+export function attachItems(mode: AttachMode): MenuItem[] {
+  return mode === 'path' ? PATH_ITEMS : MENTION_ITEMS
+}
+
+export function AttachMenu({
+  root,
+  attachments,
+  onAdd,
+  onInsert,
+  onClose,
+  disabled = false,
+  mode = 'mention',
+}: Props) {
   const [surface, setSurface] = useState<AttachSurface | 'menu' | null>(null)
   const hostRef = useRef<HTMLDivElement>(null)
   const buttonRef = useRef<HTMLButtonElement>(null)
@@ -99,9 +145,21 @@ export function AttachMenu({ root, attachments, onAdd, onInsert, onClose, disabl
    * an offer, which is a different claim.
    */
   const connectorsOffer = useControlOffer('chat.connectors')
-  const label = connectorsOffer === null
-    ? 'Add files, folders, images or connectors to this message'
-    : 'Add files, folders or images to this message'
+  const items = attachItems(mode)
+  /**
+   * The word on the chip and the sentence it says on hover.
+   *
+   * Both change with the mode, because a chip reading "Add" over a menu that
+   * inserts text into a command line is the row describing itself wrongly — and
+   * the two most-read words in this composer are the ones on its buttons.
+   */
+  const word = mode === 'path' ? 'Path' : 'Add'
+  const label =
+    mode === 'path'
+      ? 'Insert a file or folder path into the command line'
+      : connectorsOffer === null
+        ? 'Add files, folders, images or connectors to this message'
+        : 'Add files, folders or images to this message'
 
   const close = useCallback(() => {
     setSurface(null)
@@ -134,13 +192,19 @@ export function AttachMenu({ root, attachments, onAdd, onInsert, onClose, disabl
   const pick = useCallback(
     (relPath: string, isDirectory: boolean) => {
       onAdd(relPath, isDirectory)
-      // Deliberately stays open: attaching three files should be three clicks,
+      // Attaching deliberately stays open: three files should be three clicks,
       // not three trips through the menu. The confirmation is the "added" tag
       // the picker puts on the row — measured: this popover is 340×309 anchored
       // over the composer, so it covers the chip row while it is open, and the
       // chips only become the feedback once it closes.
+      //
+      // A path is the other case. It goes into the text the user is writing,
+      // there is no chip and no tag, and the popover is sitting on top of the
+      // very line it just changed — so staying open would look like nothing had
+      // happened. Closing *is* the confirmation.
+      if (mode === 'path') close()
     },
-    [onAdd],
+    [onAdd, mode, close],
   )
 
   const insert = useCallback(
@@ -154,10 +218,14 @@ export function AttachMenu({ root, attachments, onAdd, onInsert, onClose, disabl
   return (
     <div className="at-host" ref={hostRef}>
       {surface !== null ? (
-        <div className="at-pop" role="dialog" aria-label="Attach to this message">
+        <div
+          className="at-pop"
+          role="dialog"
+          aria-label={mode === 'path' ? 'Insert a path into the command line' : 'Attach to this message'}
+        >
           {surface === 'menu' ? (
             <ul className="at-menu">
-              {ITEMS.map((item) => {
+              {items.map((item) => {
                 const offer = item.surface === 'mcp' ? connectorsOffer : null
                 return (
                   <li key={item.surface}>
@@ -174,7 +242,7 @@ export function AttachMenu({ root, attachments, onAdd, onInsert, onClose, disabl
                         setSurface(item.surface)
                       }}
                     >
-                      <span className="at-item-icon">{item.icon}</span>
+                      <span className="at-item-icon">{ICONS[item.surface]}</span>
                       <span className="at-item-text">
                         <span className="at-item-label">{item.label}</span>
                         <span className="at-item-hint">{offer ? offer.title : item.hint}</span>
@@ -199,8 +267,9 @@ export function AttachMenu({ root, attachments, onAdd, onInsert, onClose, disabl
       ) : null}
 
       {/* Labelled, not a bare plus. It shares `cc-chip` with the controls beside
-          it (ChatComposer.css), and the accessible name starts with the word on
-          screen so saying "Add" out loud still hits the thing you can see. */}
+          it (ChatComposer.css), and the accessible name contains the word on
+          screen so saying "Add" — or "Path", on a shell — out loud still hits
+          the thing you can see. */}
       <button
         ref={buttonRef}
         type="button"
@@ -215,7 +284,7 @@ export function AttachMenu({ root, attachments, onAdd, onInsert, onClose, disabl
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
           <path d="M12 5v14M5 12h14" strokeWidth="2" strokeLinecap="round" />
         </svg>
-        Add
+        {word}
       </button>
     </div>
   )

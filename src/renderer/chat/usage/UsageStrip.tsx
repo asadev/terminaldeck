@@ -79,6 +79,12 @@ export interface UsageStripViewProps {
   plan: PlanLimitSnapshot | null
   /** True while the main process is still reading this project's history. */
   scanning: boolean
+  /**
+   * Whether the empty state is about one session or the whole project. Only
+   * the sentence changes: "no usage for this project" is plainly false on a
+   * screen where the project has plenty and this session simply has none yet.
+   */
+  scoped?: boolean
   now: number
   unwired?: boolean
   canRefreshPlan?: boolean
@@ -106,6 +112,7 @@ export function UsageStripView({
   today,
   plan,
   scanning,
+  scoped = false,
   now,
   unwired = false,
   canRefreshPlan = false,
@@ -125,7 +132,11 @@ export function UsageStripView({
     return (
       <div className="usage-strip usage-strip-empty">
         <span className="us-muted">
-          {scanning ? 'Reading transcripts…' : 'No usage recorded for this project yet.'}
+          {scanning
+            ? 'Reading transcripts…'
+            : scoped
+              ? 'Nothing recorded for this session yet.'
+              : 'No usage recorded for this project yet.'}
         </span>
       </div>
     )
@@ -353,6 +364,22 @@ export interface UsageStripProps {
   /** A specific transcript. Wins over the project's newest session. */
   transcriptPath?: string
   /**
+   * True when this strip is about one session rather than the whole project.
+   *
+   * It exists because an absent `transcriptPath` means two different things.
+   * For a project view it means "no preference, describe the newest session",
+   * which is what `pickSession` falls back to. For a session view it means
+   * "this session has not written a transcript yet" — and there the fallback is
+   * a lie: it borrows whichever session in the folder ran last and prints its
+   * spend and its context fill under a heading that says "This session". A tab
+   * opened under a second account, which by definition has no transcript in the
+   * default account's store, showed the default account's money.
+   *
+   * So the flag is not a display preference. It is the difference between a
+   * number about you and a number about somebody else.
+   */
+  scoped?: boolean
+  /**
    * The live PTY session. Plan limits are read from its screen, so without one
    * they are simply not available and the strip says so.
    */
@@ -363,13 +390,24 @@ export interface UsageStripProps {
   now?: number
 }
 
-export function UsageStrip({ cwd, transcriptPath, sessionId, bridge, now }: UsageStripProps) {
+export function UsageStrip({
+  cwd,
+  transcriptPath,
+  scoped = false,
+  sessionId,
+  bridge,
+  now,
+}: UsageStripProps) {
   const usage = useUsage(cwd, sessionId, bridge)
   const at = now ?? Date.now()
 
   const session = useMemo(
-    () => pickSession(usage.summary, { transcriptPath }),
-    [usage.summary, transcriptPath],
+    () =>
+      // Asked about one session that has no transcript, the honest answer is
+      // "nothing yet" — never the newest session that happens to be lying
+      // around in the same folder. See `scoped`.
+      scoped && !transcriptPath ? null : pickSession(usage.summary, { transcriptPath }),
+    [usage.summary, transcriptPath, scoped],
   )
   const today = useMemo(() => spendToday(usage.summary, at), [usage.summary, at])
 
@@ -379,6 +417,7 @@ export function UsageStrip({ cwd, transcriptPath, sessionId, bridge, now }: Usag
       today={today}
       plan={usage.plan}
       scanning={usage.summary?.scanning ?? false}
+      scoped={scoped}
       now={at}
       unwired={usage.unwired}
       canRefreshPlan={usage.canRefreshPlan}

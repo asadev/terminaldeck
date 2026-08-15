@@ -83,6 +83,8 @@ function rig(
     status?: () => RemoteStatus
     pair?: (input: { code: string; relayUrl: string }) => Promise<PairResult>
     dir?: string
+    /** False for a relay that accepts the socket and never claims the slot. */
+    slotClaimed?: boolean
   } = {},
 ): Rig {
   const handlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>()
@@ -96,9 +98,30 @@ function rig(
   const beacons: Rig['beacons'] = []
   const dir = options.dir ?? tempDir()
 
+  /*
+   * The beacon seam is on the desk, because the desk is what publishes.
+   *
+   * It used to be a dependency of this registration, and that was the shape of
+   * the bug: publishing lived beside one of the two screens that mint codes, so
+   * the other one minted codes nobody could look up. Injecting it here is also
+   * the only thing standing between this unit test and a real WebSocket to the
+   * public relay from whatever machine it runs on.
+   */
+  const desk = pairingDesk(new RemoteAuth(dir), Date.now, (beaconOptions): Beacon => {
+    const record = { options: beaconOptions, stopped: false }
+    beacons.push(record)
+    return {
+      stop: () => {
+        record.stopped = true
+      },
+      connected: () => !record.stopped && options.slotClaimed !== false,
+      ready: () => Promise.resolve(options.slotClaimed !== false),
+    }
+  })
+
   registerMachinesIpc(ipcMain, {
     storageDir: dir,
-    desk: pairingDesk(new RemoteAuth(dir)),
+    desk,
     status: options.status ?? connectedStatus,
     broadcast: (channel, payload) => broadcasts.push({ channel, payload }),
     createLink: (linkOptions): MachineLink => {
@@ -130,17 +153,6 @@ function rig(
         input: () => true,
         resize: () => true,
         create: () => true,
-      }
-    },
-    createBeacon: (beaconOptions): Beacon => {
-      const record = { options: beaconOptions, stopped: false }
-      beacons.push(record)
-      return {
-        stop: () => {
-          record.stopped = true
-        },
-        connected: () => true,
-        ready: () => Promise.resolve(true),
       }
     },
     ...(options.pair ? { pair: options.pair } : {}),
@@ -256,6 +268,20 @@ describe('showing a code', () => {
     const app = rig({ status: offlineStatus })
     expect(await app.invoke('machines:code')).toMatchObject({ ok: false })
     expect(app.beacons).toEqual([])
+  })
+
+  it('withdraws a code whose slot never comes up, rather than showing it anyway', async () => {
+    // The relay took the socket and never confirmed the slot. This screen has no
+    // second way in — no QR, no link — so the code is minted, found to be
+    // unpublishable, and taken back before it reaches anybody's eyes.
+    const app = rig({ slotClaimed: false })
+    expect(await app.invoke('machines:code')).toMatchObject({
+      ok: false,
+      message: expect.stringContaining('relay'),
+    })
+    expect(app.beacons).toHaveLength(1)
+    // And the socket it opened does not outlive the attempt.
+    expect(app.beacons[0].stopped).toBe(true)
   })
 
   it('says on the screen why no machine can be added, rather than offering a dead button', async () => {

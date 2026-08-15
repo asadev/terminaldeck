@@ -45,7 +45,8 @@ import {
   DEFAULT_MAX_SESSIONS,
   listTranscripts,
   readTranscript,
-  transcriptDir,
+  transcriptDirs,
+  type TranscriptScope,
 } from './transcript'
 
 export const ALERTS_CHANNEL = 'alerts:project'
@@ -507,6 +508,17 @@ export interface AlertsOptions {
    * writing into the developer's real `~/.claude`.
    */
   configDir?: string
+  /**
+   * Where confined sessions' per-device homes live. Defaults to whatever the
+   * host core installed; `null` asks about the profile's store alone.
+   *
+   * A session started from a paired device runs with a home of its own, so its
+   * transcript is not under `configDir` at all — and a blocked session nobody
+   * can see is exactly the thing alerts exist to surface. Overridable for the
+   * same reason `configDir` is: so the tests can point it at a scratch directory
+   * instead of the developer's real one.
+   */
+  deviceHomes?: string | null
 }
 
 /**
@@ -600,7 +612,17 @@ export async function collectAlertInput(
   const root = resolve(projectPath)
 
   const cutoff = now - DEFAULT_MAX_AGE_MS
-  const files = (await listTranscripts(transcriptDir(root, options.configDir)))
+  // Every store this project's conversations can be in — the profile's, and one
+  // per device that has run a confined session here. Merged and then capped, so
+  // "the forty most recent" stays an answer about the project rather than forty
+  // per directory.
+  const scope: TranscriptScope = {
+    ...(options.configDir === undefined ? {} : { configDir: options.configDir }),
+    ...(options.deviceHomes === undefined ? {} : { deviceHomes: options.deviceHomes }),
+  }
+  const files = (await Promise.all(transcriptDirs(root, scope).map((dir) => listTranscripts(dir))))
+    .flat()
+    .sort((a, b) => b.modifiedAt - a.modifiedAt)
     .filter((file) => file.modifiedAt >= cutoff)
     .slice(0, DEFAULT_MAX_SESSIONS)
 

@@ -872,8 +872,31 @@ class Channel {
                         message: 'Attach to that session before resizing it.',
                     })
                 }
-                sessions.get(message.id)?.process.resize(message.cols, message.rows)
-                log(`resize ${message.id} to ${message.cols}x${message.rows}`)
+                /*
+                 * A resize for a session whose process has gone is dropped.
+                 *
+                 * Not defensive tidiness — this took the whole harness down. A
+                 * phone may attach to an **exited** session, because reading
+                 * what it printed is a normal thing to want, and attaching is
+                 * followed by a `resize` as soon as the terminal has laid out.
+                 * `node-pty` throws `Error: ioctl(2) failed` on a file
+                 * descriptor whose child is gone, and an uncaught throw here
+                 * kills the host mid-run: the symptom was every later UI case
+                 * skipping with "no harness" a minute after one test typed
+                 * `exit`.
+                 *
+                 * The status check is the honest half and the `try` is the
+                 * belt: a process can exit between the check and the call.
+                 */
+                const target = sessions.get(message.id)
+                if (target && target.status !== 'exited') {
+                    try {
+                        target.process.resize(message.cols, message.rows)
+                        log(`resize ${message.id} to ${message.cols}x${message.rows}`)
+                    } catch (error) {
+                        log(`resize ${message.id} refused by the pty: ${String(error)}`)
+                    }
+                }
                 return
             }
             case 'create': {

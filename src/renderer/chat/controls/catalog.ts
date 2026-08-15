@@ -99,26 +99,53 @@ export function optionsFor(control: ControlId): ControlOption[] {
 }
 
 /**
- * Which controls stay on the composer, and which fold away behind one button.
+ * What the Options panel lists: **every** control the app has.
  *
- * The split is by how often a session actually reaches for the thing, not by
- * how interesting it is:
+ * There used to be a second list here called `FOLDED_CONTROLS`, holding the two
+ * that the panel showed and the composer's row did not, and it is worth writing
+ * down why it is gone rather than quietly deleting it. Asked for "one large
+ * chat box with the options folded neatly inside it", a pass over this composer
+ * put model and permission on the row, effort and fast mode behind a button
+ * labelled "More", and the usage readout behind it too. Read back from the
+ * screen, that is not a fold — nothing on screen said the word "effort", so
+ * there was no way to look for it, and the report was: "all the options you
+ * have actually removed."
  *
- *   Model       changes per task — "do this bit on Sonnet".            visible
- *   Permission  changes per phase — plan it, then let it edit.         visible
- *   Effort      set once, if ever, and then left alone.                folded
- *   Fast mode   rarer still, and usually cannot even be read (see      folded
+ * So the panel is the complete inventory, and hiding is no longer something
+ * this file can express.
+ *
+ * The order is not the reading order of the table at the top of
+ * `AgentControls.tsx`, and that is deliberate: the two without a chip on the
+ * row come first, because they are the reason anybody opens this. Measured in
+ * the harness at 1280×900 — five sections are 1,634px of content in a 540px
+ * panel, so what is at the top is what is found without scrolling, and putting
+ * the two controls that are already one click away up there would spend that
+ * space on the people who did not need the panel at all.
+ */
+export const MENU_CONTROLS: readonly ControlId[] = ['effort', 'fast', 'model', 'permission']
+
+/**
+ * Which of them *also* get a chip on the composer's own row, for the one-click
+ * case.
+ *
+ * By how often a session reaches for the thing, not by how interesting it is:
+ *
+ *   Model       changes per task — "do this bit on Sonnet".            chip
+ *   Permission  changes per phase — plan it, then let it edit.         chip
+ *   Effort      set once, if ever, and then left alone.                panel
+ *   Fast mode   rarer still, and usually cannot even be read (see      panel
  *               `unreadLabel`), so it spends most of its life
  *               reporting that it has nothing to report.
  *
- * Two lists rather than a flag per control because the pairing is the point:
- * every control must appear in exactly one of them, which `catalog.test.ts`
- * asserts. A control quietly dropped from both would vanish from the app while
- * every one of its own tests kept passing — that is the failure this file's
- * neighbours exist to prevent, and it applies just as well to a menu entry.
+ * A subset of `MENU_CONTROLS`, and `catalog.test.ts` asserts that — which is
+ * the guard the pair of lists used to provide, moved to where it now belongs.
+ * The consequence looks like duplication and is not: model and permission
+ * appear twice, once as a chip and once as a section, and both are the same
+ * control reading the same value and sending the same keystrokes. A menu that
+ * is a complete inventory is worth a repeated row. A menu whose contents you
+ * have to already know is not.
  */
 export const PRIMARY_CONTROLS: readonly ControlId[] = ['model', 'permission']
-export const FOLDED_CONTROLS: readonly ControlId[] = ['effort', 'fast']
 
 /** The short name on the button. Sentence case; it is a name, not a heading. */
 export function controlName(control: ControlId): string {

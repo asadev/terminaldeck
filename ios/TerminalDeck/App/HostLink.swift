@@ -98,6 +98,20 @@ final class HostLink: Identifiable {
     var onCreated: ((String) -> Void)?
 
     /**
+     * The session list on this machine changed.
+     *
+     * Every path that can change a status goes through here — the whole list,
+     * one `status` frame, an `exit`, a session this phone asked for — because
+     * the thing above is watching for *transitions* and a transition missed is
+     * an alert that never fires. See `SessionAlerts`.
+     *
+     * The reason distinguishes a change that happened while this phone was
+     * listening from the first list after a connection came back, which is a
+     * catch-up: what is in it happened while nothing here was running.
+     */
+    var onSessionsChanged: (([RemoteSession], AlertReason) -> Void)?
+
+    /**
      * Git on this machine wants a GitHub login, and this phone is the thing
      * holding one.
      *
@@ -640,10 +654,14 @@ final class HostLink: Identifiable {
             hostPlatform = platform
             granted = folders
             if capabilities.contains(WireCapability.localhost) { transport?.send(.ports) }
+            // A welcome is by definition the first list on a new connection, so
+            // whatever changed in it changed while this phone was not attached.
+            onSessionsChanged?(sessions, .catchUp)
 
         case let .sessions(list):
             sessions = list
             if !activity.isEmpty { lastActivity = activity }
+            onSessionsChanged?(sessions, .live)
 
         case let .folders(list):
             // Whole list, not a delta. A folder removed on the desktop stops
@@ -659,6 +677,7 @@ final class HostLink: Identifiable {
                 openWhenCreated = false
                 onCreated?(session.id)
             }
+            onSessionsChanged?(sessions, .live)
 
         case let .attached(id):
             attached.insert(id)
@@ -683,12 +702,16 @@ final class HostLink: Identifiable {
             let old = sessions[index]
             sessions[index] = RemoteSession(id: old.id, title: old.title, cwd: old.cwd,
                                             provider: old.provider, status: status, exitCode: old.exitCode)
+            // The frame that carries most of the alerts: `working` → `waiting`
+            // is a desktop saying an agent has stopped and wants somebody.
+            onSessionsChanged?(sessions, .live)
 
         case let .exit(id, code):
             if let index = sessions.firstIndex(where: { $0.id == id }) {
                 let old = sessions[index]
                 sessions[index] = RemoteSession(id: old.id, title: old.title, cwd: old.cwd,
                                                 provider: old.provider, status: "exited", exitCode: code)
+                onSessionsChanged?(sessions, .live)
             }
             bridges[id]?.note("session exited with code \(code)")
 

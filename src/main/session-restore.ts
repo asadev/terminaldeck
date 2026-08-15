@@ -1,6 +1,6 @@
 import { access } from 'node:fs/promises'
 import type { CreateSessionInput, ProviderId, SessionMeta } from '../shared/types'
-import { listTranscripts, transcriptDir } from './transcript'
+import { newestConversation, transcriptDir } from './transcript'
 
 /**
  * Putting the sessions you had open back, continued rather than started over.
@@ -62,14 +62,41 @@ import { listTranscripts, transcriptDir } from './transcript'
  *     (a plain shell, and gemini until its flag is confirmed) are never asked;
  *     there is nothing to continue and starting one is not a failure.
  *
+ * ## The picture, which is a separate thing from the context
+ *
+ * All of the above restores the *conversation* and none of it restores the
+ * *screen*: scrollback lives in `PtyManager`'s in-memory buffer and dies with
+ * the process, so a restored tab was an empty terminal attached to a live,
+ * fully-contexted session. It worked and it looked like everything had been
+ * lost, which for a person is the same thing.
+ *
+ * So a continued session is now painted with the tail of the conversation it is
+ * continuing, read out of the same transcript by `session-replay.ts` and put in
+ * front of the session's own output. Three rules constrain it and each is
+ * enforced here rather than there:
+ *
+ *  - **Only a session that is actually continuing.** A tab starting clean must
+ *    not be painted with a conversation it is not attached to — most obviously
+ *    the sibling tab that lost the claim, which is sitting in the same folder
+ *    looking at the same transcript and continuing none of it.
+ *  - **Read before the process exists.** The transcript is read *before* the
+ *    spawn, so nothing has to reason about what the CLI has written to the file
+ *    in the meantime.
+ *  - **Painted before the tab exists.** The buffer is seeded before `announce`,
+ *    because announcing is what makes the window build a terminal and the first
+ *    thing that terminal does is ask for the scrollback. Painting afterwards is
+ *    a race the renderer loses silently, and only sometimes.
+ *
  * ## What this module never does
  *
- * It never writes anything into the terminal, and it never announces itself.
- * Coming back to a restarted machine should look like the session was simply
- * still there. Anything explaining the mechanism — a banner, a "resumed" chip,
- * a synthetic first line — is the app narrating its own plumbing, which is the
- * thing this was asked not to do. The one place it speaks is the app log, and
- * that only when a session could *not* come back.
+ * It never writes a byte to a session's *process*, and it never announces
+ * itself. Restoring is painting text that already happened; it must not send
+ * anything to the CLI and it must not re-execute a command. Coming back to a
+ * restarted machine should look like the session was simply still there, so
+ * anything explaining the mechanism — a banner, a "resumed" chip, a synthetic
+ * first line — is the app narrating its own plumbing, which is the thing this
+ * was asked not to do. The one place it speaks is the app log, and that only
+ * when a session could *not* come back.
  */
 
 /* -------------------------------------------------------------------------- */
@@ -147,6 +174,22 @@ export interface RestoreDecision {
    * is written for them and not for a stack trace. "ENOENT" is not a reason.
    */
   reason: string
+  /**
+   * The conversation store this decision was made against.
+   *
+   * Carried on the decision rather than recomputed by whoever needs it next,
+   * and the reason is the whole point of `PlanProbes.configDir`: a profile
+   * redirects `CLAUDE_CONFIG_DIR`, so "the transcripts for this folder" has a
+   * different answer per login. The replay has to read the file the plan found,
+   * because the plan is what decided the CLI would attach to it — and a second
+   * resolution of the same question is how the two would end up describing
+   * different logins with nothing on screen to say so.
+   *
+   * Absent when the question was never reached: a folder that is gone, or an
+   * agent with no way to continue at all. That is not a missing value to
+   * default, it is the honest answer that nothing was asked.
+   */
+  configDir?: string
 }
 
 export interface PlanProbes {
@@ -259,6 +302,7 @@ export async function planRestore(
         outcome: 'fresh',
         reason:
           'another tab is already continuing the conversation this one shares, and there is only one to continue',
+        configDir,
       })
       continue
     }
@@ -270,6 +314,7 @@ export async function planRestore(
             session,
             outcome: 'fresh',
             reason: 'no earlier conversation was found on disk for this folder',
+            configDir,
           }
         : {
             session,
@@ -278,6 +323,7 @@ export async function planRestore(
               found === 'found'
                 ? 'continuing the conversation on disk'
                 : 'continuing — this agent keeps its history where the app cannot read it, so it was taken at its word',
+            configDir,
           },
     )
   }
@@ -326,10 +372,11 @@ export async function conversationOnDisk(
   configDir: string,
 ): Promise<Conversation> {
   if (session.provider !== 'claude') return 'unknown'
-  const files = await listTranscripts(
-    transcriptDir(session.cwd, configDir),
-  )
-  return files.some((file) => file.bytes > 0) ? 'found' : 'none'
+  // The same call the replay makes, on purpose: "is there a conversation" and
+  // "which file is it" have to be one lookup, or the tab can be continued
+  // against one transcript and painted from another.
+  const found = await newestConversation(transcriptDir(session.cwd, configDir))
+  return found === null ? 'none' : 'found'
 }
 
 /* -------------------------------------------------------------------------- */
@@ -384,6 +431,22 @@ export async function restoreOpenSessions(deps: RestoreDeps): Promise<RestoreRes
       decisions.push(decision)
       continue
     }
+
+    /*
+     * Nothing is painted onto the screen here, and that is measured.
+     *
+     * This loop briefly seeded each restored session with its own transcript so
+     * the terminal would not be blank. It worked and it was invisible: Claude
+     * Code switches to the ALTERNATE SCREEN (`ESC[?1049h`, then `ESC[2J`) about
+     * half a second after the spawn, so anything seeded into the normal buffer
+     * is underneath it for the life of the session. No ordering fixes that —
+     * the CLI owns the screen once it starts.
+     *
+     * It is also unnecessary. `--continue` re-reads the whole transcript and the
+     * CLI repaints the conversation itself, which is what the user actually
+     * sees; the restore above is what makes that happen. A plain shell has no
+     * transcript to replay at all.
+     */
     try {
       const meta = await deps.spawn({
         cwd: decision.session.cwd,

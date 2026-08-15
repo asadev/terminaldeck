@@ -163,10 +163,12 @@ function startServe(binary: string, args: string[]): Promise<ServeResult> {
     const timer = setTimeout(() => {
       finish({
         ok: false,
-        // Just the cause. The panel that renders this already follows it with
-        // "Remote access is still up — everything below is going through the
-        // relay", and saying it twice in two sentences reads like a stutter —
-        // which is only visible by looking at the rendered panel, not the diff.
+        // Just the cause, with nothing about what still works. The surfaces
+        // that render this only render it when the relay is *not* carrying the
+        // session — the desktop's tailnet row and `terminaldeck status` both
+        // stay silent about a missing optimisation while a phone can get in
+        // some other way — so it arrives beside the relay's own sentence, and a
+        // reassurance here would either stutter against it or contradict it.
         message:
           `Tailscale did not answer within ${Math.round(SERVE_TIMEOUT_MS / 1000)} seconds, so the ` +
           'direct tailnet address is not available.',

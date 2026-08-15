@@ -18,8 +18,17 @@ import SwiftUI
 
 @main
 struct TerminalDeckApp: App {
+    /**
+     * The delegate exists for one thing: `UNUserNotificationCenter.delegate`
+     * has to be set before launch finishes, or a notification that *launched*
+     * the app is delivered to nobody. A SwiftUI `task` runs after that moment.
+     * See `NotificationDelegate`.
+     */
+    @UIApplicationDelegateAdaptor(NotificationDelegate.self) private var delegate
+
     @State private var model = Composition.model()
     @State private var network = NetworkWatch()
+    @State private var grace = BackgroundGrace()
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
@@ -29,11 +38,40 @@ struct TerminalDeckApp: App {
                     model.start()
                     network.onChange = { model.resume() }
                     network.start()
+                    // A tap that arrived during launch is held until this line;
+                    // setting it delivers it.
+                    NotificationRouter.shared.open = { host, session in
+                        model.open(session: session, on: host)
+                    }
+                    await model.refreshAlertPermission()
                 }
                 .onOpenURL { model.open($0) }
         }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { model.resume() }
+            switch phase {
+            case .active:
+                model.isForeground = true
+                // The assertion is released the moment the app is back: holding
+                // one that is not needed is how an app is killed for still
+                // holding it when the time runs out.
+                grace.end()
+                model.resume()
+                // Permission can be changed in Settings while this app is not
+                // running, so it is re-read rather than remembered.
+                Task { await model.refreshAlertPermission() }
+            case .background:
+                model.isForeground = false
+                // Keep listening for as long as iOS allows. This is what makes
+                // an alert possible at all in the minute after the phone goes
+                // into a pocket — which is the minute people care about.
+                grace.begin()
+            case .inactive:
+                // The notification-centre pull-down and the app switcher both
+                // land here and neither is leaving. Nothing to do.
+                break
+            @unknown default:
+                break
+            }
         }
     }
 }

@@ -3,7 +3,7 @@ import { StatusDot } from '../components/StatusDot'
 import type { Project } from '../state/store'
 import { tip } from '../keymap'
 import { PANEL_GROUPS, PANELS, type PanelId, type PanelSpec } from './panels'
-import { KIND_ICON, sessionLabel, type WorkspaceTab } from './workspace-tabs'
+import { accountsWorthShowing, KIND_ICON, sessionLabel, type WorkspaceTab } from './workspace-tabs'
 
 interface Props {
   width: number
@@ -181,6 +181,15 @@ export function Sidebar({
   const labelFor = (tab: WorkspaceTab, index: number, projectName?: string): string =>
     tab.kind === 'session' ? sessionLabel(tab.label, index, projectName) : tab.label
 
+  /**
+   * Whether the rows have to name the account each session belongs to.
+   *
+   * Only once more than one is in play — see `accountsWorthShowing`. Two
+   * sessions in the same folder under two logins are otherwise the same row
+   * twice, which is the thing this app must never make someone guess about.
+   */
+  const showAccounts = accountsWorthShowing(tabs)
+
   const tabRow = (tab: WorkspaceTab, label: string) => (
     <li key={tab.id}>
       <div
@@ -191,7 +200,9 @@ export function Sidebar({
         <button
           type="button"
           className="sb-row-main"
-          title={label}
+          title={
+            showAccounts && tab.account ? `${label} — signed in as ${tab.account.name}` : label
+          }
           aria-current={!activePanel && tab.id === activeTabId}
           onClick={() => onSelectTab(tab.id)}
         >
@@ -201,6 +212,9 @@ export function Sidebar({
             <Glyph path={KIND_ICON.browser} size={15} />
           )}
           <span className="sb-label">{label}</span>
+          {showAccounts && tab.account && (
+            <span className="sb-account">{tab.account.name}</span>
+          )}
         </button>
         {/* Mail's idiom: a dot for a row with something new in it. It hides
             under the close button on hover, because at that point the pointer

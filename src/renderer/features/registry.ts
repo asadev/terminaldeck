@@ -211,7 +211,23 @@ export const FEATURES: readonly Feature[] = [
     default: 'on',
     panels: [],
     widgets: [],
-    commands: ['pane.split'],
+    /*
+     * All three pane chords, not just the one that makes a split.
+     *
+     * This said `['pane.split']` alone, and the two chords that move between
+     * panes were left ownerless — which meant that with Split view uninstalled
+     * the shortcuts sheet still advertised "Focus the pane to the left ⌘⌥←" and
+     * "Focus the pane to the right ⌘⌥→", and pressing either fell straight
+     * through `App.tsx`'s dispatcher to `focusNeighbour`, which has no
+     * neighbouring pane to find and so did nothing at all.
+     *
+     * That is precisely the failure `keymap.ts` argues against beside ⌘D:
+     * "nothing at all is indistinguishable from a broken shortcut". ⌘D was
+     * saved from it by being declared here; its two siblings were not. Owning
+     * all three means the sheet stops advertising them and the dispatcher
+     * offers the feature back instead of swallowing the key.
+     */
+    commands: ['pane.split', 'pane.focusLeft', 'pane.focusRight'],
     controls: ['window.split'],
     sections: [],
     settings: [],

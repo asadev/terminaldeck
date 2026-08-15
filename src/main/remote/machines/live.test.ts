@@ -29,10 +29,12 @@ import { createRelayServer } from '../../../../relay/src/rendezvous'
 import { RemoteAuth } from '../device-auth'
 import { loadHostIdentity } from '../host-identity'
 import { createRelayClient } from '../relay-client'
+import { FolderGrants } from '../folder-grants'
 import {
   authenticatorFor,
   createRemoteEndpoint,
   pairingDesk,
+  registerRemoteIpc,
   type CreateOutcome,
   type RemoteEndpoint,
   type SessionAccess,
@@ -129,15 +131,8 @@ function fakeSessions(): Sessions {
   }
 }
 
-/** The machine on the other side of the room: a relay, and a host dialled into it. */
-async function farMachine(): Promise<{
-  relayUrl: string
-  auth: RemoteAuth
-  desk: ReturnType<typeof pairingDesk>
-  sessions: Sessions
-  endpoint: RemoteEndpoint
-  offer: MachineOffer
-}> {
+/** A real relay on a loopback port, torn down with the test. */
+async function loopbackRelay(): Promise<string> {
   const relay = createRelayServer()
   /*
    * Every socket the relay accepts, so the harness can take the wire away.
@@ -165,8 +160,19 @@ async function farMachine(): Promise<{
     }
     return relay.close()
   })
-  const port = await listen(relay.server)
-  const relayUrl = `ws://127.0.0.1:${port}`
+  return `ws://127.0.0.1:${await listen(relay.server)}`
+}
+
+/** The machine on the other side of the room: a relay, and a host dialled into it. */
+async function farMachine(): Promise<{
+  relayUrl: string
+  auth: RemoteAuth
+  desk: ReturnType<typeof pairingDesk>
+  sessions: Sessions
+  endpoint: RemoteEndpoint
+  offer: MachineOffer
+}> {
+  const relayUrl = await loopbackRelay()
 
   const dir = tempDir()
   const auth = new RemoteAuth(dir)
@@ -209,6 +215,145 @@ async function farMachine(): Promise<{
     },
   }
 }
+
+/**
+ * This desktop, assembled by the registration the app runs at launch.
+ *
+ * Not a fixture standing in for it: `registerRemoteIpc` builds the trust store,
+ * the pairing desk, the server and the relay link, and the handlers kept here
+ * are the very functions the preload's `startRemotePairing` invokes. Nothing
+ * about a pairing code can be proved by calling something that resembles the
+ * handler — the defect this covers *was* a handler that did half of what its
+ * neighbour did.
+ *
+ * Tailscale is reported missing and the proxy seam throws, so the only route
+ * this machine has is the loopback relay. That is the situation of most people
+ * who type a pairing code.
+ */
+async function thisDesktop(): Promise<{
+  relayUrl: string
+  hostId: string
+  publicKey: Buffer
+  invoke(channel: string): Promise<unknown>
+}> {
+  const relayUrl = await loopbackRelay()
+  const dir = tempDir()
+  const handlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>()
+
+  const remote = registerRemoteIpc(
+    {
+      handle: (channel, listener) => {
+        handlers.set(channel, listener)
+      },
+    },
+    {
+      sessions: fakeSessions(),
+      folders: new FolderGrants(tempDir()),
+      webRoot: join(dir, 'nowhere'),
+      storageDir: dir,
+      broadcast: () => {},
+      relayEnabled: true,
+      relayUrl,
+      // Read no environment at all. `TERMINALDECK_RELAY_URL` set on the machine
+      // running the tests would otherwise point this at the public relay, and a
+      // green test would mean a socket to production.
+      env: {},
+      readTailnet: async () => ({
+        ready: false,
+        state: 'not-installed',
+        reason: 'Tailscale is not installed on this machine.',
+      }),
+      serve: {
+        on: async () => {
+          throw new Error('nothing may ask Tailscale for a proxy in this test')
+        },
+        off: async () => {},
+      },
+    },
+  )
+  closers.push(() => void remote.server.stop())
+
+  // Nobody pressed anything: `registerRemoteIpc` dials at launch. Waiting for
+  // that is waiting for the same thing a person waits for before the panel says
+  // it is connected.
+  await waitFor(() => remote.server.status().relay?.connected === true, 'this desktop to reach the relay')
+  const relay = remote.server.status().relay
+  if (!relay) throw new Error('no relay state')
+
+  return {
+    relayUrl,
+    hostId: relay.hostId,
+    publicKey: Buffer.from(relay.publicKey, 'base64url'),
+    invoke: async (channel) => {
+      const handler = handlers.get(channel)
+      if (!handler) throw new Error(`no handler for ${channel}`)
+      return handler(null)
+    },
+  }
+}
+
+describe('the code the Remote panel shows a phone', () => {
+  /*
+   * The defect, as three assertions.
+   *
+   * An eight-character code only works if the machine showing it is sitting in
+   * the rendezvous slot `hostIdFor(scrypt(code))` names, answering with its real
+   * address. Only `machines:code` ever started that beacon; `remote:pair` — the
+   * phone pairing — minted the same-looking code and published nothing, so
+   * typing it reached a slot with nobody in it and the person was told no
+   * machine was showing their code. The relay was fine. Nothing was broken
+   * except the half that had never been wired.
+   */
+  it('is findable at the rendezvous, the same as one from Machines → Add', async () => {
+    const deck = await thisDesktop()
+    const minted = (await deck.invoke('remote:pair')) as { token: string; expiresAt: number }
+
+    // The lookup is given the code and a relay, and nothing else — no host id,
+    // no key, no link. That is exactly what a person typing eight characters
+    // into another machine has.
+    const found = await lookupMachine({ code: minted.token, relayUrl: deck.relayUrl })
+    expect(found?.hostId).toBe(deck.hostId)
+    expect(found?.relayUrl).toBe(deck.relayUrl)
+    // Through the base64/base64url boundary the offer crosses, because a key
+    // that survives the frame and not the encoding is a machine nobody can dial.
+    expect(Buffer.from(found?.publicKey ?? '', 'base64').equals(deck.publicKey)).toBe(true)
+  }, 30_000)
+
+  it('pairs from those eight characters, and stops being findable once they are spent', async () => {
+    const deck = await thisDesktop()
+    const minted = (await deck.invoke('remote:pair')) as { token: string }
+
+    // The whole chain the phone panel promises: find the machine from the code,
+    // dial its real address, redeem the code, come away with a credential.
+    const paired = await pairWithCode({ code: minted.token, relayUrl: deck.relayUrl })
+    if (!paired.ok) throw new Error(`pairing failed: ${paired.message}`)
+    expect(paired.offer.hostId).toBe(deck.hostId)
+    expect(paired.credential).toContain('.')
+
+    // The token is single-use and was burned on the match. A slot still sitting
+    // there would be this machine advertising an address that now refuses the
+    // code it is advertising — and nothing on the redeeming path calls a cancel
+    // button, which is why the rendezvous had to belong to the desk.
+    expect(
+      await lookupMachine({ code: minted.token, relayUrl: deck.relayUrl, lookupTimeoutMs: 2000 }),
+    ).toBeNull()
+  }, 30_000)
+
+  it('stops being findable when the panel is closed', async () => {
+    const deck = await thisDesktop()
+    const minted = (await deck.invoke('remote:pair')) as { token: string }
+    expect(await lookupMachine({ code: minted.token, relayUrl: deck.relayUrl })).not.toBeNull()
+
+    await deck.invoke('remote:pair:cancel')
+    // Close is one press and it has to mean both halves: the desk stops
+    // honouring the code and the machine leaves the slot. A Close that only
+    // stopped drawing it would leave a live rendezvous for a code the trust
+    // store has already forgotten.
+    expect(
+      await lookupMachine({ code: minted.token, relayUrl: deck.relayUrl, lookupTimeoutMs: 2000 }),
+    ).toBeNull()
+  }, 30_000)
+})
 
 describe('finding a machine from a typed code', () => {
   it('reads the far machine’s address off the rendezvous the code names', async () => {

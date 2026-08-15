@@ -117,6 +117,10 @@ describe('picking the session the strip is about', () => {
   })
 
   it('falls back to the active session, then to the newest', () => {
+    // Only for a caller that expressed no preference. `UsageStrip` is the one
+    // that must not take this answer for a session of its own that has written
+    // nothing yet — it guards on `scoped` before ever calling in, because from
+    // here "no path" and "a session with no transcript" are the same argument.
     expect(pickSession(summary)?.sessionId).toBe('live')
     expect(pickSession(summary, { transcriptPath: '/t/gone.jsonl' })?.sessionId).toBe('live')
   })

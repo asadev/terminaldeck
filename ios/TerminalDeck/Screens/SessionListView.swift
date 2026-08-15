@@ -115,10 +115,18 @@ struct SessionListView: View {
                     .disabled(model.current == nil)
                     .accessibilityIdentifier("sessions.rename")
 
-                    // In its own section because it is the one item here that is
-                    // not about the machine on screen: there is one GitHub
-                    // account on this phone, and it answers for every machine.
+                    // In its own section because these are the items here that
+                    // are not about the machine on screen: there is one GitHub
+                    // account on this phone and it answers for every machine,
+                    // and there is one set of alerts for every machine too.
                     Section {
+                        Button {
+                            DispatchQueue.main.async { model.showingAlerts = true }
+                        } label: {
+                            Label("Alerts", systemImage: "bell")
+                        }
+                        .accessibilityIdentifier("sessions.alerts")
+
                         Button {
                             DispatchQueue.main.async { model.showingGitHub = true }
                         } label: {
@@ -239,6 +247,19 @@ struct SessionListView: View {
                 Banner(text: error, tone: .warning)
                     .onTapGesture { model.dismissError() }
             }
+            /*
+             * What happened while the app was asleep.
+             *
+             * Neutral rather than a warning, because nothing is wrong: it is the
+             * honest answer to a phone that cannot be woken by a machine. See
+             * `DeckModel.awayReport`. Tapping dismisses it, like the error above
+             * — the sessions it is about are in the list underneath.
+             */
+            if let report = model.awayReport {
+                Banner(text: report, tone: .neutral)
+                    .onTapGesture { model.dismissAwayReport() }
+                    .accessibilityIdentifier("sessions.awayReport")
+            }
         }
     }
 
@@ -266,6 +287,8 @@ struct SessionListView: View {
                     .buttonStyle(RowButtonStyle())
                     .accessibilityIdentifier("session.\(session.id)")
                 }
+
+                alertsOffer
 
                 // Under the sessions and above the ports, because it is a note
                 // about the sessions. Put at the very bottom it sat under a
@@ -320,6 +343,57 @@ struct SessionListView: View {
     static let onlyItsOwnSessions =
         "Only sessions started in \(Brand.name) are listed — it cannot see one you are running "
         + "in Terminal or VS Code."
+
+    /**
+     * The one place this app mentions notifications before somebody goes looking.
+     *
+     * Shown only while iOS has **never been asked** — so it disappears for good
+     * the moment the question is answered either way, and there is no second
+     * preference remembering that it was dismissed. That is the whole trick:
+     * the state that hides it belongs to the system rather than to this app,
+     * which is why it cannot come back and nag.
+     *
+     * Quiet on purpose. It is a card like the others rather than an accented
+     * one, because the accent on this screen belongs to Resume — a screen where
+     * two things are blue has no accent at all.
+     *
+     * Below the sessions rather than above them: somebody who opened the app to
+     * look at a session should reach their session first.
+     */
+    @ViewBuilder
+    private var alertsOffer: some View {
+        if model.alertPermission == .notAsked && !model.sessions.isEmpty {
+            Button {
+                model.showingAlerts = true
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "bell")
+                        .font(.system(size: 15))
+                        .foregroundStyle(Theme.secondary)
+                        .frame(width: 18)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Get told when a session needs you")
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundStyle(Theme.primary)
+                        Text("Alerts are off")
+                            .font(.system(size: 12))
+                            .foregroundStyle(Theme.faint)
+                    }
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Theme.faint)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 13)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(RowButtonStyle())
+            .padding(.top, 6)
+            .accessibilityIdentifier("sessions.alertsOffer")
+        }
+    }
 
     /**
      * The Mac's dev servers, one tap from being on this phone.

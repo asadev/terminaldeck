@@ -10,6 +10,7 @@ import {
   MIN_COLS,
   MIN_ROWS,
   MAX_CWD_BYTES,
+  MAX_PROVIDER_LENGTH,
   MAX_UPLOAD_BYTES,
   MAX_UPLOAD_DATA_CHARS,
   MAX_UPLOAD_NAME_BYTES,
@@ -114,6 +115,8 @@ const VALID_CLIENT: ClientMessage[] = [
   { t: 'create', cwd: '/Users/apple/Projects/terminaldeck' },
   { t: 'create', cols: 80, rows: 24 },
   { t: 'create', cwd: '/Users/apple/Projects/terminaldeck', cols: 100, rows: 30 },
+  { t: 'create', provider: 'shell' },
+  { t: 'create', cwd: '/Users/apple/Projects/terminaldeck', provider: 'claude', cols: 100, rows: 30 },
   { t: 'ports' },
   { t: 'tunnel.open', id: 'tun-1', port: 3000 },
   { t: 'tunnel.close', id: 'tun-1' },
@@ -742,6 +745,63 @@ describe('chunkOutput', () => {
     // Nothing else is possible: the alternative is emitting half a character.
     expect(chunkOutput('😀😀', 2)).toEqual(['😀', '😀'])
   })
+
+  /*
+   * The budget is spent in bytes of *frame*, not bytes of text.
+   *
+   * These use control characters rather than ASCII on purpose. ASCII costs one
+   * byte either way, so every earlier case in this block passes just as well
+   * against an accounting that ignores JSON escaping — which is exactly how the
+   * defect survived: the tests were written in the one alphabet that cannot see
+   * it, while a terminal speaks the alphabet that can.
+   */
+  it('counts what JSON escaping costs, not what the text weighs', () => {
+    // Six bytes of frame each, one byte of text each.
+    const escapes = '\u001b'.repeat(24)
+    expect(chunkOutput(escapes, 12)).toEqual(Array.from({ length: 12 }, () => '\u001b\u001b'))
+    // Two-byte forms: `"` and `\` and the five named escapes.
+    expect(chunkOutput('""""""', 4)).toEqual(['""', '""', '""'])
+    expect(chunkOutput('\\\\\\\\', 4)).toEqual(['\\\\', '\\\\'])
+    expect(chunkOutput('\n\n\n\n', 4)).toEqual(['\n\n', '\n\n'])
+    // A tab is `\t`, two bytes — not the six a bare C0 control costs.
+    expect(chunkOutput('\t\t\t', 6)).toEqual(['\t\t\t'])
+  })
+
+  it('never builds an output frame past the cap every client refuses at', () => {
+    /*
+     * The failure this exists to stop, in one sentence: 32 KiB of escapes
+     * serialised to 192 KiB, three times `MAX_MESSAGE_BYTES`, and the phone
+     * answers an oversized frame by closing the socket. What the person saw was
+     * a session that dropped whenever the agent drew something colourful — and
+     * nothing in the logs pointed here, because from this side the chunk was
+     * comfortably inside its budget.
+     */
+    const scrollback = ('\u001b[1;31m' + 'x'.repeat(40) + '\u001b[0m\r\n').repeat(4000)
+    const chunks = chunkOutput(scrollback)
+    expect(chunks.join('')).toBe(scrollback)
+    expect(chunks.length).toBeGreaterThan(1)
+    for (const piece of chunks) {
+      const frame = serialize({ t: 'output', id: SESSION_ID, data: piece })
+      expect(Buffer.byteLength(frame)).toBeLessThanOrEqual(MAX_MESSAGE_BYTES)
+      // And the piece itself is inside the budget it was cut to, envelope aside.
+      expect(Buffer.byteLength(JSON.stringify(piece)) - 2).toBeLessThanOrEqual(OUTPUT_CHUNK_BYTES)
+    }
+  })
+
+  it('does not hand back an oversized burst whole for being short in raw bytes', () => {
+    // The old fast path measured raw UTF-8 and returned early, so the biggest
+    // frames this function produced were the ones it never looked at.
+    const escapes = '\u001b'.repeat(OUTPUT_CHUNK_BYTES)
+    const chunks = chunkOutput(escapes)
+    // Six bytes of frame per escape, so a chunk holds a sixth of the budget.
+    // This used to come back as one chunk of 192 KiB, which is the bug.
+    const perChunk = Math.floor(OUTPUT_CHUNK_BYTES / 6)
+    expect(chunks.length).toBe(Math.ceil(escapes.length / perChunk))
+    expect(chunks.join('')).toBe(escapes)
+    for (const piece of chunks) {
+      expect(Buffer.byteLength(JSON.stringify(piece)) - 2).toBeLessThanOrEqual(OUTPUT_CHUNK_BYTES)
+    }
+  })
 })
 
 /**
@@ -845,6 +905,49 @@ describe('create', () => {
     for (const cwd of ['', 7, null, true, {}, []]) {
       expect(refused({ t: 'create', cwd }, JSON.stringify(cwd)).code).toBe('bad-message')
     }
+  })
+
+  it('carries the provider, which is the field it used to drop on the floor', () => {
+    /*
+     * The regression test for the bug this field exists to close. The
+     * desktop-to-desktop client had been sending `provider` since it was
+     * written; this parser copied across the fields it knew and dropped the rest
+     * without a word, so a request for `shell` reached the far machine as a
+     * request for nothing and came back as a `claude` session — measured on a
+     * real Windows PC.
+     *
+     * `toEqual` is the whole assertion: it fails if the field is dropped, and it
+     * fails if the parser invents a value for a request that named none.
+     */
+    expect(accepted({ t: 'create', provider: 'shell' })).toEqual({ t: 'create', provider: 'shell' })
+    expect(accepted({ t: 'create' })).toEqual({ t: 'create' })
+  })
+
+  it('refuses a provider that is not shaped like an agent name', () => {
+    // Shape only — this parser does not hold the provider table. What it refuses
+    // is anything that is not a bare identifier, because the value ends up
+    // selecting a command to run and every trimming rule turns a hostile string
+    // into a *different* legal-looking one.
+    for (const provider of ['', 7, null, true, {}, [], 'Claude', '../claude', 'a b', 'claude\n', '-x']) {
+      expect(refused({ t: 'create', provider }, JSON.stringify(provider)).code).toBe('bad-message')
+    }
+  })
+
+  it('caps the provider name', () => {
+    const atCap = 'a'.repeat(MAX_PROVIDER_LENGTH)
+    expect(accepted({ t: 'create', provider: atCap })).toEqual({ t: 'create', provider: atCap })
+    expect(refused({ t: 'create', provider: `${atCap}a` }).code).toBe('too-large')
+  })
+
+  it('does not decide whether the desktop has that agent', () => {
+    // A name this desktop cannot start is a *refusal with a sentence* from
+    // `session-create.ts`, not a closed socket from here. Closing the socket
+    // over a typo would tell the person holding the phone nothing at all, so a
+    // plausible-looking name that no desktop has must still parse.
+    expect(accepted({ t: 'create', provider: 'nosuchagent' })).toEqual({
+      t: 'create',
+      provider: 'nosuchagent',
+    })
   })
 
   it('refuses a control byte in a path rather than stripping it', () => {

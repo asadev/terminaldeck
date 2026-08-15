@@ -12,6 +12,7 @@ import {
   normalise,
   relativeTo,
   removeAttachment,
+  shellQuote,
   SUBMIT_GAP_MS,
   terminalPayload,
   terminalWrites,
@@ -204,5 +205,37 @@ describe('folders derived from the file index', () => {
 
   it('has no entry for a file at the top level', () => {
     expect(foldersFrom(['package.json'])).toEqual([])
+  })
+})
+
+describe('a path typed at a shell prompt', () => {
+  it('quotes an ordinary path, so a space cannot split it into two arguments', () => {
+    expect(shellQuote('/Users/asad/My Project/notes.md')).toBe("'/Users/asad/My Project/notes.md'")
+  })
+
+  it('leaves the shell nothing to expand inside the quotes', () => {
+    // Single quotes rather than double ones for exactly this: in double quotes
+    // `$HOME` and a backtick are still live, so a file literally called
+    // `$HOME` would be replaced by the home directory on its way to the pty.
+    const quoted = shellQuote('/tmp/$HOME `whoami` "x" \\n')
+    expect(quoted).toBe("'/tmp/$HOME `whoami` \"x\" \\n'")
+  })
+
+  it("closes, escapes and reopens around an apostrophe — the one character single quotes cannot hold", () => {
+    // `'it'\''s'` is the standard form, and it is the whole reason this is a
+    // function rather than a template literal at the call site.
+    expect(shellQuote("/Users/asad/it's here/a.txt")).toBe("'/Users/asad/it'\\''s here/a.txt'")
+  })
+
+  it('uses double quotes for a Windows path, which cmd.exe parses and sh does not', () => {
+    // The style follows the path rather than the machine, because on Windows a
+    // POSIX path launches through wsl.exe and a drive-letter path through
+    // cmd.exe — the same rule sessions themselves are routed by.
+    expect(shellQuote('C:/Users/asad/My Project')).toBe('"C:/Users/asad/My Project"')
+    expect(shellQuote('\\\\server\\share\\file.txt')).toBe('"\\\\server\\share\\file.txt"')
+  })
+
+  it('drops a trailing separator, so a folder arrives as one word', () => {
+    expect(shellQuote('/Users/asad/project/')).toBe("'/Users/asad/project'")
   })
 })

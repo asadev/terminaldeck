@@ -595,16 +595,21 @@ export function NewSessionDialog({ open, projectPath, onClose, onStart }: Props)
             </span>
           </div>
 
-          {/* The one thing this row must not imply. `sessionEnv()` in
-              main/profiles.ts is what would redirect the config directory, and
-              nothing calls it — `CreateSessionInput` has no field to carry a
-              profile at all. Saying so costs a line; letting someone believe a
-              work repo is running under their work login when it is not costs
-              whatever gets committed or billed to the wrong account. */}
+          {/* This line used to say the choice was "recorded with the session,
+              but not applied yet", and it was true when it was written: nothing
+              called `sessionEnv()` and `CreateSessionInput` had no field to
+              carry an account. Both have since changed — `startSession` in
+              main/host-core.ts resolves the account and spawns the PTY with the
+              redirected config directory — so the sentence had become the
+              opposite of a warning: a person reading it would believe the
+              feature does not work, and go looking for it somewhere else.
+
+              What replaces it is what the row is actually for, because a login
+              this app has never seen is the case people get stuck on. */}
           {profileNotice === null && profiles.length > 0 && (
             <p className="ns-caveat">
-              Recorded with the session, but not applied yet — the agent still starts under
-              whichever login it is already signed into.
+              Each login keeps its own history and transcripts. One that has not been signed into
+              yet will ask you to log in inside the session.
             </p>
           )}
         </section>

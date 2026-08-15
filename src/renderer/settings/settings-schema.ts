@@ -66,6 +66,24 @@ export const SECTIONS = [
     label: 'Agents',
     blurb: 'What is installed, and which login a session runs as.',
   },
+  /*
+   * "Accounts", not "Profiles", and next to Agents rather than buried between
+   * Shortcuts and Advanced.
+   *
+   * The id stays `profiles` because that is what the main process calls them,
+   * and renaming it would only move the translation somewhere less visible. The
+   * *label* and the *position* are what matter: the feature was built, shipped
+   * and then reported missing — "I don't see any kind of feature that I can use
+   * to have multiple accounts in one application" — by someone looking at a
+   * rail that offered him Profiles, tenth of fourteen. A person with two logins
+   * goes looking for the word they would use for them, near the agent settings
+   * they were already reading.
+   */
+  {
+    id: 'profiles',
+    label: 'Accounts',
+    blurb: 'Sign in with more than one account, and choose which one a session uses.',
+  },
   {
     id: 'setup',
     label: 'Setup',
@@ -109,11 +127,6 @@ export const SECTIONS = [
     id: 'shortcuts',
     label: 'Shortcuts',
     blurb: 'Every key the app answers to.',
-  },
-  {
-    id: 'profiles',
-    label: 'Profiles',
-    blurb: 'Separate agent logins, side by side.',
   },
   {
     id: 'advanced',

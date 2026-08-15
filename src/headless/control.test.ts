@@ -65,10 +65,17 @@ describe('the daemon record', () => {
     expect(read?.pid).toBe(4242)
     expect(read?.token).toBe('abc')
     // Checked where the check means something. Windows has no POSIX permission
-    // bits — `fs` reports 0666 for any read-write file — so this record, which
-    // holds the daemon's control TOKEN, is NOT mode-protected there; what
-    // protects it is the NTFS ACL of the directory it sits in, which nothing
-    // here sets. Asserting 0600 on Windows would assert a falsehood.
+    // bits — `fs` reports 0666 for any read-write file — so asserting 0600 there
+    // would assert a falsehood about a synthesised number.
+    //
+    // This record holds the daemon's control TOKEN, and on Windows that token is
+    // the *whole* boundary: a named pipe has no owner and mode the way a Unix
+    // socket does, which is why the token exists at all. It is protected there
+    // by an NTFS ACL granting this account only, applied by `writeSecretFile` to
+    // the state directory and to the file before the rename, and a record that
+    // cannot be locked down is not written at all. Pinned with a stand-in for
+    // `icacls` in `main/remote/secret-file.test.ts`, because the tool cannot run
+    // on the Mac this suite is written on.
     if (process.platform !== 'win32') {
       expect(statSync(join(dir, 'host.json')).mode & 0o777).toBe(0o600)
     }

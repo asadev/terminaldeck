@@ -72,6 +72,11 @@ describe('the window asks before it draws', () => {
       why: 'nothing would offer an uninstalled feature by name, and searching the palette for it would return nothing — which is how somebody concludes the app cannot do it',
     },
     {
+      file: 'renderer/components/ShortcutsSheet.tsx',
+      needle: 'features.commandOn(binding.id)',
+      why: 'the shortcuts sheet would print a chord for an uninstalled feature as though it worked — and it is the surface people open precisely because they are not sure what a chord does',
+    },
+    {
       file: 'renderer/shell/PanelView.tsx',
       needle: 'features.featureForPanel(panel)',
       why: 'the last-viewed page for an uninstalled feature would render blank instead of offering it back',

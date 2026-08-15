@@ -39,7 +39,7 @@ import { RemoteSection } from '../remote/RemoteSection'
 import { BrowserSection } from './sections/BrowserSection'
 import { PowerSection } from './sections/PowerSection'
 import { ShortcutsSection } from './sections/ShortcutsSection'
-import { ProfilesSection } from './sections/ProfilesSection'
+import { AccountsSection } from './sections/AccountsSection'
 import { AdvancedSection } from './sections/AdvancedSection'
 import { LinuxSection } from './sections/LinuxSection'
 import { HelpSection } from './sections/HelpSection'
@@ -108,7 +108,9 @@ const SECTION_VIEWS: Record<SectionId, ComponentType<SectionProps>> = {
   remote: RemoteSectionView,
   power: PowerSectionView,
   shortcuts: ShortcutsSection,
-  profiles: ProfilesSection,
+  // The section id stays `profiles` — it is what the main process calls them —
+  // while everything a person reads says "accounts". See `settings-schema.ts`.
+  profiles: AccountsSection,
   advanced: AdvancedSection,
   // Takes no props: it renders the shared HelpPanel, which reads its own bridge.
   help: HelpSection,
@@ -155,6 +157,16 @@ export interface SettingsPanelProps {
    */
   platform?: UiPlatform
   initialSection?: SectionId
+  /**
+   * Start a session and close this window.
+   *
+   * Only Accounts uses it, and only for Sign in: the agent's login runs inside
+   * a terminal, so signing an account in *is* opening a session under it. The
+   * window owns the session store, which is why this comes down as a prop
+   * rather than the pane calling `session:create` behind its back and leaving a
+   * running process with no tab.
+   */
+  onStartSession?(request: { profileId: string }): void
   /** Fired after every accepted write, so the app can react to a changed value. */
   onChange?(values: SettingValues): void
   /** Rendered in the footer by the window; exposed so the panel can drive it. */
@@ -171,6 +183,7 @@ export function SettingsPanel({
   bridge: injected,
   platform = detectPlatform(),
   initialSection = 'general',
+  onStartSession,
   onChange,
   onSaveState,
 }: SettingsPanelProps) {
@@ -451,6 +464,9 @@ export function SettingsPanel({
           loading={loading}
           goTo={goTo}
           reload={load}
+          // Absent when the host did not pass one, which is what makes the Sign
+          // in button disappear rather than sit there doing nothing.
+          {...(onStartSession ? { startSession: onStartSession } : {})}
         />
       </div>
     </div>

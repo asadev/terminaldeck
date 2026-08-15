@@ -64,14 +64,21 @@ const SEAMS: Array<{ file: string; child: string; props: string[]; why: string }
   {
     file: 'renderer/components/ChatView.tsx',
     child: 'UsageStrip',
-    props: ['cwd', 'sessionId'],
-    why: 'plan limits come from the running session; cost comes from the project',
+    props: ['cwd', 'scoped', 'sessionId'],
+    // `scoped` is the one that keeps the numbers honest. Without it an absent
+    // transcript path reads as "no preference", so the strip picked whichever
+    // session in the folder ran last and printed its spend and context fill
+    // under the heading "This session" — for a tab that had made no request at
+    // all, and, under a second account, for money belonging to another login.
+    why: 'plan limits come from the running session; cost comes from the project; scoped decides whether an absent transcript means "the newest one" or "this session has none yet"',
   },
   {
     file: 'renderer/components/ChatComposer.tsx',
     child: 'AttachMenu',
-    props: [],
-    why: 'the plus button is the only way to attach files, folders or MCP servers',
+    props: ['mode'],
+    why:
+      'the plus button is the only way to attach files, folders or MCP servers, and without mode ' +
+      'a shell session is offered `@"path"` mentions it would type verbatim at its prompt',
   },
   {
     file: 'renderer/components/ChatComposer.tsx',
@@ -84,6 +91,27 @@ const SEAMS: Array<{ file: string; child: string; props: string[]; why: string }
     child: 'BrowserWorkspace',
     props: ['visible', 'parkPage'],
     why: 'visible hides the whole panel per tab; parkPage hides only the native pages under a dialog',
+  },
+  {
+    file: 'renderer/App.tsx',
+    child: 'AccountChip',
+    props: ['current', 'projectPath', 'provider', 'onPick'],
+    // The failure this table exists for, and this feature's own history: the
+    // whole account engine — isolated config directories, per-project defaults,
+    // a resolution chain, tests — shipped with no way in, and was reported as
+    // "I don't see any kind of feature that I can use to have multiple
+    // accounts". `current` is what the running session actually runs as,
+    // `projectPath` is where a new one would start, and `onPick` is the choice
+    // itself; without any one of them the chip is a caption again.
+    //
+    // `provider` is the fourth because without it the chip offers a choice the
+    // spawn then drops. An account is a config directory handed to the agent,
+    // so it means nothing to a plain shell or to Codex and Gemini — and with
+    // the default coding tool set to Plain shell, picking an account opened a
+    // session, `host-core.ts` rightly refused to label it, and the chip snapped
+    // back to the default account with nothing said. Passed, the menu explains
+    // itself instead of silently ignoring the click.
+    why: 'the only place in the window where the account for a session can be seen or chosen',
   },
   {
     file: 'renderer/App.tsx',
@@ -312,5 +340,78 @@ describe('every terminal repaints when the theme changes', () => {
     expect(read('renderer/machines/RemoteTerminal.tsx')).toMatch(
       /import \{ terminalTheme \} from '\.\.\/components\/TerminalView'/,
     )
+  })
+})
+
+/**
+ * Nothing the chat composer offers may be simplified away.
+ *
+ * This is the only entry in this file that guards against a *deletion made on
+ * purpose*, and it is here because that deletion has already happened. Asked
+ * for "one large chat box with the options folded neatly inside it", a pass
+ * over this composer folded two controls onto the box, put two behind a button
+ * labelled "More", and withdrew the attach menu from shell sessions entirely —
+ * leaving that composer with a microphone and a send button. What came back
+ * was: "you actually removed everything rather than making it simple and all
+ * the options you have actually removed."
+ *
+ * Every check below is one of the things that went, expressed as a question
+ * about the source, because none of them would fail a single one of the
+ * deleted component's own tests. A control that is not rendered still passes
+ * everything ever written about it.
+ */
+describe('the chat composer keeps every control it was given', () => {
+  const composer = read('renderer/components/ChatComposer.tsx')
+  const controls = read('renderer/chat/controls/AgentControls.tsx')
+
+  it('draws the attach menu on a shell too, switching its mode instead', () => {
+    // `{!shell && <AttachMenu …>}` is the exact line that removed it. Picking a
+    // file out of the project is not an agent feature; only the mention form
+    // the pick used to produce was, and a mode changes a form.
+    expect(
+      composer,
+      'the attach menu is conditional on not being a shell — a shell composer then has no options at all',
+    ).not.toMatch(/\{\s*!shell\s*&&/)
+    expect(openingTag(composer, 'AttachMenu')).toMatch(/[\s{]mode[=}]/)
+  })
+
+  it('builds the options panel from every control, not from the remainder', () => {
+    // `FOLDED_CONTROLS.map` is what made the panel a list of leftovers. The
+    // panel is the complete inventory now, and the row's chips are the
+    // shortcut — see `MENU_CONTROLS` in chat/controls/catalog.ts.
+    expect(controls, 'the panel lists only the controls that were folded away').not.toMatch(
+      /FOLDED_CONTROLS\.map/,
+    )
+    expect(controls).toMatch(/MENU_CONTROLS\.map/)
+  })
+
+  it('names that panel rather than calling it More', () => {
+    // A word that names nothing is why the controls behind it were read as
+    // deleted. The button says Options and its hover label lists the contents.
+    expect(controls).not.toMatch(/^\s*More$/m)
+    expect(controls).toMatch(/^\s*Options$/m)
+    expect(controls, 'the hover label is typed by hand and will outlive a control it names').toMatch(
+      /title=\{optionsLabel\}/,
+    )
+  })
+
+  it('keeps the pickers, the microphone, the send button and the panel in the box', () => {
+    // Each of these is a control someone can reach today. If one is taken out
+    // to make the row shorter, this is where it is noticed — the alternative
+    // is noticing it in a message from the person using the app.
+    for (const held of ['AttachChips', 'AttachMenu', 'DictateButton', 'cc-send', '{controls}']) {
+      expect(composer, `${held} is no longer rendered by the composer`).toContain(held)
+    }
+    for (const held of ['ControlPicker', 'ControlSection']) {
+      expect(controls, `${held} is no longer rendered by the controls`).toContain(`<${held}`)
+    }
+  })
+
+  it('offers the microphone back where it would have been, rather than dropping it', () => {
+    // Voice dictation can be uninstalled, and uninstalling it used to delete
+    // the microphone without a trace — which teaches the reader that this app
+    // cannot dictate. FEATURE-STORE.md: where a feature would have been, offer
+    // it.
+    expect(composer).toMatch(/useControlOffer\('chat\.dictate'\)/)
   })
 })

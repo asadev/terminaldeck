@@ -241,6 +241,29 @@ describe('planRestore', () => {
     expect(seen).toEqual(['/profiles/work'])
   })
 
+  it('carries the store it asked about, so the paint cannot read a different one', async () => {
+    /*
+     * The decision is what the replay is handed, and this field is why. A
+     * profile redirects `CLAUDE_CONFIG_DIR`, so "the transcripts for this
+     * folder" has a different answer per login; resolving it a second time
+     * downstream is how the tab ends up continuing one conversation and showing
+     * another, with nothing on screen to say so.
+     */
+    const plan = await planRestore(
+      [saved({ profileId: 'work' }), saved({ cwd: '/gone' }), saved({ provider: 'shell' })],
+      probes({
+        folderExists: async (cwd) => cwd !== '/gone',
+        canContinue: (provider) => provider === 'claude',
+        configDir: (session) => `/profiles/${session.profileId ?? 'system'}`,
+      }),
+    )
+    expect(plan[0].configDir).toBe('/profiles/work')
+    // Nothing was asked about these two, and saying nothing is the honest
+    // answer: one folder is gone and the other agent has no history to read.
+    expect(plan[1].configDir).toBeUndefined()
+    expect(plan[2].configDir).toBeUndefined()
+  })
+
   it('gives a reason a person can read for every decision', async () => {
     // These end up in the app log, which the user can open from Settings. A
     // reason that is an error code, or empty, is the version of this that
@@ -329,23 +352,40 @@ interface Spawned {
   input: CreateSessionInput
 }
 
+interface Seeded {
+  id: string
+  text: string
+}
+
 function driver(
   plan: RestoreDecision[],
-  options: { enabled?: boolean; fail?: (input: CreateSessionInput) => boolean } = {},
+  options: {
+    enabled?: boolean
+    fail?: (input: CreateSessionInput) => boolean
+    /** What the transcript reader answers, or a throw. Absent means nothing to paint. */
+    replay?: (decision: RestoreDecision) => Promise<string>
+  } = {},
 ): {
   spawned: Spawned[]
   announced: SessionMeta[]
   reported: RestoreDecision[][]
+  seeded: Seeded[]
+  /** Every call, in order, so the ordering between them can be asserted. */
+  calls: string[]
   run: () => Promise<{ started: SessionMeta[]; decisions: RestoreDecision[] }>
 } {
   const spawned: Spawned[] = []
   const announced: SessionMeta[] = []
   const reported: RestoreDecision[][] = []
+  const seeded: Seeded[] = []
+  const calls: string[] = []
   let n = 0
   return {
     spawned,
     announced,
     reported,
+    seeded,
+    calls,
     run: () =>
       restoreOpenSessions({
         saved: () => plan.map((decision) => decision.session),
@@ -353,6 +393,7 @@ function driver(
         plan: async () => plan,
         spawn: async (input) => {
           if (options.fail?.(input)) throw new Error('node-pty said no')
+          calls.push(`spawn ${input.cwd}`)
           spawned.push({ input })
           n += 1
           return {
@@ -365,7 +406,10 @@ function driver(
             resumed: input.resume === true,
           }
         },
-        announce: (meta) => announced.push(meta),
+        announce: (meta) => {
+          calls.push(`announce ${meta.cwd}`)
+          announced.push(meta)
+        },
         report: (decisions) => reported.push([...decisions]),
       }),
   }
@@ -441,6 +485,44 @@ describe('restoreOpenSessions', () => {
     expect(harness.spawned).toEqual([])
     expect(harness.reported).toEqual([])
     expect(result.started).toEqual([])
+  })
+
+
+
+  it('does not paint a session that is starting clean', async () => {
+    // The sibling tab in the same folder: it lost the claim, so it is starting a
+    // new conversation, and painting it with the one the other tab is continuing
+    // would be the app inventing a past for a session that has none.
+    const harness = driver([{ session: saved({ cwd: '/a' }), outcome: 'fresh', reason: 'f' }], {
+    })
+    await harness.run()
+    expect(harness.calls).toEqual(['spawn /a', 'announce /a'])
+    expect(harness.seeded).toEqual([])
+  })
+
+  it('seeds nothing when there is no conversation to paint', async () => {
+    // An agent whose history this app cannot read, or a folder being worked in
+    // for the first time. The empty string is the ordinary answer, not an error,
+    // and it must not become an empty line in front of the session.
+    const harness = driver([{ session: saved({ cwd: '/a' }), outcome: 'resume', reason: 'r' }])
+    await harness.run()
+    expect(harness.seeded).toEqual([])
+    expect(harness.announced).toHaveLength(1)
+  })
+
+  it('still brings the session back when the transcript cannot be read', async () => {
+    // A screen that could not be painted is the blank terminal this feature was
+    // written to improve on — a fair worst case. Losing the session over it is
+    // not.
+    const harness = driver([{ session: saved({ cwd: '/a' }), outcome: 'resume', reason: 'r' }], {
+      replay: async () => {
+        throw new Error('the transcript is unreadable')
+      },
+    })
+    const result = await harness.run()
+    expect(outcomes(result.decisions)).toEqual(['resume'])
+    expect(harness.announced).toHaveLength(1)
+    expect(harness.seeded).toEqual([])
   })
 
   it('reports once, with every decision including the failures', async () => {
@@ -554,4 +636,5 @@ describe('restoring is wired to launch', () => {
     const hydrate = index.slice(index.indexOf('async function hydrateRenderer'))
     expect(hydrate.slice(0, 2400)).not.toMatch(/ptys\.write\(/)
   })
+
 })

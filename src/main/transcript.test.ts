@@ -1,16 +1,21 @@
-import { appendFileSync, mkdtempSync } from 'node:fs'
+import { appendFileSync, mkdirSync, mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { promptTokens } from './cost'
 import {
   claudeConfigDir,
+  configDirs,
   encodeProjectPath,
+  installDeviceHomes,
+  isTranscriptPath,
   listTranscripts,
   parseEventLine,
   parseUsage,
+  resetDeviceHomes,
   SessionAggregator,
   transcriptDir,
+  transcriptDirs,
   UNKNOWN_MODEL,
 } from './transcript'
 
@@ -115,6 +120,165 @@ describe('transcriptDir', () => {
   it('ignores an empty override', () => {
     process.env.CLAUDE_CONFIG_DIR = '   '
     expect(claudeConfigDir()).toMatch(/\.claude$/)
+  })
+})
+
+/**
+ * Where a confined session's transcripts actually are.
+ *
+ * A session started from a paired device is held inside its granted folder, and
+ * the account's home is outside that boundary — so the session runs with a
+ * `HOME` of its own and the CLI follows it. Measured with the real Claude Code
+ * (2.1.233) on this machine rather than reasoned about:
+ *
+ *     HOME=/tmp/homeprobe claude config ls
+ *       → /tmp/homeprobe/.claude.json          (config, one level up)
+ *       → /tmp/homeprobe/.claude/projects/…    (transcripts, here)
+ *
+ * The consequence, and the reason this block exists: chat mode, the cost pane,
+ * alerts and the agent controls all read `~/.claude` and found nothing for a
+ * session that was talking. None of them was wrong; they were reading the right
+ * directory for the wrong home.
+ */
+describe('the stores a project can have', () => {
+  afterEach(() => resetDeviceHomes())
+
+  /** A device-homes root with the given devices in it, each with a store. */
+  function homes(devices: Record<string, string[]>): string {
+    const root = mkdtempSync(join(tmpdir(), 'device-homes-'))
+    for (const [key, projects] of Object.entries(devices)) {
+      // `tmp` as well, because the real `prepareDeviceHome` makes one — it is
+      // the session's `TMPDIR` — and it must never be mistaken for a store.
+      mkdirSync(join(root, key, 'tmp'), { recursive: true })
+      for (const project of projects) {
+        mkdirSync(join(root, key, '.claude', 'projects', encodeProjectPath(project)), {
+          recursive: true,
+        })
+      }
+    }
+    return root
+  }
+
+  const PROJECT = ON_WINDOWS ? 'I:\\Claude Temp' : '/Users/apple/ClaudeAsad'
+
+  it('is just the profile store when no device has ever run one', () => {
+    // The ordinary machine, and every unit test: nothing installed, so nothing
+    // extra. A missing *extra* store must never disturb the one that works.
+    expect(configDirs({ configDir: '/tmp/cfg', deviceHomes: null })).toEqual(['/tmp/cfg'])
+    expect(transcriptDirs(PROJECT, { configDir: '/tmp/cfg', deviceHomes: null })).toEqual([
+      transcriptDir(PROJECT, '/tmp/cfg'),
+    ])
+  })
+
+  it('adds one store per device home, with the profile first', () => {
+    const root = homes({ 'dev-a': [PROJECT], 'dev-b': [PROJECT] })
+    const dirs = configDirs({ configDir: '/tmp/cfg', deviceHomes: root })
+    // Profile first, because it is the answer for nearly everything and a
+    // reader that stops at the first hit must stop at the right one.
+    expect(dirs[0]).toBe('/tmp/cfg')
+    expect(dirs.slice(1).sort()).toEqual(
+      [join(root, 'dev-a', '.claude'), join(root, 'dev-b', '.claude')].sort(),
+    )
+  })
+
+  it('skips a home whose agent has never run, rather than naming an empty path', () => {
+    // A device home exists from the moment that device first starts a session;
+    // its `.claude` exists only once an agent has actually written something. A
+    // watcher subscribing to a directory that will never hold a transcript is a
+    // rule nobody can later evaluate against reality.
+    const root = homes({ 'dev-a': [PROJECT], 'dev-fresh': [] })
+    const dirs = configDirs({ configDir: '/tmp/cfg', deviceHomes: root })
+    expect(dirs).toEqual(['/tmp/cfg', join(root, 'dev-a', '.claude')])
+  })
+
+  it('survives a device-homes root that is not there', () => {
+    // The first launch after an update, and every machine where nobody has
+    // paired anything. Failing the whole read here would take the owner's own
+    // transcripts down with a directory that has never been needed.
+    const root = join(mkdtempSync(join(tmpdir(), 'device-homes-')), 'never-made')
+    expect(configDirs({ configDir: '/tmp/cfg', deviceHomes: root })).toEqual(['/tmp/cfg'])
+  })
+
+  it('reads the homes again on every call, so a device paired since is seen', () => {
+    // Deliberately not cached. The list changes when a device is paired and its
+    // first session runs, which is not an event this module hears about — a
+    // cache would mean the app cannot see a session until it is restarted.
+    const root = mkdtempSync(join(tmpdir(), 'device-homes-'))
+    installDeviceHomes(root)
+    expect(configDirs({ configDir: '/tmp/cfg' })).toEqual(['/tmp/cfg'])
+
+    mkdirSync(join(root, 'dev-new', '.claude', 'projects'), { recursive: true })
+    expect(configDirs({ configDir: '/tmp/cfg' })).toEqual([
+      '/tmp/cfg',
+      join(root, 'dev-new', '.claude'),
+    ])
+  })
+
+  it('encodes the project the same way in every store', () => {
+    const root = homes({ 'dev-a': [PROJECT] })
+    const dirs = transcriptDirs(PROJECT, { configDir: '/tmp/cfg', deviceHomes: root })
+    for (const dir of dirs) expect(dir.endsWith(encodeProjectPath(PROJECT))).toBe(true)
+    expect(dirs).toHaveLength(2)
+  })
+})
+
+/**
+ * The guard behind `chat:load` and `cost:session`, which take a path from the
+ * renderer and read whatever file it names.
+ *
+ * It lives here because there stopped being one store: the same rule had been
+ * written out three times — in `cost-ipc.ts`, `chat-transcript.ts` and
+ * `session-insights.ts` — each saying "under `~/.claude/projects`", and widening
+ * three copies by hand is three chances for one of them to widen the wrong way.
+ * The wrong way here is an arbitrary file read reachable from page code.
+ */
+describe('isTranscriptPath', () => {
+  afterEach(() => resetDeviceHomes())
+
+  const CFG = ON_WINDOWS ? 'I:\\cfg' : '/tmp/cfg'
+  const inside = join(CFG, 'projects', 'enc', 'sess.jsonl')
+
+  it('accepts a transcript in the profile store', () => {
+    expect(isTranscriptPath(inside, { configDir: CFG, deviceHomes: null })).toBe(true)
+  })
+
+  it('accepts one in a confined session own store', () => {
+    const root = mkdtempSync(join(tmpdir(), 'device-homes-'))
+    mkdirSync(join(root, 'dev-a', '.claude', 'projects'), { recursive: true })
+    const path = join(root, 'dev-a', '.claude', 'projects', 'enc', 'sess.jsonl')
+    // The whole point: this is a real transcript that is not under `~/.claude`,
+    // and it used to be refused as an escape attempt.
+    expect(isTranscriptPath(path, { configDir: CFG, deviceHomes: root })).toBe(true)
+  })
+
+  it('accepts a sub-agent transcript one level down', () => {
+    const path = join(CFG, 'projects', 'enc', 'sub', 'sess.jsonl')
+    expect(isTranscriptPath(path, { configDir: CFG, deviceHomes: null })).toBe(true)
+  })
+
+  it('refuses everything outside the stores, however it is spelled', () => {
+    const cases = [
+      ['', 'empty'],
+      [join(CFG, 'projects'), 'the root itself'],
+      [`${CFG}-elsewhere/projects/enc/x.jsonl`, 'a sibling whose name starts the same'],
+      [join(CFG, 'projects', '..', '..', 'secrets.jsonl'), 'a traversal out'],
+      [join(CFG, 'projects', 'enc', 'sess.txt'), 'not a transcript'],
+      [join(CFG, 'settings.json'), 'a config file beside the store'],
+    ] as const
+    for (const [path, why] of cases) {
+      expect(isTranscriptPath(path, { configDir: CFG, deviceHomes: null }), why).toBe(false)
+    }
+  })
+
+  it('refuses a device home that is not one of ours', () => {
+    // The stores are enumerated from the app's own directory rather than
+    // pattern-matched, so a path that merely *looks* like a device home is not
+    // one. Otherwise the widening would have handed page code any file under
+    // any directory called `.claude/projects` anywhere on the disk.
+    const root = mkdtempSync(join(tmpdir(), 'device-homes-'))
+    mkdirSync(join(root, 'dev-a', '.claude', 'projects'), { recursive: true })
+    const elsewhere = join(tmpdir(), 'not-ours', '.claude', 'projects', 'enc', 'x.jsonl')
+    expect(isTranscriptPath(elsewhere, { configDir: CFG, deviceHomes: root })).toBe(false)
   })
 })
 

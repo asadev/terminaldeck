@@ -136,6 +136,24 @@ describe('empty states', () => {
     expect(render({ unwired: true })).toContain('not wired into this build')
   })
 
+  /*
+   * "No usage recorded for this project yet" is false on the screen that shows
+   * it: the project has plenty, this session simply has none. The strip is
+   * about one session there, so the sentence has to be about one session.
+   */
+  it('blames the session, not the project, when the strip is about one session', () => {
+    const html = render({ session: null, today: NO_SPEND, scoped: true })
+    expect(html).toContain('Nothing recorded for this session yet.')
+    expect(html).not.toContain('this project yet')
+  })
+
+  it('still says "still reading" first, whatever the strip is about', () => {
+    // Scanning outranks both sentences: neither "no usage" claim is known yet.
+    expect(render({ session: null, today: NO_SPEND, scoped: true, scanning: true })).toContain(
+      'Reading transcripts…',
+    )
+  })
+
   it('shows a dash for a session that has not made a request yet', () => {
     const html = render({ session: session({ context: null, warnings: [] }) })
     expect(html).toContain('Context')

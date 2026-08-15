@@ -1,9 +1,13 @@
-import { readFileSync } from 'node:fs'
-import { describe, expect, it } from 'vitest'
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterAll, describe, expect, it } from 'vitest'
 import {
   ConfinementUnavailableError,
   confineSpawn,
   confinementKind,
+  deviceHomesRoot,
+  prepareDeviceHome,
   proveConfinement,
   unconfinedReason,
   type ProofRunner,
@@ -58,7 +62,36 @@ describe('which platforms are confined', () => {
     // The grant screen tells a person which of the two they are getting. It can
     // only do that honestly if the reason is specific enough to act on.
     expect(unconfinedReason('win32')).toMatch(/AppContainer/)
-    expect(unconfinedReason('linux')).toMatch(/bubblewrap/)
+  })
+
+  it('does not tell Linux it is unmeasured, because it is not any more', () => {
+    /*
+     * This assertion used to be `toMatch(/bubblewrap/)`, and the sentence used
+     * to end "has not been built or measured". Half of that is no longer true:
+     * the mechanism was run on a real Ubuntu 24.04 under WSL2 and it held —
+     * unprivileged user namespaces are enabled there, a bind-mount boundary
+     * hides the owner's home and `/mnt/c`, and dropping the capability bounding
+     * set is what stops the confined shell simply unmounting its way out. The
+     * module header records the whole run.
+     *
+     * `bwrap` is specifically *not* named any more, because it is not installed
+     * on that machine and installing it needs sudo — pointing a person at a tool
+     * they cannot get is not a reason they can act on. What is still honestly
+     * unmeasured is the `wsl.exe --cd` launch this app uses, so that is what the
+     * sentence names, and the mechanism is described as holding rather than as
+     * unknown.
+     */
+    const reason = unconfinedReason('linux')
+    expect(reason).toMatch(/user namespaces/)
+    expect(reason).toMatch(/launch path/)
+    // It has to say the mechanism *holds*, which is the half that changed. The
+    // sentence still contains "has not been measured" and that is correct — it
+    // is now said about the launch path rather than about the whole idea.
+    expect(reason).toMatch(/hold/)
+    // And it must not point at `bwrap`. It is not installed on the machine this
+    // was measured on and installing it needs sudo, so naming it sends a person
+    // after a tool they cannot get for a boundary that would not use it.
+    expect(reason).not.toMatch(/bubblewrap/)
   })
 })
 
@@ -140,3 +173,57 @@ function workingSandbox(): ProofRunner {
     return program === '/bin/echo' ? target : ''
   })
 }
+
+/**
+ * What a device's home has in it before its first session runs.
+ *
+ * Two directories, and each is made in advance for a reason that only shows up
+ * somewhere else. `tmp` is the session's `TMPDIR`, and a `TMPDIR` that does not
+ * exist means `git commit` fails with a message about a path the person cannot
+ * see. `.claude/projects` is where the agent will write its transcripts, and it
+ * is made now so that the cost pane's watcher — which reads these stores — is
+ * aimed at a directory that exists rather than at one that is about to.
+ */
+describe('a device home before anything has run in it', () => {
+  const made: string[] = []
+  afterAll(() => {
+    for (const dir of made) rmSync(dir, { recursive: true, force: true })
+  })
+
+  function root(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'deck-device-home-'))
+    made.push(dir)
+    return dir
+  }
+
+  it('makes the scratch directory and the agent store', () => {
+    const home = prepareDeviceHome(root(), 'device-abc')
+    expect(existsSync(join(home, 'tmp'))).toBe(true)
+    expect(existsSync(join(home, '.claude', 'projects'))).toBe(true)
+  })
+
+  it('is keyed by device, so two devices do not share a home', () => {
+    const base = root()
+    expect(prepareDeviceHome(base, 'device-a')).not.toBe(prepareDeviceHome(base, 'device-b'))
+  })
+
+  it('can be prepared twice, because every spawn calls it', () => {
+    const base = root()
+    expect(prepareDeviceHome(base, 'device-abc')).toBe(prepareDeviceHome(base, 'device-abc'))
+  })
+
+  it.skipIf(process.platform === 'win32')('keeps it to the owner', () => {
+    // One account owns the machine, but nothing in here needs to be readable by
+    // another one. Skipped on Windows, where POSIX mode bits are not the
+    // mechanism and `mkdir`'s mode argument is ignored.
+    const home = prepareDeviceHome(root(), 'device-abc')
+    expect(statSync(join(home, 'tmp')).mode & 0o777).toBe(0o700)
+  })
+
+  it('puts the homes under one root, spelled in one place', () => {
+    // The spelling is shared with `transcript.ts`, which reads these stores to
+    // find a confined session's conversation. Two spellings of one directory
+    // name is how a reader ends up looking somewhere the writer never writes.
+    expect(deviceHomesRoot('/app-storage')).toBe(join('/app-storage', 'device-home'))
+  })
+})

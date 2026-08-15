@@ -68,7 +68,7 @@ import { join } from 'node:path'
 import type { IpcMain } from 'electron'
 import { normalizeModelId } from './cost'
 import { stripAnsi } from './session-activity'
-import { claudeConfigDir, newestTranscript, transcriptDir } from './transcript'
+import { claudeConfigDir, listTranscripts, transcriptDirs } from './transcript'
 
 /* -------------------------------------------------------------------------- */
 /* Types                                                                       */
@@ -433,7 +433,15 @@ export function fastFromSettings(settings: Record<string, unknown>): ControlRead
  * megabytes and the answer is always near the end.
  */
 export async function readModelFromTranscript(cwd: string): Promise<string | null> {
-  const file = await newestTranscript(transcriptDir(cwd))
+  // Every store, because a session started from a paired device runs with a home
+  // of its own and writes its transcript there. Reading only the profile's store
+  // answered "no model" for a session that was answering, which reads on screen
+  // as a control that does not know what it is controlling.
+  const found = await Promise.all(transcriptDirs(cwd).map((dir) => listTranscripts(dir)))
+  let file: { path: string; modifiedAt: number } | null = null
+  for (const candidate of found.flat()) {
+    if (file === null || candidate.modifiedAt > file.modifiedAt) file = candidate
+  }
   if (!file) return null
   let raw: string
   try {

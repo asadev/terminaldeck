@@ -211,6 +211,41 @@ export function terminalWrites(message: string): [string, string] {
   return [terminalPayload(message), '\r']
 }
 
+/* ------------------------------------------------------- shell command --- */
+
+/**
+ * A path as it should be **typed at a shell prompt**, quoted so a space or an
+ * apostrophe in it cannot split the command.
+ *
+ * This exists because of a regression, and the regression is worth naming. When
+ * the composer was rebuilt as one box, the plus was withdrawn entirely from
+ * shell sessions on the grounds that everything behind it produced an `@"path"`
+ * mention — which is true, and is an agent's syntax: a shell would type it
+ * verbatim at its prompt and get `command not found`. The conclusion drawn was
+ * that a shell gets no menu at all, which left that composer with a microphone
+ * and a send button and nothing else. Picking a path out of the project is not
+ * an agent feature; only the *form* of it was, so the form is what changes.
+ *
+ * The quoting style follows the **path**, not the machine, for the same reason
+ * sessions route by folder rather than by a toggle: on Windows a `/home/...`
+ * path launches through `wsl.exe` into a POSIX shell and a `C:/...` path
+ * through `cmd.exe`, so the machine cannot answer which quoting the prompt on
+ * the other end will parse — the path can.
+ *
+ *  - POSIX (`/…`): single quotes, because inside them `$`, a backtick and a
+ *    backslash are all ordinary characters. The one thing that cannot appear
+ *    inside single quotes is a single quote, which is why an apostrophe closes
+ *    the string, escapes itself and reopens — `'it'\''s'` — the standard form.
+ *  - Windows (`C:/…`, `\\server\…`): double quotes. `cmd.exe` has no escape
+ *    inside them, and it needs none: `"` is one of the characters Windows
+ *    forbids in a filename, so the case cannot arise.
+ */
+export function shellQuote(path: string): string {
+  const target = normalise(path)
+  if (/^[A-Za-z]:/.test(target) || target.startsWith('\\\\')) return `"${target}"`
+  return `'${target.replace(/'/g, `'\\''`)}'`
+}
+
 /* ------------------------------------------------------------ the list ---- */
 
 export type AddResult =

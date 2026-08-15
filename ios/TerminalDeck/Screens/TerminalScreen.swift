@@ -41,15 +41,35 @@ struct TerminalScreen: View {
 
     @State private var title: String?
     @State private var toast: String?
+    /// Bumped by every message so an earlier one's dismissal cannot take a later
+    /// one off the screen. Without it a pinch — which changes the text size
+    /// several times in a second — leaves the last size on screen for a fraction
+    /// of the time it should be, because the first message's timer clears it.
+    @State private var toastGeneration = 0
     /// Which picker is up, if any. One `@State` rather than two booleans, so the
     /// impossible state — both sheets at once — cannot be expressed.
     @State private var picking: Picking?
+    /// The find bar's state, built on first appearance because it needs the
+    /// bridge, and kept across rebuilds because the term is worth keeping.
+    @State private var find: FindSession?
+    /// The file the share sheet is showing, if any. Written at the moment Share
+    /// is chosen — see `ShareOutput`.
+    @State private var sharing: SharedFile?
 
     /// The two ways in. Both run out of process; see `FilePickers.swift`.
     private enum Picking: String, Identifiable {
         case photos
         case files
         var id: String { rawValue }
+    }
+
+    /// A written transcript, on its way to the share sheet. Identifiable so the
+    /// sheet is presented by *item*: presenting by boolean would open the sheet
+    /// a frame before the file existed.
+    private struct SharedFile: Identifiable {
+        let url: URL
+        let subject: String
+        var id: String { url.path }
     }
 
     /// The machine, or nil when it has just been unpaired out from under this
@@ -66,6 +86,19 @@ struct TerminalScreen: View {
 
             TerminalHostView(bridge: bridge)
                 .ignoresSafeArea(.container, edges: .bottom)
+
+            // Over the terminal rather than above it. See `FindBar`: inserting
+            // it into the layout would take rows off the session, which is a
+            // `resize` on the wire and a repaint on the far end — for a bar
+            // whose whole purpose is to leave the output alone while you read
+            // it.
+            if let find, find.isOpen {
+                VStack(spacing: 0) {
+                    FindBar(find: find) { closeFind() }
+                    Spacer(minLength: 0)
+                }
+                .transition(.move(edge: .top).combined(with: .opacity))
+            }
 
             if let toast {
                 VStack {
@@ -96,6 +129,26 @@ struct TerminalScreen: View {
             ToolbarItem(placement: .principal) { header }
             ToolbarItemGroup(placement: .topBarTrailing) {
                 Menu {
+                    /*
+                     * Find, at the top, because on a phone it is the thing this
+                     * menu is opened for most.
+                     *
+                     * Deferred by one turn of the run loop for the same reason
+                     * Rename is on the session list: raised in the frame the
+                     * menu is dismissing in, the focus request that raises the
+                     * keyboard arrives while a presentation is in flight and is
+                     * dropped — the bar appears with no keyboard under it and
+                     * reads as a field that will not accept typing.
+                     */
+                    Button {
+                        DispatchQueue.main.async { openFind() }
+                    } label: {
+                        Label("Find in output", systemImage: "magnifyingglass")
+                    }
+                    .accessibilityIdentifier("terminal.find")
+
+                    Divider()
+
                     /*
                      * Copy Screen, and deliberately *only* Copy Screen.
                      *
@@ -128,6 +181,50 @@ struct TerminalScreen: View {
                     }
                     .disabled(!connection.isLive)
                     .accessibilityIdentifier("terminal.paste")
+
+                    /*
+                     * Share, which is the other half of Copy rather than a
+                     * second one: Copy takes the screen, this takes the whole
+                     * scrollback as a file. See `ShareOutput` for why a file and
+                     * not a string.
+                     */
+                    Button {
+                        DispatchQueue.main.async { shareOutput() }
+                    } label: {
+                        Label("Share output", systemImage: "square.and.arrow.up")
+                    }
+                    .accessibilityIdentifier("terminal.share")
+
+                    Divider()
+
+                    /*
+                     * Text size: two ordinary items with the size in their
+                     * labels, rather than a submenu or a section.
+                     *
+                     * The tidier shapes were tried — "Text size ▸" with two
+                     * steps inside it, and a `Section` whose header carried the
+                     * size — and both cost a tap for nothing: a step is a thing
+                     * people do two or three times in a row while deciding, and
+                     * a submenu doubles every one of them. The size reads fine
+                     * in the label, which is where the eye already is.
+                     */
+                    Button {
+                        step(TextSize.larger(bridge.textSize))
+                    } label: {
+                        Label("Bigger text — \(TextSize.label(bridge.textSize))",
+                              systemImage: "textformat.size.larger")
+                    }
+                    .disabled(!TextSize.canGoLarger(bridge.textSize))
+                    .accessibilityIdentifier("terminal.textLarger")
+
+                    Button {
+                        step(TextSize.smaller(bridge.textSize))
+                    } label: {
+                        Label("Smaller text — \(TextSize.label(bridge.textSize))",
+                              systemImage: "textformat.size.smaller")
+                    }
+                    .disabled(!TextSize.canGoSmaller(bridge.textSize))
+                    .accessibilityIdentifier("terminal.textSmaller")
 
                     // Absent rather than disabled when the Mac cannot receive
                     // one: a control that can only produce a refusal is not a
@@ -208,17 +305,81 @@ struct TerminalScreen: View {
                 .ignoresSafeArea()
             }
         }
+        .sheet(item: $sharing) { file in
+            ShareSheet(url: file.url, subject: file.subject)
+        }
         .onAppear {
             bridge.onTitle = { title = $0 }
             bridge.onCopy = { show(host?.copy(from: sessionID) ?? "Nothing to copy.") }
             bridge.onPaste = { host?.paste(into: sessionID) }
+            // A tap into the terminal destroys the selection SwiftTerm is using
+            // as the match highlight, so a find bar left standing would be
+            // counting matches that are no longer on screen. Tapping in means
+            // "I want to type here", and that is the end of the search.
+            bridge.onTapped = { closeFind() }
+            // The size can change from a gesture as well as from the menu, and
+            // a pinch has no other confirmation than the number.
+            bridge.onTextSizeChanged = { show(TextSize.label($0)) }
+            // A terminal built before the person changed the size catches up
+            // here. `setTextSize` is a no-op when it already agrees, which
+            // matters: setting the font at all soft-resets the emulator.
+            bridge.applyStoredTextSize()
+            if find == nil { find = FindSession(terminal: bridge) }
             host?.attach(sessionID)
         }
         .onDisappear {
             bridge.onCopy = nil
             bridge.onPaste = nil
+            bridge.onTapped = nil
+            bridge.onTextSizeChanged = nil
+            // The hold on mouse reporting belongs to a bar that is on screen.
+            // Leaving the session without closing the find bar would leave it
+            // held, and a finger would stop driving vim in that session.
+            find?.close()
             host?.detach(sessionID)
         }
+    }
+
+    // MARK: - Find, share, size
+
+    private func openFind() {
+        let session = find ?? FindSession(terminal: bridge)
+        find = session
+        withAnimation(.easeOut(duration: 0.18)) { session.open() }
+    }
+
+    private func closeFind() {
+        guard let find, find.isOpen else { return }
+        withAnimation(.easeOut(duration: 0.18)) { find.close() }
+    }
+
+    /**
+     * Write what the terminal is holding and hand it to the share sheet.
+     *
+     * Written here rather than when the menu was built, because the session is
+     * still printing while the menu is open — a file composed a frame earlier
+     * would be missing the last thing that happened, which is very often the
+     * reason somebody is sharing it.
+     */
+    private func shareOutput() {
+        let text = bridge.scrollbackText()
+        guard !text.isEmpty else {
+            show("There is no output to share.")
+            return
+        }
+        let name = ShareOutput.fileName(session: title ?? session?.title ?? "session")
+        guard let url = ShareOutput.write(text, named: name) else {
+            show("That could not be written to a file.")
+            return
+        }
+        sharing = SharedFile(url: url, subject: title ?? session?.title ?? "Session output")
+    }
+
+    /// One step of the text size, applied and remembered. The toast comes from
+    /// the bridge's own callback, so a pinch and this button say the same thing.
+    private func step(_ size: CGFloat) {
+        bridge.setTextSize(size)
+        TextSize.save(bridge.textSize)
     }
 
     private var header: some View {
@@ -251,9 +412,13 @@ struct TerminalScreen: View {
     /// reliably reading a four-word message — and long enough that a UI test
     /// polling for it does not race the animation that dismissed the menu.
     private func show(_ message: String) {
+        toastGeneration += 1
+        let generation = toastGeneration
         withAnimation { toast = message }
         Task {
             try? await Task.sleep(for: .seconds(2.5))
+            // Only the message that scheduled this dismissal may take it away.
+            guard generation == toastGeneration else { return }
             withAnimation { toast = nil }
         }
     }

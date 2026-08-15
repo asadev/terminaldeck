@@ -84,6 +84,22 @@ export default defineConfig({
       input: {
         host: resolve(__dirname, 'src/headless/daemon.ts'),
         cli: resolve(__dirname, 'src/headless/main.ts'),
+        /*
+         * The public demo host — built here, and deliberately not published.
+         *
+         * It is the third program in this bundle and the only one that can turn
+         * on the mode that approves strangers, so it is kept out of the npm
+         * package's `bin` and out of its `files` list by
+         * `scripts/build-headless.mjs`. The demo image copies `demo.mjs` off the
+         * build directory and runs it with `node`; nobody who installs the
+         * package gets a command that leads here.
+         *
+         * Built alongside rather than separately because it shares almost all of
+         * its code with `host`, and a second Vite invocation would emit a second
+         * copy of every shared chunk — two hosts in one image, only one of which
+         * gets a fix.
+         */
+        demo: resolve(__dirname, 'src/headless/demo.ts'),
       },
       output: {
         format: 'es',

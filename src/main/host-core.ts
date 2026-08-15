@@ -42,15 +42,17 @@ import { PtyManager } from './pty-manager'
 import { detectProviders, loginPath, providersFor, PROVIDERS } from './providers'
 import { currentPlatform, type Platform } from './platform/host'
 import { homeDir } from './platform/paths'
-import { getState as profilesState, resolveProfile, sessionEnv } from './profiles'
+import { getState as profilesState, resolveProfile, sessionEnv, supportsProfiles } from './profiles'
 import {
   confineSpawn,
   confinedEnv,
   confinementKind,
+  deviceHomesRoot,
   planFor,
   prepareDeviceHome,
   type DeviceConfinement,
 } from './confine'
+import { installDeviceHomes } from './transcript'
 import { createCredentialProxy, deviceKey, type CredentialProxy } from './remote/credentials'
 import { FolderGrants, foldersForDevice } from './remote/folder-grants'
 import { guestGitDir, HELPER_FILE, type GuestGitEnv } from './remote/git-guest'
@@ -267,6 +269,24 @@ export function createHostCore(options: HostCoreOptions): HostCore {
    */
   const credentials = createCredentialProxy({ dir: join(options.storageDir, 'guest-git') })
 
+  /*
+   * Tell the transcript layer where confined sessions keep their homes.
+   *
+   * A confined session is given a home of its own — it cannot read the account's
+   * — and the agent CLI follows `HOME`, so its conversation is written under
+   * that home and not under `~/.claude` at all. Chat mode, the cost pane, alerts
+   * and the agent controls all read transcripts, and all of them were reading
+   * the owner's store and finding an empty conversation for a session that was
+   * talking. Nothing is copied and nothing is symlinked; the readers are simply
+   * told where to look. `transcript.ts` has the measurement behind it.
+   *
+   * Here, at assembly, and not in `index.ts`, for the reason this whole file
+   * exists: the headless build calls the same function and its sessions are
+   * confined the same way, so a shell that had to remember this line would be a
+   * shell that could forget it.
+   */
+  installDeviceHomes(deviceHomesRoot(options.storageDir))
+
   /**
    * Start a session. The one place that does, for the window and for a phone.
    *
@@ -446,6 +466,20 @@ export function createHostCore(options: HostCoreOptions): HostCore {
       path,
       env,
       ...(guest ? { removeEnv: guest.remove } : {}),
+      /*
+       * The account this session runs as, recorded on the session itself.
+       *
+       * `provider`, not `requested`: an agent that is not installed falls back
+       * to a plain shell above, and a shell has no login to be isolated. It is
+       * gated on `supportsProfiles` for the same reason — for an agent whose
+       * config directory this app cannot redirect, `sessionEnv` returns nothing
+       * and the session runs under whatever login the machine already has.
+       * Labelling that session with an account name would be a claim about
+       * isolation that this app did not make happen.
+       */
+      ...(supportsProfiles(provider)
+        ? { profile: { id: profile.id, name: profile.name } }
+        : {}),
       // Set only for a WSL launch, where the session's own folder is a Linux
       // path that node-pty would resolve into a Windows directory that does not
       // exist.
@@ -588,7 +622,7 @@ export function createHostCore(options: HostCoreOptions): HostCore {
           const key = deviceKey(input.deviceId)
           const guestRoot = join(options.storageDir, 'guest-git')
           const confine: DeviceConfinement = {
-            home: prepareDeviceHome(join(options.storageDir, 'device-home'), key),
+            home: prepareDeviceHome(deviceHomesRoot(options.storageDir), key),
             writable: [guestGitDir(guestRoot, key)],
             files: [join(guestRoot, HELPER_FILE)],
           }
@@ -597,12 +631,28 @@ export function createHostCore(options: HostCoreOptions): HostCore {
             meta = await startSession(
               {
                 ...input,
-                // The phone does not choose an agent — it has no honest way to
-                // know which are installed. The host's own default is the
-                // answer, and it falls back to a plain shell in `startSession`
-                // when that CLI is not there, exactly as the window's button
-                // does.
-                provider: store().getPreferences().defaultProvider,
+                /*
+                 * The agent the device asked for, or this desktop's own default.
+                 *
+                 * The comment that used to be here said the phone does not
+                 * choose an agent, and it was written when that was true. It
+                 * stopped being true the day the desktop-to-desktop client grew
+                 * a chooser, and nothing here noticed, because the field was
+                 * being dropped four layers up in `parseClientMessage` — a
+                 * request for `shell` arrived as a request for nothing and this
+                 * line filled the hole with `claude`. Measured on a real Windows
+                 * PC; see `remote/session-create.ts`.
+                 *
+                 * `input.provider` has already been checked against the provider
+                 * table by the time it reaches here — a name this desktop does
+                 * not have was refused with a sentence rather than travelling
+                 * this far. Absent still means the desktop's default, which is
+                 * what a client that names nothing gets and what the window's own
+                 * button does; and `startSession` still falls back to a plain
+                 * shell when the chosen CLI is not installed, reporting the
+                 * fallback in the `SessionMeta` it returns rather than pretending.
+                 */
+                provider: input.provider ?? store().getPreferences().defaultProvider,
               },
               guest.env,
               confine,

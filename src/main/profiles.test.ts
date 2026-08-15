@@ -415,6 +415,14 @@ describe('crud', () => {
     expect(a.color).not.toBe(b.color)
   })
 
+  it('does not give the first one the same colour as your own install', () => {
+    // The system profile is not in `state.profiles`, so indexing by that
+    // array's length handed the first account the colour the user's own
+    // install already wears — two identical dots in the accounts list, which is
+    // the one screen whose job is telling two logins apart.
+    expect(createProfile('One').color).not.toBe(systemProfile().color)
+  })
+
   it('persists across a reload', () => {
     const created = createProfile('Work')
     setProjectDefault('/w/app', created.id)

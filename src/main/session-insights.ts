@@ -17,7 +17,7 @@
 
 import type { IpcMain, IpcMainInvokeEvent } from 'electron'
 import { open, stat } from 'node:fs/promises'
-import { basename, extname, resolve, sep } from 'node:path'
+import { basename, resolve } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 import {
   aggregateCost,
@@ -43,11 +43,10 @@ import {
   type TokenUsage,
 } from './cost'
 import {
-  claudeConfigDir,
+  isTranscriptPath,
   listTranscripts,
-  newestTranscript,
   parseUsage,
-  transcriptDir,
+  transcriptDirs,
   UNKNOWN_MODEL,
   type TranscriptFile,
 } from './transcript'
@@ -954,20 +953,24 @@ export async function readSessionInsights(
  * read whatever file they are handed and echo fields out of it, so an unchecked
  * path is an arbitrary-file-read primitive reachable from the renderer.
  *
- * Duplicated from `cost-ipc.ts` rather than imported because that module does
- * not export it and belongs to another wave. Nested paths are allowed on
- * purpose — sub-agent transcripts live in `<session-id>/subagents/*.jsonl`.
+ * This used to be a hand copy of the one in `cost-ipc.ts`, which was a hand copy
+ * of the one in `chat-transcript.ts`, and all three said "under
+ * `~/.claude/projects`". That stopped being the whole truth when confined
+ * sessions started writing to a home of their own, and three copies of a rule
+ * that has to widen is three chances for one of them to widen wrong — where
+ * wrong, here, means an open file read from page code. One implementation now,
+ * in `transcript.ts`, which is also the module that knows where the stores are.
+ * Nested paths are still allowed on purpose — sub-agent transcripts live in
+ * `<session-id>/subagents/*.jsonl`.
  */
 function assertTranscriptPath(path: unknown): string {
   if (typeof path !== 'string' || path.length === 0) {
     throw new Error('insights: a transcript path is required')
   }
-  const resolved = resolve(path)
-  const root = resolve(claudeConfigDir(), 'projects')
-  if (!resolved.startsWith(root + sep) || extname(resolved) !== '.jsonl') {
+  if (!isTranscriptPath(path)) {
     throw new Error(`insights: refusing to read outside the transcript store: ${path}`)
   }
-  return resolved
+  return resolve(path)
 }
 
 function projectPath(cwd: unknown): string {
@@ -995,7 +998,9 @@ export function registerInsightsIpc(ipcMain: IpcMain): void {
   ipcMain.handle(
     'insights:latest',
     async (_e: IpcMainInvokeEvent, cwd: string): Promise<SessionInsights | null> => {
-      const newest = await newestTranscript(transcriptDir(projectPath(cwd)))
+      // Every store, so a session a paired device started can be inspected at
+      // all. It runs with a home of its own and writes its transcript there.
+      const newest = (await listAcrossStores(projectPath(cwd)))[0]
       return newest ? readSessionInsights(newest.path) : null
     },
   )
@@ -1003,6 +1008,18 @@ export function registerInsightsIpc(ipcMain: IpcMain): void {
   ipcMain.handle(
     'insights:list',
     (_e: IpcMainInvokeEvent, cwd: string): Promise<TranscriptFile[]> =>
-      listTranscripts(transcriptDir(projectPath(cwd))),
+      listAcrossStores(projectPath(cwd)),
   )
+}
+
+/**
+ * Every transcript for one project, newest first, from every store it can be in.
+ *
+ * The re-sort is the part that is easy to leave out: `listTranscripts` orders
+ * each directory on its own, so concatenating two of them puts a device's live
+ * session after the owner's oldest one. The inspector opens the first row.
+ */
+async function listAcrossStores(cwd: string): Promise<TranscriptFile[]> {
+  const found = await Promise.all(transcriptDirs(cwd).map((dir) => listTranscripts(dir)))
+  return found.flat().sort((a, b) => b.modifiedAt - a.modifiedAt)
 }

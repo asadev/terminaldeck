@@ -28,6 +28,18 @@ export interface SpawnSpec {
    */
   removeEnv?: readonly string[]
   /**
+   * The account this session runs as, once the caller has resolved it.
+   *
+   * Carried onto `SessionMeta` and no further: nothing in this class reads it,
+   * because the environment that *makes* it true is already in `env`. It is
+   * here so a window can say which login a tab belongs to without recomputing a
+   * resolution it does not have the inputs for — see `SessionMeta.profileId`.
+   *
+   * Left unset by callers when no account applies, which is a plain shell or an
+   * agent whose config directory this app cannot redirect.
+   */
+  profile?: { id: string; name: string }
+  /**
    * Where the operating-system process starts, when that is not the session's
    * own folder.
    *
@@ -151,6 +163,12 @@ export class PtyManager {
       // transcript older than itself, which is the one case where "started
       // before this tab did" stops meaning "not this tab's".
       resumed: input.resume === true,
+      // Spread rather than assigned so a session with no account carries no
+      // key at all: `profileName: undefined` and "this session has no account"
+      // are the same thing to a renderer, and only one of them survives JSON.
+      ...(spawnSpec.profile
+        ? { profileId: spawnSpec.profile.id, profileName: spawnSpec.profile.name }
+        : {}),
     }
 
     // Built before the spawn rather than inline, because one step of it is a
@@ -213,6 +231,7 @@ export class PtyManager {
   scrollback(id: string): string {
     return this.sessions.get(id)?.scrollback.join('') ?? ''
   }
+
 
   /**
    * What the session is showing right now, or null when there is no such

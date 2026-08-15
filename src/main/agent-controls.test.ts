@@ -1,4 +1,12 @@
-import { describe, expect, it } from 'vitest'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterAll, describe, expect, it } from 'vitest'
+import {
+  encodeProjectPath,
+  installDeviceHomes,
+  resetDeviceHomes,
+} from './transcript'
 import {
   applyControl,
   effortFromSettings,
@@ -11,6 +19,7 @@ import {
   readFastFromScreen,
   readModelConfirmation,
   readModelFromScreen,
+  readModelFromTranscript,
   readPermissionMode,
   type SessionAccess,
 } from './agent-controls'
@@ -481,5 +490,61 @@ describe('changing fast mode', () => {
     expect(result.ok).toBe(false)
     expect(result.message).toMatch(/usage credits/i)
     expect(result.reading.unavailableReason).toBeTruthy()
+  })
+})
+
+/* --------------------------------------------- where the model is read from -- */
+
+/**
+ * The model shown on the controls is read off the newest assistant line of the
+ * project's live transcript, which is the strongest statement available: not a
+ * setting or an intention, but the model that served the last reply.
+ *
+ * A session started from a paired device runs confined, with a `HOME` of its
+ * own, so the CLI writes that transcript under the device's home rather than
+ * under `~/.claude`. Reading only the profile's store answered "no model" for a
+ * session that was answering — a control that does not know what it is
+ * controlling.
+ */
+describe('reading the model from a confined session transcript', () => {
+  const made: string[] = []
+
+  afterAll(() => {
+    for (const dir of made) rmSync(dir, { recursive: true, force: true })
+  })
+
+  function scratch(prefix: string): string {
+    const dir = mkdtempSync(join(tmpdir(), prefix))
+    made.push(dir)
+    return dir
+  }
+
+  function assistant(model: string): string {
+    return `${JSON.stringify({
+      type: 'assistant',
+      sessionId: 'sess-phone',
+      timestamp: '2026-08-15T09:00:00.000Z',
+      message: { role: 'assistant', model, usage: { input_tokens: 1, output_tokens: 1 } },
+    })}\n`
+  }
+
+  const CWD = '/Users/apple/Projects/agent-controls-fixture'
+
+  it('finds it in the device store the session actually wrote to', async () => {
+    const homes = scratch('deck-controls-homes-')
+    installDeviceHomes(homes)
+    try {
+      const store = join(homes, 'dev-a', '.claude', 'projects', encodeProjectPath(CWD))
+      mkdirSync(store, { recursive: true })
+      writeFileSync(join(store, 'sess-phone.jsonl'), assistant('claude-opus-5'))
+      expect(await readModelFromTranscript(CWD)).toBe('claude-opus-5')
+    } finally {
+      resetDeviceHomes()
+    }
+  })
+
+  it('answers null when no store holds anything for the project', async () => {
+    resetDeviceHomes()
+    expect(await readModelFromTranscript('/nowhere/at/all')).toBeNull()
   })
 })

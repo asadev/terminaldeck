@@ -34,13 +34,53 @@
  * Windows sessions run exactly as they did, and the grant screen says so in its
  * own sentence rather than sharing one with the Mac.
  *
- * **Linux, including WSL: not confined.** Same answer and the same reason. User
- * namespaces, bind mounts and `bubblewrap` are all plausible and none of them
- * was run. WSL is the case that matters most here — it is where this app's
- * author keeps his own work — and it is also the one with the most unknowns:
- * whether unprivileged user namespaces are enabled in the distribution's
- * kernel, whether `bwrap` is installed, and what a bind-mount confinement does
- * to `/mnt/c`. Guessing at any of those from a Mac would be inventing an answer.
+ * **Linux, including WSL: not confined — but no longer unmeasured.** The
+ * mechanism was run, on a real Ubuntu 24.04 under WSL2 (kernel
+ * `6.18.33.2-microsoft-standard-WSL2`), reached over ssh from the Mac this is
+ * written on. What it found, in order:
+ *
+ *  - Unprivileged user namespaces are **enabled**:
+ *    `/proc/sys/user/max_user_namespaces` is 79947 and
+ *    `unshare --user --map-root-user id` reports uid 0. The AppArmor restriction
+ *    that blocks this on a stock Ubuntu 24.04 desktop —
+ *    `kernel.apparmor_restrict_unprivileged_userns` — **does not exist in the
+ *    WSL kernel at all**, so the usual reason this fails on Ubuntu does not
+ *    apply here.
+ *  - `bwrap` is **not installed** (it is in the archive as 0.9.0-1ubuntu0.1, but
+ *    installing it needs sudo, which this app must not assume). `unshare`,
+ *    `nsenter`, `setpriv` and `capsh` all are.
+ *  - A mount namespace plus bind mounts **does hold**: a `tmpfs` over `/home`
+ *    with the granted folder bound back in leaves the folder readable and
+ *    writable, `ls $HOME` showing only the granted folder, and a canary file in
+ *    the owner's home unreadable. `git` and `node` (v22.23.1) still run.
+ *  - `/mnt/c` binds away cleanly. It is a 9p `drvfs` mount, and an empty bind
+ *    over `/mnt` removes the whole Windows filesystem from the session —
+ *    including, as a side effect, every reachable path to a Windows `.exe`, so
+ *    WSL interop by path stops working. Note that the `WSLInterop` binfmt
+ *    handler is still registered; it is the *paths* that are gone.
+ *  - **The load-bearing step is dropping capabilities, and without it the whole
+ *    thing is decoration.** Measured: a shell inside the namespace simply ran
+ *    `umount /home` and read the canary. With
+ *    `setpriv --bounding-set=-all --inh-caps=-all` before the exec, `umount`
+ *    answers "must be superuser to unmount", the canary stays unreadable, and
+ *    the obvious next move — a *nested* user namespace to get the capability
+ *    back — fails with `write failed /proc/self/uid_map: Operation not
+ *    permitted`. `/proc/1/root/home` is Permission denied.
+ *
+ * So the answer is no longer "nobody has looked". It is: **the mechanism works
+ * and is not built**, for two reasons that are about the app rather than the
+ * kernel. First, a session inside WSL is launched through `wsl.exe --cd`, and
+ * nothing in that chain has been run — this repository has no Windows machine,
+ * and a boundary whose *launch path* is unmeasured is exactly the kind this
+ * module refuses to claim. Second, under a real `wsl.exe` launch the session
+ * inherits `WSL_INTEROP`, a socket that asks the Windows side to start
+ * processes; the probe above ran over ssh, where that variable is unset, so it
+ * has never been tested and it is a door straight back out. Both are closable
+ * and neither is closed. One box's kernel is also not "Linux": the same script
+ * on a distribution with the AppArmor restriction switched on would fail at the
+ * first step, which is why anything built here would have to prove itself per
+ * session the way {@link proveConfinement} already does rather than trust a
+ * platform name.
  *
  * ## What it costs, stated where somebody will find it
  *
@@ -51,12 +91,17 @@
  * rest. Signing in from the device puts the login in that device's own home,
  * where the owner's is not.
  *
- * The consequence worth knowing about: a confined session's agent transcripts
- * land under that home, and the desktop looks for transcripts under the resolved
- * profile's config directory. Chat mode and the cost pane will therefore not
- * find a confined session's conversation. That is a real gap and it is named
- * here rather than discovered; closing it means teaching the transcript lookup
- * which home a session actually ran with.
+ * ### Where its transcripts go, and who now knows
+ *
+ * A confined session's agent transcripts land under that home rather than under
+ * `~/.claude`, which used to mean chat mode, the cost pane, alerts and the agent
+ * controls all showed nothing for a session that was talking — each of them
+ * reading the right directory for the wrong home. That is closed, and closed the
+ * only honest way: nothing is copied and nothing is symlinked, the session keeps
+ * writing where it was always going to write, and the transcript layer is told
+ * where the homes are. `host-core.ts` calls `installDeviceHomes` at assembly and
+ * `transcript.ts` carries the measurement — with the real CLI, `HOME=<dir>`
+ * alone puts the transcripts at `<dir>/.claude/projects/…`.
  *
  * ## No silent downgrade
  *
@@ -111,6 +156,7 @@ import { currentPlatform, type Platform } from '../platform/host'
 import {
   confinedEnv,
   deviceHomeDir,
+  deviceHomesRoot,
   sessionPlan,
   within,
   type ConfinementPlan,
@@ -148,7 +194,14 @@ export function unconfinedReason(platform: Platform): string {
     return 'Windows confinement (AppContainer, restricted tokens, job objects) has not been built or measured.'
   }
   if (platform === 'linux') {
-    return 'Linux confinement (user namespaces, bind mounts, bubblewrap) has not been built or measured.'
+    // Deliberately no longer says "not measured", because it has been. The
+    // mechanism held on a real Ubuntu 24.04 under WSL2 — user namespaces, bind
+    // mounts, and capabilities dropped before the shell starts. What has not
+    // been run is the `wsl.exe --cd` launch this app actually uses, and the
+    // interop socket a session inherits through it. The module header records
+    // every measurement; this sentence has to fit on a settings panel and so
+    // says the one thing a person can act on: it is not switched on here.
+    return 'Linux confinement is not switched on: user namespaces and bind mounts hold here, but the launch path this app uses has not been measured.'
   }
   return 'No confinement mechanism has been measured on this platform.'
 }
@@ -228,8 +281,29 @@ export interface DeviceConfinement {
 export function prepareDeviceHome(root: string, deviceKey: string): string {
   const home = deviceHomeDir(root, deviceKey)
   mkdirSync(join(home, 'tmp'), { recursive: true, mode: 0o700 })
+  /*
+   * The agent's store, made now rather than left to the CLI.
+   *
+   * The CLI creates it the moment it writes its first line, so this changes
+   * nothing about where anything lands — it changes *when the directory exists*,
+   * and that turns out to matter to the thing reading it. The cost pane watches
+   * these stores for a session's conversation, and a file watcher aimed at a
+   * tree that is being created underneath it is unreliable in a way that is easy
+   * to mistake for slowness: measured here, a burst that made
+   * `<home>/.claude/projects/<project>/<session>.jsonl` in one go was still
+   * undelivered eight seconds later, while the same file created inside a
+   * directory that already existed arrived immediately.
+   *
+   * So the two levels the app can know in advance are made in advance, and only
+   * the project directory — a direct child of a watched one, which is the case
+   * that was measured as reliable — appears while anybody is watching.
+   */
+  mkdirSync(join(home, '.claude', 'projects'), { recursive: true, mode: 0o700 })
   return home
 }
+
+/** The device-homes root, re-exported so callers need one import. */
+export { deviceHomesRoot }
 
 /** The environment a confined session adds. Re-exported so callers need one import. */
 export { confinedEnv }

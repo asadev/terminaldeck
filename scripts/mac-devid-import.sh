@@ -13,7 +13,7 @@
 # full: two identically named identities make `codesign` report
 # `errSecInternalComponent`, which reads exactly like a locked keychain and is
 # not one. Everything Terminal Deck signs with lives in
-# `terminaldeck.keychain-db` and nowhere else.
+# `terminaldeck-signing.keychain-db` and nowhere else.
 #
 # ## What the certificate is, and what it is not
 #
@@ -32,8 +32,8 @@ set -euo pipefail
 
 CER="${1:-}"
 KEY="$HOME/private_keys/DeveloperID_TerminalDeck.key"
-KEYCHAIN="$HOME/Library/Keychains/terminaldeck.keychain-db"
-PW_FILE="$HOME/ClaudeAsad/credentials/.terminaldeck-keychain-pw"
+KEYCHAIN="$HOME/Library/Keychains/terminaldeck-signing.keychain-db"
+PW_FILE="$HOME/ClaudeAsad/credentials/.terminaldeck-signing-pw"
 
 die() { printf '\nerror: %s\n' "$1" >&2; shift; for l in "$@"; do printf '  %s\n' "$l" >&2; done; exit 1; }
 

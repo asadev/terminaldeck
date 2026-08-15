@@ -218,9 +218,9 @@ describe('titleFromTranscript', () => {
     const result = titleFromTranscript([
       userPrompt('rebuild the whole cost pipeline'),
       aiTitle('Rebuild cost pipeline'),
-      customTitle('Tailscale infrastructure requirements'),
+      customTitle('Relay handshake requirements'),
     ])
-    expect(result).toEqual({ title: 'Tailscale infrastructure requirements', source: 'custom' })
+    expect(result).toEqual({ title: 'Relay handshake requirements', source: 'custom' })
   })
 
   it('prefers the model-written title over the first prompt', () => {

@@ -67,6 +67,23 @@ final class TerminalGestures: NSObject, UIGestureRecognizerDelegate {
     /// type", and a grid covering the keyboard is the wrong answer to that.
     var onTapped: (() -> Void)?
 
+    /**
+     * A two-finger pinch, reported as the scale since the gesture began.
+     *
+     * Three callbacks rather than one because the size has to be applied against
+     * where the pinch *started*: `UIPinchGestureRecognizer.scale` is cumulative
+     * from the beginning of the gesture, so multiplying the current size by it
+     * on every update compounds — a gentle spread crosses the whole range in
+     * about a fifth of a second and lands on the maximum every time.
+     *
+     * Two fingers is also what makes this free of the arrangement above: the
+     * scroll is one finger, the selection press is one finger, and nothing else
+     * on this view claims a second one.
+     */
+    var onPinchBegan: (() -> Void)?
+    var onPinch: ((CGFloat) -> Void)?
+    var onPinchEnded: (() -> Void)?
+
     private unowned let terminal: DeckTerminalView
 
     /**
@@ -105,6 +122,10 @@ final class TerminalGestures: NSObject, UIGestureRecognizerDelegate {
         drag.delegate = self
         install(drag)
         selectionDrag = drag
+
+        let pinch = UIPinchGestureRecognizer(target: self, action: #selector(pinched))
+        pinch.delegate = self
+        install(pinch)
 
         let tap = UITapGestureRecognizer(target: self, action: #selector(tapped))
         // Both false, and both deliberate: this recogniser exists only to notice
@@ -186,6 +207,19 @@ final class TerminalGestures: NSObject, UIGestureRecognizerDelegate {
 
     @objc private func tapped(_ recognizer: UITapGestureRecognizer) {
         onTapped?()
+    }
+
+    @objc private func pinched(_ recognizer: UIPinchGestureRecognizer) {
+        switch recognizer.state {
+        case .began:
+            onPinchBegan?()
+        case .changed:
+            onPinch?(recognizer.scale)
+        case .ended, .cancelled, .failed:
+            onPinchEnded?()
+        default:
+            break
+        }
     }
 
     /**

@@ -829,6 +829,11 @@
 
 .settings-profile {
   flex-wrap: wrap;
+  /* Top-aligned, because an account row is three stacked lines now — name,
+     sign-in state, config directory — and centring put the account's colour dot
+     level with the middle line, where it read as a second status mark next to
+     the real one. It belongs beside the name it stands for. */
+  align-items: flex-start;
 }
 
 .settings-profile-dot {
@@ -836,6 +841,20 @@
   height: var(--sp-2);
   flex-shrink: 0;
   border-radius: var(--radius-pill);
+  /* Optically level with the cap height of the name beside it. */
+  margin-top: 7px;
+}
+
+/* An account's buttons take a line of their own, under the three lines they
+   act on.
+
+   They used to sit on the right of the name, and with four of them the row
+   wrapped only sometimes — one account showed its buttons beside the name and
+   the next showed them underneath, in the same list. Same block, two layouts,
+   for no reason a reader could see. One line each, always. */
+.settings-profile-actions {
+  flex-basis: 100%;
+  margin-top: var(--sp-2);
 }
 
 .settings-profile-main {
@@ -843,7 +862,11 @@
   flex-direction: column;
   gap: var(--sp-05);
   flex: 1;
-  min-width: 0;
+  /* Wide enough that the sign-in sentence keeps one line rather than being
+     squeezed into two by a row of four buttons; the row wraps instead, which is
+     what `flex-wrap` on `.settings-profile` is there for. `min()` so a narrow
+     window still gets a column that fits rather than one that overflows. */
+  min-width: min(100%, 22rem);
 }
 
 .settings-profile-name {
@@ -862,6 +885,45 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* The sign-in line: the one thing on this screen that was actually read from
+   the agent rather than from a directory listing. It sits between the name and
+   the path because that is the order the questions get asked — who is this,
+   can it start a session, where does it live. */
+.settings-account-state {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-15);
+  font-size: var(--t-footnote);
+  color: var(--text-secondary);
+}
+
+/* A mark, not a tick: a tick is a claim, and this is only ever coloured for a
+   state the agent reported. Unknown stays grey — it is neither a yes nor a no,
+   and colouring it either way is the lie this screen exists to avoid. */
+.settings-account-mark {
+  width: 7px;
+  height: 7px;
+  flex-shrink: 0;
+  align-self: center;
+  border-radius: var(--radius-pill);
+  background: var(--fill-secondary);
+}
+
+.settings-account-state[data-state='signed-in'] .settings-account-mark {
+  background: var(--status-completed);
+}
+
+.settings-account-state[data-state='signed-out'] .settings-account-mark {
+  background: var(--color-warning);
+}
+
+.settings-account-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  margin-top: var(--sp-3);
 }
 
 .settings-profile-actions,

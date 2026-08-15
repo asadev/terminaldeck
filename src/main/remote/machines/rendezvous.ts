@@ -72,7 +72,8 @@ import { scryptSync } from 'node:crypto'
 import { DEFAULT_RELAY_URL, HOST_SECRET_BYTES, hostIdFor, isHostId } from '../../../shared/relay-wire'
 import { fingerprint, staticFromSeed } from '../../../shared/sealed'
 import { normaliseCode } from '../../../shared/short-code'
-import { createRelayClient, type RelayLink } from '../relay-client'
+import { createRelayClient, type RelayLink, type RelayState } from '../relay-client'
+import { describeThisMachine } from './guest'
 import type { HostIdentity } from '../host-identity'
 
 /**
@@ -155,6 +156,38 @@ export interface MachineOffer {
   name: string
   /** `darwin`, `win32` or `linux`. Empty when it declines to say. */
   platform: string
+}
+
+/**
+ * What this machine can honestly say about itself right now, or null when it has
+ * nothing to say.
+ *
+ * Null is not a detail. Every field here comes off the relay link, so a machine
+ * whose link has not come up has no address to publish — and publishing an empty
+ * one would put a slot at the relay answering with a host id that routes
+ * nowhere. The caller turns that null into a sentence on the screen rather than
+ * into a code that fails after somebody has typed it.
+ *
+ * It lives here, next to the frame it fills in, because two paths need it: the
+ * Machines screen, which refuses to show a code without one, and the phone
+ * pairing on the Remote panel, which shows its code either way because a QR
+ * carries the address inside the link. Two spellings of one offer is exactly the
+ * kind of thing that works on the machine it was written on — which is also why
+ * the key is re-encoded below rather than passed through.
+ */
+export function offerFrom(relay: RelayState | null): MachineOffer | null {
+  if (relay === null || !relay.connected || relay.hostId === '' || relay.publicKey === '') return null
+  const me = describeThisMachine()
+  return {
+    relayUrl: relay.url,
+    hostId: relay.hostId,
+    // Re-encoded rather than passed through. `RelayState` publishes base64url
+    // because it goes into a URL; the offer is JSON inside a sealed frame and
+    // `parseOffer` decodes plain base64.
+    publicKey: Buffer.from(relay.publicKey, 'base64url').toString('base64'),
+    name: me.name,
+    platform: me.platform,
+  }
 }
 
 /** Bounded so a hostile answer cannot make this process hold a large string. */

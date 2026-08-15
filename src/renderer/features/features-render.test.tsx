@@ -315,15 +315,27 @@ describe('the chat box', () => {
     expect(html).toContain('data-offer="true"')
   })
 
-  it('draws no Add menu on a shell, whatever is installed', () => {
+  it('keeps the menu on a shell and changes what it offers, whatever is installed', () => {
     /*
-     * Every entry behind the plus adds an `@"path"` mention: an agent expands
-     * it, a shell types it at its prompt. The menu was promising "the agent
-     * gets its listing" on a pane that was simultaneously saying "this session
-     * is a shell".
+     * This test used to assert the opposite — that a shell got no plus at all —
+     * and the reasoning behind it was half right. Every entry behind the plus
+     * added an `@"path"` mention, which an agent expands and a shell types at
+     * its prompt, so the menu really was promising "the agent gets its listing"
+     * on a pane that was simultaneously saying "this session is a shell".
+     *
+     * The conclusion was the wrong half. Deleting the menu left that composer
+     * with a microphone and a send button, which is how the redesign came back
+     * as "all the options you have actually removed". Picking a file out of the
+     * project is not an agent feature; only the mention form was. So the menu
+     * stays and switches to inserting a shell-quoted path, and loses only the
+     * two rows that need an agent to mean anything.
      */
     const html = withFeatures(everythingOn(), <ChatComposer {...props} shell />)
-    expect(html).not.toContain('at-host')
+    expect(html).toContain('at-host')
+    expect(html).toContain('Insert a file or folder path into the command line')
+    // Nothing on screen claims an agent is listening, which is the half of the
+    // old reasoning that was right.
+    expect(html.toLowerCase()).not.toContain('the agent gets its listing')
     expect(html).toContain('cc-send')
   })
 

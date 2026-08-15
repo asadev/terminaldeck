@@ -6,6 +6,7 @@ import {
   composeMessage,
   removeAttachment,
   REJECTION_TEXT,
+  shellQuote,
   terminalPayload,
   type Attachment,
 } from '../chat/attach/mentions'
@@ -34,14 +35,20 @@ interface Props {
   /**
    * Whether this session is a plain shell rather than an agent CLI.
    *
-   * It decides whether the Add menu is drawn at all, and that is not a
-   * cosmetic choice. Every entry behind that plus adds an `@"path"` mention,
-   * which an agent expands on submit and a shell types verbatim at its prompt —
-   * so on a shell the menu offered "Add files — sent as a reference the agent
-   * reads" on the same screen the pane was saying "This session is a shell",
-   * and pressing it would have put a broken command line in front of somebody.
-   * Connectors are an agent's tools for the same reason. A shell gets the box
-   * and nothing that lies about what is on the other end of it.
+   * It decides what the menu behind the plus *offers*, not whether there is
+   * one. That distinction is the bug this prop was born with. Every entry
+   * behind the plus used to add an `@"path"` mention, which an agent expands on
+   * submit and a shell types verbatim at its prompt — so the menu was withdrawn
+   * from a shell entirely, and that composer was left with a microphone, a send
+   * button and nothing else. Reported back in one sentence: *"you actually
+   * removed everything rather than making it simple"*.
+   *
+   * Picking a file out of the project is not an agent feature; only the form of
+   * the result was. So a shell keeps the menu and gets the form its prompt can
+   * read — a quoted absolute path typed into the command line — and loses only
+   * the two rows that genuinely need an agent on the other end: an image, which
+   * is a separate kind of thing only because an agent *sees* it, and
+   * connectors, which are its tools.
    */
   shell?: boolean
 }
@@ -81,10 +88,23 @@ const NOTICE_MS = 4000
  * the thing that got reported, in these words: "it's very messy with a lot of
  * options under the chat box".
  *
- * Nothing on that row is a bare icon on its own: the plus carries the word
- * "Add", the controls carry their names and their values, and the two glyphs
- * that stay glyphs — the microphone and send — are the pair every chat app in
- * the world draws in that corner, and both say what they are on hover.
+ * Nothing on that row is a bare icon on its own: the plus carries a word ("Add"
+ * for an agent, "Path" for a shell), the controls carry their names and their
+ * values, the panel behind them is called Options and names its whole contents
+ * on hover, and the two glyphs that stay glyphs — the microphone and send — are
+ * the pair every chat app in the world draws in that corner, and both say what
+ * they are on hover.
+ *
+ * ## Folding is not deleting
+ *
+ * Said here because it is the mistake this composer has already made once. The
+ * first pass at "one box with the options folded inside it" folded two controls
+ * onto the row, two behind a button labelled "More", and — on a shell — the plus
+ * into nothing at all, which came back as *"all the options you have actually
+ * removed"*. Nothing on this row may be dropped to make the row shorter. If a
+ * control does not fit, it goes in the Options panel, which lists every one of
+ * them; if it does not belong on this kind of session, it changes form rather
+ * than disappearing. `wiring.test.ts` pins the list.
  */
 export function ChatComposer({
   onSend,
@@ -157,9 +177,28 @@ export function ChatComposer({
     }
   }
 
+  const insert = useCallback((snippet: string) => {
+    setText((current) => appendSpoken(current, snippet))
+  }, [])
+
+  /**
+   * What a pick in the menu becomes.
+   *
+   * Two answers, because there are two things on the other end of this box. An
+   * agent gets an attachment, which is an `@"path"` mention the CLI expands on
+   * submit and a chip above the text in the meantime. A shell gets the path
+   * itself, quoted, appended to the command line it is already writing — there
+   * is nothing to attach to a `/bin/zsh`, and `shellQuote` is what keeps a
+   * folder called "My Project" from arriving as two arguments.
+   */
   const add = useCallback(
     (relPath: string, isDirectory: boolean) => {
-      const result = addAttachment(attachments, root, `${root}/${relPath}`, isDirectory)
+      const target = `${root}/${relPath}`
+      if (shell) {
+        insert(shellQuote(target))
+        return
+      }
+      const result = addAttachment(attachments, root, target, isDirectory)
       if (result.ok) {
         setAttachments(result.attachments)
         setNotice(null)
@@ -167,12 +206,8 @@ export function ChatComposer({
         setNotice(REJECTION_TEXT[result.reason])
       }
     },
-    [attachments, root],
+    [attachments, root, shell, insert],
   )
-
-  const insert = useCallback((snippet: string) => {
-    setText((current) => appendSpoken(current, snippet))
-  }, [])
 
   /**
    * The padding is part of the field.
@@ -221,19 +256,18 @@ export function ChatComposer({
 
         <div className="cc-foot">
           <div className="cc-foot-left">
-            {/* Everything behind the plus is written for an agent — see the
-                `shell` prop. A shell gets no plus rather than a menu whose every
-                entry contradicts the sentence in the middle of the pane. */}
-            {!shell && (
-              <AttachMenu
-                root={root}
-                attachments={attachments}
-                onAdd={add}
-                onInsert={insert}
-                onClose={focusBox}
-                disabled={off || root === ''}
-              />
-            )}
+            {/* Drawn for a shell as well as for an agent, and the mode is what
+                differs — see the `shell` prop for the regression that rule
+                exists to close. */}
+            <AttachMenu
+              root={root}
+              attachments={attachments}
+              onAdd={add}
+              onInsert={insert}
+              onClose={focusBox}
+              disabled={off || root === ''}
+              mode={shell ? 'path' : 'mention'}
+            />
             {controls}
           </div>
           <div className="cc-foot-right">

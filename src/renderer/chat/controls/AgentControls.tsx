@@ -3,7 +3,7 @@ import { ControlPicker } from './ControlPicker'
 import { ControlSection } from './ControlSection'
 import {
   controlName,
-  FOLDED_CONTROLS,
+  MENU_CONTROLS,
   optionsFor,
   PRIMARY_CONTROLS,
   reachOf,
@@ -36,18 +36,25 @@ import './AgentControls.css'
  * says "Not reported" and its panel explains the difference, instead of showing
  * the same "Unknown" that everywhere else here means "something failed".
  *
- * ## Why two of them are hidden
+ * ## Where each of them is, and why it is in two places
  *
  * This was a strip of four pickers and two lines of prose under the chat box,
  * and it read as clutter rather than as control — the complaint that started
- * this redesign was, exactly, "a lot of options under the chat box". So the two
- * that a session actually reaches for stay on the box and the two that get set
- * once hide behind one labelled button. `PRIMARY_CONTROLS` and
- * `FOLDED_CONTROLS` in `catalog.ts` are that decision, written down where a
- * test can check nothing fell out of both lists.
+ * the redesign was, exactly, "a lot of options under the chat box". The pass
+ * that answered it moved two pickers onto the box and put the other two behind
+ * a button labelled "More", and the report that came back was the opposite
+ * complaint: *"all the options you have actually removed"*.
  *
- * Hiding is not dropping: everything the strip could say is still said, and the
- * panel is where the descriptions finally have room to be sentences.
+ * Both readings were fair, and the second one is the reason this file no longer
+ * has a hidden set. There is one panel and it lists **every** control
+ * (`MENU_CONTROLS`), each with its name, a sentence describing it and all of
+ * its options; `PRIMARY_CONTROLS` decides only which of them *also* get a chip
+ * on the row for the one-click case. So the row stays two chips long and
+ * nothing is behind a word that names nothing — the button says Options, and
+ * what it opens is the whole list rather than the remainder of one.
+ *
+ * The panel is also where the descriptions finally have room to be sentences,
+ * which is the half a chip cannot do at any width.
  */
 
 export interface AgentControlsBridge {
@@ -324,6 +331,32 @@ export function AgentControls({ sessionId, cwd, provider, extra }: Props) {
   const blockedReason = (control: ControlId): string | null =>
     control === 'fast' ? (readings?.fast.unavailableReason ?? null) : null
 
+  /**
+   * The hover label on the Options button, written out of the panel's own
+   * contents.
+   *
+   * Hand-typing it is how a tooltip comes to advertise a control that was
+   * removed six months earlier — and this composer has already lost controls
+   * once. Building the sentence from `MENU_CONTROLS` means the two cannot
+   * disagree: delete a control and its name leaves the sentence with it.
+   *
+   * Sentence case, so it reads as prose rather than as a row of proper nouns:
+   * only the first name keeps its capital.
+   */
+  const optionsLabel = ((): string => {
+    const parts = usable ? MENU_CONTROLS.map(controlName) : []
+    const named =
+      parts.length === 0
+        ? ''
+        : parts
+            .map((name, index) => (index === 0 ? name : name.toLowerCase()))
+            .reduce((sentence, name, index) =>
+              index === parts.length - 1 ? `${sentence} and ${name}` : `${sentence}, ${name}`,
+            )
+    if (named === '') return 'What this session has cost so far'
+    return extra ? `${named}, and what this session has cost` : named
+  })()
+
   return (
     <div className="agent-controls" ref={rootRef}>
       {notice ? (
@@ -354,11 +387,15 @@ export function AgentControls({ sessionId, cwd, provider, extra }: Props) {
             ))
           : null}
 
-        {/* One affordance for everything folded away, and it says so on hover
-            rather than making the word "More" carry the whole explanation.
+        {/* One affordance for the whole list, and it names the list rather than
+            making a word like "More" carry it. The hover label is built from
+            the control names themselves, so a control that is renamed is
+            renamed here too and one that is deleted takes its own name out of
+            the sentence — the tooltip cannot go on advertising something the
+            panel no longer holds.
 
-            Not drawn when there is nothing folded away. On a plain shell every
-            picker is withdrawn and the usage strip is withheld, so the sheet
+            Not drawn when there is nothing behind it. On a plain shell every
+            picker is withdrawn and the usage strip is withheld, so the panel
             could only ever open onto a paragraph explaining its own emptiness —
             "Model, effort, fast mode and permission modes belong to an agent
             CLI, there is nothing here to set them on" — which is the dead
@@ -368,17 +405,13 @@ export function AgentControls({ sessionId, cwd, provider, extra }: Props) {
         {(usable || extra) && (
         <button
           type="button"
-          className="cc-chip ac-more"
+          className="cc-chip ac-open"
           aria-haspopup="dialog"
           aria-expanded={open}
-          title={
-            shell
-              ? 'What this session can and cannot be told to do'
-              : 'Effort, fast mode, and what this session has cost'
-          }
+          title={optionsLabel}
           onClick={() => setOpen((was) => !was)}
         >
-          More
+          Options
           <svg className="ac-caret" width="9" height="9" viewBox="0 0 12 12" aria-hidden="true">
             <path d="M2.5 4.5 6 8l3.5-3.5" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
           </svg>
@@ -387,11 +420,11 @@ export function AgentControls({ sessionId, cwd, provider, extra }: Props) {
       </div>
 
       {open ? (
-        <div className="ac-sheet scroll-fade" role="dialog" aria-label="More session options">
+        <div className="ac-sheet scroll-fade" role="dialog" aria-label="Session options">
           {unusable ? (
             <p className="ac-sheet-note">{unusable}</p>
           ) : (
-            FOLDED_CONTROLS.map((id) => (
+            MENU_CONTROLS.map((id) => (
               <ControlSection
                 key={id}
                 control={id}

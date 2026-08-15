@@ -27,8 +27,9 @@ this session" is not a detail.
 | Session list with live status, attach + replay, resume, new session | done |
 | Key bar + key grid, copy/paste, automatic reconnect | done |
 | `StubTransport` | **deleted** — the real one works |
-| Release pipeline, icon, signing, App Store metadata | done; `preflight.sh` passes everything except distribution signing — see below |
-| Anything that talks to App Store Connect | **blocked on one credential**, and now also on an export filing — see [Shipping it](#shipping-it-testflight) |
+| Release pipeline, icon, signing | done; `preflight.sh` passes every check |
+| TestFlight | **live** — 0.1.8 build `2608151610`, VALID, on the internal group |
+| App Store submission | **not started** and not close — a reviewer has no machine to pair with, see [`APPSTORE.md`](../APPSTORE.md) |
 
 ### What has actually been run, and against what
 
@@ -89,6 +90,48 @@ Worth being precise, because "compiled" and "works" are different claims:
   never been exercised from this app. It is the shape the PWA uses and it is
   transcribed from `pwa/src/connection.ts`, which is exactly the claim the relay
   transport carried before someone pointed it at a socket and found two bugs.
+
+## What the phone can do beyond attaching to a session
+
+The four things below were added on 2026-08-15, after the design pass, because
+"it is on very basic stages" was the accurate description of a client that could
+attach to a session and do nothing else with it.
+
+**Find in the scrollback.** The actions menu → *Find in output*. A bar floats
+over the terminal — it does not push it, because taking rows off a session is a
+`resize` on the wire and a repaint on the far end. Typing searches **backwards
+from the bottom**, so the first match is the newest one, which on a terminal is
+almost always the interesting one; `↑` walks further back and `↓` comes forwards.
+The counter is counted from the top of the buffer. The search is SwiftTerm's own,
+against the real emulator buffer, so it finds what scrolled away rather than what
+is on screen. `TerminalFind.swift`, `FindBar.swift`, `Tests/FindTests.swift`.
+
+**Alerts.** The phone says when a machine needs somebody: a session that stops
+and waits makes a sound, a session that finishes arrives quietly, and tapping
+either opens that session on that machine. It is computed on the phone from the
+`status` and `exit` frames the desktop already sends — no new wire verb, nothing
+the desktop has to be taught.
+
+What it cannot do is on the screen, in the app, in those words: **there is no
+push service in this product**, so an alert can only be raised while the app is
+running — in front of you, or in the ~30 s `beginBackgroundTask` window after the
+phone goes in a pocket. Anything that happened while it was asleep is caught up
+on the next connection and shown as one line at the top of the session list
+("While you were away: 1 session needs you, 1 finished") rather than as four
+banners about things that are already over. `SessionAlerts.swift`,
+`AlertCenter.swift`, `BackgroundGrace.swift`, `AlertsView.swift`.
+
+**Text size.** Pinch the terminal, or the two items in the actions menu. It is
+not a zoom: the column count *is* the font, so a smaller face means more columns
+and a `resize` the far end reflows to — which is the point, because an agent's
+eighty-column table wraps into nonsense at fifty. Nine to twenty-two points,
+whole points, one setting for the phone. `TextSize.swift`.
+
+**Share the output.** The actions menu → *Share output* writes the **whole
+buffer** — scrollback included — to a `.txt` named after the session and hands it
+to the system share sheet. Deliberately not the same thing as Copy, which takes
+the screen or a selection: the reason to send somebody a session is usually the
+error that has already scrolled off the top. `ShareOutput.swift`.
 
 ## Build and run
 
@@ -277,6 +320,38 @@ command line" at the top of the log, never reaches the runner's
 the worst thing this suite can produce — and it is why `live-transfer.sh` exists
 as one command rather than as a recipe to be retyped.
 
+#### `FindShareAndAlertsUITests` pairs itself
+
+The newest file in the target does not need `simctl openurl` at all: it asks the
+harness's control server for a code and types it, the way `KeyBarUITests` does.
+So the whole of find, text size, share and the alerts screen is one command:
+
+```sh
+ios/Harness/run.sh host --approve-after 3000 &
+xcodebuild test -project ios/TerminalDeck.xcodeproj -scheme TerminalDeck \
+  -destination 'platform=iOS Simulator,id=<UDID>' \
+  -derivedDataPath ios/build/DerivedData \
+  -only-testing:TerminalDeckUITests/FindShareAndAlertsUITests
+```
+
+Use `id=<UDID>` rather than `name=iPhone 17` if two runtimes are installed:
+`name=` picks one of the two devices with that name and it is not necessarily
+the one you booted, installed to and are screenshotting. That cost an hour once.
+
+One case in it is **opt-in**, because it spends the system notification prompt,
+which can be answered exactly once per install:
+
+```sh
+TEST_RUNNER_TD_SPEND_NOTIFICATION_PERMISSION=1 xcodebuild test … \
+  -only-testing:TerminalDeckUITests/FindShareAndAlertsUITests/testASessionEndingRaisesARealNotification
+```
+
+It grants permission, starts `sleep 6; exit` in a session, leaves that screen,
+and waits for the banner. Run on 2026-08-15 it passed: **"build — Finished on
+RLCKG3."** over the session list, which is the whole chain — a pty exiting on the
+machine, a `status` frame across the sealed relay, a transition noticed on the
+phone, and iOS drawing it.
+
 ## The pairing code
 
 Two shapes, because there are two ways to reach a Mac. `Transport/PairingCode.swift`
@@ -303,29 +378,77 @@ rather than both being supported.
 
 ### The state of it
 
-Everything that can be built, signed-except-for-one-credential, checked and
-scripted is done. `scripts/ios/preflight.sh` passes every check it is able to
-make: the Release configuration archives for a real arm64 device, the icon
-compiles in, the Info.plist comes out saying what it should, the distribution
-certificate is present and good until August 2027, and the App Store Connect
-private key is on disk.
+The whole path runs unattended, from a checkout to a build a phone can install.
+`scripts/ios/preflight.sh` passes every check: the Release configuration
+archives for a real arm64 device, the icon compiles in, the Info.plist comes out
+saying what it should, exactly one distribution identity is visible and its
+keychain is unlocked, the release notes exist and fit, and the App Store Connect
+key and issuer id are both on disk.
 
-One check does fail on this machine as of the sealed-channel work, and it is
-worth writing down because it looks alarming and is not about the app:
+### The signing key was lost once, and what replaced it
+
+Worth the paragraphs, because the symptom points at the wrong thing and it cost
+an afternoon on 2026-08-15.
 
 ```
 CodeSign … TerminalDeck.app: errSecInternalComponent
 ```
 
 The unsigned archive immediately before it succeeds, so nothing in the bundle is
-the problem. `errSecInternalComponent` from `codesign` is the keychain refusing
-to hand over the signing key to a process that cannot put a prompt on screen —
-the login keychain is locked, or the key's ACL has not been told to always allow
-`codesign`. Unlock the keychain in the same session (`security unlock-keychain
-~/Library/Keychains/login.keychain-db`) or run the archive from Xcode once and
-click *Always Allow*. It is not a code change and it is not the missing issuer id.
+the problem. `errSecInternalComponent` from `codesign` means the keychain would
+not hand over the signing key to a process that cannot put a prompt on screen.
+It has two causes and they look identical: **two identities with the same name**,
+or **the keychain is locked**. This time it was the second.
 
-Three things are blocked. The first two are the same thing twice:
+The keychain holding the Apple Distribution identity had been created with
+`security set-keychain-settings -lut 21600`, which locks it on sleep. It slept.
+And the password recorded for it in
+`~/ClaudeAsad/credentials/.terminaldeck-keychain-pw` **did not open it** — not a
+whitespace problem, not a quoting problem; four spellings were tried and all
+four were refused. The private key inside is therefore unreachable and stays
+that way, because a keychain password cannot be recovered or reset from inside.
+
+The fix was to stop trying and rebuild the material, which is entirely doable
+without Apple's help beyond the API key already on disk:
+
+1. A new key pair and CSR, then `POST /v1/certificates` with
+   `certificateType: DISTRIBUTION` — **this one Apple's API will do**. (Only
+   `DEVELOPER_ID_APPLICATION` is refused with *"can only be performed by the
+   Account Holder"*; do not confuse the two, see `SIGNING-HANDOFF.md`.) New
+   certificate `MPD2XX32V2`, valid to 2027-08-15. Nothing was revoked — the
+   account was not at its certificate limit, and revoking would have broken the
+   other apps that share this team.
+2. A p12 of certificate + key + the WWDR G3 intermediate, imported into a new
+   `terminaldeck-ios.keychain-db` whose password is recorded in
+   `~/ClaudeAsad/credentials/.terminaldeck-ios-keychain-pw`, with
+   `set-key-partition-list` so `codesign` never needs a dialog — and created with
+   a **plain `security set-keychain-settings`**, no `-l` and no `-t`, so it can
+   never lock itself the way its predecessor did.
+3. A provisioning profile is a *snapshot* of the certificates that existed when
+   it was made, so the existing one did not contain the new certificate and had
+   to be rebuilt. `Terminal Deck iOS App Store` was deleted and recreated with
+   every distribution certificate on the account, keeping the same name so
+   nothing in `project.yml` changed.
+
+`preflight.sh` now unlocks that keychain from the recorded password before
+anything is built, and fails loudly if the password does not open it — which
+turns this whole afternoon into one red line in five seconds.
+
+**Do not check for a locked keychain by signing something, or with
+`security show-keychain-info`.** Both raise a SecurityAgent dialog and block
+forever, and the dialog *outlives the process that raised it* — killing
+`codesign` leaves the window up. A first attempt at this check hung for two
+minutes and stacked three modal prompts on the user's desktop. `unlock-keychain
+-p` is the only one of these that never raises UI: it unlocks, or it says the
+passphrase is wrong, immediately.
+
+The old `terminaldeck.keychain-db` is left on disk, out of the search list. It
+still holds the Developer ID Application certificate for the **macOS** lane —
+whose private key *is* recoverable, from `~/private_keys/developer-id/`, so that
+lane can be rebuilt the same way when someone needs it.
+
+Three things used to be blocked. None of them is now, and the history is kept
+because each one has a trap in it that will be met again:
 
 1. ~~The App Store Connect issuer id is not known.~~ **Resolved** —
    `33807517-81cb-4d1e-8263-787b34fe2cc2`, recorded in
@@ -339,9 +462,14 @@ Three things are blocked. The first two are the same thing twice:
    see [Export compliance](#export-compliance). The key was removed and the
    question is answered in App Store Connect.
 
-**The app is uploaded.** App record `6801251458`, bundle `dev.terminaldeck.ios`,
-first build delivered 2026-08-13. What remains before a tester can install it is
-Apple's own processing and adding testers in TestFlight.
+**The app is on TestFlight.** App record `6801251458`, bundle
+`dev.terminaldeck.ios`. Four builds delivered; the current one is **0.1.8, build
+`2608151610`**, processed VALID, export compliance answered, notes filed, and
+attached to the internal group — so it is installable now, with no Beta App
+Review in the way.
+
+Getting onto the **App Store** is a different question with a real obstacle in
+it, and it is written down in [`APPSTORE.md`](../APPSTORE.md) rather than here.
 
 Two traps worth keeping, because both cost hours:
 
@@ -414,7 +542,21 @@ one. <https://appstoreconnect.apple.com/apps> > **+** > **New App**:
 | SKU | `terminaldeck-ios` (private to you; any stable string) |
 | User access | Full Access |
 
-**Step 5 — release.**
+**Step 5 — say what changed.**
+
+Edit `ios/WhatToTest.md`. It is the text TestFlight shows the tester as *What to
+Test*, and both `preflight.sh` and `testflight.mjs` refuse to go on without it.
+
+That refusal is not fussiness. Builds 1, 2 and 3 all went up with this field
+empty — `betaBuildLocalizations` was an empty list for every one of them — and
+the result was exactly what you would predict: the tester installed build 3,
+could not tell it apart from build 2, and concluded the release had not
+happened. A build nobody can verify is not a shipped build.
+
+Write it for somebody holding a phone: name the screen, name what changed on it,
+name what to look at. 4000 characters is the ceiling App Store Connect stores.
+
+**Step 6 — release.**
 
 ```sh
 scripts/ios/release.sh
@@ -424,12 +566,21 @@ Archive, export, validate, upload — four steps, four logs under
 `ios/build/release/`, each one able to fail on its own without taking the others
 with it. Roughly three minutes, most of it SwiftTerm compiling.
 
-**Step 6 — TestFlight (Asad, in a browser, per build the first time).**
+**Step 7 — TestFlight.**
 
-Processing takes 5–15 minutes and ends in an email. Then *TestFlight* > add the
-build to an internal group. The first build of a new app also wants the export
-compliance answer acknowledged once in the UI even though `Info.plist` declares
-it — Apple asks anyway, and the answer is the one written down below.
+```sh
+node scripts/ios/testflight.mjs <build number>
+```
+
+Waits for processing to reach a terminal state and exits non-zero on INVALID,
+answers export compliance over the API, uploads the notes from step 5, and
+attaches the build to the internal group. No browser, and nothing left half
+done: a build that has been through this is installable on a paired phone
+minutes later, because an internal group needs no Beta App Review.
+
+Processing itself takes 5–15 minutes. The first build of a *new app* also wants
+the export compliance answer acknowledged once in the App Store Connect UI —
+Apple asks anyway, and the answer is the one written down below.
 
 ### Environment
 
@@ -444,6 +595,11 @@ Everything the pipeline needs, and nothing hardcoded that shouldn't be:
 | `TD_IOS_MARKETING_VERSION` | `package.json`'s `version` | One product, one version. |
 | `TD_IOS_BUILD` | `yymmddHHMM`, UTC | See below. |
 | `TD_IOS_SIGN_STYLE` | `automatic` | `manual` needs `TD_IOS_PROFILE`. |
+| `TD_IOS_KEYCHAIN_PW_FILE` | `~/ClaudeAsad/credentials/.terminaldeck-ios-keychain-pw` | Unlocks the keychain holding the signing key. Ignored when the identity lives in the login keychain. |
+| `TD_TESTFLIGHT_NOTES` | `ios/WhatToTest.md` | The *What to Test* text. |
+| `TD_TESTFLIGHT_LOCALE` | `en-GB` | The app's primary language, read off the app record — **not** `en-US`. Notes filed against a locale the app does not have are stored and shown to nobody. |
+| `TD_TESTFLIGHT_GROUP` | the `Internal` group | Internal groups need no Beta App Review. |
+| `TD_ASC_APP_ID` | `6801251458` | The app record. |
 
 `release.sh --no-upload` stops with an `.ipa` on disk; `--no-validate` skips the
 pre-upload check; `--skip-preflight` skips the checks it runs first.

@@ -84,10 +84,10 @@ import type { IpcMain } from 'electron'
 // type import here would be a real cycle; `import type` is erased before the
 // bundler ever sees it, which keeps the runtime edge pointing one way.
 import type { GitHubErrorKind, GitHubFailure, RepoRef } from './github'
-import { currentPlatform, withPath, type Platform } from './platform/host'
+import { currentPlatform, machineNoun, withPath, type Platform } from './platform/host'
 import { loginPath } from './providers'
 import { redact } from './redact'
-import { writeSecretFile } from './remote/secret-file'
+import { protectSecretFile, writeSecretFile } from './remote/secret-file'
 
 const run = promisify(execFile)
 
@@ -541,6 +541,13 @@ export class GitHubAuthenticator {
 
   private readStored(): StoredCredential | null {
     if (this.stored !== undefined) return this.stored
+    // A credential written by an older version of this app is on disk under
+    // whatever ACL it inherited, and a GitHub token can sit there for months
+    // without ever being rewritten — the write path alone would never reach it.
+    // This is the first thing that opens the file, so it is where the repair
+    // goes. It costs nothing off Windows and does not throw; `secret-file.ts`
+    // says why a read is the one place that reports rather than refuses.
+    protectSecretFile(this.dir, this.file, { platform: this.platform, env: this.env })
     try {
       const parsed = parseJson<StoredCredential>(readFileSync(this.file, 'utf8'))
       // A file that parses but carries no token is not a credential. Treating
@@ -553,8 +560,21 @@ export class GitHubAuthenticator {
     return this.stored
   }
 
+  /**
+   * Throws when the credential could not be stored *safely*, which on Windows
+   * includes "could not be locked down to this account".
+   *
+   * The platform and environment are handed down rather than read again inside
+   * the writer, for the reason `platform/host.ts` gives: this class already
+   * takes an injected platform so its `gh` calls can be pinned from a Mac, and
+   * two reads of the platform in one call path are two answers waiting to
+   * disagree.
+   */
   private writeStored(credential: StoredCredential): void {
-    writeSecretFile(this.dir, this.file, JSON.stringify(credential, null, 2))
+    writeSecretFile(this.dir, this.file, JSON.stringify(credential, null, 2), {
+      platform: this.platform,
+      env: this.env,
+    })
     this.stored = credential
     this.cached = null
     this.onAuthChanged()
@@ -1089,14 +1109,44 @@ export class GitHubAuthenticator {
           this.lastFlowFailure = checked.failure
           return
         }
-        this.writeStored({
-          version: 1,
-          host: this.host,
-          token,
-          login: checked.identity.login,
-          scopes: checked.scopes,
-          obtainedAt: this.now(),
-        })
+        try {
+          this.writeStored({
+            version: 1,
+            host: this.host,
+            token,
+            login: checked.identity.login,
+            scopes: checked.scopes,
+            obtainedAt: this.now(),
+          })
+        } catch (error) {
+          /*
+           * The sign-in worked and the credential could not be stored, which is
+           * a real outcome and used to be an invisible one: this runs on a
+           * background promise whose rejection `connect` deliberately swallows,
+           * so the only thing the user saw was a panel that never became
+           * connected and never said why.
+           *
+           * On Windows the realistic cause is now the one this module cares
+           * about — the file could not be restricted to this account, so it was
+           * not written at all rather than being left for every account on the
+           * PC to read. A full disk and a read-only profile land here too, and
+           * all three want the same sentence: you are not signed in, here is
+           * what stopped it.
+           *
+           * `not-authenticated` rather than `error`, because it is the truthful
+           * end state and the one the panel already has a headline for. The
+           * token is passed as a secret so that nothing quoted out of the
+           * failure can carry it into the detail box.
+           */
+          this.lastFlowFailure = fail(
+            'not-authenticated',
+            `GitHub signed you in, but this ${machineNoun(this.platform)} would not store the credential safely, so it was not saved.`,
+            null,
+            errorText(error) || String(error),
+            [token],
+          )
+          return
+        }
         this.lastFlowFailure = null
         return
       }

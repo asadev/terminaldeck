@@ -18,11 +18,18 @@
  *
  * Because Windows named pipes do not inherit that guarantee, and because a
  * socket left behind by a crashed daemon can be inherited by whatever binds it
- * next. The token lives in a 0600 file beside the socket and is compared with a
+ * next. The token lives in a file beside the socket and is compared with a
  * constant-time equality — the same rule the rest of this codebase follows for
  * anything a caller can guess at repeatedly. A caller that cannot read the file
  * cannot talk to the host, which is the same boundary the socket already draws
  * and costs one field to make true on both platforms.
+ *
+ * Which puts the whole weight of the Windows boundary on that file, and for a
+ * long time the file could not hold it: 0600 is a POSIX mode and NTFS has no
+ * such thing, so on Windows the token sat under whatever ACL the folder handed
+ * down and the socket's "only this user" was true on exactly the platform that
+ * did not need it. `writeSecretFile` now sets a real ACL there; this file is
+ * one of the three reasons it had to.
  *
  * ## Why one request per connection
  *
@@ -36,7 +43,7 @@ import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { createConnection, createServer, type Server, type Socket } from 'node:net'
 import { join, posix, win32 } from 'node:path'
 import { BRAND } from '../shared/brand'
-import { writeSecretFile } from '../main/remote/secret-file'
+import { protectSecretFile, writeSecretFile } from '../main/remote/secret-file'
 import type { Platform } from '../main/platform/host'
 
 /** The file that says a host is running, and how to reach it. */
@@ -125,15 +132,23 @@ export function controlPaths(
 /* ----------------------------------------------------------------- record -- */
 
 export function writeDaemonRecord(stateDir: string, record: DaemonRecord): void {
-  // 0600, through a temp file and a rename, exactly as every other secret this
-  // app writes. The token is a bearer secret; it does not get a weaker file than
-  // the relay identity does. `writeSecretFile` wants the directory and the *full
-  // path* — the directory is what it creates and fsyncs, the path is what it
-  // renames onto — which is why the join is not redundant.
+  // Through a temp file and a rename, exactly as every other secret this app
+  // writes: 0600 on POSIX, and on Windows — where a mode decides nothing — an
+  // NTFS ACL that names this account and removes what the folder inherited. The
+  // token is a bearer secret and `pair` and `stop` are behind it, so it does not
+  // get a weaker file than the relay identity does. `writeSecretFile` wants the
+  // directory and the *full path* — the directory is what it creates, locks down
+  // and fsyncs, the path is what it renames onto — so the join is not redundant.
   writeSecretFile(stateDir, join(stateDir, RECORD_FILE), JSON.stringify(record, null, 2))
 }
 
 export function readDaemonRecord(stateDir: string): DaemonRecord | null {
+  // A record left by a version of this host that could not set an ACL is a
+  // control token every account on the PC can read. Repaired here, on the way
+  // in, because a host that has been up for a week does not rewrite it. No-op
+  // off Windows, done once per process however often this is called, and it
+  // reports rather than throws — `secret-file.ts` says why.
+  protectSecretFile(stateDir, join(stateDir, RECORD_FILE))
   try {
     const raw: unknown = JSON.parse(readFileSync(join(stateDir, RECORD_FILE), 'utf8'))
     return parseDaemonRecord(raw)

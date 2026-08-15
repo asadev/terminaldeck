@@ -47,8 +47,8 @@ set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO"
 
-KEYCHAIN="$HOME/Library/Keychains/terminaldeck.keychain-db"
-PW_FILE="$HOME/ClaudeAsad/credentials/.terminaldeck-keychain-pw"
+KEYCHAIN="$HOME/Library/Keychains/terminaldeck-signing.keychain-db"
+PW_FILE="$HOME/ClaudeAsad/credentials/.terminaldeck-signing-pw"
 # The common name WITHOUT the `Developer ID Application:` prefix.
 #
 # electron-builder refuses the full string outright — "Please remove prefix

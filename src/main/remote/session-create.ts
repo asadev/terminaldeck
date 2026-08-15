@@ -43,9 +43,29 @@
  * session here", never "may *this* phone". A required field means the compiler
  * asks the question at every call site instead of a reviewer having to.
  *
+ * ## And it has to say *what* is being started
+ *
+ * `create` grew a `provider` field, and this file is where the name on it
+ * becomes an agent. The reason it grew one is worth keeping: the
+ * desktop-to-desktop client had been sending `provider` since it was written,
+ * `parseClientMessage` had never listed the field, and a parser drops what it
+ * does not list without a word. Measured on a real Windows PC — a request for
+ * `shell` produced a `claude` session, and no layer had anything to report,
+ * because from each layer's own point of view nothing had gone wrong.
+ *
+ * The rule here is the same one the folder rule already follows, applied to a
+ * second field: **a name this desktop cannot honour is refused with a sentence,
+ * never replaced with a different one.** Naming nothing is not a refusal and
+ * means "whatever you would have started", which is what every older client
+ * sends. What this file does *not* do is guarantee the agent is installed — the
+ * spawn falls back to a plain shell when the CLI is missing, exactly as the
+ * desktop's own button does, and the `created` frame reports the provider the
+ * session actually got so the far end can show the truth rather than the request.
+ *
  * ## What this file decides, and what it no longer has to apologise for
  *
- * It decides where a session **starts**. What happens after that is
+ * It decides where a session **starts**, and which agent it starts. What happens
+ * after that is
  * `src/main/confine/`, and the answer is now different per platform: on macOS
  * the session is held inside the folder it started in, and on Windows and Linux
  * it is not, because no mechanism there has been measured. This file makes no
@@ -54,7 +74,7 @@
  */
 
 import { posix, win32 } from 'node:path'
-import type { SessionMeta } from '../../shared/types'
+import type { ProviderId, SessionMeta } from '../../shared/types'
 import { ConfinementUnavailableError } from '../confine'
 import { currentPlatform, isWindows, machineNoun, type Platform } from '../platform/host'
 import type { CreateOutcome, CreateRequest } from './server'
@@ -88,6 +108,53 @@ function rules(platform: Platform): typeof posix {
 const DEFAULT_COLS = 80
 const DEFAULT_ROWS = 24
 
+/**
+ * Every agent id, written once and checked by the compiler.
+ *
+ * `satisfies Record<ProviderId, ProviderId>` is doing real work: it is an error
+ * for this object to name something that is not a provider *and* an error for it
+ * to leave one out. So a fifth agent added to `ProviderId` fails to compile here
+ * until it is listed, rather than being silently unstartable from a phone — which
+ * is the same class of silent drop this whole change exists to close, one layer
+ * up.
+ *
+ * A list rather than a read of `PROVIDERS`' keys because `Object.keys` answers
+ * `string[]`, and turning that back into a `ProviderId` needs a cast. A cast is
+ * a defect: it would type-check just as happily on the day the wire starts
+ * carrying a name the table has never had.
+ */
+const PROVIDER_IDS = {
+  claude: 'claude',
+  codex: 'codex',
+  gemini: 'gemini',
+  shell: 'shell',
+} as const satisfies Record<ProviderId, ProviderId>
+
+/**
+ * Turn the name a client asked for into an agent this desktop has, or into
+ * nothing at all.
+ *
+ * Returns `null` rather than throwing, and — the part that matters — rather than
+ * falling back to a default. The fallback *was* the bug: a `shell` request
+ * reached this machine carrying nothing at all, the desktop filled the hole with
+ * its own default agent, and a person on a real Windows PC watched Claude start
+ * when they had asked for a shell. Nothing logged it, because from here nothing
+ * had gone wrong. A name this desktop cannot start is something the person can
+ * act on the moment they are told, and cannot act on at all when the machine
+ * quietly picks something else.
+ */
+export function knownProvider(name: string): ProviderId | null {
+  for (const id of Object.values(PROVIDER_IDS)) {
+    if (id === name) return id
+  }
+  return null
+}
+
+/** The agent ids this desktop will start, for a sentence that has to list them. */
+export function providerNames(): string[] {
+  return Object.values(PROVIDER_IDS)
+}
+
 export interface SessionStarter {
   /**
    * Folders this desktop will start a session in **for this device**, most
@@ -117,7 +184,22 @@ export interface SessionStarter {
    * asks for a password. A spawn that did not know whose session it was starting
    * could only give every remote session the same isolation, or none.
    */
-  spawn(input: { cwd: string; cols: number; rows: number; deviceId: string }): Promise<SessionMeta>
+  /**
+   * `provider` is absent when the client named none, and absent means "the one
+   * this desktop would have started" — the host's own default preference, which
+   * is what every client shipped before the field existed gets and what the
+   * desktop's own button does. When it is present it has already been checked
+   * against {@link knownProvider}, which is why it is a `ProviderId` here and a
+   * bare `string` on the request: the narrowing is the check, and a starter
+   * cannot be handed a name nobody looked at.
+   */
+  spawn(input: {
+    cwd: string
+    cols: number
+    rows: number
+    deviceId: string
+    provider?: ProviderId
+  }): Promise<SessionMeta>
 }
 
 /**
@@ -238,12 +320,43 @@ export function remoteSessionCreator(
       cwd = named
     }
 
+    /*
+     * Which agent, and the refusal that replaces a substitution.
+     *
+     * `undefined` is the ordinary case and is not a refusal: a client that names
+     * no agent gets the one this desktop would have started anyway. A client
+     * that *does* name one and names something this desktop has never heard of
+     * is refused, and refused with the list, because the alternative is the bug
+     * this field exists to close — a request for `shell` answered with a Claude
+     * session and nothing anywhere saying so.
+     *
+     * `unauthorized` rather than `unavailable`, for the same reason a folder off
+     * the list is: retrying does not change the answer, and sending someone back
+     * to a spinner over a name that will never be right is worse than telling
+     * them what the names are. The name is echoed *from the desktop's own list*
+     * and never from the request — it came off a network and this sentence is
+     * both sent over the wire and drawn on a phone.
+     */
+    let provider: ProviderId | undefined
+    if (request.provider !== undefined) {
+      const known = knownProvider(request.provider)
+      if (known === null) {
+        return {
+          ok: false,
+          code: 'unauthorized',
+          message: `${here} does not have an agent by that name. It can start: ${providerNames().join(', ')}.`,
+        }
+      }
+      provider = known
+    }
+
     try {
       const meta = await starter.spawn({
         cwd,
         cols: request.cols ?? DEFAULT_COLS,
         rows: request.rows ?? DEFAULT_ROWS,
         deviceId: request.deviceId,
+        ...(provider === undefined ? {} : { provider }),
       })
       return {
         ok: true,

@@ -28,8 +28,42 @@ export interface WorkspaceTab {
   status?: SessionStatus
   /** Sessions only — the project the session runs in. */
   projectPath?: string
+  /**
+   * Sessions only — the account the session is signed in as.
+   *
+   * Absent when no account applies, which is a plain shell or an agent whose
+   * config directory this app cannot redirect. Absent is not "the default": it
+   * means there is nothing true to say, and a row that says nothing is better
+   * than one that names an account the session is not actually isolated to.
+   */
+  account?: { id: string; name: string }
   /** True for tabs the user can close. */
   closable: boolean
+}
+
+/**
+ * Whether a list of tabs needs to say which account each session belongs to.
+ *
+ * Only when they do not all agree. On the ordinary install there is one
+ * account, every row would carry the same word, and a label that is on every
+ * row carries no information — the same reason the Accounts screen hides its
+ * "Default" badge when there is only one account to be the default of. The
+ * moment a second account is in play the rows have to be tellable apart,
+ * because two sessions in the same folder under two logins are otherwise
+ * identical on screen.
+ *
+ * Sessions with no account are not counted. A plain shell tab appearing beside
+ * an agent tab is not a disagreement about accounts, and letting it flip every
+ * row into carrying a name would make the label mean "you opened a shell".
+ */
+export function accountsWorthShowing(tabs: readonly WorkspaceTab[]): boolean {
+  const seen = new Set<string>()
+  for (const tab of tabs) {
+    if (tab.kind !== 'session' || !tab.account) continue
+    seen.add(tab.account.id)
+    if (seen.size > 1) return true
+  }
+  return false
 }
 
 export const SINGLETON_KINDS: readonly TabKind[] = []

@@ -19,6 +19,25 @@ function scratch(prefix: string): string {
   return realpathSync(mkdtempSync(join(tmpdir(), prefix)))
 }
 
+/**
+ * One device's confined home, built exactly the way the app builds it, and
+ * returning the store the agent will write into.
+ *
+ * `prepareDeviceHome` in `confine/index.ts` is the real thing, and this mirrors
+ * it rather than calling it so that a test fixture cannot quietly become a test
+ * of itself. What matters here is the *order*: the home, its `tmp` — which is
+ * the session's `TMPDIR` and must never be mistaken for a store — and the empty
+ * `.claude/projects`, all before any transcript exists. That is what the app
+ * does, and a fixture that made all four levels in one burst would be testing a
+ * sequence that never happens.
+ */
+function deviceHome(root: string, key: string): string {
+  mkdirSync(join(root, key, 'tmp'), { recursive: true })
+  const store = join(root, key, '.claude')
+  mkdirSync(join(store, 'projects'), { recursive: true })
+  return store
+}
+
 function line(
   id: string,
   output: number,
@@ -204,6 +223,154 @@ describe('TranscriptWatcher against a live file', () => {
     expect(ids).toContain('sess-b')
     expect(ids).not.toContain('sess-a')
   }, 10_000)
+
+  /**
+   * The store a confined session writes to, which is not the owner's.
+   *
+   * A session started from a paired device runs with a `HOME` of its own — it
+   * cannot read the account's — and the CLI follows `HOME`, so its transcript
+   * lands under `<deviceHome>/.claude/projects/<encoded cwd>`. Measured with the
+   * real CLI; `transcript.ts` records the run.
+   *
+   * These cases are on a real filesystem with a real chokidar for the same
+   * reason the ones above are: the interesting behaviour is what the watcher
+   * *notices*, and every version of this code looks correct when you call its
+   * methods by hand.
+   */
+  it('counts a confined session, whose transcript is not in the profile store', async () => {
+    const config = scratch('terminaldeck-cost-confined-')
+    const homes = scratch('terminaldeck-device-homes-')
+    const cwd = '/fake/project'
+
+    // The owner's own session in this folder, in the ordinary place.
+    const own = join(config, 'projects', encodeProjectPath(cwd))
+    mkdirSync(own, { recursive: true })
+    appendFileSync(join(own, 'sess-owner.jsonl'), line('o1', 1_000_000))
+
+    // A device that has already run one here — this is what the app's own
+    // `prepareDeviceHome` plus the CLI leave on disk.
+    const device = join(deviceHome(homes, 'dev-a'), 'projects', encodeProjectPath(cwd))
+    mkdirSync(device, { recursive: true })
+    appendFileSync(join(device, 'sess-phone.jsonl'), line('p1', 1_000_000))
+
+    const watcher = new TranscriptWatcher({
+      cwd,
+      configDir: config,
+      deviceHomes: homes,
+      debounceMs: 50,
+      onUpdate: () => undefined,
+    })
+    await watcher.start()
+    const afterScan = watcher.summary()
+    console.log('confined scan:', afterScan.requests, afterScan.sessions.map((s) => s.sessionId))
+    watcher.stop()
+
+    // Both, in one project total. This is the regression: the phone's session
+    // used to be invisible, so the cost pane showed the owner's spend as the
+    // project's spend and the conversation was simply not there.
+    expect(afterScan.sessions.map((s) => s.sessionId).sort()).toEqual(['sess-owner', 'sess-phone'])
+    expect(afterScan.requests).toBe(2)
+  }, 10_000)
+
+  it('notices a device that starts its first session while the pane is open', async () => {
+    /*
+     * A device pairs, starts its first session ever, and the cost pane for that
+     * folder is already open. Nothing about that device's store existed when the
+     * watcher started.
+     *
+     * Driven through `refresh()`, which is the path the app actually uses:
+     * `index.ts` calls `refreshCostWatchers()` from the same hook that tells the
+     * window a session appeared, because the app *made* that home a moment
+     * earlier and does not need the filesystem to tell it. The `addDir` watch on
+     * the device-homes root covers the same case when nothing told us, and it is
+     * deliberately not what this asserts — measured on this Mac, a directory
+     * created in the same tick that a watch became ready is delivered most of
+     * the time and not always, and a user-visible number must not rest on that.
+     */
+    const config = scratch('terminaldeck-cost-newdev-')
+    const homes = scratch('terminaldeck-device-homes-new-')
+    const cwd = '/fake/project'
+    mkdirSync(join(config, 'projects', encodeProjectPath(cwd)), { recursive: true })
+
+    const watcher = new TranscriptWatcher({
+      cwd,
+      configDir: config,
+      deviceHomes: homes,
+      debounceMs: 50,
+      onUpdate: () => undefined,
+    })
+    await watcher.start()
+    expect(watcher.summary().requests).toBe(0)
+
+    // The app makes the home, then spawns; the agent writes its first line some
+    // time later. Both halves are what `refresh()` has to cope with.
+    const store = deviceHome(homes, 'dev-late')
+    const device = join(store, 'projects', encodeProjectPath(cwd))
+    mkdirSync(device, { recursive: true })
+    appendFileSync(join(device, 'sess-late.jsonl'), line('l1', 1_000_000))
+
+    await watcher.refresh()
+    const summary = await until('the new device session to appear', watcher, (s) => s.requests >= 1)
+    console.log('late device:', summary.requests, summary.sessions.map((s) => s.sessionId))
+    expect(summary.sessions.map((s) => s.sessionId)).toEqual(['sess-late'])
+
+    // And it keeps tailing it, rather than reading it once on discovery. This is
+    // the half that proves `refresh` started a *watch* and not just a read.
+    appendFileSync(join(device, 'sess-late.jsonl'), line('l2', 1_000_000))
+    const grown = await until('the append to that session', watcher, (s) => s.requests >= 2)
+    watcher.stop()
+    expect(grown.sessions.map((s) => s.sessionId)).toEqual(['sess-late'])
+  }, 15_000)
+
+  it('counts only this project, not another folder the device worked in or its scratch', async () => {
+    /*
+     * A device's store holds one directory per folder that device has worked in,
+     * and its home also holds its `TMPDIR` — the directory a confined session
+     * writes to every time it runs `git commit`. Neither may reach this
+     * project's numbers.
+     *
+     * Everything is on disk before the watcher starts, and then one append
+     * arrives live. That is deliberate: whether a store that appears *later* is
+     * noticed is a different claim, and the test above owns it. Asking one case
+     * to prove both meant a failure could not say which half had broken.
+     */
+    const config = scratch('terminaldeck-cost-prune-')
+    const homes = scratch('terminaldeck-device-homes-prune-')
+    const cwd = '/fake/project'
+    mkdirSync(join(config, 'projects', encodeProjectPath(cwd)), { recursive: true })
+
+    const store = deviceHome(homes, 'dev-a')
+    const other = join(store, 'projects', encodeProjectPath('/fake/elsewhere'))
+    mkdirSync(other, { recursive: true })
+    appendFileSync(join(other, 'sess-other.jsonl'), line('x1', 1_000_000))
+    appendFileSync(join(homes, 'dev-a', 'tmp', 'sess-noise.jsonl'), line('x2', 1_000_000))
+
+    const mine = join(store, 'projects', encodeProjectPath(cwd))
+    mkdirSync(mine, { recursive: true })
+    appendFileSync(join(mine, 'sess-mine.jsonl'), line('m1', 1_000_000))
+
+    const watcher = new TranscriptWatcher({
+      cwd,
+      configDir: config,
+      deviceHomes: homes,
+      debounceMs: 50,
+      onUpdate: () => undefined,
+    })
+    await watcher.start()
+    const afterScan = watcher.summary()
+    console.log('pruned scan:', afterScan.sessions.map((s) => s.sessionId))
+    expect(afterScan.sessions.map((s) => s.sessionId)).toEqual(['sess-mine'])
+
+    // And the live watch is filtered the same way: an append to the other
+    // project must not arrive as this project's cost.
+    appendFileSync(join(other, 'sess-other.jsonl'), line('x3', 1_000_000))
+    appendFileSync(join(mine, 'sess-mine.jsonl'), line('m2', 1_000_000))
+    const grown = await until('the append to this project', watcher, (s) => s.requests >= 2)
+    watcher.stop()
+    console.log('pruned live:', grown.requests, grown.sessions.map((s) => s.sessionId))
+    expect(grown.sessions.map((s) => s.sessionId)).toEqual(['sess-mine'])
+    expect(grown.requests).toBe(2)
+  }, 15_000)
 
   it('survives a project that has never been opened in Claude Code', async () => {
     const config = scratch('terminaldeck-cost-empty-')

@@ -540,6 +540,39 @@ describe('a paired device', () => {
     expect(CAPABILITIES).toContain('create')
   })
 
+  it('advertises nothing outside `offer`, including the capability nothing else can withhold', async () => {
+    /*
+     * The public demo host, and the one capability it could not otherwise take
+     * away.
+     *
+     * `create`, `upload` and `credential` each have an object behind them, so a
+     * host that lacks the object does not advertise the name. `localhost` has
+     * none — every host can pipe bytes to its own loopback — which means before
+     * `offer` existed there was no way to build a host that did not offer a
+     * stranger a tunnel into whatever it happens to be running. That is exactly
+     * the host `src/headless/demo.ts` builds.
+     *
+     * Both directions are asserted, because a ceiling that could *add* would be
+     * worse than none: naming `upload` with no uploads directory must still
+     * advertise nothing, or the demo could promise a button that only ever
+     * produces a refusal.
+     */
+    const dir = mkdtempSync(join(tmpdir(), 'deck-uploads-'))
+    roots.push(dir)
+
+    const narrowed = await serve({ offer: ['create'], uploadsDir: dir }, creatingSessions())
+    const client = await connect(narrowed.port)
+    client.send(HELLO)
+    const welcome = await client.until((m) => m.t === 'welcome', 'the welcome')
+    expect(welcome.t === 'welcome' && welcome.capabilities).toEqual(['create'])
+
+    const promising = await serve({ offer: ['upload'] })
+    const empty = await connect(promising.port)
+    empty.send(HELLO)
+    const nothing = await empty.until((m) => m.t === 'welcome', 'the welcome')
+    expect(nothing.t === 'welcome' && nothing.capabilities).toEqual([])
+  })
+
   it('advertises `upload` only when it has somewhere to put a file', async () => {
     // Same rule as `create`, and the same failure it is written to prevent: a
     // Send File button on somebody's phone that produces a refusal, because the
@@ -810,6 +843,49 @@ describe('starting a session from a phone', () => {
     expect(sessions.requests).toEqual([
       { deviceId: 'device-1', cwd: undefined, cols: 100, rows: 30 },
     ])
+  })
+
+  it('carries the agent the client asked for all the way to the session layer', async () => {
+    /*
+     * The regression test for a bug that was invisible at every individual
+     * layer. `machines/guest.ts` had been putting `provider` on the wire since
+     * it was written; `parseClientMessage` did not list the field and dropped
+     * it; this hand-off did not mention it either; and the spawn filled the gap
+     * with the desktop's default. A request for `shell` came back as a `claude`
+     * session on a real Windows PC, with nothing logged anywhere, because from
+     * each layer's own point of view nothing had gone wrong.
+     *
+     * Driven over a real socket rather than by calling the handler, because the
+     * drop happened *in* the parse-and-forward path and a test that constructed
+     * a `CreateRequest` by hand would have passed against every version of this
+     * code, including the broken one.
+     */
+    const sessions = creatingSessions()
+    const harness = await serve({}, sessions)
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    client.send({ t: 'create', provider: 'shell' })
+    await client.until((m) => m.t === 'created', 'the new session')
+    expect(sessions.requests).toEqual([
+      { deviceId: 'device-1', cwd: undefined, cols: undefined, rows: undefined, provider: 'shell' },
+    ])
+  })
+
+  it('leaves the agent unset when the client named none, rather than choosing one', async () => {
+    // The other half. A desktop's own default provider is a preference the
+    // person set, and a server that invented `claude` here for every client that
+    // said nothing would quietly take that preference away.
+    const sessions = creatingSessions()
+    const harness = await serve({}, sessions)
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    client.send({ t: 'create' })
+    await client.until((m) => m.t === 'created', 'the new session')
+    expect(sessions.requests[0].provider).toBeUndefined()
   })
 
   it('makes a first-class session: it is in the list, and it can be attached to', async () => {

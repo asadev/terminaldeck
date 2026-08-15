@@ -1,0 +1,52 @@
+# What gets uploaded when the browser client is deployed — see pwa/deploy.sh.
+#
+# The Vercel project's Root Directory is `pwa`, but the CLI uploads from *here*,
+# because the client does not build from `pwa/` alone: `pwa/src/*` imports the
+# sealed channel, the relay wire format, the pairing-link format and the brand
+# from `src/shared/`, deliberately, so that there is one implementation of each
+# rather than a browser copy that agrees with itself and drifts from the rest of
+# the product.
+#
+# Without this file that upload is the whole working tree — 2.7 GB of it, nearly
+# all `ios/`, `android/`, `release/` and `node_modules`. So this is an allowlist
+# written the only way .gitignore syntax permits one: ignore everything at the
+# top level, name back the two directories the build reads, then ignore
+# everything inside `src/` except `shared/`. A negation cannot resurrect a file
+# whose parent directory is ignored, which is why `/src` has to be un-ignored
+# before `/src/*` is ignored again.
+/*
+!/pwa
+!/src
+/src/*
+!/src/shared
+
+# `pwa/src/protocol-client.ts` imports the wire protocol's own definition rather
+# than restating it, which is the same argument `src/shared/` exists for and one
+# the file makes at length. It has not moved into `shared/` yet, so the one file
+# is named here.
+!/src/main
+/src/main/*
+!/src/main/remote
+/src/main/remote/*
+!/src/main/remote/protocol.ts
+
+# The two faces `pwa/src/styles.css` declares are the desktop's, by path —
+# `../../src/renderer/assets/fonts/*.woff2` — so the client does not ship a
+# second copy of a font the product already has. Vite resolves those at build
+# time and fingerprints them into `dist/assets`; left out of the upload, the
+# build does not fail, it *warns* and emits the URLs unchanged, which is a live
+# page whose type falls back to whatever the phone happens to have. So the two
+# files come too, and nothing else from the renderer does.
+!/src/renderer
+/src/renderer/*
+!/src/renderer/assets
+/src/renderer/assets/*
+!/src/renderer/assets/fonts
+
+# Built and installed by Vercel from pwa/package-lock.json. Uploading either
+# would ship this Mac's copy — the wrong architecture for the build container in
+# the first case, and in the second a `dist/` that predates the sources beside
+# it, which is exactly the "folder somebody uploaded by hand" this deployment is
+# not allowed to be.
+/pwa/node_modules
+/pwa/dist

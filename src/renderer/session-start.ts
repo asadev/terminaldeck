@@ -147,14 +147,19 @@ export interface SpawnRequest {
   provider: ProviderId
   resume: boolean
   /**
-   * Which profile the user asked this session to run as, or null when the
+   * Which account the user asked this session to run as, or null when the
    * chosen agent has no login this app could isolate even in principle.
    *
-   * A non-null id is a *request*, not a guarantee. Applying it means spawning
-   * the CLI with a redirected config directory, which is `sessionEnv()` in
-   * `main/profiles.ts` — and nothing calls that yet. `CreateSessionInput` has
-   * no field to carry this, so today it is recorded and shown, not enforced.
-   * The dialog says as much rather than implying the login was switched.
+   * It is enforced, and this comment used to say it was not. `CreateSessionInput`
+   * carries the field, `startSession` in `main/host-core.ts` resolves it through
+   * `resolveProfile` and hands the result to `sessionEnv()`, and the PTY spawns
+   * with the redirected config directory. The resolved account comes back on
+   * `SessionMeta`, which is what the account chip and the session rows read —
+   * so what is on screen is the account the process actually got, not the one
+   * that was asked for.
+   *
+   * Null still means "resolve it", not "no account": the main process then
+   * applies the folder's account, then the default one.
    */
   profileId: string | null
   cols: number

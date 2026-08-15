@@ -44,6 +44,7 @@ import {
 import { Sidebar } from './shell/Sidebar'
 import { WindowToolbar } from './shell/WindowToolbar'
 import { FolderChip } from './shell/FolderChip'
+import { AccountChip } from './shell/AccountChip'
 import { PanelView } from './shell/PanelView'
 import { useSidebar } from './shell/useSidebar'
 import { PANELS, panelSpec, type PanelId } from './shell/panels'
@@ -193,6 +194,13 @@ function Workspace() {
   const terminalFontFamily = stringSetting(settings, 'appearance.terminalFontFamily')
   const copyOnSelect = booleanSetting(settings, 'general.copyOnSelect')
   const autoNameSessions = booleanSetting(settings, 'general.autoNameSessions')
+  /*
+   * Which agent a new session would run. Read here as well as inside
+   * `newSessionIn` because the account chip has to describe the same decision
+   * before it is made — an account only means something to an agent that reads
+   * a config directory, and this setting is what decides that.
+   */
+  const defaultProvider = stringSetting(settings, 'general.defaultProvider')
 
   /**
    * Any app-level dialog being open.
@@ -215,6 +223,15 @@ function Workspace() {
       label: session.title,
       status: session.status,
       projectPath: session.projectPath,
+      // The account this session actually runs as, filled in by the main
+      // process at spawn. Absent for a shell and for any agent whose login this
+      // app cannot isolate — see `SessionMeta.profileId`. The sidebar shows it
+      // only when there is more than one in play; two sessions in one folder
+      // under two accounts have to be tellable apart, and one account on every
+      // row is noise.
+      ...(session.profileId && session.profileName
+        ? { account: { id: session.profileId, name: session.profileName } }
+        : {}),
       closable: true,
     })),
     /*
@@ -499,7 +516,7 @@ function Workspace() {
   )
 
   const newSessionIn = useCallback(
-    async (path: string, resume = false) => {
+    async (path: string, resume = false, profileId?: string) => {
       /*
        * The default agent is *sent*, not assumed.
        *
@@ -516,6 +533,16 @@ function Workspace() {
         rows: 30,
         resume,
         ...(isProviderId(provider) ? { provider } : {}),
+        /*
+         * The account, when one was picked for *this* session.
+         *
+         * Left off otherwise, and that is not the same as sending null: absent
+         * means "resolve it", and the main process then applies this folder's
+         * account, or the default one, in that order. Sending a fixed id from
+         * here would freeze today's answer and quietly ignore a per-folder
+         * account the user set afterwards. `profiles.ts` owns that chain.
+         */
+        ...(profileId ? { profileId } : {}),
       })
       // Remembered here rather than at the call sites, because every way of
       // starting a session goes through this function and only one of them
@@ -538,15 +565,39 @@ function Workspace() {
     [addProject, addSession, showTab, settings],
   )
 
-  const openProject = useCallback(async () => {
-    const path = await window.deck.pickProjectFolder()
-    if (!path) return
-    // Through `newSessionIn`, so the first session in a project starts on the
-    // same agent every other one does — and is registered the same way. This
-    // call used to build its own request and left the provider off it.
-    await newSessionIn(path)
-    setOnboardingDone(true)
-  }, [newSessionIn])
+  /**
+   * Choose a folder, then start a session in it — optionally under a chosen
+   * account.
+   *
+   * The account matters on exactly one path and it is the one that would have
+   * been missed: signing an account in on a machine with nothing open. There is
+   * no folder to fall back on there, so the chooser comes up first, and the
+   * account has to survive that detour or the session opens under the wrong
+   * login and the sign-in lands on the wrong account.
+   */
+  const openProjectAs = useCallback(
+    async (profileId?: string) => {
+      const path = await window.deck.pickProjectFolder()
+      if (!path) return
+      // Through `newSessionIn`, so the first session in a project starts on the
+      // same agent every other one does — and is registered the same way. This
+      // call used to build its own request and left the provider off it.
+      await newSessionIn(path, false, profileId)
+      setOnboardingDone(true)
+    },
+    [newSessionIn],
+  )
+
+  /*
+   * The no-argument form, which is what every button binds to.
+   *
+   * Separate on purpose: `onClick={openProject}` hands the handler a
+   * MouseEvent as its first argument, and a function whose first parameter is
+   * an account id would take that event as an account.
+   */
+  const openProject = useCallback(() => {
+    void openProjectAs()
+  }, [openProjectAs])
 
   /**
    * ⌘T and the sidebar's primary button: a session, immediately.
@@ -562,12 +613,15 @@ function Workspace() {
    * New session put a folder chooser on screen instead of a session.
    */
   const newSession = useCallback(
-    (path?: string, resume = false) => {
+    (path?: string, resume = false, profileId?: string) => {
       const target = path ?? activeProjectPath ?? lastFolderRef.current
-      if (target) void newSessionIn(target, resume)
-      else void openProject()
+      if (target) void newSessionIn(target, resume, profileId)
+      // No folder anywhere — a first launch. The chooser is not "a dialog in
+      // the way" at that point, it is the only question left, and the account
+      // travels through it.
+      else void openProjectAs(profileId)
     },
-    [activeProjectPath, newSessionIn, openProject],
+    [activeProjectPath, newSessionIn, openProjectAs],
   )
 
   const newBrowserTab = useCallback(() => {
@@ -1456,20 +1510,33 @@ function Workspace() {
     : activeTab
 
   const heading = showingPanel && panel
-    ? { title: panelSpec(panel).label, subtitle: panelSpec(panel).blurb, folder: null }
+    ? { title: panelSpec(panel).label, subtitle: panelSpec(panel).blurb, folder: null, account: null }
     : headingTab
       ? {
           title: labelOf(headingTab),
           subtitle: null,
           // The path is a control now rather than a caption — see FolderChip.
           folder: headingTab.kind === 'session' ? headingTab.projectPath ?? null : null,
+          // And so is the account, beside it — see AccountChip. Null for a
+          // session that has none, where the chip falls back to saying which
+          // account a *new* session here would use.
+          account: headingTab.kind === 'session' ? headingTab.account ?? null : null,
         }
       // No subtitle. "Nothing open yet." is the sidebar's line, and it is there to
       // explain why the list beneath it is empty — a job this heading does not
       // share. Saying it here too put the same sentence on screen twice, a few
       // centimetres apart, while the page in the middle was already explaining
       // the same emptiness with a button. The title alone is enough.
-      : { title: BRAND.name, subtitle: null, folder: null }
+      : { title: BRAND.name, subtitle: null, folder: null, account: null }
+
+  /**
+   * The folder the heading's two chips act on.
+   *
+   * Bound to a `const` rather than read off `heading` at each use so it narrows
+   * inside the callbacks: a property access is re-widened inside a closure, and
+   * both chips hand this folder to a callback that starts a session in it.
+   */
+  const headingFolder = heading.folder
 
   /**
    * What the mode switch is showing, and what it will not offer.
@@ -1540,13 +1607,38 @@ function Workspace() {
           title={heading.title}
           subtitle={heading.subtitle}
           meta={
-            heading.folder ? (
-              <FolderChip
-                path={heading.folder}
-                options={projects}
-                onPick={(path) => newSession(path)}
-                onBrowse={() => void openProject()}
-              />
+            headingFolder ? (
+              /* Where, and who — one line, both one click away, both before
+                 anything has been typed. New session still starts immediately
+                 in the last folder; these are how that decision is changed. */
+              <div className="toolbar-chips">
+                <FolderChip
+                  path={headingFolder}
+                  options={projects}
+                  onPick={(path) => newSession(path)}
+                  onBrowse={() => void openProject()}
+                />
+                <span className="toolbar-chip-sep" aria-hidden="true" />
+                <AccountChip
+                  current={heading.account}
+                  projectPath={headingFolder}
+                  /*
+                   * The agent a session started from this chip would run — the
+                   * same setting `newSessionIn` sends, read the same way, so the
+                   * menu cannot promise an account that the spawn then drops.
+                   * Undefined when the stored value is not a provider id, which
+                   * is the honest answer to "which agent" and leaves the menu
+                   * saying nothing rather than explaining a reason it has not
+                   * established. Spelled as a plain prop rather than a
+                   * conditional spread so `wiring.test.ts` can see it: a spread
+                   * is invisible to that guard, and this is exactly the seam it
+                   * was written to watch.
+                   */
+                  provider={isProviderId(defaultProvider) ? defaultProvider : undefined}
+                  onPick={(accountId) => newSession(headingFolder, false, accountId)}
+                  onManage={() => openSettings('profiles')}
+                />
+              </div>
             ) : null
           }
           /*
@@ -1590,6 +1682,17 @@ function Workspace() {
         open={prefsOpen}
         initialSection={prefsSection}
         onClose={() => setPrefsOpen(false)}
+        /*
+         * Signing an account in means opening a session under it, because the
+         * agent's login runs inside its own terminal and this app never handles
+         * a credential. The settings window cannot do that on its own — the
+         * session store lives here — so Accounts asks, and this closes the
+         * window and starts the session the user is about to log in with.
+         */
+        onStartSession={({ profileId }) => {
+          setPrefsOpen(false)
+          newSession(undefined, false, profileId)
+        }}
         // Every behavioural setting is read from one copy up here, so a change
         // made in the dialog has to land in it — otherwise the next ⌘W, the
         // next banner and the next terminal all disagree with what is on

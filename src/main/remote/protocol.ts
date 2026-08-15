@@ -286,6 +286,13 @@ export const MAX_INPUT_BYTES = 16 * 1024
  * Scrollback can be megabytes. Sent whole it would be one JSON string the phone
  * has to parse in a single tick — visibly janky on a phone — and it would blow
  * past whatever inbound cap the client applies to us in return.
+ *
+ * Bytes **of the encoded frame**, not of the text inside it. `chunkOutput`
+ * spends this budget through `jsonCostOf`, which is the difference between a
+ * cap that holds and one that holds only for ASCII: a terminal's output is
+ * escape sequences, and `JSON.stringify` writes a bare control character as six
+ * characters. Half of `MAX_MESSAGE_BYTES`, so the envelope and any client
+ * counting slightly differently both fit in the headroom.
  */
 export const OUTPUT_CHUNK_BYTES = 32 * 1024
 
@@ -299,6 +306,19 @@ export const OUTPUT_CHUNK_BYTES = 32 * 1024
  * be the authority on what a path may be.
  */
 export const MAX_CWD_BYTES = 1024
+
+/**
+ * Longest `create.provider`.
+ *
+ * The field names an agent CLI — `claude`, `codex`, `gemini`, `shell` — and the
+ * longest of those is six characters. Thirty-two leaves room for a name nobody
+ * has thought of yet while keeping the value small enough that refusing it costs
+ * nothing; this parser does not know the list and deliberately does not check
+ * against one. Whether a name is one this desktop can actually start is
+ * `remote/session-create.ts`'s question, answered against the real provider
+ * table, and the answer is a sentence rather than a closed socket.
+ */
+export const MAX_PROVIDER_LENGTH = 32
 
 /** Terminal sizes a phone can plausibly ask for; anything else is a bug or an attack. */
 export const MIN_COLS = 20
@@ -435,24 +455,49 @@ export type ClientMessage =
    * that paints a box on startup paints it at the size it will be read at.
    * Both or neither, never one.
    *
+   * ## `provider`, and the bug that put it here
+   *
+   * This field used to be absent, with a paragraph saying it was absent on
+   * purpose: the phone has no honest way to know which agent CLIs are installed
+   * on the far machine, so a picker built from a guess would offer choices that
+   * fail. That argument is still true about a *picker*, and it was the wrong
+   * conclusion, because the desktop-to-desktop client had already grown a
+   * chooser and `machines/guest.ts` had been putting `provider` on the wire ever
+   * since. TypeScript never complained — the value goes on through a spread,
+   * which does not trigger an excess-property check — and this parser copied
+   * across the fields it knew and dropped the rest without a word.
+   *
+   * Measured on a real Windows PC: asking for `shell` produced a `claude`
+   * session. Nothing logged it, because from the desktop's side nothing had
+   * happened — the frame simply never carried the field. That is the exact shape
+   * of failure this file exists to prevent, arriving through the one gap a
+   * parser has: a field it does not know about is indistinguishable from a field
+   * that was never sent.
+   *
+   * So it travels, optionally, and an older client that sends nothing is
+   * unaffected — it gets the desktop's own default provider, exactly as before.
+   * A name this desktop cannot start is **refused with a sentence**, never
+   * quietly swapped for another agent. And the `created` frame reports the
+   * provider the session actually got, which is what a client should display: a
+   * desktop whose Claude CLI is not installed still answers a `claude` request
+   * with a shell, and says so in the answer rather than in silence.
+   *
    * Deliberately **not** here:
    *
    *  - **A title.** Every other session in this app is titled after its folder,
    *    by `PtyManager`, and a phone-chosen title would be the one tab in the
    *    desktop that does not mean what the others mean. It would also be
    *    attacker-chosen display text in the desktop's own chrome, for nothing.
-   *  - **A provider.** The phone has no honest way to know which agent CLIs are
-   *    installed on the Mac — the session list says what is *running*, which is
-   *    a different question — so a picker built from it would offer choices
-   *    that fail. The desktop's own default provider is the right answer and is
-   *    the answer its own button uses.
    *  - **`resume`.** Continuing the newest conversation in a folder is real and
    *    the desktop supports it, but only for providers that have a resume flag;
    *    a toggle that silently does nothing for a plain shell is a fake feature.
    *    Resuming a *session* — the thing the phone actually wants — is `attach`,
-   *    which has worked since v1 and replays the scrollback.
+   *    which has worked since v1 and replays the scrollback. `machines/guest.ts`
+   *    sends this one too and it is still dropped here; that is a live gap,
+   *    named rather than closed, because closing it means answering the
+   *    per-provider question above and not merely widening a type.
    */
-  | { t: 'create'; cwd?: string; cols?: number; rows?: number }
+  | { t: 'create'; cwd?: string; cols?: number; rows?: number; provider?: string }
   /* ---- capability `localhost`. Refused outright when it is not advertised. -- */
   /** What is listening on the Mac right now. */
   | { t: 'ports' }
@@ -841,6 +886,20 @@ const BASE64_RE = /^[A-Za-z0-9+/]*={0,2}$/
  */
 const HEX_RE = /^[0-9a-fA-F]+$/
 
+/**
+ * A plausible agent name on `create.provider`.
+ *
+ * Every id this app has — `claude`, `codex`, `gemini`, `shell` — is a bare
+ * lowercase word, and a name that is not shaped like one is not a name any
+ * client of ours produces. Deliberately narrower than "a string this parser can
+ * carry": the value selects a row in the provider table and, through it, a
+ * command that gets executed, and the cheapest place to say "that is not an
+ * identifier" is before anything has looked it up. Whether the identifier names
+ * an agent this desktop actually has is a different question and a different
+ * file — see the note in the `create` case.
+ */
+const PROVIDER_RE = /^[a-z][a-z0-9-]*$/
+
 /** A port a phone may name. Zero and anything past 65535 are not ports. */
 function portNumber(value: unknown): number | null {
   return whole(value, 1, 65535)
@@ -1195,6 +1254,29 @@ export function parseClientMessage(raw: unknown): ParseResult {
         // project list. See the note at the top of this file.
         message.cwd = rawCwd
       }
+      // Read once, for the reason spelled out on `input.data`. Shape only: this
+      // parser does not hold the provider table and must not appear to — a name
+      // it does not recognise is a *refusal with a sentence* from the session
+      // layer, not a closed socket from here, because the person who typed it is
+      // holding a phone and "the connection dropped" tells them nothing.
+      //
+      // The character class is what stops this being a hole rather than a field.
+      // The value ends up selecting a row in a table and, through it, a command
+      // to execute, so anything that is not a bare lowercase identifier is
+      // refused outright rather than trimmed: a name with a slash, a space or a
+      // NUL in it has no legitimate sender and every trimming rule invents a
+      // *different* legal-looking name out of a hostile one.
+      const rawProvider = parsed.provider
+      if (rawProvider !== undefined) {
+        if (typeof rawProvider !== 'string' || rawProvider === '') {
+          return bad('create with an unusable provider')
+        }
+        if (rawProvider.length > MAX_PROVIDER_LENGTH) {
+          return tooLarge('create with a provider over the name limit')
+        }
+        if (!PROVIDER_RE.test(rawProvider)) return bad('create with an unusable provider')
+        message.provider = rawProvider
+      }
       const rawCols = parsed.cols
       const rawRows = parsed.rows
       if (rawCols === undefined && rawRows === undefined) return { ok: true, message }
@@ -1386,10 +1468,44 @@ export function serialize(message: ClientMessage | ServerMessage): string {
   return JSON.stringify(message)
 }
 
-/** UTF-8 cost of one code point, matching `utf8Length`. */
-function costOf(code: number): number {
+/**
+ * What one code point costs *inside a JSON string*, in bytes of frame.
+ *
+ * This is not the same number as `utf8Length` spends on it, and the difference
+ * is the whole defect this function was rewritten for. `chunkOutput` fills a
+ * budget denominated in bytes on the wire, but nothing puts a bare string on
+ * the wire — `serialize` wraps it in `{"t":"output","id":…,"data":"…"}`, and
+ * `JSON.stringify` is not a byte-for-byte copy of what it is given:
+ *
+ *   - `"` and `\` become two characters each,
+ *   - the five escapes with short forms (`\b \t \n \f \r`) become two,
+ *   - **every other C0 control becomes six** — `\u001b`, and a terminal’s
+ *     output is made of those. A cursor move is `ESC [ 1 2 ; 3 4 H`; a
+ *     colour change is another. Escape alone is one byte counted and six
+ *     bytes sent,
+ *   - a lone surrogate becomes six as well, because `JSON.stringify` has
+ *     produced well-formed output since ES2019 and escapes what it cannot
+ *     encode.
+ *
+ * Counted as one byte each, 32 KiB of escape-heavy scrollback serialises to as
+ * much as 192 KiB of frame — three times `MAX_MESSAGE_BYTES`, which is the cap
+ * *every* client on this wire enforces on what it receives. The phone does not
+ * render a slow frame in that case; it refuses the frame and closes the socket,
+ * and what a person sees is a session that drops whenever an agent draws
+ * something colourful. So the budget is spent in the currency it is denominated
+ * in: bytes of JSON, not bytes of text.
+ */
+function jsonCostOf(code: number): number {
+  if (code < 0x20) {
+    // \b \t \n \f \r have two-character forms; the rest of C0 has none.
+    return code === 0x08 || code === 0x09 || code === 0x0a || code === 0x0c || code === 0x0d ? 2 : 6
+  }
+  if (code === 0x22 || code === 0x5c) return 2
   if (code < 0x80) return 1
   if (code < 0x800) return 2
+  // A surrogate reaching here is unpaired — `codePointAt` returns the pair as
+  // one code point above 0xffff — and `JSON.stringify` writes it as `\udXXX`.
+  if (code >= 0xd800 && code <= 0xdfff) return 6
   if (code < 0x10000) return 3
   return 4
 }
@@ -1397,16 +1513,28 @@ function costOf(code: number): number {
 /**
  * Split output into frames the phone can parse without stalling.
  *
- * Cut on code-point boundaries and measured in UTF-8 bytes, which is what the
- * limit is denominated in and what the far end's own cap counts. Slicing UTF-16
- * at a fixed offset instead would eventually land between the halves of a
- * surrogate pair: `JSON.stringify` encodes the halves happily, and the phone
+ * Cut on code-point boundaries and measured in bytes of the JSON frame each
+ * piece ends up inside, which is what the far end's own cap counts. Slicing
+ * UTF-16 at a fixed offset instead would eventually land between the halves of
+ * a surrogate pair: `JSON.stringify` encodes the halves happily, and the phone
  * renders two replacement characters — one corrupted glyph per 32 KiB of
  * scrollback, which is exactly the kind of defect nobody traces back to here.
+ *
+ * There is no `if (!overBytes(data, size)) return [data]` shortcut any more,
+ * and its absence is deliberate rather than an oversight. That test measured
+ * raw UTF-8, so a burst that was *under* the budget by that measure and three
+ * times over it once escaped was handed back whole, in one frame, without ever
+ * reaching the loop below — the largest frames this function produced were the
+ * ones it decided not to look at. The loop answers the same in one pass: a
+ * string that fits comes back out of `slice(0)` unsplit.
+ *
+ * The envelope around the piece — the type, the session id, the field names —
+ * is not counted. It is under a hundred bytes against a 32 KiB budget and a
+ * 64 KiB cap, so the headroom absorbs it; what it must never absorb is a
+ * multiplier, which is what escaping is.
  */
 export function chunkOutput(data: string, size = OUTPUT_CHUNK_BYTES): string[] {
   if (data === '') return []
-  if (!overBytes(data, size)) return [data]
 
   const out: string[] = []
   let start = 0
@@ -1415,7 +1543,7 @@ export function chunkOutput(data: string, size = OUTPUT_CHUNK_BYTES): string[] {
   while (at < data.length) {
     const code = data.codePointAt(at) as number
     const units = code > 0xffff ? 2 : 1
-    const cost = costOf(code)
+    const cost = jsonCostOf(code)
     if (bytes + cost > size && at > start) {
       out.push(data.slice(start, at))
       start = at
@@ -1537,6 +1665,32 @@ export function parseServerMessage(raw: unknown): ServerParse {
   } catch {
     return { ok: false, reason: 'not JSON' }
   }
+  return parseServerFrame(parsed)
+}
+
+/**
+ * The same reader, given the decoded value instead of the text.
+ *
+ * `parseClientMessage` has taken `unknown` from the start for this reason — an
+ * in-process bridge hands over an object and there is no frame to measure — and
+ * this is the same door on the other direction of the wire, split out rather
+ * than duplicated so there is still exactly one place that says what a host may
+ * say.
+ *
+ * It exists because a client that has to look at a frame *before* delegating
+ * was paying for a second `JSON.parse` of the same text on every inbound
+ * message: `pwa/src/protocol-client.ts` probes for `credential.request`, which
+ * this parser deliberately does not cover, and then handed the string here to be
+ * parsed all over again. Parsing once and branching costs nothing and is
+ * measurably less than parsing twice on a socket carrying a terminal.
+ *
+ * The size cap belongs to whoever holds the text — the string cannot be
+ * measured once it is an object, and a caller that decoded it has already spent
+ * what the cap exists to bound. `parseServerMessage` above applies it; the PWA
+ * applies it before its own single parse. A new caller of this function that
+ * skips it is a caller that will happily parse a megabyte.
+ */
+export function parseServerFrame(parsed: unknown): ServerParse {
   if (!isRecord(parsed)) return { ok: false, reason: 'not an object' }
 
   switch (parsed.t) {

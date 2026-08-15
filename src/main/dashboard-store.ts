@@ -13,11 +13,6 @@ import { app } from 'electron'
  * writes and hands back whatever it read. Repair, migration and collision
  * fixing live in `src/renderer/dashboard/layout.ts` beside their tests, and the
  * main-process bundle has no reason to reach into renderer code to do them.
- *
- * The sentence above used to begin "Like `board-store.ts`" — a file deleted
- * with the task board it served. A comparison to something that no longer
- * exists reads as a missing file rather than as prose that outlived its
- * subject, and the next person to look for it spends the search either way.
  */
 
 /** Refuse anything larger. A real layout is a few hundred bytes. */

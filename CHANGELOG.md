@@ -181,6 +181,27 @@ host**.
   to "which session does the sidebar name", and the answer is the focused pane.
   ⌘D splits, the divider drags, and the sidebar follows focus.
 
+- **A restored session comes back with its conversation on the screen**, not
+  just in the model's context. Everything already survived a quit except the
+  picture — `claude --continue` re-reads the whole transcript, while scrollback
+  lived only in memory and died with the process, so a reopened tab was an empty
+  terminal in front of a fully-contexted session. That works and it looks
+  identical to having lost the lot.
+
+  The transcript the restore decided to continue is read back through the same
+  reader chat mode uses and painted above the session's own output. It is a
+  read, never a re-run: nothing is sent to the CLI and no command re-executes.
+  It is bounded to the last 800 lines of prose and says at the top that the rest
+  is in the transcript rather than pretending the buffer is whole; it is dim,
+  ruled off at both ends, and never ends in anything that could be mistaken for a
+  prompt. Nothing is summarised — a generated summary would replace real history
+  with a paraphrase, which is the loss this exists to prevent.
+
+  The text goes into the session's scrollback buffer rather than into the
+  process, so it reaches a phone that attaches later already flagged as replayed
+  output, and the headless host — the one that restarts on its own, where WSL
+  takes the whole process down with the last terminal — paints it too.
+
 ### Changed
 
 - **The accent is blue, taken from the app icon rather than invented**, and dark

@@ -589,7 +589,16 @@ export function createProfile(name: string, options: CreateProfileOptions = {}):
     name: clean,
     configDir,
     system: false,
-    color: PROFILE_COLORS[state.profiles.length % PROFILE_COLORS.length],
+    /*
+     * Round-robin, starting *after* the system profile's colour.
+     *
+     * `systemProfile()` wears `PROFILE_COLORS[0]`, and it is not in
+     * `state.profiles` — so indexing by the array's length gave the first
+     * account a person creates the same dot as their own install. Seen on
+     * screen the moment the accounts list had two rows in it: two identical
+     * blue dots, in the one place whose whole job is telling two logins apart.
+     */
+    color: PROFILE_COLORS[(state.profiles.length + 1) % PROFILE_COLORS.length],
     createdAt: Date.now(),
     lastUsedAt: null,
   }
@@ -724,7 +733,21 @@ export interface ProfileStatus {
   id: string
   /** The config directory exists on disk. */
   exists: boolean
-  /** A `.claude.json` is present, i.e. the CLI has run under this profile. */
+  /**
+   * A `.claude.json` is present, i.e. the CLI has run under this profile.
+   *
+   * Not the same thing as "this profile has been used", and the difference is
+   * newer than this field: `profiles-signin.ts` runs `claude auth status` under
+   * the profile's directory to find out whether it is signed in, and the CLI
+   * creates `.claude.json` on the way past — verified by running it against a
+   * fresh directory, which came back `{"loggedIn": false}` and left a
+   * `.claude.json`, a lock file and a `backups/` folder behind. So one visit to
+   * the Accounts screen flips this to true for every account listed.
+   *
+   * `lastUsedAt` on the profile is the honest answer to "has this been used":
+   * it is written by `markProfileUsed` when a session actually spawns, and by
+   * nothing else.
+   */
   initialized: boolean
   /**
    * Login state is deliberately absent. On macOS credentials live in the OS

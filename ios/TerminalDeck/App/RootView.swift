@@ -65,6 +65,9 @@ struct RootView: View {
         .sheet(isPresented: $model.showingGitHub) {
             GitHubAccountView(model: model) { model.showingGitHub = false }
         }
+        .sheet(isPresented: $model.showingAlerts) {
+            AlertsView(model: model) { model.showingAlerts = false }
+        }
         /*
          * A machine asking this phone for a GitHub login.
          *

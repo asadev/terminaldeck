@@ -83,8 +83,22 @@ describe('with nothing wired', () => {
   it('says so instead of throwing when a channel is missing', () => {
     // The realistic case while the preload is being wired: the window opens,
     // and the sections that need a channel explain themselves.
-    const html = render('profiles')
+    const html = render('setup')
     expect(html).toContain('not available in this build yet')
+  })
+
+  it('says so for a pane that resolves its own bridge, in its own words', () => {
+    /*
+     * Accounts is the third pane — after Remote and Power — that reads channels
+     * off `window.deck` rather than the settings bridge, because what it needs
+     * is not a setting: a list of logins, and one spawn of the agent per login
+     * to find out which of them are signed in. This case used to be `profiles`
+     * with the shared "not available in this build yet" sentence, and it is
+     * kept as a case rather than dropped: a settings pane with no bridge must
+     * still render an explanation, whichever bridge it was looking for.
+     */
+    const html = render('profiles')
+    expect(html).toContain('Accounts are not wired into this window')
   })
 
   it('still renders the generated controls, which need no channel to draw', () => {

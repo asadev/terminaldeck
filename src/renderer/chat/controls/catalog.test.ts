@@ -4,8 +4,8 @@ import {
   describeControl,
   displayValue,
   EFFORT_OPTIONS,
-  FOLDED_CONTROLS,
   isCurrent,
+  MENU_CONTROLS,
   MODEL_OPTIONS,
   optionsFor,
   PERMISSION_OPTIONS,
@@ -49,20 +49,30 @@ describe('what the row is allowed to offer', () => {
   })
 })
 
-describe('what stays on the composer and what folds away', () => {
-  it('places every control in exactly one of the two lists', () => {
-    // The point of the pairing. Folding a control away is a layout decision;
-    // dropping it from both lists is a feature quietly leaving the app, and it
-    // would not fail a single one of that control's own tests.
-    const placed = [...PRIMARY_CONTROLS, ...FOLDED_CONTROLS]
-    expect([...placed].sort()).toEqual([...ALL].sort())
-    expect(new Set(placed).size).toBe(placed.length)
-  })
-
+describe('what the panel holds and what also gets a chip', () => {
   it('keeps the two a session reaches for on the box itself', () => {
     // Model changes per task, permission per phase of the work. Effort is set
     // once if ever, and fast mode usually cannot even be read.
     expect(PRIMARY_CONTROLS).toEqual(['model', 'permission'])
+  })
+
+  it('lists every control in the Options panel, once each', () => {
+    // The regression this pins, in the words it was reported in: "all the
+    // options you have actually removed". Two controls were on the row, two
+    // were behind a button called "More", and nothing on screen named what
+    // "More" held — so a panel that lists only the remainder is the shape that
+    // failed. A control dropped from this list leaves the app while every one
+    // of its own tests keeps passing, which is the failure this file's
+    // neighbours exist to prevent.
+    expect([...MENU_CONTROLS].sort()).toEqual([...ALL].sort())
+    expect(new Set(MENU_CONTROLS).size).toBe(MENU_CONTROLS.length)
+  })
+
+  it('keeps every chip on the row inside the panel as well', () => {
+    // A control reachable only from the row is a control that disappears the
+    // next time the row is shortened for being busy — which is exactly how the
+    // last two went missing.
+    for (const control of PRIMARY_CONTROLS) expect(MENU_CONTROLS).toContain(control)
   })
 
   it('names and describes every control, so none is a bare icon', () => {

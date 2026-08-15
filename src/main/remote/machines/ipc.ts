@@ -14,6 +14,13 @@
  * of them believed — a pairing screen saying a code is valid while the machine
  * refuses it.
  *
+ * Sharing the desk is also what makes the two codes *behave* the same. It did
+ * not always: this file published a rendezvous beacon for the code it minted and
+ * `remote:pair` published nothing, so the phone panel's code could not be looked
+ * up by anybody typing it. Publishing now belongs to the desk — `desk.show`
+ * mints and claims the slot in one call — so there is one code, one slot, and no
+ * second way to publish one.
+ *
  * ## The bug class this file is written against
  *
  * "Built, tested, and never wired to boot." Every paired machine is connected
@@ -27,9 +34,9 @@ import { DEFAULT_RELAY_URL } from '../../../shared/relay-wire'
 import type { InvokeRegistrar } from '../../ipc-seam'
 import type { PairingToken } from '../device-auth'
 import type { PairingDesk, RemoteStatus } from '../server'
-import { createMachineLink, describeThisMachine, type MachineLink, type MachineLinkState } from './guest'
+import { createMachineLink, type MachineLink, type MachineLinkState } from './guest'
 import { pairWithCode, type PairResult } from './pair'
-import { startBeacon, type Beacon, type MachineOffer } from './rendezvous'
+import { offerFrom } from './rendezvous'
 import { MachineStore, type Machine } from './store'
 
 /**
@@ -67,28 +74,18 @@ export interface MachinesView {
   blocked: string | null
 }
 
-/** What the host end of a code needs to publish about itself. */
-function offerFrom(status: RemoteStatus): MachineOffer | null {
-  const relay = status.relay
-  if (relay === null || !relay.connected || relay.hostId === '' || relay.publicKey === '') return null
-  const me = describeThisMachine()
-  return {
-    relayUrl: relay.url,
-    hostId: relay.hostId,
-    // Re-encoded rather than passed through. `RelayState` publishes base64url
-    // because it goes into a URL; the offer is JSON inside a sealed frame and
-    // `parseOffer` decodes plain base64. Two spellings of one key is exactly the
-    // kind of thing that works on the machine it was written on.
-    publicKey: Buffer.from(relay.publicKey, 'base64url').toString('base64'),
-    name: me.name,
-    platform: me.platform,
-  }
-}
-
 export interface MachinesIpcDeps {
   /** Where `machines.json` lives. The same directory the trust store uses. */
   storageDir: string
-  /** The one live pairing code, shared with the host half. See above. */
+  /**
+   * The one live pairing code, shared with the host half. See above.
+   *
+   * It is also the only thing here that publishes a rendezvous: `desk.show`
+   * mints the code and claims its slot in one call, so this screen and the
+   * phone pairing on the Remote panel produce codes that behave identically.
+   * A test that must not open a socket injects its beacon seam into
+   * `pairingDesk`, not here.
+   */
   desk: PairingDesk
   /** Read this desktop's own relay state, for the address inside an offer. */
   status(): RemoteStatus
@@ -100,8 +97,6 @@ export interface MachinesIpcDeps {
   pair?: typeof pairWithCode
   /** Seam for the tests, so a link can be driven without a socket. */
   createLink?: typeof createMachineLink
-  /** Seam for the tests, so publishing a code opens no socket. */
-  createBeacon?: typeof startBeacon
   now?: () => number
 }
 
@@ -118,12 +113,8 @@ export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcD
   const now = deps.now ?? Date.now
   const store = new MachineStore(deps.storageDir, { now })
   const makeLink = deps.createLink ?? createMachineLink
-  const makeBeacon = deps.createBeacon ?? startBeacon
   const pair = deps.pair ?? pairWithCode
   const links = new Map<string, MachineLink>()
-
-  let beacon: Beacon | null = null
-  let beaconTimer: ReturnType<typeof setTimeout> | null = null
 
   function relayUrl(): string {
     // This desktop's own relay when it has one, because two machines belonging
@@ -152,7 +143,7 @@ export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcD
             retryAt: null,
           },
       ),
-      blocked: offerFrom(deps.status()) === null
+      blocked: offerFrom(deps.status().relay) === null
         ? 'This machine is not connected to the relay yet, so it cannot show or read a pairing code. Turn remote access on and wait for it to connect.'
         : null,
     }
@@ -189,13 +180,6 @@ export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcD
     return link
   }
 
-  function stopBeacon(): void {
-    if (beaconTimer !== null) clearTimeout(beaconTimer)
-    beaconTimer = null
-    beacon?.stop()
-    beacon = null
-  }
-
   /* ----------------------------------------------------------- the channels */
 
   ipcMain.handle('machines:list', (): MachinesView => view())
@@ -203,15 +187,24 @@ export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcD
   /**
    * Put a code on screen and answer it for as long as it is there.
    *
-   * The desk mints it — the same desk `remote:pair` uses, so there is one code
-   * — and the beacon publishes this machine's address at the slot that code
-   * names. Refused outright when the relay is down, because a code nobody can
-   * look up is a code that fails after somebody has typed it.
+   * One call, because it is one thing: `desk.show` mints the code — the same
+   * desk `remote:pair` uses, so there is one code — and claims the rendezvous
+   * slot that code names, publishing this machine's address there. It waits for
+   * the slot before answering, because a code shown while its rendezvous is
+   * still dialling is a code that tells the person who typed it that no machine
+   * is showing it, which is a lie about the one thing this screen is for.
+   *
+   * Refused, here, when there is no address to publish or the slot will not
+   * come up. Eight typed characters are the *only* input this screen has — no
+   * QR, no link — so a code that cannot be looked up is a code that fails after
+   * somebody has typed it, three metres from the machine that could have said
+   * so. The Remote panel's phone pairing makes the opposite call for the
+   * opposite reason: its QR carries the address inside the link.
    */
   ipcMain.handle(
     'machines:code',
     async (): Promise<{ ok: true; code: PairingToken } | { ok: false; message: string }> => {
-      const offer = offerFrom(deps.status())
+      const offer = offerFrom(deps.status().relay)
       if (offer === null) {
         return {
           ok: false,
@@ -220,42 +213,26 @@ export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcD
             'Turn remote access on and try again once it says connected.',
         }
       }
-      stopBeacon()
-      const code = deps.desk.create()
-      beacon = makeBeacon({ code: code.token, offer, relayUrl: offer.relayUrl })
-      if (beacon === null) {
-        deps.desk.cancel()
-        return { ok: false, message: 'This machine could not publish a pairing code. Check the app log.' }
-      }
-      // Waited for on purpose, before the code reaches a screen. A code shown
-      // while its rendezvous is still dialling is a code that tells the person
-      // who typed it that no machine is showing it — a lie about the one thing
-      // this screen is for.
-      if (!(await beacon.ready())) {
-        stopBeacon()
+      const shown = await deps.desk.show(offer)
+      if (!shown.findable) {
+        // Minted and unpublishable, so it is withdrawn rather than shown. The
+        // reason is in the app log — `startBeacon` writes it — and the sentence
+        // here is the one that helps somebody standing at the machine.
         deps.desk.cancel()
         return {
           ok: false,
           message: 'This machine could not reach the relay to publish a code. Check the connection and try again.',
         }
       }
-      // One timer, tied to the life of the code that created it. Not a poll:
-      // it fires once, at the moment the thing it is waiting for happens, and
-      // is cleared by every other way the code can end.
-      beaconTimer = setTimeout(() => {
-        beaconTimer = null
-        stopBeacon()
-      }, Math.max(0, code.expiresAt - now()))
-      beaconTimer.unref?.()
-      return { ok: true, code }
+      return { ok: true, code: shown.code }
     },
   )
 
   ipcMain.handle('machines:code:cancel', (): { cancelled: true } => {
-    // Both halves, or Cancel is a button that only stops drawing the code: the
-    // desk still offers it and the beacon still answers for it.
+    // Both halves, and one call: the desk leaves the rendezvous slot as it
+    // forgets the code. Cancel used to need two, and the day one of them was
+    // forgotten is the day a slot outlived its code.
     deps.desk.cancel()
-    stopBeacon()
     return { cancelled: true }
   })
 
@@ -393,7 +370,10 @@ export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcD
       for (const link of links.values()) link.wake()
     },
     stop(): void {
-      stopBeacon()
+      // The code goes with the app. A slot left claimed at the relay by a
+      // process that is exiting would answer for a machine that is no longer
+      // there, until the socket eventually noticed.
+      deps.desk.cancel()
       for (const link of links.values()) link.disconnect()
       links.clear()
     },

@@ -262,6 +262,20 @@ export interface RelayClientOptions {
    * with a credential, and still has to have been approved by a human.
    */
   isKnownDevice(devicePublicKey: Buffer): boolean
+  /**
+   * Told whenever this link connects or drops, with the state as it now is.
+   *
+   * A settings panel does not need this — it reads `state()` when it draws — and
+   * that is why there was no event here for a long time. A *headless* host does:
+   * the public demo container has to say "I am reachable" to the broker that
+   * started it, and reachable means the relay socket is up rather than the
+   * process being alive. Without an event the only way to know was to ask
+   * repeatedly, and the standing rule in this repository is events, not polling.
+   *
+   * Fires on the transition only, never on a timer, and a listener that throws
+   * cannot take the link down with it.
+   */
+  onState?: (state: RelayState) => void
   now?: () => number
   baseBackoffMs?: number
   maxBackoffMs?: number
@@ -375,6 +389,22 @@ export function createRelayClient(options: RelayClientOptions): RelayLink {
   /** Throttle state for refused handshakes. See REFUSAL_LOG_INTERVAL_MS. */
   let refusalsSinceLog = 0
   let refusalLoggedAt = 0
+
+  /**
+   * Say the link changed, once, and survive a listener that throws.
+   *
+   * Called from `drop` and from the moment the upgrade completes, which are the
+   * only two places `socket` changes — so this cannot report a transition that
+   * did not happen, and cannot miss one that did.
+   */
+  function announce(): void {
+    if (!options.onState) return
+    try {
+      options.onState(state())
+    } catch (error) {
+      console.error('[relay] a listener for the link state threw:', error)
+    }
+  }
 
   function state(): RelayState {
     return {
@@ -677,11 +707,15 @@ export function createRelayClient(options: RelayClientOptions): RelayLink {
     reason = why
     if (stopped) {
       retryAt = null
+      announce()
       return
     }
     // A link that held for a minute failed for a new reason, not the old one.
     if (wasStable) attempts = 0
     schedule()
+    // After `schedule`, so a listener reading `retryAt` sees when the next dial
+    // is due rather than a null that is about to be filled in.
+    announce()
   }
 
   function schedule(): void {
@@ -876,6 +910,11 @@ export function createRelayClient(options: RelayClientOptions): RelayLink {
     reader = new FrameReader(MAX_PAYLOAD_BYTES + ENVELOPE_HEADER, 'client')
     socket = live
     upgraded = true
+    // Said here rather than at the bottom of this function: a listener whose
+    // whole job is "tell me the moment this host is reachable" should hear it
+    // before the heartbeat is armed, not after, and nothing below can fail in a
+    // way that makes the link not connected.
+    announce()
 
     // Whatever rode in behind the `101`. Fed after `socket` is set, or the
     // framer would drop it for want of a link to belong to.

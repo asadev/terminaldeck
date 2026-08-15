@@ -97,15 +97,21 @@ describe('the file', () => {
    *
    * Windows has no POSIX permission bits. `fs` synthesises a mode — a
    * read-write file reports 0666 — and honouring 0600 there is simply not
-   * something the filesystem does; protection comes from NTFS ACLs, which this
-   * store does not set. So on Windows THIS FILE IS NOT MODE-PROTECTED, and it
-   * holds a plaintext bearer credential.
-   *
-   * Asserting 0600 on Windows would therefore be asserting something false, and
-   * asserting 0666 would quietly enshrine "unprotected" as the expected answer.
-   * The honest thing is to check it where it is real and to say plainly, here,
-   * that it is not real anywhere else. Discovered when the Windows CI release
+   * something the filesystem does. Asserting 0600 on Windows would therefore be
+   * asserting something false, and asserting 0666 would quietly enshrine
+   * "unprotected" as the expected answer. Discovered when the Windows CI release
    * build failed on this line: `expected 438 to be 384`.
+   *
+   * This file holds a plaintext bearer credential per paired machine, so what
+   * happens on Windows is not a footnote. It used to be nothing at all — the
+   * file was left under whatever ACL `%APPDATA%` handed down, which on a shared
+   * PC is routinely readable by the other accounts on it. It is now written
+   * under an ACL that names this account and removes the inherited entries, on
+   * the folder as well as the file, and the store refuses to write rather than
+   * leave a credential it could not lock down. None of that can be exercised
+   * from a Mac through a real `icacls`, so it is pinned with an injected runner
+   * in `remote/secret-file.test.ts`, where the writer lives; here the check that
+   * is real on this platform stays exactly as it was.
    */
   it.skipIf(process.platform === 'win32')('is written 0600, because it holds bearer credentials', () => {
     const dir = tempDir()

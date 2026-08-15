@@ -93,9 +93,30 @@ heading "Signing material"
 
 identity="$(security find-identity -v -p codesigning 2>/dev/null |
             sed -n "s/.*\"\(Apple Distribution: .*($TEAM_ID)\)\".*/\1/p" | head -1)"
+identity_hash="$(security find-identity -v -p codesigning 2>/dev/null |
+            sed -n "s/^ *[0-9]*) \([0-9A-F]*\) \"Apple Distribution: .*($TEAM_ID)\".*/\1/p" | head -1)"
+identity_count="$(security find-identity -v -p codesigning 2>/dev/null |
+            grep -c "Apple Distribution: .*($TEAM_ID)" || true)"
 
 if [[ -n "$identity" ]]; then
     pass "distribution certificate — $identity"
+
+    # Exactly one, and it is checked rather than assumed. Two certificates with
+    # the same common name can sit in two keychains at once — this account has
+    # had precisely that, one for this product and one from another — and
+    # `codesign` cannot choose between identically named identities. What it
+    # says when it cannot is `errSecInternalComponent`, which reads exactly like
+    # a locked keychain and sends people to the wrong problem for hours.
+    if (( identity_count == 1 )); then
+        pass "exactly one matching identity ($identity_hash)"
+    else
+        fail "$identity_count identities are named 'Apple Distribution: … ($TEAM_ID)'" \
+             "codesign cannot choose between them and reports errSecInternalComponent," \
+             "which looks like a locked keychain and is not. Take the keychain that" \
+             "should not be in play out of the search list:" \
+             "  security list-keychains -s <the one you want> ~/Library/Keychains/login.keychain-db" \
+             "$(security find-identity -v -p codesigning 2>/dev/null | grep "Apple Distribution")"
+    fi
 
     cert_pem="$(security find-certificate -c "$identity" -p 2>/dev/null || true)"
     if [[ -z "$cert_pem" ]]; then
@@ -113,6 +134,76 @@ if [[ -n "$identity" ]]; then
             fail "the distribution certificate expires within 30 days ($expiry)" \
                  "Reissue before it lapses; a build cannot be signed after it does."
         fi
+    fi
+
+    # Everything above reads certificates, and a certificate is the public half.
+    # The half that signs is a private key in a keychain, and a keychain that has
+    # locked itself hands `codesign` nothing while `find-identity` goes on
+    # listing the certificate as valid — so every other check on this page can
+    # pass while no build can be signed at all. That is not hypothetical: the
+    # keychain that held this identity was created with
+    # `set-keychain-settings -lut 21600`, locked itself on sleep, and the archive
+    # died four minutes in with `errSecInternalComponent`, which names neither
+    # the keychain nor the lock.
+    #
+    # ## Why this does not test by signing something
+    #
+    # The obvious check is to sign a throwaway binary and see what happens. It
+    # was written that way first and it is a trap. `codesign` against a locked
+    # keychain does not fail — it asks SecurityAgent to put an unlock dialog on
+    # the user's screen and blocks forever waiting for an answer. Worse, the
+    # dialog OUTLIVES the process: killing `codesign` leaves the window up, so a
+    # preflight run against a locked keychain hung for two minutes and stacked
+    # three modal prompts on his desktop that had to be clicked away by hand.
+    # `security show-keychain-info` does exactly the same thing.
+    #
+    # So nothing here may touch a locked keychain to find out whether it is
+    # locked. What is safe is `unlock-keychain -p`, which never raises UI: it
+    # either unlocks or says the passphrase is wrong, immediately. That turns the
+    # check into the fix — the keychain is left unlocked and the release works,
+    # rather than being told why it will not.
+
+    # Which keychain in the search list holds it, so a message can name a path
+    # instead of saying "a keychain" and leaving three to try. Reading the
+    # certificate list is safe on a locked keychain; certificates are public.
+    signing_keychain=""
+    while IFS= read -r kc; do
+        [[ -n "$kc" ]] || continue
+        if security find-identity -v -p codesigning "$kc" 2>/dev/null | grep -q "$identity_hash"; then
+            signing_keychain="$kc"
+            break
+        fi
+    done < <(security list-keychains | sed 's/^ *"//; s/"$//')
+
+    keychain_pw_file="${TD_IOS_KEYCHAIN_PW_FILE:-$HOME/ClaudeAsad/credentials/.terminaldeck-ios-keychain-pw}"
+
+    if [[ -z "$signing_keychain" ]]; then
+        fail "the identity is not in any keychain on the search list" \
+             "find-identity found it, list-keychains does not account for it — which" \
+             "means something changed the search list underneath this run."
+    elif [[ "$signing_keychain" == *"/login.keychain-db" ]]; then
+        # The login keychain is unlocked by logging in and stays that way. There
+        # is no password to record and nothing here should try to hold one.
+        pass "identity lives in the login keychain — unlocked with the session"
+    elif [[ ! -f "$keychain_pw_file" ]]; then
+        fail "no recorded password for $(basename "$signing_keychain")" \
+             "$keychain_pw_file does not exist." \
+             "A dedicated keychain with no way to unlock it is a release that stops" \
+             "working the first time the Mac sleeps, and it has already happened once." \
+             "Record the password there (chmod 600), or set TD_IOS_KEYCHAIN_PW_FILE."
+    elif security unlock-keychain -p "$(cat "$keychain_pw_file")" "$signing_keychain" 2>/dev/null; then
+        pass "signing keychain unlocked — $(basename "$signing_keychain")"
+        detail "password read from $keychain_pw_file"
+    else
+        fail "the recorded password does not open $(basename "$signing_keychain")" \
+             "$keychain_pw_file is there and it is wrong." \
+             "This is the exact state that cost an afternoon: the certificate lists as" \
+             "valid, the private key is unreachable, and the archive fails four minutes" \
+             "later with errSecInternalComponent — which reads like a missing certificate." \
+             "The key inside cannot be recovered without the password. What can be done" \
+             "is mint a new Apple Distribution certificate through the App Store Connect" \
+             "API, import it into a keychain whose password is recorded, and rebuild the" \
+             "App Store provisioning profile so it includes the new certificate."
     fi
 else
     fail "no 'Apple Distribution: … ($TEAM_ID)' identity in the keychain" \
@@ -310,6 +401,37 @@ fi
     pass "CFBundleIconName = AppIcon" ||
     fail "CFBundleIconName is missing from Support/Info.plist" \
          "actool's copy of it is nested; the validator reads the top level (ITMS-90713)."
+
+# --------------------------------------------------------------- what to test
+
+# Checked here, before anything is built, because the cost of finding out late
+# is a build sitting in TestFlight that nobody can verify. Builds 1, 2 and 3 all
+# went up with this field empty, and the result was measured: the tester
+# installed build 3, could not tell it apart from build 2, and concluded the
+# release had not happened. `testflight.mjs` refuses to attach a build without
+# these notes; this is the same refusal, four minutes earlier.
+heading "What to test"
+
+notes="$IOS_DIR/WhatToTest.md"
+# App Store Connect's own ceiling on the field.
+readonly NOTES_LIMIT=4000
+
+if [[ ! -f "$notes" ]]; then
+    fail "no release notes at $notes" \
+         "TestFlight shows this text to the tester as 'What to Test'. Write what" \
+         "changed since the build they are on, naming screens they can go and look at."
+else
+    chars="$(LC_ALL=C wc -c < "$notes" | tr -d ' ')"
+    if (( chars == 0 )); then
+        fail "$notes is empty"
+    elif (( chars > NOTES_LIMIT )); then
+        fail "the release notes are $chars characters; App Store Connect stores $NOTES_LIMIT" \
+             "Cutting them at the limit would end a sentence mid-word on somebody's phone."
+    else
+        pass "release notes — $chars of $NOTES_LIMIT characters"
+        detail "$(head -1 "$notes")"
+    fi
+fi
 
 if [[ "$FAST" == "1" ]]; then
     heading "Archive"

@@ -31,6 +31,19 @@ export interface SectionProps {
   goTo(section: string): void
   /** Re-read both stores from disk. For anything that writes behind `save`. */
   reload(): void
+  /**
+   * Start a session from inside settings, and close the window on the way.
+   *
+   * Exactly one section needs it and the reason is not decoration: signing an
+   * account in happens inside the agent's own terminal, so "Sign in" can only
+   * mean "open a session under this account". A settings pane cannot do that on
+   * its own — the window owns the session store, and a session created behind
+   * its back would be a running pty with no tab.
+   *
+   * Optional, like every other capability here: a panel rendered without it
+   * draws no Sign in button rather than a button that does nothing.
+   */
+  startSession?(request: { profileId: string }): void
 }
 
 /* ------------------------------------------------------------ mirrored -- */
