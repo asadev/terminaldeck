@@ -35,6 +35,7 @@
  * distro with systemd and one without, side by side, on one macOS run.
  */
 
+import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { BRAND } from '../shared/brand'
 import { currentPlatform, type Env, type Platform } from './platform/host'
@@ -90,6 +91,7 @@ export interface Reachability {
 export function readHostFacts(
   platform: Platform = currentPlatform(),
   env: Env = process.env,
+  rootWindowsPath: () => string | null = wslRootWindowsPath,
 ): HostFacts {
   if (platform !== 'linux') {
     return { platform, wsl: false, distro: null, battery: false, systemd: false, user: userFrom(env) }
@@ -107,7 +109,18 @@ export function readHostFacts(
   return {
     platform,
     wsl,
-    distro: named !== undefined && named !== '' ? named : null,
+    /*
+     * The name, from the environment when it is there and from the filesystem
+     * when it is not.
+     *
+     * The second half is not belt-and-braces. `WSL_DISTRO_NAME` is missing in
+     * precisely the arrangement this module exists to recommend — a host systemd
+     * started inside the distribution — so on Asad's Ubuntu the advice below
+     * printed `wsl.exe -d <your distro> …` as the one step it also calls "not
+     * optional". A placeholder inside a command somebody is meant to paste is
+     * worse than no command.
+     */
+    distro: named !== undefined && named !== '' ? named : wsl ? rootWindowsPath() : null,
     // A file rather than a glob: `/sys/class/power_supply` exists on servers too
     // and is empty there, so its *contents* are the signal. `BAT0` is the usual
     // name and `BAT1` the second battery some laptops carry.
@@ -122,6 +135,42 @@ export function readHostFacts(
 function readText(file: string): string | null {
   try {
     return readFileSync(file, 'utf8')
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The distribution's name, pulled out of the Windows path of its own root.
+ *
+ * `wslpath -w /` answers `\\wsl.localhost\Ubuntu-24.04\` — older builds say
+ * `\\wsl$\…` — and that middle component is the registration name, the exact
+ * string `wsl.exe -d` wants. It is the only source available to a process
+ * systemd started: `WSL_DISTRO_NAME` is not in its environment, `/proc/1/environ`
+ * does not carry it either (checked on the real machine), and `/etc/os-release`
+ * says "Ubuntu" where the registration is "Ubuntu-24.04".
+ *
+ * Exported and pure so the parsing can be pinned on a Mac, which is where this
+ * repository is written and tested and where `wslpath` does not exist.
+ */
+export function distroFromRootPath(windowsPath: string): string | null {
+  const match = /^\\\\wsl(?:\.localhost|\$)\\([^\\]+)\\?$/i.exec(windowsPath.trim())
+  return match === null ? null : match[1]
+}
+
+/**
+ * Ask `wslpath`, and treat every way it can fail as "no name".
+ *
+ * Guarded like every other read here: a host that cannot answer this question
+ * must still start, and off WSL the binary is simply not there. The timeout is
+ * because this runs on the launch path — `wslpath` crosses into Windows through
+ * interop, and interop wedged is a thing that happens.
+ */
+function wslRootWindowsPath(): string | null {
+  try {
+    return distroFromRootPath(
+      execFileSync('wslpath', ['-w', '/'], { encoding: 'utf8', timeout: 3000 }),
+    )
   } catch {
     return null
   }
@@ -151,6 +200,19 @@ export function describeReachability(facts: HostFacts): Reachability {
   const kind = hostKind(facts)
   const user = facts.user ?? '<your user>'
   const distro = facts.distro ?? '<your distro>'
+  /*
+   * Say so when the name in that command is a placeholder.
+   *
+   * `readHostFacts` now finds it in every arrangement seen on a real machine, so
+   * this should not appear — but if it ever does, a person pasting the line
+   * verbatim would create a Task Scheduler entry for a distribution called
+   * "<your distro>", and the failure would only show up the next time Windows
+   * restarted. One line naming the command that lists it costs nothing.
+   */
+  const distroNote =
+    facts.distro === null
+      ? ['# (this host could not read its own name; "wsl.exe -l -q" on Windows lists it)']
+      : []
 
   if (kind === 'wsl') {
     const shared = [
@@ -184,6 +246,7 @@ export function describeReachability(facts: HostFacts): Reachability {
           'sudo loginctl enable-linger ' + user,
           '# and on Windows, so the distribution starts at login (Task Scheduler,',
           '# "At log on", run whether or not the user is logged on):',
+          ...distroNote,
           `wsl.exe -d ${distro} -u ${user} --exec /bin/true`,
         ],
         atRisk: true,
@@ -208,6 +271,7 @@ export function describeReachability(facts: HostFacts): Reachability {
         `sudo loginctl enable-linger ${user}`,
         '# on Windows, so the distribution starts at login (Task Scheduler,',
         '# "At log on", run whether or not the user is logged on):',
+        ...distroNote,
         `wsl.exe -d ${distro} -u ${user} --exec /bin/true`,
       ],
       atRisk: true,

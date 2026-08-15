@@ -187,7 +187,18 @@ describe('a live control socket', () => {
     })
   })
 
-  it('says "no host is listening" rather than a syscall name', async () => {
+  /*
+   * The sentence is for a person; the `reason` is for `main.ts`.
+   *
+   * Both are asserted here because the CLI turns exactly this answer into "not
+   * running" — deleting the stale record and, for `pair`, starting a host. It
+   * can only do that if the failure is told apart by its code rather than by
+   * matching on prose, so a `reason` quietly dropped from this response would
+   * bring back the bug it was added for: on a WSL distribution that has
+   * restarted, a record naming a reused pid made `status` exit 1 and made `pair`
+   * refuse to start anything.
+   */
+  it('says "no host is listening" rather than a syscall name, and codes it', async () => {
     const dir = tempDir()
     const answer = await callControl({
       socket: join(dir, 'nothing.sock'),
@@ -195,7 +206,11 @@ describe('a live control socket', () => {
       cmd: 'status',
       timeoutMs: 500,
     })
-    expect(answer).toEqual({ ok: false, error: 'No host is listening here.' })
+    expect(answer).toEqual({
+      ok: false,
+      error: 'No host is listening here.',
+      reason: 'no-listener',
+    })
   })
 
   it('takes over a socket file a dead host left behind', async () => {

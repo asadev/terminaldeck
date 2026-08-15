@@ -51,9 +51,27 @@ export interface ControlRequest {
   args: string[]
 }
 
+/**
+ * Why a call failed, for the one difference a caller has to *act* on.
+ *
+ * `no-listener` means the socket named in the record answered nothing, because
+ * there is no file there or nothing is bound to it. Every other failure — a
+ * refused token, a command that threw, a host that is up and wedged — is a
+ * sentence to show and nothing more, so none of them gets a code.
+ *
+ * The distinction exists because the record on disk is not proof. It survives a
+ * machine that has been switched off, and {@link processAlive} can only ask
+ * whether *a* process holds that pid, not whether it is this host: a WSL
+ * distribution restarts pids from 1, so a record written by a host systemd
+ * started early in the previous boot names a pid that almost certainly belongs
+ * to something else now. Asking the socket is the only thing that actually
+ * proves a host is there, and this field is how the answer gets back.
+ */
+export type ControlFailure = 'no-listener'
+
 export type ControlResponse =
   | { ok: true; value: unknown }
-  | { ok: false; error: string }
+  | { ok: false; error: string; reason?: ControlFailure }
 
 export interface DaemonRecord {
   pid: number
@@ -422,13 +440,16 @@ export async function callControl(options: ControlCallOptions): Promise<ControlR
       else finish({ ok: false, error: 'The host closed the connection without answering.' })
     })
     socket.on('error', (error: NodeJS.ErrnoException) => {
-      finish({
-        ok: false,
-        error:
-          error.code === 'ENOENT' || error.code === 'ECONNREFUSED'
-            ? 'No host is listening here.'
-            : `Could not reach the host: ${error.message}`,
-      })
+      // ENOENT is no socket file at all; ECONNREFUSED is a socket file whose
+      // host is gone. Both mean the same thing to a caller — this record is
+      // describing a host that does not exist — and both are told apart from
+      // every other failure by the code, not by the sentence, so that nothing
+      // has to match on prose that is free to change.
+      finish(
+        error.code === 'ENOENT' || error.code === 'ECONNREFUSED'
+          ? { ok: false, error: 'No host is listening here.', reason: 'no-listener' }
+          : { ok: false, error: `Could not reach the host: ${error.message}` },
+      )
     })
   })
 }

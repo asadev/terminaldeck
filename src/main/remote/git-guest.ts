@@ -65,15 +65,26 @@
  * owner's. It is written once and never rewritten, so an identity a guest sets
  * survives their next session.
  *
- * ## What this does not do, and no wording anywhere may imply otherwise
+ * ## What this file does not do, and what now does it instead
  *
- * It is **not a sandbox**. A guest has a shell on somebody else's computer as
- * that person's account. They can read `~/.ssh`, run `ssh` themselves, run
- * `git -c credential.helper=osxkeychain`, or read the owner's `~/.gitconfig` and
- * copy what they find. Every one of those is available to any process that
- * account can start, and none of it is closed by configuration. What this file
- * changes is what happens **by default**, which is what happens in practice.
- * Confinement is separate work and does not exist yet.
+ * This is **configuration**, and configuration only changes what happens by
+ * default. A shell could always ignore all of it: read `~/.ssh` directly, run
+ * `ssh` itself, run `git -c credential.helper=osxkeychain`, or read the owner's
+ * `~/.gitconfig` and copy out what it found. Every one of those is available to
+ * any process that account can start, and no environment variable closes any of
+ * them.
+ *
+ * `src/main/confine/` is what closes them, and only on macOS: inside the
+ * boundary none of those paths can be opened at all, and the keychain the
+ * osxkeychain helper would have answered from is unreachable — measured, by
+ * running `security find-generic-password` inside and outside the sandbox and
+ * comparing. On Windows and Linux there is no boundary, so on those platforms
+ * this file is still the whole of the answer and the paragraph above still
+ * describes exactly what a determined guest can do.
+ *
+ * That split is why this work was worth shipping on its own and is still worth
+ * keeping: it is the half that works on every platform, and on the one platform
+ * that also has a boundary the two agree rather than duplicating each other.
  *
  * ## Version floor
  *

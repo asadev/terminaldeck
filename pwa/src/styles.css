@@ -229,6 +229,56 @@ button {
   background: var(--bg-active);
 }
 
+/* -------------------------------------------------------------------- ask */
+
+/* A machine asked this browser for a GitHub login and this browser refused —
+   see pwa/src/credential.ts for why refusing is the honest answer here and not
+   an unfinished one.
+
+   It sits under the banner and above the content, so it is readable from the
+   terminal as well as from the session list: a push is asked for from inside a
+   session, which is where somebody is looking when it fails. It is not styled
+   as an error, deliberately. Nothing went wrong; a question was asked and this
+   client is the one client that cannot answer it. */
+.ask {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--accent-soft);
+}
+.ask[hidden] {
+  display: none;
+}
+
+/* Both paragraphs give up the browser's default 1em margins, so the only
+   spacing in this card is the `gap` above — otherwise the two stack and the
+   card is half again as tall as it needs to be for the same three lines. */
+.ask__headline {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text-primary);
+}
+
+.ask__why {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+/* `.button` is `display: block; width: 100%` because every other button in this
+   client is the primary action of its screen. This one is a way out, not an
+   action: full width would make Dismiss look like the thing to do about a
+   machine asking for a GitHub login, which it is not. */
+.ask .button {
+  width: auto;
+  margin-top: 2px;
+  padding-inline: 16px;
+}
+
 /* ----------------------------------------------------------------- content */
 
 /* A flex column, not a plain block. The terminal screen is `flex: 1` and needs

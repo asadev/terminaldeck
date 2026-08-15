@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -193,6 +193,71 @@ describe('sessions, which are the whole point', () => {
     await waitFor(() => (storedSessions().length === 0 ? true : null))
   }, 30_000)
 })
+
+describe.skipIf(process.platform !== 'darwin')('a session started for a device', () => {
+  /*
+   * The wiring, proven from the far side.
+   *
+   * `src/main/confine/` has its own tests and they run the real `sandbox-exec`
+   * against the real generated profile — but they build the plan themselves. What
+   * they cannot show is that the *product* reaches them: that `startSession`,
+   * assembled by `createHostCore` exactly as a shell assembles it, hands the
+   * command to the sandbox rather than to the shell directly. That is one
+   * argument and one `if`, which is precisely the size of thing that gets
+   * refactored into never running while every other test still passes.
+   *
+   * So this starts a session the way the remote path starts one, types into the
+   * pty, and reads what came back. A confinement that were quietly skipped here
+   * would print the file.
+   */
+  it('is held inside its folder, all the way through the real spawn path', async () => {
+    const granted = join(dir, 'granted-folder')
+    const deviceHome = join(dir, 'device-home')
+    mkdirSync(granted, { recursive: true })
+    mkdirSync(join(deviceHome, 'tmp'), { recursive: true })
+    const canary = join(dir, 'outside-secret.txt')
+    writeFileSync(canary, SECRET)
+
+    const meta = await host.core.startSession(
+      { cwd: granted, cols: 80, rows: 24, provider: 'shell' },
+      undefined,
+      { home: deviceHome, writable: [], files: [] },
+    )
+
+    /*
+     * Wait for the shell to be *running* before typing at it, and prove it by
+     * something only execution produces.
+     *
+     * A login shell takes a second or two to come up, and a pty echoes what is
+     * typed at it whether or not anything is reading. The first version of this
+     * test wrote its commands immediately and then asserted on a marker that
+     * appeared in the echo — so it "passed" against a shell that had never run a
+     * command, which is the same class of mistake this whole change is about.
+     * `printf` with a substituted argument cannot be confused with its own echo:
+     * the typed line contains `%s`, the output does not.
+     */
+    host.core.ptys.write(meta.id, "printf 'SHELL-%s\\n' RUNNING\r")
+    await waitFor(() =>
+      host.core.ptys.scrollback(meta.id).includes('SHELL-RUNNING') ? true : null,
+    )
+
+    host.core.ptys.write(meta.id, `cat ${JSON.stringify(canary)}\r`)
+    const printed = await waitFor(() => {
+      const text = host.core.ptys.scrollback(meta.id)
+      return /not permitted/i.test(text) ? text : null
+    })
+
+    // It could not read a file one directory above the folder it was given —
+    // and the shell that could not read it was demonstrably alive.
+    expect(printed).toContain('SHELL-RUNNING')
+    expect(printed).not.toContain(SECRET)
+
+    host.core.ptys.kill(meta.id)
+  }, 30_000)
+})
+
+/** Written outside the granted folder. Its contents must never reach a session. */
+const SECRET = 'headless-canary-b71fe9-do-not-leak'
 
 function storedSessions(): Array<{ cwd: string }> {
   return store().getOpenSessions()

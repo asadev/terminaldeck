@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { RECONNECT_BACKOFF } from './backoff'
 import { Connection, closeReason, type Clock, type ConnectionState, type SocketLike } from './connection'
+import type { CredentialNotice } from './credential'
 import { PROTOCOL_VERSION, type ServerMessage } from './protocol-client'
 
 /* ------------------------------------------------------------- test rig -- */
@@ -89,17 +90,20 @@ interface Rig {
   states: ConnectionState[]
   messages: ServerMessage[]
   credentials: string[]
+  /** GitHub logins a machine asked this client for, as the app was told about them. */
+  asks: CredentialNotice[]
   advance(ms: number): void
   pending(): number
   now(): number
   last(): FakeSocket
 }
 
-function rig(token = 'pair-token'): Rig {
+function rig(token = 'pair-token', watchAsks = true): Rig {
   const sockets: FakeSocket[] = []
   const states: ConnectionState[] = []
   const messages: ServerMessage[] = []
   const credentials: string[] = []
+  const asks: CredentialNotice[] = []
   const { clock, advance, pending, now } = fakeClock()
 
   const connection = new Connection({
@@ -118,6 +122,9 @@ function rig(token = 'pair-token'): Rig {
       onState: (state) => states.push(state),
       onMessage: (message) => messages.push(message),
       onCredential: (credential) => credentials.push(credential),
+      // Left off entirely when a test asks for it, because the answer must not
+      // depend on anybody listening.
+      ...(watchAsks ? { onCredentialAsked: (notice: CredentialNotice) => asks.push(notice) } : {}),
     },
   })
 
@@ -127,6 +134,7 @@ function rig(token = 'pair-token'): Rig {
     states,
     messages,
     credentials,
+    asks,
     advance,
     pending,
     now,
@@ -156,7 +164,7 @@ describe('the handshake', () => {
     expect(test.connection.current().phase).toBe('connecting')
   })
 
-  it('greets with the token and the protocol version', () => {
+  it('greets with the token, the protocol version and what it can answer', () => {
     const test = rig('pair-token')
     test.connection.start()
     test.last().onopen?.()
@@ -165,6 +173,10 @@ describe('the handshake', () => {
       protocol: PROTOCOL_VERSION,
       token: 'pair-token',
       device: { name: 'iPhone', platform: 'iOS' },
+      // Not decoration. Without `credential` here the desktop never asks this
+      // client anything, and a push from a folder it was granted fails with
+      // "your device isn't reachable" about a tab that is open and connected.
+      capabilities: ['credential'],
     })
   })
 
@@ -561,5 +573,112 @@ describe('what kind of machine is on the other end', () => {
     test.last().deliver({ t: 'error', code: 'unauthorized', message: '' })
     expect(test.connection.current().phase).toBe('pending')
     expect(test.connection.current().detail).toBe('Waiting for approval on the desktop.')
+  })
+})
+
+describe('a machine asking this browser for a GitHub login', () => {
+  /**
+   * The socket half of the refusal. `credential.test.ts` proves the policy is
+   * the right one; these prove it actually reaches the wire, in the right order,
+   * and that the person hears about it.
+   *
+   * Why this client refuses at all is in the header of `credential.ts` and is
+   * worth the one-line version here: this page is served by the machine that is
+   * asking, so any token a browser could keep is a token that machine could read
+   * by changing the JavaScript it serves.
+   */
+  const question = (patch: Record<string, unknown> = {}): ServerMessage =>
+    ({
+      t: 'credential.request',
+      id: 'req-1',
+      host: 'github.com',
+      repo: 'asadev/terminaldeck',
+      operation: 'write',
+      prompt: true,
+      ...patch,
+    }) as ServerMessage
+
+  it('acknowledges and then refuses, in that order, on the same socket', () => {
+    const test = rig()
+    const socket = online(test)
+    const before = socket.sent.length
+    socket.deliver(question())
+
+    expect(socket.sent.slice(before).map((raw) => JSON.parse(raw))).toEqual([
+      { t: 'credential.ack', id: 'req-1' },
+      { t: 'credential.deny', id: 'req-1', reason: 'no-account' },
+    ])
+  })
+
+  it('answers within the same turn as the frame arriving', () => {
+    // The desktop gives a device a few seconds to say it is there before it
+    // decides the device is asleep. Nothing here may wait on a render, a timer
+    // or a handler somebody forgot to register.
+    const test = rig()
+    const socket = online(test)
+    const before = socket.sent.length
+    socket.deliver(question())
+    // No clock advance between the two lines: the frames are already out.
+    expect(socket.sent.length).toBe(before + 2)
+  })
+
+  it('answers even with nothing listening for the notice', () => {
+    const test = rig('pair-token', false)
+    const socket = online(test)
+    const before = socket.sent.length
+    socket.deliver(question())
+
+    expect(socket.sent.length).toBe(before + 2)
+  })
+
+  it('tells the app what was asked, so the refusal is not silent', () => {
+    const test = rig()
+    online(test).deliver(question())
+
+    expect(test.asks).toEqual([
+      {
+        id: 'req-1',
+        origin: 'github.com',
+        repo: 'asadev/terminaldeck',
+        operation: 'write',
+        prompt: true,
+        at: test.now(),
+      },
+    ])
+  })
+
+  it('does not hand the question to the ordinary message path', () => {
+    // Nothing above this layer routes it, and letting it fall through would put
+    // a frame with no session id in front of code that reads session ids.
+    const test = rig()
+    online(test).deliver(question())
+
+    expect(test.messages.some((message) => message.t === 'credential.request')).toBe(false)
+  })
+
+  it('answers a silent read the same way, and still reports it', () => {
+    const test = rig()
+    const socket = online(test)
+    const before = socket.sent.length
+    socket.deliver(question({ operation: 'read', prompt: false }))
+
+    expect(socket.sent.slice(before).map((raw) => JSON.parse(raw))).toEqual([
+      { t: 'credential.ack', id: 'req-1' },
+      { t: 'credential.deny', id: 'req-1', reason: 'no-account' },
+    ])
+    expect(test.asks[0].prompt).toBe(false)
+  })
+
+  it('never sends a credential answer, whatever it is asked', () => {
+    // The guard against somebody "finishing" this client by teaching it to hold
+    // a token. If this ever fails, a secret is being kept on an origin the
+    // machine that wants it controls.
+    const test = rig()
+    const socket = online(test)
+    socket.deliver(question())
+    socket.deliver(question({ id: 'req-2', prompt: false }))
+    socket.deliver(question({ id: 'req-3', repo: null }))
+
+    expect(socket.sent.some((raw) => raw.includes('credential.answer'))).toBe(false)
   })
 })

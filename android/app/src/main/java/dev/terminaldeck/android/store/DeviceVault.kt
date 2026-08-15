@@ -296,8 +296,17 @@ interface VaultCipher {
  * `setRandomizedEncryptionRequired` is the default and is stated anyway: it is what stops a
  * caller supplying an IV, and a repeated IV under GCM is catastrophic in the same way a
  * repeated nonce is for the sealed channel.
+ *
+ * ## Why the alias is a parameter
+ *
+ * Because there is a second thing on this phone worth wrapping and it must not share a key with the
+ * pairings: the GitHub token — see `github/GitHubAccount.kt`. One alias for both would mean a
+ * Keystore entry lost for any reason takes *both* with it, so unpairing every machine and being
+ * signed out of GitHub would be one event rather than two. The default is the alias every phone
+ * already has on disk and must keep having; renaming it would be this build declaring every
+ * existing pairing lost.
  */
-class KeystoreVaultCipher : VaultCipher {
+class KeystoreVaultCipher(private val alias: String = KEY_ALIAS) : VaultCipher {
 
     override fun seal(plaintext: ByteArray): ByteArray {
         val cipher = Cipher.getInstance(TRANSFORMATION)
@@ -328,11 +337,11 @@ class KeystoreVaultCipher : VaultCipher {
 
     private fun wrappingKey(): SecretKey {
         val store = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
-        (store.getEntry(KEY_ALIAS, null) as? KeyStore.SecretKeyEntry)?.let { return it.secretKey }
+        (store.getEntry(alias, null) as? KeyStore.SecretKeyEntry)?.let { return it.secretKey }
         val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEYSTORE)
         generator.init(
             KeyGenParameterSpec.Builder(
-                KEY_ALIAS,
+                alias,
                 KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
             )
                 .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
@@ -347,14 +356,19 @@ class KeystoreVaultCipher : VaultCipher {
         return generator.generateKey()
     }
 
-    private companion object {
+    companion object {
+        /** The pairings' wrapping key. On disk on every phone that has ever paired. */
         const val KEY_ALIAS = "terminaldeck.vault.v1"
-        const val ANDROID_KEYSTORE = "AndroidKeyStore"
-        const val TRANSFORMATION = "AES/GCM/NoPadding"
-        const val IV_BYTES = 12
+
+        /** The GitHub token's, deliberately a different one — see the class header. */
+        const val GITHUB_KEY_ALIAS = "terminaldeck.github.v1"
+
+        private const val ANDROID_KEYSTORE = "AndroidKeyStore"
+        private const val TRANSFORMATION = "AES/GCM/NoPadding"
+        private const val IV_BYTES = 12
 
         /** How the bytes are wrapped. Unrelated to [CURRENT_VERSION], which is what they say. */
-        const val ENVELOPE_VERSION = 1
+        private const val ENVELOPE_VERSION = 1
     }
 }
 

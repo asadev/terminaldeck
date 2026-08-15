@@ -6,6 +6,7 @@ import dev.terminaldeck.android.crypto.HandshakeInitiator
 import dev.terminaldeck.android.crypto.Sealed
 import dev.terminaldeck.android.crypto.SealedChannel
 import dev.terminaldeck.android.crypto.SealedException
+import dev.terminaldeck.android.protocol.Capability
 import dev.terminaldeck.android.protocol.ClientFrames
 import dev.terminaldeck.android.protocol.ClientMessage
 import dev.terminaldeck.android.protocol.DeviceDescriptor
@@ -415,6 +416,13 @@ class WebSocketDeckTransport(
                         protocol = Protocol.VERSION,
                         token = token,
                         device = DeviceDescriptor(name = deviceName, platform = PLATFORM),
+                        // What this phone will *answer*, not what it wants to ask for. Today that
+                        // is one name, `credential`, and it is load bearing: a desktop that does
+                        // not see it here never sends `credential.request`, so the approval prompt
+                        // simply never appears and a push from a folder this phone was granted
+                        // fails with "your device isn't reachable" about a phone that is right
+                        // here. See [Capability.CLAIMED].
+                        capabilities = Capability.CLAIMED,
                     )
                 )
             )

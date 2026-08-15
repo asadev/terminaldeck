@@ -41,12 +41,34 @@
  *    happened; this one guards the next one, anywhere in `src/main`,
  *    `src/shared`, `src/preload` or `relay/src`, including files nobody has
  *    written yet.
+ * 6. **scrypt, run and compared against known answers.** Check 5 cannot see
+ *    this one: scrypt is not named by a string anywhere, so a scan for
+ *    `createCipheriv('…')`-shaped calls will never mention it however carefully
+ *    it is written. It is on the relay path — `machines/rendezvous.ts` derives
+ *    the whole machine-to-machine pairing from it, and `device-auth.ts` hashes
+ *    every device credential with it — and it arrived after this file did,
+ *    which is exactly how the ChaCha hole opened: a primitive assumed rather
+ *    than measured. If BoringSSL's scrypt differed by a byte, two machines
+ *    would derive different rendezvous slots and pairing would fail with a
+ *    fault instead of a refusal, in the one code path nobody can test from a
+ *    unit test because both ends are the same runtime.
  *
  * Nothing here imports vitest. It reports through an exit code so it can run
  * inside a runtime that has no test framework installed.
  */
 
-import { createHash, diffieHellman, generateKeyPairSync, getCiphers, getHashes, hkdfSync, randomBytes, timingSafeEqual } from 'node:crypto'
+import {
+  createHash,
+  diffieHellman,
+  generateKeyPairSync,
+  getCiphers,
+  getHashes,
+  hkdfSync,
+  randomBytes,
+  scrypt as scryptCallback,
+  scryptSync,
+  timingSafeEqual,
+} from 'node:crypto'
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -60,6 +82,7 @@ import {
   type StaticKeyPair,
 } from '../../shared/sealed'
 import { HOST_IDENTITY_FILE, loadHostIdentity } from './host-identity'
+import { RENDEZVOUS_SALT, rendezvousIdentity } from './machines/rendezvous'
 
 /* -------------------------------------------------------------------------- */
 /* Reporting                                                                   */
@@ -339,8 +362,115 @@ for (const use of algorithms) {
 }
 
 /* -------------------------------------------------------------------------- */
+/* 6. scrypt, which the relay path added after this file was written           */
+/* -------------------------------------------------------------------------- */
 
-process.stdout.write(
-  `\n${checks - failures}/${checks} checks passed under Electron${failures === 0 ? '' : ` — ${failures} FAILED`}\n\n`,
+process.stdout.write('\nscrypt, against answers recorded under plain Node\n')
+
+/**
+ * The parameters the product actually uses, in both places it uses them.
+ *
+ * `device-auth.ts` hashes every device credential at these, and
+ * `machines/rendezvous.ts` derives a pairing rendezvous at the same ones on
+ * purpose — the comment there says so, and the salt is versioned so that
+ * changing them is a visible break rather than two builds quietly failing to
+ * find each other. Written out again here rather than imported because a probe
+ * that imported the constant would pass just as happily if somebody halved N:
+ * the point is to pin the numbers a recorded answer was taken at.
+ */
+const SCRYPT = { N: 16384, r: 8, p: 1 } as const
+/** Derived exactly as both call sites derive it: 32MB is not enough for 16384×8. */
+const SCRYPT_MAXMEM = 256 * SCRYPT.N * SCRYPT.r
+
+/**
+ * Recorded under plain Node (OpenSSL 3.6.3) with these inputs and these
+ * parameters. Not self-consistent — recorded on the *other* implementation,
+ * which is the only kind of answer that can catch BoringSSL disagreeing.
+ *
+ *   scryptSync(Buffer.alloc(32, 0x2a), Buffer.alloc(16, 0x5b), 32, params)
+ */
+const CREDENTIAL_KAT = '4bf290a5a496b447a9166888fb58f41b13c8a9aa68a518737e3262a0d6d46b87'
+
+/**
+ * The same, for the rendezvous: the canonical form of one code, the versioned
+ * salt, and the 64 bytes `rendezvousIdentity` splits into a relay slot secret
+ * and a responder key pair.
+ */
+const RENDEZVOUS_KAT =
+  '21997b4b8533227a9e94ca653ef8d29a3c0053bb631b231c1163865b25d90dd4' +
+  'dd03190926474bf2dff0820a86943da2f434463ecb0dbaed4902234466d9cec4'
+
+/** A code somebody could be reading off the other machine's screen. */
+const CODE = 'h4k9 2fqt'
+const CODE_HOST_ID = 'ZWG39KXXW8GKVHZP6UF2SGUARD'
+const CODE_FINGERPRINT = '7XQA-UMES-XHFR-5S8L-46TV-H9XN'
+const CODE_PUBLIC_KEY = 'aQPhyoFeCJkVcrnoSvne9Eft2vkXQrmYitfzy2JowX8='
+
+const credentialSecret = Buffer.alloc(32, 0x2a)
+const credentialSalt = Buffer.alloc(16, 0x5b)
+
+check('scryptSync exists here and answers what OpenSSL answered', () => {
+  const key = scryptSync(credentialSecret, credentialSalt, 32, { ...SCRYPT, maxmem: SCRYPT_MAXMEM })
+  equalBytes(key, Buffer.from(CREDENTIAL_KAT, 'hex'), 'scrypt at the credential parameters')
+})
+
+check('the rendezvous seed is the same 64 bytes it is everywhere else', () => {
+  const seed = scryptSync('H4K9-2FQT', RENDEZVOUS_SALT, 64, { ...SCRYPT, maxmem: SCRYPT_MAXMEM })
+  equalBytes(seed, Buffer.from(RENDEZVOUS_KAT, 'hex'), 'the rendezvous seed')
+})
+
+check('two machines typing one code land on the same slot and the same key', () => {
+  // The end of the derivation rather than the middle of it: a slot name and a
+  // responder identity, which is what the two machines actually have to agree
+  // on. A byte of difference here is a pairing that dials a relay slot nobody
+  // is answering, and the person reading the code is told the machine cannot be
+  // found — a fault dressed up as a refusal.
+  const identity = rendezvousIdentity(CODE)
+  assert(identity !== null, `${CODE} is no longer a code this build accepts`)
+  assert(identity.hostId === CODE_HOST_ID, `rendezvous slot: expected ${CODE_HOST_ID}, got ${identity.hostId}`)
+  assert(
+    identity.fingerprint === CODE_FINGERPRINT,
+    `responder fingerprint: expected ${CODE_FINGERPRINT}, got ${identity.fingerprint}`,
+  )
+  equalBytes(
+    identity.keys.publicKey,
+    Buffer.from(CODE_PUBLIC_KEY, 'base64'),
+    'the responder public key derived from the code',
+  )
+})
+
+/* -------------------------------------------------------------------------- */
+
+function report(): never {
+  process.stdout.write(
+    `\n${checks - failures}/${checks} checks passed under Electron${failures === 0 ? '' : ` — ${failures} FAILED`}\n\n`,
+  )
+  process.exit(failures === 0 ? 0 : 1)
+}
+
+/*
+ * The last check is asynchronous, and it is here rather than above because
+ * `device-auth.ts` does not call `scryptSync` — it calls the callback form, on
+ * the main process, once per attach. Two entry points into one primitive is two
+ * places it can be missing, and the one that is missing is always the one
+ * nobody ran.
+ *
+ * `process.exitCode` is set first, so a callback that never fires cannot be
+ * read as a pass. Node exits 0 when its queue drains, and "quietly succeeded
+ * because nothing happened" is the precise shape of the bug this whole file was
+ * written after.
+ */
+process.exitCode = 1
+scryptCallback(
+  credentialSecret,
+  credentialSalt,
+  32,
+  { ...SCRYPT, maxmem: SCRYPT_MAXMEM },
+  (err: Error | null, key: Buffer) => {
+    check('scrypt through the callback form, the way device-auth verifies a device', () => {
+      assert(err === null, `scrypt reported ${err?.message ?? 'an error'}`)
+      equalBytes(key, Buffer.from(CREDENTIAL_KAT, 'hex'), 'the callback form')
+    })
+    report()
+  },
 )
-process.exit(failures === 0 ? 0 : 1)

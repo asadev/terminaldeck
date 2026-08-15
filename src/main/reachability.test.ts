@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   describeReachability,
+  distroFromRootPath,
   hostKind,
   readHostFacts,
   type HostFacts,
@@ -40,6 +41,14 @@ describe('readHostFacts', () => {
     expect(read.distro).toBe('Ubuntu')
   })
 
+  it('prefers the variable, and never consults the fallback off Linux', () => {
+    // The variable wins when a login shell set it, so the fallback is not run at
+    // all — and off Linux nothing is run and nothing is named, whatever a
+    // `wslpath` on this machine might have said.
+    expect(readHostFacts('linux', { WSL_DISTRO_NAME: 'Ubuntu' }, () => 'Wrong').distro).toBe('Ubuntu')
+    expect(readHostFacts('darwin', {}, () => 'Ubuntu-24.04').distro).toBeNull()
+  })
+
   it('asks nothing of Linux when the platform is not Linux', () => {
     // Running the real reader on this Mac must not report a WSL distro or a
     // battery, whatever /sys happens to hold.
@@ -52,6 +61,30 @@ describe('readHostFacts', () => {
       systemd: false,
       user: 'asad',
     })
+  })
+})
+
+/*
+ * The parsing is pinned on its own because the reader that feeds it cannot run
+ * here: `wslpath` exists only inside a WSL distribution, and this repository is
+ * written and tested on a Mac. The string below is the literal answer
+ * `wslpath -w /` gave on Asad's Ubuntu.
+ */
+describe('distroFromRootPath', () => {
+  it('reads the registration name out of the root path, old spelling and new', () => {
+    expect(distroFromRootPath('\\\\wsl.localhost\\Ubuntu-24.04\\')).toBe('Ubuntu-24.04')
+    expect(distroFromRootPath('\\\\wsl$\\Ubuntu\\')).toBe('Ubuntu')
+    // A trailing newline is what execFileSync hands back.
+    expect(distroFromRootPath('\\\\wsl.localhost\\Debian\\\n')).toBe('Debian')
+  })
+
+  it('answers nothing rather than guessing at a path of another shape', () => {
+    // A wrong name here becomes a Task Scheduler entry for a distribution that
+    // does not exist, which fails silently until the next Windows restart.
+    expect(distroFromRootPath('/')).toBeNull()
+    expect(distroFromRootPath('C:\\Users\\asad')).toBeNull()
+    expect(distroFromRootPath('')).toBeNull()
+    expect(distroFromRootPath('\\\\wsl.localhost\\Ubuntu\\home\\asad')).toBeNull()
   })
 })
 

@@ -626,6 +626,9 @@ export const KEYMAP: readonly KeyBinding[] = [
     scope: 'global',
     group: 'Panels',
   },
+  // Owned by a feature, like `pane.split` below. The chord stays in the table
+  // whatever the store says — see the note there for why that is the honest
+  // arrangement and not an oversight.
   { id: 'view.swarm', keys: ['mod+\\'], label: 'Swarm view', scope: 'global', group: 'Panels' },
   { id: 'view.sidebar', keys: ['mod+b'], label: 'Toggle the sidebar', scope: 'global', group: 'Panels' },
 
@@ -643,6 +646,22 @@ export const KEYMAP: readonly KeyBinding[] = [
   // tree underneath handles both axes and `moveFocus` takes all four
   // directions; up and down get bindings the day something can create a
   // stacked split, and not before.
+  //
+  // ## Why ⌘D stays here when the split view is uninstalled
+  //
+  // This table is chords to command ids, and nothing else. Whether a command is
+  // live is the feature registry's question, asked once, in `App.tsx`'s
+  // dispatcher: a chord whose feature is off opens the store at Features and
+  // offers it back, which is a real answer and the same one the palette gives.
+  // Dropping the binding instead would make ⌘D do nothing at all, and nothing
+  // at all is indistinguishable from a broken shortcut — the failure the
+  // dispatcher's own comment was written against.
+  //
+  // The *menu* is the surface that had to change, because a visible item saying
+  // "Split the Window" is a promise the way a chord in muscle memory is not.
+  // `src/main/menu.ts` drops it while the feature is off, which also unbinds its
+  // accelerator and hands ⌘D back to this table — so exactly one of the two
+  // answers is live at a time.
   { id: 'pane.split', keys: ['mod+d'], label: 'Split the window', scope: 'global', group: 'Panes' },
   {
     id: 'pane.focusLeft',

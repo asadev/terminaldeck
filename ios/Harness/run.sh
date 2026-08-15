@@ -12,6 +12,15 @@
 #
 #   ios/Harness/run.sh vectors     regenerate Tests/Fixtures/sealed-vectors.json
 #   ios/Harness/run.sh host        run a relay + a stand-in desktop on it
+#   ios/Harness/run.sh live        drive a REAL host over the LIVE relay
+#
+# `host` and `live` are not two flavours of the same thing and the difference is
+# the point. `host` is a stand-in: a second implementation of the desktop, good
+# enough to tap against and capable of sharing a bug with its client — which is
+# exactly how Electron's missing ChaCha stayed hidden while 3,628 Node tests
+# passed. `live` stands nothing in. It talks to the product's own headless host
+# on `relay.terminaldeck.dev`, down that host's real control socket. See
+# `live-desktop.ts`, and `live-transfer.sh` for the whole proof it is half of.
 #
 # Everything after the subcommand is passed through to the script.
 
@@ -33,8 +42,9 @@ shift || true
 case "$command" in
     vectors) entry=sealed-vectors ;;
     host)    entry=host-standin ;;
+    live)    entry=live-desktop ;;
     *)
-        echo "usage: run.sh {vectors|host} [args…]" >&2
+        echo "usage: run.sh {vectors|host|live} [args…]" >&2
         exit 2
         ;;
 esac

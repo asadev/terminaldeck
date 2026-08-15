@@ -21,7 +21,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -37,6 +39,8 @@ import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import dev.terminaldeck.android.protocol.HostPlatform
 import dev.terminaldeck.android.transfer.PickedFile
+import dev.terminaldeck.android.ui.CredentialPromptSheet
+import dev.terminaldeck.android.ui.GitHubSheet
 import dev.terminaldeck.android.ui.PairingScreen
 import dev.terminaldeck.android.ui.SessionListScreen
 import dev.terminaldeck.android.ui.TerminalScreen
@@ -165,6 +169,14 @@ fun TerminalDeckApp(
     val screenTick by viewModel.screenTick.collectAsStateWithLifecycle()
     val link by pairingLinks.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    /**
+     * Whether the GitHub sheet is up.
+     *
+     * A flag here rather than a route, for the same reason the credential prompt is not one: it is
+     * about the phone rather than about the machine on screen, and it has to be openable from the
+     * switcher, which is itself drawn above whatever route is current.
+     */
+    var github by remember { mutableStateOf(false) }
 
     onRegisterResume { viewModel.resume() }
 
@@ -279,6 +291,18 @@ fun TerminalDeckApp(
     }
 
     /*
+     * The credential prompt and the GitHub sheet sit *above* everything else, including the pair
+     * screen.
+     *
+     * Not a navigation destination and not a child of one route, because neither is about the
+     * screen underneath. A machine can ask this phone for a login at any moment — while a terminal
+     * is open, while the session list is up, or while somebody is on the pair screen adding a
+     * second machine — and a `git push` is waiting on the answer. A prompt that could only appear
+     * on one route would be a prompt that silently fails to appear on the others.
+     */
+    Box(modifier = Modifier.fillMaxSize()) {
+
+    /*
      * The pair screen owns the window while the machine on screen has not admitted this device —
      * which covers "nothing is paired at all", because then there is no machine on screen — and
      * while the user is adding another one.
@@ -296,8 +320,7 @@ fun TerminalDeckApp(
             onRetry = viewModel::reconnect,
             onCancel = if (state.canLeavePairing) viewModel::cancelAddingHost else null,
         )
-        return
-    }
+    } else {
 
     NavHost(navController = navController, startDestination = ROUTE_SESSIONS) {
         composable(ROUTE_SESSIONS) {
@@ -315,6 +338,8 @@ fun TerminalDeckApp(
                 onRenameHost = viewModel::rename,
                 onForgetHost = viewModel::forget,
                 onAddHost = viewModel::beginAddingHost,
+                gitHubLogin = state.gitHubAccount?.login,
+                onGitHub = { github = true },
             )
         }
 
@@ -392,6 +417,38 @@ fun TerminalDeckApp(
             )
         }
     }
+
+    } // end of the paired branch; the sheets below are drawn over either one
+
+    /*
+     * The one screen that is the entire explanation of the credential proxy.
+     *
+     * Only ever a request the desktop asked this phone to *prompt* about — a push, against a
+     * repository this device has not already approved on that machine. Reads and approved pushes
+     * are answered without anything reaching here, which is the policy and is why this is null
+     * almost always.
+     */
+    state.credentialPrompt?.let { question ->
+        CredentialPromptSheet(
+            question = question,
+            account = state.gitHubAccount,
+            queued = state.credentialsQueued,
+            onApprove = viewModel::approveCredential,
+            onDeny = viewModel::denyCredential,
+        )
+    }
+
+    if (github) {
+        GitHubSheet(
+            account = state.gitHubAccount,
+            phase = state.signInPhase,
+            signIn = viewModel.signIn,
+            onDisconnect = viewModel::disconnectGitHub,
+            onDismiss = { github = false },
+        )
+    }
+
+    } // end of the Box the sheets are stacked in
 }
 
 /**

@@ -212,13 +212,73 @@ describe('being refused', () => {
     // A device that has been welcomed and is now refused has been revoked, not
     // left pending — and telling somebody to go and approve a device they
     // deliberately removed is the wrong instruction.
+    //
+    // The hang-up is not decoration. `remote:device:revoke` calls
+    // `server.dropDevice`, which sends this frame and then closes the socket in
+    // the same breath, so a refusal of the *connection* always arrives with the
+    // connection ending. That is exactly what tells it apart from a refused
+    // request, which arrives on a channel that stays open.
     const { link, rig } = build()
     link.connect()
     await settle()
     rig.fakes[0].say(welcome())
     rig.fakes[0].say({ t: 'error', code: 'unauthorized', message: 'This device is not allowed in.' })
+    rig.fakes[0].hangUp('The relay closed the connection.')
 
     expect(link.state().state).toBe('error')
+    // The far end's sentence, not the socket's: "the relay closed the
+    // connection" tells somebody whose device was revoked nothing at all.
+    expect(link.state().reason).toBe('This device is not allowed in.')
+    link.disconnect()
+  })
+
+  it('keeps the link when one request is refused, rather than tearing it down', async () => {
+    /*
+     * The failure this pins was found between two real machines. A Mac asked a
+     * paired Windows PC for a folder that was not on that device's grant list;
+     * the PC answered `unauthorized` and — correctly — kept serving. This end
+     * dropped the whole link anyway: `online` → `error` with every session row
+     * blanked → `connecting` → `online`, 1.9 seconds later, for a mistake whose
+     * whole correct outcome is one line of text under the machine's name.
+     *
+     * `create` is not the only frame that can be refused this way. `attach` to
+     * a session that has just exited, a tunnel, an upload and a credential push
+     * are all answered and not closed.
+     */
+    const { link, rig } = build()
+    link.connect()
+    await settle()
+    rig.fakes[0].say(welcome())
+    expect(link.state().sessions).toHaveLength(1)
+
+    rig.fakes[0].say({
+      t: 'error',
+      code: 'unauthorized',
+      message: 'This PC is not offering that folder to this device. Pick one from the list it sent.',
+    })
+
+    expect(link.state().state).toBe('online')
+    expect(link.state().sessions).toHaveLength(1)
+    expect(link.state().reason).toMatch(/not offering that folder/)
+    expect(rig.dialled).toBe(1)
+    link.disconnect()
+  })
+
+  it('clears a refusal once a session does start', async () => {
+    const { link, rig } = build()
+    link.connect()
+    await settle()
+    rig.fakes[0].say(welcome())
+    rig.fakes[0].say({ t: 'error', code: 'unauthorized', message: 'Not that folder.' })
+    expect(link.state().reason).toBe('Not that folder.')
+
+    rig.fakes[0].say({
+      t: 'created',
+      session: { id: 's9', title: 'new', cwd: '/tmp/ok', provider: 'shell', status: 'running', exitCode: null },
+    })
+
+    expect(link.state().reason).toBeNull()
+    expect(link.state().state).toBe('online')
     link.disconnect()
   })
 

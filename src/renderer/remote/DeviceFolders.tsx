@@ -18,17 +18,27 @@ import './DeviceFolders.css'
  *
  * So the list is chosen here, per device, on the machine the files are on.
  *
- * ## Say what it is, on the screen, in plain words
+ * ## Say what it is, on the screen, in plain words — and the answer differs
  *
- * This decides **where a session starts**. It is not a sandbox and this panel
- * must never imply that it is: a shell that starts in a granted folder can `cd`
- * anywhere the account can reach and read anything the account can read. The
- * security boundary is pairing plus approval, one screen up — a device that got
- * past that has a shell either way.
+ * For most of this feature's life there was one sentence here and it said *this
+ * is not a boundary*: a shell that starts in a granted folder can `cd` anywhere
+ * the account can reach. That was true everywhere and it is now true in only
+ * some places, which is a harder thing to write and a much more important one
+ * to get right.
  *
- * The sentence saying so is not fine print at the bottom. It is the first thing
- * under the heading, because a person who believes this is a lock will hand a
- * device to somebody on the strength of it.
+ * On **macOS** a session started from a device is held inside the folder it was
+ * given — measured, not assumed; `src/main/confine/` lists every escape that
+ * was attempted and what happened. On **Windows** and **Linux** nothing holds
+ * it, because no mechanism there has been built or measured, and an unmeasured
+ * boundary claimed on screen is worse than an honest gap.
+ *
+ * So this panel says which of the two the reader is getting, in its own
+ * sentence, and never one sentence covering both. A person who reads "held
+ * inside" on a machine where nothing holds it will hand a device to somebody on
+ * the strength of it — which is exactly why the old wording was so careful, and
+ * exactly why the new wording may not be careless in the other direction.
+ *
+ * It is the first thing under the heading either way, not fine print.
  *
  * ## Three states, and the difference between two of them matters
  *
@@ -145,6 +155,28 @@ export interface FolderDevice {
   name: string
 }
 
+/**
+ * Whether a session started from a device is held inside its folder here.
+ *
+ * The renderer's copy of `confinementKind` in `src/main/confine/index.ts`, and a
+ * copy for the same reason `machineNoun` is one: this bundle cannot import from
+ * `src/main`, and the two sides answer the question from different facts — the
+ * main process reads `process.platform`, a window reads its own user agent. Both
+ * describe the same machine, because a window is always in the same process tree
+ * as its main process.
+ *
+ * A copy of a platform decision is a thing that can drift, so it is worth being
+ * explicit about which direction the drift would hurt. If this said `true` on a
+ * platform the main process does not confine, the panel would promise a boundary
+ * that is not there. If it said `false` on macOS, the panel would undersell a
+ * boundary that is — annoying, and not dangerous. That is why this names macOS
+ * rather than excluding the platforms it knows about: a new build target arrives
+ * unconfined until somebody measures it.
+ */
+export function confinesSessions(platform: UiPlatform): boolean {
+  return platform === 'mac'
+}
+
 export interface DeviceFoldersViewProps {
   devices: FolderDevice[]
   /**
@@ -188,15 +220,36 @@ export function DeviceFoldersView({
 
   return (
     <Group title="Folders">
-      {/* The honest sentence, first and not last. Someone who reads this as a
-          lock will make a decision about who holds a device on the strength of
-          it. */}
-      <p className="settings-prose">
-        Pick where each device can start a session. <strong>That is all this does.</strong> A
-        session is a shell — once it is running it can move to any other folder on {machine}, the
-        same as one you start here. This is for keeping your own devices tidy, not for keeping
-        anyone out.
-      </p>
+      {/* The honest sentence, first and not last, and a different one per
+          platform. Someone will decide who holds a device on the strength of
+          whichever of these two they read. */}
+      {confinesSessions(platform) ? (
+        <>
+          <p className="settings-prose">
+            Pick which folders each device can use. On {machine} a session started from a device is{' '}
+            <strong>held inside them</strong> — it can read and write those folders and nothing
+            else. Not your other projects, not your home folder, not your keys, not the accounts
+            you are signed in to.
+          </p>
+          <p className="settings-prose">
+            It still runs node, git and the agent tools, and it still reaches the internet. It gets
+            a home folder of its own, so it starts signed out of those tools until that device
+            signs in. If a session cannot be held inside its folder, it does not start at all.
+          </p>
+          <p className="settings-prose">
+            One thing this does not cover: a device can also open a session <em>you</em> started
+            here, in any folder, and yours are not held anywhere — they are your own shell.
+          </p>
+        </>
+      ) : (
+        <p className="settings-prose">
+          Pick where each device can start a session. On {machine}, <strong>that is all this
+          does</strong> — a session is a shell, and once it is running it can move to any other
+          folder, the same as one you start here. Holding a session inside its folder has only been
+          built for macOS, so this is for keeping your own devices tidy, not for keeping anyone
+          out.
+        </p>
+      )}
 
       {problem && <Notice tone="error">{problem} What is below may be out of date.</Notice>}
 

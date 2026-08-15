@@ -397,6 +397,10 @@ export async function createHeadlessHost(
     core.ledger.flush()
     core.ledger.freeze()
     core.ptys.killAll()
+    // Asked is not finished: `killAll` signals, and each process writes its last
+    // through `onExit` afterwards. A caller that removes the state directory the
+    // instant this resolves would race those writes. See `PtyManager.drain`.
+    await core.ptys.drain()
     machines.stop()
     await remote.server.stop().catch(() => undefined)
     await stopHookServer().catch(() => undefined)

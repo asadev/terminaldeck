@@ -31,6 +31,7 @@
  */
 
 import { Backoff, type BackoffOptions } from './backoff'
+import { answerCredential, credentialNotice, type CredentialNotice } from './credential'
 import { machineNoun, readHostPlatform, type HostPlatform } from './host-platform'
 import {
   decodeServerMessage,
@@ -125,6 +126,17 @@ export interface ConnectionHandlers {
    * is now spent and will not work a second time.
    */
   onCredential(token: string): void
+  /**
+   * A machine asked this browser for a GitHub login, and it has already been
+   * acknowledged and refused — see the header of `credential.ts`.
+   *
+   * Optional because the answer does not depend on anybody listening: the two
+   * frames go out whether or not this is set, which is what keeps "acknowledge
+   * every request" a property of the transport rather than of the screen. What a
+   * listener adds is the person finding out it happened, which matters because a
+   * refusal nobody sees is indistinguishable from a broken feature.
+   */
+  onCredentialAsked?(notice: CredentialNotice): void
 }
 
 export interface ConnectionOptions {
@@ -454,6 +466,28 @@ export class Connection {
 
     if (message.t === 'pong') {
       this.awaitingPong = false
+      return
+    }
+
+    /*
+     * A machine wants a GitHub login, and this client answers before it draws.
+     *
+     * Answered here rather than handed up to the app, because the first frame
+     * back is the acknowledgement and it is the one thing in this feature that
+     * must not wait on anything — not on a render, not on a handler somebody
+     * might not have registered. The desktop gives a device a few seconds to say
+     * it is there before it decides the device is asleep, and this client *is*
+     * there, so it says so within the same tick as the frame arriving.
+     *
+     * What it can honestly say afterwards is in `credential.ts`, at length: this
+     * page is served by the machine that is asking, so a token kept here would
+     * be a token that machine could read, and there is no browser storage that
+     * changes that. It refuses, and then tells the person what was asked and
+     * what to do instead.
+     */
+    if (message.t === 'credential.request') {
+      for (const answer of answerCredential(message)) this.send(answer)
+      this.options.handlers.onCredentialAsked?.(credentialNotice(message, this.clock.now()))
       return
     }
 

@@ -29,6 +29,16 @@
  *       -destination 'platform=iOS Simulator,name=iPhone 17 Pro Max' \
  *       -only-testing:TerminalDeckUITests/RealDesktopUITests
  *
+ * **The three assignments belong in front of `xcodebuild`, in its environment,
+ * and not after it as build settings.** They read like build settings and they
+ * are not, and getting that wrong is silent: measured on Xcode 26.6 with iOS
+ * 26.5, `xcodebuild test … TEST_RUNNER_TD_PAIR_FILE=/tmp/probe` prints the
+ * setting under "Build settings from command line" and the runner's
+ * `ProcessInfo.processInfo.environment` then contains no `TD_` variable at all,
+ * so every case here skips and the run ends `** TEST SUCCEEDED **`. A green run
+ * in which nothing was tested is the worst outcome this suite can produce, so
+ * the form above is the one that has been checked to work.
+ *
  * Then, at the Mac: Settings → Remote → Pair a device, and write the code in
  * the QR into that file. Approve the device when it appears.
  *

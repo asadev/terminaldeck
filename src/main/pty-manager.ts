@@ -64,6 +64,14 @@ const SCROLLBACK_LIMIT = 4000
 export class PtyManager {
   private sessions = new Map<string, Session>()
   /**
+   * Processes signalled but not yet confirmed dead. See `drain`.
+   *
+   * Counted rather than derived from `sessions`, because `kill` removes the
+   * session immediately — the caller must stop seeing it at once — while the
+   * process itself lives on until the OS reaps it.
+   */
+  private pendingExits = 0
+  /**
    * Whether anything is listening to session status. True unless a headless
    * host has said otherwise; see {@link setWatched}.
    */
@@ -173,7 +181,9 @@ export class PtyManager {
       this.onData(id, data)
     })
 
+    this.pendingExits += 1
     proc.onExit(({ exitCode }) => {
+      this.pendingExits -= 1
       session.meta.exitCode = exitCode
       activity.markExited()
       this.onExit(id, exitCode)
@@ -248,5 +258,35 @@ export class PtyManager {
 
   killAll(): void {
     for (const id of [...this.sessions.keys()]) this.kill(id)
+  }
+
+  /**
+   * Wait for the processes `killAll` signalled to actually be gone.
+   *
+   * `kill` sends a signal and returns; the process dies whenever the OS gets
+   * round to it, and its `onExit` — which writes down the exit code and tells
+   * every listener — fires after that. So `killAll()` returning means "asked",
+   * not "finished", and anything that tears down state immediately afterwards is
+   * racing a write it cannot see.
+   *
+   * That race is not theoretical. `src/headless/host.test.ts` removes its state
+   * directory the moment `stop()` resolves, and under the full suite — where
+   * dozens of files run at once and the machine is loaded — the removal walks a
+   * tree that a dying pty is still writing into, and node answers `ENOTEMPTY`.
+   * Alone, on an idle machine, it passes every time. A flake that only appears
+   * under load is the shape of a real shutdown ordering bug, and the honest fix
+   * is to make shutdown ordered rather than to retry the delete.
+   *
+   * Bounded, because a wedged process must not be able to hang a quit: after
+   * `timeoutMs` this gives up and returns anyway. Returns true if everything
+   * exited, false if it timed out — the caller may want to say so.
+   */
+  async drain(timeoutMs = 2000): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs
+    while (this.pendingExits > 0) {
+      if (Date.now() >= deadline) return false
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    return true
   }
 }

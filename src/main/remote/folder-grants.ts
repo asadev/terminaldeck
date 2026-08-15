@@ -14,18 +14,28 @@
  * So the list becomes something a person decides, per device, on the machine
  * that owns the files. The device gets what it was given and nothing else.
  *
- * ## Be honest about what this is
+ * ## Be honest about what this is — and the answer is now per platform
  *
- * It decides **where a session starts**. It is not a sandbox. A shell that
- * starts in a granted folder can `cd` anywhere the user account can reach, read
- * any file that account can read, and push to any remote its keys open. Nothing
- * here confines a process, and no wording in this app may suggest it does —
- * this is organisation for your own machines, in the same spirit as choosing
- * which folder a file dialog opens in.
+ * This file decides **where a session starts**, and that is all it has ever
+ * done. What that *means* changed when `src/main/confine/` arrived, and it
+ * changed on one platform only:
  *
- * The security boundary is the one that was already there and is unchanged:
- * pairing, plus a human approving the device on the desktop. A device that gets
- * past that has a shell. This file decides which door it opens on.
+ *  - **macOS.** The folder is also a boundary. The session is held inside it by
+ *    Seatbelt and cannot read or write anything else; `confine/seatbelt.ts`
+ *    lists every escape that was attempted and what happened.
+ *  - **Windows and Linux.** Exactly as before: a shell that starts in a granted
+ *    folder can `cd` anywhere the account can reach, read any file it can read,
+ *    and push to any remote its keys open. No mechanism there has been measured,
+ *    and no wording in this app may claim one on those platforms.
+ *
+ * Nothing in *this* file enforces either answer. It is still a list, and the
+ * list is still the input to both — which is why it is worth saying here that a
+ * folder appearing in it is not, on its own, a promise about anything.
+ *
+ * The security boundary that decides whether a device gets a shell at all is
+ * unchanged and comes first: pairing, plus a human approving the device on the
+ * desktop. This file decides which door that shell opens on; confinement decides
+ * how far it can walk once it is through.
  *
  * ## Absence is not denial
  *

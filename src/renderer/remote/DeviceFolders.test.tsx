@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import {
   DeviceFoldersView,
+  confinesSessions,
   folderName,
   resolveDeviceFoldersBridge,
   summaryFor,
@@ -70,30 +71,88 @@ function text(markup: string): string {
 
 describe('the sentence at the top', () => {
   /*
-   * Pinned to the words, not to the existence of a paragraph. Someone who reads
-   * this screen as a lock will hand a device to another person on the strength
-   * of it — so "this is not confinement" has to survive every future edit, and
-   * a test that only checked a <p> was present would let it be softened away.
+   * Pinned to the words, not to the existence of a paragraph, and now pinned
+   * *per platform* — which is the part that matters.
+   *
+   * Someone will decide who holds a device on the strength of whichever of these
+   * two sentences they read, and the two failures are not symmetrical. Claiming
+   * a boundary on a machine that has none is the dangerous one; failing to
+   * mention one that exists is merely a shame. So the Windows copy is checked
+   * for the absence of every word that could be read as a lock, and the macOS
+   * copy is checked for the presence of the specific things that are true.
    */
-  it('says plainly that this is not a sandbox', () => {
-    const said = text(view())
+  it('on a PC, says plainly that this is not a boundary', () => {
+    const said = text(view({ platform: 'windows' }))
     expect(said).toContain('Pick where each device can start a session')
-    expect(said).toContain('That is all this does')
+    expect(said).toContain('that is all this does')
     // The mechanism, in words a non-engineer can act on: it moves.
     expect(said).toContain('it can move to any other folder')
     expect(said).toContain('not for keeping anyone out')
+    // And it says why, rather than leaving the reader to wonder whether the app
+    // simply has not got round to it.
+    expect(said).toContain('only been built for macOS')
   })
 
-  it('never claims the device is confined to what it was given', () => {
-    const said = text(view()).toLowerCase()
-    for (const lie of ['sandbox', 'restricted to', 'confined', 'cannot leave', 'only access']) {
+  it('on a PC, never claims the device is held where it was put', () => {
+    const said = text(view({ platform: 'windows' })).toLowerCase()
+    for (const lie of ['sandbox', 'restricted to', 'cannot leave', 'only access', 'held inside them']) {
       expect(said).not.toContain(lie)
     }
+  })
+
+  it('on a Mac, says what is held and what is not', () => {
+    const said = text(view({ platform: 'mac' }))
+    expect(said).toContain('held inside them')
+    expect(said).toContain('read and write those folders and nothing else')
+    // The three things a person would actually worry about, named.
+    expect(said).toContain('not your home folder')
+    expect(said).toContain('not your keys')
+    // And the two costs, which are real and must not be discovered later.
+    expect(said).toContain('signed out of those tools')
+    expect(said).toContain('does not start at all')
+  })
+
+  it('on a Mac, says what confinement does not cover', () => {
+    /*
+     * The gap that would otherwise be found the hard way. Confinement holds for
+     * a session a device *starts*; attaching to a session the owner started has
+     * no folder check at all and never has had one — that is the product's
+     * headline feature, driving your own desktop session from your phone.
+     *
+     * A screen that said "held inside them" and stopped there would be true
+     * about the sentence and misleading about the feature, which is the exact
+     * failure the careful old wording existed to avoid.
+     */
+    const said = text(view({ platform: 'mac' }))
+    expect(said).toContain('a session you started here')
+    expect(said).toContain('yours are not held anywhere')
+  })
+
+  it('on a Mac, does not pretend the tools or the network are gone', () => {
+    // Rule five of the brief, said on screen: a confinement that broke node or
+    // git would not be usable, and a screen that implied it had would send
+    // people looking for a bug that is not there.
+    const said = text(view({ platform: 'mac' }))
+    expect(said).toContain('still runs node, git and the agent tools')
+    expect(said).toContain('still reaches the internet')
+  })
+
+  it('never sends one sentence to both platforms', () => {
+    // The instruction, as a test. The two answers are different facts and a
+    // shared sentence could only be true of one of them.
+    expect(text(view({ platform: 'mac' }))).not.toEqual(text(view({ platform: 'windows' })))
   })
 
   it('calls the machine what the reader would call it', () => {
     expect(text(view({ platform: 'windows' }))).toContain('this PC')
     expect(text(view({ platform: 'mac' }))).toContain('this Mac')
+  })
+
+  it('treats an unknown platform as unconfined', () => {
+    // A new build target arrives with no measurement behind it, so it must read
+    // as "nothing holds this" until somebody does the work.
+    expect(confinesSessions('other')).toBe(false)
+    expect(text(view({ platform: 'other' }))).toContain('not for keeping anyone out')
   })
 })
 

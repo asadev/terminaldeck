@@ -38,7 +38,22 @@
  * Usage:
  *   node android/tools/dev-host.cjs [--port 8787] [--relay ws://10.0.2.2:8787]
  *
- * Keys: p = new pairing code · a = approve every waiting device · l = list · r = revoke all · q = quit
+ * Keys: p = new pairing code · a = approve every waiting device · l = list · r = revoke all ·
+ *       c = ask every connected phone for a GitHub login (push) · f = the same, as a silent fetch ·
+ *       q = quit
+ *
+ * ## Why `c` is here
+ *
+ * The credential proxy is the one exchange in this protocol that starts on the *desktop* and waits
+ * on the phone, so it is the one thing a phone cannot be made to demonstrate by tapping something.
+ * Without a way to ask, the approval prompt is a screen nobody can reach except by having a real
+ * repository, a real push, and a real Mac — which is exactly the sort of thing that ends up
+ * shipping unlooked-at. `c` sends the frame `src/main/remote/credentials.ts` sends, with the same
+ * fields, and prints what comes back: the acknowledgement, and then the answer or the refusal.
+ *
+ * It never prints the secret. The reply is reported by shape — `answer (remember: true)` — because
+ * a verification rig that logged somebody's token would be a verification rig that has to be
+ * remembered about.
  */
 
 const { execFileSync } = require('node:child_process')
@@ -250,6 +265,37 @@ function announce() {
   for (const client of clients) if (client.deviceId) sendJson(client, { t: 'sessions', sessions: listSessions() })
 }
 
+/**
+ * Ask every connected phone for a GitHub login.
+ *
+ * The frame is the one `credentials.ts` sends and the fields mean what they mean there: `operation`
+ * is what git is doing and `prompt` is whether a person should be interrupted. They are separate
+ * because a push against a repository a device has already approved is a `write` that is **not**
+ * prompted — the desktop is the side that remembers approvals, so it is the side that decides.
+ *
+ * `repo` can be sent as null with `--credential-repo=`, because the null case is a real one the
+ * desktop passes along (a gist, a wiki, a self-hosted layout) and it is the case where the prompt
+ * has to say it does not know the name rather than invent one.
+ */
+let credentialCounter = 0
+function askForCredential({ operation, prompt }) {
+  const repo = process.env.TD_CREDENTIAL_REPO === '' ? null : process.env.TD_CREDENTIAL_REPO || 'asadev/terminaldeck'
+  let asked = 0
+  for (const client of clients) {
+    if (!client.deviceId) continue
+    if (!client.capabilities?.includes('credential')) {
+      log(`${client.deviceName || client.deviceId} did not claim the credential capability — not asking it`)
+      continue
+    }
+    credentialCounter += 1
+    const id = `dev-${credentialCounter}`
+    sendJson(client, { t: 'credential.request', id, host: 'github.com', repo, operation, prompt })
+    log(`credential ${id}: asked ${client.deviceName || client.deviceId} (${operation}, prompt: ${prompt})`)
+    asked += 1
+  }
+  if (asked === 0) log('no connected phone claims the credential capability')
+}
+
 /* -------------------------------------------------------------- protocol -- */
 
 const clients = new Set()
@@ -374,6 +420,24 @@ function onProtocol(client, raw) {
       return
     }
 
+    /* ---- capability `credential` ----------------------------------------------------------- */
+    /**
+     * The phone answering a question this host asked. See the `c` key.
+     *
+     * Reported by shape and never by content. `credential.answer` carries somebody's GitHub token,
+     * and a rig that printed it would be a rig that has to be remembered about every time it is
+     * run near a real account.
+     */
+    case 'credential.ack':
+      return log(`credential ${message.id}: acknowledged — the phone is there`)
+    case 'credential.answer':
+      return log(
+        `credential ${message.id}: answered as @${message.username}` +
+          `${message.remember === true ? ' (remember: this repo, from this device)' : ''}`,
+      )
+    case 'credential.deny':
+      return log(`credential ${message.id}: refused (${message.reason ?? 'denied'})`)
+
     /* ---- capability `upload` -------------------------------------------------------------- */
     case 'upload.begin':
     case 'upload.data':
@@ -426,7 +490,11 @@ function hello(client, message) {
     }
     client.deviceId = known.id
     client.deviceName = known.name
-    log(`${known.name} connected`)
+    // What the phone said it can *answer*, which is the other half of the negotiation. A real
+    // desktop uses it to decide whether a device is reachable for a credential request at all —
+    // asking one that never claimed `credential` is how a push stalls until a timer gives up.
+    client.capabilities = Array.isArray(message.capabilities) ? message.capabilities : []
+    log(`${known.name} connected · claims: ${client.capabilities.join(', ') || 'nothing'}`)
     return sendJson(client, {
       t: 'welcome',
       protocol: PROTOCOL_VERSION,
@@ -691,6 +759,12 @@ process.stdin.on('data', (data) => {
       identity.devices = []
       saveIdentity(identity)
       log('revoked every device')
+    }
+    if (key === 'c' || key === 'f') {
+      // `c` is a push, which the phone should raise a prompt for; `f` is a fetch, which it should
+      // answer without troubling anybody. Sending both is how the *policy* is verified rather than
+      // only the plumbing — a client that prompted for a fetch would be one nobody could live with.
+      askForCredential({ operation: key === 'c' ? 'write' : 'read', prompt: key === 'c' })
     }
   }
 })

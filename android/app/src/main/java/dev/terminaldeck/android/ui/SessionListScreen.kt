@@ -101,6 +101,9 @@ fun SessionListScreen(
     onRenameHost: (String, String?) -> Unit,
     onForgetHost: (String) -> Unit,
     onAddHost: () -> Unit,
+    /** The GitHub account this phone holds, or null. Phone-wide, not per machine. */
+    gitHubLogin: String? = null,
+    onGitHub: () -> Unit = {},
 ) {
     val snackbar = remember { SnackbarHostState() }
     var folderMenu by remember { mutableStateOf(false) }
@@ -256,6 +259,8 @@ fun SessionListScreen(
             onRename = onRenameHost,
             onForget = onForgetHost,
             onAddHost = onAddHost,
+            gitHubLogin = gitHubLogin,
+            onGitHub = onGitHub,
             onDismiss = { switcher = false },
         )
     }

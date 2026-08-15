@@ -1,5 +1,6 @@
 package dev.terminaldeck.android
 
+import dev.terminaldeck.android.github.InMemoryGitHubStore
 import dev.terminaldeck.android.protocol.ClientMessage
 import dev.terminaldeck.android.protocol.RemoteSession
 import dev.terminaldeck.android.protocol.ServerMessage
@@ -142,6 +143,7 @@ class FolderGrantTest {
         deck = DeckViewModel(
             vault = vault,
             clipboard = FakeClipboard(),
+            accounts = InMemoryGitHubStore(),
             network = NetworkWatch.none,
             heartbeat = Heartbeat(scope = CoroutineScope(Dispatchers.Unconfined)),
         ) { _, hostId, store ->

@@ -21,10 +21,12 @@ class ProtocolCodecTest {
                 protocol = 1,
                 token = "abc",
                 device = DeviceDescriptor(name = "Pixel", platform = "android"),
+                capabilities = listOf("credential"),
             )
         )
         assertEquals(
-            """{"t":"hello","protocol":1,"token":"abc","device":{"name":"Pixel","platform":"android"}}""",
+            """{"t":"hello","protocol":1,"token":"abc","device":{"name":"Pixel","platform":"android"},""" +
+                """"capabilities":["credential"]}""",
             json,
         )
     }

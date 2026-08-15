@@ -267,6 +267,11 @@ struct SessionListView: View {
                     .accessibilityIdentifier("session.\(session.id)")
                 }
 
+                // Under the sessions and above the ports, because it is a note
+                // about the sessions. Put at the very bottom it sat under a
+                // screen's worth of localhost rows on a busy machine and read as
+                // a footnote about those instead.
+                scopeNote
                 localhost
             }
             .padding(.horizontal, 16)
@@ -281,6 +286,40 @@ struct SessionListView: View {
             try? await Task.sleep(for: .milliseconds(450))
         }
     }
+
+    /**
+     * What this list does *not* contain, said once and quietly.
+     *
+     * The list is every session the desktop started, and people reasonably
+     * expect it to be every session — they have a Claude running in Terminal.app
+     * or in VS Code and they go looking for it here. It is not here and it
+     * cannot be: a session is a pty this product owns, and nothing gives it a
+     * handle on a process some other program spawned. Saying nothing leaves the
+     * only available conclusion being that the app is broken, which is the
+     * failure this line exists to prevent.
+     *
+     * A line at the foot of the list rather than a banner over it, deliberately.
+     * The design brief's rule is that motion and emphasis are earned; this is a
+     * fact worth having available and not worth interrupting anybody for, so it
+     * sits where a footnote sits, in the faint colour, below the last row. The
+     * same sentence is the second half of the empty state's description, because
+     * an empty list is exactly when somebody is most likely to be looking for a
+     * session that was never going to be here.
+     */
+    private var scopeNote: some View {
+        Text(Self.onlyItsOwnSessions)
+            .font(.system(size: 12))
+            .foregroundStyle(Theme.faint)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 4)
+            .padding(.top, 18)
+    }
+
+    /// Written once and read in both places it belongs. Two copies of a sentence
+    /// is two sentences that drift.
+    static let onlyItsOwnSessions =
+        "Only sessions started in \(Brand.name) are listed — it cannot see one you are running "
+        + "in Terminal or VS Code."
 
     /**
      * The Mac's dev servers, one tap from being on this phone.
@@ -362,7 +401,11 @@ struct SessionListView: View {
                 + "phone yet. Open the settings on the \(model.hostPlatform.noun) and choose which "
                 + "folders it may start sessions in."
         }
-        return "The \(model.hostPlatform.noun) has nothing running. \(Brand.tagline)."
+        // Not "the Mac has nothing running", which is the sentence that was here
+        // and is very often false — the Mac may well be running an agent, just
+        // not one this app started. See `scopeNote`.
+        return "Nothing has been started on the \(model.hostPlatform.noun) yet. "
+            + Self.onlyItsOwnSessions
     }
 }
 

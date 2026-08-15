@@ -36,6 +36,28 @@ object Protocol {
     const val MAX_TOKEN_LENGTH = 200
 
     /**
+     * Longest `host` and `repo` on an inbound `credential.request`.
+     *
+     * Transcribed from `MAX_CREDENTIAL_HOST_LENGTH` / `MAX_CREDENTIAL_REPO_LENGTH`. 253 is the
+     * longest a DNS name can be; 256 is generous for `owner/name` and both are bounds on text that
+     * ends up **on a screen somebody reads before approving a push**. A prompt that can be made
+     * arbitrarily long is a prompt whose last line — the machine that asked — can be pushed off it.
+     */
+    const val MAX_CREDENTIAL_HOST_LENGTH = 253
+    const val MAX_CREDENTIAL_REPO_LENGTH = 256
+
+    /**
+     * Longest username and secret this phone may answer a credential request with.
+     *
+     * The desktop's `parseClientMessage` refuses a longer one and answers a refused frame by
+     * closing the socket — so a token past this costs the connection rather than one push. It is
+     * therefore checked where a person can still do something about it, when the account is
+     * connected, and again on the way out.
+     */
+    const val MAX_CREDENTIAL_USERNAME_LENGTH = 128
+    const val MAX_CREDENTIAL_SECRET_LENGTH = 4096
+
+    /**
      * Largest slice of a file in one `upload.data`, before base64.
      *
      * The same number as the desktop's `MAX_NET_CHUNK_BYTES`, because it is the same arithmetic:
@@ -198,6 +220,29 @@ object Capability {
      * File button on a phone talking to one would produce nothing but a refusal.
      */
     const val UPLOAD = "upload"
+
+    /**
+     * Git on the desktop may ask **this phone** for a GitHub login.
+     *
+     * The only capability that runs backwards, and that changes what the string means on each side.
+     * Every other name here is a verb this phone sends and the desktop serves; this one is a
+     * question the desktop asks and this phone answers. So it is advertised in *both* directions —
+     * the desktop puts it in `welcome.capabilities` to say "I may ask you", and this client puts it
+     * in [CLAIMED] to say "I can answer" — and both halves are load bearing. A desktop that asked a
+     * phone which had never heard of the frame would sit there until a timer gave up, which is
+     * exactly the thirty-second stall on a `git push` the feature exists to not have.
+     */
+    const val CREDENTIAL = "credential"
+
+    /**
+     * What this build tells a desktop it can do, in `hello.capabilities`.
+     *
+     * Only names that run desktop→phone belong here. [CREATE], [LOCALHOST] and [UPLOAD] are things
+     * this phone *asks for* and are gated on what the desktop advertised, so claiming them would
+     * say nothing at all; [CREDENTIAL] is a frame the desktop sends only once it has been told
+     * somebody is listening for it.
+     */
+    val CLAIMED: List<String> = listOf(CREDENTIAL)
 }
 
 /** A session as the phone sees it. Enough to draw a list and pick one. */

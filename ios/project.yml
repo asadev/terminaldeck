@@ -166,11 +166,18 @@ schemes:
         # In the scheme so `-only-testing:TerminalDeckUITests` can select it —
         # a target that is not in the test action cannot be run by name at all.
         # It needs a relay and a desktop on the machine, so every case skips
-        # itself when TD_PAIRING_URI is unset rather than failing on a laptop
-        # with nothing listening:
+        # itself when its own variable is unset rather than failing on a laptop
+        # with nothing listening. The live proof — a real host on the deployed
+        # relay, a file hashed at both ends, the clipboard both ways — is one
+        # command and starts everything it needs:
+        #   ios/Harness/live-transfer.sh
+        # The stand-in suites take the same shape by hand:
         #   ios/Harness/run.sh host --approve-after 6000 --log-input &
-        #   xcodebuild test -only-testing:TerminalDeckUITests …
-        #     TEST_RUNNER_TD_PAIRING_URI="$(cat ios/Harness/.build/pairing.txt)"
+        #   TEST_RUNNER_TD_READY_FILE=… xcodebuild test -only-testing:…
+        # Those assignments go in FRONT of xcodebuild, in its environment. Put
+        # after it they are parsed as build settings, never reach the runner, and
+        # every case skips while the run reports "** TEST SUCCEEDED **" —
+        # measured on Xcode 26.6, and the reason `live-transfer.sh` exists.
         - TerminalDeckUITests
     # Stated rather than left to default, because the release pipeline archives
     # by scheme name and the configuration an archive is built in decides

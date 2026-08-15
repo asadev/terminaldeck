@@ -357,8 +357,25 @@ export const FEATURES: readonly Feature[] = [
 
 const BY_ID = new Map<FeatureId, Feature>(FEATURES.map((entry) => [entry.id, entry]))
 
+/**
+ * The same ids again, as plain strings.
+ *
+ * `BY_ID.has()` will not take a `string`, because a `Map<FeatureId, …>` is
+ * typed to be asked about its own keys — and the question this file has to
+ * answer is the opposite one: *here is a string off disk, out of a URL or out
+ * of a message; is it one of ours?* The version of `isFeatureId` that reached
+ * for `has(value as FeatureId)` answered it by telling the compiler the string
+ * was already a `FeatureId`, which is the one thing nobody knows yet. A cast
+ * there is not a shortcut, it is the check written backwards.
+ *
+ * A second index costs one short string per feature and lets both questions be
+ * asked in the type they are actually asked in. Built from the same table, so
+ * the two cannot disagree.
+ */
+const IDS: ReadonlySet<string> = new Set<string>(FEATURES.map((entry) => entry.id))
+
 export function isFeatureId(value: unknown): value is FeatureId {
-  return typeof value === 'string' && BY_ID.has(value as FeatureId)
+  return typeof value === 'string' && IDS.has(value)
 }
 
 export function feature(id: FeatureId): Feature {

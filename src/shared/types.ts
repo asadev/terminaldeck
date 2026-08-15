@@ -89,6 +89,15 @@ export interface DeckApi {
   onSessionCreated(cb: (meta: SessionMeta) => void): () => void
   /** Application-menu items, dispatched as command ids. */
   onMenuCommand(cb: (command: string) => void): () => void
+  /**
+   * The commands the application menu must not offer, because the feature that
+   * owns them is not installed.
+   *
+   * The menu is built in the main process; the feature registry lives in the
+   * renderer, with everything else that asks it. This is how the answer
+   * crosses. See `src/main/menu.ts`.
+   */
+  setHiddenMenuCommands(commands: string[]): void
 
   // Feature modules. These cross the bridge as `unknown` and each consumer
   // narrows to its own module's types — the main-process modules own those

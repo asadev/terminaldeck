@@ -123,6 +123,25 @@ export function availableFeatures(state: FeatureState): Feature[] {
   return FEATURES.filter((entry) => !isInstalled(state, entry.id))
 }
 
+/**
+ * Every command id that is not live right now, in registry order.
+ *
+ * This is the one question about features that has to leave the renderer. The
+ * application menu is built in the main process, which has no registry and no
+ * `localStorage` to read one against, so it was offering Browser, Split the
+ * Window and Swarm View whatever the store said. It is answered in commands
+ * rather than in feature ids on purpose: the menu knows what it sends, it does
+ * not know what a feature is, and keeping it that way means the registry never
+ * has to exist in two processes at once.
+ *
+ * `off` counts as well as `uninstalled` — `isOn` is the question every drawn
+ * surface asks, and a feature switched off is one whose menu item would do
+ * something the person has just turned off.
+ */
+export function offCommands(state: FeatureState): string[] {
+  return FEATURES.filter((entry) => !isOn(state, entry.id)).flatMap((entry) => entry.commands)
+}
+
 /* --------------------------------------------------------------- storage -- */
 
 /** What this machine has, or the shipped defaults when nothing is stored. */

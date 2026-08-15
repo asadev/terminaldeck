@@ -87,6 +87,15 @@ fun HostSwitcherSheet(
     onRename: (String, String?) -> Unit,
     onForget: (String) -> Unit,
     onAddHost: () -> Unit,
+    /**
+     * The GitHub account this phone holds, or null when none is connected.
+     *
+     * It lives on this sheet rather than on a settings screen because this sheet is already "the
+     * things that are about the phone rather than about what is on screen", and because a GitHub
+     * account is exactly that: **one**, phone-wide, answering every machine in the list above.
+     */
+    gitHubLogin: String? = null,
+    onGitHub: () -> Unit = {},
     onDismiss: () -> Unit,
 ) {
     var renaming by remember { mutableStateOf<HostSummary?>(null) }
@@ -211,6 +220,45 @@ fun HostSwitcherSheet(
                                 "The ones above stay paired and stay connected."
                             },
                             style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+
+                HorizontalDivider(
+                    color = MaterialTheme.colorScheme.outline,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
+                )
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 56.dp)
+                        .clickable {
+                            onDismiss()
+                            onGitHub()
+                        }
+                        .padding(horizontal = 20.dp, vertical = 12.dp),
+                ) {
+                    Column {
+                        Text(
+                            text = "GitHub",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        Text(
+                            // "Not connected" is said plainly rather than left blank: a row with no
+                            // second line reads as a feature with nothing behind it.
+                            //
+                            // The login asks for mono, because a login is data — a thing somebody
+                            // checks character by character. It is stated even though `bodySmall`
+                            // in this app's theme is *already* monospace, so today the two branches
+                            // look identical on screen: the day that style stops being mono, this
+                            // line is the one that should not follow it.
+                            text = gitHubLogin?.let { "@$it" } ?: "Not connected",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = if (gitHubLogin != null) FontFamily.Monospace else null,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }

@@ -19,6 +19,11 @@ import './styles.css'
 
 import { BRAND } from '../../src/shared/brand'
 import { Connection, type ConnectionState } from './connection'
+import {
+  CREDENTIAL_EXPLANATION,
+  credentialHeadline,
+  type CredentialNotice,
+} from './credential'
 import { folderOffer, foldersAfter, noFoldersSentence, pickerRows } from './folders'
 import { machineNoun, readHostPlatform, type HostPlatform } from './host-platform'
 import { createKeyBar, type KeyBarHandle } from './keybar'
@@ -90,6 +95,15 @@ class Deck {
   private readonly banner = element('div', 'banner')
   private readonly bannerText = element('span', 'banner__text')
   private readonly bannerAction = element('button', 'banner__action', 'Retry now')
+  /**
+   * Where a machine's request for a GitHub login is reported.
+   *
+   * A sibling of the content rather than part of a screen, because it has to be
+   * readable from the terminal as well as from the session list — a `git push`
+   * is asked for from inside a session, which is exactly where somebody is
+   * looking when it happens.
+   */
+  private readonly credentialCard = element('section', 'ask')
   private readonly content = element('main', 'content')
 
   private connection: Connection | null = null
@@ -106,6 +120,15 @@ class Deck {
   private terminalScreen: HTMLElement | null = null
   /** Set while a message needs saying on the sessions screen. */
   private notice: string | null = null
+  /**
+   * The last GitHub login a machine asked this browser for, until it is
+   * dismissed.
+   *
+   * Kept rather than flashed: the person who needs to read it may have been
+   * looking at the terminal when the push failed, and a toast that had already
+   * gone would leave them with a git error and no explanation anywhere.
+   */
+  private credentialAsk: CredentialNotice | null = null
   /**
    * What kind of machine this client is paired to.
    *
@@ -155,7 +178,7 @@ class Deck {
     this.bannerAction.addEventListener('click', () => this.connection?.resume())
     this.banner.append(this.bannerText, this.bannerAction)
 
-    root.append(this.header, this.banner, this.content)
+    root.append(this.header, this.banner, this.credentialCard, this.content)
   }
 
   /* ------------------------------------------------------------- startup -- */
@@ -195,6 +218,7 @@ class Deck {
         onState: (state) => this.onState(state),
         onMessage: (message, activity) => this.onMessage(message, activity),
         onCredential: (credential) => this.onCredential(credential),
+        onCredentialAsked: (notice) => this.onCredentialAsked(notice),
       },
     })
     this.connection.start()
@@ -268,6 +292,25 @@ class Deck {
       hostPlatform: this.hostPlatform,
     }
     saveCredential(window.localStorage, this.credential)
+  }
+
+  /**
+   * A machine asked this browser for a GitHub login.
+   *
+   * It has already been acknowledged and refused by the time this runs — see
+   * `credential.ts` for why this client cannot hold a token and why refusing is
+   * the honest implementation rather than an unfinished one. What is left to do
+   * is tell the person, because a refusal nobody sees is indistinguishable from
+   * a feature that is broken.
+   *
+   * The newest question replaces the one on screen rather than stacking. A fetch
+   * loop would otherwise fill the page with identical cards, and the second card
+   * says nothing the first one did not: the answer is the same every time and
+   * the remedy is the same every time.
+   */
+  private onCredentialAsked(notice: CredentialNotice): void {
+    this.credentialAsk = notice
+    this.renderCredentialAsk()
   }
 
   /** What to call the machine on the other end, in a sentence. */
@@ -405,7 +448,43 @@ class Deck {
   private render(): void {
     this.renderHeader()
     this.renderBanner()
+    this.renderCredentialAsk()
     this.renderContent()
+  }
+
+  /**
+   * What a machine asked for, and the sentence the desktop had no way to write.
+   *
+   * The three facts named here are the same three the approval prompt names on
+   * the phones — the repository, the account, and the machine that asked — and
+   * that is deliberate: this is the same event, reported by a client that cannot
+   * answer it. What replaces the buttons is the explanation and the two routes
+   * that do work.
+   *
+   * Everything variable in it goes through `plain`, like every other string that
+   * came off this socket.
+   */
+  private renderCredentialAsk(): void {
+    const ask = this.credentialAsk
+    this.credentialCard.hidden = ask === null
+    if (ask === null) {
+      this.credentialCard.replaceChildren()
+      return
+    }
+
+    const headline = element(
+      'p',
+      'ask__headline',
+      plain(credentialHeadline(ask, `The ${this.noun}`)),
+    )
+    const why = element('p', 'ask__why', CREDENTIAL_EXPLANATION)
+    const dismiss = element('button', 'button button--quiet', 'Dismiss')
+    dismiss.type = 'button'
+    dismiss.addEventListener('click', () => {
+      this.credentialAsk = null
+      this.renderCredentialAsk()
+    })
+    this.credentialCard.replaceChildren(headline, why, dismiss)
   }
 
   private renderHeader(): void {

@@ -353,6 +353,18 @@ describe('the whole page', () => {
     expect(markup).toContain('placeholder="Paste the code"')
   })
 
+  it('leaves both halves of pairing live while nothing is blocking them', () => {
+    // The other half of the fix that disables them when the relay is down: a
+    // page with nothing wrong with it must not come up greyed out. Static
+    // markup is the first frame, before any read has answered, which is exactly
+    // the moment a defensive `disabled` would show up as a screen nobody can
+    // start a pairing on.
+    const markup = renderToStaticMarkup(<MachinesPanel bridge={NOOP_BRIDGE} />)
+    expect(markup).toContain('Show a code</button>')
+    expect(markup).not.toMatch(/<button[^>]*disabled[^>]*>Show a code/)
+    expect(markup).not.toMatch(/<input[^>]*placeholder="Paste the code"[^>]*disabled/)
+  })
+
   it('says so plainly when this build cannot reach the feature at all', () => {
     // A window running against an older preload explains itself once rather
     // than throwing inside an effect and leaving a blank page.

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi, type Mock } from 'vitest'
+import { ConfinementUnavailableError } from '../confine'
 import { remoteSessionCreator, remoteSessionStart, type SessionStarter } from './session-create'
 import type { SessionMeta } from '../../shared/types'
 
@@ -309,6 +310,38 @@ describe('when it cannot start one', () => {
     quiet.mockRestore()
 
     expect(outcome).toMatchObject({ ok: false, code: 'unavailable' })
+  })
+
+  it('says something different when the folder could not be made a boundary', async () => {
+    /*
+     * Two failures, two remedies, and sharing a sentence would send a person to
+     * the wrong one. "The folder may have moved" invites a retry and a look at
+     * the folder; a session refused because it could not be confined will be
+     * refused again for as long as the machine is in that state, and the thing
+     * to look at is the machine.
+     *
+     * This is also the test for the rule that keeps the grant screen honest:
+     * the spawn path throws rather than starting an unconfined session, so
+     * something here has to turn that throw into a refusal instead of losing it.
+     */
+    const failing = starter({
+      spawn: async () => {
+        throw new ConfinementUnavailableError('sandbox-exec would not run a command with this profile')
+      },
+    })
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const outcome = await remoteSessionCreator(failing)({ deviceId: PHONE })
+    quiet.mockRestore()
+
+    expect(outcome).toMatchObject({ ok: false, code: 'unavailable' })
+    if (!outcome.ok) {
+      expect(outcome.message).toContain('could not keep a session inside that folder')
+      expect(outcome.message).not.toContain('may have moved')
+      // The detail is for the log on the machine, not for a phone in another
+      // room: it names a program and a profile and nobody holding a phone can
+      // act on either.
+      expect(outcome.message).not.toContain('sandbox-exec')
+    }
   })
 
   it('never echoes the folder back in the sentence it sends', async () => {

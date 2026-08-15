@@ -10,6 +10,268 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+Four batches of work since 0.1.8 and **none of it is in a tagged build**. Anyone
+reading this from a downloaded release has none of what follows.
+
+Two things below have been proved on one operating system only, and are marked
+again where they appear. **A Mac has never talked to a Windows PC**:
+machine-to-machine pairing has been run end to end against a real relay, a real
+`RemoteAuth` and a real pairing desk — with both ends in one macOS process on
+loopback, which is where every seam that has ever broken lives, and nowhere
+else. And the **iOS UI tests compile but have not been executed against a live
+host**.
+
+### Added
+
+- **One machine can be paired to another with an eight-character code**, and
+  then drive its sessions from the Machines panel. Crockford base32 with `I`,
+  `L`, `O` and `U` removed — exactly 32 symbols, so eight characters carry
+  exactly 40 bits with no modulo bias, and no pair of symbols can be misread for
+  each other on a screen across a desk.
+
+  A typed code cannot carry an address, so it names a slot at the relay: the
+  machine showing the code sits in that slot for the sixty seconds the code
+  lives and answers with its real URL, host id and public key. A hostile relay
+  cannot answer in its place, because the responder's static key pair is derived
+  from the code as well — the offer channel is ordinary Noise IK whose identity
+  only a code-holder can produce. No relay change and no new primitive.
+
+- **Per-device folder grants.** The machine that owns the files decides which
+  folders each paired device may **start a session in**, per device, and every
+  client reads that list from the wire instead of inventing one from whatever
+  sessions it can see. Editing the list pushes it to the device immediately.
+
+  Read that sentence literally: it decides **where a session starts**. It is not
+  a sandbox and nothing in the app may say otherwise — a shell that starts in a
+  granted folder can `cd` anywhere the user account can reach. It is
+  organisation, in the same spirit as choosing which folder a file dialog opens
+  in. The security boundary is the one that was already there: pairing, plus a
+  human approving the device on the machine itself.
+
+  A device with no record falls back to the old behaviour rather than being
+  locked out — two phones were already paired when this was written, and a
+  refusal that arrives on a phone in another room is a bug, not a policy. An
+  empty recorded list is a different fact and is honoured: that is somebody
+  having removed every folder, which means nowhere.
+
+- **The credential proxy — their GitHub, from their device, never on yours.**
+  Two halves, and the first ships regardless of the second:
+
+  A session started from another device is handed **its own git configuration**
+  rather than the machine's, so `git push` cannot reach the owner's account
+  through any of the four doors it used to: the credential helper (an empty
+  `credential.helper` entry, which is git's "forget every helper seen so far",
+  followed by ours), the rest of the global config (`url.insteadOf`,
+  `http.extraHeader`, `include.path` — the whole file is replaced through
+  `GIT_CONFIG_GLOBAL`), `gh` (its own config directory and token variables), and
+  ssh (GitHub remotes rewritten to HTTPS; anything left over gets an ssh with no
+  agent and no identity file, so it fails loudly instead of quietly succeeding
+  as the owner).
+
+  On top of that, when git on the host needs a login, the request crosses the
+  sealed channel to the device that started the session, is answered there, and
+  is used once in memory. It is asked through a git **credential helper** rather
+  than `GIT_ASKPASS`, because askpass is handed a host and not a repository, and
+  "approve a push to github.com" is consent to push anywhere the account can
+  reach. Fetches and clones are silent; a push asks once per repository and
+  remembers the answer for as long as the app is running. Nothing is written to
+  the host's disk, so revocation is disconnection.
+
+  **The host half and the iOS client are done. Android and the browser client do
+  not answer a `credential.request` yet** — they never advertise the capability,
+  so a host never asks them, and nothing on either offers to sign in to GitHub.
+
+- **Sessions in WSL, routed by the folder rather than by a switch.** A Linux
+  path (`/home/asad/proj`) launches through `wsl.exe` inside the distribution; a
+  Windows path (`C:\Users\Asad\proj`) launches through `cmd.exe` as before. The
+  shell and the files therefore never end up on opposite sides of the boundary,
+  which is the one arrangement that is both slow and confusing. There is no "use
+  WSL" toggle on purpose — a toggle is what lets the two disagree. The single
+  choice a person does make is *which* distribution, in Settings → Linux, and
+  only because a path genuinely cannot answer it.
+
+- **A headless host: the same machine, without a window.** Core (sessions, the
+  remote server, crypto, grants) is split from shell (the Electron window, menus
+  and renderer), and a plain-Node daemon takes the core. Not a second
+  implementation — a fork would mean every fix landing twice and one copy
+  rotting.
+
+  The user interface is the terminal it was installed from: `pair`, `status`,
+  `folders` and `stop`, and deliberately no fifth command. Idle mode holds only
+  the relay connection when nothing is attached and wakes on the first attach,
+  driven by the attach and detach events that already exist rather than by a
+  timer; the WebSocket ping/pong stays, because a NAT drops an idle connection
+  in silence without it.
+
+  Verified end to end on macOS against the live relay with a real pty and no
+  Electron in the process. **It has not been installed in WSL yet**, which is
+  the machine it was written for.
+
+- **Features, not plugins.** Settings → Features switches parts of the app off
+  and back on: the browser pane, split view, every-session-at-once, cost and
+  usage, alerts, GitHub, MCP servers, hooks, AI readiness and voice dictation.
+  Everything ships inside the app always — installing turns one on,
+  uninstalling turns it off and clears the data it declares it owns, nothing is
+  downloaded and no third-party code ever runs, which is why reinstalling is
+  instant.
+
+  One registry file declares each feature and every surface it gates, and the
+  surface ids are typed against the panel, section and widget ids, so renaming a
+  panel without renaming it there fails the build rather than leaving a feature
+  that gates nothing.
+
+  Remote access is **not** in the store and never will be — the tunnel, the
+  clipboard, file transfer, pairing, device grants and the Machines panel are
+  the product, not an option. A test asserts no entry ever claims one of those
+  surfaces.
+
+  A store's own failure mode is undiscoverability, so where a feature would have
+  been, the app offers it: the empty split view says split view is available and
+  the button installs it and splits. The dead end would be the bug, not the
+  absence.
+
+- **Keep this machine awake with the lid closed** (Settings → Power), and it
+  reports the system's answer rather than its own intention. Electron's
+  `powerSaveBlocker` does not do this — it blocks *idle* sleep, and closing the
+  lid is a different path — so the switch reads and writes macOS's own
+  `SleepDisabled` and every read goes to the OS instead of to a stored boolean
+  that could be stale. The blocker is still taken, because idle sleep is a
+  second real way to lose a running agent. `Sleep On Power Button` is a
+  different key and is never touched, so the power button still locks the way it
+  always did.
+
+- **Sessions come back continued rather than reopened.** Restore-on-launch has
+  existed as a switch since the beginning and reopened only *projects*; its own
+  help text said so. It now reopens the sessions and hands the CLI its own
+  resume flag, with one rule that comes from `claude --continue` itself: it
+  picks the most recently written conversation in a folder, so the most recently
+  used tab in a conversation store continues and its siblings start clean rather
+  than two tabs attaching to one transcript.
+
+- **The iOS key bar and the terminal's gestures were rebuilt.** The bar this
+  replaces put twenty-six buttons in one horizontal scroll view and added
+  *dismiss* last, so the control reached for most often was the furthest away:
+  putting the keyboard down meant scrolling past the symbol row, four signals,
+  home, end, pgup, pgdn, copy and paste. A scrolling key bar is the wrong shape
+  anyway — you cannot see what is in it, and a key's position moves as you
+  scroll, so no muscle memory ever forms.
+
+  The bar never scrolls now and holds only what is pressed constantly while
+  typing a command, with *more* and *dismiss* pinned hard right; everything else
+  lives in a grid that opens where the keyboard was, grouped and labelled so it
+  can be read instead of hunted. Seven 44pt targets is about 350pt of content,
+  which fits a 375pt phone — the arithmetic is in a test, because it is the
+  whole design. There is no cmd or win cap: a PTY cannot receive either, so they
+  would have been two dead controls in a brand-new grid.
+
+  Gestures follow the system rather than the library: one finger scrolls, a
+  half-second press selects the word under it, dragging extends the selection,
+  and letting go offers the standard Copy callout. Scrolling needed no code —
+  the terminal is a scroll view — only the two recognisers that were taking the
+  drag away from it.
+
+  **The UI tests for all of this compile and have not been run against a live
+  host.** They are written to pair themselves against the harness and to run on
+  a 375-point screen, because on a 430-point one the old bar looked nearly fine,
+  which is how it shipped.
+
+- **Split view is on screen.** `SplitView.tsx` and `pane-tree.ts` were written,
+  tested and rendered nowhere for their whole life, and came within a commit of
+  being deleted as dropped. What was missing was never code: it was the answer
+  to "which session does the sidebar name", and the answer is the focused pane.
+  ⌘D splits, the divider drags, and the sidebar follows focus.
+
+### Changed
+
+- **The accent is blue, taken from the app icon rather than invented**, and dark
+  mode is a neutral grey with the warm cast removed. Orange survives nowhere as
+  an accent.
+- **Settings is a modal with its own section rail**, not a full page that takes
+  the window away from what you were doing.
+- **The sidebar's close control moved out of the panel header** to sit beside
+  the window buttons, and the panel edge reveals on approach and pins on click.
+- **A new session starts immediately**, in the folder used last, with the folder
+  still changeable from a chip until something is typed. No dialog in the way.
+- **One segmented mode switch** in the top right, rather than a strip of
+  controls.
+- **One parser for the wire, not two.** The browser client carried its own
+  decoder for the frames a host sends; it now calls the desktop's
+  `parseServerMessage`, which is the only TypeScript reader of an inbound frame
+  in this repository. Two decoders for one wire is how the two ends drift while
+  both keep compiling. As a side effect the browser client now enforces the same
+  maximum message size every other reader does — it had none.
+
+### Removed
+
+- **The task board, code and all** — the page, its state module, its
+  main-process store, its dashboard widget, its menu item and its ⌘⇧B. Not
+  wanted: a board is something you keep up to date by hand, and nothing else in
+  this app asks that of you. Removing half of it would have left rows that open
+  nothing, which is worse than the feature was.
+- `requestNotificationPermission`. In a renderer it resolves `granted` without
+  asking anyone, so the "Ask now" button it backed did nothing while looking
+  like it had done something.
+
+### Fixed
+
+- **Notifications actually arrive, and the app can tell when they do not.**
+  `Notification.permission` is always `granted` in an Electron renderer —
+  Chromium answers from its own permission model and never asks
+  `UNUserNotificationCenter` — so the app read a healthy permission it had not
+  checked, enabled its Test button on the strength of it, printed "Sent." for a
+  delivery it had not confirmed, and then blamed a Focus mode, which was the one
+  cause that had been ruled out. macOS had put up its authorisation prompt, the
+  banner-shaped one whose Allow hides behind *Options*, and nobody had ever
+  answered it.
+
+  The app now asks macOS's own notification store whether anything arrived, with
+  three verdicts of which only `delivered` reads as success; every branch that
+  cannot ask says so. Two measured facts are encoded in it: the row is written
+  when the banner *leaves* the screen, about six seconds in, so a short poll
+  would have cried wolf over every banner that worked; and the store lower-cases
+  the identifier, so an exact match found nothing for banners that plainly
+  arrived. Authorisation is requested when a banner preference is switched on,
+  where somebody is looking at the screen, rather than on a background event
+  where the one prompt macOS ever shows is missed for good.
+- **Changing the theme recolours the terminals that are already open.** They
+  resolved their xterm palette once at construction and never again, so a switch
+  to light mode left every open terminal a black slab in a white app.
+  `subscribeTheme` existed, was documented as being for exactly this, and was
+  called by nothing.
+- **The folder chip's menu is clickable.** It painted *under* the terminal and
+  could not be reached. Not a z-index problem: `backdrop-filter` creates a
+  stacking context, and on a statically positioned box that paints with in-flow
+  content, beneath every positioned descendant whatever z-index it asks for. The
+  same property from the other side made the menu a backdrop root's child, so
+  its own blur sampled nothing and terminal text read through its labels.
+- **MCP servers get the login PATH on Windows.** `{ ...process.env, PATH: path }`
+  leaves Windows' own `Path` spelling in place, so the child process held both
+  keys with no rule about which it reads — and the one it ignored was the PATH
+  that had just been resolved.
+- **Session restore is no longer blind to profiles.** A session under a work or
+  personal profile asked `~/.claude`, was told there was no conversation, and
+  came back blank on top of an intact transcript. The unit is a conversation
+  scope now — provider, config directory and folder — and the config directory
+  is required, so making that mistake again is a compile error.
+- **A notification no longer says the same word twice.** A tab keeps its folder
+  name until the conversation has a title, which made the common case read
+  "terminaldeck / terminaldeck needs your input".
+- macOS signing works end to end — identifier `dev.terminaldeck.app` rather than
+  Electron, hardened runtime, `codesign --verify --strict` passing. **Builds are
+  still unsigned**: a Developer ID certificate cannot be issued over the API
+  (`POST /v1/certificates` answers 403 "can only be performed by the Account
+  Holder"), so it needs one interactive sign-in that has not happened.
+
+### Security
+
+- **A wrong pairing code is counted.** `authenticatorFor` refused an unknown
+  code *before* `redeemPairingToken` ran, so a wrong guess never reached the
+  rate limiter. That was harmless while a token carried 256 bits and is not
+  harmless at 40. Misses are counted now and a code burns after five, which is
+  what makes the arithmetic in that file honest rather than decorative.
+- **A guest session no longer inherits the host's GitHub.** See the credential
+  proxy above; this half shipped on its own and needs nothing on the other end.
+
 ## [0.1.8] — 2026-08-14
 
 ### Fixed

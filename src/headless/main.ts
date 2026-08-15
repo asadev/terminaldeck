@@ -25,12 +25,14 @@ import { existsSync, realpathSync } from 'node:fs'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { BRAND } from '../shared/brand'
-import { installPaths, nodePaths, userDataDir } from '../main/platform/paths'
+import { installPaths, nodePaths, userDataDir, type PlatformPaths } from '../main/platform/paths'
 import type { Device } from '../main/remote/device-auth'
 import type { DeviceFolderGrant } from '../main/remote/folder-grants'
 import type { PairingToken } from '../main/remote/device-auth'
+import { currentPlatform } from '../main/platform/host'
 import {
   callControl,
+  clearDaemonRecord,
   processAlive,
   readDaemonRecord,
   type ControlResponse,
@@ -60,8 +62,23 @@ import { hostVersion } from './version'
  */
 const START_TIMEOUT_MS = 20_000
 
-export async function run(argv: readonly string[]): Promise<number> {
-  installPaths(nodePaths({ appRoot: bundleDir() }))
+/**
+ * Run one command.
+ *
+ * `paths` is a seam and nothing else: left alone it is this machine's real
+ * directories, and a test passes a temporary one so that exercising `status`
+ * against a stale record does not read — or delete — the record of the host
+ * actually running on the developer's own computer. Written as a branch rather
+ * than as a default argument so the plain-Node call still reads literally as
+ * `installPaths(nodePaths(…))`, which `seam.test.ts` looks for: that assertion
+ * is what stops this file quietly going back to Electron's paths.
+ */
+export async function run(
+  argv: readonly string[],
+  paths: PlatformPaths | null = null,
+): Promise<number> {
+  if (paths === null) installPaths(nodePaths({ appRoot: bundleDir() }))
+  else installPaths(paths)
   const command = parseArgs(argv)
 
   switch (command.kind) {
@@ -79,31 +96,70 @@ export async function run(argv: readonly string[]): Promise<number> {
   }
 }
 
+/**
+ * Thrown when the record named a host that is not there after all.
+ *
+ * Not an error to show. It is a control-flow signal from {@link ask} back to
+ * {@link connected}, whose whole job is to turn it into the *not running*
+ * answer — the one with the state directory in it and, for `pair`, a host that
+ * gets started. See {@link connected} for the failure that motivated it.
+ */
+class HostGone extends Error {}
+
 async function connected(command: Command): Promise<number> {
   const stateDir = userDataDir()
-  let record = liveRecord(stateDir)
+  const record = liveRecord(stateDir)
 
-  if (record === null) {
-    if (command.kind !== 'pair') {
-      process.stdout.write(`${renderNotRunning(stateDir)}\n`)
-      // Not an error. "Not running" is a true and complete answer to `status`,
-      // and a non-zero exit would make a health check report a failure for a
-      // machine that is simply switched off.
-      return command.kind === 'status' ? 0 : 1
-    }
-    process.stdout.write(`Starting the ${BRAND.name} host…\n`)
-    const started = await startHost(stateDir)
-    if (started !== null) {
-      process.stderr.write(`${started}\n`)
-      return 1
-    }
-    record = liveRecord(stateDir)
-    if (record === null) {
-      process.stderr.write('The host started and then did not write its record. Check its log.\n')
-      return 1
+  /*
+   * Try the record first, and treat "nothing is listening" as *not running*.
+   *
+   * `liveRecord` believes a record whose pid is alive, and a pid being alive is
+   * not the same as this host being alive. A WSL distribution restarts pids from
+   * 1 every time Windows brings it back, so a record written by a host systemd
+   * started early in the last boot names a low pid that some other service holds
+   * now — and the record itself survives, because it is on the distribution's
+   * own disk. That combination was reproduced on Asad's Ubuntu and it broke both
+   * commands that matter: `status` printed "No host is listening here." and
+   * exited 1, where its whole contract is that a switched-off machine is a
+   * complete answer worth exit 0; and `pair` — the command whose entire purpose
+   * is to start the host on first use — refused instead of starting anything.
+   *
+   * So the socket is the authority and the record is only a hint. A record that
+   * names a socket nobody answers is deleted, and the command carries on down
+   * the path it would have taken had the record never been there.
+   */
+  if (record !== null) {
+    try {
+      return await dispatch(record, command)
+    } catch (error) {
+      if (!(error instanceof HostGone)) throw error
+      clearDaemonRecord(stateDir, currentPlatform())
     }
   }
 
+  if (command.kind !== 'pair') {
+    process.stdout.write(`${renderNotRunning(stateDir)}\n`)
+    // Not an error. "Not running" is a true and complete answer to `status`,
+    // and a non-zero exit would make a health check report a failure for a
+    // machine that is simply switched off.
+    return command.kind === 'status' ? 0 : 1
+  }
+
+  process.stdout.write(`Starting the ${BRAND.name} host…\n`)
+  const started = await startHost(stateDir)
+  if (started !== null) {
+    process.stderr.write(`${started}\n`)
+    return 1
+  }
+  const fresh = liveRecord(stateDir)
+  if (fresh === null) {
+    process.stderr.write('The host started and then did not write its record. Check its log.\n')
+    return 1
+  }
+  return await dispatch(fresh, command)
+}
+
+async function dispatch(record: DaemonRecord, command: Command): Promise<number> {
   switch (command.kind) {
     case 'status':
       return await showStatus(record)
@@ -319,8 +375,8 @@ async function changeFolders(
 
 /* ---------------------------------------------------------------- plumbing -- */
 
-function ask(record: DaemonRecord, cmd: string, ...args: unknown[]): Promise<ControlResponse> {
-  return callControl({
+async function ask(record: DaemonRecord, cmd: string, ...args: unknown[]): Promise<ControlResponse> {
+  const answer = await callControl({
     socket: record.socket,
     token: record.token,
     cmd,
@@ -335,6 +391,17 @@ function ask(record: DaemonRecord, cmd: string, ...args: unknown[]): Promise<Con
      */
     args: args.map((arg) => JSON.stringify(arg)),
   })
+  /*
+   * One failure is not a message to print, it is a fact about the record.
+   *
+   * Raised from here rather than checked at each of the eight call sites,
+   * because a check somebody has to remember to write is a check that is missing
+   * from the ninth. `connected` is the only catcher.
+   */
+  if (!answer.ok && answer.reason === 'no-listener') {
+    throw new HostGone('The host named in this machine’s record is not there.')
+  }
+  return answer
 }
 
 async function devices(

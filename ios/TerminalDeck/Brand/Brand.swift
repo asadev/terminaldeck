@@ -20,8 +20,15 @@ enum Brand {
     /// Lowercase slug. Also the URL scheme the desktop opens a session with.
     static let id = "terminaldeck"
 
-    /// One line, used on the empty state.
-    static let tagline = "Run your coding agents on one deck"
+    /*
+     * There was a `tagline` here — "Run your coding agents on one deck" — and it
+     * had exactly one reader, the session list's empty state. That sentence has
+     * been replaced by one that says something true about *this* screen: the list
+     * only ever holds sessions this product started, so a Claude running in
+     * Terminal.app is missing from it by design rather than by failure. A brand
+     * constant with no reader is a constant whose comment starts lying about
+     * where it is used, so it went with the copy that used it.
+     */
 
     /// Read rather than restated: `project.yml` already has to declare it, and
     /// a constant here would be a second copy that can disagree with the bundle

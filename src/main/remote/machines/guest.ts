@@ -168,6 +168,17 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
   let welcomeTimer: ReturnType<typeof setTimeout> | null = null
   /** Has a `welcome` ever landed from this machine? Decides "waiting" vs "broken". */
   let everWelcomed = false
+  /**
+   * The last `error` that arrived on a serving connection, kept only until that
+   * connection ends.
+   *
+   * Its whole job is the sentence. If the far end refused a *request* the
+   * channel stays open and this is never read again; if it was refusing the
+   * *connection* the close follows within a frame or two, and `closed` reports
+   * this instead of the socket's own description — "the relay closed the
+   * connection" says nothing to somebody whose device was just revoked.
+   */
+  let refusal: { message: string; code: ProtocolErrorCode | null } | null = null
 
   let current: MachineLinkState = {
     id: options.id,
@@ -222,6 +233,7 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
   function drop(reason: string, refused: ProtocolErrorCode | null): void {
     const live = channel
     channel = null
+    refusal = null
     if (welcomeTimer !== null) clearTimeout(welcomeTimer)
     welcomeTimer = null
     if (live !== null) live.close()
@@ -269,6 +281,8 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
         everWelcomed = true
         connectedAt = now()
         attempts = 0
+        // A new connection carries none of the old one's refusals.
+        refusal = null
         publish({
           state: 'online',
           reason: null,
@@ -289,7 +303,13 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
       case 'created':
         // Merged rather than replacing the list: this frame is the one session
         // that was just started, and the rest of the list is still true.
+        //
+        // `reason` is cleared with it. A refusal printed under the row is about
+        // the request that was refused, and leaving it there next to a session
+        // that has just started would describe the wrong thing.
+        refusal = null
         publish({
+          reason: null,
           sessions: [
             message.session,
             ...current.sessions.filter((session) => session.id !== message.session.id),
@@ -318,14 +338,49 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
           ),
         })
         return
-      case 'error':
-        // Every refusal that matters closes the channel behind it, so this is
-        // reported and the `closed` handler decides what happens next. The
-        // sentence is the far machine's own and is written for a person; it is
-        // not rewritten here, because this end does not know more than that end
-        // about why it said no.
-        drop(message.message === '' ? 'That machine refused the connection.' : message.message, message.code)
+      case 'error': {
+        /*
+         * Two completely different frames share this shape, and telling them
+         * apart is the difference between a sentence and a disconnection.
+         *
+         * One is the connection being refused: a credential the far end will
+         * not take, a device somebody revoked, a protocol frame it could not
+         * read. `server.ts` sends those through `refuse`, which closes the
+         * socket in the same breath.
+         *
+         * The other is one *request* being refused on a connection that is
+         * working perfectly — `create` naming a folder that device has not been
+         * granted, `attach` naming a session that has already exited, a tunnel
+         * or an upload turned down. Those are answered and nothing is closed.
+         *
+         * This handler used to drop the link for both, and on real machines
+         * that was the more common one by far. Asking a paired Windows PC for a
+         * folder its grant list no longer carried took the whole link down:
+         * `online` → `error` with the session list blanked → `connecting` →
+         * `online`, measured at 1.9 seconds, for a mistake whose entire correct
+         * outcome is one line of red text. Every remote session on that machine
+         * vanished from the screen and came back, and any attach in flight was
+         * lost with them.
+         *
+         * There is no request id on this wire to match an answer to a question,
+         * so the discriminator is the state of the link: once `welcome` has
+         * landed and this thing is serving, a refusal is a refused *request*.
+         * A refused connection is still refused — the close follows immediately
+         * and `closed` reports it with this sentence rather than the socket's.
+         */
+        const sentence = message.message === '' ? 'That machine refused the connection.' : message.message
+        if (current.state === 'online') {
+          refusal = { message: sentence, code: message.code }
+          // Published so the sentence reaches the person who caused it. The
+          // panel already draws `reason` under the row whatever the state is,
+          // and the far end wrote this text for a reader — this end knows less
+          // about why it said no than it does.
+          publish({ reason: sentence })
+          return
+        }
+        drop(sentence, message.code)
         return
+      }
       case 'attached':
       case 'detached':
       case 'pong':
@@ -352,7 +407,10 @@ export function createMachineLink(options: MachineLinkOptions): MachineLink {
           message: onMessage,
           closed: (reason) => {
             if (channel === null) return
-            drop(reason, null)
+            // A refusal that arrived a moment ago was about this connection
+            // after all, so its sentence wins over the socket's: "This device
+            // is not allowed in." rather than "the relay closed the channel".
+            drop(refusal?.message ?? reason, refusal?.code ?? null)
           },
         },
       })

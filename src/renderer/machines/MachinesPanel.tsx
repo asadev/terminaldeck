@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { PageEmpty, PageNote } from '../components/PageEmpty'
+import { useWhenActive } from '../schedule'
 import { panelSpec } from '../shell/panels'
 import { thisMachine } from '../platform'
 import { useAppSettings } from '../settings/useAppSettings'
@@ -184,6 +185,46 @@ export function MachinesPanel({ bridge: supplied }: Props) {
   }, [bridge])
 
   /**
+   * True while this panel is on screen, so a read that lands after it is gone
+   * does not set state nobody is looking at.
+   */
+  const mounted = useRef(true)
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
+  }, [])
+
+  const reread = useCallback(async (): Promise<void> => {
+    if (!bridge) return
+    const value = await bridge.listMachines()
+    if (mounted.current) setView(asView(value))
+  }, [bridge])
+
+  /**
+   * Read it again when the window comes back, because one thing on this screen
+   * has nothing pushing it.
+   *
+   * `machines:state` is announced when a *link* changes — a machine coming up,
+   * going away, being paired. `blocked` is not a link: it is this desktop's own
+   * relay, and nothing in the main process announces that connecting or
+   * dropping. So the sentence about the relay was decided once, when the page
+   * was opened, and then stood there being wrong in whichever direction the
+   * relay moved next: still saying "wait for it to connect" a minute after it
+   * had, or still offering a code after the socket died.
+   *
+   * This is the same answer `RemoteSection` gives for the same reason and in the
+   * same words — coming back to the window is the moment a stale answer starts
+   * to matter — and it is an event rather than a timer, which is the standing
+   * rule here: nothing polls for something a person's own attention already
+   * signals.
+   */
+  useWhenActive(() => {
+    void reread()
+  })
+
+  /**
    * Take the code off screen when it dies.
    *
    * One timeout for the life of one code, not a tick. The code is already dead
@@ -308,6 +349,22 @@ export function MachinesPanel({ bridge: supplied }: Props) {
     <section className="machines" aria-label="Machines">
       <h2 className="machines-heading">Machines</h2>
 
+      {/*
+        The reason pairing cannot happen, above the two halves it governs.
+
+        It used to sit *below* both of them, between the pairing block and the
+        list of machines, where it read as a footnote about the list — so the
+        page said "this machine cannot show or read a pairing code" underneath a
+        filled blue button that still offered to show one. Pressing it then
+        printed the main process's version of the same sentence in a third
+        place, and the screen had two paragraphs saying one thing and a primary
+        button that could only ever fail.
+
+        Now the precondition comes first and the controls it disables come
+        after, which is the order somebody reads them in.
+      */}
+      {view.blocked !== null && <p className="machines-blocked">{view.blocked}</p>}
+
       <div className="machines-pair">
         <div className="machines-pair-half">
           <h3 className="machines-pair-title">Let another machine in</h3>
@@ -316,7 +373,22 @@ export function MachinesPanel({ bridge: supplied }: Props) {
             once.
           </p>
           {code === null ? (
-            <button type="button" className="btn-primary" onClick={() => void showCode()}>
+            /*
+              Disabled while the relay is down, because the app already knows
+              the answer. `machines:code` refuses the moment it sees the same
+              state this button is reading, so an enabled one was a press whose
+              only possible outcome was an error — the dead control the design
+              brief's first rule is about, dressed as the one filled button on
+              the page. The reason is on the hover as well as in the notice
+              above, so the disabled state is never a mystery.
+            */
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={() => void showCode()}
+              disabled={view.blocked !== null}
+              title={view.blocked ?? undefined}
+            >
               Show a code
             </button>
           ) : (
@@ -390,17 +462,24 @@ export function MachinesPanel({ bridge: supplied }: Props) {
               spellCheck={false}
               autoComplete="off"
               aria-label="Pairing code from the other machine"
-              disabled={pairing}
+              // Both halves go quiet together. The notice above says this
+              // machine can neither show *nor read* a code, and a field that
+              // still takes nine characters while that is true is an invitation
+              // to type a code that dies on submit.
+              disabled={pairing || view.blocked !== null}
+              title={view.blocked ?? undefined}
             />
-            <button type="submit" disabled={pairing || typed.trim() === ''}>
+            <button
+              type="submit"
+              disabled={pairing || view.blocked !== null || typed.trim() === ''}
+              title={view.blocked ?? undefined}
+            >
               {pairing ? 'Adding…' : 'Add'}
             </button>
           </form>
           {pairError !== null && <p className="machines-error">{pairError}</p>}
         </div>
       </div>
-
-      {view.blocked !== null && <p className="machines-blocked">{view.blocked}</p>}
 
       {/*
         The reading note belongs to the *list*, not to the page.

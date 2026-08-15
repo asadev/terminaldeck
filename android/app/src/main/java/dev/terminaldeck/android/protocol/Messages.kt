@@ -60,6 +60,19 @@ sealed interface ClientMessage {
         val protocol: Int,
         val token: String,
         val device: DeviceDescriptor,
+        /**
+         * What this phone can do that the desktop would otherwise never ask it about.
+         *
+         * No default, for the same reason `protocol` has none: `encodeDefaults = false` means a
+         * field carrying its default is a field that never reaches the wire, and a desktop that
+         * does not see `credential` here will not send `credential.request` — so the approval
+         * prompt would simply never appear, on a build whose every round-trip test passed.
+         *
+         * The list is [Capability.CLAIMED] and nothing else. It is *not* the desktop's own
+         * capability list echoed back: everything in that one is something this phone asks for and
+         * is gated on the desktop having offered it.
+         */
+        val capabilities: kotlin.collections.List<String>,
     ) : ClientMessage
 
     @Serializable
@@ -163,6 +176,71 @@ sealed interface ClientMessage {
     @Serializable
     @SerialName("upload.cancel")
     data class UploadCancel(val id: String) : ClientMessage
+
+    /* ---- capability `credential`. The one exchange that starts over there. ---------------- */
+
+    /**
+     * "I heard you, and I am dealing with it."
+     *
+     * The one frame here that exists purely for a failure mode, and it is the failure mode the
+     * whole feature is judged on. Without it a desktop cannot tell a phone that is asleep from a
+     * person who is thinking — both are silence — so it would have to wait out the *human*
+     * deadline before it could say "your device isn't reachable": a thirty-second stall on a push
+     * with nothing on screen, which is how people stop trusting a feature.
+     *
+     * With it there are two deadlines over there. A few seconds for this, which a live app answers
+     * instantly; then, and only then, as long as a person needs to read a prompt and decide.
+     *
+     * Sent for silent requests too, where it costs nothing — the answer follows it in the same
+     * breath — because a client that only acked when it was about to prompt would be one more
+     * thing that has to be right.
+     */
+    @Serializable
+    @SerialName("credential.ack")
+    data class CredentialAck(val id: String) : ClientMessage
+
+    /**
+     * The login, for this one operation.
+     *
+     * It is used once, in memory, on the machine that asked, and is never written to that
+     * machine's disk. There is no cache to expire and nothing to clean up when this phone
+     * disconnects.
+     *
+     * [remember] is the "Always for this repo" button, and it is a **scope, not a stored secret**:
+     * it tells that machine it may stop asking about that repository from this device. Every push
+     * still comes back here for the credential itself, because the desktop has never held one.
+     *
+     * It defaults to false so that `encodeDefaults = false` leaves it off the wire entirely unless
+     * somebody pressed that button — the desktop reads `remember === true` and nothing else, and a
+     * literal `false` on the wire would be a field that says nothing while carrying somebody's
+     * consent as its name.
+     */
+    @Serializable
+    @SerialName("credential.answer")
+    data class CredentialAnswer(
+        val id: String,
+        val username: String,
+        val password: String,
+        val remember: Boolean = false,
+    ) : ClientMessage
+
+    /**
+     * No.
+     *
+     * Carries a code rather than a sentence, and the direction is the point: this string is written
+     * *here* and read on somebody else's **desktop**, where it is printed into a terminal. The
+     * desktop owns the words that appear in its own terminal — it is the side that knows whether
+     * the reader is looking at a push or a fetch, and it is the side that must not pipe text chosen
+     * by a phone into a PTY. So this end says which of two things happened and the desktop writes
+     * the sentence.
+     *
+     * No default on [reason]: the desktop treats an absent one as `denied`, and defaulting here
+     * would mean `encodeDefaults = false` silently turning [CredentialDenial.NoAccount] — which is
+     * not a refusal at all — into one.
+     */
+    @Serializable
+    @SerialName("credential.deny")
+    data class CredentialDeny(val id: String, val reason: CredentialDenial) : ClientMessage
 
     companion object {
         /**
@@ -395,6 +473,93 @@ sealed interface ServerMessage {
         val id: String,
         val message: String = "That file did not arrive.",
     ) : ServerMessage
+
+    /* ---- capability `credential` ------------------------------------------------------------ */
+
+    /**
+     * Git on that machine needs a login for a repository, and this phone holds it.
+     *
+     * The only frame in this protocol the desktop sends unprompted as a *question*. Everything else
+     * it sends is an answer or an event; this one is waiting on a reply, and the two ways to reply
+     * are [ClientMessage.CredentialAnswer] and [ClientMessage.CredentialDeny] — with a
+     * [ClientMessage.CredentialAck] first, always, so a live phone can be told from an absent one.
+     *
+     * [repo] is `owner/name`, or **null** when git gave the desktop no path to derive one from.
+     * Null is not a detail to paper over: a prompt that cannot name the repository is a prompt
+     * asking somebody to approve "a push, somewhere", and this client says exactly that rather than
+     * inventing a name. It happens when the remote is not a two-segment path — a gist, a wiki, a
+     * self-hosted layout.
+     *
+     * [prompt] is the instruction and [operation] is the fact, and they are two fields because they
+     * answer two different questions. [operation] says what git is doing, always. [prompt] says
+     * whether a person should be asked — false for every read, and false for a write against a
+     * repository this device has already approved *on that machine*. **Whether to ask is the
+     * desktop's answer, not this one's**: it is the side that knows what this device has approved
+     * there, and a phone that second-guessed it would be a second source of truth with no way to
+     * reconcile the two.
+     *
+     * [operation] defaults to [CredentialOperation.Write] rather than being required, and the
+     * direction of that default is chosen rather than accidental. `coerceInputValues` folds a
+     * missing or unrecognised value onto it, and the desktop's own classifier does the same thing
+     * for the same reason: prompting for a fetch costs somebody one tap they did not need, and
+     * *not* prompting for a push is the entire feature not working.
+     */
+    @Serializable
+    @SerialName("credential.request")
+    data class CredentialRequest(
+        val id: String,
+        /**
+         * The git host — `github.com`, or an enterprise one.
+         *
+         * Called `host` on the wire and read as `origin` everywhere above this layer, because on
+         * this side of the connection "host" already means *the machine this phone is paired with*
+         * — and the two are on the same screen at the same time.
+         */
+        val host: String,
+        val repo: String? = null,
+        val operation: CredentialOperation = CredentialOperation.Write,
+        val prompt: Boolean = false,
+    ) : ServerMessage
+}
+
+/**
+ * What git was doing when it asked for a login.
+ *
+ * Transcribed from `CREDENTIAL_OPERATIONS`. Two values because there are exactly two answers a
+ * person cares about, and the difference between them is the whole of the prompting policy: a fetch
+ * or a clone is a **read**, is reversible, and asking about one buys nothing but fatigue; a push is
+ * a **write**, is not reversible, and is the moment somebody should get to see whose name goes on
+ * the commit.
+ *
+ * It arrives as a fact, not as an instruction. What this client is asked to *do* is the separate
+ * `prompt` flag on the same frame.
+ */
+@Serializable
+enum class CredentialOperation {
+    @SerialName("read")
+    Read,
+
+    @SerialName("write")
+    Write,
+}
+
+/**
+ * Why this phone would not answer, as a code rather than a sentence.
+ *
+ * Transcribed from `CREDENTIAL_DENIALS`. See [ClientMessage.CredentialDeny] for why this direction
+ * carries a code where `tunnel.closed` carries prose.
+ *
+ * [NoAccount] is **not a refusal**. It means no GitHub is connected in this app yet, which is a
+ * different thing to be told and has a different fix — and the desktop's wording for it points at
+ * this phone rather than at the person who pushed.
+ */
+@Serializable
+enum class CredentialDenial {
+    @SerialName("denied")
+    Denied,
+
+    @SerialName("no-account")
+    NoAccount,
 }
 
 @Serializable

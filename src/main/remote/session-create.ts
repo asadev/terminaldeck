@@ -43,15 +43,19 @@
  * session here", never "may *this* phone". A required field means the compiler
  * asks the question at every call site instead of a reviewer having to.
  *
- * ## What this is not
+ * ## What this file decides, and what it no longer has to apologise for
  *
- * It decides where a session **starts**. A shell that starts in a granted
- * folder can `cd` anywhere the account can reach. Nothing here is a sandbox and
- * no sentence this file sends may imply one.
+ * It decides where a session **starts**. What happens after that is
+ * `src/main/confine/`, and the answer is now different per platform: on macOS
+ * the session is held inside the folder it started in, and on Windows and Linux
+ * it is not, because no mechanism there has been measured. This file makes no
+ * claim either way — it only has to know that the spawn it calls can refuse for
+ * a *third* reason now, and that the refusal deserves its own sentence.
  */
 
 import { posix, win32 } from 'node:path'
 import type { SessionMeta } from '../../shared/types'
+import { ConfinementUnavailableError } from '../confine'
 import { currentPlatform, isWindows, machineNoun, type Platform } from '../platform/host'
 import type { CreateOutcome, CreateRequest } from './server'
 
@@ -256,6 +260,27 @@ export function remoteSessionCreator(
         },
       }
     } catch (error) {
+      /*
+       * The boundary could not be put around the session, so there is no
+       * session. This is deliberate and is the only way the wording on the grant
+       * screen stays honest: it tells a person that a session from a device
+       * stays inside the folder, and a session that quietly started outside one
+       * would make that sentence a lie on a machine nobody was looking at.
+       *
+       * A separate message because the remedy is completely different from the
+       * one below. Nothing about retrying, and nothing about the folder having
+       * moved — the folder is fine; the machine is not able to hold a session
+       * inside it right now, and that is something only the person at that
+       * machine can look into.
+       */
+      if (error instanceof ConfinementUnavailableError) {
+        console.error('[remote] refusing to start an unconfined session:', error.detail)
+        return {
+          ok: false,
+          code: 'unavailable',
+          message: `${here} could not keep a session inside that folder, so it did not start one. Check it on the machine itself.`,
+        }
+      }
       // The realistic failure is a folder that was listed and has since been
       // deleted or unmounted, which is somebody else's action rather than a
       // wrong request — so it is `unavailable` and worth retrying, not a

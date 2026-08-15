@@ -1,4 +1,12 @@
-import { app, Menu, shell, type BrowserWindow, type MenuItemConstructorOptions } from 'electron'
+import {
+  app,
+  ipcMain,
+  Menu,
+  shell,
+  type BrowserWindow,
+  type IpcMainEvent,
+  type MenuItemConstructorOptions,
+} from 'electron'
 import { BRAND } from '../shared/brand'
 import { currentPlatform, type Platform } from './platform/host'
 
@@ -31,14 +39,72 @@ import { currentPlatform, type Platform } from './platform/host'
  * run on one machine. Windows and Linux get the same four items where their own
  * conventions put them: Settings and Keyboard Shortcuts at the foot of File,
  * Exit below them, About at the bottom of Help.
+ *
+ * ## Why the menu has to be told about the feature store
+ *
+ * Three of the items below belong to features somebody can uninstall: Browser,
+ * Split the Window and Swarm View. The window already stops drawing their
+ * buttons, their panels and their palette rows — the registry is asked before
+ * anything optional is rendered — and the menu bar was the one surface that
+ * never asked. Uninstall the split view and "Split the Window ⌘D" stayed in
+ * View, which is precisely the dead control the design brief's first rule is
+ * about: it looks like the feature is still there, and choosing it lands you in
+ * a settings page offering to install the thing you thought you were using.
+ *
+ * The registry lives in the renderer, because everything that consults it does.
+ * So the renderer sends the ids of the commands whose feature is switched off,
+ * the same way it sends every other piece of state that has to cross — an
+ * explicit preload method over one channel — and the menu is rebuilt from
+ * scratch each time that list changes. Rebuilt, not built once: a menu that is
+ * only correct at launch is the same bug one uninstall later, and Electron
+ * binds accelerators *through* the menu, so an item that goes away takes its
+ * chord with it — which is the right way round. ⌘D with no menu item behind it
+ * falls through to the window's own key handler, and that handler routes a
+ * command for a missing feature into the store and explains itself. Exactly one
+ * of the two answers is live at any moment, and neither of them is silence.
  */
 
 /** Turns a renderer command id into a menu click handler. */
 export type Send = (command: string) => () => void
 
-export function menuTemplate(platform: Platform, send: Send): MenuItemConstructorOptions[] {
+/**
+ * Command ids the menu must not offer, because the feature that owns them is
+ * not installed in the window that sent this.
+ *
+ * Empty means "offer everything", which is the only safe reading of "nobody has
+ * told me anything yet": the app has to come up with its whole menu bar, and a
+ * launch that hid Sessions or Settings while it waited for the first frame of
+ * the renderer would be a far worse failure than a moment of showing an item
+ * for a feature somebody removed.
+ */
+export type HiddenCommands = ReadonlySet<string>
+
+const NOTHING_HIDDEN: HiddenCommands = new Set<string>()
+
+export function menuTemplate(
+  platform: Platform,
+  send: Send,
+  hidden: HiddenCommands = NOTHING_HIDDEN,
+): MenuItemConstructorOptions[] {
   const mac = platform === 'darwin'
   const separator: MenuItemConstructorOptions = { type: 'separator' }
+
+  /**
+   * A menu item, or nothing at all when its feature has been uninstalled.
+   *
+   * Gone, rather than present and greyed out. A permanently disabled item is a
+   * question the menu bar has no room to answer — it cannot say "you uninstalled
+   * this, here is how to get it back" — and the palette already does exactly
+   * that, in words, under the name of the feature.
+   *
+   * `renderer/features/menu-bridge.test.ts` reads this file and fails the build
+   * if a command the registry gates is sent from an item that does not go
+   * through here.
+   */
+  const whenInstalled = (
+    command: string,
+    item: MenuItemConstructorOptions,
+  ): MenuItemConstructorOptions[] => (hidden.has(command) ? [] : [item])
 
   // The four items the app menu used to own. Defined once so the two layouts
   // cannot disagree about a label or an accelerator — the drift would show up
@@ -110,16 +176,29 @@ export function menuTemplate(platform: Platform, send: Send): MenuItemConstructo
     ],
   }
 
+  // Every gated item below shares its group with an item nothing can take away
+  // — Sessions in the first, Toggle Sidebar in the second — so uninstalling all
+  // three features can never strand a separator against another separator or
+  // against the end of the menu. `menu.test.ts` asserts that for every
+  // combination rather than leaving it as something true today.
   const view: MenuItemConstructorOptions = {
     label: 'View',
     submenu: [
       { label: 'Sessions', click: send('view.terminal') },
       { label: 'Project Overview', click: send('view.overview') },
-      { label: 'Browser', click: send('view.browser') },
+      ...whenInstalled('view.browser', { label: 'Browser', click: send('view.browser') }),
       separator,
       { label: 'Toggle Sidebar', accelerator: 'CmdOrCtrl+B', click: send('view.sidebar') },
-      { label: 'Split the Window', accelerator: 'CmdOrCtrl+D', click: send('pane.split') },
-      { label: 'Swarm View', accelerator: 'CmdOrCtrl+\\', click: send('view.swarm') },
+      ...whenInstalled('pane.split', {
+        label: 'Split the Window',
+        accelerator: 'CmdOrCtrl+D',
+        click: send('pane.split'),
+      }),
+      ...whenInstalled('view.swarm', {
+        label: 'Swarm View',
+        accelerator: 'CmdOrCtrl+\\',
+        click: send('view.swarm'),
+      }),
       separator,
       { label: 'Command Palette', accelerator: 'CmdOrCtrl+K', click: send('app.palette') },
       { label: 'Quick Open', accelerator: 'CmdOrCtrl+P', click: send('app.quickOpen') },
@@ -145,6 +224,41 @@ export function menuTemplate(platform: Platform, send: Send): MenuItemConstructo
   ]
 }
 
+/**
+ * The channel the window pushes its feature state down.
+ *
+ * A `send`, not an `invoke`: the renderer is telling the menu something, and
+ * there is no answer to wait for. Named for what it carries rather than for the
+ * feature store, because that is all the main process is ever told — a list of
+ * command ids, no feature ids, no statuses. The registry stays in the one
+ * process that owns it, and this side cannot fall out of step with a table it
+ * never reads.
+ */
+export const MENU_HIDDEN_COMMANDS = 'menu:hidden-commands'
+
+/**
+ * Command ids off a message, and nothing else.
+ *
+ * This arrives from a renderer, so it is parsed rather than trusted: the worst
+ * a malformed one can do here is hide nothing, which is the menu the app has
+ * always had.
+ */
+function commandsFrom(value: unknown): HiddenCommands {
+  if (!Array.isArray(value)) return NOTHING_HIDDEN
+  const entries: readonly unknown[] = value
+  const commands = new Set<string>()
+  for (const entry of entries) {
+    if (typeof entry === 'string' && entry !== '') commands.add(entry)
+  }
+  return commands
+}
+
+function sameCommands(a: HiddenCommands, b: HiddenCommands): boolean {
+  if (a.size !== b.size) return false
+  for (const command of a) if (!b.has(command)) return false
+  return true
+}
+
 export function buildMenu(
   getWindow: () => BrowserWindow | null,
   platform: Platform = currentPlatform(),
@@ -154,6 +268,34 @@ export function buildMenu(
     if (window && !window.isDestroyed()) window.webContents.send('menu:command', command)
   }
 
-  Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate(platform, send)))
+  let hidden: HiddenCommands = NOTHING_HIDDEN
+  const apply = (): void => {
+    Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate(platform, send, hidden)))
+  }
+  apply()
+
+  /*
+   * Rebuilt whenever the window's feature state changes, and only then.
+   *
+   * `removeAllListeners` first so that two calls leave one listener. Nothing
+   * calls this twice today — `index.ts` builds the menu once, at `whenReady` —
+   * but two listeners would each close over a different `getWindow`, and the
+   * menu would then dispatch its commands into whichever window registered
+   * first, which is the one that had just been replaced. One line to make that
+   * impossible is better than a convention that nobody may call this again.
+   *
+   * The equality check is not an optimisation either. `setApplicationMenu`
+   * replaces the live menu bar, and doing that while a menu is open closes it
+   * under the pointer — and the window pushes the same list again every time it
+   * reloads, which is every time somebody opens the devtools and hits reload.
+   */
+  ipcMain.removeAllListeners(MENU_HIDDEN_COMMANDS)
+  ipcMain.on(MENU_HIDDEN_COMMANDS, (_event: IpcMainEvent, commands: unknown) => {
+    const next = commandsFrom(commands)
+    if (sameCommands(next, hidden)) return
+    hidden = next
+    apply()
+  })
+
   app.setAboutPanelOptions({ applicationName: BRAND.name, applicationVersion: app.getVersion() })
 }

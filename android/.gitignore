@@ -16,3 +16,11 @@ keystore.properties
 # rebuilds the bundles from src/ and relay/ on every run, and `dev-host-identity.json` holds a
 # stand-in Mac's private key.
 tools/.gen/
+
+# The repo root ignores `release/` for the desktop build output. That pattern also
+# swallows this module’\s **release source set**, which is a real directory of code:
+# `app/src/release/` holds the no-op halves of the debug-only harnesses, and without
+# them a release build does not compile. Re-included here, directory first — git
+# cannot re-include a file whose parent directory is still excluded.
+!/app/src/release/
+!/app/src/release/**

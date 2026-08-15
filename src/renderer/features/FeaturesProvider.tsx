@@ -1,4 +1,13 @@
-import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from 'react'
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react'
 import type { WidgetType } from '../dashboard/layout'
 import type { SectionId } from '../settings/settings-schema'
 import type { PanelId } from '../shell/panels'
@@ -15,6 +24,7 @@ import {
 import {
   defaultFeatureState,
   isOn,
+  offCommands,
   readFeatureState,
   statusOf,
   withStatus,
@@ -114,6 +124,34 @@ export function useFeatures(): FeatureControls {
   return useContext(FeaturesContext) ?? DEFAULTS
 }
 
+/* ------------------------------------------------------------- the menu -- */
+
+/**
+ * The half of the bridge this provider needs, declared where it is used.
+ *
+ * `preload/contract.test.ts` reads every `*Bridge*` interface in the renderer
+ * and fails the build when the preload stops exposing one of its methods, which
+ * is the guard that matters here: nothing on screen changes if this call
+ * quietly stops existing. The native menu would simply go on offering an
+ * uninstalled feature, in the one surface no component test can see.
+ */
+interface MenuBridge {
+  setHiddenMenuCommands(commands: string[]): void
+}
+
+/**
+ * Read defensively, like every other bridge in this app: these components are
+ * rendered to a string in their own tests, where there is no `window` at all —
+ * and a build whose preload predates this method must not take the window down
+ * over a menu.
+ */
+function menuBridge(): MenuBridge | null {
+  if (typeof window === 'undefined') return null
+  const deck = window.deck
+  if (!deck || typeof deck.setHiddenMenuCommands !== 'function') return null
+  return deck
+}
+
 export interface FeaturesProviderProps {
   children: ReactNode
   /**
@@ -155,6 +193,27 @@ export function FeaturesProvider({ children, storage, initial }: FeaturesProvide
     setState(next)
     writeFeatureState(next, store.current ?? null)
   }, [])
+
+  /*
+   * Tell the application menu what to stop offering.
+   *
+   * Memoised on `state` rather than rebuilt per render, because the array
+   * identity is the effect's dependency: `offCommands` returns a fresh array
+   * every call, and pushing on every render would rebuild the whole native menu
+   * bar — which closes any menu the person has open at that instant. `state` is
+   * a `useState` value, so this fires when a feature is installed, uninstalled
+   * or switched, and at no other time. `menu.ts` compares the list it is sent
+   * against the one it holds as a second line of defence.
+   *
+   * On mount as well as on change, deliberately. The menu is built before the
+   * window has finished loading and therefore starts out offering everything;
+   * this first push is what corrects it, and a window whose owner never opens
+   * the store needs it exactly as much as one whose owner lives there.
+   */
+  const hiddenCommands = useMemo(() => offCommands(state), [state])
+  useEffect(() => {
+    menuBridge()?.setHiddenMenuCommands(hiddenCommands)
+  }, [hiddenCommands])
 
   const controls = useMemo<FeatureControls>(
     () =>

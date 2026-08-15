@@ -57,6 +57,33 @@ Worth being precise, because "compiled" and "works" are different claims:
   attach with scrollback replay, typing, resize, Ctrl-C, creating a session and
   reconnecting after the far end disappeared have all been done on a device
   screen rather than argued from the source.
+- **File transfer and the clipboard have been proved against a real host on the
+  live relay**, which is the claim that had never been made for iOS before
+  2026-08-15 — Android made it a day earlier and this was the unproven half.
+  `Harness/live-transfer.sh` runs it; two consecutive runs from an erased
+  Simulator, each with fresh randomness, gave:
+  - a **6,752,593-byte** photo picked in `PHPickerViewController`, across
+    `wss://relay.terminaldeck.dev`, landing at
+    `…/Downloads/Terminal Deck/td-proof.png` with SHA-256
+    `04fdd4e6…c3b484a9` — **identical** to the source, hashed by `shasum -a 256`
+    on the Mac and independently by CryptoKit inside the Simulator, and gated a
+    third time by `uploads.ts`, which deletes rather than renames anything whose
+    digest does not match what the phone claimed;
+  - the same for a **video** — `live-transfer.sh --media td-proof.mp4`, an
+    8,102,371-byte H.264 clip of noise, landing with SHA-256
+    `a28885f9…eac94b53`, identical. Same code path as the photo
+    (`preferredAssetRepresentationMode = .current`, so nothing is transcoded on
+    the phone), and worth running because "photos and videos" is two claims;
+  - progress that was **real**: 163 samples of the `.part` file on the Mac, 62
+    distinct sizes, only ever growing, every one a whole number of 24,576-byte
+    slices except the last, which was the file's exact length;
+  - the clipboard **inwards** — a command put on the device pasteboard with
+    `simctl pbcopy`, pasted, run, and read back out of the file it wrote in the
+    granted folder;
+  - the clipboard **outwards** — Copy Screen replacing that pasteboard with
+    terminal text carrying a value the host's own shell minted from `$RANDOM`,
+    read with `simctl pbpaste`, which needs no consent and has nothing from the
+    test process in the loop.
 - **The direct transport has not.** `DirectCarrier` speaks the same protocol over
   plain text frames to `WS_PATH` on the desktop's listener, and that path has
   never been exercised from this app. It is the shape the PWA uses and it is
@@ -162,6 +189,44 @@ says whether the harness or the client is wrong.
 The sessions it serves are real shells. Typing `rm` into one from the phone will
 do what `rm` does.
 
+### Against a real host, on the live relay — one command
+
+Everything above is a stand-in, and a stand-in can share a bug with its client
+and agree with it forever — which is how an 81-versus-80 byte error survived a
+day and how Electron's missing ChaCha survived weeks. So the transfer and
+clipboard proof uses no stand-in at all:
+
+```sh
+ios/Harness/live-transfer.sh            # or --device "iPhone 17 Pro Max"
+```
+
+It starts the product's own headless host (`out/headless/host.mjs` — the same
+`registerRemoteIpc`, `PtyManager`, `uploads.ts` and sealed channel the window
+build links) under its own `HOME`, waits until it is on
+`wss://relay.terminaldeck.dev`, erases and boots a Simulator, drives
+`UITests/LiveTransferUITests`, and then reads the evidence off the Mac:
+
+- `shasum -a 256` over the photo before it goes into the library and over the
+  file that lands in the host's uploads folder;
+- the partial file's growth, sampled while it is being written;
+- the file the pasted command wrote, and `xcrun simctl pbpaste` against the
+  Simulator's own pasteboard.
+
+The headless host rather than `/Applications/Terminal Deck.app` for two reasons:
+its pairing can be driven end to end (`Harness/live-desktop.ts` sends the same
+`machines:code` and `remote:device:approve` the CLI sends), and it cannot
+disturb the desktop app's own state or relay identity.
+
+**Send File is the one branch this does not cover.** `DocumentPicker` in
+`Transfer/FilePickers.swift` has not been driven against a live host: the Files
+browser is out of process like the photo picker, but unlike the photo picker
+there is no `simctl` verb that puts a file where it can be chosen, and the app
+deliberately declares neither `UIFileSharingEnabled` nor
+`LSSupportsOpeningDocumentsInPlace` — adding them to make a test easier would be
+changing the product to suit the harness. Everything after the picker callback
+is shared with the photo path and is covered: staging, `FileUpload`, the window,
+the digest, `uploads.ts`.
+
 ### The UI tests
 
 `UITests/` covers what a unit test cannot: that the connection indicator says a
@@ -188,10 +253,29 @@ because a server is not running on someone's laptop is a test that gets deleted
 in a week.
 
 Pairing happens outside the test on purpose: the code is minted at run time and
-has to cross from the host machine into the Simulator. `TEST_RUNNER_…`
-environment injection does not reach the runner on this toolchain — measured,
-not assumed — and a pasteboard hand-off runs into the system's Allow Paste
-prompt. `simctl openurl` is the mechanism the product already has.
+has to cross from the host machine into the Simulator. A pasteboard hand-off
+runs into the system's Allow Paste prompt, so `simctl openurl` is the mechanism
+— it is the door the product already has, the one a scanned QR code comes
+through. **The Simulator then asks "Open in 'Terminal Deck'?" and somebody has
+to answer it**, because as far as iOS is concerned another program is offering
+this app a link. `LiveTransferUITests.tapOpenInApp` is that somebody; without it
+`simctl openurl` returns 0 and nothing happens at all.
+
+`TEST_RUNNER_…` injection is how the run-time values reach the runner, and the
+*form* matters more than anything else on this page. Measured on Xcode 26.6 with
+iOS 26.5, changing nothing but where the assignment sits:
+
+```sh
+xcodebuild test … TEST_RUNNER_TD_READY_FILE=/tmp/probe   # after: DOES NOT WORK
+TEST_RUNNER_TD_READY_FILE=/tmp/probe xcodebuild test …   # before: works
+```
+
+The first is parsed as a build setting, is echoed under "Build settings from
+command line" at the top of the log, never reaches the runner's
+`ProcessInfo.processInfo.environment`, and every case skips while the run ends
+`** TEST SUCCEEDED **`. That is a green run in which nothing was tested, which is
+the worst thing this suite can produce — and it is why `live-transfer.sh` exists
+as one command rather than as a recipe to be retyped.
 
 ## The pairing code
 

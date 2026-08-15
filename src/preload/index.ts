@@ -532,6 +532,26 @@ const api = {
     ipcRenderer.invoke('browser-isolation:dispose', partition),
   browserIsolationCount: (): Promise<unknown> => ipcRenderer.invoke('browser-isolation:count'),
 
+  /**
+   * Which commands the application menu must stop offering.
+   *
+   * The other direction of `onMenuCommand`, and the reason it exists: the menu
+   * is built in the main process and the feature store lives in the renderer,
+   * so without this the menu bar is the one surface in the app that cannot ask
+   * whether a feature is installed. Uninstall the split view and "Split the
+   * Window ⌘D" stayed in View — a control that looks like the feature is still
+   * there.
+   *
+   * The **whole** list every time, like `setDeviceFolders`, rather than a hide
+   * and an unhide: the menu is rebuilt from it, so a message that went missing
+   * costs one stale menu rather than a menu that drifts further from the truth
+   * with every install. `send`, not `invoke` — nothing comes back, and the
+   * window is telling rather than asking.
+   */
+  setHiddenMenuCommands: (commands: string[]): void => {
+    ipcRenderer.send('menu:hidden-commands', commands)
+  },
+
   /** Menu items are commands; App maps them to the same handlers as the keys. */
   onMenuCommand: (cb: (command: string) => void): (() => void) => {
     const handler = (_e: IpcRendererEvent, command: string) => cb(command)

@@ -7,7 +7,17 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import dev.terminaldeck.android.credential.CredentialQuestion
+import dev.terminaldeck.android.credential.CredentialResponder
+import dev.terminaldeck.android.credential.coroutineExpiry
 import dev.terminaldeck.android.crypto.Sealed
+import dev.terminaldeck.android.github.GitHubAccount
+import dev.terminaldeck.android.github.GitHubAccountStore
+import dev.terminaldeck.android.github.GitHubEndpoints
+import dev.terminaldeck.android.github.GitHubSignIn
+import dev.terminaldeck.android.github.KeystoreGitHubStore
+import dev.terminaldeck.android.github.SignInPhase
+import dev.terminaldeck.android.github.harnessGitHubEndpoints
 import dev.terminaldeck.android.pairing.PairingCode
 import dev.terminaldeck.android.pairing.PairingCodes
 import dev.terminaldeck.android.protocol.Capability
@@ -75,6 +85,26 @@ import kotlinx.coroutines.launch
 class DeckViewModel(
     private val vault: DeviceVault,
     private val clipboard: Clipboard,
+    /**
+     * The one GitHub account this phone holds, and the thing that answers with it.
+     *
+     * Phone-wide rather than per machine, and that is the model rather than a convenience: it is
+     * *one person's* GitHub, and every machine they work on asks the same device about it.
+     *
+     * No default. A default would be [dev.terminaldeck.android.github.InMemoryGitHubStore], which
+     * forgets on relaunch — a sign-in that silently stopped surviving the app being closed, in a
+     * build whose every test still passed.
+     */
+    private val accounts: GitHubAccountStore,
+    /**
+     * Where GitHub is.
+     *
+     * The real addresses by default. A debug build launched by a test can be pointed at a stand-in
+     * instead — see `HarnessEndpoints`, which exists only in the debug source set — so that the
+     * approval prompt can be reached without a real token, and without a code path in the shipping
+     * app whose job is to fake being signed in.
+     */
+    private val gitHubEndpoints: GitHubEndpoints = GitHubEndpoints(),
     private val network: NetworkWatch = NetworkWatch.none,
     /**
      * The app-wide tick. Held here only to realign it once when the app comes back, rather than
@@ -121,7 +151,39 @@ class DeckViewModel(
     private var noticeJob: Job? = null
     private var stopWatchingNetwork: (() -> Unit)? = null
 
+    /**
+     * What answers a machine that asks this phone for a GitHub login.
+     *
+     * One responder for every machine, not one per link, and that is the point: a person looking at
+     * two machines must not be asked two things at once by two objects that do not know about each
+     * other. One question is on screen at a time and the rest queue behind it.
+     */
+    private val credentials = CredentialResponder(
+        accounts = accounts,
+        expiry = coroutineExpiry(viewModelScope),
+        onChange = { publish() },
+    )
+
+    /**
+     * Getting a token onto this phone: the device flow, or a pasted personal access token.
+     *
+     * Held here rather than made per screen so that closing the sheet mid-flow and reopening it
+     * comes back to the same poll rather than starting a second one against a code GitHub has
+     * already issued.
+     */
+    val signIn: GitHubSignIn = GitHubSignIn(
+        accounts = accounts,
+        scope = viewModelScope,
+        endpoints = gitHubEndpoints,
+        onChange = { publish() },
+    )
+
     init {
+        // Routed by machine **id** rather than through a captured link, because a machine can be
+        // forgotten while its question is on screen — and answering through an object that has been
+        // torn down would be answering nobody, quietly.
+        credentials.route = { hostId, message -> links[hostId]?.transport?.send(message) }
+
         for (record in vault.pairings()) adopt(record)
         selectedHostId = vault.selectedHost()?.takeIf(links::containsKey) ?: links.keys.firstOrNull()
         publish()
@@ -193,6 +255,10 @@ class DeckViewModel(
             // in it are now history, and the banner says so rather than the rows quietly continuing
             // to claim "running".
             link.live = false
+            // A question from a machine whose socket has gone is unanswerable: the reply has
+            // nowhere to go. It comes off the screen rather than staying up as three buttons that
+            // do nothing, which is the design brief's first rule.
+            credentials.machineLost(link.hostId)
             // An upload cannot survive the connection carrying it, and a progress bar left creeping
             // against a socket that will never answer is exactly the lie this client is written not
             // to tell. The machine deletes its half-written file when the socket closes.
@@ -292,6 +358,34 @@ class DeckViewModel(
                     link.openWhenCreated = false
                     _created.value = OpenRequest(link.hostId, message.session.id)
                 }
+            }
+
+            /*
+             * The one frame the desktop sends as a *question*.
+             *
+             * Handed to the responder with the machine that asked already attached — its id, so a
+             * reply can be routed back to the right socket, and its label, because the third line
+             * of the prompt is *which machine asked* and by the time it is drawn this may not be
+             * the machine on screen. A phone paired with three machines can be looking at any of
+             * them when a fourth thing happens on a fourth.
+             *
+             * It returns before the fold at the bottom: the responder publishes for itself when
+             * what is on screen changes, and a request answered silently — every read — changes
+             * nothing a screen reads.
+             */
+            is ServerMessage.CredentialRequest -> {
+                credentials.receive(
+                    CredentialQuestion(
+                        id = message.id,
+                        machineId = link.hostId,
+                        machineName = link.label,
+                        origin = message.host,
+                        repo = message.repo,
+                        operation = message.operation,
+                        prompt = message.prompt,
+                    )
+                )
+                return
             }
 
             is ServerMessage.UploadReady,
@@ -453,6 +547,9 @@ class DeckViewModel(
     fun forget(hostId: String) {
         val link = links.remove(hostId) ?: return
         link.stop()
+        // Before the vault, because after `stop` there is no socket left to answer on and a prompt
+        // still naming this machine would be three buttons with nowhere to send their answer.
+        credentials.machineLost(hostId)
         vault.forget(hostId)
         if (vault.pairings().isEmpty()) vault.unpairAll()
 
@@ -717,6 +814,33 @@ class DeckViewModel(
         publish()
     }
 
+    /* ------------------------------------------------- GitHub, and what machines ask -- */
+
+    /**
+     * Approve the question on screen.
+     *
+     * [remember] is the "Always for this repo" button. It is a scope rather than a stored secret —
+     * that machine may stop asking about that repository from this device, and every push still
+     * comes back here for the credential itself.
+     */
+    fun approveCredential(remember: Boolean) = credentials.approve(remember)
+
+    fun denyCredential() = credentials.deny()
+
+    /**
+     * Forget the GitHub account.
+     *
+     * This *is* the revocation that works from here: with no token on this phone, nothing on it can
+     * answer a credential request from any machine. It does not revoke the token at GitHub — that
+     * is a page on github.com, and this app claiming to have done it would be a claim it cannot
+     * keep.
+     */
+    fun disconnectGitHub() {
+        accounts.disconnect()
+        signIn.cancel()
+        publish()
+    }
+
     /* -------------------------------------------------------------------- state -- */
 
     private fun notify(text: String) {
@@ -756,11 +880,20 @@ class DeckViewModel(
             pairingError = pairingError,
             upload = current?.uploadView,
             addingHost = addingHost,
+            gitHubAccount = accounts.account(),
+            credentialPrompt = credentials.asking,
+            credentialsQueued = credentials.queued,
+            signInPhase = signIn.phase,
         )
     }
 
     override fun onCleared() {
         for (link in links.values) link.stop()
+        // Nothing left to answer on, so nothing is left asking. Not a refusal: the desktop settles
+        // its own question on its own deadline, and a "no" sent from an app that is being torn down
+        // would be a decision nobody made.
+        credentials.reset()
+        signIn.cancel()
         stopWatchingNetwork?.invoke()
         stopWatchingNetwork = null
     }
@@ -778,13 +911,21 @@ class DeckViewModel(
          */
         const val DEFAULT_RELAY = "wss://relay.terminaldeck.dev"
 
+        /**
+         * `context` is the **activity**, not the application, and that is load bearing: the debug
+         * harness reads its launch intent through it. The application context is taken from it for
+         * everything that must outlive the activity, which is everything else here.
+         */
         fun factory(context: Context): ViewModelProvider.Factory {
             val application = context.applicationContext as Application
+            val endpoints = harnessGitHubEndpoints(context) ?: GitHubEndpoints()
             return viewModelFactory {
                 initializer {
                     DeckViewModel(
                         vault = KeystoreDeviceVault(application),
                         clipboard = AndroidClipboard(application),
+                        accounts = KeystoreGitHubStore(application),
+                        gitHubEndpoints = endpoints,
                         network = AndroidNetworkWatch(application),
                     ) { scope, hostId, store ->
                         WebSocketDeckTransport(scope = scope, hostId = hostId, vault = store)
@@ -842,6 +983,26 @@ data class DeckUiState(
     val upload: UploadView? = null,
     /** The user asked to add a machine, so the pair screen shows the field rather than a wait. */
     val addingHost: Boolean = false,
+    /**
+     * The GitHub account this phone holds, or null.
+     *
+     * Phone-wide, not per machine: it is one person's GitHub, and every machine they work on asks
+     * this one device about it. Never carries the token — see
+     * [dev.terminaldeck.android.github.GitHubAccount].
+     */
+    val gitHubAccount: GitHubAccount? = null,
+    /**
+     * The credential question on screen, or null. Null is the normal state.
+     *
+     * Only ever a request the desktop asked this phone to *prompt* about — a push, against a
+     * repository this device has not already approved on that machine. Reads and approved pushes
+     * are answered without anything reaching this field.
+     */
+    val credentialPrompt: CredentialQuestion? = null,
+    /** How many questions are behind the one on screen, so the prompt can say there is another. */
+    val credentialsQueued: Int = 0,
+    /** Where the GitHub sign-in has got to, when a sheet is showing it. */
+    val signInPhase: SignInPhase = SignInPhase.Idle,
 ) {
     /** The machine on screen, if there is one. */
     val host: HostSummary? get() = hosts.firstOrNull { it.hostId == selectedHostId } ?: hosts.firstOrNull()

@@ -90,13 +90,38 @@ object ServerFrames {
         if (Protocol.overBytes(raw, Protocol.MAX_MESSAGE_BYTES)) {
             return Result.Bad("frame over the message limit")
         }
-        return try {
-            Result.Ok(ProtocolJson.decodeFromString<ServerMessage>(raw))
+        val decoded = try {
+            ProtocolJson.decodeFromString<ServerMessage>(raw)
         } catch (e: SerializationException) {
-            Result.Bad("not a server message")
+            return Result.Bad("not a server message")
         } catch (e: IllegalArgumentException) {
-            Result.Bad("not a server message")
+            return Result.Bad("not a server message")
         }
+        return narrow(decoded)
+    }
+
+    /**
+     * The checks the serializer cannot express, applied after it has done the shape.
+     *
+     * Only [ServerMessage.CredentialRequest] needs one today, and it needs one because it is the
+     * single frame in this protocol whose contents are **drawn on a screen somebody reads before
+     * approving a push**. Two strings on it are bounded on the wire, and an unbounded one here
+     * would be a prompt whose last line — the machine that asked — can be pushed off the bottom by
+     * a host name a kilometre long.
+     *
+     * A missing id or host is a refusal, because there is nothing to answer and nowhere to say it
+     * went. An over-long repository is **not**: it is folded onto null, which is the same answer
+     * this client already has to handle for a repository the desktop could not name, and which the
+     * prompt says out loud rather than papering over.
+     */
+    private fun narrow(message: ServerMessage): Result {
+        if (message !is ServerMessage.CredentialRequest) return Result.Ok(message)
+        if (message.id.isEmpty()) return Result.Bad("credential.request without an id")
+        if (message.host.isEmpty() || message.host.length > Protocol.MAX_CREDENTIAL_HOST_LENGTH) {
+            return Result.Bad("credential.request without a usable host")
+        }
+        val repo = message.repo?.takeIf { it.isNotEmpty() && it.length <= Protocol.MAX_CREDENTIAL_REPO_LENGTH }
+        return Result.Ok(if (repo == message.repo) message else message.copy(repo = repo))
     }
 
     /**

@@ -43,9 +43,17 @@ import { detectProviders, loginPath, providersFor, PROVIDERS } from './providers
 import { currentPlatform, type Platform } from './platform/host'
 import { homeDir } from './platform/paths'
 import { getState as profilesState, resolveProfile, sessionEnv } from './profiles'
-import { createCredentialProxy, type CredentialProxy } from './remote/credentials'
+import {
+  confineSpawn,
+  confinedEnv,
+  confinementKind,
+  planFor,
+  prepareDeviceHome,
+  type DeviceConfinement,
+} from './confine'
+import { createCredentialProxy, deviceKey, type CredentialProxy } from './remote/credentials'
 import { FolderGrants, foldersForDevice } from './remote/folder-grants'
-import type { GuestGitEnv } from './remote/git-guest'
+import { guestGitDir, HELPER_FILE, type GuestGitEnv } from './remote/git-guest'
 import { SessionFanout } from './remote/session-fanout'
 import { remoteSessionStart } from './remote/session-create'
 import type { SavedSession } from './session-restore'
@@ -173,8 +181,17 @@ export interface HostCore {
    *
    * `guest` is set for exactly one caller — a session a paired device asked for
    * — and it is what stops that session inheriting this machine's git login.
+   *
+   * `confine` is set by the same caller and for the same reason, one layer
+   * further down: it is what stops the session leaving the folder it was granted
+   * at all. Both are absent for a window, because a person sitting at their own
+   * keyboard has no grant to be held inside — see `confine/index.ts`.
    */
-  startSession(input: CreateSessionInput, guest?: GuestGitEnv): Promise<SessionMeta>
+  startSession(
+    input: CreateSessionInput,
+    guest?: GuestGitEnv,
+    confine?: DeviceConfinement,
+  ): Promise<SessionMeta>
   /** A path a Windows API can stat, for a folder that may live inside a distro. */
   statablePath(cwd: string): string
 }
@@ -260,7 +277,11 @@ export function createHostCore(options: HostCoreOptions): HostCore {
    * subtly not the same kind of session: no agent CLI on PATH, or two "separate"
    * logins quietly sharing one config directory.
    */
-  async function startSession(input: CreateSessionInput, guest?: GuestGitEnv): Promise<SessionMeta> {
+  async function startSession(
+    input: CreateSessionInput,
+    guest?: GuestGitEnv,
+    confine?: DeviceConfinement,
+  ): Promise<SessionMeta> {
     const path = await loginPath()
     /*
      * Which side of the WSL boundary this session lives on, decided by its
@@ -307,7 +328,34 @@ export function createHostCore(options: HostCoreOptions): HostCore {
      * about two comments up — reappearing on Windows only, and only inside
      * Linux.
      */
-    const profileEnv = { ...sessionEnv(profile, provider), ...(guest?.set ?? {}) }
+    /*
+     * Whether this session is held inside the folder it was granted.
+     *
+     * Three conditions, and each rules out a case where confining would be a
+     * claim rather than a fact. There has to be a device — a window is a person
+     * at their own keyboard with no grant to be held inside. The platform has to
+     * have a mechanism this repository has actually measured; `confine/index.ts`
+     * names the ones it has not. And the session must not be running inside WSL,
+     * where the process is a Linux one launched through `wsl.exe` and a
+     * Windows-side sandbox could not reach it even if one existed here.
+     */
+    const confined =
+      confine !== undefined && confinementKind(platform) === 'seatbelt' && target === null
+
+    /*
+     * `HOME` and `TMPDIR` are part of the environment rather than an afterthought
+     * because a confined session needs them *before* anything runs. The account's
+     * home is outside the boundary, so a session left pointing at it cannot read
+     * its own shell startup files, cannot write an npm cache, and cannot store
+     * the agent login the person has just completed — each of which reads as a
+     * broken session rather than as a boundary. `confine/plan.ts` says why the
+     * `PATH` is deliberately not touched in the same breath.
+     */
+    const profileEnv = {
+      ...sessionEnv(profile, provider),
+      ...(guest?.set ?? {}),
+      ...(confined && confine ? confinedEnv(confine.home) : {}),
+    }
     /*
      * The guest's git variables have to cross the WSL boundary too, and they are
      * split the same way everything else here is: a path is translated, a plain
@@ -347,11 +395,54 @@ export function createHostCore(options: HostCoreOptions): HostCore {
     // the launchable form in `spawn` the whole time, unread. Inside WSL they
     // diverge further still: `spawn` is a whole `wsl.exe` invocation and `bin`
     // is the CLI's own name, which is what the far side looks up.
+    const wanted =
+      input.resume && spec.spawn.resumeArgs.length > 0 ? spec.spawn.resumeArgs : spec.spawn.args
+
+    /*
+     * The last thing between deciding what to run and running it.
+     *
+     * `confineSpawn` **throws** rather than handing back the unwrapped command
+     * when the boundary cannot be proven on this machine, at this moment, for
+     * this exact folder. That throw is the feature, not a rough edge: the grant
+     * screen tells a person that a session from a device is held inside the
+     * folder, and the only thing that keeps that sentence true is a session
+     * which cannot be held not starting. A silent fall-through to an unconfined
+     * shell would be the same failure this project has already shipped once in
+     * another subsystem — the side reporting success was not the side doing the
+     * work. `remote/session-create.ts` turns the throw into a sentence a phone
+     * can act on.
+     *
+     * The proof is a real `sandbox-exec` run against a file written outside the
+     * plan, not an inspection of the generated profile. See `confine/index.ts`.
+     */
+    const launch =
+      confined && confine
+        ? await confineSpawn(
+            planFor({
+              folder: input.cwd,
+              device: confine,
+              accountHome: homeDir(),
+              path,
+              // Absent for the system profile on purpose. `sessionEnv` returns
+              // nothing for it — `profiles.ts` explains why — so the CLI finds
+              // its own default, which with `HOME` redirected is inside the
+              // device's own home, which is exactly where a confined session's
+              // login belongs. A *named* profile is a deliberate choice of which
+              // login this session runs as, kept in a directory the app owns, and
+              // the boundary honours that choice instead of overriding it.
+              ...(profile.system ? {} : { agentConfigDir: profile.configDir }),
+              platform,
+            }),
+            spec.spawn.command,
+            wanted,
+            platform,
+          )
+        : { command: spec.spawn.command, args: [...wanted] }
+
     const meta = ptys.create(input, {
       provider,
-      command: spec.spawn.command,
-      args:
-        input.resume && spec.spawn.resumeArgs.length > 0 ? spec.spawn.resumeArgs : spec.spawn.args,
+      command: launch.command,
+      args: launch.args,
       path,
       env,
       ...(guest ? { removeEnv: guest.remove } : {}),
@@ -373,15 +464,35 @@ export function createHostCore(options: HostCoreOptions): HostCore {
      * `input.profileId`, not the resolved `profile`: a null here means "whatever
      * this project's default profile is", and that is a question worth asking
      * again next launch rather than freezing today's answer.
+     *
+     * ## Confined sessions are deliberately not remembered
+     *
+     * A `SavedSession` carries a folder and a provider and no device, so a
+     * restore has nothing to rebuild a boundary from — it would start the
+     * session again as an ordinary tab. That is not a smaller version of the
+     * feature, it is the boundary silently lapsing at the next launch, and a
+     * device can attach to a running session without naming a folder, so the
+     * lapsed session is reachable by the same device that started the confined
+     * one. A security property that survives until the app restarts is the kind
+     * of thing that is worse than not having it, because nobody is watching for
+     * the moment it stops being true.
+     *
+     * So it is not written down, and the cost is stated rather than hidden: a
+     * session a device started does not come back after the app is restarted,
+     * and the device starts a new one. The honest fix is for the ledger to carry
+     * the device and for the restore path to rebuild the confinement — worth
+     * doing, and a change to the stored shape rather than to this line.
      */
-    ledger.note(meta.id, {
-      cwd: input.cwd,
-      provider: requested,
-      profileId: input.profileId ?? null,
-      cols: input.cols,
-      rows: input.rows,
-      lastSeenAt: Date.now(),
-    })
+    if (!confined) {
+      ledger.note(meta.id, {
+        cwd: input.cwd,
+        provider: requested,
+        profileId: input.profileId ?? null,
+        cols: input.cols,
+        rows: input.rows,
+        lastSeenAt: Date.now(),
+      })
+    }
 
     return meta
   }
@@ -457,6 +568,30 @@ export function createHostCore(options: HostCoreOptions): HostCore {
            * `git-guest.ts` for the four doors that closes and the one it cannot.
            */
           const guest = await credentials.openGuestSession(input.deviceId)
+          /*
+           * And the folder it was granted is where it stays.
+           *
+           * Everything above this line was about *whose login* the session runs
+           * with. This is about *where it can reach*, which until now was
+           * nowhere at all: the grant chose a starting directory and the shell
+           * could type `cd ..`. Every sentence in the product said exactly that,
+           * on purpose, and this is the change that lets one of them stop.
+           *
+           * The three directories handed over are the ones this module knows
+           * about and `confine/` deliberately does not. The device's guest git
+           * directory has to be writable or `git config --global` inside the
+           * session writes to a file it cannot open. The helper is granted as a
+           * *file*: it sits one level above the per-device directories, so
+           * granting its folder would hand this device every other device's git
+           * identity.
+           */
+          const key = deviceKey(input.deviceId)
+          const guestRoot = join(options.storageDir, 'guest-git')
+          const confine: DeviceConfinement = {
+            home: prepareDeviceHome(join(options.storageDir, 'device-home'), key),
+            writable: [guestGitDir(guestRoot, key)],
+            files: [join(guestRoot, HELPER_FILE)],
+          }
           let meta: SessionMeta
           try {
             meta = await startSession(
@@ -470,6 +605,7 @@ export function createHostCore(options: HostCoreOptions): HostCore {
                 provider: store().getPreferences().defaultProvider,
               },
               guest.env,
+              confine,
             )
           } catch (error) {
             // The key was minted before the spawn, because it has to be in the
