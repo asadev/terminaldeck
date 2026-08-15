@@ -99,6 +99,51 @@ export function optionsFor(control: ControlId): ControlOption[] {
 }
 
 /**
+ * Which controls stay on the composer, and which fold away behind one button.
+ *
+ * The split is by how often a session actually reaches for the thing, not by
+ * how interesting it is:
+ *
+ *   Model       changes per task — "do this bit on Sonnet".            visible
+ *   Permission  changes per phase — plan it, then let it edit.         visible
+ *   Effort      set once, if ever, and then left alone.                folded
+ *   Fast mode   rarer still, and usually cannot even be read (see      folded
+ *               `unreadLabel`), so it spends most of its life
+ *               reporting that it has nothing to report.
+ *
+ * Two lists rather than a flag per control because the pairing is the point:
+ * every control must appear in exactly one of them, which `catalog.test.ts`
+ * asserts. A control quietly dropped from both would vanish from the app while
+ * every one of its own tests kept passing — that is the failure this file's
+ * neighbours exist to prevent, and it applies just as well to a menu entry.
+ */
+export const PRIMARY_CONTROLS: readonly ControlId[] = ['model', 'permission']
+export const FOLDED_CONTROLS: readonly ControlId[] = ['effort', 'fast']
+
+/** The short name on the button. Sentence case; it is a name, not a heading. */
+export function controlName(control: ControlId): string {
+  if (control === 'model') return 'Model'
+  if (control === 'effort') return 'Effort'
+  if (control === 'fast') return 'Fast mode'
+  return 'Permission'
+}
+
+/**
+ * One line saying what the control does, for the folded panel where there is
+ * room to say it.
+ *
+ * Each describes the *effect on this session*, not the option's merits: the
+ * per-option hints already argue for themselves, and a description that also
+ * recommends is a description nobody reads twice.
+ */
+export function describeControl(control: ControlId): string {
+  if (control === 'model') return 'Which model answers in this session.'
+  if (control === 'effort') return 'How much reasoning the model spends before it answers.'
+  if (control === 'fast') return 'A quicker reply, drawn from your usage credits at a higher rate.'
+  return 'What the agent may do without stopping to ask you first.'
+}
+
+/**
  * How far a change reaches — or `null` where we cannot say, in which case the
  * menu prints nothing rather than a comfortable guess.
  *

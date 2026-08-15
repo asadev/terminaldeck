@@ -166,6 +166,44 @@ class ProtocolCodecTest {
         assertEquals("s9", ServerFrames.sessionIdOf(message))
     }
 
+    /**
+     * The three answers about folders, kept apart at the parser.
+     *
+     * Absent is a desktop older than the field; empty is a person having removed every folder. They
+     * arrive one key apart and mean opposite things — "carry on as before" against "nothing will
+     * start here" — so this is the first place they could be flattened into each other.
+     */
+    @Test
+    fun `welcome carries the folder grant, and absent is not the same as empty`() {
+        val granted = (ServerFrames.parse(
+            """{"t":"welcome","protocol":1,"deviceId":"d1","deviceName":"Pixel","token":null,"sessions":[],"folders":["/Users/asad/Projects/api"]}"""
+        ) as ServerFrames.Result.Ok).message as ServerMessage.Welcome
+        assertEquals(listOf("/Users/asad/Projects/api"), granted.folders)
+
+        val emptied = (ServerFrames.parse(
+            """{"t":"welcome","protocol":1,"deviceId":"d1","deviceName":"Pixel","token":null,"sessions":[],"folders":[]}"""
+        ) as ServerFrames.Result.Ok).message as ServerMessage.Welcome
+        assertEquals(emptyList<String>(), emptied.folders)
+
+        val silent = (ServerFrames.parse(
+            """{"t":"welcome","protocol":1,"deviceId":"d1","deviceName":"Pixel","token":null,"sessions":[]}"""
+        ) as ServerFrames.Result.Ok).message as ServerMessage.Welcome
+        assertEquals(null, silent.folders)
+    }
+
+    @Test
+    fun `the pushed folders frame parses, including the one that empties the list`() {
+        val pushed = (ServerFrames.parse("""{"t":"folders","folders":["/one","/two"]}""")
+            as ServerFrames.Result.Ok).message as ServerMessage.Folders
+        assertEquals(listOf("/one", "/two"), pushed.folders)
+
+        // The frame that takes the last folder away. It has to survive as an empty list rather than
+        // as a dropped frame: it is the moment the picker must stop offering anything.
+        val emptied = (ServerFrames.parse("""{"t":"folders","folders":[]}""")
+            as ServerFrames.Result.Ok).message as ServerMessage.Folders
+        assertEquals(emptyList<String>(), emptied.folders)
+    }
+
     @Test
     fun `unavailable is a code this build understands rather than Unknown`() {
         // The desktop uses it for "would have, and could not" — a folder deleted since it was

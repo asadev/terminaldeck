@@ -165,20 +165,24 @@ export function AttachMenu({ root, attachments, onAdd, onInsert, onClose, disabl
         </div>
       ) : null}
 
+      {/* Labelled, not a bare plus. It shares `cc-chip` with the controls beside
+          it (ChatComposer.css), and the accessible name starts with the word on
+          screen so saying "Add" out loud still hits the thing you can see. */}
       <button
         ref={buttonRef}
         type="button"
-        className={`cc-tool${surface !== null ? ' cc-tool-on' : ''}`}
+        className="cc-chip"
         disabled={disabled}
         aria-haspopup="dialog"
         aria-expanded={surface !== null}
-        aria-label="Attach files, folders or images"
-        title="Attach files, folders or images"
+        aria-label="Add files, folders, images or connectors to this message"
+        title="Add files, folders, images or connectors to this message"
         onClick={() => (surface === null ? setSurface('menu') : close())}
       >
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
-          <path d="M12 5v14M5 12h14" strokeWidth="1.9" strokeLinecap="round" />
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+          <path d="M12 5v14M5 12h14" strokeWidth="2" strokeLinecap="round" />
         </svg>
+        Add
       </button>
     </div>
   )

@@ -980,6 +980,7 @@ describe('registerMcpIpc', () => {
     registerMcpIpc(ipc as unknown as Electron.IpcMain)
 
     expect([...ipc.handlers.keys()].sort()).toEqual([
+      'mcp:add',
       'mcp:call',
       'mcp:connect',
       'mcp:disconnect',
@@ -994,7 +995,7 @@ describe('registerMcpIpc', () => {
     const ipc = fakeIpcMain()
     registerMcpIpc(ipc as unknown as Electron.IpcMain)
     expect(() => registerMcpIpc(ipc as unknown as Electron.IpcMain)).not.toThrow()
-    expect(ipc.handlers.size).toBe(7)
+    expect(ipc.handlers.size).toBe(8)
   })
 
   it('refuses a relative project path instead of resolving it against the app cwd', () => {

@@ -101,6 +101,15 @@ fun TerminalScreen(
     subtitle: String,
     screenTick: Long,
     transport: TransportState,
+    /**
+     * What to call the machine this session is running on — `DeckUiState.machineNoun`.
+     *
+     * Required, and grouped with the other facts rather than given a default, because a default is
+     * exactly how this screen came to call every machine a Mac: the attach button's description was
+     * a literal, and a phone paired to a Windows PC read "Send a photo, video or file to the Mac".
+     * A caller that has to supply it is a caller that has to think about which machine it means.
+     */
+    hostNoun: String,
     onBack: () -> Unit,
     onKey: (String) -> Unit,
     /**
@@ -114,7 +123,7 @@ fun TerminalScreen(
      */
     onCopy: (String?) -> Unit,
     onPaste: () -> Unit,
-    /** Absent, not disabled, when the Mac never advertised `upload`. See `DeckUiState.canSendFiles`. */
+    /** Absent, not disabled, when the machine never advertised `upload`. See `DeckUiState.canSendFiles`. */
     canSendFiles: Boolean = false,
     onSendPhoto: () -> Unit = {},
     onSendFile: () -> Unit = {},
@@ -248,7 +257,10 @@ fun TerminalScreen(
                             IconButton(onClick = { attachOpen = true }) {
                                 Icon(
                                     Icons.Filled.AttachFile,
-                                    contentDescription = "Send a photo, video or file to the Mac",
+                                    // Read aloud by TalkBack, which makes it the one label on this
+                                    // screen a blind user hears in full — and the one that named the
+                                    // wrong computer for as long as the noun was a literal here.
+                                    contentDescription = "Send a photo, video or file to the $hostNoun",
                                     tint = MaterialTheme.colorScheme.onBackground,
                                 )
                             }

@@ -78,6 +78,18 @@ export const PROTOCOL_VERSION = 1
  * name — a phone that could announce a file but not send its bytes would have
  * nothing to show for it.
  *
+ * `credential` is the only one that runs the other way round, and that is worth
+ * saying out loud because it changes what the string means. Every other
+ * capability is a verb the *desktop* will serve when the phone sends it; this one
+ * is a question the *desktop asks the phone* — git on this machine needs a login
+ * for a repository, and the phone is the thing holding it. So it is advertised in
+ * both directions: the desktop lists it in `welcome.capabilities` to say "I may
+ * ask you", and the client lists it in `hello.capabilities` to say "I can
+ * answer". Both halves are needed and neither is optional in practice: a desktop
+ * that asked a client which had never heard of the frame would sit there until a
+ * timer gave up, which is precisely the thirty-second stall this feature exists
+ * to not have.
+ *
  * ## Why these strings are not the ones the phones invented
  *
  * Both clients grew a New Session button before any desktop could serve one,
@@ -96,6 +108,7 @@ export const CAPABILITY = {
   localhost: 'localhost',
   create: 'create',
   upload: 'upload',
+  credential: 'credential',
 } as const
 
 /**
@@ -108,7 +121,47 @@ export const CAPABILITY = {
  * what the injected `SessionAccess` can actually do, which is what makes the
  * button on the phone appear only when there is something behind it.
  */
-export const CAPABILITIES: string[] = [CAPABILITY.localhost, CAPABILITY.create, CAPABILITY.upload]
+export const CAPABILITIES: string[] = [
+  CAPABILITY.localhost,
+  CAPABILITY.create,
+  CAPABILITY.upload,
+  CAPABILITY.credential,
+]
+
+/**
+ * What git was doing when it asked for a login.
+ *
+ * Two values because there are exactly two answers a person cares about, and the
+ * difference between them is the whole of the prompting policy: a fetch or a
+ * clone is a **read**, is reversible, and prompting for one buys nothing but
+ * fatigue; a push is a **write**, is not reversible, and is the moment somebody
+ * should get to see whose name goes on it.
+ *
+ * Sent as a fact about the operation rather than as an instruction. What the
+ * client is being asked to *do* is `prompt` on the same frame, which is a
+ * separate field for a separate reason — see `credential.request`.
+ */
+export const CREDENTIAL_OPERATIONS = ['read', 'write'] as const
+
+export type CredentialOperation = (typeof CREDENTIAL_OPERATIONS)[number]
+
+/**
+ * Why a device would not answer, as a code rather than a sentence.
+ *
+ * The opposite direction from `tunnel.closed`, which carries prose, and for the
+ * opposite reason: that sentence is written by the desktop and read on a phone,
+ * whereas this one is written by a phone and printed into a terminal **on the
+ * desktop**. The desktop owns the words that appear in its own terminal — it is
+ * the side that knows whether the reader is looking at a push or a fetch, and it
+ * is the side that must not pipe attacker-chosen text into a PTY. So the client
+ * says which of two things happened and the desktop writes the sentence.
+ *
+ * `no-account` is not a refusal. It means the app on that device has no GitHub
+ * connected yet, which is a different thing to be told and has a different fix.
+ */
+export const CREDENTIAL_DENIALS = ['denied', 'no-account'] as const
+
+export type CredentialDenial = (typeof CREDENTIAL_DENIALS)[number]
 
 /**
  * A port on the Mac that is being listened on, as the phone sees it.
@@ -261,6 +314,47 @@ export const MAX_ROWS = 200
  */
 const MAX_TOKEN_LENGTH = 200
 
+/**
+ * How many capability names a client may claim, and how long each may be.
+ *
+ * A ceiling on an advisory field. The list is only ever compared against the
+ * handful of names in {@link CAPABILITY}, so nothing is lost by refusing to
+ * carry a thousand of them — and what it buys is that a `hello` cannot be made
+ * to cost this process a megabyte of strings before it has authenticated.
+ */
+export const MAX_CLIENT_CAPABILITIES = 16
+export const MAX_CAPABILITY_LENGTH = 32
+
+/**
+ * Longest username and secret a device may answer a credential request with.
+ *
+ * Generous rather than tight, because what is on the other end of these fields
+ * is somebody's GitHub token and the shape of those is not ours to pin: a
+ * classic token is 40 characters, a fine-grained one is over 90, an installation
+ * token is longer still, and an OAuth flow that starts issuing something else
+ * tomorrow must not be broken by a number written here today. The cap exists so
+ * a hostile client cannot post a megabyte through the loopback endpoint and into
+ * a `git` process, not to describe what a real token looks like.
+ *
+ * The username is bounded far more tightly because it genuinely is a login — or
+ * one of the fixed placeholders GitHub accepts beside a token — and neither is
+ * long.
+ */
+export const MAX_CREDENTIAL_USERNAME_LENGTH = 128
+export const MAX_CREDENTIAL_SECRET_LENGTH = 4096
+
+/**
+ * Longest `host` and `repo` on a credential request.
+ *
+ * A hostname cannot exceed 253 characters and a GitHub `owner/name` cannot come
+ * near this. Both travel outbound, so these bound what this desktop will *say*
+ * rather than what it will accept — which is why they live here beside the
+ * inbound caps rather than in the module that builds the frame: one file
+ * describes the whole shape of the wire.
+ */
+export const MAX_CREDENTIAL_HOST_LENGTH = 253
+export const MAX_CREDENTIAL_REPO_LENGTH = 256
+
 /** WebSocket close codes used here, RFC 6455 §7.4.1 plus our own reasons. */
 export const CLOSE = {
   normal: 1000,
@@ -291,7 +385,19 @@ export interface DeviceDescriptor {
 }
 
 export type ClientMessage =
-  | { t: 'hello'; protocol: number; token: string; device: DeviceDescriptor }
+  /**
+   * `capabilities` is the client's half of the negotiation, and it is here
+   * rather than in a later frame because the desktop may need it before the
+   * client has sent anything else — a session started from this device can be
+   * running `git push` a second after it connects.
+   *
+   * Optional, and absent is meaningful: it means "nothing beyond version 1",
+   * which is exactly what every client shipped before this field says. Nothing
+   * is granted by claiming a name — the list only decides what this desktop will
+   * *send*, never what it will accept — so an inflated one buys a client nothing
+   * except frames it will then have to ignore.
+   */
+  | { t: 'hello'; protocol: number; token: string; device: DeviceDescriptor; capabilities?: string[] }
   | { t: 'list' }
   /**
    * `cols`/`rows` are the phone's viewport, and they travel with the attach so
@@ -407,6 +513,52 @@ export type ClientMessage =
   | { t: 'upload.end'; id: string; sha256: string }
   /** Stop, throw away what has landed. Sent by the Cancel button on the phone. */
   | { t: 'upload.cancel'; id: string }
+  /* ---- capability `credential`. Refused outright when it is not advertised. -- */
+  /**
+   * "I heard you, and I am dealing with it."
+   *
+   * The one frame here that exists purely for a failure mode, and it is the
+   * failure mode the whole feature is judged on. Without it there is no way to
+   * tell a device that is asleep from a person who is thinking: both look like
+   * silence, so the desktop would have to wait out the *human* deadline before
+   * it could say "your device isn't reachable" — a thirty-second stall on a push,
+   * with no explanation, which is how people stop trusting a feature.
+   *
+   * With it there are two deadlines. A few seconds for this, which a live app on
+   * a woken phone answers instantly; then, and only then, as long as a person
+   * needs to read a prompt and decide. Silence in the first window is a device
+   * that is not there, and it is answered in seconds with a sentence that says
+   * what to do about it.
+   *
+   * Sent for silent requests too, where it costs nothing — the answer follows it
+   * in the same breath — because a client that only acked when it was about to
+   * prompt would be one more thing that has to be right.
+   */
+  | { t: 'credential.ack'; id: string }
+  /**
+   * The login, for this one operation.
+   *
+   * It is used once, in memory, and is never written to this machine's disk —
+   * not by the helper, which refuses git's `store`, and not here, which hands it
+   * straight to the process that asked and forgets it. There is no cache to
+   * expire and nothing to clean up when the device disconnects.
+   *
+   * `remember` is the second button on the prompt — "Approve always for this
+   * repo" — and it is a *scope*, not a stored secret. It says the desktop may
+   * stop asking about this repository from this device; every push still comes
+   * back here for the credential itself, because this end has never held one.
+   * It is ignored for a request that was not a prompt, since agreeing to
+   * something nobody was asked is not consent to anything.
+   */
+  | { t: 'credential.answer'; id: string; username: string; password: string; remember?: true }
+  /**
+   * No.
+   *
+   * Carries a code rather than a sentence — see {@link CREDENTIAL_DENIALS} for
+   * why this direction is the opposite of `tunnel.closed`. Absent means
+   * `denied`, so a client that only ever refuses can send the bare frame.
+   */
+  | { t: 'credential.deny'; id: string; reason?: CredentialDenial }
 
 export type ServerMessage =
   | {
@@ -422,6 +574,49 @@ export type ServerMessage =
        * already understands and a newer one learns what it may offer.
        */
       capabilities: string[]
+      /**
+       * What kind of machine this is — `'darwin'`, `'win32'`, `'linux'`.
+       *
+       * Sent raw rather than as a noun because the noun is presentation, and
+       * the clients do not share a language for it: the desktop writes "This
+       * Mac will not start a session in that folder" in English sentences it
+       * composes itself, while a phone builds its own labels and would have to
+       * un-say a word it was handed. Every client maps this to its own noun.
+       *
+       * Optional, like `capabilities`, and for the same reason: a desktop that
+       * predates this field is still a desktop a current phone must talk to.
+       * A client that reads nothing here must show something neutral — never
+       * guess "Mac", which is the bug this field exists to end. A phone paired
+       * to a Windows PC read "Running on the Mac" on its own session list,
+       * because the only place the machine's kind appeared was a string
+       * constant compiled into the phone.
+       */
+      hostPlatform?: string
+      /**
+       * Folders this device may start a session in, most relevant first.
+       *
+       * Sent so the phone's picker can show exactly what it may use, rather
+       * than a list it assembled from the sessions it happens to be able to
+       * see. Those two were never the same set and the difference was
+       * unexplainable from the phone: the picker showed one folder, the desktop
+       * would have accepted several, and nothing on either screen said why.
+       *
+       * The same array the desktop enforces against — see `session-create.ts`,
+       * where one function answers both questions — so a folder on this list is
+       * a folder that will start, subject only to it still existing.
+       *
+       * Optional, like `capabilities` and `hostPlatform`: a desktop that
+       * predates the field is one a current phone still has to talk to, and a
+       * client that reads nothing here keeps whatever it did before. Absent is
+       * also what a host that cannot start sessions at all sends, which is the
+       * same thing its missing `create` capability already says.
+       *
+       * Empty is meaningful and is not the same as absent. It means a person
+       * chose no folders for this device, so New Session has nowhere to go —
+       * a client that draws the button anyway will be refused with a sentence
+       * that says so.
+       */
+      folders?: string[]
     }
   | { t: 'sessions'; sessions: RemoteSession[] }
   | { t: 'attached'; id: string }
@@ -448,6 +643,26 @@ export type ServerMessage =
    * appear. That is the same additive rule the capability list is for.
    */
   | { t: 'created'; session: RemoteSession }
+  /**
+   * This device's folder list changed while it was connected.
+   *
+   * Pushed, not polled, and it carries the whole list rather than a delta —
+   * there is one list per device, it is short, and a client that applied
+   * deltas would need to be right about every one of them to end up with the
+   * set the desktop is actually enforcing.
+   *
+   * It exists because the list is editable from the desktop at any moment. The
+   * enforcement is already live — `folders()` is read per request, so removing
+   * a folder takes effect on the very next `create` with no reconnect — and
+   * without this frame the phone would keep drawing the removed folder in its
+   * picker until somebody closed and reopened the app, offering a tap whose
+   * only outcome is a refusal.
+   *
+   * An older client drops a message type it does not know and carries on, which
+   * is the additive rule the capability list exists for; the worst it suffers is
+   * the stale picker it has today.
+   */
+  | { t: 'folders'; folders: string[] }
   /* ---- capability `localhost` ------------------------------------------- */
   | { t: 'ports'; ports: LocalPort[] }
   | { t: 'tunnel.opened'; id: string; port: number }
@@ -501,6 +716,47 @@ export type ServerMessage =
    * `tunnel.closed` makes.
    */
   | { t: 'upload.failed'; id: string; message: string }
+  /* ---- capability `credential` ------------------------------------------- */
+  /**
+   * Git on this machine needs a login for a repository, and this device holds it.
+   *
+   * The only frame in this protocol the desktop sends unprompted as a *question*.
+   * Everything else it sends is either an answer or an event; this one is waiting
+   * on a reply, and the two ways to reply are `credential.answer` and
+   * `credential.deny`. A client that neither acks nor answers is treated as a
+   * device that is not there — see `credential.ack`.
+   *
+   * `repo` is `owner/name`, or **null** when git gave no path to derive one from.
+   * Null is not a detail to paper over: a prompt that cannot name the repository
+   * is a prompt asking somebody to approve "a push, somewhere", and a client
+   * should say exactly that rather than invent a name. It happens when the remote
+   * is not a two-segment path — a gist, a wiki, a self-hosted layout — and the
+   * honest answer is that this desktop does not know what to call it.
+   *
+   * `prompt` is the instruction and `operation` is the fact, and they are two
+   * fields because they answer two different questions. `operation` says what git
+   * is doing, always, so a client can show activity honestly. `prompt` says
+   * whether a person should be asked — false for every read, and false for a
+   * write against a repository this device has already approved. Folding them
+   * into one would mean sending `read` for an approved push, which is a lie told
+   * to the one screen in this feature that exists to tell the truth.
+   *
+   * **Where the memory lives, and why it is here.** The desktop remembers which
+   * repositories a device has approved; the device remembers nothing. That looks
+   * backwards next to "their token stays on their device", and it is the same
+   * principle: what the desktop keeps is a *scope*, in memory, for as long as the
+   * app is running — never a credential, never on disk. Putting it on the device
+   * instead would give the two ends two answers to "has this been approved" and
+   * no way to reconcile them.
+   */
+  | {
+      t: 'credential.request'
+      id: string
+      host: string
+      repo: string | null
+      operation: CredentialOperation
+      prompt: boolean
+    }
 
 /**
  * Every refusal this protocol can name, as a value rather than only a type.
@@ -705,6 +961,69 @@ function descriptor(value: unknown): DeviceDescriptor | null {
 }
 
 /**
+ * The capability names a client claims, cleaned rather than trusted.
+ *
+ * Lenient about the contents and strict about the shape, and the split is
+ * deliberate. A field that is not an array is a client that has misunderstood
+ * the protocol, and it is refused. An array with junk in it is filtered, because
+ * the list is advisory — it decides only which frames this desktop will *send* —
+ * and locking a device out of a shell over a stray entry in an optional field
+ * would be a spectacularly bad trade.
+ *
+ * Names are never checked against {@link CAPABILITY} here. A client is allowed
+ * to know about a capability this desktop has not heard of; the comparison
+ * belongs to whoever is about to send a frame, and doing it here would mean an
+ * older desktop silently erasing the half of the list it does not recognise.
+ */
+function capabilities(value: unknown): string[] | null {
+  if (!Array.isArray(value)) return null
+  const out: string[] = []
+  for (const entry of value) {
+    if (typeof entry !== 'string' || entry === '' || entry.length > MAX_CAPABILITY_LENGTH) continue
+    if (CONTROL_CHARS.test(entry)) continue
+    if (out.includes(entry)) continue
+    out.push(entry)
+    if (out.length >= MAX_CLIENT_CAPABILITIES) break
+  }
+  return out
+}
+
+/**
+ * One half of a credential, as it arrives from a device.
+ *
+ * Control characters are **refused**, not stripped, and that is the security
+ * check in this function rather than a tidiness one. The value's next stop is
+ * git's credential protocol, which is a stream of `key=value` lines: a newline
+ * inside a password ends the line early and the rest of it becomes a *different
+ * key*, so a device could otherwise write `url=` or `quit=` into the middle of
+ * an answer and change what git does with it. Git refuses these itself for the
+ * same reason; refusing here means the refusal is legible — "that is not a
+ * credential" — instead of surfacing later as a git error nobody can place.
+ *
+ * Stripping would be worse than either: it turns a hostile value into a
+ * different, legal-looking one, which is the argument `create.cwd` makes.
+ */
+function credentialValue(value: unknown, max: number): string | null {
+  if (typeof value !== 'string' || value === '' || value.length > max) return null
+  return CONTROL_CHARS.test(value) ? null : value
+}
+
+/**
+ * A denial code, narrowed by comparison rather than by a cast.
+ *
+ * The comparison returns the entry out of {@link CREDENTIAL_DENIALS}, so the
+ * value that reaches the message is one this module wrote, not one a client
+ * sent that happened to match. `includes` plus `as` would have produced the same
+ * type and a different guarantee.
+ */
+function denial(value: unknown): CredentialDenial | null {
+  for (const known of CREDENTIAL_DENIALS) {
+    if (value === known) return known
+  }
+  return null
+}
+
+/**
  * UTF-8 length, without allocating a copy of the string.
  *
  * `Buffer` and `TextEncoder` are both unavailable in one of the two runtimes
@@ -785,7 +1104,26 @@ export function parseClientMessage(raw: unknown): ParseResult {
       if (supplied === null) return bad('hello without a usable token')
       const device = descriptor(parsed.device)
       if (device === null) return bad('hello without a device descriptor')
-      return { ok: true, message: { t: 'hello', protocol, token: supplied, device } }
+      const message: Extract<ClientMessage, { t: 'hello' }> = {
+        t: 'hello',
+        protocol,
+        token: supplied,
+        device,
+      }
+      // Read once, for the reason spelled out on `input.data`: on the object
+      // path a property can be a getter, and the value that is checked has to be
+      // the value that is filtered. Absent stays absent rather than becoming an
+      // empty array — "said nothing" and "claimed nothing" are the same thing to
+      // every reader of this field, but only one of them is what an older client
+      // actually sent, and the shape a client sent is the shape a log should
+      // show.
+      const claimed = parsed.capabilities
+      if (claimed !== undefined) {
+        const cleaned = capabilities(claimed)
+        if (cleaned === null) return bad('hello with an unusable capability list')
+        message.capabilities = cleaned
+      }
+      return { ok: true, message }
     }
     case 'list':
       return { ok: true, message: { t: 'list' } }
@@ -980,6 +1318,56 @@ export function parseClientMessage(raw: unknown): ParseResult {
       return uploadId
         ? { ok: true, message: { t: 'upload.cancel', id: uploadId } }
         : bad('upload.cancel without an id')
+    }
+
+    /* ---- capability `credential` ---------------------------------------- */
+    // Shape-checked here and authorised nowhere near here. Whether this desktop
+    // asked anything at all, whether this device is the one it asked, and
+    // whether the answer is still wanted are questions only the desk in
+    // `credentials.ts` can answer, because only it is holding the request.
+    case 'credential.ack': {
+      const requestId = id(parsed.id)
+      return requestId
+        ? { ok: true, message: { t: 'credential.ack', id: requestId } }
+        : bad('credential.ack without an id')
+    }
+    case 'credential.answer': {
+      const requestId = id(parsed.id)
+      if (!requestId) return bad('credential.answer without an id')
+      // Read once each, for the reason spelled out on `input.data`.
+      const rawUser = parsed.username
+      const rawSecret = parsed.password
+      const username = credentialValue(rawUser, MAX_CREDENTIAL_USERNAME_LENGTH)
+      if (username === null) return bad('credential.answer without a usable username')
+      const password = credentialValue(rawSecret, MAX_CREDENTIAL_SECRET_LENGTH)
+      // The reason says the field is unusable and never why, which is the rule
+      // for every refusal in this file and matters more here than anywhere else:
+      // this reason is logged, and the value being described is somebody's
+      // GitHub token.
+      if (password === null) return bad('credential.answer without a usable secret')
+      const answer: Extract<ClientMessage, { t: 'credential.answer' }> = {
+        t: 'credential.answer',
+        id: requestId,
+        username,
+        password,
+      }
+      // Only the literal `true`. A truthy string or a 1 would be a client whose
+      // "Approve once" button widened itself into "always" through a JSON quirk,
+      // and the difference between those two taps is the entire consent model.
+      if (parsed.remember === true) answer.remember = true
+      return { ok: true, message: answer }
+    }
+    case 'credential.deny': {
+      const requestId = id(parsed.id)
+      if (!requestId) return bad('credential.deny without an id')
+      const deny: Extract<ClientMessage, { t: 'credential.deny' }> = { t: 'credential.deny', id: requestId }
+      // An unknown reason is dropped rather than refused: a newer client naming
+      // a denial this desktop has not heard of has still denied, and closing the
+      // socket over the *label* on a "no" would turn a refusal that worked into
+      // a device that fell off the network.
+      const reason = denial(parsed.reason)
+      if (reason !== null) deny.reason = reason
+      return { ok: true, message: deny }
     }
 
     default:

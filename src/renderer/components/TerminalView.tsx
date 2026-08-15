@@ -115,11 +115,29 @@ export function TerminalView({
       cursorBlink: true,
       allowProposedApi: true,
       scrollback: 10_000,
+      /*
+       * xterm paints on a canvas, so it cannot read a CSS variable — the theme
+       * has to be resolved to literal colours once, here. The second argument
+       * is only used if the variable is missing, which happens exactly when
+       * tokens.css has not been applied to the document yet.
+       *
+       * These fallbacks are kept in step with the dark theme in tokens.css on
+       * purpose. They spent a long time as the purple-blue of a palette that
+       * had been replaced twice over (#0e0f13 / #8588f2), so on the rare boot
+       * where they did fire, the terminal came up in a colour scheme the rest
+       * of the app had not used for months and nobody could reproduce it. If
+       * the dark theme's --bg-primary / --text-primary / --accent /
+       * --accent-soft change, change these too.
+       */
       theme: {
-        background: token('--bg-primary', '#0e0f13'),
-        foreground: token('--text-primary', '#e9eaf1'),
-        cursor: token('--accent', '#8588f2'),
-        selectionBackground: token('--accent-soft', 'rgba(133,136,242,0.15)'),
+        /* `--terminal-bg` / `--terminal-fg` rather than the app's canvas and
+           ink. They are the same values in the dark theme and deliberately not
+           in the light one, where the chrome is white and a white terminal on
+           it stops looking like a terminal at all. */
+        background: token('--terminal-bg', '#191919'),
+        foreground: token('--terminal-fg', '#ededed'),
+        cursor: token('--accent', '#3b8fee'),
+        selectionBackground: token('--accent-soft', 'rgba(59,143,238,0.16)'),
       },
     })
 

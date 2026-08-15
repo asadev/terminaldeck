@@ -49,7 +49,16 @@ cd "$REPO"
 
 KEYCHAIN="$HOME/Library/Keychains/terminaldeck.keychain-db"
 PW_FILE="$HOME/ClaudeAsad/credentials/.terminaldeck-keychain-pw"
-IDENTITY="${TD_MAC_IDENTITY:-Developer ID Application: Asad Iqbal (6U4VNX5W87)}"
+# The common name WITHOUT the `Developer ID Application:` prefix.
+#
+# electron-builder refuses the full string outright — "Please remove prefix
+# ... appropriate certificate will be chosen automatically" — because it
+# prepends the type itself when it searches the keychain. Passing the name it
+# is printed with in `security find-identity` therefore fails, which reads like
+# the certificate is missing when it is sitting right there. The team id stays,
+# and it is what makes this unambiguous against the `Apple Distribution: Asad
+# Iqbal` in the same keychain.
+IDENTITY="${TD_MAC_IDENTITY:-Asad Iqbal (6U4VNX5W87)}"
 TEAM_ID="6U4VNX5W87"
 
 # Read from the environment or from disk, never hardcoded. This repository is

@@ -1,12 +1,15 @@
-/* Attachments riding along with the next message: pills above the field, in the
-   system fill rather than an outlined box each. */
+/* Attachments riding along with the next message: pills above the text, inside
+   the box, in the system fill rather than an outlined box each. */
 
 .at-chips {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--sp-15);
-  padding: 0 var(--sp-2) var(--sp-2);
+  /* Only the inset that lines the first chip up with the first character of the
+     message. The space below belongs to the box's own gap — carrying it here
+     too left a double gap on the one row that has chips and none on the rest. */
+  padding: 0 var(--sp-2);
 }
 
 .at-chip {

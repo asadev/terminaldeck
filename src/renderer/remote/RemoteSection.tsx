@@ -5,6 +5,7 @@ import { errorText } from '../settings/settings-bridge'
 import { chooseRoute, pairingPaths, pairingRoutes, type PairPath } from './pairing-link'
 import { detectPlatform, machineNoun, thisMachine, ThisMachine, type UiPlatform } from '../platform'
 import { encodeQr, qrPath, qrViewBox, QR_QUIET_ZONE } from './qr'
+import { DeviceFolders, type FolderDevice } from './DeviceFolders'
 import './RemoteSection.css'
 
 /**
@@ -1734,19 +1735,59 @@ export function RemoteSection({ bridge: provided }: Props) {
   })
 
   return (
-    <RemoteView
-      state={state}
-      wired={wired}
-      missing={missing}
-      problem={problem}
-      notice={notice}
-      pairing={pairing}
-      secondsLeft={secondsLeft}
-      busy={busy}
-      confirmEnable={confirmEnable}
-      pairPath={pairPath}
-      actions={actions}
-      now={now}
-    />
+    <>
+      <RemoteView
+        state={state}
+        wired={wired}
+        missing={missing}
+        problem={problem}
+        notice={notice}
+        pairing={pairing}
+        secondsLeft={secondsLeft}
+        busy={busy}
+        confirmEnable={confirmEnable}
+        pairPath={pairPath}
+        actions={actions}
+        now={now}
+      />
+      {/*
+        Rendered here, beside `RemoteView`, rather than inside it.
+
+        `RemoteView` is pure on purpose — every state this panel can be in is
+        pinned by handing it props and calling `renderToStaticMarkup`, which
+        never runs an effect. `DeviceFolders` reads its own grants in an effect,
+        so nesting it would put a component that fetches inside the one thing
+        here that is provably a function of its arguments, and every existing
+        view test would start rendering a child that reports "not available in
+        this build" because there is no `window.deck` under the test renderer.
+
+        Below the device roster, and that order is the argument the screen
+        makes: pair a device, approve it, then choose what it may open. Choosing
+        folders for a device nobody has approved is a setting with no subject.
+      */}
+      {wired && state !== null && <DeviceFolders devices={grantableDevices(state.devices)} />}
+    </>
   )
+}
+
+/**
+ * The devices worth choosing folders for.
+ *
+ * Approved only, and the two it drops are dropped for different reasons.
+ *
+ * A **pending** device cannot open anything at all — it has not been let in —
+ * so a folder list for it would be a decision made about a device before the
+ * only decision that matters. Approve it first; its row appears the moment you
+ * do, which is also the moment the choice starts meaning something.
+ *
+ * A **revoked** one is gone for good. The trust store never un-revokes, so a
+ * phone that comes back pairs again and is issued a *new* device id — the old
+ * row could never be reached by anything again, and `FolderGrants.forget` has
+ * already dropped whatever it had. Listing it would offer an edit to a record
+ * the main process deleted while this panel was open.
+ */
+export function grantableDevices(devices: readonly RemoteDevice[]): FolderDevice[] {
+  return devices
+    .filter((device) => device.state === 'approved')
+    .map((device) => ({ id: device.id, name: device.name }))
 }

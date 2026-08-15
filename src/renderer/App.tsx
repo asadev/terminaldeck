@@ -18,12 +18,32 @@ import { CommandPalette, type PaletteCommand } from './components/CommandPalette
 import { ShortcutsSheet } from './components/ShortcutsSheet'
 import { Onboarding } from './components/Onboarding'
 import { ChatView } from './components/ChatView'
+import { PageEmpty } from './components/PageEmpty'
+import { BRAND } from '@shared/brand'
+import { StatusDot } from './components/StatusDot'
 import { UpdateBanner } from './updates/UpdateBanner'
-import { ChatToggle, type SessionViewMode } from './components/ChatToggle'
+import { ModeSwitch, type SessionViewMode, type WorkspaceMode } from './shell/ModeSwitch'
 import { BrowserWorkspace } from './browser/BrowserWorkspace'
 import { SwarmGrid } from './layout/SwarmGrid'
+import { SplitView } from './layout/SplitView'
+import {
+  closePane,
+  emptyLayout,
+  focusedSessionId,
+  moveFocus,
+  type PaneLayout,
+} from './layout/pane-tree'
+import {
+  closePaneOrCollapse,
+  isSplit,
+  pruneClosedSessions,
+  seedSplit,
+  showInFocusedPane,
+  splitFocused,
+} from './layout/panes'
 import { Sidebar } from './shell/Sidebar'
 import { WindowToolbar } from './shell/WindowToolbar'
+import { FolderChip } from './shell/FolderChip'
 import { PanelView } from './shell/PanelView'
 import { useSidebar } from './shell/useSidebar'
 import { panelSpec, type PanelId } from './shell/panels'
@@ -35,15 +55,9 @@ import { AutoTitler } from './auto-title'
 import { useSessionNotifier } from './useSessionNotifier'
 import { useAppSettings } from './settings/useAppSettings'
 import { booleanSetting, numberSetting, stringSetting } from './settings/settings-schema'
-import { chordFor, resolveCommand, scopeForTarget, tip } from './keymap'
+import { readLastFolder, writeLastFolder } from './session-start'
+import { chordFor, resolveCommand, scopeForTarget } from './keymap'
 import './shell/shell.css'
-
-/** Toolbar icons, 24×24, 1.5 stroke — the same grid the sidebar draws on. */
-const ICON = {
-  inspector: 'M12 4.6c-4.3 0-7.4 3.2-8.6 5.2a2 2 0 0 0 0 2c1.2 2 4.3 5.2 8.6 5.2s7.4-3.2 8.6-5.2a2 2 0 0 0 0-2c-1.2-2-4.3-5.2-8.6-5.2zM12 14a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4z',
-  swarm: 'M4.5 4.5h6v6h-6zM13.5 4.5h6v6h-6zM4.5 13.5h6v6h-6zM13.5 13.5h6v6h-6z',
-  palette: 'M11 4.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zM19.5 19.5l-3.9-3.9',
-}
 
 /** A close waiting on the user: one session, or every session in a project. */
 type PendingClose =
@@ -57,23 +71,7 @@ function folderNameOf(path: string | undefined): string | undefined {
   return parts[parts.length - 1]
 }
 
-function ToolbarIcon({ path }: { path: string }) {
-  return (
-    <svg
-      width="17"
-      height="17"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.5"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d={path} />
-    </svg>
-  )
-}
+const PANE_CLOSE = 'M6.5 6.5l11 11M17.5 6.5l-11 11'
 
 function Workspace() {
   const {
@@ -113,6 +111,20 @@ function Workspace() {
   const [activeTabId, setActiveTabId] = useState<string | null>(null)
   const [swarm, setSwarm] = useState(false)
   const [sessionView, setSessionView] = useState<Record<string, SessionViewMode>>({})
+  /**
+   * The split layout, and the only record of whether the window is split.
+   *
+   * A `PaneLayout` with a null root *is* "not split", so there is no second
+   * boolean beside it to fall out of step. The two disagreeing is not
+   * hypothetical: closing the last pane from inside the split view has to leave
+   * the mode switch reading "Terminal", and a separate flag would have left it
+   * claiming Split with nothing in it.
+   *
+   * The pane tree and its view have existed, complete and unit-tested, since
+   * before the first release, and were rendered by nothing at all for that
+   * entire time — twice nearly deleted for it. This is the wiring.
+   */
+  const [panes, setPanes] = useState<PaneLayout>(emptyLayout)
   const [openFile, setOpenFile] = useState<string | null>(null)
   /**
    * The close that is waiting on an answer — one session, or a whole project.
@@ -187,10 +199,6 @@ function Workspace() {
 
   const activeTab = tabs.find((t) => t.id === activeTabId) ?? tabs[0] ?? null
   const activeSession = activeTab?.kind === 'session' ? activeTab : null
-  /** The full record behind the open session — a tab carries only its label. */
-  const activeSessionMeta = activeSession
-    ? sessions.find((s) => s.id === activeSession.id) ?? null
-    : null
 
   /** True while one of the sidebar's views has the window. */
   const showingPanel = panel !== null
@@ -224,13 +232,61 @@ function Workspace() {
   const autoNameRef = useRef(autoNameSessions)
   autoNameRef.current = autoNameSessions
 
+  /**
+   * The folder the last session was started in, read once at launch.
+   *
+   * Held in a ref rather than state because nothing on screen depends on it —
+   * it is the answer the New session button needs when there is nothing open to
+   * infer a folder from, and reading `localStorage` inside the click handler
+   * would be a synchronous disk-backed read on the way to spawning a process.
+   */
+  // `undefined` is "not read yet" and `null` is "read, and there was nothing".
+  // Without that distinction the read repeats on every render for anyone who
+  // has never started a session — which is a synchronous disk-backed read per
+  // frame, for the one user it can never help.
+  const lastFolderRef = useRef<string | null | undefined>(undefined)
+  if (lastFolderRef.current === undefined) {
+    lastFolderRef.current = readLastFolder(globalThis.localStorage ?? null)
+  }
+
   const activeProjectPath =
     activeSession?.projectPath ??
     sessions.find((s) => s.id === activeSessionId)?.projectPath ??
     projects[0]?.path ??
     null
 
+  /** Whether the window is showing a hand-arranged layout rather than one session. */
+  const splitting = isSplit(panes)
+
+  /**
+   * The session the app acts on: the focused pane's while split, the open tab's
+   * otherwise.
+   *
+   * This is the whole of "focus routing", and it is one expression on purpose.
+   * Everything downstream — the title, the folder chip, the inspector, which
+   * row the sidebar draws as current, what `unread` counts as being looked at —
+   * asks this and not `activeTab`, so there is no second place for the two
+   * models to disagree.
+   */
+  const focusedId = splitting ? focusedSessionId(panes) : activeTab?.id ?? null
+  const focusedSession = focusedId
+    ? sessions.find((session) => session.id === focusedId) ?? null
+    : null
+
   useEffect(() => unread.subscribe((snapshot) => setUnreadIds(snapshot.ids)), [unread])
+
+  /**
+   * A pane naming a session that no longer exists is a hole with no
+   * explanation, and `focusedSessionId` would keep answering with an id the
+   * store has already forgotten — so the toolbar and the inspector would be
+   * reading a dead session's name. Driven off the session list rather than off
+   * each close path, because a session can leave four different ways (⌘W, the
+   * row's ✕, the process exiting, a whole project closing) and only one of them
+   * is a place a caller could remember to prune.
+   */
+  useEffect(() => {
+    setPanes((current) => pruneClosedSessions(current, sessions))
+  }, [sessions])
 
   /**
    * Output on a session nobody is looking at lights its row — and names it.
@@ -298,10 +354,10 @@ function Workspace() {
 
   const viewing = useMemo(
     () => ({
-      activeSessionId: showingPanel ? null : activeTab?.id ?? null,
+      activeSessionId: showingPanel ? null : focusedId,
       windowFocused,
     }),
-    [showingPanel, activeTab?.id, windowFocused],
+    [showingPanel, focusedId, windowFocused],
   )
 
   useEffect(() => unread.setViewing(viewing), [unread, viewing])
@@ -326,6 +382,50 @@ function Workspace() {
       cancelled = true
     }
   }, [addProject, settings, settingsLoaded])
+
+  /**
+   * The sessions that are still running, put back — on every mount, not just
+   * on launch.
+   *
+   * This app's own stated bug class is a feature wired to a button and never
+   * wired to boot. This is its sibling, and it had shipped: the session list
+   * lived only in renderer state, so reloading the renderer (⌘R, or a crash
+   * that React recovered from) emptied the sidebar while the ptys carried on
+   * running in the main process. Verified with `ps`: a `/bin/zsh -l` still
+   * parented to Electron, with no row in the window to reach it and no way to
+   * close it short of quitting the app. Every piece needed to fix it already
+   * existed — `session:list` returns the manager's live map, and `TerminalView`
+   * already replays `session:scrollback` when it mounts — and nothing had ever
+   * called the first one.
+   *
+   * Deliberately NOT gated on `advanced.restoreSessions`. That setting is about
+   * reopening the projects you had open the last time the *app* ran; this is a
+   * process that is running right now, in this very main process, and hiding it
+   * is not a preference anybody expressed.
+   *
+   * `focus: false` on every one of them: a reload should put the window back as
+   * it was, not pull the user onto whichever session happens to be last in the
+   * map. The project is added first so the rows have a group to land in.
+   */
+  useEffect(() => {
+    let cancelled = false
+    void window.deck
+      .listSessions()
+      .then((live) => {
+        if (cancelled) return
+        for (const meta of live) {
+          addProject(meta.cwd)
+          addSession(meta, { focus: false })
+        }
+      })
+      .catch(() => {
+        // A build whose bridge is missing the channel keeps the old behaviour:
+        // an empty list. There is nothing better to do and nothing to say.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [addProject, addSession])
 
   // Show the first-run screen only when no agent is usable. Someone with a
   // working setup should never be made to click through a welcome screen.
@@ -364,28 +464,53 @@ function Workspace() {
         resume,
         ...(isProviderId(provider) ? { provider } : {}),
       })
+      // Remembered here rather than at the call sites, because every way of
+      // starting a session goes through this function and only one of them
+      // knows where the folder came from.
+      lastFolderRef.current = path
+      writeLastFolder(path, globalThis.localStorage ?? null)
+      // Started while the window is split: it belongs in the pane you are
+      // looking at, which is the same rule a sidebar click follows. Without it,
+      // the empty pane's own New session button would start a session that
+      // appeared everywhere except the pane it was pressed in.
+      setPanes((current) => (isSplit(current) ? showInFocusedPane(current, meta.id) : current))
+      // A session in a folder the sidebar is not listing is a session with no
+      // row. That happened whenever the folder came from the remembered one
+      // rather than from a project the user had opened in this window.
+      addProject(path)
+      void window.deck.addProject(path)
       addSession(meta)
       showTab(meta.id)
     },
-    [addSession, showTab, settings],
+    [addProject, addSession, showTab, settings],
   )
 
   const openProject = useCallback(async () => {
     const path = await window.deck.pickProjectFolder()
     if (!path) return
-    addProject(path)
-    void window.deck.addProject(path)
     // Through `newSessionIn`, so the first session in a project starts on the
-    // same agent every other one does. This call used to build its own request
-    // and left the provider off it.
+    // same agent every other one does — and is registered the same way. This
+    // call used to build its own request and left the provider off it.
     await newSessionIn(path)
     setOnboardingDone(true)
-  }, [addProject, newSessionIn])
+  }, [newSessionIn])
 
-  /** ⌘T and the sidebar's primary button: a session wherever you last were. */
+  /**
+   * ⌘T and the sidebar's primary button: a session, immediately.
+   *
+   * No dialog stands in front of this any more, and the folder is decided in
+   * the order the user would guess: the one you asked for, then the one you are
+   * working in, then the one you were working in last time. The picker is what
+   * happens when all three are genuinely unknown — a first launch — and at that
+   * point it is not "a dialog in the way", it is the only question left.
+   *
+   * `openProject` was previously reached whenever no project was open at all,
+   * which included every launch with restore-on-start switched off: pressing
+   * New session put a folder chooser on screen instead of a session.
+   */
   const newSession = useCallback(
     (path?: string, resume = false) => {
-      const target = path ?? activeProjectPath
+      const target = path ?? activeProjectPath ?? lastFolderRef.current
       if (target) void newSessionIn(target, resume)
       else void openProject()
     },
@@ -403,7 +528,20 @@ function Workspace() {
       showTab(id)
       // Terminals key off the store's active session; keep the two in step or
       // switching to a session shows the previously focused terminal.
-      if (sessions.some((session) => session.id === id)) setActiveSession(id)
+      if (!sessions.some((session) => session.id === id)) return
+      setActiveSession(id)
+      /*
+       * While the window is split, a sidebar row fills the pane you are looking
+       * at rather than taking the whole window back.
+       *
+       * This is the sentence that makes the two models one model. The sidebar
+       * keeps meaning exactly what it always meant — "show me this session" —
+       * and the only thing that changed is where "show" happens to be. It is
+       * deliberately not "open it in a new pane": the sidebar is a list of what
+       * you have open, not a layout editor, and a click that quietly multiplied
+       * your panes would be the list fighting the layout.
+       */
+      setPanes((current) => (isSplit(current) ? showInFocusedPane(current, id) : current))
     },
     [sessions, setActiveSession, showTab],
   )
@@ -570,6 +708,101 @@ function Workspace() {
     [showPanel],
   )
 
+  /* --------------------------------------------------------------- panes -- */
+
+  /**
+   * Split the window, or split again.
+   *
+   * Pressing it the first time seeds two panes from the sessions you already
+   * have; pressing it again divides whichever pane has focus. The two are one
+   * command because to the user they are one idea, and because a "Split" that
+   * does nothing the second time you press it is a control that has stopped
+   * answering.
+   */
+  const splitPanes = useCallback(() => {
+    clearPanel()
+    setSwarm(false)
+    setPanes((current) =>
+      isSplit(current) ? splitFocused(current) : seedSplit(sessionsRef.current, focusedId),
+    )
+  }, [clearPanel, focusedId])
+
+  /** Leave the layout behind and go back to one session filling the window. */
+  const closeSplit = useCallback(() => setPanes(emptyLayout()), [])
+
+  /**
+   * Terminal, Chat, Split — what the window is doing.
+   *
+   * The first two are per session and the third is per window, and joining them
+   * in one control is a deliberate simplification rather than a shortcut: they
+   * are three answers to one question the user is actually asking, which is
+   * "what am I looking at". The state stays split — `sessionView` per session,
+   * `panes` for the window — so nothing downstream has to unpick the join.
+   */
+  const setMode = useCallback(
+    (next: WorkspaceMode) => {
+      if (next === 'split') {
+        splitPanes()
+        return
+      }
+      closeSplit()
+      setSwarm(false)
+      // The focused pane's session, so leaving a split leaves you looking at
+      // the half you were working in rather than at whatever tab was active
+      // before you split.
+      if (focusedId) {
+        setActiveTabId(focusedId)
+        setActiveSession(focusedId)
+        setSessionView((views) => ({ ...views, [focusedId]: next }))
+      }
+    },
+    [splitPanes, closeSplit, focusedId, setActiveSession],
+  )
+
+  /** Arrow-key travel between panes, geometric rather than by tree order. */
+  const focusNeighbour = useCallback((direction: 'left' | 'right') => {
+    setPanes((current) => moveFocus(current, direction))
+  }, [])
+
+  /**
+   * Close one pane, and land somewhere sensible when that was the last split.
+   *
+   * The survivor is read before the collapse, not after: `closePaneOrCollapse`
+   * throws the tree away once one pane is left, so by the time the new layout
+   * exists there is nothing to ask which session was kept. Without this,
+   * closing the pane you were *in* left the window showing the session you had
+   * just closed the view of — still running, still real, and not the one you
+   * chose to keep.
+   */
+  const closePaneAt = useCallback(
+    (paneId: string) => {
+      const survivor = focusedSessionId(closePane(panes, paneId))
+      const next = closePaneOrCollapse(panes, paneId)
+      setPanes(next)
+      if (isSplit(next) || !survivor) return
+      setActiveTabId(survivor)
+      setActiveSession(survivor)
+    },
+    [panes, setActiveSession],
+  )
+
+  /**
+   * While the window is split, the focused pane *is* the active session.
+   *
+   * One effect rather than a line in each of the four places focus can move —
+   * a click in a pane, an arrow key, a pane closing, a session being pruned.
+   * Everything outside the layout reads the store, so a pane taking focus
+   * without this leaves the composer, the inspector and the chat bridge acting
+   * on whichever session was in front before the window was split.
+   */
+  useEffect(() => {
+    if (!splitting) return
+    const id = focusedSessionId(panes)
+    if (!id) return
+    setActiveTabId(id)
+    setActiveSession(id)
+  }, [panes, splitting, setActiveSession])
+
   const commands = useMemo<PaletteCommand[]>(() => {
     /*
      * No chord is written down here.
@@ -598,7 +831,21 @@ function Workspace() {
       { id: 'project.open', title: 'Open a project', group: 'Project', run: () => void openProject() },
       { id: 'palette.quickOpen', title: 'Open a file…', group: 'Project', run: () => setPaletteMode('files') },
       { id: 'view.browser', title: 'New browser tab', group: 'View', run: () => newBrowserTab() },
-      { id: 'view.swarm', title: 'Toggle swarm view', group: 'View', run: () => setSwarm((value) => !value) },
+      { id: 'pane.split', title: 'Split the window', group: 'View', run: () => splitPanes() },
+      {
+        id: 'view.swarm',
+        title: 'Every session at once',
+        group: 'View',
+        // Swarm and split are both "several sessions on screen", so only one of
+        // them may be on: they are two answers to the same question, and a
+        // window showing both would be answering it twice. Swarm derives its
+        // grid from the session list and rearranges itself; split is arranged
+        // by hand and stays where it is put.
+        run: () => {
+          closeSplit()
+          setSwarm((value) => !value)
+        },
+      },
       // `view.dashboard`, which is the id the keymap binds the Overview chord
       // to. The row used to call itself `view.overview` and print that chord
       // anyway: the chord worked, via an alias in the switch below, but the
@@ -607,7 +854,6 @@ function Workspace() {
       { id: 'view.files', title: 'Files', group: 'View', run: () => showPanel('files') },
       { id: 'view.search', title: 'Search past sessions', group: 'View', run: () => showPanel('search') },
       { id: 'view.git', title: 'Source control', group: 'View', run: () => showPanel('git') },
-      { id: 'view.board', title: 'Task board', group: 'View', run: () => showPanel('board') },
       { id: 'view.github', title: 'GitHub', group: 'View', run: () => showPanel('github') },
       { id: 'view.alerts', title: 'Alerts', group: 'View', run: () => showPanel('alerts') },
       { id: 'view.readiness', title: 'AI readiness', group: 'View', run: () => showPanel('readiness') },
@@ -624,7 +870,7 @@ function Workspace() {
       const chord = chordFor(row.id)
       return chord === null ? row : { ...row, shortcut: chord }
     })
-  }, [newSession, newBrowserTab, openProject, showPanel, openSettings, sidebar])
+  }, [newSession, newBrowserTab, openProject, showPanel, openSettings, sidebar, splitPanes, closeSplit])
 
   /**
    * One dispatcher for every command, whatever fired it: a menu item, a chord
@@ -641,6 +887,16 @@ function Workspace() {
       switch (id) {
         case 'session.close':
           if (activeTab) closeTab(activeTab.id)
+          return true
+        // Travel between panes without reaching for the mouse. Geometric, via
+        // `moveFocus` — of the panes that share an edge with this one, the
+        // closest one lined up with its centre — because a tree walk has to
+        // guess which leaf to land on the moment a split is nested.
+        case 'pane.focusLeft':
+          focusNeighbour('left')
+          return true
+        case 'pane.focusRight':
+          focusNeighbour('right')
           return true
         case 'session.next':
           cycleTab(1)
@@ -681,7 +937,17 @@ function Workspace() {
           return false
       }
     },
-    [commands, activeTab, closeTab, cycleTab, showPanel, openSettings, selectTab, sessions],
+    [
+      commands,
+      activeTab,
+      closeTab,
+      cycleTab,
+      showPanel,
+      openSettings,
+      selectTab,
+      sessions,
+      focusNeighbour,
+    ],
   )
 
   // Menu items dispatch the same commands the palette runs, so a menu entry
@@ -795,8 +1061,8 @@ function Workspace() {
           }}
           // What makes the dashboard's numbers doors rather than decoration.
           // Every one of these was undefined until now, which is why the
-          // sessions list rendered its rows disabled and the git and board
-          // tiles hid their "open" buttons entirely.
+          // sessions list rendered its rows disabled and the git tile hid its
+          // "open" button entirely.
           dashboard={{
             sessions: sessions
               .filter((session) => session.projectPath === activeProjectPath)
@@ -813,6 +1079,7 @@ function Workspace() {
             onOpenSession: selectTab,
             onShowSessions: () => {
               clearPanel()
+              closeSplit()
               setSwarm(true)
             },
             onOpenInspector: () => setInspectorOpen(true),
@@ -849,6 +1116,103 @@ function Workspace() {
               copyOnSelect={copyOnSelect}
             />
           )}
+        />
+      )
+    }
+
+    /*
+     * The split layout.
+     *
+     * Only the panes' terminals are mounted here, where the single-session view
+     * below keeps every terminal mounted and hides the ones off screen. That is
+     * safe for the same reason a session started on a phone can be opened cold:
+     * the main process holds each session's scrollback and `TerminalView` asks
+     * for it on mount, so entering or leaving a split is a redraw from a buffer
+     * rather than a loss. What it is not safe to do is keep both — a session
+     * rendered twice would attach two input handlers to one pty.
+     */
+    if (splitting) {
+      return (
+        <SplitView
+          layout={panes}
+          // Focus and geometry both arrive here; the effect above is what
+          // carries a focus change on to the store.
+          onLayoutChange={setPanes}
+          renderPane={({ paneId, sessionId, focused }) => {
+            const session = sessionId
+              ? sessions.find((entry) => entry.id === sessionId) ?? null
+              : null
+            const index = session
+              ? sessions.filter((s) => s.projectPath === session.projectPath).indexOf(session)
+              : 0
+            return (
+              <div className="pane-cell" data-focused={focused}>
+                <header className="pane-cell-head" data-empty={!session || undefined}>
+                  {session ? (
+                    <>
+                      <StatusDot status={session.status} />
+                      <span className="pane-cell-title">
+                        {sessionLabel(session.title, index, folderNameOf(session.projectPath))}
+                      </span>
+                    </>
+                  ) : (
+                    <span className="pane-cell-title pane-cell-waiting">Empty pane</span>
+                  )}
+                  <button
+                    type="button"
+                    className="pane-cell-close"
+                    aria-label="Close this pane"
+                    // Closing the second-to-last pane puts the window back to a
+                    // single session rather than leaving a "split view" with one
+                    // pane in it, which is the ordinary view wearing a divider.
+                    title="Close this pane"
+                    onClick={() => closePaneAt(paneId)}
+                  >
+                    <svg
+                      width="13"
+                      height="13"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.6"
+                      strokeLinecap="round"
+                      aria-hidden="true"
+                    >
+                      <path d={PANE_CLOSE} />
+                    </svg>
+                  </button>
+                </header>
+                <div className="pane-cell-body">
+                  {session ? (
+                    <TerminalView
+                      // Keyed on the pane as well as the session, so the same
+                      // session opened in two panes gets two terminals rather
+                      // than one element React keeps moving between them.
+                      key={`${paneId}:${session.id}`}
+                      sessionId={session.id}
+                      visible
+                      fontSize={terminalFontSize}
+                      fontFamily={terminalFontFamily}
+                      copyOnSelect={copyOnSelect}
+                    />
+                  ) : (
+                    // An instruction, not a placeholder. The sidebar fills the
+                    // focused pane, so the first sentence names something that
+                    // is one click away on the left; the button is the other
+                    // half, for the case this pane exists to serve — you split
+                    // the window in order to run a second agent, and there is
+                    // not a second one yet.
+                    <PageEmpty
+                      title="Nothing in this pane yet"
+                      action={{ label: 'New session', onClick: () => newSession() }}
+                    >
+                      Pick a session in the sidebar and it opens here.
+                    </PageEmpty>
+                  )}
+                </div>
+              </div>
+            )
+          }}
         />
       )
     }
@@ -920,6 +1284,9 @@ function Workspace() {
                   // render in their "no session focused" state: model, effort
                   // and permission mode are read off this session's screen.
                   sessionId={session.id}
+                  // What is actually in the pty. Without it the pane writes
+                  // agent copy over a plain shell — see `ChatViewProps`.
+                  provider={session.provider}
                   onSend={(text) => {
                     // Written to the session's own terminal: chat mode is a
                     // different view of the same session, not a second channel,
@@ -935,30 +1302,76 @@ function Workspace() {
     )
   }
 
-  const heading = showingPanel && panel
-    ? { title: panelSpec(panel).label, subtitle: panelSpec(panel).blurb }
+  /**
+   * The tab the window's heading is about.
+   *
+   * While the window is split that is the *focused pane's* session, not the tab
+   * that happened to be active before the split — the title, the folder chip
+   * and the session-details dialog all read from here, so they follow the pane
+   * you are working in the way everything else does.
+   */
+  const headingTab = splitting
+    ? tabs.find((tab) => tab.id === focusedId) ?? activeTab
     : activeTab
+
+  const heading = showingPanel && panel
+    ? { title: panelSpec(panel).label, subtitle: panelSpec(panel).blurb, folder: null }
+    : headingTab
       ? {
-          title: labelOf(activeTab),
-          subtitle: activeTab.kind === 'session' ? activeTab.projectPath ?? null : null,
+          title: labelOf(headingTab),
+          subtitle: null,
+          // The path is a control now rather than a caption — see FolderChip.
+          folder: headingTab.kind === 'session' ? headingTab.projectPath ?? null : null,
         }
       // No subtitle. "Nothing open yet." is the sidebar's line, and it is there to
       // explain why the list beneath it is empty — a job this heading does not
       // share. Saying it here too put the same sentence on screen twice, a few
       // centimetres apart, while the page in the middle was already explaining
       // the same emptiness with a button. The title alone is enough.
-      : { title: 'Terminal Deck', subtitle: null }
+      : { title: BRAND.name, subtitle: null, folder: null }
+
+  /**
+   * What the mode switch is showing, and what it will not offer.
+   *
+   * Read rather than stored: `panes` already knows whether the window is split
+   * and `sessionView` already knows how the focused session is drawn, so a
+   * third piece of state saying the same thing could only ever be the one that
+   * is wrong.
+   */
+  const mode: WorkspaceMode = splitting
+    ? 'split'
+    : focusedId
+      ? sessionView[focusedId] ?? 'terminal'
+      : 'terminal'
 
   return (
-    <div className="app">
-      {!sidebar.collapsed && (
+    <div className="app" data-sidebar-peek={sidebar.peeking || undefined}>
+      {/*
+        The reveal strip: eight pixels of window edge that peek the rail out.
+        Only present while the rail is away, and it sits under the traffic
+        lights' own row so it can never swallow a click meant for them.
+      */}
+      {!sidebar.revealed && (
+        <div
+          className="sidebar-edge"
+          onPointerEnter={sidebar.beginPeek}
+          aria-hidden="true"
+        />
+      )}
+
+      {sidebar.revealed && (
         <Sidebar
           width={sidebar.width}
           projects={projects}
           tabs={tabs}
-          activeTabId={activeTab?.id ?? null}
+          activeTabId={focusedId ?? activeTab?.id ?? null}
           activePanel={panel}
           unread={unreadIds}
+          peeking={sidebar.peeking && sidebar.collapsed}
+          // Above Settings, in the foot. Mounted here rather than inside the
+          // sidebar so the component stays where the wiring test can see it and
+          // where its bridge subscription belongs.
+          update={<UpdateBanner />}
           onSelectTab={selectTab}
           onCloseTab={closeTab}
           onSelectPanel={showPanel}
@@ -967,6 +1380,9 @@ function Workspace() {
           onOpenProject={openProject}
           onCloseProject={closeProject}
           onOpenSettings={() => openSettings()}
+          onToggleCollapsed={sidebar.toggleCollapsed}
+          onPeekStart={sidebar.beginPeek}
+          onPeekEnd={sidebar.endPeek}
           onStartResize={sidebar.startResize}
         />
       )}
@@ -975,57 +1391,44 @@ function Workspace() {
         <WindowToolbar
           title={heading.title}
           subtitle={heading.subtitle}
-          sidebarCollapsed={sidebar.collapsed}
-          onToggleSidebar={sidebar.toggleCollapsed}
+          meta={
+            heading.folder ? (
+              <FolderChip
+                path={heading.folder}
+                options={projects}
+                onPick={(path) => newSession(path)}
+                onBrowse={() => void openProject()}
+              />
+            ) : null
+          }
+          /*
+           * The *pinned* state, not the visible one.
+           *
+           * A peeked rail floats over the toolbar rather than taking room from
+           * it, so the traffic lights are still sitting on the toolbar and it
+           * still needs their 82px of clearance. Passing `!revealed` here made
+           * that padding come and go with the peek, which slid the window's
+           * title 66px sideways every time a pointer brushed the left edge.
+           * The reveal button goes with it and is simply covered by the rail
+           * while it is out — the same control, in the same place, either way.
+           */
+          sidebarHidden={sidebar.collapsed}
+          onRevealSidebar={sidebar.pin}
+          onEdgeEnter={sidebar.beginPeek}
         >
-          {/* Swarm shows every terminal at once, so a Terminal/Chat switch for
-              "the" session would be a control with no session to act on. */}
-          {activeSession && !showingPanel && !swarm ? (
-            <ChatToggle
-              mode={sessionView[activeSession.id] ?? 'terminal'}
-              onChange={(mode) =>
-                setSessionView((views) => ({ ...views, [activeSession.id]: mode }))
-              }
-            />
-          ) : null}
-          {sessions.length > 1 && !showingPanel && (
-            <button
-              type="button"
-              className={`toolbar-btn${swarm ? ' on' : ''}`}
-              aria-pressed={swarm}
-              onClick={() => setSwarm((value) => !value)}
-              aria-label="Swarm view"
-              title={tip('Every session at once', 'view.swarm')}
-            >
-              <ToolbarIcon path={ICON.swarm} />
-            </button>
-          )}
-          {activeSession && (
-            <button
-              type="button"
-              className="toolbar-btn"
-              onClick={() => setInspectorOpen(true)}
-              aria-label="Session details"
-              title={tip('Session details', 'view.inspector')}
-            >
-              <ToolbarIcon path={ICON.inspector} />
-            </button>
-          )}
-          <button
-            type="button"
-            className="toolbar-btn"
-            onClick={() => setPaletteMode('commands')}
-            aria-label="Command palette"
-            title={tip('Command palette', 'palette.commands')}
-          >
-            <ToolbarIcon path={ICON.palette} />
-          </button>
-        </WindowToolbar>
+          {/*
+            One control, and only where it means something.
 
-        {/* Under the toolbar, above the work: an update is worth interrupting
-            the chrome for, but never the work — a session may be mid-run, so
-            this is a banner and not a modal. */}
-        <UpdateBanner />
+            Swarm draws every terminal at once, so "how is *the* session shown"
+            has no session to be about; a view from the sidebar is not a session
+            at all. In both cases the switch is absent rather than disabled —
+            there is nothing to say about a mode for something that is not on
+            screen.
+          */}
+          {(activeSession || splitting) && !showingPanel && !swarm ? (
+            <ModeSwitch mode={mode} onChange={setMode} />
+          ) : null}
+        </WindowToolbar>
 
         <div className="panes">
           <ErrorBoundary label={heading.title}>{mainView()}</ErrorBoundary>
@@ -1094,16 +1497,16 @@ function Workspace() {
       <SessionInspector
         open={inspectorOpen}
         onClose={() => setInspectorOpen(false)}
-        cwd={activeSessionMeta?.projectPath ?? activeProjectPath}
+        cwd={focusedSession?.projectPath ?? activeProjectPath}
         // The session in front of you, not whatever the store last marked
         // active — those disagree the moment you switch to a browser page, and
         // the dialog was heading one session's numbers with another's name.
         session={
-          activeSessionMeta
-            ? { startedAt: activeSessionMeta.createdAt, resumed: activeSessionMeta.resumed }
+          focusedSession
+            ? { startedAt: focusedSession.createdAt, resumed: focusedSession.resumed }
             : null
         }
-        sessionTitle={activeSessionMeta?.title}
+        sessionTitle={focusedSession?.title}
       />
       <ShortcutsSheet open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
       <CommandPalette

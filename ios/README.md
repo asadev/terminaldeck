@@ -25,7 +25,7 @@ this session" is not a detail.
 | **Relay transport** — guest socket, handshake as initiator, sealed protocol | done; run against the real relay and a stand-in desktop |
 | Direct (tailnet) transport | written; **not run against a desktop** — see below |
 | Session list with live status, attach + replay, resume, new session | done |
-| Keyboard accessory row, copy/paste, automatic reconnect | done |
+| Key bar + key grid, copy/paste, automatic reconnect | done |
 | `StubTransport` | **deleted** — the real one works |
 | Release pipeline, icon, signing, App Store metadata | done; `preflight.sh` passes everything except distribution signing — see below |
 | Anything that talks to App Store Connect | **blocked on one credential**, and now also on an export filing — see [Shipping it](#shipping-it-testflight) |
@@ -165,7 +165,7 @@ do what `rm` does.
 ### The UI tests
 
 `UITests/` covers what a unit test cannot: that the connection indicator says a
-true thing, that a key on the accessory row reaches a shell, that copy and paste
+true thing, that a key on the key bar reaches a shell, that copy and paste
 are wired to the session, and that New Session appears only because the far end
 offered it. They need the harness and a phone that is already paired with it:
 
@@ -473,7 +473,7 @@ different binary in any case).
   That is correct behaviour rather than a bug, and it is the price of a Paste
   button that works from anywhere; `UIPasteControl` is the way to avoid the
   prompt and is a later change, because it is a system-drawn button and the
-  accessory row draws its own.
+  key grid draws its own.
 - **The direct (tailnet) carrier has never run against the desktop.** See the
   status section.
 - **Internal TestFlight only, for now.** External testing needs Beta App Review,
@@ -488,7 +488,7 @@ different binary in any case).
 | `TerminalDeck/Protocol/` | the wire language: types, codec, backoff. No UIKit, no SwiftUI. |
 | `TerminalDeck/Crypto/` | the sealed channel — a port of `src/shared/sealed.ts`, and the only cryptography in the app |
 | `TerminalDeck/Transport/` | the seam and what is under it: carriers, the protocol state machine, pairing codes, the Keychain |
-| `TerminalDeck/Terminal/` | SwiftTerm, the two directions data moves through it, and the accessory row |
+| `TerminalDeck/Terminal/` | SwiftTerm, the two directions data moves through it, the key bar and grid, and the gesture reconciliation |
 | `TerminalDeck/Screens/` | pairing, the approval wait, the session list, the terminal |
 | `TerminalDeck/App/` | composition root, navigation, the model every screen reads, the network watcher |
 | `TerminalDeck/Assets.xcassets/` | the app icon, generated — see above |

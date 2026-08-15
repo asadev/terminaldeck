@@ -136,6 +136,27 @@ function capabilities(value: unknown): string[] {
 }
 
 /**
+ * The folders this device may start a session in, when the desktop says.
+ *
+ * Null and `[]` are different answers and the difference is the whole point of
+ * the field. Null means this desktop never mentioned folders — every build
+ * older than the field, and every host that cannot start sessions at all — and
+ * a client that reads null must keep doing whatever it did before rather than
+ * drawing an empty picker. `[]` means somebody chose no folders for *this*
+ * device, which is a real state with a real remedy, and flattening the two
+ * would turn "your desktop is old" into "you have been shut out" on the screen
+ * of a phone that is three rooms away from the machine that could explain.
+ *
+ * Entries that are not strings are dropped rather than failing the frame, the
+ * same rule `capabilities` follows: one bad row must not cost the connection
+ * carrying it.
+ */
+function folderList(value: unknown): string[] | null {
+  if (!Array.isArray(value)) return null
+  return value.filter((entry): entry is string => typeof entry === 'string' && entry !== '')
+}
+
+/**
  * The codes, from the desktop's own module rather than written out again here.
  *
  * This list used to be a copy, and a copy of a wire vocabulary is a copy that
@@ -174,19 +195,32 @@ export function decodeServerMessage(raw: string): DecodeResult {
       // ends up believing it is paired when it holds nothing.
       const token = parsed.token === null ? null : str(parsed.token)
       if (token === null && parsed.token !== null) return { ok: false, reason: 'welcome without a token field' }
-      return {
-        ok: true,
-        message: {
-          t: 'welcome',
-          protocol,
-          deviceId,
-          deviceName,
-          token,
-          sessions: list.sessions,
-          capabilities: capabilities(parsed.capabilities),
-        },
-        activity: list.activity,
+      const message: Extract<ServerMessage, { t: 'welcome' }> = {
+        t: 'welcome',
+        protocol,
+        deviceId,
+        deviceName,
+        token,
+        sessions: list.sessions,
+        capabilities: capabilities(parsed.capabilities),
       }
+      // Assigned only when it is there, rather than written as `hostPlatform:
+      // str(...)`, so that "the desktop did not say" stays distinguishable from
+      // "the desktop said something this build does not recognise". Both end up
+      // at the neutral noun today, but only one of them is a desktop that is
+      // older than the field — see `host-platform.ts`. Carried raw: turning it
+      // into a noun is the UI's job, and a decoder that returned "Mac" would be
+      // putting presentation on the wire type.
+      const hostPlatform = str(parsed.hostPlatform)
+      if (hostPlatform !== null) message.hostPlatform = hostPlatform
+      // Assigned only when it is there, for the same reason and with more at
+      // stake: an absent field and an empty list are two different facts about
+      // this device — see `folderList` — and a decoder that wrote `folders: []`
+      // for a desktop that said nothing would report a lock-out that nobody
+      // chose.
+      const folders = folderList(parsed.folders)
+      if (folders !== null) message.folders = folders
+      return { ok: true, message, activity: list.activity }
     }
     case 'sessions': {
       const list = sessionList(parsed.sessions)
@@ -230,6 +264,26 @@ export function decodeServerMessage(raw: string): DecodeResult {
     }
     case 'pong':
       return { ok: true, message: { t: 'pong' } }
+    case 'created': {
+      // The row for the session this client just asked for. Refused rather than
+      // half-read, unlike a row inside a list: a `sessions` frame missing one
+      // entry is still a useful list, whereas this frame *is* the one session,
+      // and a client that accepted a nameless one would navigate to an id the
+      // desktop never minted.
+      const session = decodeSession(parsed.session)
+      if (session === null) return { ok: false, reason: 'created without a session' }
+      return { ok: true, message: { t: 'created', session } }
+    }
+    case 'folders': {
+      // Pushed when somebody edits this device's list on the desktop. Refused
+      // when it carries no list at all, because unlike the optional field in
+      // `welcome` there is nothing else in this frame — reading it as "no
+      // folders" would take the picker away on the strength of a malformed
+      // message.
+      const folders = folderList(parsed.folders)
+      if (folders === null) return { ok: false, reason: 'folders without a list' }
+      return { ok: true, message: { t: 'folders', folders } }
+    }
     default:
       return { ok: false, reason: `unknown message type ${JSON.stringify(parsed.t)}` }
   }

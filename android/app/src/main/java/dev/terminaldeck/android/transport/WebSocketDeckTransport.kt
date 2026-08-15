@@ -9,6 +9,7 @@ import dev.terminaldeck.android.crypto.SealedException
 import dev.terminaldeck.android.protocol.ClientFrames
 import dev.terminaldeck.android.protocol.ClientMessage
 import dev.terminaldeck.android.protocol.DeviceDescriptor
+import dev.terminaldeck.android.protocol.HostPlatform
 import dev.terminaldeck.android.protocol.Protocol
 import dev.terminaldeck.android.protocol.ProtocolErrorCode
 import dev.terminaldeck.android.protocol.RelayWire
@@ -53,8 +54,8 @@ import java.util.concurrent.TimeUnit
  * The version byte, though, is not optional and was missing here: `sealed.ts` produces 80 bytes and
  * `relay-wire.ts` frames them to 81 before they cross a relay. A desktop refuses a first payload of
  * the wrong length by closing the channel in silence — deliberately, so a hostile relay gets no
- * oracle — so an 80-byte handshake reached the Mac, was dropped, and looked from here exactly like
- * a Mac that was asleep. [RelayWire] is that framing and the only place it is applied.
+ * oracle — so an 80-byte handshake reached the desktop, was dropped, and looked from here exactly
+ * like a machine that was asleep. [RelayWire] is that framing and the only place it is applied.
  *
  * ## The rule this class exists to obey
  *
@@ -126,22 +127,59 @@ class WebSocketDeckTransport(
      * half a second after it appears.
      */
     private var awaitingApproval = false
-    private var approvalDetail = "Paired. Approve this device on the Mac, then reconnect."
 
     /**
-     * Whether the Mac has answered *on this attempt*.
+     * The desktop's own words for the approval wait, when it sent any.
+     *
+     * Null rather than a pre-filled sentence, because the fallback has to be composed at the moment
+     * it is read: the noun in it comes from [hostPlatform], and a string built here at construction
+     * would have been built before a single frame arrived. That is how this client came to tell a
+     * Windows user to go and approve a device on "the Mac" — see [approvalSentence].
+     */
+    private var approvalDetail: String? = null
+
+    /**
+     * What kind of machine this socket talks to, once it has said so in a `welcome`.
+     *
+     * Sticky for the life of the transport and deliberately **not** reset by [open] or [disconnect],
+     * unlike [hostAnswered] beside it. The two are different kinds of fact: whether the machine is
+     * answering is about this attempt, whereas what kind of machine it is does not change between
+     * one reconnect and the next — and the sentences that most need the right noun are the failure
+     * ones, printed when there is no connection to ask.
+     */
+    private var hostPlatform: HostPlatform = HostPlatform.UNKNOWN
+
+    /** What to call the far end in a sentence. "desktop" until it says otherwise; never a guess. */
+    private val hostNoun: String get() = hostPlatform.noun
+
+    /**
+     * The sentence shown while a human is being waited on.
+     *
+     * The desktop's own when it sent one — it knows more than this client does about why it refused
+     * — and otherwise composed here, now, with whatever noun is currently justified.
+     */
+    private val approvalSentence: String
+        get() = approvalDetail ?: "Paired. Approve this device on the $hostNoun, then reconnect."
+
+    /**
+     * Whether the desktop has answered *on this attempt*.
      *
      * A frame that parsed is the proof: it arrived through the sealed channel, so whoever sent it
-     * holds the Mac's static private key. Reset on every [open].
+     * holds the machine's static private key. Reset on every [open].
      *
      * This exists because [awaitingApproval] used to be enough on its own to report
      * [TransportState.Pending] — so once a device was pending, every subsequent failure, including
      * a handshake that never completed, was described with the remembered approval sentence. A
-     * client that could not reach the Mac at all therefore said "Paired. Approve this device on the
-     * Mac" forever, which is a connection failure wearing the costume of the normal path.
+     * client that could not reach the machine at all therefore said "Paired. Approve this device on
+     * the Mac" forever, which is a connection failure wearing the costume of the normal path.
+     *
+     * Named for the host rather than for a Mac, along with everything else in this file, because
+     * "mac" was this codebase's word for "the machine at the other end" and that habit is what put
+     * the literal into eleven user-facing sentences. A private field cannot mislead a user, but it
+     * is where the vocabulary that did comes from.
      */
-    private var macAnswered = false
-    private var macAnsweredLastAttempt = false
+    private var hostAnswered = false
+    private var hostAnsweredLastAttempt = false
 
     private var retryJob: Job? = null
     private var handshakeJob: Job? = null
@@ -188,8 +226,8 @@ class WebSocketDeckTransport(
         synchronized(lock) {
             stopped = true
             awaitingApproval = false
-            macAnswered = false
-            macAnsweredLastAttempt = false
+            hostAnswered = false
+            hostAnsweredLastAttempt = false
             clearTimers()
             closeSocket(Protocol.Close.NORMAL, "client closed")
             _state.value = TransportState.Offline
@@ -209,7 +247,7 @@ class WebSocketDeckTransport(
         greeted = false
         channel = null
         initiator = null
-        macAnswered = false
+        hostAnswered = false
         // Nothing is owed an answer on a socket that does not exist yet. Left set from a previous
         // attempt it would make the first grace period after a reconnect fail the fresh connection.
         awaitingPong = false
@@ -224,11 +262,11 @@ class WebSocketDeckTransport(
         }
 
         // While waiting for approval the reconnects *are* the poll, and flipping the banner to
-        // "Connecting…" every few seconds would bury the instruction. That only holds while the Mac
-        // is answering, though: if the last attempt reached nothing, "waiting for approval"
+        // "Connecting…" every few seconds would bury the instruction. That only holds while the
+        // machine is answering, though: if the last attempt reached nothing, "waiting for approval"
         // describes a conversation that is not happening.
-        _state.value = if (awaitingApproval && macAnsweredLastAttempt) {
-            TransportState.Pending(approvalDetail)
+        _state.value = if (awaitingApproval && hostAnsweredLastAttempt) {
+            TransportState.Pending(approvalSentence)
         } else {
             TransportState.Connecting
         }
@@ -251,14 +289,14 @@ class WebSocketDeckTransport(
         socket = client.newWebSocket(request, listener)
 
         // Nothing else bounds the gap between an open socket and a welcome. A captive portal, a
-        // middlebox holding the connection, or a relay that accepted the upgrade for a Mac that is
-        // not there all leave the client on "Connecting…" for as long as the platform's own TCP
+        // middlebox holding the connection, or a relay that accepted the upgrade for a machine that
+        // is not there all leave the client on "Connecting…" for as long as the platform's own TCP
         // timeout, with no retry in flight.
         handshakeJob = scope.launch {
             delay(HANDSHAKE_TIMEOUT_MS)
             synchronized(lock) {
                 if (greeted || stopped) return@launch
-                fail("The Mac accepted the connection but never answered.")
+                fail("The $hostNoun accepted the connection but never answered.")
             }
         }
     }
@@ -292,7 +330,7 @@ class WebSocketDeckTransport(
                     live.receiveText(bytes.toByteArray())
                 } catch (e: SealedException) {
                     // A frame that does not open is either corruption or something that is not the
-                    // Mac. Either way the channel's counters are now the only truth about ordering
+                    // desktop. Either way the channel's counters are the only truth about ordering
                     // and it cannot be resynchronised — so the connection ends.
                     fail("The connection could not be verified.")
                     return
@@ -324,7 +362,7 @@ class WebSocketDeckTransport(
                 socket = null
                 if (stopped) return
                 if (terminal()) return
-                scheduleRetry(closeReason(code, greeted))
+                scheduleRetry(closeReason(code, greeted, hostNoun))
             }
         }
 
@@ -337,7 +375,7 @@ class WebSocketDeckTransport(
                 // The exception's message is not shown: it names hosts and ports, and this string
                 // ends up on a lock screen. It is logged instead.
                 Log.d(TAG, "relay socket failed", t)
-                scheduleRetry("Could not reach that Mac. It may be asleep, offline, or the relay is down.")
+                scheduleRetry("Could not reach that $hostNoun. It may be asleep, offline, or the relay is down.")
             }
         }
 
@@ -346,7 +384,7 @@ class WebSocketDeckTransport(
             // told apart from a reply that failed its tag: only one of the two is fixed by updating
             // an app, and a client that fed the framed reply straight to `finish` would report the
             // wrong one — 49 bytes read as a 48-byte Noise reply is a length error, which is what
-            // "this Mac could not prove who it is" would then have been saying.
+            // "this machine could not prove who it is" would then have been saying.
             val reply = when (val opened = RelayWire.readSealedHandshake(framed, RelayWire.HANDSHAKE_REPLY_BYTES)) {
                 is RelayWire.SealedOpen.Ok -> opened.message
                 is RelayWire.SealedOpen.Refused -> {
@@ -363,11 +401,11 @@ class WebSocketDeckTransport(
             val sealedChannel = try {
                 handshake.finish(reply)
             } catch (e: SealedException) {
-                // The far end does not hold the Mac's static private key, or the relay bent a byte.
-                // Not recoverable by retrying against the same key, but it is also exactly what a
-                // Mac that has forgotten this device looks like — so it retries, slowly, rather
-                // than sending the user to a pair screen on one bad frame.
-                fail("This Mac could not prove who it is.")
+                // The far end does not hold the machine's static private key, or the relay bent a
+                // byte. Not recoverable by retrying against the same key, but it is also exactly
+                // what a machine that has forgotten this device looks like — so it retries, slowly,
+                // rather than sending the user to a pair screen on one bad frame.
+                fail("This $hostNoun could not prove who it is.")
                 return
             }
             channel = sealedChannel
@@ -397,9 +435,9 @@ class WebSocketDeckTransport(
             is ServerFrames.Result.Ok -> parsed.message
         }
 
-        // A frame that parsed came through the sealed channel, so the far end holds the Mac's
-        // static private key. That is the only evidence worth calling "the Mac answered".
-        macAnswered = true
+        // A frame that parsed came through the sealed channel, so the far end holds the machine's
+        // static private key. That is the only evidence worth calling "the desktop answered".
+        hostAnswered = true
 
         when {
             message is ServerMessage.Welcome -> welcome(message)
@@ -418,11 +456,16 @@ class WebSocketDeckTransport(
     }
 
     private fun welcome(message: ServerMessage.Welcome) {
+        // Read before anything decides what to do with this welcome, including whether to refuse to
+        // speak to it at all. What kind of machine it is is true either way, and the refusal below
+        // is one of the sentences that wants the right noun in it.
+        hostPlatform = HostPlatform.fromWire(message.hostPlatform)
+
         if (message.protocol != Protocol.VERSION) {
             terminate(
                 TransportState.Incompatible(
-                    "The Mac speaks protocol ${message.protocol} and this app speaks ${Protocol.VERSION}. " +
-                        "Update whichever is older."
+                    "The $hostNoun speaks protocol ${message.protocol} and this app speaks " +
+                        "${Protocol.VERSION}. Update whichever is older."
                 )
             )
             return
@@ -451,7 +494,7 @@ class WebSocketDeckTransport(
             awaitingApproval = true
             _capabilities.value = message.capabilities.toSet()
             emit(message)
-            scheduleRetry(approvalDetail)
+            scheduleRetry(approvalSentence)
             return
         }
 
@@ -474,22 +517,26 @@ class WebSocketDeckTransport(
                 // lockout counter forever; clearing it is what turns the next launch into a pair
                 // screen with an explanation.
                 vault.clearCredential(hostId)
-                terminate(TransportState.Rejected(detail ?: "This device is not paired with that Mac any more."))
+                terminate(
+                    TransportState.Rejected(detail ?: "This device is not paired with that $hostNoun any more.")
+                )
             }
 
             ProtocolErrorCode.Unauthorized -> {
-                // Paired but not approved. The fix is a person walking to the Mac, so this keeps
-                // trying — slowly — rather than declaring failure at someone who is three metres
-                // from the button. The backoff doubles as the poll interval.
+                // Paired but not approved. The fix is a person walking to the machine, so this
+                // keeps trying — slowly — rather than declaring failure at someone who is three
+                // metres from the button. The backoff doubles as the poll interval.
                 awaitingApproval = true
                 if (detail != null) approvalDetail = detail
                 emit(message)
                 closeSocket(Protocol.Close.NORMAL, "awaiting approval")
-                scheduleRetry(approvalDetail)
+                scheduleRetry(approvalSentence)
             }
 
             ProtocolErrorCode.Version ->
-                terminate(TransportState.Incompatible(detail ?: "The Mac refused this app's protocol version."))
+                terminate(
+                    TransportState.Incompatible(detail ?: "The $hostNoun refused this app's protocol version.")
+                )
 
             else -> emit(message)
         }
@@ -538,20 +585,20 @@ class WebSocketDeckTransport(
         retryJob?.cancel()
         clearHandshakeTimer()
         clearHeartbeat()
-        macAnsweredLastAttempt = macAnswered
+        hostAnsweredLastAttempt = hostAnswered
         val delayMs = backoff.next()
         val retryAt = clock() + delayMs
         /*
          * Which of the two waits this is.
          *
-         * [TransportState.Pending] is a claim about the Mac — that it answered and said "not yet" —
-         * so it is only made when the Mac did answer on this attempt. When it did not, this is an
+         * [TransportState.Pending] is a claim about the machine — that it answered and said "not
+         * yet" — so it is only made when it did answer on this attempt. When it did not, this is an
          * ordinary [TransportState.Waiting] carrying the real reason the attempt failed. The
          * device is still unapproved either way, and the pair screen keeps the window; what changes
          * is that it now says which of the two is happening instead of always saying the nicer one.
          */
-        _state.value = if (awaitingApproval && macAnswered) {
-            TransportState.Pending(approvalDetail, retryAt)
+        _state.value = if (awaitingApproval && hostAnswered) {
+            TransportState.Pending(approvalSentence, retryAt)
         } else {
             TransportState.Waiting(detail, retryAt, backoff.attempts)
         }
@@ -566,8 +613,8 @@ class WebSocketDeckTransport(
      *
      * A ping the desktop has to answer, on top of the relay's own: the relay pings both of its
      * sockets, so a dead TCP connection is noticed there — but "the relay can still reach my
-     * socket" is not "the Mac is still there". Only an end-to-end pong proves the far end is alive
-     * and still holds the channel.
+     * socket" is not "the machine is still there". Only an end-to-end pong proves the far end is
+     * alive and still holds the channel.
      *
      * It used to be a coroutine per transport. With one machine that was the same thing; with
      * several it would be one timer each, waking the radio N times a cycle for traffic that fits in
@@ -675,16 +722,22 @@ internal fun String.toHttpish(): String = when {
  * What to tell the user about a close code.
  *
  * `greeted` matters: the same code means different things on either side of the handshake. A close
- * during it is usually the Mac refusing this device; the same code afterwards is usually the
+ * during it is usually the machine refusing this device; the same code afterwards is usually the
  * network. Transcribed from `pwa/src/connection.ts`.
+ *
+ * `noun` is what to call the far end — [HostPlatform.noun] of whatever the last `welcome` said,
+ * which before any welcome is the neutral "desktop" these sentences were previously hardcoded to.
+ * It is a required parameter rather than one with a default, because a default is how a caller
+ * silently keeps the generic word after the machine has told us what it is, and every one of these
+ * sentences is about a specific computer the reader is standing next to.
  */
-internal fun closeReason(code: Int, greeted: Boolean): String = when (code) {
+internal fun closeReason(code: Int, greeted: Boolean, noun: String): String = when (code) {
     Protocol.Close.NORMAL, Protocol.Close.GOING_AWAY ->
-        if (greeted) "The Mac closed the connection." else "The connection closed before the Mac answered."
-    Protocol.Close.PROTOCOL_ERROR, Protocol.Close.UNSUPPORTED_DATA -> "The Mac rejected a message from this app."
-    Protocol.Close.POLICY_VIOLATION -> "The Mac refused this device."
-    Protocol.Close.MESSAGE_TOO_BIG -> "A message was too large for the Mac to accept."
-    Protocol.Close.TRY_AGAIN_LATER -> "The Mac asked this app to try again later."
-    Protocol.Close.INTERNAL_ERROR -> "The Mac hit an internal error."
-    else -> if (greeted) "Connection lost." else "Could not reach that Mac. It may be asleep or offline."
+        if (greeted) "The $noun closed the connection." else "The connection closed before the $noun answered."
+    Protocol.Close.PROTOCOL_ERROR, Protocol.Close.UNSUPPORTED_DATA -> "The $noun rejected a message from this app."
+    Protocol.Close.POLICY_VIOLATION -> "The $noun refused this device."
+    Protocol.Close.MESSAGE_TOO_BIG -> "A message was too large for the $noun to accept."
+    Protocol.Close.TRY_AGAIN_LATER -> "The $noun asked this app to try again later."
+    Protocol.Close.INTERNAL_ERROR -> "The $noun hit an internal error."
+    else -> if (greeted) "Connection lost." else "Could not reach that $noun. It may be asleep or offline."
 }

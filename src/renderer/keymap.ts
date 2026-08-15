@@ -584,7 +584,6 @@ export const KEYMAP: readonly KeyBinding[] = [
   },
 
   // -- panels --
-  { id: 'view.board', keys: ['mod+shift+b'], label: 'Task board', scope: 'global', group: 'Panels' },
   {
     id: 'view.dashboard',
     keys: ['mod+shift+d'],
@@ -611,10 +610,35 @@ export const KEYMAP: readonly KeyBinding[] = [
   { id: 'view.swarm', keys: ['mod+\\'], label: 'Swarm view', scope: 'global', group: 'Panels' },
   { id: 'view.sidebar', keys: ['mod+b'], label: 'Toggle the sidebar', scope: 'global', group: 'Panels' },
 
-  // Split panes had three chords documented here for a component that was
-  // never rendered. The chords went first; the component and its pane tree are
-  // gone too now — swarm mode (⌘\) is this app's answer to "several sessions at
-  // once", and see ROADMAP.md for why there is not a second one.
+  // -- panes --
+  //
+  // These three were documented here once before, for a `SplitView` that was
+  // rendered by nothing at all — a shortcuts sheet printing chords for a
+  // feature with no way in. The chords were withdrawn then, correctly, and the
+  // component came within one commit of being deleted with them. It is wired
+  // now, in `App.tsx`, so they are back and `reachable.test.ts` is what keeps
+  // them honest: if the split view ever loses its way in again, every one of
+  // these fails the build rather than quietly becoming a lie in the sheet.
+  //
+  // Left and right only, because splitting from the UI is horizontal only. The
+  // tree underneath handles both axes and `moveFocus` takes all four
+  // directions; up and down get bindings the day something can create a
+  // stacked split, and not before.
+  { id: 'pane.split', keys: ['mod+d'], label: 'Split the window', scope: 'global', group: 'Panes' },
+  {
+    id: 'pane.focusLeft',
+    keys: ['mod+alt+left'],
+    label: 'Focus the pane to the left',
+    scope: 'global',
+    group: 'Panes',
+  },
+  {
+    id: 'pane.focusRight',
+    keys: ['mod+alt+right'],
+    label: 'Focus the pane to the right',
+    scope: 'global',
+    group: 'Panes',
+  },
 
   // -- app --
   // The id stays `app.preferences` because the application menu dispatches it;

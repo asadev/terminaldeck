@@ -92,8 +92,6 @@ function corpus(except: readonly string[] = []): string {
 
 /** Unreachable on purpose, each with the reason it is not a lie. */
 const KNOWN_UNREACHABLE: Record<string, string> = {
-  'src/renderer/board/board-session-link.ts':
-    'board cards cannot yet open the session they name.',
   'src/main/remote/sealed.electron-probe.ts':
     'unreachable from the app on purpose: it is the body of the Electron-runtime crypto check, ' +
     'bundled and run under ELECTRON_RUN_AS_NODE by scripts/check-electron-crypto.mjs during ' +
@@ -137,7 +135,10 @@ describe('every module is reachable from an entry point', () => {
   /*
    * Tests are excluded as importers on purpose. A module imported only by its
    * own test is exactly the shape of the bug — `SplitView.tsx` looked imported
-   * for that reason alone, for its whole life, and has since been deleted.
+   * for that reason alone, for its whole life, and came within one commit of
+   * being deleted over it. It is rendered from `App.tsx` now, through
+   * `layout/panes.ts`, so it passes this check the way every other module does:
+   * because something a user can reach actually uses it.
    */
   it('has no unlisted orphans', () => {
     const seen = new Set<string>()

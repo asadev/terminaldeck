@@ -128,7 +128,13 @@ export function Button({
  * because the interesting case is the one all three used to skip: a tool that
  * was found and still has no version. See `toolVersionLabel`.
  */
-export function ToolVersion({ tool }: { tool: { state: ToolState; version?: string } }) {
+export function ToolVersion({
+  tool,
+}: {
+  // `label` is optional and used only to drop a trailing "(Claude Code)" that
+  // repeats the row's own heading — see `toolVersionLabel`.
+  tool: { state: ToolState; version?: string; label?: string }
+}) {
   const label = toolVersionLabel(tool)
   if (!label) return null
   const missing = label === NO_VERSION

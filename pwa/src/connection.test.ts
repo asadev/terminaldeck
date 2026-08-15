@@ -457,10 +457,109 @@ describe('sending', () => {
 
 describe('close codes are explained honestly', () => {
   it('separates a refusal during the handshake from a network drop after it', () => {
-    expect(closeReason(1000, false)).toContain('before pairing finished')
-    expect(closeReason(1000, true)).toBe('The desktop closed the connection.')
-    expect(closeReason(1008, true)).toBe('The desktop refused this device.')
-    expect(closeReason(1006, true)).toBe('Connection lost.')
-    expect(closeReason(1006, false)).toContain('same tailnet')
+    expect(closeReason(1000, false, 'desktop')).toContain('before pairing finished')
+    expect(closeReason(1000, true, 'desktop')).toBe('The desktop closed the connection.')
+    expect(closeReason(1008, true, 'desktop')).toBe('The desktop refused this device.')
+    expect(closeReason(1006, true, 'desktop')).toBe('Connection lost.')
+    expect(closeReason(1006, false, 'desktop')).toContain('same tailnet')
+  })
+
+  it('uses the noun the machine earned', () => {
+    expect(closeReason(1008, true, 'PC')).toBe('The PC refused this device.')
+    expect(closeReason(1000, true, 'Mac')).toBe('The Mac closed the connection.')
+  })
+})
+
+/*
+ * The bug this whole field exists to end: a phone paired to a Windows PC read
+ * "Running on the Mac" because the noun was a constant compiled into the client.
+ *
+ * Two cases, and the second one is the one that matters. A desktop that says
+ * `win32` must produce "PC"; a desktop that says nothing at all — every build
+ * released before `welcome.hostPlatform` existed — must produce the neutral
+ * word and never fall back to the specific one that caused the defect.
+ */
+describe('what kind of machine is on the other end', () => {
+  it('says PC when the desktop says win32', () => {
+    const test = rig()
+    test.connection.start()
+    test.last().onopen?.()
+    test.last().greet({ hostPlatform: 'win32' })
+    expect(test.connection.hostPlatform()).toBe('windows')
+
+    // And the noun reaches a sentence the user actually reads.
+    test.last().drop(1008)
+    expect(test.connection.current().detail).toBe('The PC refused this device.')
+  })
+
+  it('says desktop when the welcome carries no platform at all', () => {
+    const test = rig()
+    test.connection.start()
+    test.last().onopen?.()
+    // `greet()` sends exactly the fields a pre-hostPlatform desktop sends.
+    test.last().greet()
+    expect(test.connection.hostPlatform()).toBe('unknown')
+
+    test.last().drop(1008)
+    expect(test.connection.current().detail).toBe('The desktop refused this device.')
+  })
+
+  it('maps darwin and linux, and refuses to guess at anything else', () => {
+    for (const [wire, expected] of [
+      ['darwin', 'mac'],
+      ['linux', 'linux'],
+      ['freebsd', 'unknown'],
+      ['', 'unknown'],
+    ] as const) {
+      const test = rig()
+      test.connection.start()
+      test.last().onopen?.()
+      test.last().greet({ hostPlatform: wire })
+      expect(test.connection.hostPlatform()).toBe(expected)
+    }
+  })
+
+  it('keeps the noun after the socket drops', () => {
+    // The sentences that most need the right word are printed *after* a
+    // connection is gone, and a machine does not change operating system
+    // between one reconnect and the next.
+    const test = rig()
+    test.connection.start()
+    test.last().onopen?.()
+    test.last().greet({ hostPlatform: 'win32' })
+    test.last().drop()
+    test.advance(RECONNECT_BACKOFF.firstMs)
+    test.last().drop(1011)
+    expect(test.connection.current().detail).toBe('The PC hit an internal error.')
+  })
+
+  it('composes its own approval sentence with the neutral noun, not with "Mac"', () => {
+    /*
+     * The mint-then-refuse path, as today's desktop actually plays it.
+     *
+     * `server.ts` sends `hostPlatform` on the welcome that *admits* a device and
+     * deliberately not on the one that mints a credential and then refuses — so
+     * a device waiting for approval genuinely does not know what kind of machine
+     * it is waiting on. The requirement is therefore not "say PC" but the
+     * stronger and simpler one: **never say Mac on a guess.** The default
+     * sentence this client falls back to used to be a constant reading "Waiting
+     * for approval on the Mac.", which is what a Windows user was told.
+     *
+     * The desktop's own sentence still wins when it sends one, which is the
+     * usual case and is covered by the pending tests above.
+     */
+    const test = rig('pair-token')
+    test.connection.start()
+    test.last().onopen?.()
+    test.last().greet({ token: 'dev-1.c2VjcmV0', sessions: [] })
+    // Empty message: the desktop said nothing, so the client composes its own.
+    test.last().deliver({ t: 'error', code: 'unauthorized', message: '' })
+    test.last().drop(1008)
+
+    test.advance(RECONNECT_BACKOFF.firstMs)
+    test.last().onopen?.()
+    test.last().deliver({ t: 'error', code: 'unauthorized', message: '' })
+    expect(test.connection.current().phase).toBe('pending')
+    expect(test.connection.current().detail).toBe('Waiting for approval on the desktop.')
   })
 })

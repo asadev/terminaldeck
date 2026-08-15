@@ -232,6 +232,36 @@ sealed interface ServerMessage {
          * inventing a new one.
          */
         val capabilities: kotlin.collections.List<String> = emptyList(),
+        /**
+         * What kind of machine this desktop is — `darwin`, `win32`, `linux`.
+         *
+         * Raw, and mapped to a noun by [HostPlatform] rather than here, because the noun is
+         * presentation and the same value has to serve a heading, a button and a sentence.
+         *
+         * Null is a real answer and not a missing one: like [capabilities] this is additive rather
+         * than a version bump, so a desktop that predates the field simply does not send it and
+         * `ignoreUnknownKeys` leaves this at its default. A client that reads nothing here must say
+         * something neutral — **never "Mac"**, which is the bug the field exists to end. See
+         * [HostPlatform].
+         */
+        val hostPlatform: String? = null,
+        /**
+         * The folders this device may start a session in, most relevant first.
+         *
+         * The same array the desktop's own `create` rule enforces against, so a folder in here is
+         * one that will start. It exists because the phone used to build its picker out of the
+         * working directories of the sessions it could see — a list nobody chose, that changed when
+         * a project was closed at the desk, and that the person holding the phone had no way to
+         * explain. One folder in the picker and no answer available is the bug being fixed.
+         *
+         * **Null and empty are different facts and must never be folded together.** Null is a
+         * desktop that predates the field — additive, like [capabilities], so `ignoreUnknownKeys`
+         * leaves it at this default — and a client reading null keeps doing what it did before.
+         * Empty is a person having chosen *no* folders for this device, which is a real state with
+         * a real remedy, and showing it as "your desktop is old" would hide the only sentence that
+         * explains why nothing starts.
+         */
+        val folders: kotlin.collections.List<String>? = null,
     ) : ServerMessage
 
     @Serializable
@@ -294,6 +324,25 @@ sealed interface ServerMessage {
     @Serializable
     @SerialName("created")
     data class Created(val session: RemoteSession) : ServerMessage
+
+    /**
+     * This device's folder list changed while it was connected.
+     *
+     * Pushed rather than polled, and the whole list rather than a delta: there is one short list
+     * per device, and a client applying deltas would have to be right about every one of them to
+     * end up with the set the desktop is actually enforcing.
+     *
+     * It matters because the list is editable at the desk at any moment. Enforcement is already
+     * live without this frame — the desktop consults the list on every `create` — so what it buys
+     * is an honest picker: without it, a folder somebody took away five minutes ago is still drawn
+     * on the phone, offering a tap whose only possible outcome is a refusal.
+     *
+     * The default makes an empty list expressible, which is the case that matters most here: it is
+     * how "every folder was removed" arrives.
+     */
+    @Serializable
+    @SerialName("folders")
+    data class Folders(val folders: kotlin.collections.List<String> = emptyList()) : ServerMessage
 
     /* ---- capability `upload` --------------------------------------------------------------- */
 

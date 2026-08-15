@@ -83,7 +83,7 @@ struct InspectSheet: View {
             // that is *nearly* right is to copy it and fix it by hand.
             Text(capture.selector)
                 .font(.system(size: 13, design: .monospaced))
-                .foregroundStyle(.white)
+                .foregroundStyle(Theme.primary)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(10)

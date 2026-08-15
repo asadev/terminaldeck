@@ -1,88 +1,62 @@
 /* ============================================================================
-   The control row under the composer.
+   The agent's controls, drawn inside the chat box.
 
-   Metadata, not a widget bar. There is no strip, no border and no surface of
-   its own: four labelled values sitting in the composer's own whitespace, each
-   one a target that only grows a background when you point at it. The send
-   button is still the only filled control in this view.
+   They used to be a strip under it: four pickers on one line, a sentence under
+   those, and a usage readout under that — three rows of chrome below the thing
+   you were actually typing into. Now the two that get used sit on the box's own
+   bottom row wearing `cc-chip` (defined in ChatComposer.css, so the plus, the
+   pickers and the send button are one family), and everything else lives behind
+   one "More" button in a glass panel that opens upward.
+
+   Nothing in here draws a strip, a border or a surface of its own. The panel is
+   the app's glass — the same material every dialog, menu and popover wears.
    ============================================================================ */
 
 .agent-controls {
-  flex-shrink: 0;
-  /* Held to the same measure and axis as the conversation and the composer. */
-  box-sizing: border-box;
-  width: 100%;
-  max-width: calc(var(--content-measure) + var(--sp-6) * 2);
-  align-self: center;
-  margin-inline: auto;
-  padding: 0 var(--sp-6) var(--sp-2);
-  background: var(--bg-primary);
-}
-
-.agent-controls-idle {
-  padding: 0 var(--sp-6) var(--sp-3);
-}
-
-.ac-idle {
-  font-family: var(--font-ui);
-  font-size: var(--t-footnote);
-  color: var(--text-muted);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  /* A flex child's default `min-width: auto` refuses to shrink below its own
+     content, which in a narrow pane pushed the send button off the box. */
+  min-width: 0;
 }
 
 .ac-row {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: var(--sp-05) var(--sp-1);
-  margin-left: calc(var(--sp-15) * -1);
+  gap: var(--sp-05);
+  min-width: 0;
 }
 
 /* -------------------------------------------------------------- button -- */
 
 .ac-picker {
   position: relative;
-}
-
-.ac-button {
-  display: flex;
-  align-items: baseline;
-  gap: var(--sp-15);
-  height: var(--control-h-sm);
-  padding: 0 var(--sp-15);
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: none;
-  font-family: var(--font-ui);
-  font-size: var(--t-footnote);
-  line-height: var(--lh-tight);
-  color: var(--text-primary);
-  transition: background var(--dur-fast) var(--ease);
-}
-
-.ac-button:hover:not(:disabled) {
-  background: var(--bg-hover);
-}
-
-.ac-button[aria-expanded='true'] {
-  background: var(--bg-active);
-}
-
-.ac-button:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
-}
-
-.ac-button:disabled {
-  color: var(--text-muted);
-  cursor: not-allowed;
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
 .ac-name {
   color: var(--text-muted);
+  white-space: nowrap;
 }
 
+/* The value is the only thing on this row allowed to be long — a model reads
+   back as "Opus 5 (1M context) (default)" — so it is the only thing that gives
+   way, first to its own ceiling and then, in a narrow pane, to whatever room is
+   left. The button's own tooltip still carries the whole of it.
+
+   `min-width: 0` is what makes the second half work at all: a flex child
+   refuses by default to shrink below its own text, which is how a long model
+   name pushed the send button off the right-hand end of the box. */
 .ac-value {
+  flex: 0 1 auto;
+  overflow: hidden;
+  min-width: 0;
+  max-width: 16ch;
   font-weight: var(--w-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* An unread value is muted and italic, so a glance separates "this is what it
@@ -94,11 +68,35 @@
 }
 
 .ac-caret {
-  color: var(--text-muted);
+  flex-shrink: 0;
   align-self: center;
+  color: var(--text-muted);
+}
+
+.ac-more {
+  gap: var(--sp-1);
+  color: var(--text-secondary);
+}
+
+.ac-more[aria-expanded='true'] {
+  color: var(--text-primary);
 }
 
 /* ---------------------------------------------------------------- menu -- */
+
+/*
+  `--ac-label` is the distance from the panel's inner edge to where an option's
+  *words* start: a row's own left padding, plus the tick column, plus the gap
+  after it. Everything in a menu that is not a row — the "Now: …" footer, a
+  section's name and its description — is set to that instead of to the row's
+  padding, because otherwise it hangs 18px to the left of every label it is
+  describing, which is what "Effort" was doing above "Auto". Alignment is the
+  thing that makes an app feel amateur when nobody can name why.
+*/
+.ac-menu,
+.ac-sheet {
+  --ac-label: calc(var(--sp-2) + var(--sp-3) + var(--sp-15));
+}
 
 .ac-menu {
   position: absolute;
@@ -130,7 +128,12 @@
   gap: var(--sp-15);
   width: 100%;
   padding: var(--sp-15) var(--sp-2);
-  border-radius: var(--radius-sm);
+  /* Concentric with the panel, not merely rounded. The panel is 12px and the
+     row is inset by the panel's 4px of padding, so the row's own radius has to
+     be 12 − 4 = 8 or its corners cut across the panel's curve — which is what a
+     6px radius was doing, poking square-ish shoulders past the first and last
+     rows of an `overflow: visible` panel. */
+  border-radius: var(--radius-md);
   text-align: left;
   font-family: var(--font-ui);
   font-size: var(--t-callout);
@@ -177,14 +180,14 @@
   color: var(--text-muted);
 }
 
-/* The foot of the menu: what the value is, where it came from, how far a
-   change reaches. Space sets it apart from the options; it needs no rule. */
+/* The foot of a menu or a section: what the value is, where it came from, how
+   far a change reaches. Space sets it apart from the options; it needs no rule. */
 .ac-reach {
   display: flex;
   flex-direction: column;
   gap: 1px;
   margin-top: var(--sp-2);
-  padding: 0 var(--sp-2) var(--sp-1);
+  padding: 0 var(--sp-2) var(--sp-1) var(--ac-label);
   font-family: var(--font-ui);
   font-size: var(--t-footnote);
   line-height: var(--lh-body);
@@ -196,6 +199,7 @@
 }
 
 .ac-blocked {
+  margin: 0;
   padding: var(--sp-15) var(--sp-2);
   font-family: var(--font-ui);
   font-size: var(--t-callout);
@@ -203,18 +207,174 @@
   color: var(--text-secondary);
 }
 
+/* --------------------------------------------------------------- panel -- */
+
+/* Opens upward: the composer sits at the bottom of the window, so downwards has
+   nowhere to go.
+
+   Positioned against `.cc-box` (ChatComposer.css sets it relative for exactly
+   this) rather than against the button that opens it. Two things fall out of
+   that, and both were bugs first: it cannot jump sideways when the model's name
+   gets longer, and `max-width: 100%` now means "no wider than the box" — capped
+   against the viewport instead, a pane narrowed by the sidebar let the panel
+   hang off the right-hand edge of the window. */
+.ac-sheet {
+  position: absolute;
+  bottom: calc(100% + var(--sp-2));
+  left: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+  width: 360px;
+  max-width: 100%;
+  /* Both halves are needed. The pixel cap keeps it from becoming a wall on a
+     tall display; the viewport half keeps it inside a short window, where it
+     grows upward out of a composer that is already 150px from the bottom. */
+  max-height: min(50vh, 460px);
+  padding: var(--sp-4) var(--sp-3);
+  overflow-y: auto;
+  border-radius: var(--radius-lg);
+  background-color: var(--material-bg-strong);
+  background-image: var(--material-sheen);
+  -webkit-backdrop-filter: var(--material-filter);
+  backdrop-filter: var(--material-filter);
+  border: 1px solid var(--material-hairline);
+  box-shadow: var(--shadow-lg), inset 0 1px 0 var(--material-edge);
+}
+
+/* Title bright, description dim, air around the block — the treatment the
+   settings window gives the same kind of thing. Space separates the sections;
+   there is no rule between them. */
+.ac-section {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.ac-section-name {
+  margin: 0;
+  padding: 0 var(--sp-2) 0 var(--ac-label);
+  font-family: var(--font-ui);
+  font-size: var(--t-body);
+  font-weight: var(--w-semibold);
+  line-height: var(--lh-tight);
+  color: var(--text-primary);
+}
+
+.ac-section-desc {
+  margin: var(--sp-1) 0 var(--sp-2);
+  padding: 0 var(--sp-2) 0 var(--ac-label);
+  font-family: var(--font-ui);
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
+  color: var(--text-muted);
+}
+
+.ac-options {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.ac-option {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-15);
+  width: 100%;
+  padding: var(--sp-15) var(--sp-2);
+  border-radius: var(--radius-sm);
+  text-align: left;
+  font-family: var(--font-ui);
+  font-size: var(--t-callout);
+  color: var(--text-primary);
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.ac-option:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.ac-option:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.ac-option-current {
+  background: var(--accent-soft);
+}
+
+.ac-option:disabled {
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+.ac-option-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.ac-option-label {
+  line-height: var(--lh-tight);
+}
+
+.ac-option-hint {
+  font-size: var(--t-footnote);
+  line-height: var(--lh-tight);
+  color: var(--text-muted);
+}
+
+.ac-sheet-note,
+.ac-sheet-foot {
+  margin: 0;
+  padding: 0 var(--sp-2) 0 var(--ac-label);
+  font-family: var(--font-ui);
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
+  color: var(--text-muted);
+}
+
+/* The usage readout is written as the last line of a wide pane — one centred
+   row of items capped to the reading measure. In here it is a column 344px
+   wide, so the page-level part of its layout is unwound and the items stack.
+   Done from this side because the panel is what imposes the shape; the strip
+   still owns how each figure is written. */
+.ac-sheet .usage-strip,
+.ac-sheet .usage-strip-empty {
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  /* It paints the pane's own background, because it used to be the bottom band
+     of the pane. On the glass that reads as a solid slab dropped into the
+     panel — the one thing a frosted surface must never contain. */
+  background: none;
+}
+
+.ac-sheet .us-items {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-1);
+}
+
+/* Stacked, so nothing sits beside anything: the separator that reads correctly
+   on one line starts a line of its own here, as a bullet pointing at nothing. */
+.ac-sheet .us-sub-after::before {
+  content: none;
+}
+
 /* -------------------------------------------------------------- notice -- */
 
+/* Feedback on a change the user just made, on the line above the controls.
+   Inside the box, because that is where the control that caused it is. */
 .ac-notice {
-  margin: var(--sp-15) 0 0;
+  margin: 0;
+  padding: 0 var(--sp-15);
   font-family: var(--font-ui);
   font-size: var(--t-footnote);
   line-height: var(--lh-body);
   color: var(--text-secondary);
-}
-
-.ac-notice-quiet {
-  color: var(--text-muted);
 }
 
 .ac-notice-bad {

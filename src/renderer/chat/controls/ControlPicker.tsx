@@ -20,12 +20,18 @@ interface Props {
 }
 
 /**
- * One control: a button showing the value that was actually read, and a menu.
+ * One control on the composer: a button showing the value that was actually
+ * read, and a menu.
  *
  * The button never shows a value this app has not read from somewhere real —
  * `displayValue` says so instead — and the caption underneath names the source,
  * so "Opus 5" read from the last reply and "Opus 5" assumed from a settings
  * file are never confused for each other.
+ *
+ * It wears `cc-chip`, the shape every labelled control inside the chat box
+ * wears — the plus, the model, the permission mode and the "More" button are
+ * all one family, because they sit on one row and a family of one-offs is what
+ * made that row look like a control panel.
  *
  * An unread control also gets to say *why* where there is a real reason. Fast
  * mode is the only one that has one, and it is permanent rather than a hiccup —
@@ -73,7 +79,7 @@ export function ControlPicker({ control, name, reading, options, reach, busy, di
     <div className="ac-picker" ref={rootRef}>
       <button
         type="button"
-        className="ac-button"
+        className="cc-chip"
         aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={open ? menuId : undefined}

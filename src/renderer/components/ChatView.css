@@ -20,8 +20,19 @@
   font-family: var(--font-ui);
 }
 
+/* The conversation and anything that floats over it. Exists so "Jump to latest"
+   has something to be pinned to that stops where the composer starts — pinned
+   to the pane it landed underneath the box, and behind it. */
+.cv-stage {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
 .cv-scroll {
   flex: 1;
+  min-width: 0;
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
@@ -29,10 +40,10 @@
 }
 
 /* One column, centred, capped at the reading measure. The pane is often 900px+
-   wide, where full-bleed text loses its place between lines. The composer, the
-   control row and the usage strip below all cap themselves to the same measure
-   and centre on the same axis, so the pane reads as one document rather than a
-   narrow column with a full-bleed toolbar bolted under it. */
+   wide, where full-bleed text loses its place between lines. The composer below
+   caps itself to the same measure and centres on the same axis, so the pane
+   reads as one document rather than a narrow column with a full-bleed toolbar
+   bolted under it. */
 .cv-column {
   max-width: var(--content-measure);
   margin: 0 auto;
@@ -273,9 +284,26 @@
   text-align: center;
 }
 
+/*
+  Centred in the conversation, not parked at a fraction of the viewport.
+
+  `margin: 18vh auto 0` put the message in the top quarter of the pane with
+  roughly 550px of nothing between it and the composer — measured, not
+  estimated: the block ran y 257–344 inside a stage running 48–818. `vh` is the
+  window's height and this box's container is not the window, so the gap grew
+  with every pixel the pane was taller than the assumption. The scroller centres
+  it instead, and only when the conversation *is* the empty state — a loaded
+  transcript still starts at the top, where reading starts.
+*/
+.cv-scroll:has(> .cv-empty) {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
 .cv-empty {
   max-width: 44ch;
-  margin: 18vh auto 0;
+  margin: 0 auto;
   text-align: center;
 }
 

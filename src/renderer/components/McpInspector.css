@@ -53,6 +53,7 @@
 }
 
 .mcp-refresh,
+.mcp-add-open,
 .mcp-server-action {
   display: inline-flex;
   align-items: center;
@@ -69,16 +70,33 @@
   transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
 
-.mcp-refresh {
+.mcp-refresh,
+.mcp-add-open {
   font-size: var(--t-body);
 }
 
 .mcp-refresh:hover:not(:disabled),
+.mcp-add-open:hover:not(:disabled),
 .mcp-server-action:hover:not(:disabled) {
   background: var(--fill-secondary);
 }
 
-.mcp-refresh:disabled {
+/* The one thing this panel is for, once there is a list to add to. It was a
+   grey chip identical to Reload sitting beside it, so the screen's primary
+   action and its "read it again" action were drawn as the same control — and
+   the accent, which exists to say "this is the action", was spent on nothing at
+   all here. */
+.mcp-add-open {
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+.mcp-add-open:hover:not(:disabled) {
+  background: var(--accent-dim);
+}
+
+.mcp-refresh:disabled,
+.mcp-add-open:disabled {
   opacity: 0.5;
   cursor: default;
 }
@@ -86,6 +104,7 @@
 /* This panel is almost entirely buttons and disclosure rows; one rule keeps
    every one of them reachable by keyboard. */
 .mcp-refresh:focus-visible,
+.mcp-add-open:focus-visible,
 .mcp-server-action:focus-visible,
 .mcp-server-toggle:focus-visible,
 .mcp-tab:focus-visible,
@@ -704,4 +723,104 @@ button.mcp-item-head:hover {
   color: var(--color-critical);
   font-size: var(--t-callout);
   overflow-wrap: anywhere;
+}
+
+/* ---------------------------------------------------------- the add form -- */
+
+/* Two neutral buttons side by side. The filled accent one lives inside the
+   form, not up here: the header offers to *open* the form, and painting that
+   the same colour as the button that actually writes the config would put two
+   competing primaries on one screen. */
+.mcp-head-actions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+/* Layered, not outlined — the form is a surface sitting on the page rather
+   than a rectangle drawn around some fields.
+
+   The width cap is not decoration. `.mcp` is 96rem wide, and a form that
+   inherits all of it puts a 700px box around a word like "filesystem" and
+   drags the label miles from the field it names. Text inputs are capped by
+   what is comfortable to read back, not by the room available. */
+.mcp-add {
+  flex-shrink: 0;
+  max-width: 52rem;
+  margin-bottom: var(--sp-5);
+  padding: var(--sp-4);
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+}
+
+/* Exactly two columns, not `auto-fit`. Auto-fit sized the tracks off the
+   container and produced three or four of them, so the two short fields sat in
+   the first two and the rest of the row was empty air while every other field
+   spanned the lot — a ragged right edge that reads as a bug even when nobody
+   can name it. Two fixed tracks keep the top row full and everything aligned
+   to the same grid. */
+.mcp-add-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-4);
+}
+
+/* One column once two would be narrower than a readable field. */
+@media (max-width: 620px) {
+  .mcp-add-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.mcp-field-wide {
+  grid-column: 1 / -1;
+}
+
+/* The same size Settings gives the same thing. It was --t-footnote here and
+   --t-callout there, which is one point of difference for a line doing exactly
+   the same job in two panes of the same app. */
+.mcp-field-help {
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+  color: var(--text-muted);
+}
+
+/* `.mcp-input` fixes a control height, which is right for one line and wrong
+   for a box meant to hold several. */
+/* `.mcp-input` fixes a control height, which is right for one line and wrong
+   for a box meant to hold several.
+
+   `resize` is off because the platform's own grabber is a raw OS handle — the
+   only one anywhere in a window that draws every other control itself, and it
+   appears in the bottom-right corner of an otherwise custom field. The box
+   grows on its own instead: `field-sizing: content` between the floor and the
+   ceiling below, so pasting six environment variables in makes room for them
+   without anybody dragging a corner. */
+.mcp-textarea {
+  height: auto;
+  min-height: calc(var(--control-h) * 2);
+  max-height: calc(var(--control-h) * 7);
+  field-sizing: content;
+  padding: var(--sp-2);
+  line-height: var(--lh-body);
+  resize: none;
+}
+
+.mcp-add-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-4);
+}
+
+/* Deliberately quiet, and deliberately not an error. It outlives the form so
+   the confirmation is still there once the fields have gone. */
+.mcp-added {
+  margin: 0 0 var(--sp-4);
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--status-completed) 12%, transparent);
+  color: var(--text-primary);
+  font-size: var(--t-callout);
 }

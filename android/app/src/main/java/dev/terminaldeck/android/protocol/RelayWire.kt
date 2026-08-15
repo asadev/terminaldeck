@@ -8,7 +8,7 @@ import dev.terminaldeck.android.crypto.Sealed
  *
  * ## Why this is a separate file from `Sealed`
  *
- * Because it is a separate layer on the Mac, and the split is the whole reason this app spent a
+ * Because it is a separate layer on the desktop, and the split is the whole reason this app spent a
  * week talking to nobody.
  *
  * `sealed.ts` produces a bare 80-byte Noise IK message and consumes a bare 48-byte reply.
@@ -19,7 +19,7 @@ import dev.terminaldeck.android.crypto.Sealed
  *
  * That failure is silent by design: the desktop refuses a first payload of the wrong length by
  * closing the channel with nothing on the wire, because saying *which* check failed would hand a
- * hostile relay an oracle. From the phone it looks exactly like a Mac that is asleep.
+ * hostile relay an oracle. From the phone it looks exactly like a machine that is asleep.
  *
  * So the framing lives here, named after the file it comes from, and `Sealed`'s own constants are
  * named for the Noise sizes they actually are. `RelayWireTest` pins every number below against
@@ -48,7 +48,7 @@ object RelayWire {
      */
     const val HANDSHAKE_OPEN_BYTES = 1 + Sealed.NOISE_MESSAGE_BYTES
 
-    /** What the Mac answers with. */
+    /** What the desktop answers with. */
     const val HANDSHAKE_REPLY_BYTES = 1 + Sealed.NOISE_REPLY_BYTES
 
     /** Put the version in front of a handshake message. */
@@ -70,15 +70,26 @@ object RelayWire {
         /** A sentence for the connection banner. Says what to do, never which check failed. */
         val sentence: String
 
+        /*
+         * Both sentences say "desktop" and neither takes a noun, unlike the ones in
+         * `WebSocketDeckTransport`.
+         *
+         * That is not an oversight and not a shortcut. These two refusals can only ever happen
+         * *before* the sealed channel is open — they are what a failed handshake produces — and
+         * `welcome.hostPlatform` arrives on the first frame *inside* that channel. So at the moment
+         * either of these is composed, what kind of machine is at the far end is genuinely unknown,
+         * and the neutral word is the only honest one. Threading a noun in here would produce a
+         * parameter that is always "desktop" and would invite someone to pass something else.
+         */
         data class WrongVersion(val saw: Int) : Refusal {
             override val sentence: String
-                get() = "That Mac answered with sealed-channel version $saw; this app speaks " +
+                get() = "That desktop answered with sealed-channel version $saw; this app speaks " +
                     "${SEALED_VERSION.toInt()}. Update whichever is older."
         }
 
         data class Malformed(val count: Int, val expected: Int) : Refusal {
             override val sentence: String
-                get() = "That Mac's first answer was not a sealed handshake."
+                get() = "That desktop's first answer was not a sealed handshake."
         }
     }
 

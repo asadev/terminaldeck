@@ -92,6 +92,12 @@
   color: var(--color-warning);
 }
 
+/* Trails the thing before it on the same line. Whoever stacks this strip into a
+   column turns the separator off — see `.ac-sheet` in AgentControls.css. */
+.us-sub-after::before {
+  content: '· ';
+}
+
 .us-muted {
   color: var(--text-muted);
 }

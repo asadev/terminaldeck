@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { AttachChips } from '../chat/attach/AttachChips'
 import { AttachMenu } from '../chat/attach/AttachMenu'
 import {
@@ -20,6 +20,16 @@ interface Props {
   cwd?: string | null
   disabled?: boolean
   placeholder?: string
+  /**
+   * The agent's controls, rendered on the box's own bottom row beside the plus.
+   *
+   * A slot rather than an import, because `wiring.test.ts` pins `AgentControls`
+   * and `UsageStrip` to `ChatView.tsx` — that table is the record of them
+   * having shipped mounted nowhere, and the fix for a messy composer is not to
+   * move the seam it guards. So the owner stays the same and only the place
+   * they are drawn changes.
+   */
+  controls?: ReactNode
 }
 
 const MAX_ROWS = 12
@@ -46,8 +56,23 @@ const NOTICE_MS = 4000
  * `writeToSession(id, text + '\r')` silently does nothing for every message
  * carrying an attachment. `terminalWrites` in `mentions.ts` is the sequence
  * that works — two writes, `SUBMIT_GAP_MS` apart.
+ *
+ * ## The shape
+ *
+ * One box, tall enough to look like somewhere you write a paragraph, with every
+ * control inside its frame: attachments above the text, and a single row under
+ * it holding the plus, the agent's controls, the microphone and send. Before
+ * this, the plus and the microphone squeezed a single-line field between them
+ * and three further rows of controls and readouts hung underneath — which is
+ * the thing that got reported, in these words: "it's very messy with a lot of
+ * options under the chat box".
+ *
+ * Nothing on that row is a bare icon on its own: the plus carries the word
+ * "Add", the controls carry their names and their values, and the two glyphs
+ * that stay glyphs — the microphone and send — are the pair every chat app in
+ * the world draws in that corner, and both say what they are on hover.
  */
-export function ChatComposer({ onSend, cwd, disabled = false, placeholder }: Props) {
+export function ChatComposer({ onSend, cwd, disabled = false, placeholder, controls }: Props) {
   const [text, setText] = useState('')
   const [attachments, setAttachments] = useState<Attachment[]>([])
   const [notice, setNotice] = useState<string | null>(null)
@@ -57,6 +82,8 @@ export function ChatComposer({ onSend, cwd, disabled = false, placeholder }: Pro
 
   // Grow with the content up to a ceiling, then scroll. Measured from
   // scrollHeight rather than counting newlines, which ignores wrapped lines.
+  // The floor is CSS's, not this function's: `min-height` on `.cc-input` clamps
+  // whatever is written here, so an empty box still stands three lines tall.
   useEffect(() => {
     const box = boxRef.current
     if (!box) return
@@ -116,26 +143,34 @@ export function ChatComposer({ onSend, cwd, disabled = false, placeholder }: Pro
     setText((current) => appendSpoken(current, snippet))
   }, [])
 
+  /**
+   * The padding is part of the field.
+   *
+   * A big box with a small textarea inside it is a trap: click in the margin
+   * above the controls and nothing happens, which reads as a dead surface. Only
+   * a press that landed on the box itself counts — a press that started on a
+   * button, a chip or the text is that thing's own — and the default is
+   * prevented so focus does not move away again on mouse-up.
+   */
+  const focusFromFrame = (event: React.MouseEvent<HTMLDivElement>): void => {
+    if (event.target !== event.currentTarget) return
+    event.preventDefault()
+    focusBox()
+  }
+
   const idle = !onSend
   const off = disabled || idle
   const empty = composeMessage(attachments, text) === ''
 
   return (
     <div className="chat-composer">
-      <AttachChips
-        attachments={attachments}
-        notice={notice}
-        onRemove={(path) => setAttachments((current) => removeAttachment(current, path))}
-      />
-      <div className="cc-row">
-        <AttachMenu
-          root={root}
+      <div className={off ? 'cc-box cc-box-off' : 'cc-box'} onMouseDown={focusFromFrame}>
+        <AttachChips
           attachments={attachments}
-          onAdd={add}
-          onInsert={insert}
-          onClose={focusBox}
-          disabled={off || root === ''}
+          notice={notice}
+          onRemove={(path) => setAttachments((current) => removeAttachment(current, path))}
         />
+
         <textarea
           ref={boxRef}
           className="cc-input"
@@ -143,26 +178,44 @@ export function ChatComposer({ onSend, cwd, disabled = false, placeholder }: Pro
           value={text}
           disabled={off}
           spellCheck
-          placeholder={
-            idle ? 'Open a session to write to it' : (placeholder ?? 'Message the agent…  (Enter to send, Shift+Enter for a new line)')
-          }
-          aria-label="Message the agent"
+          placeholder={idle ? 'Open a session to write to it' : (placeholder ?? 'Message the agent…')}
+          // The label follows the placeholder rather than being fixed: a screen
+          // reader on a plain shell was being told it had focused a box for
+          // messaging an agent that is not in the session. The ellipsis is a
+          // typographic invitation and belongs only to the visible hint.
+          aria-label={(placeholder ?? 'Message the agent').replace(/…$/, '')}
           onChange={(event) => setText(event.target.value)}
           onKeyDown={onKeyDown}
         />
-        <DictateButton onFocusComposer={focusBox} disabled={off} />
-        <button
-          type="button"
-          className="cc-send"
-          onClick={send}
-          disabled={off || empty}
-          aria-label="Send"
-          title="Send (Enter)"
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-            <path d="M4 12h15M13 6l6 6-6 6" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-        </button>
+
+        <div className="cc-foot">
+          <div className="cc-foot-left">
+            <AttachMenu
+              root={root}
+              attachments={attachments}
+              onAdd={add}
+              onInsert={insert}
+              onClose={focusBox}
+              disabled={off || root === ''}
+            />
+            {controls}
+          </div>
+          <div className="cc-foot-right">
+            <DictateButton onFocusComposer={focusBox} disabled={off} />
+            <button
+              type="button"
+              className="cc-send"
+              onClick={send}
+              disabled={off || empty}
+              aria-label="Send"
+              title="Send — Enter sends, Shift+Enter starts a new line"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+                <path d="M4 12h15M13 6l6 6-6 6" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   )

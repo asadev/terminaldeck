@@ -39,21 +39,33 @@
 
   --text-primary: #d4d4d4;
   --text-secondary: #9b9b9b;
-  --text-muted: #6f6f6f;
+  /* Was #6f6f6f, which is 3.5:1 on --bg-primary and 3.1:1 on --bg-tertiary —
+     under AA, on a phone, often outdoors. 4.7:1 at worst here. */
+  --text-muted: #8f8f8f;
 
-  --accent: #529cca;
-  --accent-soft: rgba(82, 156, 202, 0.14);
-  --accent-fg: #ffffff;
+  /* The desktop's accent, which is the application icon's own blue (the top
+     stop of the spine gradient in build/art/icon.mjs). This was #529cca, a
+     steel blue that belonged to nothing: it matched neither the icon nor the
+     desktop app, and white on it is 3.0:1 — under AA on the one button the
+     phone client has. The dark ink is the icon's tile black and clears 5.7:1,
+     the same trade the desktop theme makes and for the same reason: no single
+     blue can be readable as text on charcoal *and* carry white text. */
+  --accent: #3b8fee;
+  --accent-soft: rgba(59, 143, 238, 0.14);
+  --accent-fg: #0f1114;
 
   --border: rgba(255, 255, 255, 0.094);
   --border-subtle: rgba(255, 255, 255, 0.055);
 
-  --status-working: #529cca;
-  --status-waiting: #c9a227;
-  --status-input: #d9730d;
-  --status-completed: #4dab9a;
-  --status-idle: #6f6f6f;
-  --color-critical: #ff7369;
+  /* Same ramp as the desktop's dark theme, so a session showing "working" on
+     the Mac shows the same colour on the phone. --status-input keeps its
+     orange — it is the one state that has to be seen from across a room. */
+  --status-working: #64a6e8;
+  --status-waiting: #ddb04a;
+  --status-input: #f0913f;
+  --status-completed: #5fbf95;
+  --status-idle: #8f8f8f;
+  --color-critical: #ff6f60;
 
   --radius-sm: 4px;
   --radius-md: 6px;
@@ -287,6 +299,113 @@ button {
   background: var(--bg-tertiary);
   color: var(--text-secondary);
   font-weight: 400;
+}
+
+/* A button waiting on the desktop stops looking pressable, and stops taking the
+   press — the click handler refuses a second one, and a control that still
+   lights up under a finger while refusing it is the small lie that makes people
+   tap four times. */
+.button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.button:disabled:active {
+  filter: none;
+}
+
+/* ----------------------------------------------------------- new session */
+
+/* The session list is edge-to-edge, so this block carries its own gutter rather
+   than the screen carrying one for it. The bottom of it is a real gap: with four
+   pixels there, the last folder and the first session row read as one list, and
+   the seam between two different kinds of thing is exactly where a phone screen
+   has to be unambiguous. */
+.start {
+  padding: 12px 16px 18px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+/* Where the session is about to start, under the button that starts it. It sits
+   close to the button on purpose — it is that button's second line, not a note. */
+.start__where {
+  display: flex;
+  gap: 6px;
+  margin: 8px 2px 0;
+  color: var(--text-muted);
+  /* The path is mono and the two words in front of it are not. A bare path under
+     a button reads as easily as "you are here"; the label is what makes it a
+     promise about what the tap will do. */
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+/* `min-width: 0` because a flex item refuses to shrink below its content by
+   default, and a nested project path is easily wider than a phone — without it
+   the ellipsis never happens and the path runs off the side of the screen. */
+.start__where span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.start__where-label,
+.start__caption {
+  flex: none;
+  color: var(--text-muted);
+  font-family: var(--font-ui);
+}
+
+.start__caption {
+  margin: 14px 2px 6px;
+  font-size: 12px;
+}
+
+/* The desktop has shared nothing with this device. Not an error colour: nothing
+   has gone wrong, and the sentence names the machine and the screen where that
+   is changed. */
+.start__note {
+  margin: 0;
+  padding: 12px;
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.start__folders {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* Each choice sits on its own surface. As bare text on the page these read as a
+   caption under the button rather than as three things you can tap — and the
+   list below them is made of rows, so a row that is not drawn like one is the
+   only unpressable-looking thing on the screen. */
+.start__folder {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  margin-bottom: 6px;
+  padding: 12px;
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 14px;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.start__folder:active {
+  background: var(--bg-active);
+}
+
+.start__folder--path {
+  font-family: var(--font-mono);
+  font-size: 13px;
 }
 
 /* ------------------------------------------------------------ session list */

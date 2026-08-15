@@ -24,6 +24,18 @@
  * screen. Re-attaching to a session gets the whole scrollback again in `replay`
  * frames, and appending that under whatever was already on screen would show
  * every line twice.
+ *
+ * ## The two surfaces under the terminal
+ *
+ * The terminal owns both of them, which is the point rather than an accident of
+ * where the code went. `KeyboardAccessory` is its `inputAccessoryView` and
+ * `KeyGridView` is its `inputView`, so pressing a key in either one is a touch
+ * *inside* the terminal — and a selection made with a long press survives being
+ * acted on. A control anywhere else does not: SwiftTerm clears its selection on
+ * a touch outside itself, which is how this app lost a "Copy Selection" item
+ * from the navigation bar. Opening the grid therefore swaps one input view for
+ * the other at the same height, and the terminal neither moves nor stops being
+ * first responder.
  */
 
 import SwiftTerm
@@ -38,7 +50,7 @@ import UIKit
 @MainActor
 final class TerminalBridge: NSObject, @preconcurrency TerminalViewDelegate {
 
-    let view: TerminalView
+    let view: DeckTerminalView
 
     /// Bytes the user typed, already UTF-8 decoded. The caller chunks and sends.
     var onInput: ((String) -> Void)?
@@ -49,13 +61,24 @@ final class TerminalBridge: NSObject, @preconcurrency TerminalViewDelegate {
 
     private(set) var size: TerminalSize?
 
+    private let accessory: KeyboardAccessory
+    private let grid: KeyGridView
+    private var gestures: TerminalGestures?
+    private var keyboardObservers: [NSObjectProtocol] = []
+
     override init() {
         // A fixed monospaced face rather than the system default: the terminal
         // measures its column count from the advance width, and a font whose
         // metrics change with the user's Dynamic Type setting would change the
         // session's column count when they change their text size.
         let font = UIFont.monospacedSystemFont(ofSize: 12, weight: .regular)
-        view = TerminalView(frame: .zero, font: font)
+        view = DeckTerminalView(frame: .zero, font: font)
+        // Any width will do for either: a `UIInputView` with `allowsSelfSizing`
+        // is laid out by the keyboard system against the real screen, and
+        // `UIScreen.main` is both deprecated and wrong on a Mac or a second
+        // display.
+        accessory = KeyboardAccessory(width: KeyPlan.narrowestPhoneWidth)
+        grid = KeyGridView(width: KeyPlan.narrowestPhoneWidth)
         super.init()
 
         view.terminalDelegate = self
@@ -70,30 +93,139 @@ final class TerminalBridge: NSObject, @preconcurrency TerminalViewDelegate {
         // Set on the UIKit view rather than through a SwiftUI modifier, because
         // the modifier would apply to the representable's wrapper and a
         // long-press has to land on the terminal itself — which is what starts
-        // SwiftTerm's own text selection, and therefore the only way a UI test
-        // can exercise copying a *selection* rather than the screen.
+        // the text selection, and therefore the only way a UI test can exercise
+        // copying a *selection* rather than the screen.
         view.accessibilityIdentifier = "terminal.view"
 
         // SwiftTerm builds its own accessory in `init`; this replaces it. See
-        // `KeyboardAccessory` for why, and for why arming Control there works
+        // `KeyboardAccessory` for why, and for why arming a modifier there works
         // through the terminal view rather than through the accessory.
-        // Any width will do: `UIInputView` with `allowsSelfSizing` is laid out
-        // by the keyboard system against the real screen, and `UIScreen.main`
-        // is both deprecated and wrong on a Mac or a second display.
-        let accessory = KeyboardAccessory(width: 375)
+        wireKeys()
+        view.inputAccessoryView = accessory
+
+        // One finger scrolls, a long press selects. See `TerminalGestures` for
+        // what that costs and which of SwiftTerm's own recognisers it displaces.
+        let gestures = TerminalGestures(terminal: view)
+        gestures.onTapped = { [weak self] in
+            // Tapping into the terminal means "I want to type", so a grid
+            // standing where the keyboard should be is the wrong answer to it.
+            self?.closeGrid()
+        }
+        self.gestures = gestures
+
+        watchTheKeyboard()
+    }
+
+    deinit {
+        // Block-based observers outlive their object: NotificationCenter holds
+        // one until it is handed back, so a session-per-bridge app would
+        // accumulate one dead observer per terminal ever opened.
+        for token in keyboardObservers { NotificationCenter.default.removeObserver(token) }
+    }
+
+    /// The bar, the grid, and the single place a key press turns into an effect.
+    private func wireKeys() {
         accessory.applicationCursor = { [weak self] in
             self?.view.getTerminal().applicationCursor ?? false
         }
         accessory.onBytes = { [weak self] bytes in
             self?.view.send(bytes)
         }
-        accessory.onControl = { [weak self] armed in
-            self?.view.controlModifier = armed
+        accessory.onModifier = { [weak self] modifier, armed in
+            guard let self else { return }
+            switch modifier {
+            case .control: view.controlModifier = armed
+            case .meta: view.metaModifier = armed
+            }
+            // The grid draws `alt` and the bar draws `ctrl`; both are the same
+            // kind of state and neither may show it while the other does not.
+            grid.armed = accessory.armed
         }
         accessory.onCopy = { [weak self] in self?.onCopy?() }
         accessory.onPaste = { [weak self] in self?.onPaste?() }
-        accessory.onDismiss = { [weak self] in self?.blur() }
-        view.inputAccessoryView = accessory
+        accessory.onDismiss = { [weak self] in
+            // The grid goes with the keyboard. Dismiss means "give me the screen
+            // back", and leaving a grid standing would answer half of that.
+            self?.closeGrid()
+            self?.blur()
+        }
+        accessory.onMore = { [weak self] in self?.toggleGrid() }
+        // The grid hands its presses back to the bar rather than interpreting
+        // them: `copy` in the grid and `copy` on the bar have to be the same
+        // act, and a second switch statement is how they stop being.
+        grid.onKey = { [weak self] cap in
+            guard let self else { return }
+            accessory.press(cap)
+            grid.armed = accessory.armed
+        }
+    }
+
+    // MARK: - The grid
+
+    /**
+     * Swap the keyboard for the grid, or the grid back for the keyboard.
+     *
+     * Setting `inputView` and reloading is the whole mechanism, and it is chosen
+     * for something more important than the animation: the terminal **stays**
+     * first responder, so a selection made with a long press is still there when
+     * the grid's `copy` is pressed. Every alternative — a sheet, an overlay, a
+     * view pushed up from the bottom — is a touch outside the terminal, and a
+     * touch outside the terminal is what destroys a selection here.
+     */
+    private func toggleGrid() {
+        if view.inputView == nil { openGrid() } else { closeGrid() }
+    }
+
+    private func openGrid() {
+        grid.preferredHeight = keyboardHeight
+        grid.armed = accessory.armed
+        view.inputView = grid
+        accessory.isGridOpen = true
+        // The keyboard has to be up for there to be anything to replace. With a
+        // hardware keyboard attached the bar is on screen without one, and this
+        // is what puts the grid in front of somebody who pressed the button.
+        if !view.isFirstResponder { view.becomeFirstResponder() }
+        view.reloadInputViews()
+    }
+
+    private func closeGrid() {
+        guard view.inputView != nil else { return }
+        view.inputView = nil
+        accessory.isGridOpen = false
+        view.reloadInputViews()
+    }
+
+    /**
+     * How tall the keyboard was, so the grid can be exactly that tall.
+     *
+     * Measured rather than assumed. There is no constant for it: the keyboard is
+     * a different height on every screen size, in landscape, with a third-party
+     * keyboard, and with predictive text on or off. The accessory's own height
+     * comes off the top because the notification's frame includes it — the bar
+     * is part of the keyboard as far as UIKit is concerned — and it stays on
+     * screen either way, so counting it twice would push the terminal up by 52
+     * points every time the grid opened.
+     */
+    private var keyboardHeight: CGFloat = KeyGridView.fallbackHeight
+
+    private func watchTheKeyboard() {
+        for name in [UIResponder.keyboardDidShowNotification,
+                     UIResponder.keyboardDidChangeFrameNotification] {
+            let token = NotificationCenter.default.addObserver(
+                forName: name, object: nil, queue: .main) { [weak self] note in
+                    MainActor.assumeIsolated {
+                        guard let self,
+                              let frame = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect
+                        else { return }
+                        let height = frame.height - KeyboardAccessory.height
+                        // A keyboard shorter than the bar above it is a frame
+                        // arriving mid-dismissal, not a measurement.
+                        guard height > 100 else { return }
+                        self.keyboardHeight = height
+                    }
+                }
+            keyboardObservers.append(token)
+        }
     }
 
     /// Raised by the accessory row. Handled by the model, which owns the
@@ -238,11 +370,23 @@ final class TerminalBridge: NSObject, @preconcurrency TerminalViewDelegate {
 
     var isFocused: Bool { view.isFirstResponder }
 
+    /// Whether the key grid is standing where the keyboard was. Read by the
+    /// tests; nothing in the app asks, because the two controls that change it
+    /// both go through this object.
+    var isKeyGridOpen: Bool { view.inputView != nil }
+
     @discardableResult
     func focus() -> Bool { view.becomeFirstResponder() }
 
+    /// Putting the keyboard away takes the grid with it, whichever control asked
+    /// — the bar's dismiss button and the toolbar's keyboard toggle are the same
+    /// intent, and one of them leaving a grid behind would be a surface with
+    /// nothing underneath it.
     @discardableResult
-    func blur() -> Bool { view.resignFirstResponder() }
+    func blur() -> Bool {
+        closeGrid()
+        return view.resignFirstResponder()
+    }
 
     // MARK: - TerminalViewDelegate
 
@@ -282,13 +426,4 @@ final class TerminalBridge: NSObject, @preconcurrency TerminalViewDelegate {
     }
 
     func rangeChanged(source: TerminalView, startY: Int, endY: Int) {}
-}
-
-/// The terminal's colours. Not in an asset catalog because the terminal is
-/// black in both appearances — a light-mode terminal would be a different
-/// palette, not a lighter one, and inventing that here would be guessing.
-enum Palette {
-    static let terminalBackground = UIColor(red: 0.043, green: 0.047, blue: 0.055, alpha: 1)
-    static let terminalForeground = UIColor(red: 0.878, green: 0.890, blue: 0.910, alpha: 1)
-    static let caret = UIColor(red: 0.20, green: 0.62, blue: 0.95, alpha: 1)
 }

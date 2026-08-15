@@ -429,7 +429,7 @@ export function Dashboard({ projectPath, context, bridge }: DashboardProps) {
                       </svg>
                     </button>
                   </header>
-                  <div className="widget-body">
+                  <div className="widget-body scroll-fade">
                     <Component context={widgetContext} />
                   </div>
                 </div>

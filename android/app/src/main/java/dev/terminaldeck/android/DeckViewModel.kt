@@ -12,6 +12,7 @@ import dev.terminaldeck.android.pairing.PairingCode
 import dev.terminaldeck.android.pairing.PairingCodes
 import dev.terminaldeck.android.protocol.Capability
 import dev.terminaldeck.android.protocol.ClientMessage
+import dev.terminaldeck.android.protocol.HostPlatform
 import dev.terminaldeck.android.protocol.pasteRefusal
 import dev.terminaldeck.android.protocol.RemoteSessionView
 import dev.terminaldeck.android.protocol.ServerMessage
@@ -226,9 +227,24 @@ class DeckViewModel(
                 link.sessions = message.sessions.map { it.toView() }
                 link.deviceName = message.deviceName
                 link.capabilities = message.capabilities.toSet()
+                // The one frame that says what kind of computer this is. Everything the screens
+                // print about "the Mac" is really about whatever this resolves to, and an absent
+                // field resolves to a neutral word rather than to a guess — see [HostPlatform].
+                link.hostPlatform = HostPlatform.fromWire(message.hostPlatform)
+                // Where this phone may start a session, decided on the machine the files are on.
+                // Assigned straight across, null included: a machine that stops sending the field
+                // is a machine that has been downgraded, and holding the old list would leave the
+                // picker enforcing a rule that is no longer there.
+                link.grantedFolders = message.folders
                 link.loaded = message.sessions.isNotEmpty() || link.loaded
                 link.live = true
             }
+
+            // The same list again, because somebody edited it at the desk. Handled identically to
+            // the one in `welcome` and on purpose: the reason this frame exists is that a folder
+            // removed while the phone sits there connected must leave the picker *now*, and a
+            // client that only read the welcome would keep offering it until the app was reopened.
+            is ServerMessage.Folders -> link.grantedFolders = message.folders
 
             is ServerMessage.Sessions -> {
                 link.sessions = message.sessions.map { it.toView() }
@@ -460,15 +476,24 @@ class DeckViewModel(
      * otherwise. Sending a message the machine's parser has never heard of would close the socket
      * for `bad-message`, so a hopeful client is a broken one.
      *
-     * `folder` is a directory that machine is **already offering** — the working directory of a
-     * session in the list on screen, which is the only honest source this phone has, and which is
-     * per machine by construction: offering a Mac's folder to a Windows PC would be a picker full of
-     * choices that fail. Null means "wherever you would have started one".
+     * `folder` is one the machine itself offered this device — [DeckUiState.startableFolders], which
+     * is that machine's own grant list when it sent one and the old cwd-derived list when it is too
+     * old to. Per machine by construction either way: offering a Mac's folder to a Windows PC would
+     * be a picker full of choices that fail. Null means "wherever you would have started one".
      */
     fun newSession(folder: String? = null) {
         val link = selected ?: return
         if (!_uiState.value.canCreateSessions) {
             notify("This machine cannot start sessions from the phone.")
+            return
+        }
+        // Somebody chose no folders for this phone, so every `create` it could send is already
+        // refused. Said here rather than sent and refused, because the round trip would answer with
+        // the same sentence a second later and the screen would flash a button that never worked.
+        // The button is absent in this state — see [DeckUiState.canStartSession] — so this is the
+        // backstop for a folder list emptied between the draw and the tap.
+        if (_uiState.value.noFoldersGranted) {
+            notify(_uiState.value.noFoldersSentence)
             return
         }
         // Remembered so the `created` that comes back *opens* the session rather than merely adding
@@ -648,6 +673,11 @@ class DeckViewModel(
         val started = FileUpload(
             file = file,
             scope = viewModelScope,
+            // Read off the link at the moment the transfer starts, and safe to freeze for its
+            // duration: an upload only runs while `canSendFiles`, which needs `live`, which needs a
+            // `welcome` — so the machine has already said what it is, and it will not change
+            // operating system halfway through a photo.
+            hostNoun = link.hostPlatform.noun,
             send = { link.transport.send(it) },
             open = open,
             onChange = { publish() },
@@ -718,6 +748,8 @@ class DeckViewModel(
             sessions = current?.sessions ?: emptyList(),
             deviceName = current?.deviceName,
             capabilities = current?.capabilities ?: emptySet(),
+            grantedFolders = current?.grantedFolders,
+            hostPlatform = current?.hostPlatform ?: HostPlatform.UNKNOWN,
             loaded = current?.loaded ?: false,
             live = current?.live ?: false,
             notice = notice,
@@ -787,6 +819,21 @@ data class DeckUiState(
     /** What the machine calls this phone, from `welcome`. Not the machine's own name. */
     val deviceName: String? = null,
     val capabilities: Set<String> = emptySet(),
+    /**
+     * The folders the machine on screen has chosen for this phone, or null when it has not said.
+     *
+     * Read through [startableFolders] and [noFoldersGranted] rather than directly: the null and the
+     * empty case mean opposite things and every screen wants one of the two questions answered, not
+     * the raw field. See [HostLink.grantedFolders].
+     */
+    val grantedFolders: List<String>? = null,
+    /**
+     * What kind of machine the selected one is. [HostPlatform.UNKNOWN] until it says.
+     *
+     * Read through [machineNoun] rather than branched on: every screen wants the same thing out of
+     * it, which is a word to put in a sentence.
+     */
+    val hostPlatform: HostPlatform = HostPlatform.UNKNOWN,
     val loaded: Boolean = false,
     val live: Boolean = false,
     val notice: String? = null,
@@ -801,6 +848,16 @@ data class DeckUiState(
 
     /** What the title bar calls the machine on screen. */
     val hostLabel: String get() = host?.label ?: "not paired"
+
+    /**
+     * What every sentence in this app calls the machine on screen.
+     *
+     * One property so that the answer cannot differ between two screens, and so that the thing that
+     * used to be a literal `"Mac"` scattered through a dozen files is now a value with one source.
+     * Before a machine has answered it is "desktop": neutral, true of all of them, and — the whole
+     * point — never the specific one that made a Windows user read about their Mac.
+     */
+    val machineNoun: String get() = hostPlatform.noun
 
     /**
      * The pair screen owns the window.
@@ -841,7 +898,7 @@ data class DeckUiState(
      * completed sealed handshake — so a non-null [PairingView.deviceName] is the phone's proof that
      * the two ends have ever actually spoken. It says nothing about *now*.
      */
-    val macEverAnswered: Boolean get() = pairing?.deviceName != null
+    val hostEverAnswered: Boolean get() = pairing?.deviceName != null
 
     /**
      * Paired, and the machine said on this attempt that a human still has to approve it.
@@ -852,14 +909,47 @@ data class DeckUiState(
      * This is narrow on purpose. The pair screen used to say "Paired with a Mac. Waiting to be let
      * in." on the strength of [hasUnapprovedPairing] alone — true from the instant a code was
      * *parsed* — directly above a card reading "Could not reach that Mac." Both sentences were on
-     * screen at once and only the second one was true.
+     * screen at once, only the second one was true, and neither had any business calling an
+     * unidentified machine a Mac in the first place.
      */
     val awaitingApproval: Boolean get() = hasUnapprovedPairing && transport is TransportState.Pending
 
     /** Unapproved, and the machine is not answering right now — whatever it may have done before. */
-    val macUnreachable: Boolean get() = hasUnapprovedPairing && transport !is TransportState.Pending
+    val hostUnreachable: Boolean get() = hasUnapprovedPairing && transport !is TransportState.Pending
 
     val canCreateSessions: Boolean get() = live && capabilities.contains(Capability.CREATE)
+
+    /**
+     * The machine said which folders this phone may use, and the answer was **none**.
+     *
+     * Its own question rather than `startableFolders.isEmpty()`, because that is true of two
+     * opposite situations: this one, where a person removed every folder and nothing will start, and
+     * an old machine with nothing running, where a session started with no folder named works
+     * perfectly. Answering both with one boolean is how the empty case would come to read as a bug.
+     */
+    val noFoldersGranted: Boolean get() = grantedFolders?.isEmpty() == true
+
+    /**
+     * The one folder this phone was granted, when the machine granted exactly one.
+     *
+     * Null for every other case, including a single folder arrived at by the old cwd-derived
+     * fallback — that one is not a decision anybody made, so it may not be described as one.
+     *
+     * It exists because one destination is not a choice and must not be drawn as a menu, and because
+     * a session that starts somewhere the screen never named is the original complaint in a new
+     * costume. The screen starts there on the first tap and says where in a line beside it.
+     */
+    val onlyGrantedFolder: String? get() = grantedFolders?.singleOrNull()
+
+    /**
+     * Whether to draw New Session at all: the machine can start one, **and** has somewhere to put
+     * it.
+     *
+     * Absent rather than disabled when it cannot, which is the same rule [canSendFiles] follows.
+     * What replaces it in the empty case is [noFoldersSentence] — a control that only ever refuses
+     * is a fake feature, but a screen that says nothing at all is the bug this feature is fixing.
+     */
+    val canStartSession: Boolean get() = canCreateSessions && !noFoldersGranted
 
     /**
      * Whether the machine will take a file. Absent rather than disabled in the UI when false, for
@@ -870,11 +960,65 @@ data class DeckUiState(
     /**
      * Folders this phone may ask for a session in, **on the machine on screen**.
      *
-     * The working directory of a session that machine has already listed, and nothing else. It
-     * accepts only a folder it is already offering, so a picker built from anything else would be
-     * offering choices that fail.
+     * The list that machine chose for this device, when it sent one. Not a list assembled here out
+     * of the working directories of the sessions it happens to be showing — which is what this used
+     * to be, and which is the bug: nobody chose it, it changed when a project was closed at the
+     * desk, it was not the set the machine would actually accept, and from the phone there was
+     * nothing to read that explained why it had one folder in it.
+     *
+     * The fallback is deliberate and is the old behaviour exactly. A machine released before the
+     * field sends nothing, and it is still a machine somebody is paired to; taking its New Session
+     * button away over a missing field would break a working phone to fix a wording problem. It
+     * offers what is running, and — because a machine with an empty list still starts a session
+     * wherever it would have — the screen keeps the "where you would" row in that case alone.
      */
-    val startableFolders: List<String> get() = sessions.map { it.cwd }.distinct()
+    val startableFolders: List<String> get() = grantedFolders ?: sessions.map { it.cwd }.distinct()
+
+    /**
+     * What to say when the machine has granted this phone nothing.
+     *
+     * Both halves earn their place. The first says the *machine* has not shared a folder — nothing
+     * is broken, and this app has not lost anything. The second names the screen where that is
+     * changed, because the person reading it is holding the one device that cannot fix it, and the
+     * picker this replaces explained nothing at all.
+     *
+     * Worded to match the machine's own refusal — "has no folders chosen for this device. Choose one
+     * in its remote access settings" — since the two are read minutes apart by one person, and two
+     * vocabularies for one situation read as two different problems.
+     */
+    val noFoldersSentence: String
+        get() = "The $machineNoun has not shared a folder with this phone, so it cannot start a " +
+            "session here. Choose one on it, under Settings → Remote access → Folders."
+
+    /**
+     * The rows the New Session menu draws, in order.
+     *
+     * A value rather than a `when` inside the composable, for the same reason the desktop keeps its
+     * wiring assertions out of React: what this picker offers is *the* thing that was wrong, and a
+     * list built inside a `DropdownMenu` can only be checked by reading it. Here it can be asserted.
+     *
+     * "Where the machine would" appears only against a machine that never sent a grant list. With a
+     * list it would not be a second choice — a `create` naming nothing starts in the first granted
+     * folder — so it would be one destination drawn twice, with the copy that hides which folder it
+     * is on top. That ambiguity is exactly what the grants exist to remove.
+     */
+    val folderChoices: List<FolderChoice>
+        get() = buildList {
+            if (grantedFolders == null) add(FolderChoice("Where the $machineNoun would", null))
+            for (folder in startableFolders) add(FolderChoice(folder, folder))
+        }
+}
+
+/**
+ * One row of the New Session menu.
+ *
+ * [folder] null means "wherever you would have started one", which is the machine's own default and
+ * the only honest row to draw against a machine that has not said what it will accept. It doubles as
+ * the answer to "is this label a path": a path is set in monospace, because mono is this app's
+ * promise that the characters are exact and countable, and a sentence about a Mac is not.
+ */
+data class FolderChoice(val label: String, val folder: String?) {
+    val isPath: Boolean get() = folder != null
 }
 
 /** The pairing, as the UI is allowed to see it: no key material, no token. */

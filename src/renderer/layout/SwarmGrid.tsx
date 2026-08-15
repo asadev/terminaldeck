@@ -116,10 +116,13 @@ export interface SwarmGridProps {
 /**
  * Every running session on screen at once.
  *
- * There is no pane tree here, deliberately: the grid is derived from the
+ * There is no pane tree here, deliberately, and that is the whole difference
+ * between this and the split view next door: the grid is *derived* from the
  * session list, so opening or closing a session reflows it with no layout state
- * to keep in sync with the sidebar. A hand-arranged split view was built once
- * and deleted for exactly that reason — see ROADMAP.md.
+ * to keep in sync. `SplitView` is the other answer — hand-arranged, and it
+ * stays where it is put. The two are mutually exclusive in `App.tsx` for that
+ * reason: they are two answers to "several sessions at once", and a window
+ * showing both would be answering the question twice.
  */
 export function SwarmGrid({
   sessions,

@@ -120,6 +120,53 @@ struct DeviceDescriptor: Equatable {
     let platform: String
 }
 
+/**
+ * What kind of machine is on the other end.
+ *
+ * This exists because the phone used to have no idea. `DeviceDescriptor.platform`
+ * above travels the *other* way — it is this phone describing itself — and the
+ * desktop never said anything about itself at all. So the session list carried a
+ * string constant, `"Running on the Mac"`, and a phone paired to a Windows PC
+ * read those words while looking at that PC's own dev servers.
+ *
+ * `unknown` is a real case and not a placeholder: every desktop released before
+ * this field existed is still a desktop this app must talk to, and the honest
+ * answer for one of those is a neutral noun. Guessing "Mac" for an absent field
+ * is precisely the bug, so the fallback must never be a specific machine.
+ */
+enum HostPlatform: Equatable {
+    case mac
+    case windows
+    case linux
+    case unknown
+
+    /// Maps the raw `process.platform` the desktop sends. Unrecognised values
+    /// land on `.unknown` rather than being rejected — a desktop on a platform
+    /// this build has never heard of is still one worth showing sessions for.
+    init(wire: String?) {
+        switch wire {
+        case "darwin": self = .mac
+        case "win32": self = .windows
+        case "linux": self = .linux
+        default: self = .unknown
+        }
+    }
+
+    /// The noun to put in a sentence: "Running on the **Mac**".
+    ///
+    /// Deliberately no article and no capital beyond the proper noun, so callers
+    /// can compose. `unknown` reads "desktop", which is true of every host this
+    /// app can reach and singles out none of them.
+    var noun: String {
+        switch self {
+        case .mac: return "Mac"
+        case .windows: return "PC"
+        case .linux: return "machine"
+        case .unknown: return "desktop"
+        }
+    }
+}
+
 /// A terminal's measured size. Both or neither, never one — which is why this is
 /// a struct and not two optionals.
 struct TerminalSize: Equatable {
@@ -278,12 +325,37 @@ enum ClientMessage: Equatable {
 }
 
 enum ServerMessage: Equatable {
-    /// `capabilities` is read defensively and defaults to empty: it is not in
-    /// protocol v1, and a desktop that does not send it is telling the truth
-    /// about itself by omission.
+    /**
+     * `capabilities` is read defensively and defaults to empty: it is not in
+     * protocol v1, and a desktop that does not send it is telling the truth
+     * about itself by omission.
+     *
+     * `folders` is optional for the same reason and **nil is not the same as
+     * empty**. Nil means the desktop never mentioned folders — every build
+     * before this field existed, and every host that cannot start sessions at
+     * all — so the phone keeps the list it used to assemble for itself. Empty
+     * means a person sat at that machine and granted this device no folders,
+     * which is a real answer and the one the New Session button has to respect.
+     */
     case welcome(protocolVersion: Int, deviceId: String, deviceName: String, token: String?,
-                 sessions: [RemoteSession], capabilities: Set<String>)
+                 sessions: [RemoteSession], capabilities: Set<String>, hostPlatform: HostPlatform,
+                 folders: [String]?)
     case sessions([RemoteSession])
+    /**
+     * This device's folder list changed while it was connected.
+     *
+     * Pushed rather than polled, and it carries the whole list rather than a
+     * delta — there is one list per device, it is short, and a client applying
+     * deltas would have to be right about every one of them to end up with the
+     * set the desktop is actually enforcing.
+     *
+     * It exists because the list is editable on the desktop at any moment. The
+     * *rule* is already live without this frame — the Mac reads the grants on
+     * every `create`, so removing a folder takes effect on the next one with no
+     * reconnect — so all this does is stop the phone offering a folder whose
+     * only possible outcome is a refusal.
+     */
+    case folders([String])
     case attached(id: String)
     case detached(id: String)
     /// `replay` marks scrollback that arrived before this client did.

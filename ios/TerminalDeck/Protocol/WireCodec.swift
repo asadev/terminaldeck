@@ -77,7 +77,13 @@ enum WireCodec {
             return .ok(
                 .welcome(protocolVersion: version, deviceId: deviceId, deviceName: deviceName,
                          token: token, sessions: list.sessions,
-                         capabilities: capabilities(object["capabilities"])),
+                         capabilities: capabilities(object["capabilities"]),
+                         // Absent from every desktop before 0.1.9, and absent is
+                         // its own answer: `.unknown` makes this screen say
+                         // "Running on the desktop" rather than guess "Mac",
+                         // which is the whole bug. See `HostPlatform`.
+                         hostPlatform: HostPlatform(wire: string(object["hostPlatform"])),
+                         folders: folders(object["folders"])),
                 activity: list.activity)
 
         case "sessions":
@@ -85,6 +91,16 @@ enum WireCodec {
                 return .failed(reason: "sessions without a list")
             }
             return .ok(.sessions(list.sessions), activity: list.activity)
+
+        case "folders":
+            // An absent or malformed list is fatal here and merely means
+            // "nothing said" in a `welcome`, and the difference is not
+            // pedantry: this frame exists *to change* the list, so a version of
+            // it that cannot say what to change it to has nothing to deliver.
+            guard let list = folders(object["folders"]) else {
+                return .failed(reason: "folders without a list")
+            }
+            return .ok(.folders(list), activity: [:])
 
         case "attached":
             guard let id = string(object["id"]) else { return .failed(reason: "attached without an id") }
@@ -454,6 +470,29 @@ enum WireCodec {
     private static func capabilities(_ value: Any?) -> Set<String> {
         guard let rows = value as? [Any] else { return [] }
         return Set(rows.compactMap { string($0) }.filter { !$0.isEmpty && $0.count <= 32 })
+    }
+
+    /**
+     * The folders this device may start a session in, or nil when the desktop
+     * did not say.
+     *
+     * **Nil and empty are different answers and the difference is the whole
+     * feature.** A desktop that predates per-device folder grants sends no such
+     * field, and the honest reading of that is "I have not told you", which
+     * leaves the phone with the list it assembled from the sessions it can see.
+     * A desktop that sends `[]` is saying a person granted this device nothing,
+     * and drawing a picker over that would be offering taps that can only be
+     * refused. `[] as? [Any]` decodes both to an empty array, which is exactly
+     * why this is not `Codable`.
+     *
+     * Blank strings are dropped rather than failing the frame — the same
+     * leniency one bad session row gets — and the list is capped, because it is
+     * drawn into a menu and a host that sent ten thousand paths would be a
+     * phone that stopped responding.
+     */
+    private static func folders(_ value: Any?) -> [String]? {
+        guard let rows = value as? [Any] else { return nil }
+        return rows.compactMap { string($0) }.filter { !$0.isEmpty }.prefix(100).map { $0 }
     }
 
     private struct DecodedList {

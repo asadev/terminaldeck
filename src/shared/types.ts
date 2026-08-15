@@ -114,9 +114,6 @@ export interface DeckApi {
   cancelProjectFileSearch(): Promise<void>
   invalidateProjectFiles(root?: string): Promise<void>
 
-  loadBoard(projectPath: string): Promise<unknown>
-  saveBoard(projectPath: string, board: unknown): Promise<void>
-
   getSessionInsights(transcriptPath: string): Promise<unknown>
   getLatestSessionInsights(cwd: string): Promise<unknown>
   listSessionInsights(cwd: string): Promise<unknown>
@@ -125,6 +122,12 @@ export interface DeckApi {
   githubRefresh(cwd: string): Promise<unknown>
   githubRepo(cwd: string): Promise<unknown>
   clearGitHubCache(cwd?: string): void
+
+  githubAuthStatus(cwd?: string): Promise<unknown>
+  githubConnect(): Promise<unknown>
+  githubAwaitConnect(cwd?: string): Promise<unknown>
+  githubCancelConnect(cwd?: string): Promise<unknown>
+  githubDisconnect(cwd?: string): Promise<unknown>
 
   scanReadiness(projectPath: string): Promise<unknown>
   applyReadinessFix(projectPath: string, checkId: string): Promise<unknown>

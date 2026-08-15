@@ -5,15 +5,24 @@ export type PanelId =
   | 'files'
   | 'search'
   | 'git'
-  | 'board'
   | 'github'
   | 'alerts'
   | 'readiness'
   | 'mcp'
   | 'hooks'
 
-/** The two labelled runs in the sidebar. Order here is the order on screen. */
-export type PanelGroupId = 'project' | 'integrations'
+/**
+ * Where a view sits in the sidebar.
+ *
+ * `project` and `integrations` are the two labelled runs in the scrolling list.
+ * `foot` is the quiet strip at the bottom, beside Settings — deliberately *not*
+ * in `PANEL_GROUPS`, because that array is the list of labelled runs and the
+ * foot has no label. A view in `foot` is one you check on rather than work in:
+ * Alerts belongs there because it is the app talking to you, which is the same
+ * category of thing as the update notice and Settings, and none of the three is
+ * part of "what am I doing in this project".
+ */
+export type PanelGroupId = 'project' | 'integrations' | 'foot'
 
 export interface PanelSpec {
   id: PanelId
@@ -31,13 +40,18 @@ export interface PanelSpec {
   blurb: string
 }
 
+/**
+ * The labelled runs, in the order they appear. `foot` is absent on purpose —
+ * see `PanelGroupId`. Anything not in this array is somewhere the sidebar
+ * places by hand, so adding a group here is what makes it a scrolling run.
+ */
 export const PANEL_GROUPS: ReadonlyArray<{ id: PanelGroupId; label: string }> = [
   { id: 'project', label: 'Project' },
   { id: 'integrations', label: 'Integrations' },
 ]
 
 /**
- * Ten views, in two runs, ordered by how often they are wanted.
+ * Nine views, ordered by how often they are wanted.
  *
  * These used to be an icon rail plus a 300px drawer — two vertical bars before
  * the content even started, with a dashboard squeezed into the narrower of
@@ -77,14 +91,6 @@ export const PANELS: PanelSpec[] = [
     blurb: 'What has changed, and what is staged.',
   },
   {
-    id: 'board',
-    label: 'Task board',
-    group: 'project',
-    command: 'view.board',
-    icon: 'M5 4.5h3.6v15H5zM10.2 4.5h3.6v9.5h-3.6zM15.4 4.5H19v12.4h-3.6z',
-    blurb: 'The work in flight, in columns.',
-  },
-  {
     id: 'github',
     label: 'GitHub',
     group: 'integrations',
@@ -94,7 +100,12 @@ export const PANELS: PanelSpec[] = [
   {
     id: 'alerts',
     label: 'Alerts',
-    group: 'integrations',
+    // The foot, not Integrations. Alerts is not an integration — it is the app
+    // telling you something about your own work, which is why it now sits with
+    // the update notice and Settings at the bottom of the rail rather than in
+    // the top-right of the toolbar, where it was competing with the controls
+    // you use while you are actually working.
+    group: 'foot',
     icon: 'M12 4.2a5.6 5.6 0 0 0-5.6 5.6c0 3.7-1.8 4.7-1.8 4.7h14.8s-1.8-1-1.8-4.7A5.6 5.6 0 0 0 12 4.2zM10.3 18.5a2 2 0 0 0 3.4 0',
     blurb: 'What this project is waiting on you for.',
   },

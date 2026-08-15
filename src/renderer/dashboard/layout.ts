@@ -64,14 +64,13 @@ export const MAX_WIDGETS = 200
  */
 const SCAN_BUDGET = 20_000
 
-export type WidgetType = 'sessions' | 'cost' | 'git' | 'readiness' | 'kanban' | 'github'
+export type WidgetType = 'sessions' | 'cost' | 'git' | 'readiness' | 'github'
 
 /** Order the widget picker offers them in. */
 export const WIDGET_TYPES: readonly WidgetType[] = [
   'sessions',
   'cost',
   'git',
-  'kanban',
   'readiness',
   'github',
 ]
@@ -97,7 +96,6 @@ export const WIDGET_SPECS: Readonly<Record<WidgetType, WidgetSpec>> = {
   sessions: { type: 'sessions', w: 6, h: 6, minW: 3, minH: 3, allowMultiple: false },
   cost: { type: 'cost', w: 6, h: 6, minW: 3, minH: 3, allowMultiple: false },
   git: { type: 'git', w: 6, h: 6, minW: 3, minH: 3, allowMultiple: false },
-  kanban: { type: 'kanban', w: 6, h: 6, minW: 3, minH: 4, allowMultiple: false },
   readiness: { type: 'readiness', w: 8, h: 7, minW: 4, minH: 4, allowMultiple: false },
   // The only repeatable one: a project can watch more than one GitHub view.
   github: { type: 'github', w: 6, h: 6, minW: 3, minH: 3, allowMultiple: true },
@@ -256,10 +254,14 @@ export function createLayout(projectPath: string, columns = DASHBOARD_COLUMNS): 
 }
 
 /**
- * What a project shows before anyone has arranged anything: a 2×2 of the four
- * widgets backed by data that exists today. Readiness and GitHub are left to
- * the picker deliberately — a default dashboard where half the tiles say
- * "not available" reads as a broken app rather than an empty one.
+ * What a project shows before anyone has arranged anything: the three widgets
+ * backed by data that exists today. Readiness and GitHub are left to the picker
+ * deliberately — a default dashboard where half the tiles say "not available"
+ * reads as a broken app rather than an empty one.
+ *
+ * This used to be a 2×2, with a board widget in the fourth slot. The board went
+ * with the feature, and the hole it left is not filled with Readiness or GitHub
+ * for the reason above: a tidy grid is not worth a tile that says nothing.
  */
 export function defaultLayout(projectPath: string): DashboardLayout {
   const base = createLayout(projectPath)
@@ -267,7 +269,6 @@ export function defaultLayout(projectPath: string): DashboardLayout {
     ['sessions', 0, 0],
     ['cost', 6, 0],
     ['git', 0, 6],
-    ['kanban', 6, 6],
   ]
   return seed.reduce(
     (layout, [type, x, y]) => addWidget(layout, { type, id: `${type}-default`, x, y }),

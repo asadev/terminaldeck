@@ -53,7 +53,7 @@ struct LocalhostBrowser: View {
                     Spacer()
                     Text(toast)
                         .font(.system(size: 13))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Theme.primary)
                         .padding(.horizontal, 14)
                         .padding(.vertical, 8)
                         .background(.ultraThinMaterial, in: Capsule())
@@ -141,7 +141,7 @@ struct LocalhostBrowser: View {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(title)
                         .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Theme.primary)
                         .lineLimit(1)
                         .truncationMode(.tail)
                     Text(subtitle)

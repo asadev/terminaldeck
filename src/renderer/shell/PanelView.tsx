@@ -10,7 +10,6 @@ import { HooksPanel } from '../components/HooksPanel'
 import { PageEmpty } from '../components/PageEmpty'
 import { Dashboard } from '../dashboard/Dashboard'
 import type { WidgetContext } from '../dashboard/widgets'
-import { Board } from '../board/Board'
 import { panelSpec, type PanelId } from './panels'
 import { ErrorBoundary } from './ErrorBoundary'
 
@@ -137,8 +136,6 @@ export function PanelView({
     switch (panel) {
       case 'overview':
         return <Dashboard projectPath={projectPath} context={dashboard} />
-      case 'board':
-        return <Board projectPath={projectPath} />
       case 'files':
         return <FilesPage root={projectPath} selected={openFile} onSelect={onOpenFile} />
       case 'search':

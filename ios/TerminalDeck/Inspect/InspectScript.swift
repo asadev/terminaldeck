@@ -60,13 +60,12 @@ enum InspectScript {
      * The accent, written out literally.
      *
      * The page is a different document and cannot read this app's colours, so the
-     * value has to travel. It is `Theme.accent` — `Color(red: 0.20, green: 0.62,
-     * blue: 0.95)` — as hex; if that changes, change this too. There is no way to
-     * share it.
+     * value has to travel. It is `Theme.accent` — the icon's own blue, `#3b8fee`
+     * — as hex; if that changes, change this too. There is no way to share it.
      */
-    private static let highlightBorder = "#339ef2"
-    private static let highlightFill = "rgba(51, 158, 242, 0.16)"
-    private static let capturedFill = "rgba(51, 158, 242, 0.34)"
+    private static let highlightBorder = "#3b8fee"
+    private static let highlightFill = "rgba(59, 143, 238, 0.16)"
+    private static let capturedFill = "rgba(59, 143, 238, 0.34)"
 
     /// Everything the page-side half of inspect mode is.
     static let source = """

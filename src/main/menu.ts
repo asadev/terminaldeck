@@ -115,10 +115,10 @@ export function menuTemplate(platform: Platform, send: Send): MenuItemConstructo
     submenu: [
       { label: 'Sessions', click: send('view.terminal') },
       { label: 'Project Overview', click: send('view.overview') },
-      { label: 'Task Board', click: send('view.board') },
       { label: 'Browser', click: send('view.browser') },
       separator,
       { label: 'Toggle Sidebar', accelerator: 'CmdOrCtrl+B', click: send('view.sidebar') },
+      { label: 'Split the Window', accelerator: 'CmdOrCtrl+D', click: send('pane.split') },
       { label: 'Swarm View', accelerator: 'CmdOrCtrl+\\', click: send('view.swarm') },
       separator,
       { label: 'Command Palette', accelerator: 'CmdOrCtrl+K', click: send('app.palette') },

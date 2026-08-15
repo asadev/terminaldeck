@@ -1,9 +1,11 @@
 /* The dictation popover. No recording state, because there is no recording. */
 
+/* Centred on the composer's control row, like everything else on it. */
 .dc-host {
   position: relative;
   display: flex;
-  align-items: flex-end;
+  align-items: center;
+  flex-shrink: 0;
 }
 
 /* A floating surface, so it wears the app's glass like every other popover. */

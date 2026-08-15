@@ -60,6 +60,13 @@ final class HostLink: Identifiable {
     private(set) var upload: FileUpload?
     /// The last thing that went wrong here. Cleared on the next success.
     private(set) var lastError: String?
+    /// What kind of machine this is, as the host itself said in its `welcome`.
+    ///
+    /// Per host and not global: one phone holds several machines at once, and a
+    /// Mac and a Windows PC are routinely both in that list. A single app-wide
+    /// value would be right for whichever was greeted last and wrong for the
+    /// other — which is a subtler version of the constant string it replaces.
+    private(set) var hostPlatform: HostPlatform = .unknown
 
     /// What the switcher shows. The user's name for the machine, or its address.
     var label: String { credential.label }
@@ -152,15 +159,44 @@ final class HostLink: Identifiable {
     /**
      * Folders this phone may ask for a session in **on this machine**.
      *
-     * The working directory of a session this host has already listed, and
-     * nothing else — the host accepts only a folder it is already offering. Per
-     * host by construction: offering a Mac's folder to a Windows PC would be a
-     * picker full of choices that fail, which is the first thing multi-host could
-     * plausibly have got wrong.
+     * Two sources, and which one is in use is decided by the desktop rather than
+     * by this app:
+     *
+     *  - **What the machine granted this device.** `welcome.folders`, kept
+     *    current by the pushed `folders` frame. It is the same array the desktop
+     *    enforces against — one function answers both questions over there — so
+     *    a folder on this list is a folder that will actually start, subject
+     *    only to it still existing.
+     *  - **The working directories already on screen**, for a desktop old enough
+     *    not to have said. That was the only source before grants existed, and
+     *    the two were never the same set: the picker offered one folder while
+     *    the Mac would have accepted several, and nothing on either screen
+     *    explained why.
+     *
+     * Per host by construction: offering a Mac's folder to a Windows PC would be
+     * a picker full of choices that fail.
      */
     var startableFolders: [String] {
+        if let granted { return granted }
         var seen = Set<String>()
         return sessions.compactMap { seen.insert($0.cwd).inserted ? $0.cwd : nil }
+    }
+
+    /**
+     * What this machine says this device may use, or nil if it has never said.
+     *
+     * Nil is a desktop that predates the field. **Empty is a person choosing
+     * none**, which is why this is not flattened to `[]` on arrival: the two
+     * lead to different screens, and collapsing them would put the older
+     * desktop's phone in front of the newer desktop's "no folders" message.
+     */
+    private(set) var granted: [String]?
+
+    /// Whether a session can be started at all right now. The capability says
+    /// the machine *can*; an empty grant says this device *may not*, and a
+    /// button that is only ever refused is not a button.
+    var canStartSomewhere: Bool {
+        canCreateSessions && granted?.isEmpty != true
     }
 
     // MARK: - Lifecycle
@@ -193,6 +229,11 @@ final class HostLink: Identifiable {
         sessions = []
         ports = []
         lastActivity = [:]
+        // Back to "this machine has not said", not to "this machine granted
+        // nothing". The grant belongs to a live connection, and remembering an
+        // empty one across a stop would leave a phone refusing to offer New
+        // Session on a machine that has simply not been asked yet.
+        granted = nil
         attached = []
         wanted = []
         bridges = [:]
@@ -559,15 +600,23 @@ final class HostLink: Identifiable {
         if upload?.receive(message) == true { return }
 
         switch message {
-        case let .welcome(_, _, _, _, list, capabilities):
+        case let .welcome(_, _, _, _, list, capabilities, platform, folders):
             sessions = list
             lastActivity = activity
             lastError = nil
+            hostPlatform = platform
+            granted = folders
             if capabilities.contains(WireCapability.localhost) { transport?.send(.ports) }
 
         case let .sessions(list):
             sessions = list
             if !activity.isEmpty { lastActivity = activity }
+
+        case let .folders(list):
+            // Whole list, not a delta. A folder removed on the desktop stops
+            // being offered here without a reconnect, which is the only way the
+            // picker and the rule the Mac enforces can stay the same thing.
+            granted = list
 
         case let .created(session):
             if !sessions.contains(where: { $0.id == session.id }) { sessions.append(session) }

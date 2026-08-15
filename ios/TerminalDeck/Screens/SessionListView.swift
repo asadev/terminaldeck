@@ -10,11 +10,23 @@
  * do is just a smaller lie. It appears when a desktop advertises `create` in its
  * `welcome`. See `WireCapability`.
  *
+ * The same rule now decides *where* a session may be started. `welcome.folders`
+ * is the list of folders a person granted this particular device on that
+ * machine, and the desktop enforces the same array it sends — so the picker
+ * offers what will work rather than what this phone could see. A machine that
+ * granted nothing gets no button at all and a sentence saying where to fix it.
+ *
  * ## The connection pill is the most important thing on this screen
  *
  * Every other element assumes the list is current. When it is not, the pill is
  * the only thing saying so, and it says which of the six ways it is not current —
  * connecting, waiting, pending approval, offline — rather than going grey.
+ *
+ * ## Space, not lines
+ *
+ * The rows used to be separated by hairlines. They are cards with gaps now, for
+ * the reason the design brief gives: whitespace is the layout tool and a divider
+ * is what you reach for when space cannot do the job. Here it can.
  */
 
 import SwiftUI
@@ -56,7 +68,7 @@ struct SessionListView: View {
             // none, because it looks like it is telling you something.
             ToolbarItem(placement: .principal) { HostSwitcher(model: model) }
             ToolbarItemGroup(placement: .topBarTrailing) {
-                if model.canCreateSessions { newSession }
+                if model.canStartSomewhere { newSession }
                 Menu {
                     Button {
                         model.refresh()
@@ -133,10 +145,18 @@ struct SessionListView: View {
      * folder, by the Mac, and a phone-chosen name would have been the one tab on
      * the desktop that meant something different from all the others.
      *
-     * The folders are the ones already on this screen — the Mac accepts only a
-     * folder it is already offering — so nothing here can offer a choice that
-     * fails. With none of them, the button does not ask a question it already
-     * knows the answer to: it starts a session where the desktop would have.
+     * ## Where the folders come from
+     *
+     * From the machine, when it says: `welcome.folders` is the list a person
+     * granted *this device* on that desktop, kept current by a pushed `folders`
+     * frame, and it is the same array the Mac enforces against — so nothing in
+     * this menu can offer a tap that gets refused. When the machine is old
+     * enough not to have said, the list falls back to the working directories
+     * already on this screen, which is what it always was.
+     *
+     * A machine that granted this device *nothing* is a different case again,
+     * and it is not this control's job: the button is absent, and `empty` says
+     * why. See `DeckModel.canStartSomewhere`.
      */
     @ViewBuilder
     private var newSession: some View {
@@ -155,6 +175,13 @@ struct SessionListView: View {
                 } label: {
                     Label("New session", systemImage: "plus")
                 }
+                // Identified, because the toolbar button above it is *labelled*
+                // "New session" too — it is the same action, said once for a
+                // screen reader and once in a menu. A query on the words matches
+                // both and cannot be tapped: "multiple matching elements found",
+                // which is how two UI tests failed against a host that offered
+                // any folders at all.
+                .accessibilityIdentifier("sessions.newDefault")
                 Section("In a folder") {
                     ForEach(model.startableFolders, id: \.self) { folder in
                         Button {
@@ -192,25 +219,36 @@ struct SessionListView: View {
         }
     }
 
+    /**
+     * The list, laid out with space rather than with lines.
+     *
+     * Every row used to be separated by a hairline. The design brief's rule is
+     * that whitespace is the layout tool and a divider is what you reach for
+     * when space genuinely cannot do the job — and here it can: a session is a
+     * card, cards have gaps between them, and the gap says the same thing a line
+     * said while leaving the screen quieter. It also gives each row a shape to
+     * respond with when it is pressed, which a row between two lines never had.
+     */
     private var list: some View {
         ScrollView {
-            LazyVStack(spacing: 0) {
+            LazyVStack(spacing: 10) {
                 if let session = model.resumable {
                     ResumeRow(session: session) { model.open(session: session.id) }
-                    Divider().overlay(Theme.hairline)
                 }
                 ForEach(model.sessions) { session in
                     NavigationLink(value: DeckModel.Route.session(host: model.current?.id ?? "",
                                                                   id: session.id)) {
                         SessionRow(session: session, lastActivity: model.lastActivity[session.id])
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(RowButtonStyle())
                     .accessibilityIdentifier("session.\(session.id)")
-                    Divider().overlay(Theme.hairline)
                 }
 
                 localhost
             }
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
+            .padding(.bottom, 28)
         }
         .scrollBounceBehavior(.basedOnSize)
         .refreshable {
@@ -233,7 +271,7 @@ struct SessionListView: View {
     @ViewBuilder
     private var localhost: some View {
         if model.canBrowseLocalhost && !model.ports.isEmpty {
-            SectionHeader(text: "Running on the Mac")
+            SectionHeader(text: "Running on the \(model.hostPlatform.noun)")
             ForEach(model.ports) { entry in
                 Button {
                     // The tap *is* the consent: no sheet asking whether to
@@ -243,25 +281,87 @@ struct SessionListView: View {
                 } label: {
                     PortRow(entry: entry)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(RowButtonStyle())
                 .accessibilityIdentifier("port.\(entry.port)")
-                Divider().overlay(Theme.hairline)
             }
         }
     }
 
+    /**
+     * The screen when there is nothing to list — which is the screen people see
+     * when something is wrong, and therefore the one the app is judged on.
+     *
+     * Three different situations reach it and each gets its own sentence and its
+     * own action, because "no sessions" said over a dead socket is a lie by
+     * omission and "no sessions" said over a machine that granted this phone no
+     * folders sends someone looking for a bug that is a setting.
+     */
     private var empty: some View {
         ContentUnavailableView {
-            Label(model.connection.isLive ? "No sessions" : model.connection.label, systemImage: "terminal")
+            Label(emptyTitle, systemImage: emptyIcon)
         } description: {
-            Text(model.connection.isLive
-                 ? "The Mac has nothing running. \(Brand.tagline)."
-                 : model.connection.detail)
+            Text(emptyDetail)
         } actions: {
             if !model.connection.isLive && !model.connection.isTrying {
                 Button("Try again") { model.resume() }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Theme.accent)
+            } else if model.canStartSomewhere && model.connection.isLive {
+                // The empty state is where a first session gets started, so the
+                // action is here as well as in the toolbar — the toolbar's plus
+                // is a 24pt target in a corner, and this is the moment the
+                // screen is asking to be used.
+                Button("New session") { model.createSession(in: nil) }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Theme.accent)
+                    .accessibilityIdentifier("sessions.newFromEmpty")
             }
         }
+    }
+
+    private var emptyTitle: String {
+        if !model.connection.isLive { return model.connection.label }
+        return model.hasNoGrantedFolders ? "No folders shared" : "No sessions"
+    }
+
+    private var emptyIcon: String {
+        if !model.connection.isLive { return "bolt.horizontal.circle" }
+        return model.hasNoGrantedFolders ? "folder.badge.questionmark" : "terminal"
+    }
+
+    private var emptyDetail: String {
+        if !model.connection.isLive { return model.connection.detail }
+        if model.hasNoGrantedFolders {
+            // Named where the fix is. The grant is per device and it is edited
+            // on the machine, so a sentence that only said "you cannot start a
+            // session" would send someone hunting on the wrong screen.
+            return "\(model.current?.label ?? "That machine") has not shared any folders with this "
+                + "phone yet. Open the settings on the \(model.hostPlatform.noun) and choose which "
+                + "folders it may start sessions in."
+        }
+        return "The \(model.hostPlatform.noun) has nothing running. \(Brand.tagline)."
+    }
+}
+
+/**
+ * A row that answers a finger.
+ *
+ * `.plain` leaves a `NavigationLink` looking identical before, during and after
+ * a press, which on a list where every row navigates is a screen full of
+ * controls that all look inert. This is the smallest honest response: the card
+ * lightens and settles back by 1%, fast enough not to be a transition and slow
+ * enough to be seen.
+ */
+private struct RowButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(Color.white.opacity(configuration.isPressed ? 0.06 : 0))
+            }
+            .scaleEffect(configuration.isPressed ? 0.99 : 1)
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
     }
 }
 
@@ -269,7 +369,14 @@ struct SessionListView: View {
 /* Rows                                                                        */
 /* -------------------------------------------------------------------------- */
 
-/// The session this phone was last looking at, at the top, one tap away.
+/**
+ * The session this phone was last looking at, at the top, one tap away.
+ *
+ * The one place on this screen that is allowed to be blue, and that is the
+ * accent rule doing its job: there is exactly one action being suggested here,
+ * so it is the only thing tinted. Everything below it is a card the same colour
+ * as every other card.
+ */
 private struct ResumeRow: View {
     let session: RemoteSession
     let open: () -> Void
@@ -278,30 +385,53 @@ private struct ResumeRow: View {
         Button(action: open) {
             HStack(spacing: 12) {
                 Image(systemName: "arrow.uturn.backward.circle.fill")
-                    .font(.system(size: 20))
+                    .font(.system(size: 22))
                     .foregroundStyle(Theme.accent)
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 3) {
                     Text("Resume \(session.title)")
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(.white)
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(Theme.primary)
+                        .lineLimit(1)
                     Text("Where you were last")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Theme.faint)
+                        .font(.system(size: 13))
+                        .foregroundStyle(Theme.secondary)
                 }
-                Spacer(minLength: 0)
+                Spacer(minLength: 8)
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(Theme.faint)
             }
             .padding(.horizontal, 16)
-            .padding(.vertical, 12)
+            .padding(.vertical, 14)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-        .background(Theme.accent.opacity(0.08))
+        .buttonStyle(AccentRowButtonStyle())
     }
 }
 
+/// The resume card's own press state. Separate from `RowButtonStyle` because it
+/// is the tinted card and a 6% white wash over a blue tint is a different
+/// colour from a 6% wash over grey.
+private struct AccentRowButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(Theme.accent.opacity(configuration.isPressed ? 0.22 : 0.14),
+                        in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .scaleEffect(configuration.isPressed ? 0.99 : 1)
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+    }
+}
+
+/**
+ * One session.
+ *
+ * The type is the hierarchy. The name is the thing you are looking for, so it
+ * is the largest and the brightest; the folder underneath is **data**, so it is
+ * mono and dimmed, truncated from the *head* because the end of a path is what
+ * identifies it; the status line is a sentence about the row rather than the row
+ * itself, so it is quieter than both.
+ */
 private struct SessionRow: View {
     let session: RemoteSession
     let lastActivity: Double?
@@ -309,12 +439,12 @@ private struct SessionRow: View {
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             StatusDot(status: session.status)
-                .padding(.top, 6)
+                .padding(.top, 7)
 
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 6) {
                 Text(session.title)
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundStyle(.white)
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(Theme.primary)
                     .lineLimit(1)
 
                 Text(session.cwd)
@@ -328,18 +458,21 @@ private struct SessionRow: View {
                     Text(statusLine)
                         .font(.system(size: 12))
                         .foregroundStyle(Theme.secondary)
+                        .lineLimit(1)
                 }
+                .padding(.top, 1)
             }
 
             Spacer(minLength: 0)
 
             Image(systemName: "chevron.right")
-                .font(.system(size: 12, weight: .semibold))
+                .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(Theme.faint)
                 .padding(.top, 4)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 14)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
     }
 
@@ -392,9 +525,9 @@ private struct SectionHeader: View {
             .kerning(0.6)
             .foregroundStyle(Theme.faint)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 16)
-            .padding(.top, 18)
-            .padding(.bottom, 8)
+            .padding(.leading, 4)
+            .padding(.top, 14)
+            .padding(.bottom, 2)
     }
 }
 
@@ -413,13 +546,16 @@ private struct PortRow: View {
         HStack(spacing: 12) {
             Image(systemName: "globe")
                 .font(.system(size: 15))
-                .foregroundStyle(Theme.accent)
+                .foregroundStyle(Theme.secondary)
                 .frame(width: 18)
 
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 3) {
+                // Mono because it is data — a port is a number somebody typed
+                // and will type again — and it leads because it is the identity
+                // of the row.
                 Text("localhost:\(String(entry.port))")
                     .font(.system(size: 15, weight: .medium, design: .monospaced))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Theme.primary)
                     .lineLimit(1)
                 if !entry.guessed {
                     Text(entry.process)
@@ -432,11 +568,12 @@ private struct PortRow: View {
             Spacer(minLength: 0)
 
             Image(systemName: "chevron.right")
-                .font(.system(size: 12, weight: .semibold))
+                .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(Theme.faint)
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 12)
+        .padding(.vertical, 13)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
     }
 }
@@ -450,7 +587,7 @@ private struct Chip: View {
             .foregroundStyle(Theme.secondary)
             .padding(.horizontal, 7)
             .padding(.vertical, 2)
-            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 5))
+            .background(Theme.surfaceHigh, in: RoundedRectangle(cornerRadius: 5, style: .continuous))
     }
 }
 
@@ -509,7 +646,7 @@ private struct HostSwitcher: View {
                     HStack(spacing: 4) {
                         Text(model.current?.label ?? Brand.name)
                             .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(Theme.primary)
                             .lineLimit(1)
                         Image(systemName: "chevron.up.chevron.down")
                             .font(.system(size: 9, weight: .semibold))
@@ -524,7 +661,7 @@ private struct HostSwitcher: View {
             VStack(spacing: 1) {
                 Text(Brand.name)
                     .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Theme.primary)
                 ConnectionPill(state: model.connection)
             }
         }
@@ -582,16 +719,30 @@ struct ConnectionPill: View {
         .accessibilityLabel("Connection: \(state.label). \(state.detail)")
     }
 
+    /// The three semantic colours, from the same set the desktop uses for the
+    /// same meanings. Green is not the accent and must not be: the accent means
+    /// "this is the action", and a connection is a fact rather than an action.
     private var color: Color {
         switch state.phase {
-        case .online: return Color(red: 0.30, green: 0.78, blue: 0.42)
-        case .connecting, .waiting, .pending: return Color(red: 0.98, green: 0.72, blue: 0.20)
-        case .rejected, .incompatible: return Color(red: 0.90, green: 0.35, blue: 0.35)
+        case .online: return Theme.positive
+        case .connecting, .waiting, .pending: return Theme.warning
+        case .rejected, .incompatible: return Theme.critical
         case .offline: return Theme.secondary
         }
     }
 }
 
+/**
+ * The one line that says something is wrong, over the top of whatever is
+ * underneath it.
+ *
+ * On a material rather than a flat fill, and that is the one place this app
+ * genuinely wants the system's blur: the banner sits over content that scrolls
+ * beneath it, so it has to be legible without being a wall — which is exactly
+ * what a material is for. The hairline underneath stays for the same reason: it
+ * is the case where space cannot do the job, because there is no space between
+ * a floating bar and the thing sliding under it.
+ */
 struct Banner: View {
     enum Tone { case neutral, warning }
 
@@ -599,7 +750,7 @@ struct Banner: View {
     let tone: Tone
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
             Image(systemName: tone == .warning ? "exclamationmark.triangle.fill" : "info.circle")
                 .font(.system(size: 11))
             Text(text)
@@ -607,11 +758,11 @@ struct Banner: View {
                 .multilineTextAlignment(.leading)
             Spacer(minLength: 0)
         }
-        .foregroundStyle(tone == .warning ? Color(red: 0.98, green: 0.78, blue: 0.35) : Theme.secondary)
+        .foregroundStyle(tone == .warning ? Theme.warning : Theme.secondary)
         .padding(.horizontal, 16)
-        .padding(.vertical, 8)
+        .padding(.vertical, 9)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.surface)
+        .background(.ultraThinMaterial)
         .overlay(alignment: .bottom) {
             Rectangle().fill(Theme.hairline).frame(height: 0.5)
         }

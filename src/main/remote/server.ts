@@ -53,6 +53,10 @@ import type { Duplex } from 'node:stream'
 import { extname, join, normalize, resolve, sep } from 'node:path'
 import type { IpcMain } from 'electron'
 import { RemoteAuth, type Device, type PairingToken } from './device-auth'
+// Type-only, deliberately. The store is built by `index.ts` and handed to
+// `registerRemoteIpc`; importing the class here would put a second constructor
+// for the same file in the one module that must not own it.
+import type { DeviceFolderGrant, FolderGrants } from './folder-grants'
 import {
   CAPABILITIES,
   CAPABILITY,
@@ -83,8 +87,13 @@ import {
   type UploadDesk,
   type UploadMessage,
 } from './uploads'
+// Type-only, like `FolderGrants` above and for the same reason: the proxy is
+// built by `index.ts`, which needs it before this function is called — the
+// session spawn path closes over it — so constructing one here would give the
+// sockets a different object from the one sessions are keyed against.
+import type { CredentialMessage, CredentialProxy } from './credentials'
 import { scanDevPortsDetailed } from '../dev-ports'
-import { machineNoun } from '../platform/host'
+import { currentPlatform, machineNoun } from '../platform/host'
 import { createRelayClient, relayEnabled, relayUrl, type RelayLink, type RelayState } from './relay-client'
 import { loadHostIdentity } from './host-identity'
 import { tailnetStatus, type TailnetStatus } from './tailnet'
@@ -118,6 +127,22 @@ export interface SessionHandle {
  * project list.
  */
 export interface CreateRequest {
+  /**
+   * Which device is asking. Not optional, and that is the point.
+   *
+   * The connection has known this since `hello` — a device only has an id after
+   * `RemoteAuth` matched its credential and a human approved it — and for a long
+   * time the request travelled down to the session layer without it. So the only
+   * question that layer could answer was "will this desktop start a session in
+   * that folder", never "will it start one for *this phone*", and every paired
+   * device necessarily got the same answer. Required rather than optional so the
+   * compiler asks at each call site instead of a reviewer having to notice.
+   *
+   * It is this server's word, taken from the authenticated connection, and never
+   * a field off the wire. A device id a client could name would be a client
+   * choosing whose folders it gets.
+   */
+  deviceId: string
   cwd?: string
   cols?: number
   rows?: number
@@ -172,6 +197,21 @@ export interface SessionAccess {
    * spawns anything, and both of those are `execFile`.
    */
   create?(request: CreateRequest): Promise<CreateOutcome>
+  /**
+   * The folders one device may start a session in, most relevant first.
+   *
+   * Sent to the device on `welcome` and again whenever the list changes, so its
+   * picker offers what it may use rather than a set it inferred. This is the
+   * *same* call `create` checks against — `remoteSessionStart` in
+   * `session-create.ts` hands both out of one starter — because a picker built
+   * from a second source is a picker that eventually offers a folder the rule
+   * refuses, which is unexplainable from a phone.
+   *
+   * Optional alongside `create` and absent with it: a host that cannot start
+   * sessions has no list to advertise, and one that can must be able to say what
+   * is on it.
+   */
+  folders?(deviceId: string): string[]
 }
 
 /**
@@ -287,6 +327,22 @@ export interface RemoteEndpointOptions {
    * feature nobody has used is litter in somebody's Downloads.
    */
   uploadsDir?: string
+  /**
+   * Where a git login is asked for. **Absent is the switch**, as everywhere else.
+   *
+   * A host with no proxy does not advertise the `credential` capability, so a
+   * client never draws a GitHub screen for it and this server never sends it a
+   * frame it would have to ignore — the same negotiation `uploadsDir` and
+   * `SessionAccess.create` get.
+   *
+   * The direction of this one is the other way round from every other capability
+   * and that is the interesting part: nothing here *serves* a verb. This server
+   * holds the sockets, so it is the only thing that can put a question to a
+   * device, and the proxy is the only thing that knows which question. Handing
+   * it {@link DevicePost} at construction is how those two facts are joined
+   * without either module importing the other.
+   */
+  credentials?: CredentialProxy
 }
 
 export interface RemoteEndpoint {
@@ -304,6 +360,12 @@ export interface RemoteEndpoint {
   connections(): RemoteConnection[]
   /** Close every socket held by one device. Returns how many were dropped. */
   dropDevice(deviceId: string): number
+  /**
+   * Send one device its folder list again, because it changed on the desktop.
+   * Returns how many of its connections were told, which is zero when it is not
+   * connected — a normal outcome, not a failure.
+   */
+  foldersChanged(deviceId: string): number
   /** Close one socket, leaving the device paired. False when it had already gone. */
   dropConnection(connectionId: string): boolean
   /** End one localhost tunnel from the Mac. False when it had already gone. */
@@ -372,6 +434,8 @@ export interface RemoteServer {
   url(): string | null
   connections(): RemoteConnection[]
   dropDevice(deviceId: string): number
+  /** Re-send one device's folder list. Zero when it is not connected. */
+  foldersChanged(deviceId: string): number
   dropConnection(connectionId: string): boolean
   stopTunnel(connectionId: string, tunnelId: string): boolean
   status(): RemoteStatus
@@ -827,6 +891,15 @@ interface LiveConnection {
   platform: string
   /** Proved by the carrier's own handshake, before any of this ran. Null on the tailnet. */
   peerPublicKey: Buffer | null
+  /**
+   * What this client said it can do, from `hello`.
+   *
+   * Read before anything is *sent* to it, never before something is accepted
+   * from it: a claim here grants nothing, it only stops this server from putting
+   * a question to a client that has no code to answer it — which would be a
+   * request that times out instead of one that was never asked.
+   */
+  capabilities: string[]
   handles: Map<string, SessionHandle>
   /**
    * Made on the first `localhost` verb and not before.
@@ -942,6 +1015,10 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
     // thing that decides whether it is offered. A host with nowhere to put a file
     // must not draw a Send File button on somebody's phone.
     if (name === CAPABILITY.upload) return typeof options.uploadsDir === 'string' && options.uploadsDir !== ''
+    // Same rule again. A host with no proxy would otherwise tell a phone it may
+    // be asked for a GitHub login and then never ask, which is a screen in
+    // somebody's app for a thing that cannot happen.
+    if (name === CAPABILITY.credential) return options.credentials !== undefined
     return true
   })
 
@@ -1212,6 +1289,11 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
     // what the device called itself when it paired, and this is the phone in
     // front of you now. It is display text either way.
     connection.platform = message.device.platform
+    // Absent means "nothing past version 1", which is what every client shipped
+    // before the field says. Empty rather than a guess: the one thing this list
+    // decides is what gets *sent*, and inventing a capability for a client that
+    // did not claim one is how a request ends up waiting on code that is not there.
+    connection.capabilities = message.capabilities ?? []
     if (connection.helloTimer) clearTimeout(connection.helloTimer)
     connection.helloTimer = null
     connection.wire.startHeartbeat?.(pingIntervalMs)
@@ -1224,8 +1306,46 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
       token: outcome.credential,
       sessions: options.sessions.list(),
       capabilities: advertised,
+      hostPlatform: currentPlatform(),
+      // Spread rather than sent as `undefined`, so a host that cannot start
+      // sessions sends no key at all — the same shape a desktop from before this
+      // field sends, which is what an older client is already correct about.
+      ...foldersFrame(outcome.deviceId),
     })
     announce()
+  }
+
+  /**
+   * This device's folder list, in the shape a message spreads.
+   *
+   * One helper because two frames carry it — the `welcome` above and the push
+   * below — and they must not be able to disagree about what "no list" looks
+   * like on the wire.
+   */
+  function foldersFrame(deviceId: string): { folders?: string[] } {
+    const list = options.sessions.folders?.(deviceId)
+    return list ? { folders: list } : {}
+  }
+
+  /**
+   * Tell one device its folders changed, without waiting for it to reconnect.
+   *
+   * Driven by the settings panel: a person removing a folder on the desktop
+   * expects the phone in their other hand to stop offering it. The *rule* is
+   * already live without this — `folders()` is consulted on every `create` — so
+   * this only keeps the picker honest, which is why a device with no live
+   * connection is not an error and simply counts zero.
+   */
+  function tellFolders(deviceId: string): number {
+    let told = 0
+    for (const connection of live.values()) {
+      if (connection.deviceId !== deviceId) continue
+      const frame = foldersFrame(deviceId)
+      if (frame.folders === undefined) continue
+      send(connection, { t: 'folders', folders: frame.folders })
+      told += 1
+    }
+    return told
   }
 
   /**
@@ -1247,7 +1367,16 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
    * cannot name anything the desktop has not already offered it — see
    * `CreateRequest`.
    */
-  async function create(connection: LiveConnection, message: Extract<ClientMessage, { t: 'create' }>): Promise<void> {
+  async function create(
+    connection: LiveConnection,
+    // Passed in rather than read off `connection` inside, because this is the
+    // one value here that decides whose folders apply and it must come from the
+    // authenticated connection at the call site — `onMessage` has already
+    // refused anything with no device id, and taking it there means this
+    // function cannot be called with a device this socket did not prove it is.
+    deviceId: string,
+    message: Extract<ClientMessage, { t: 'create' }>,
+  ): Promise<void> {
     const start = options.sessions.create
     if (!start) {
       send(connection, {
@@ -1270,7 +1399,7 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
     connection.creating = true
     let outcome: CreateOutcome
     try {
-      outcome = await start({ cwd: message.cwd, cols: message.cols, rows: message.rows })
+      outcome = await start({ deviceId, cwd: message.cwd, cols: message.cols, rows: message.rows })
     } finally {
       connection.creating = false
     }
@@ -1384,7 +1513,10 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
         // not stop reading for the length of a spawn. A rejection is impossible
         // by contract and caught anyway — an unhandled rejection on this path
         // would be a main process that exits while a phone is holding a shell.
-        void create(connection, message).catch((error) => {
+        // `connection.deviceId` is a `string` here and not `string | null`: the
+        // guard at the top of this function returned for anything that had not
+        // said hello, and nothing between reassigns it.
+        void create(connection, connection.deviceId, message).catch((error) => {
           console.error('[remote] create failed:', error)
           if (!live.has(connection.id)) return
           send(connection, {
@@ -1426,6 +1558,31 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
         desk.handle(message satisfies UploadMessage)
         return
       }
+      case 'credential.ack':
+      case 'credential.answer':
+      case 'credential.deny': {
+        const proxy = options.credentials
+        if (!proxy) {
+          // Refused rather than dropped, for the same reason `create` is: a
+          // client answering a question this host never asked is not a client of
+          // ours. It is also the one refusal here that cannot be answered on the
+          // feature's own id, because without a proxy there is no request to
+          // name.
+          send(connection, {
+            t: 'error',
+            code: 'unauthorized',
+            message: 'Nothing here asked this device for a login.',
+          })
+          return
+        }
+        // `connection.deviceId` is a `string` here and not `string | null`: the
+        // guard at the top of this function returned for anything that had not
+        // said hello. Passing it rather than letting the desk read it off a
+        // connection is the same argument `create` makes — whose answer this is
+        // must come from the authenticated socket, never from the frame.
+        proxy.handle(connection.deviceId, message satisfies CredentialMessage)
+        return
+      }
     }
   }
 
@@ -1456,6 +1613,7 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
       deviceName: '',
       platform: '',
       peerPublicKey: peerPublicKey ?? null,
+      capabilities: [],
       handles: new Map(),
       tunnels: null,
       uploads: null,
@@ -1470,9 +1628,17 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
         if (!live.delete(connection.id)) return
         if (connection.helloTimer) clearTimeout(connection.helloTimer)
         connection.helloTimer = null
-        const wasAuthenticated = connection.deviceId !== null
+        const deviceId = connection.deviceId
         detachAll(connection)
-        if (wasAuthenticated) announce()
+        if (deviceId !== null) {
+          // After the delete above, so the proxy's own "is it still reachable"
+          // check cannot see the socket that has just gone. A git waiting on a
+          // phone that closed its app is the case this exists for: without it the
+          // request would sit until a timer expired rather than failing the
+          // moment the last way to reach that device disappeared.
+          options.credentials?.connectionClosed(deviceId)
+          announce()
+        }
       },
     })
 
@@ -1537,12 +1703,53 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
     })
   }
 
+  /**
+   * How the credential proxy reaches a device: every live socket it has that
+   * said it can answer.
+   *
+   * Every socket rather than one, because a person can have the app open on a
+   * phone and a tablet and either may be the one in their hand. Whichever
+   * answers first wins and the desk drops the rest, which is the same shape as
+   * the prompt itself — one question, several places it can be seen.
+   *
+   * The capability check is what keeps this from being a hang: a client that has
+   * never heard of `credential.request` is not counted as reachable, so a push
+   * from a device running an older app is refused in milliseconds with a sentence
+   * instead of waiting out a deadline for code that does not exist.
+   */
+  function canAnswer(connection: LiveConnection, deviceId: string): boolean {
+    return connection.deviceId === deviceId && connection.capabilities.includes(CAPABILITY.credential)
+  }
+
+  options.credentials?.serve({
+    ask(deviceId: string, message: ServerMessage): number {
+      let heard = 0
+      for (const connection of live.values()) {
+        if (!canAnswer(connection, deviceId)) continue
+        send(connection, message)
+        heard += 1
+      }
+      return heard
+    },
+    reachable(deviceId: string): boolean {
+      for (const connection of live.values()) {
+        if (canAnswer(connection, deviceId)) return true
+      }
+      return false
+    },
+  })
+
   return {
     handleRequest,
     handleUpgrade,
     attachTransport,
     connections: publicConnections,
     dropDevice(deviceId: string): number {
+      // Before the sockets go, so anything waiting on this device is answered
+      // with "no longer allowed" rather than with "not reachable" — a revoke and
+      // a phone in a tunnel are different facts and the person at the terminal
+      // is owed the right one.
+      options.credentials?.forget(deviceId)
       sweep += 1
       sweptAt.set(deviceId, sweep)
       // Bounded: only a revoke reaches here, and the trust store caps devices
@@ -1562,6 +1769,7 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
       }
       return dropped
     },
+    foldersChanged: tellFolders,
     dropConnection(connectionId: string): boolean {
       const connection = live.get(connectionId)
       // Not a revoke: the device stays paired and may connect again. This is
@@ -1983,6 +2191,9 @@ export function createRemoteServer(options: RemoteServerOptions): RemoteServer {
     url: () => current?.url ?? null,
     connections: () => endpoint?.connections() ?? [],
     dropDevice: (deviceId) => endpoint?.dropDevice(deviceId) ?? 0,
+    // Nothing to tell when the server is not up: the device is not connected,
+    // and it reads the new list in its `welcome` the next time it is.
+    foldersChanged: (deviceId) => endpoint?.foldersChanged(deviceId) ?? 0,
     dropConnection: (connectionId) => endpoint?.dropConnection(connectionId) ?? false,
     stopTunnel: (connectionId, tunnelId) => endpoint?.stopTunnel(connectionId, tunnelId) ?? false,
     status: snapshot,
@@ -1998,6 +2209,18 @@ export const REMOTE_CONNECTIONS_CHANNEL = 'remote:connections'
 
 export interface RemoteIpcDeps {
   sessions: SessionAccess
+  /**
+   * Which folders each device may start a session in.
+   *
+   * Passed in rather than constructed here, even though the trust store beside
+   * it is constructed here, and the reason is which end of the app reads it.
+   * `index.ts` needs this object *before* this function is called — the folder
+   * rule it hands to `SessionFanout` closes over it — so building a second one
+   * here would give the panel a store that writes the same file as the one
+   * sessions are checked against and holds a different copy of it in memory. One
+   * instance, owned by the caller that needs it first.
+   */
+  folders: FolderGrants
   /** Built PWA directory. */
   webRoot: string
   /** Directory for the device trust file and the certificate pair, under userData. */
@@ -2012,6 +2235,15 @@ export interface RemoteIpcDeps {
    * Absent means this host does not offer the capability at all.
    */
   uploadsDir?: string
+  /**
+   * The GitHub credential proxy, when this build has one running.
+   *
+   * Passed in for the same reason `folders` is: `index.ts` needs it *before* this
+   * function is called, because the session spawn path closes over it to put a
+   * key into each guest session's environment. Building a second one here would
+   * mean sockets routed to one desk and sessions keyed against another.
+   */
+  credentials?: CredentialProxy
   port?: number
   /** Push an event at the renderer. `index.ts` already has exactly this function. */
   broadcast(channel: string, payload: unknown): void
@@ -2165,6 +2397,7 @@ export function registerRemoteIpc(ipcMain: IpcMain, deps: RemoteIpcDeps): Remote
     webRoot: deps.webRoot,
     certDir: deps.storageDir,
     ...(deps.uploadsDir ? { uploadsDir: deps.uploadsDir } : {}),
+    ...(deps.credentials ? { credentials: deps.credentials } : {}),
     port: deps.port,
     onConnections: (connections) => deps.broadcast(REMOTE_CONNECTIONS_CHANNEL, connections),
     ...(relay ? { relay } : {}),
@@ -2243,9 +2476,41 @@ export function registerRemoteIpc(ipcMain: IpcMain, deps: RemoteIpcDeps): Remote
       // the phone that is already attached has to lose the socket it is
       // holding, now.
       server.dropDevice(id)
+      // And its folder list goes with it. Revocation is permanent — a returning
+      // phone pairs again and is issued a *new* device id — so the row left
+      // behind could never be reached by anything again.
+      deps.folders.forget(id)
     }
     return auth.listDevices()
   })
+
+  /**
+   * Which folders each device may use, and the one write that changes them.
+   *
+   * Both answer with the whole list, the same way the device channels above
+   * answer with the whole roster: the panel then renders what the main process
+   * says rather than what it just asked for, which is the rule this screen is
+   * built on — nothing on it may claim an outcome it has not read back.
+   *
+   * Devices with no chosen list simply do not appear. That is the fallback
+   * state, and inventing a row for it here would make "not chosen" and "chosen,
+   * and it happens to be everything this desktop has open" look identical in
+   * the panel when they behave differently the moment a project is closed.
+   */
+  ipcMain.handle('remote:folders', (): DeviceFolderGrant[] => deps.folders.list())
+  ipcMain.handle(
+    'remote:folders:set',
+    (_event, id: unknown, folders: unknown): DeviceFolderGrant[] => {
+      if (typeof id !== 'string' || !Array.isArray(folders)) return deps.folders.list()
+      deps.folders.set(id, folders)
+      // The rule is already live for the next request — `folders()` is read per
+      // `create` — so this is only about the picker on the phone, which would
+      // otherwise keep offering a folder that has been taken away until someone
+      // reconnected it.
+      server.foldersChanged(id)
+      return deps.folders.list()
+    },
+  )
 
   return { server, auth }
 }

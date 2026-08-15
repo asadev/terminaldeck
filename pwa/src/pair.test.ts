@@ -8,6 +8,7 @@ import {
   saveCredential,
   takePairToken,
   type StorageLike,
+  type StoredCredential,
 } from './pair'
 
 function memoryStorage(initial: Record<string, string> = {}): StorageLike & { data: Record<string, string> } {
@@ -90,7 +91,13 @@ describe('taking the token out of the URL', () => {
 })
 
 describe('the stored credential', () => {
-  const credential = { token: 'dev-1.c2VjcmV0', deviceId: 'dev-1', deviceName: 'iPhone', pairedAt: 1_700_000_000_000 }
+  const credential: StoredCredential = {
+    token: 'dev-1.c2VjcmV0',
+    deviceId: 'dev-1',
+    deviceName: 'iPhone',
+    pairedAt: 1_700_000_000_000,
+    hostPlatform: 'windows',
+  }
 
   it('round-trips', () => {
     const storage = memoryStorage()
@@ -121,6 +128,37 @@ describe('the stored credential', () => {
     const storage = memoryStorage({ [CREDENTIAL_KEY]: '{"token":"a.b","deviceId":"a"}' })
     expect(loadCredential(storage)?.deviceName).toBe('This device')
     expect(loadCredential(storage)?.pairedAt).toBe(0)
+  })
+
+  /*
+   * A credential written before `hostPlatform` existed, and a credential
+   * carrying nonsense in it, must both read as "I do not know what that
+   * machine is" — never as a Mac.
+   *
+   * This is the same defect as the wire one, moved into storage: the very
+   * first thing the session list paints after a relaunch is drawn from this
+   * record, before any socket is up, so a wrong answer here is on screen for
+   * as long as the handshake takes.
+   */
+  it('reads an absent or unrecognisable platform as unknown, never as a Mac', () => {
+    expect(loadCredential(memoryStorage({ [CREDENTIAL_KEY]: '{"token":"a.b","deviceId":"a"}' }))?.hostPlatform).toBe(
+      'unknown',
+    )
+    // `"darwin"` is in this list on purpose: it is the *wire* word, and nothing
+    // this client writes to storage ever spells it that way. Accepting it here
+    // would mean the two vocabularies had been merged again.
+    for (const value of ['"darwin"', '"win32"', '"MAC"', '""', '42', 'null', 'true', '{}']) {
+      const raw = `{"token":"a.b","deviceId":"a","hostPlatform":${value}}`
+      expect(loadCredential(memoryStorage({ [CREDENTIAL_KEY]: raw }))?.hostPlatform).toBe('unknown')
+    }
+  })
+
+  it('remembers which kind of machine the credential is for', () => {
+    const storage = memoryStorage()
+    saveCredential(storage, { ...credential, hostPlatform: 'windows' })
+    expect(loadCredential(storage)?.hostPlatform).toBe('windows')
+    saveCredential(storage, { ...credential, hostPlatform: 'mac' })
+    expect(loadCredential(storage)?.hostPlatform).toBe('mac')
   })
 
   it('reads as unpaired when storage itself refuses', () => {

@@ -85,7 +85,7 @@ struct PairingView: View {
         VStack(alignment: .leading, spacing: 6) {
             Text(adding ? "Pair another machine" : "Pair with your Mac")
                 .font(.system(size: 26, weight: .semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(Theme.primary)
             Text(adding
                  // "Machine", not "Mac". The protocol is OS-agnostic and a phone
                  // genuinely cannot tell one from the other — telling somebody
@@ -110,15 +110,18 @@ struct PairingView: View {
             TextField("terminaldeck://pair?…", text: $typed, axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(.system(size: 13, design: .monospaced))
-                .foregroundStyle(.white)
+                .foregroundStyle(Theme.primary)
                 .lineLimit(1 ... 3)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .focused($typing)
                 .accessibilityIdentifier("pairing.field")
                 .padding(12)
-                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 10))
-                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.hairline))
+                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                // The one border on this screen, and it earns it: a text field
+                // with no edge on a dark background is indistinguishable from a
+                // paragraph until it is tapped.
+                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Theme.hairline))
 
             HStack(spacing: 10) {
                 Button {
@@ -127,24 +130,49 @@ struct PairingView: View {
                     if let text = UIPasteboard.general.string { typed = text }
                 } label: {
                     Label("Paste", systemImage: "doc.on.clipboard")
-                        .font(.system(size: 14, weight: .medium))
+                        .font(.system(size: 15, weight: .medium))
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
+                        .padding(.vertical, 11)
                 }
-                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 10))
+                .foregroundStyle(Theme.primary)
+                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
 
                 Button {
                     typing = false
                     model.pair(with: typed)
                 } label: {
-                    Label(model.isPairing ? "Pairing…" : "Pair", systemImage: "link")
-                        .font(.system(size: 14, weight: .semibold))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
+                    HStack(spacing: 7) {
+                        // A spinner rather than the word alone. Redeeming a code
+                        // is a round trip to a machine over a relay, and a button
+                        // whose only sign of life is a changed caption reads as
+                        // one that has stuck.
+                        if model.isPairing {
+                            ProgressView()
+                                .controlSize(.small)
+                                .tint(Theme.onAccent)
+                        } else {
+                            Image(systemName: "link")
+                        }
+                        Text(model.isPairing ? "Pairing…" : "Pair")
+                    }
+                    .font(.system(size: 15, weight: .semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 11)
                 }
-                .background(Theme.accent.opacity(typed.isEmpty ? 0.3 : 1),
-                            in: RoundedRectangle(cornerRadius: 10))
-                .foregroundStyle(.white)
+                // Dimmed rather than greyed: this is the primary action and it
+                // has to stay recognisable as the blue one while it is waiting
+                // for something to be typed.
+                //
+                // The ink changes with it, and that is not decoration. On the
+                // full-strength blue the label is near-black — see
+                // `Theme.onAccent` — but near-black on a blue at a third
+                // strength is a dark grey on a dark navy, which rendered as an
+                // unreadable button on the pairing screen. So the disabled state
+                // takes secondary ink instead, which is what a disabled control
+                // should read as anyway.
+                .background(Theme.accent.opacity(typed.isEmpty ? 0.28 : 1),
+                            in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .foregroundStyle(typed.isEmpty ? Theme.secondary : Theme.onAccent)
                 .accessibilityIdentifier("pairing.submit")
                 .disabled(typed.isEmpty || model.isPairing)
             }
@@ -162,7 +190,7 @@ struct PairingView: View {
                 .textCase(.uppercase)
             Text(model.deviceName)
                 .font(.system(size: 14))
-                .foregroundStyle(.white)
+                .foregroundStyle(Theme.primary)
             Text(model.deviceFingerprint)
                 .font(.system(size: 13, design: .monospaced))
                 .foregroundStyle(Theme.secondary)
@@ -222,12 +250,12 @@ struct PendingApprovalView: View {
                 } else {
                     Image(systemName: "exclamationmark.triangle")
                         .font(.system(size: 34))
-                        .foregroundStyle(Color(red: 0.98, green: 0.72, blue: 0.20))
+                        .foregroundStyle(Theme.warning)
                 }
 
                 Text(reached ? "Waiting for approval" : "Cannot reach that Mac")
                     .font(.system(size: 22, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Theme.primary)
                     .accessibilityIdentifier("pending.title")
 
                 // The desktop's own sentence when there is one — it is the only
@@ -242,9 +270,12 @@ struct PendingApprovalView: View {
                     .accessibilityIdentifier("pending.detail")
 
                 if !reached {
-                    Text("This device is paired but has not been approved yet, and the Mac is not "
-                         + "answering. Approving it will not help until the two can reach each other — "
-                         + "check that the Mac is awake and that Terminal Deck is running on it.")
+                    // `Brand.name` rather than the words: this file is not the
+                    // one place the product is allowed to be spelled out, and it
+                    // had quietly become a second one.
+                    Text("This device is paired but has not been approved yet, and the machine is "
+                         + "not answering. Approving it will not help until the two can reach each "
+                         + "other — check that it is awake and that \(Brand.name) is running on it.")
                         .font(.system(size: 13))
                         .foregroundStyle(Theme.faint)
                         .multilineTextAlignment(.center)
@@ -253,7 +284,7 @@ struct PendingApprovalView: View {
                 VStack(spacing: 4) {
                     Text(model.deviceName)
                         .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Theme.primary)
                     Text(model.deviceFingerprint)
                         .font(.system(size: 13, design: .monospaced))
                         .foregroundStyle(Theme.secondary)
@@ -291,7 +322,7 @@ struct PendingApprovalView: View {
                         .padding(.vertical, 10)
                         .background(Theme.surface, in: RoundedRectangle(cornerRadius: 10))
                 }
-                .foregroundStyle(.white)
+                .foregroundStyle(Theme.primary)
             }
             .padding(24)
         }

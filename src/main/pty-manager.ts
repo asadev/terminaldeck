@@ -3,7 +3,7 @@ import { basename } from 'node:path'
 import * as pty from 'node-pty'
 import { BRAND } from '../shared/brand'
 import { stripInheritedSessionEnv } from './session-env'
-import { currentPlatform, withPath } from './platform/host'
+import { currentPlatform, isWindows, withPath } from './platform/host'
 import type { CreateSessionInput, ProviderId, SessionMeta, SessionStatus } from '../shared/types'
 import { ActivityTracker } from './session-activity'
 
@@ -15,6 +15,36 @@ export interface SpawnSpec {
   path: string
   /** Extra environment, e.g. a profile's redirected config directory. */
   env?: Record<string, string>
+  /**
+   * Variables to take away from the session rather than set on it.
+   *
+   * Spreading an object can only add, and for a session started from somebody
+   * else's device the load-bearing half is subtraction: `SSH_AUTH_SOCK` and
+   * `GH_TOKEN` have to be *gone*, not blank. The difference is not pedantic —
+   * `ssh` reading an empty agent path is a different failure from `ssh` with no
+   * agent at all, and a `gh` handed an empty token reports being signed in as
+   * nobody rather than being signed out. `git-guest.ts` says which variables and
+   * why each one is on the list.
+   */
+  removeEnv?: readonly string[]
+  /**
+   * Where the operating-system process starts, when that is not the session's
+   * own folder.
+   *
+   * There is exactly one case, and it is not a nicety. A session inside WSL has
+   * a Linux `cwd` — `/home/asad/proj` — and node-pty on Windows runs
+   * `path.resolve(cwd)` before handing it to ConPTY (read in
+   * `windowsPtyAgent.js` in the installed copy: `cwd = path.resolve(cwd)`, then
+   * `startProcess(file, commandLine, env, cwd, …)`). `path.win32.resolve` turns
+   * that into `C:\home\asad\proj`, which does not exist, so the process is never
+   * created and the tab dies with nothing printed in it. The directory the
+   * session actually runs in travels in `wsl.exe --cd` instead, and this is the
+   * harmless Windows directory the launcher itself starts in.
+   *
+   * `meta.cwd` is still the session's real folder. This is about the process,
+   * not about the session.
+   */
+  hostCwd?: string
 }
 
 interface Session {
@@ -40,6 +70,59 @@ export class PtyManager {
     private readonly onStatus: (id: string, status: SessionStatus) => void,
   ) {}
 
+  /**
+   * The environment one session runs with.
+   *
+   * Order is the whole of it, and the last step is the only one that could not
+   * be written as a spread:
+   *
+   *  1. Not `process.env` directly: if this app was launched from inside an
+   *     agent session, its markers are in here and the CLI would treat the new
+   *     session as a child — which turns transcript saving off, and chat mode
+   *     and cost both read those transcripts.
+   *  2. A GUI app inherits a minimal PATH; use the login shell's instead so CLIs
+   *     installed via nvm/Homebrew/~/.local/bin resolve. Written through
+   *     `withPath` rather than as a literal `PATH:` key — Windows spells the
+   *     variable `Path`, and a spread copy would hand the child both spellings
+   *     with no defined winner. `platform/host.ts` documents it.
+   *  3. A profile redirects the agent's config dir, which is what actually keeps
+   *     two logins apart. Applied after the inherited environment so it wins.
+   *  4. Then the removals, **last**, so that taking a variable away is final. A
+   *     deletion that ran before the spreads would be undone by the copy of
+   *     `process.env` they are built from, which is exactly where the variable
+   *     being removed came from in the first place.
+   */
+  private environmentFor(id: string, spawnSpec: SpawnSpec): Record<string, string> {
+    const env: Record<string, string> = {
+      ...withPath(
+        stripInheritedSessionEnv(process.env, BRAND.sessionEnvVar),
+        spawnSpec.path,
+        currentPlatform(),
+      ),
+      ...(spawnSpec.env ?? {}),
+      [BRAND.sessionEnvVar]: id,
+      TERM: 'xterm-256color',
+      COLORTERM: 'truecolor',
+    }
+    const doomed = spawnSpec.removeEnv ?? []
+    if (doomed.length === 0) return env
+    // Windows environment names are case-insensitive, so `Gh_Token` and
+    // `GH_TOKEN` are one variable there and deleting only the spelling we were
+    // handed would leave the other one behind holding the same token. On POSIX
+    // they genuinely are two variables and an exact match is the only correct
+    // answer — folding case there would let a request to remove `PATH` take
+    // `Path` with it.
+    if (isWindows(currentPlatform())) {
+      const folded = new Set(doomed.map((name) => name.toLowerCase()))
+      for (const name of Object.keys(env)) {
+        if (folded.has(name.toLowerCase())) delete env[name]
+      }
+      return env
+    }
+    for (const name of doomed) delete env[name]
+    return env
+  }
+
   create(input: CreateSessionInput, spawnSpec: SpawnSpec): SessionMeta {
     const id = randomUUID()
     const meta: SessionMeta = {
@@ -57,34 +140,20 @@ export class PtyManager {
       resumed: input.resume === true,
     }
 
+    // Built before the spawn rather than inline, because one step of it is a
+    // deletion and an object literal has no way to say that. Everything the
+    // literal used to do happens here in the same order; only the `removeEnv`
+    // pass at the end is new.
+    const env = this.environmentFor(id, spawnSpec)
+
     const proc = pty.spawn(spawnSpec.command, spawnSpec.args, {
       name: 'xterm-256color',
       cols: input.cols,
       rows: input.rows,
-      cwd: input.cwd,
-      env: {
-        // Not `process.env` directly: if this app was launched from inside an
-        // agent session, its markers are in here and the CLI would treat the
-        // new session as a child — which turns transcript saving off, and
-        // chat mode and cost both read those transcripts.
-        //
-        // A GUI app inherits a minimal PATH; use the login shell's instead so
-        // CLIs installed via nvm/Homebrew/~/.local/bin resolve. Written through
-        // `withPath` rather than as a literal `PATH:` key — Windows spells the
-        // variable `Path`, and a spread copy would hand the child both
-        // spellings with no defined winner. `platform/host.ts` documents it.
-        ...withPath(
-          stripInheritedSessionEnv(process.env, BRAND.sessionEnvVar),
-          spawnSpec.path,
-          currentPlatform(),
-        ),
-        // A profile redirects the agent's config dir, which is what actually
-        // keeps two logins apart. Applied last so it wins.
-        ...(spawnSpec.env ?? {}),
-        [BRAND.sessionEnvVar]: id,
-        TERM: 'xterm-256color',
-        COLORTERM: 'truecolor',
-      },
+      // The *process's* directory, which is the session's folder in every case
+      // but one. See `hostCwd`.
+      cwd: spawnSpec.hostCwd ?? input.cwd,
+      env,
     })
 
     const activity = new ActivityTracker(id, this.onStatus, input.cols, input.rows)

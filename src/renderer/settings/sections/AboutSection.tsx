@@ -67,6 +67,20 @@ export function AboutSection({ bridge }: SectionProps) {
     }
   }, [bridge])
 
+  /*
+   * Whether pressing the button could possibly do anything.
+   *
+   * `checkable` is the main process's answer to "is this a packaged app with an
+   * update feed beside it", and on a build run from source it is false. The
+   * button used to be drawn live regardless — full opacity, pointer cursor,
+   * twenty pixels above its own sentence explaining that there is nothing to
+   * update — and pressing it re-set the note to the string already on screen,
+   * so nothing at all changed. A hover state is a promise; this one had nothing
+   * behind it. The reason is left in the notice underneath, where it already
+   * was, and the button now matches it.
+   */
+  const checkable = about?.updates?.checkable ?? false
+
   const check = useCallback(() => {
     if (!about?.updates) {
       setUpdateNote('This build cannot tell whether an update exists.')
@@ -134,7 +148,9 @@ export function AboutSection({ bridge }: SectionProps) {
 
       <Group title="Updates">
         <div className="settings-actions">
-          <Button onClick={check}>Check for updates</Button>
+          <Button onClick={check} disabled={about !== null && !checkable}>
+            Check for updates
+          </Button>
           {releases && <LinkOut href={releases}>Releases</LinkOut>}
         </div>
         <Notice tone="info">

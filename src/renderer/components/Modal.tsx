@@ -24,11 +24,20 @@ interface Props {
   /** Right-aligned action row. Omit for a dialog with no actions. */
   footer?: ReactNode
   /**
-   * `md` and `lg` are dialogs. `page` fills the window with no scrim and no
-   * corners — for a surface you sit in rather than answer, which is what
-   * Settings is.
+   * All three are dialogs; they differ only in how much room they take.
+   *
+   * `xl` is the large sheet Settings sits in. It replaced a `page` size that
+   * filled the window edge to edge with no scrim and no corners — which looked
+   * like navigating away rather than opening something, so pressing ⌘, felt
+   * like leaving your work rather than glancing at a panel over it. Closing it
+   * has to put you back exactly where you were, and the surest way to promise
+   * that is to never take the window away in the first place: the workspace
+   * stays visible around the sheet the whole time.
+   *
+   * An `xl` body is handed over with no padding — what goes in it is expected
+   * to be a layout of its own, with its own scrolling regions.
    */
-  size?: 'md' | 'lg' | 'page'
+  size?: 'md' | 'lg' | 'xl'
 }
 
 /**

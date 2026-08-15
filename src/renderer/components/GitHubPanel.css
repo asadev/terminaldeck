@@ -92,10 +92,21 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* Something is waiting on *this* project, not just somewhere in the account —
-   which is exactly what --status-input names elsewhere in the app. */
+/*
+  Something is waiting on *this* project, not just somewhere in the account.
+
+  It used to paint `--status-input`, on the reasoning that the token means
+  "act now". It does — for a *session*: it is the colour of the dot that says an
+  agent has asked you a question, and it is a pure orange (hue 28). Borrowing a
+  session-status token for a notification count put the loudest warm colour in
+  the palette on a GitHub unread badge, in an app whose only colour is meant to
+  be one blue, and it said "something is wrong" where the truth is "there is
+  something here for you". The accent is exactly the colour for that, and it is
+  the same colour the rest of the window uses to mean "this is the thing to
+  act on".
+*/
 .gh-bell[data-mine='true'] {
-  color: var(--status-input);
+  color: var(--accent);
 }
 
 .gh-refresh {
@@ -523,4 +534,410 @@
     flex-wrap: wrap;
     max-width: 100%;
   }
+}
+
+/* ============================================================================
+   The connection — who you are signed in as, and how you got that way.
+
+   Two blocks, and they never appear together: `.gh-conn` is the strip above a
+   working page, `.gh-device` is the whole page while GitHub waits for a code.
+
+   Type follows the house treatment for an option that needs a paragraph: the
+   title in the bright ink, the explanation a step down and a step quieter, and
+   real space between them rather than a tighter line-height. The whole point of
+   this panel is that somebody who has never seen it can read what it is doing,
+   so nothing here is smaller than a footnote and nothing is a bare icon.
+   ============================================================================ */
+
+.gh-conn {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  flex-shrink: 0;
+  max-width: 60rem;
+  margin-bottom: var(--sp-5);
+  padding: var(--sp-4);
+  border-radius: var(--radius-lg);
+  /* The one filled surface on the page. It earns it: this is the block that
+     answers "what is this app doing with my GitHub account", and a strip of
+     unbounded text above the repo name read as a stray paragraph. */
+  background: var(--fill-quaternary);
+}
+
+/* The initial, not the avatar: `img-src 'self' data:` blocks the real one. */
+.gh-avatar {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 2rem;
+  height: 2rem;
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: var(--t-callout);
+  font-weight: var(--w-semibold);
+}
+
+.gh-conn-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.gh-conn-title {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--t-headline);
+  font-weight: var(--w-semibold);
+}
+
+.gh-conn-login {
+  padding: 0 var(--sp-1);
+  margin: 0 calc(var(--sp-1) * -1);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font: inherit;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.gh-conn-login:hover {
+  background: var(--bg-hover);
+}
+
+.gh-conn-name {
+  color: var(--text-muted);
+  font-size: var(--t-callout);
+  font-weight: var(--w-regular);
+}
+
+/* Dimmer and roomier than the line above it — see the header. */
+.gh-conn-source,
+.gh-conn-note {
+  margin: var(--sp-2) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+  text-wrap: pretty;
+}
+
+.gh-conn-note {
+  flex-shrink: 0;
+  max-width: 16rem;
+  color: var(--text-muted);
+  text-align: right;
+}
+
+.gh-conn-scopes {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  margin: var(--sp-3) 0 0;
+}
+
+.gh-conn-scopes-label {
+  margin-right: var(--sp-1);
+  color: var(--text-muted);
+  font-size: var(--t-footnote);
+  text-transform: uppercase;
+  letter-spacing: var(--t-caption-ls);
+}
+
+/* A scope this app asked for reads as granted; one that came along with an
+   existing `gh auth login` is shown, but without a claim about what it does. */
+.gh-scope {
+  height: var(--control-h-sm);
+  display: inline-flex;
+  align-items: center;
+  padding: 0 var(--sp-2);
+  border-radius: var(--radius-pill);
+  background: var(--fill-tertiary);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--t-footnote);
+  user-select: text;
+}
+
+.gh-scope[data-asked] {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.gh-scope[data-empty] {
+  font-family: var(--font-ui);
+  font-style: italic;
+}
+
+/*
+  A standing note about the token's scopes, not an alarm — and therefore not a
+  colour.
+
+  It was a thick amber rule down its left edge: the exact treatment
+  `UpdateBanner.css` records having removed for being wrong, and the second warm
+  thing on a screen that is supposed to have none. A wash of the warning colour
+  was tried in its place and is still the wrong idea — "one scope was not
+  granted, so the unread count stays empty" is a standing fact about a working
+  connection, the same category as that banner's `unsupported` phase, which is
+  deliberately untinted. So: a plain quiet surface and a corner. The sentence
+  inside carries the whole message; nothing needs to shout it.
+*/
+.gh-conn-missing {
+  margin-top: var(--sp-4);
+  padding: var(--sp-3);
+  border-radius: var(--radius-lg);
+  background: var(--fill-quaternary);
+}
+
+.gh-conn-missing-title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--t-callout);
+  font-weight: var(--w-medium);
+}
+
+.gh-conn-missing-list {
+  margin: var(--sp-2) 0 0;
+  padding: 0;
+  list-style: none;
+  color: var(--text-secondary);
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+}
+
+.gh-conn-missing-list li + li {
+  margin-top: var(--sp-1);
+}
+
+.gh-conn-missing-list code,
+.gh-conn-source code,
+.gh-conn-note code,
+.gh-device-body code {
+  padding: 1px var(--sp-1);
+  border-radius: var(--radius-sm);
+  background: var(--fill-tertiary);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--t-footnote);
+  user-select: text;
+}
+
+.gh-conn-fix,
+.gh-conn-action,
+.gh-conn-keep,
+.gh-conn-danger,
+.gh-device-cancel {
+  height: var(--control-h);
+  padding: 0 var(--sp-4);
+  border-radius: var(--radius-md);
+  background: var(--fill-tertiary);
+  color: var(--text-primary);
+  font-size: var(--t-callout);
+  font-weight: var(--w-medium);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.gh-conn-fix {
+  margin-top: var(--sp-3);
+}
+
+.gh-conn-action,
+.gh-conn-fix:hover:not(:disabled),
+.gh-conn-keep:hover:not(:disabled),
+.gh-device-cancel:hover:not(:disabled) {
+  background: var(--fill-secondary);
+}
+
+.gh-conn-action {
+  flex-shrink: 0;
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.gh-conn-action:hover:not(:disabled) {
+  background: var(--fill-tertiary);
+  color: var(--text-primary);
+}
+
+/* Signing out can reach the user's terminal, so the second press is the one
+   that is coloured like it means it. */
+.gh-conn-danger {
+  background: var(--color-critical);
+  color: var(--text-onaccent);
+}
+
+.gh-conn-danger:hover:not(:disabled) {
+  opacity: 0.88;
+}
+
+.gh-conn-confirm {
+  flex-shrink: 0;
+  max-width: 22rem;
+  text-align: right;
+}
+
+.gh-conn-confirm-text {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+  text-wrap: pretty;
+}
+
+.gh-conn-confirm-row {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+}
+
+.gh-conn-fix:disabled,
+.gh-conn-action:disabled,
+.gh-conn-keep:disabled,
+.gh-conn-danger:disabled,
+.gh-device-cancel:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* ------------------------------------------------------------ device code -- */
+
+/* Parked at the same height as `.page-blank` in shell.css, because pressing
+   Connect swaps one for the other and the eye should not have to follow it. */
+.gh-device {
+  max-width: 34rem;
+  margin: 11vh auto 0;
+  text-align: center;
+}
+
+.gh-device-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--t-title3);
+  font-weight: var(--w-semibold);
+  letter-spacing: var(--t-title3-ls);
+  color: var(--text-primary);
+}
+
+.gh-device-body {
+  margin: var(--sp-3) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--t-body);
+  line-height: var(--lh-body);
+  text-wrap: pretty;
+}
+
+/* The code is the largest thing in the window on purpose: it is the one piece
+   of this screen the user has to carry to another application by hand. */
+.gh-device-code {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-3);
+  margin: var(--sp-5) 0 0;
+  padding: var(--sp-3) var(--sp-5);
+  border-radius: var(--radius-lg);
+  background: var(--fill-tertiary);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--t-title1);
+  font-weight: var(--w-semibold);
+  letter-spacing: 0.14em;
+  /* Selectable either way — where there is no clipboard API this is the only
+     way to get the code out, and where there is one it still beats retyping. */
+  user-select: text;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+button.gh-device-code:hover {
+  background: var(--fill-secondary);
+}
+
+.gh-device-copy {
+  padding: 0 var(--sp-2);
+  border-radius: var(--radius-pill);
+  background: var(--bg-secondary);
+  color: var(--text-muted);
+  font-family: var(--font-ui);
+  font-size: var(--t-footnote);
+  font-weight: var(--w-medium);
+  letter-spacing: normal;
+}
+
+.gh-device-expiry {
+  margin: var(--sp-3) 0 0;
+  color: var(--text-muted);
+  font-size: var(--t-callout);
+}
+
+.gh-device-asks {
+  margin: var(--sp-4) auto 0;
+  max-width: 44ch;
+  color: var(--text-muted);
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
+  text-wrap: pretty;
+}
+
+.gh-device-row {
+  display: flex;
+  justify-content: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-5);
+}
+
+.gh-device-open {
+  padding: 0 var(--sp-4);
+}
+
+/* Both buttons on this row are the tall size. Left at the default the Cancel
+   beside the primary sat four pixels short of it, which reads as a rendering
+   fault rather than a hierarchy. */
+.gh-device-open,
+.gh-device-cancel {
+  height: var(--control-h-lg);
+}
+
+/* Under about 700px the strip's right-hand column has nowhere to sit beside a
+   paragraph, so it drops under it rather than squeezing the text to a ribbon. */
+@media (max-width: 700px) {
+  .gh-conn {
+    flex-wrap: wrap;
+  }
+
+  .gh-conn-body {
+    flex-basis: 100%;
+  }
+
+  .gh-conn-note,
+  .gh-conn-confirm {
+    max-width: 100%;
+    text-align: left;
+  }
+
+  .gh-conn-confirm-row {
+    justify-content: flex-start;
+  }
+}
+
+/* The two lines under the connect block. `PageNote` inherits alignment from its
+   container, so this is the container that makes them agree with the block they
+   sit under rather than with the page's left edge. */
+.gh-connect-notes {
+  max-width: 30rem;
+  margin: var(--sp-5) auto 0;
+  text-align: center;
+}
+
+.gh-connect-notes .page-blank-line + .page-blank-line {
+  padding-top: var(--sp-1);
+}
+
+/* A command inside the connect page's hint must not break across a line: `gh
+   auth login` rendered as `gh auth` / `login` in two boxes, which reads as two
+   different commands. Scoped to this panel rather than pushed into the shared
+   blank, where a long path in some other page's hint may need to wrap. */
+.gh-panel .page-blank-hint code {
+  white-space: nowrap;
 }

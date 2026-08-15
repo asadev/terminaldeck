@@ -70,6 +70,9 @@ const CLIENT_TYPES: Record<ClientMessage['t'], true> = {
   'upload.data': true,
   'upload.end': true,
   'upload.cancel': true,
+  'credential.ack': true,
+  'credential.answer': true,
+  'credential.deny': true,
 }
 
 /** Same guard for the other direction. */
@@ -84,6 +87,7 @@ const SERVER_TYPES: Record<ServerMessage['t'], true> = {
   error: true,
   pong: true,
   created: true,
+  folders: true,
   ports: true,
   'tunnel.opened': true,
   'tunnel.closed': true,
@@ -94,6 +98,7 @@ const SERVER_TYPES: Record<ServerMessage['t'], true> = {
   'upload.ack': true,
   'upload.done': true,
   'upload.failed': true,
+  'credential.request': true,
 }
 
 const VALID_CLIENT: ClientMessage[] = [
@@ -120,6 +125,14 @@ const VALID_CLIENT: ClientMessage[] = [
   { t: 'upload.data', id: 'up-1', data: Buffer.from([0xff, 0xd8, 0xff, 0xe0]).toString('base64') },
   { t: 'upload.end', id: 'up-1', sha256: 'e'.repeat(SHA256_HEX_LENGTH) },
   { t: 'upload.cancel', id: 'up-1' },
+  // A client that claims nothing and one that claims what it can do. Both are
+  // legal `hello`s and the first is what every build before the field sends.
+  { t: 'hello', protocol: PROTOCOL_VERSION, token: TOKEN, device: DEVICE, capabilities: ['credential'] },
+  { t: 'credential.ack', id: 'req-1' },
+  { t: 'credential.answer', id: 'req-1', username: 'octocat', password: 'ghp_notarealtoken' },
+  { t: 'credential.answer', id: 'req-1', username: 'octocat', password: 'ghp_notarealtoken', remember: true },
+  { t: 'credential.deny', id: 'req-1' },
+  { t: 'credential.deny', id: 'req-1', reason: 'no-account' },
 ]
 
 const SESSION: RemoteSession = {
@@ -157,6 +170,11 @@ const VALID_SERVER: ServerMessage[] = [
   { t: 'error', code: 'unknown-session', message: 'That session is not open.' },
   { t: 'pong' },
   { t: 'created', session: SESSION },
+  { t: 'folders', folders: ['/Users/apple/Projects/terminaldeck'] },
+  // Empty is a frame that gets sent: it is a person having removed the last
+  // folder from a device, which is a different message from never having chosen
+  // one, and it has to survive the round trip as itself.
+  { t: 'folders', folders: [] },
   { t: 'upload.ready', id: 'up-1', path: '/Users/apple/Downloads/Terminal Deck/IMG_4823.HEIC' },
   { t: 'upload.ack', id: 'up-1', bytes: 24 * 1024 },
   {
@@ -167,6 +185,17 @@ const VALID_SERVER: ServerMessage[] = [
     sha256: 'e'.repeat(SHA256_HEX_LENGTH),
   },
   { t: 'upload.failed', id: 'up-1', message: 'Cancelled on the phone.' },
+  {
+    t: 'credential.request',
+    id: 'req-1',
+    host: 'github.com',
+    repo: 'asadev/terminaldeck',
+    operation: 'write',
+    prompt: true,
+  },
+  // Null is a frame that gets sent: git supplied no path to derive a name from,
+  // and a client is expected to say so rather than invent one.
+  { t: 'credential.request', id: 'req-2', host: 'github.com', repo: null, operation: 'read', prompt: false },
 ]
 
 /**

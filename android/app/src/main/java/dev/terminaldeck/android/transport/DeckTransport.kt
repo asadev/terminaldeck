@@ -59,7 +59,7 @@ interface DeckTransport {
  * Where the connection is, in the only vocabulary the UI is allowed to draw.
  *
  * The states are separate rather than one `Failed(recoverable)` because they call for different
- * words and different behaviour: [Pending] is a person walking to a Mac, [Waiting] is a network,
+ * words and different behaviour: [Pending] is a person walking to a machine, [Waiting] is a network,
  * [Rejected] is a credential that will never work again, [Incompatible] is a version. Collapsing
  * them produced a banner that told someone to check their wifi while the real answer was a button
  * on the desk in front of them.
@@ -80,16 +80,18 @@ sealed interface TransportState {
     /**
      * The desktop said `welcome` and admitted this device. The only live state.
      *
-     * @param deviceName what the **Mac** calls this phone. `welcome.deviceName` in `protocol.ts` is
-     *   the name out of the desktop's trust store — the device's, not the machine's. Version 1
-     *   carries no name for the Mac at all, so a client that printed this next to "connected to"
+     * @param deviceName what the **desktop** calls this phone. `welcome.deviceName` in `protocol.ts`
+     *   is the name out of the desktop's trust store — the device's, not the machine's. The protocol
+     *   carries no name for the machine at all, so a client that printed this next to "connected to"
      *   would be showing the user their own phone's name and calling it their computer. Which
      *   machine this is gets said with the host id and the key fingerprint instead, both of which
-     *   are actually about the Mac.
+     *   are actually about the machine. `welcome.hostPlatform` says what *kind* of machine it is,
+     *   which is a different question again and is answered by
+     *   [dev.terminaldeck.android.protocol.HostPlatform].
      */
     data class Online(val deviceName: String) : TransportState
 
-    /** Paired, but a human at the Mac has not approved this device yet. Reconnects are the poll. */
+    /** Paired, but a human at the machine has not approved this device yet. Reconnects are the poll. */
     data class Pending(val detail: String, val retryAt: Long? = null) : TransportState
 
     /** A retry is scheduled. [retryAt] is epoch milliseconds. */
@@ -108,7 +110,10 @@ val TransportState.isOnline: Boolean get() = this is TransportState.Online
 /** A sentence for the banner. Always present, always true. */
 val TransportState.detail: String
     get() = when (this) {
-        is TransportState.Unpaired -> "Not paired with a Mac yet."
+        // Neutral, permanently and correctly: [Unpaired] means there is no machine, so there is
+        // nothing whose kind could be known. The word here used to be "Mac", which was a guess made
+        // about a computer that did not exist yet.
+        is TransportState.Unpaired -> "Not paired with a desktop yet."
         is TransportState.Offline -> "Disconnected."
         is TransportState.Connecting -> "Connecting…"
         is TransportState.Online -> "Connected as $deviceName"

@@ -99,12 +99,58 @@
   height: var(--pane-divider-hit);
 }
 
+/*
+  The grip, drawn only on approach.
+
+  Dragging a divider has always worked — two panes really do go 756/756 to
+  456/1056 — but nothing on screen said so: an 8px strip of the app's own ground
+  colour, and a hover tint of `--fill-secondary` over `--bg-sunken` that is a
+  four-level change nobody can see. A working control that is completely
+  undiscoverable is the inverse of the rule about affordances: not a promise
+  that goes unkept, but one that is never made. So on approach a short rounded
+  bar appears in the middle of the divider — the mark every resizable split on
+  this platform uses — and the strip itself tints hard enough to be seen.
+*/
+.pane-divider::before {
+  content: '';
+  position: absolute;
+  z-index: 3;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  border-radius: var(--radius-pill);
+  background: var(--text-muted);
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+
+.pane-split[data-direction='horizontal'] > .pane-divider::before {
+  width: 3px;
+  height: 32px;
+}
+
+.pane-split[data-direction='vertical'] > .pane-divider::before {
+  width: 32px;
+  height: 3px;
+}
+
 /* Pointing at a divider is not focusing it, so hovering and dragging tint it
    rather than turning it accent. Keyboard focus keeps the accent, which is what
    makes the two states tell apart when a divider is both. */
 .pane-divider:hover,
 .pane-divider[data-dragging='true'] {
   background: var(--fill-secondary);
+}
+
+.pane-divider:hover::before,
+.pane-divider[data-dragging='true']::before,
+.pane-divider:focus-visible::before {
+  opacity: 1;
+}
+
+/* Against the accent fill the grip has to invert, or it disappears into it. */
+.pane-divider:focus-visible::before {
+  background: var(--accent-fg);
 }
 
 .pane-divider:focus-visible {
@@ -123,22 +169,44 @@
   overflow: hidden;
   border-radius: var(--radius-lg);
   background: var(--bg-secondary);
-  /* Declared unfocused so the focused ring has something to transition from. */
-  outline: 2px solid transparent;
-  outline-offset: -2px;
-  transition: outline-color var(--dur-fast) var(--ease);
 }
 
-.pane-leaf[data-focused='true'] {
-  outline-color: var(--accent);
-  z-index: 1;
+/*
+  The focus ring, drawn as a pseudo-element rather than as an `outline`.
+
+  It was an inset outline for as long as this file existed, and it was invisible
+  — which nobody could have known, because nothing rendered this component until
+  now. `.pane-leaf-body` is an opaque, positioned, full-bleed child, so it
+  paints over an outline offset back inside the border box; the ring's colour
+  computed correctly as the accent and not one pixel of it reached the screen.
+  A pseudo-element sits above the body and cannot be covered by it.
+
+  `pointer-events: none` is load-bearing: the ring covers the entire pane, and
+  without it every click meant for the terminal underneath would land here.
+*/
+.pane-leaf::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  border: 2px solid transparent;
+  border-radius: inherit;
+  transition: border-color var(--dur-fast) var(--ease);
+}
+
+.pane-leaf[data-focused='true']::after {
+  border-color: var(--accent);
 }
 
 /* A single pane is not a split, so the ring and the corner are noise — the
    window edge is already the boundary. */
 .split-view > .pane-leaf {
   border-radius: 0;
-  outline: none;
+}
+
+.split-view > .pane-leaf::after {
+  display: none;
 }
 
 /* Positioned so an absolutely-filled child (the terminal host) sits inside

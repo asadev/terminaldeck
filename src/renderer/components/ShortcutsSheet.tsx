@@ -62,7 +62,7 @@ export function ShortcutsList({
   const searching = query.trim().length > 0
 
   return (
-    <div className="sheet">
+    <div className="sheet scroll-fade" data-fade="foot">
       <div className="sheet-search">
         <svg
           width="13"

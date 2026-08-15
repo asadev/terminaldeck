@@ -50,10 +50,17 @@ const ATTR_KEYS = ['aria-label', 'alt', 'placeholder', 'title', 'role', 'type', 
  * The highlight colours are the app's accent written out literally, because the
  * guest is a different document and cannot read `tokens.css`. If the accent in
  * tokens.css changes, change it here too — there is no way to share it.
+ *
+ * That instruction had already been ignored once: these stayed the purple-blue
+ * #8588f2 through two accent changes, so the picker outlined elements in a
+ * colour that appeared nowhere else in the product and read as a rendering bug
+ * rather than a selection. This is the dark theme's --accent (#3b8fee, itself
+ * the app icon's blue) and its --accent-soft alpha, plus a heavier fill for an
+ * element that has actually been captured.
  */
-const HIGHLIGHT_BORDER = '#8588f2'
-const HIGHLIGHT_FILL = 'rgba(133, 136, 242, 0.16)'
-const CAPTURED_FILL = 'rgba(133, 136, 242, 0.38)'
+const HIGHLIGHT_BORDER = '#3b8fee'
+const HIGHLIGHT_FILL = 'rgba(59, 143, 238, 0.16)'
+const CAPTURED_FILL = 'rgba(59, 143, 238, 0.38)'
 
 /**
  * The guest script.

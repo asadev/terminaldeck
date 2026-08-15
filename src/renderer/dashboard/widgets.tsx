@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
 import type { SessionStatus } from '@shared/types'
 import { StatusDot } from '../components/StatusDot'
-import { cardsInColumn, COLUMN_IDS, COLUMN_TITLES, parseBoard } from '../board/board-state'
 // Type-only, so nothing of GitPanel's module — including its CSS import — is
 // pulled into this bundle. Those mirrors of `src/main/git.ts` already exist
 // there; re-declaring them a third time is how the three copies start to drift.
@@ -799,71 +798,6 @@ function GitWidget({ context }: { context: WidgetContext }): ReactElement {
   })
 }
 
-/* ----------------------------------------------------------------- kanban -- */
-
-function KanbanWidget({ context }: { context: WidgetContext }): ReactElement {
-  const { projectPath, onNavigate } = context
-  const { state, reload } = useBridgeData(
-    'loadBoard',
-    projectPath,
-    useCallback(
-      async (call) => parseBoard((await call(projectPath)) as unknown, projectPath),
-      [projectPath],
-    ),
-  )
-
-  return renderState(state, reload, 'Opening the board…', (board) => {
-    const columns = COLUMN_IDS.map((id) => ({ id, cards: cardsInColumn(board, id) }))
-    const total = columns.reduce((n, column) => n + column.cards.length, 0)
-    if (total === 0) {
-      return (
-        <WidgetMessage
-          tone="muted"
-          title="Board is empty"
-          detail="Cards you add on the board show up here."
-          action={onNavigate ? { label: 'Open board', onClick: () => onNavigate('board') } : undefined}
-        />
-      )
-    }
-
-    const next = columns.find((column) => column.id === 'todo')?.cards ?? []
-    return (
-      <>
-        <div className="widget-stats">
-          {columns.map((column) => (
-            <Stat
-              key={column.id}
-              label={COLUMN_TITLES[column.id]}
-              value={String(column.cards.length)}
-              goes={`Open the board at ${COLUMN_TITLES[column.id]}`}
-              onClick={doorIf(column.cards.length > 0 && Boolean(onNavigate), () =>
-                onNavigate?.('board', column.id),
-              )}
-            />
-          ))}
-        </div>
-        {next.length > 0 && (
-          <ul className="widget-list">
-            {next.slice(0, 12).map((card) => (
-              <li key={card.id}>
-                <span className="widget-row static">
-                  <span className="widget-row-main">{card.title}</span>
-                  {card.tags.length > 0 && <span className="widget-row-side">{card.tags[0]}</span>}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-        {onNavigate && (
-          <button type="button" className="widget-message-action" onClick={() => onNavigate('board')}>
-            Open board
-          </button>
-        )}
-      </>
-    )
-  })
-}
-
 /* -------------------------------------------------------------- readiness -- */
 
 /** Mirrors `ReadinessStatus` in `src/main/readiness.ts`. */
@@ -1120,12 +1054,6 @@ export const WIDGET_DEFINITIONS: Readonly<Record<WidgetType, WidgetDefinition>> 
     title: 'Git',
     description: 'Branch, ahead/behind, and every file the working tree has touched.',
     Component: GitWidget,
-  },
-  kanban: {
-    type: 'kanban',
-    title: 'Board',
-    description: 'Card counts per column and what is next up on the project board.',
-    Component: KanbanWidget,
   },
   readiness: {
     type: 'readiness',

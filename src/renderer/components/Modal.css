@@ -1,15 +1,16 @@
 /* ============================================================================
-   Modal shell — scrim, sheet, and the page-sized variant.
+   Modal shell — scrim, sheet, and the large sheet Settings sits in.
 
    Apple's sheet: it slides up a few points, it wears the same glass as the
    chrome, and the scrim behind it is a blur rather than a blackout. Three
-   sizes — `md` and `lg` are dialogs; `page` is a full-window surface for
-   something you sit in rather than answer, which is what Settings is.
+   sizes, and all three are dialogs — `md` and `lg` for a question, `xl` for
+   the large sheet Settings sits in. There is no full-window size any more;
+   see the `xl` block for why that was the wrong shape for Settings.
    ============================================================================ */
 
 :root,
 [data-theme='light'] {
-  --modal-scrim: color-mix(in srgb, var(--text-primary) 22%, transparent);
+  --modal-scrim: color-mix(in srgb, var(--text-primary) 38%, transparent);
 }
 
 [data-theme='dark'] {
@@ -54,64 +55,49 @@
   width: 620px;
 }
 
-/* --------------------------------------------------------------- a page -- */
+/* ------------------------------------------------------------ the sheet -- */
 
-/* Not a dialog. It fills the window, it has no scrim margin and no corners,
-   and it is where Settings lives — the way Claude and ChatGPT do it. */
-.modal-overlay:has(> .modal-panel[data-size='page']) {
-  padding: 0;
-  background: transparent;
-  -webkit-backdrop-filter: none;
-  backdrop-filter: none;
+/* Settings. Still a dialog — scrim, corners, the workspace visible around it —
+   just a large one, because it has a rail of twelve sections down its left and
+   one of them is the whole remote-access panel.
+
+   It replaced a `page` size that filled the window edge to edge with no scrim
+   at all. That read as *navigating away*: ⌘, blanked the work and put a
+   full-screen surface in its place, so coming back felt like coming back rather
+   than like closing something. The whole promise of "close it and you are
+   exactly where you were" is easier to keep by never taking the window away.
+
+   Sized in vw/vh with a cap so it is a sheet on a large display and very nearly
+   the window on a laptop, without ever growing past the room it has. */
+.modal-panel[data-size='xl'] {
+  width: min(1040px, 92vw);
+  height: min(760px, 88vh);
+  max-height: 100%;
 }
 
-.modal-panel[data-size='page'] {
-  width: 100%;
-  height: 100%;
-  max-height: none;
-  border-radius: 0;
-  background-color: var(--bg-primary);
-  background-image: none;
-  -webkit-backdrop-filter: none;
-  backdrop-filter: none;
-  box-shadow: none;
-  animation: modal-page-in var(--dur) var(--ease-emphasis);
-}
-
-.modal-panel[data-size='page'] > .modal-header {
-  /* Clears the traffic lights, and drags the window like any other toolbar. */
-  height: var(--toolbar-h);
-  align-items: center;
-  padding: 0 var(--sp-4) 0 82px;
-  background-color: var(--material-bg);
-  background-image: var(--material-sheen);
-  -webkit-backdrop-filter: var(--material-filter);
-  backdrop-filter: var(--material-filter);
-  box-shadow: inset 0 -1px 0 var(--border-subtle);
-  -webkit-app-region: drag;
-}
-
-.modal-panel[data-size='page'] > .modal-header .modal-close,
-.modal-panel[data-size='page'] > .modal-header .modal-heading {
-  -webkit-app-region: no-drag;
-}
-
-.modal-panel[data-size='page'] > .modal-header .modal-title {
-  font-size: var(--t-title3);
-}
-
-.modal-panel[data-size='page'] > .modal-header .modal-description {
-  display: none;
-}
-
-.modal-panel[data-size='page'] > .modal-body {
+/* Whatever goes in an xl body brings its own layout and its own scrolling —
+   Settings puts two independently scrolling columns in here — so the shell
+   contributes neither padding nor a scrollbar of its own. */
+.modal-panel[data-size='xl'] > .modal-body {
   padding: 0;
   overflow: hidden;
 }
 
-.modal-panel[data-size='page'] > .modal-footer {
+/* The header sits over a rail on one side and a reading column on the other,
+   so it gets the hairline that the two-pane body would otherwise run into. */
+.modal-panel[data-size='xl'] > .modal-header {
+  align-items: center;
+  padding: var(--sp-4) var(--sp-4) var(--sp-4) var(--sp-5);
+  box-shadow: inset 0 -1px 0 var(--border-subtle);
+}
+
+.modal-panel[data-size='xl'] > .modal-header .modal-title {
+  font-size: var(--t-title3);
+}
+
+.modal-panel[data-size='xl'] > .modal-footer {
   padding: var(--sp-2) var(--sp-4);
-  background: var(--bg-secondary);
+  box-shadow: inset 0 1px 0 var(--border-subtle);
 }
 
 /* The panel takes focus on open; it is a container, so no ring for it. */
@@ -238,13 +224,6 @@
   from {
     opacity: 0;
     transform: translateY(10px) scale(0.985);
-  }
-}
-
-@keyframes modal-page-in {
-  from {
-    opacity: 0;
-    transform: translateY(14px);
   }
 }
 

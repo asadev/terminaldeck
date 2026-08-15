@@ -173,15 +173,14 @@ describe('findFreeSlot', () => {
 })
 
 describe('defaultLayout', () => {
-  it('is a sound 2x2 of the widgets that have a live data source', () => {
+  it('is a sound arrangement of the widgets that have a live data source', () => {
     const layout = defaultLayout(PROJECT)
     expectSound(layout)
-    expect(layout.widgets.map((w) => w.type)).toEqual(['sessions', 'cost', 'git', 'kanban'])
+    expect(layout.widgets.map((w) => w.type)).toEqual(['sessions', 'cost', 'git'])
     expect(rects(layout)).toEqual({
       'sessions-default': '0,0 6x6',
       'cost-default': '6,0 6x6',
       'git-default': '0,6 6x6',
-      'kanban-default': '6,6 6x6',
     })
   })
 
@@ -221,9 +220,11 @@ describe('addWidget', () => {
   })
 
   it('floors size at the spec minimum and caps width at the column count', () => {
-    const layout = addWidget(createLayout(PROJECT), { type: 'kanban', id: 'k', w: 1, h: 1 })
-    expect(rects(layout)).toEqual({ k: `0,0 ${WIDGET_SPECS.kanban.minW}x${WIDGET_SPECS.kanban.minH}` })
-    const wide = addWidget(createLayout(PROJECT), { type: 'kanban', id: 'k', w: 99, h: 3 })
+    const layout = addWidget(createLayout(PROJECT), { type: 'readiness', id: 'k', w: 1, h: 1 })
+    expect(rects(layout)).toEqual({
+      k: `0,0 ${WIDGET_SPECS.readiness.minW}x${WIDGET_SPECS.readiness.minH}`,
+    })
+    const wide = addWidget(createLayout(PROJECT), { type: 'readiness', id: 'k', w: 99, h: 3 })
     expect(widgetById(wide, 'k')?.w).toBe(DASHBOARD_COLUMNS)
   })
 
@@ -269,11 +270,7 @@ describe('addWidget', () => {
 describe('removeWidget', () => {
   it('drops the widget and leaves the rest untouched', () => {
     const layout = removeWidget(defaultLayout(PROJECT), 'cost-default')
-    expect(layout.widgets.map((w) => w.id)).toEqual([
-      'sessions-default',
-      'git-default',
-      'kanban-default',
-    ])
+    expect(layout.widgets.map((w) => w.id)).toEqual(['sessions-default', 'git-default'])
   })
 
   it('returns the same object for an unknown id', () => {
@@ -338,8 +335,10 @@ describe('resizeWidget', () => {
   })
 
   it('floors at the spec minimum', () => {
-    const layout = resizeWidget(seed([['a', 'kanban', 0, 0, 6, 6]]), 'a', 1, 1)
-    expect(rects(layout)).toEqual({ a: `0,0 ${WIDGET_SPECS.kanban.minW}x${WIDGET_SPECS.kanban.minH}` })
+    const layout = resizeWidget(seed([['a', 'readiness', 0, 0, 8, 7]]), 'a', 1, 1)
+    expect(rects(layout)).toEqual({
+      a: `0,0 ${WIDGET_SPECS.readiness.minW}x${WIDGET_SPECS.readiness.minH}`,
+    })
   })
 
   it('refuses a size that would swallow a neighbour', () => {
@@ -517,7 +516,7 @@ describe('parseLayout', () => {
         widgets: [
           { id: 'a', type: 'git', x: 0, y: 0, w: 6, h: 6 },
           { id: 'b', type: 'cost', x: 0, y: 0, w: 6, h: 6 },
-          { id: 'c', type: 'kanban', x: 3, y: 3, w: 6, h: 6 },
+          { id: 'c', type: 'readiness', x: 3, y: 3, w: 6, h: 6 },
         ],
       },
       PROJECT,
@@ -661,7 +660,7 @@ describe('bounded work', () => {
           widgets: [
             { id: 'a', type: 'git', x: 0, y: 0, w: 12, h: 1e15 },
             { id: 'b', type: 'cost', x: 0, y: 0, w: 12, h: 1e15 },
-            { id: 'c', type: 'kanban', x: 0, y: 1e15, w: 12, h: 6 },
+            { id: 'c', type: 'readiness', x: 0, y: 1e15, w: 12, h: 6 },
           ],
         },
         PROJECT,

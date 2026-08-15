@@ -29,9 +29,17 @@
  * ## Why these four
  *
  * They are the claims a unit test cannot make: that the connection indicator
- * says a true thing, that a key on the accessory row reaches a shell through
- * the sealed channel, that copy and paste are wired to the session rather than
- * to nothing, and that New Session exists only because the far end offered it.
+ * says a true thing, that a key on the key bar reaches a shell through the
+ * sealed channel, that copy and paste are wired to the session rather than to
+ * nothing, and that New Session exists only because the far end offered it.
+ *
+ * ## The bar and the grid
+ *
+ * The key bar carries `esc` `tab` `ctrl` `↑` `↓` and never scrolls; everything
+ * else is in a grid that opens where the keyboard was, behind the `keys.more`
+ * button. So a case that wants `^C`, `|`, `copy` or `paste` opens the grid first
+ * — see `openTheKeyGrid`. That is one extra tap in the test and one fewer swipe
+ * plus hunt for the person holding the phone.
  */
 
 import UIKit
@@ -85,26 +93,34 @@ final class LiveSessionUITests: XCTestCase {
         XCTAssertGreaterThan(rows.count, 0, "the desktop should have sessions running")
     }
 
-    // MARK: - 2. A key on the accessory row reaches a shell
+    // MARK: - 2. A key on the key bar reaches a shell
 
-    func testTheAccessoryRowSendsToTheSession() throws {
+    func testTheKeyBarSendsToTheSession() throws {
         try sessionRows().first!.tap()
 
         let keyboard = app.buttons["terminal.keyboard"]
         XCTAssertTrue(keyboard.waitForExistence(timeout: 10), "the terminal screen should appear")
         keyboard.tap()
 
-        // The row is the reason a terminal is usable on a phone: none of these
-        // keys exist on an iOS keyboard.
-        for key in ["esc", "tab", "ctrl", "^C", "|"] {
-            XCTAssertTrue(app.buttons[key].waitForExistence(timeout: 5), "missing accessory key: \(key)")
+        // The bar is the reason a terminal is usable on a phone, and these are
+        // the keys that never move: none of them exists on an iOS keyboard, and
+        // none of them is behind a scroll any more.
+        for key in ["esc", "tab", "ctrl"] {
+            XCTAssertTrue(app.buttons[key].waitForExistence(timeout: 5), "missing key: \(key)")
         }
+        // Dismiss is on the bar, always, rather than being the twenty-sixth item
+        // in a scroll view — which is the defect this redesign was for.
+        XCTAssertTrue(app.buttons["keys.dismiss"].exists, "dismiss must be reachable without scrolling")
 
         // Typed into the terminal itself, which is a `UIKeyInput` rather than a
         // text field — so this is also the check that keystrokes reach it.
         app.typeText("echo ui-test-marker\n")
-        // Then keys that exist only on the accessory row, to prove that path
-        // separately. `|` goes through insertText; Ctrl-C is raw bytes.
+
+        // Then keys that exist only in the key grid, to prove that path
+        // separately. `|` goes through insertText; Ctrl-C is raw bytes. Both
+        // moved off the bar deliberately: the bar carries what is pressed while
+        // typing a command and nothing else.
+        try openTheKeyGrid()
         app.buttons["|"].tap()
         app.buttons["^C"].tap()
 
@@ -121,9 +137,9 @@ final class LiveSessionUITests: XCTestCase {
         actions.tap()
 
         // `terminal.copyScreen`, not `terminal.copy`. The menu copies the
-        // screen and says so; copying a *selection* is the accessory row's
-        // `copy` key and the system's own long-press menu, because a selection
-        // does not survive the trip to this one — see `TerminalScreen`.
+        // screen and says so; copying a *selection* is the key grid's `copy` and
+        // the callout a long press puts over the selection, because a selection
+        // does not survive the trip to this menu — see `TerminalScreen`.
         let copy = app.buttons["terminal.copyScreen"]
         XCTAssertTrue(copy.waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["terminal.paste"].exists)
@@ -200,21 +216,43 @@ final class LiveSessionUITests: XCTestCase {
         // There used to be an alert with a text field here. There is no title on
         // the wire any more — the Mac names a session after its folder — so the
         // control is either a plain button (nothing to choose) or a menu of the
-        // folders already on screen. Both are exercised: which one appears
-        // depends on whether the host has sessions running, and a test that
-        // insisted on one would be red on half the harnesses.
-        let menuItem = app.buttons["New session"]
+        // folders the machine granted this device. Both are exercised: which one
+        // appears depends on what the host offered, and a test that insisted on
+        // one would be red on half the harnesses.
+        //
+        // By identifier, not by label: the toolbar button *is* labelled "New
+        // session" for VoiceOver, so a query on the words matches two elements
+        // and taps neither.
+        let menuItem = app.buttons["sessions.newDefault"]
         if menuItem.waitForExistence(timeout: 3) { menuItem.tap() }
 
+        /*
+         * The new session **opens**, and that is what is asserted first.
+         *
+         * A session started from the phone is pushed onto the navigation stack
+         * the moment the machine confirms it — "a new session starts
+         * immediately" is the product's own rule — so the session list is no
+         * longer on screen and counting its rows here would be counting a screen
+         * that has been navigated away from. An earlier version of this case did
+         * exactly that and waited twenty seconds for a number that had gone to
+         * zero.
+         */
+        XCTAssertTrue(app.buttons["terminal.actions"].waitForExistence(timeout: 25),
+                      "starting a session should open it")
+
+        // Then back, where the list is one longer than it was.
+        app.navigationBars.buttons.element(boundBy: 0).tap()
         let grew = NSPredicate(format: "count > %d", before)
         expectation(for: grew, evaluatedWith: app.buttons.matching(rowIdentifier), handler: nil)
         waitForExpectations(timeout: 20)
     }
 
-    func testNewSessionOffersTheFoldersAlreadyOnScreen() throws {
-        // The Mac accepts only a folder it is already offering, so the picker is
-        // built from the `cwd` of sessions in the list. Nothing here can offer a
-        // choice that fails, which is the whole reason it is sourced this way.
+    func testNewSessionOffersTheFoldersTheMachineGranted() throws {
+        // The picker is the list of folders the machine granted *this device*,
+        // and the machine enforces the same list — so nothing in the menu can
+        // offer a tap that gets refused. Against a desktop too old to have sent
+        // one it falls back to the working directories already on screen, which
+        // is why a host with no sessions and no grant has nothing to pick from.
         let rows = try sessionRows()
         try XCTSkipIf(rows.isEmpty, "the host is serving no sessions, so there is nothing to pick")
 
@@ -222,13 +260,28 @@ final class LiveSessionUITests: XCTestCase {
         XCTAssertTrue(plus.waitForExistence(timeout: 10))
         plus.tap()
 
-        XCTAssertTrue(app.buttons["New session"].waitForExistence(timeout: 5),
-                      "with folders on screen the control is a menu, not a bare button")
+        XCTAssertTrue(app.buttons["sessions.newDefault"].waitForExistence(timeout: 5),
+                      "with folders to choose from the control is a menu, not a bare button")
         // Dismissed rather than chosen: this case is about what is offered.
-        app.buttons["New session"].tap()
+        app.buttons["sessions.newDefault"].tap()
     }
 
     // MARK: - Helpers
+
+    /**
+     * Open the grid that stands where the keyboard was.
+     *
+     * Everything that is not on the fixed bar lives in it — copy, paste, the
+     * four signals, the symbols, home/end/pgup/pgdn, alt and the function keys —
+     * and it opens by pressing the one button that never moves. Shared by the
+     * cases below because three of them need a key that used to be reachable by
+     * scrolling and now is not.
+     */
+    private func openTheKeyGrid() throws {
+        let more = app.buttons["keys.more"]
+        XCTAssertTrue(more.waitForExistence(timeout: 5), "the key bar should be up")
+        more.tap()
+    }
 
     private var rowIdentifier: NSPredicate {
         NSPredicate(format: "identifier BEGINSWITH 'session.'")

@@ -1,5 +1,6 @@
 package dev.terminaldeck.android
 
+import dev.terminaldeck.android.protocol.HostPlatform
 import dev.terminaldeck.android.protocol.RemoteSessionView
 import dev.terminaldeck.android.session.RemoteSessionBinding
 import dev.terminaldeck.android.store.PairingRecord
@@ -14,9 +15,12 @@ import dev.terminaldeck.android.transport.isOnline
  *
  * This is the object that used to *be* the view model. Splitting it out is the whole of multi-host:
  * the relay has always been a map of host ids and the protocol has never had an opinion about what
- * a host is — a phone genuinely cannot tell a Mac from a Windows PC, because nothing on the wire
- * says — so the only thing that was ever single was the phone's own storage and the phone's own
+ * a host is — so the only thing that was ever single was the phone's own storage and the phone's own
  * state. There is now one of these per paired machine and [DeckViewModel] holds the collection.
+ *
+ * This header used to add "a phone genuinely cannot tell a Mac from a Windows PC, because nothing on
+ * the wire says". That was true, and it is the sentence that let every screen in this app call every
+ * machine a Mac. `welcome.hostPlatform` says now — see [hostPlatform] below.
  *
  * ## What is not shared between machines, and why that is free
  *
@@ -60,6 +64,38 @@ class HostLink(
     var deviceName: String? = null
 
     var capabilities: Set<String> = emptySet()
+
+    /**
+     * What kind of machine this is, from `welcome.hostPlatform`.
+     *
+     * [HostPlatform.UNKNOWN] until it says, and [HostPlatform.UNKNOWN] forever against a desktop old
+     * enough not to send the field — which is the honest answer for one, and the one thing this must
+     * never do is guess [HostPlatform.MAC].
+     *
+     * Kept when the socket drops, and kept by [stop] too — unlike [sessions], [live] and
+     * [capabilities], which are claims about *now* and stop being true the moment the connection
+     * does. This is not one of those. A machine does not change operating system between one
+     * reconnect and the next, and the sentences that most need the right noun are the ones printed
+     * after a connection has gone: "Could not reach that PC", "The PC closed the connection". A
+     * field reset on disconnect would make every one of those read "desktop" at exactly the moment
+     * it matters.
+     */
+    var hostPlatform: HostPlatform = HostPlatform.UNKNOWN
+
+    /**
+     * The folders this machine has chosen for this phone, or null when it has never said.
+     *
+     * Null is not an empty list. Null is a machine older than the field — and a machine that cannot
+     * start sessions at all — and it means "fall back to what this app did before"; an empty list is
+     * a person having removed every folder, which means nothing will start and the screen has to say
+     * so. Every screen reads this through [DeckUiState.startableFolders] rather than branching on it
+     * twice.
+     *
+     * Kept when the socket drops, like [sessions], because it is the last true thing the machine
+     * said — and cleared by [stop], like [capabilities], because that is a machine being taken down
+     * rather than one going quiet, and the next `welcome` is what says whose folders these are.
+     */
+    var grantedFolders: List<String>? = null
 
     /** Whether a session list has ever arrived, so an empty list can be told from an unknown one. */
     var loaded: Boolean = false
@@ -105,6 +141,7 @@ class HostLink(
         live = false
         loaded = false
         capabilities = emptySet()
+        grantedFolders = null
         connection = TransportState.Offline
     }
 
@@ -117,6 +154,7 @@ class HostLink(
         connection = connection,
         live = live,
         sessions = sessions,
+        hostPlatform = hostPlatform,
         selected = selected,
     )
 }
@@ -145,6 +183,17 @@ data class HostSummary(
      * the wrong computer.
      */
     val sessions: List<RemoteSessionView>,
+    /**
+     * What kind of machine this row is, for the sentences that name one.
+     *
+     * Per row for the same reason [sessions] is, and the consequence is the same shape of bug: a
+     * phone holding a Mac *and* a PC that read the noun off whichever machine happened to be
+     * selected would print "That session is no longer on the Mac" about a session that was on the
+     * PC — which is the original defect, moved one screen over rather than fixed.
+     *
+     * [HostPlatform.UNKNOWN] until that machine's own `welcome` says otherwise. Never a guess.
+     */
+    val hostPlatform: HostPlatform,
     val selected: Boolean,
 ) {
     val isOnline: Boolean get() = connection.isOnline

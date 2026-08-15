@@ -1,10 +1,14 @@
 /* The attach popover: menu, picker and connector list share one surface, and it
    is the app's glass — the same material every dialog, menu and tooltip wears. */
 
+/* Centred, not bottom-aligned: the button sits on the composer's control row
+   now rather than beside a one-line field, and every control on that row is
+   centred on the same line. */
 .at-host {
   position: relative;
   display: flex;
-  align-items: flex-end;
+  align-items: center;
+  flex-shrink: 0;
 }
 
 /* Anchored to the button and grown upwards — the composer sits at the bottom

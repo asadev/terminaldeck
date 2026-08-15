@@ -78,17 +78,28 @@ data source for all of this — no scraping of terminal output.
 ## Phase 5 — Dashboard and board
 
 - [x] **Customisable project overview** — drag-and-drop widget grid (gridstack)
-- [x] **Widgets** — AI Readiness, Kanban, Sessions, Team, Provider Tools, GitHub
-- [x] **Kanban board** — per project, drag-drop, search, tag filter
-- [x] **Board ↔ session link** — a card spawns or resumes a session; the card
-      moves to Done when that session completes
+- [x] **Widgets** — AI Readiness, Sessions, Cost, Git, GitHub
+- ~~**Kanban board**~~ and ~~**Board ↔ session link**~~ — **removed, code and
+      all**, on 2026-08-15. Not wanted: a task board is a thing you keep up to
+      date by hand, and nothing else in this app asks that of you. The page, its
+      state module, its main-process store, its overview widget, its menu item
+      and its ⌘⇧B all went together — a half-removed feature leaves rows that
+      open nothing, which is worse than the feature was.
 
 ## Phase 6 — Multi-session power features
 
 - [x] **Swarm mode** — grid view of every running session (⌘\)
-- [ ] **Split panes** with focus routing — `SplitView.tsx` and `pane-tree.ts`
-      exist and are tested, but `SplitView` is rendered nowhere, so there is no
-      way to reach it
+- [x] **Split panes** with focus routing — `SplitView.tsx` and `pane-tree.ts`
+      were complete and tested and rendered nowhere for their whole life; they
+      were once written off here as dropped, and came within a commit of being
+      deleted. What was actually missing was the answer to the objection, and
+      the answer is one sentence: **the sidebar names the session in the focused
+      pane.** With a single pane that is exactly what the sidebar has always
+      done, so nothing about it had to change; `renderer/layout/panes.ts` is
+      where that rule lives, and its tests are the guard against the two models
+      drifting apart again. Split (⌘D) is arranged by hand; swarm (⌘\) is
+      derived from the session list. They are mutually exclusive in `App.tsx`,
+      because they are two answers to the same question.
 - [x] **Multiple Claude profiles** — isolated `CLAUDE_CONFIG_DIR` per profile so
       work and personal logins never mix; per-session / per-project / global default
 - [x] **Full keymap** + shortcut reference sheet
@@ -116,9 +127,8 @@ data source for all of this — no scraping of terminal output.
 
 Phase 2 before 3 because status detection is what the inspector visualises.
 Phase 3 before 5 because the dashboard widgets display cost and readiness data.
-Phase 6 after 4 because split panes need the file tree and git panel to be
-worth splitting to. Phase 8 last — sharing and updates only matter once there
-is something worth sharing and updating.
+Phase 8 last — sharing and updates only matter once there is something worth
+sharing and updating.
 
 ## Open questions for Asad
 

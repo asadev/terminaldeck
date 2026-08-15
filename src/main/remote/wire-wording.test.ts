@@ -40,7 +40,7 @@ import { describe, expect, it } from 'vitest'
  * sentence — which is why the check is on the words as words, inside quotes.
  */
 
-const WIRE_MODULES = ['server.ts', 'uploads.ts', 'tunnel.ts', 'session-create.ts']
+const WIRE_MODULES = ['server.ts', 'uploads.ts', 'tunnel.ts', 'session-create.ts', 'credentials.ts']
 
 /** Words that name the reader's computer, as a person would write them. */
 const PLATFORM_NOUNS = /\b(Mac|Macs|MacBook|PC|iMac)\b/

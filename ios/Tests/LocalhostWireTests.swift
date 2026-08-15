@@ -162,14 +162,14 @@ final class LocalhostWireTests: XCTestCase {
     func testLocalhostIsOnlyOfferedWhenTheDesktopAdvertisesIt() {
         let without = #"{"t":"welcome","protocol":1,"deviceId":"d","deviceName":"p","token":null,"sessions":[]}"#
         guard case let .ok(plain, _) = WireCodec.decode(without),
-              case let .welcome(_, _, _, _, _, none) = plain else {
+              case let .welcome(_, _, _, _, _, none, _, _) = plain else {
             return XCTFail("a v1 welcome should still decode")
         }
         XCTAssertFalse(none.contains(WireCapability.localhost))
 
         let with = #"{"t":"welcome","protocol":1,"deviceId":"d","deviceName":"p","token":null,"sessions":[],"capabilities":["localhost"]}"#
         guard case let .ok(newer, _) = WireCodec.decode(with),
-              case let .welcome(_, _, _, _, _, offered) = newer else {
+              case let .welcome(_, _, _, _, _, offered, _, _) = newer else {
             return XCTFail("a welcome with capabilities should decode")
         }
         XCTAssertTrue(offered.contains(WireCapability.localhost))

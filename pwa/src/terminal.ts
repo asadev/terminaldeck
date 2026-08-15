@@ -61,7 +61,14 @@ const THEME = {
   foreground: '#d4d4d4',
   cursor: '#d4d4d4',
   cursorAccent: '#191919',
-  selectionBackground: 'rgba(82, 156, 202, 0.35)',
+  /* The accent, at a heavier alpha than the desktop's --accent-soft: a
+     selection made by dragging a finger has to be visible while the finger is
+     still on top of it. The rgb is the desktop's --accent (the app icon's
+     blue); only the alpha differs. The sixteen ANSI slots below are not the
+     accent and must not follow it — `blue` is whatever a program means by
+     blue, and a shell that prints a blue prompt should not come out brand
+     coloured. */
+  selectionBackground: 'rgba(59, 143, 238, 0.35)',
   black: '#2b2b2b',
   red: '#ff7369',
   green: '#4dab9a',

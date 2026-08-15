@@ -1,12 +1,18 @@
 /* ============================================================================
-   Settings — a full-window page, the way macOS System Settings is one.
+   Settings — two panes inside a sheet, the way macOS System Settings is laid
+   out inside its own window.
 
-   Two panes and no dialog. A quiet rail of sections on the app ground, and a
-   reading column on the paper beside it. Everything that used to be separated
-   by a hairline is separated by space or by a soft fill instead: a run of rows
-   is one rounded block of `--bg-secondary` with nothing drawn between the rows,
-   a section is a heading and a gap, and the only line left in the window is the
-   one the Modal shell draws under its own header.
+   A quiet rail of sections on the left, a reading column beside it, and the
+   workspace still visible around the whole thing. It used to fill the window
+   edge to edge, which read as navigating away from your work rather than
+   opening something over it; the layout below did not change when it became a
+   sheet, only how much room it is given.
+
+   Everything that used to be separated by a hairline is separated by space or
+   by a soft fill instead: a run of rows is one rounded block of
+   `--bg-secondary` with nothing drawn between the rows, a section is a heading
+   and a gap, and the only lines left are the two the Modal shell draws around
+   its own header and footer.
 
    Colour carries meaning here and nowhere else — a status dot, the selected
    rail row, the one destructive button.
@@ -17,7 +23,12 @@
   /* A switch knob is white on macOS in both appearances, which is why it is a
      token of its own rather than a text or surface colour. */
   --switch-knob: #ffffff;
-  --switch-knob-shadow: 0 0 0 0.5px rgba(30, 27, 22, 0.06), 0 1px 2px rgba(30, 27, 22, 0.24);
+  /* Neutral black, the same ink the --shadow-* tokens use. It was
+     rgba(30, 27, 22, …) — a brown shadow left from the warm palette, and the
+     last warm colour in the renderer once tokens.css was neutralised. On a
+     white knob a tinted shadow is not subtle: it is the only thing separating
+     the knob from the rail, so it decides what colour the edge reads as. */
+  --switch-knob-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.24);
 }
 
 [data-theme='dark'] {
@@ -28,7 +39,10 @@
 :root {
   /* Geometry this window owns. macOS's switch is 38×22 with an 18pt knob; the
      rail is a sidebar, so it takes the sidebar's minimum width. */
-  --settings-rail: 220px;
+  /* Narrower than the app's own sidebar minimum: this rail lives inside a
+     dialog, where every pixel it takes comes off the reading column beside it
+     rather than off the window. Twelve one-word labels fit at this width. */
+  --settings-rail: 196px;
   --switch-w: 38px;
   --switch-h: 22px;
   --switch-knob-size: 18px;
@@ -39,8 +53,11 @@
 
 /* ---------------------------------------------------------------- layout -- */
 
-/* The Modal's `page` size hands over a body with no padding and no scroll, so
-   the two panes own their own scrolling and the page never scrolls as a whole. */
+/* The Modal's `xl` size hands over a body with no padding and no scroll, so the
+   two panes own their own scrolling and the sheet never scrolls as a whole.
+   `height: 100%` resolves against the sheet's fixed height rather than against
+   the window's — which is what keeps both columns scrolling independently
+   instead of the taller one stretching the dialog off the screen. */
 .settings {
   display: grid;
   grid-template-columns: var(--settings-rail) minmax(0, 1fr);
@@ -58,6 +75,13 @@
   overflow-y: auto;
   padding: var(--sp-4) var(--sp-2) var(--sp-6);
   background: var(--bg-secondary);
+  /* The sheet has corners now, and `.modal-panel` does not clip its children —
+     it cannot, or a focus ring on the last control in the footer would be cut
+     off. The footer covers this corner today, so this is insurance rather than
+     a visible fix; it is here because the day something opens Settings without
+     one, a square fill poking out of a rounded dialog reads as a rendering
+     fault rather than as a missing footer. */
+  border-bottom-left-radius: var(--radius-xl);
 }
 
 .settings-nav-item {
@@ -106,9 +130,10 @@
      720px column against the window's left edge with 500px of blank paper
      beside it — System Settings centres its column, and so does this. The
      gutter never drops below --sp-10, so a narrow window is unchanged. */
-  padding-block: var(--sp-8) var(--sp-12);
-  padding-inline: max(var(--sp-10), calc((100% - var(--content-measure)) / 2));
+  padding-block: var(--sp-6) var(--sp-10);
+  padding-inline: max(var(--sp-6), calc((100% - var(--content-measure)) / 2));
   background: var(--bg-primary);
+  border-bottom-right-radius: var(--radius-xl);
 }
 
 /* A settings row whose control is 900px from its label is a row nobody reads
@@ -224,19 +249,29 @@
   border-bottom-right-radius: 0;
 }
 
+/* An option that needs a paragraph to explain itself is two pieces of type with
+   very different jobs, and they have to read that way: the title is what you
+   scan for, the description is what you read once. So the title takes the
+   brightest ink in the window and the description drops a step below body text,
+   and the two are pushed apart — both from each other and from the rows either
+   side.
+
+   The vertical padding is the description's, not the title's. A one-line row
+   and a row with a paragraph under it used to be padded identically, which made
+   the explained ones feel cramped exactly where there was most to read. */
 .settings-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--sp-6);
   min-height: var(--control-h-lg);
-  padding: var(--sp-3) var(--sp-4);
+  padding: var(--sp-4);
 }
 
 .settings-row-text {
   display: flex;
   flex-direction: column;
-  gap: var(--sp-05);
+  gap: var(--sp-15);
   min-width: 0;
 }
 
@@ -245,14 +280,17 @@
   align-items: center;
   gap: var(--sp-15);
   font-size: var(--t-body);
-  font-weight: var(--w-medium);
+  font-weight: var(--w-semibold);
   color: var(--text-primary);
 }
 
+/* `--text-muted`, not `--text-secondary`. Secondary is what the *rest* of the
+   window's prose is set in, so a description in it carried the same weight as
+   the sentence above the group — and the eye had nothing to skip. */
 .settings-help {
   font-size: var(--t-callout);
-  line-height: var(--lh-body);
-  color: var(--text-secondary);
+  line-height: var(--lh-loose);
+  color: var(--text-muted);
   max-width: 56ch;
 }
 
@@ -652,6 +690,59 @@
   flex-shrink: 0;
   font-size: var(--t-footnote);
   color: var(--text-muted);
+}
+
+/* The word *is* the status mark on the Agents list — see the note there. It is
+   scoped rather than applied to every `.settings-tool-state` because the Setup
+   pane draws a glyph beside its own word and the Linux pane puts a button in
+   that slot; colouring those too would put the second mark back. */
+.settings-tool[data-state='ready'] .settings-tool-state-lit {
+  color: var(--color-positive);
+}
+
+.settings-tool[data-state='installed-not-authed'] .settings-tool-state-lit {
+  color: var(--color-warning);
+}
+
+/* Shimmer placeholders shaped like the rows they stand in for, so the panel
+   does not jump a hundred pixels when a one-second probe comes back. */
+.settings-tool-ghost {
+  pointer-events: none;
+}
+
+.settings-ghost-line {
+  display: block;
+  height: 11px;
+  width: 60%;
+  border-radius: var(--radius-pill);
+  background: linear-gradient(
+    90deg,
+    var(--fill-quaternary) 0%,
+    var(--fill-tertiary) 50%,
+    var(--fill-quaternary) 100%
+  );
+  background-size: 200% 100%;
+  animation: settings-ghost 1.4s var(--ease) infinite;
+}
+
+.settings-ghost-short {
+  flex-shrink: 0;
+  width: 64px;
+}
+
+@keyframes settings-ghost {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-ghost-line {
+    animation: none;
+  }
 }
 
 .settings-url-address {

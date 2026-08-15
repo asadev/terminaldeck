@@ -263,8 +263,71 @@ export const START_MEMORY_KEY = 'session-start.defaults.v1'
  */
 export const MAX_REMEMBERED_PROJECTS = 100
 
+/**
+ * The folder the last session was started in.
+ *
+ * Separate from `START_MEMORY_KEY`, which is a map from folder to the choices
+ * made *within* that folder. This is the answer to a different question — which
+ * folder — and the reason it has to be stored at all is that the sidebar's New
+ * session button no longer opens a dialog. Without a dialog there is nothing to
+ * pre-fill, so the folder has to be a fact the app already knows.
+ *
+ * The store's project list is not that fact and cannot be made into it: it is
+ * ordered by when a project was *opened*, so on a window with three projects
+ * open it answers "the first one you ever added", which is exactly the folder
+ * you are least likely to have been working in.
+ */
+export const LAST_FOLDER_KEY = 'session-start.lastFolder.v1'
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/**
+ * Narrow whatever came out of storage into a usable path.
+ *
+ * Total, like `parseStartMemory`, and for the same reason: this string can be
+ * edited by hand in devtools and can be left behind by an older version. A
+ * relative path is rejected as well as a blank one — the main process resolves
+ * a session's cwd against its own working directory, so a stored `..` would
+ * silently start the next session somewhere inside the app bundle.
+ */
+export function parseLastFolder(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null
+  const path = raw.trim()
+  if (path.length === 0) return null
+  const absolute = path.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(path) || path.startsWith('\\\\')
+  return absolute ? path : null
+}
+
+/** The folder to start in, or null if nothing usable has been remembered. */
+export function readLastFolder(storage: Storage | null): string | null {
+  if (!storage) return null
+  try {
+    return parseLastFolder(storage.getItem(LAST_FOLDER_KEY))
+  } catch {
+    // A store disabled between reads. No memory is a worse start than a good
+    // one, and no reason at all to refuse to start.
+    return null
+  }
+}
+
+/**
+ * Remember where a session was just started.
+ *
+ * Rejects anything `parseLastFolder` would refuse to hand back, so a bad value
+ * never reaches storage — a write that only fails on the *next* read is the
+ * kind of bug that gets attributed to the reader.
+ */
+export function writeLastFolder(path: string, storage: Storage | null): void {
+  if (!storage) return
+  const clean = parseLastFolder(path)
+  if (!clean) return
+  try {
+    storage.setItem(LAST_FOLDER_KEY, clean)
+  } catch {
+    // Quota, or a disabled store. Forgetting the folder costs one click.
+  }
 }
 
 /**

@@ -62,7 +62,7 @@ struct QRScanner: View {
             Image(systemName: "qrcode.viewfinder")
                 .font(.system(size: 28))
                 .foregroundStyle(Theme.faint)
-            Text(title).font(.system(size: 14, weight: .medium)).foregroundStyle(.white)
+            Text(title).font(.system(size: 14, weight: .medium)).foregroundStyle(Theme.primary)
             Text(detail)
                 .font(.system(size: 12))
                 .foregroundStyle(Theme.secondary)

@@ -388,10 +388,14 @@ export function AlertsPanel({
       ) : (
         groups.map((group) => (
           <section className="alerts-group" key={group.severity} data-severity={group.severity}>
-            <h3 className="alerts-group-head">
-              {SEVERITY_HEADING[group.severity]}
-              <span className="alerts-count">{group.alerts.length}</span>
-            </h3>
+            {/* The heading and nothing else.
+
+                It used to carry a count badge, and between it, the summary line
+                above ("1 worth knowing") and this heading, the phrase "worth
+                knowing" was printed three times inside the top 150px of the
+                panel — twice as words and once as a bare digit. The summary
+                counts them; the rows underneath *are* them. */}
+            <h3 className="alerts-group-head">{SEVERITY_HEADING[group.severity]}</h3>
             <ul className="alerts-list">
               {group.alerts.map((alert) => (
                 <AlertRow key={alert.id} alert={alert} onAction={onAction} />

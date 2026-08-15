@@ -258,6 +258,8 @@ function fakeSessions(seed: Record<string, string> = { 'sess-1': 'earlier output
 interface CreatingSessions extends FakeSessions {
   /** Every request that reached the session layer, in order. Empty is the assertion. */
   requests: CreateRequest[]
+  /** Folders this desktop offers a given device. Anything unlisted gets the shared set. */
+  offers: Map<string, string[]>
   /** Set to answer with a refusal instead of starting anything. */
   refuseWith: CreateOutcome | null
   /** Set to hold `create` open, so a test can look at the window while it runs. */
@@ -275,6 +277,12 @@ function creatingSessions(folders: string[] = ['/tmp/allowed']): CreatingSession
   fake.requests = []
   fake.refuseWith = null
   fake.hold = null
+  // Per device, because that is the whole shape of the real one: a desktop
+  // offers each phone the folders somebody chose for it, and a device with no
+  // row of its own gets the shared list. Present on every host that can create,
+  // absent on every host that cannot — the two travel together.
+  fake.offers = new Map<string, string[]>()
+  fake.folders = (deviceId: string): string[] => fake.offers.get(deviceId) ?? folders
   fake.create = async (request: CreateRequest): Promise<CreateOutcome> => {
     fake.requests.push(request)
     if (fake.hold) await fake.hold
@@ -796,8 +804,12 @@ describe('starting a session from a phone', () => {
     client.send({ t: 'create', cols: 100, rows: 30 })
     const created = await client.until((m) => m.t === 'created', 'the new session')
     expect(created.t === 'created' && created.session.id).toBe('made-1')
-    // The size travelled, so the first screen is drawn at the size it is read at.
-    expect(sessions.requests).toEqual([{ cwd: undefined, cols: 100, rows: 30 }])
+    // The size travelled, so the first screen is drawn at the size it is read
+    // at — and so did the device, which is what lets the session layer answer
+    // "may *this* phone start here" rather than "may a phone".
+    expect(sessions.requests).toEqual([
+      { deviceId: 'device-1', cwd: undefined, cols: 100, rows: 30 },
+    ])
   })
 
   it('makes a first-class session: it is in the list, and it can be attached to', async () => {
@@ -915,6 +927,139 @@ describe('starting a session from a phone', () => {
 
     expect(harness.endpoint.connections()).toEqual([])
     expect(sessions.list().map((s) => s.id)).toContain('made-1')
+  })
+})
+
+/**
+ * The folders a device may use, on the wire.
+ *
+ * The rule itself lives in `session-create.ts` and is tested there. What this
+ * server owns is narrower and was the missing half: the request has to carry
+ * *which device* is asking, and the device has to be told what it may use so its
+ * picker is not a guess. Before this, a phone assembled a folder list out of the
+ * sessions it could see — a set that was never the same as the one the desktop
+ * would accept, with nothing on either screen to explain the difference.
+ */
+describe('the folders a device is offered', () => {
+  const TABLET = 'device-tablet.c2VjcmV0'
+
+  /** Two paired devices, so "this one's list" is a claim with something to fail against. */
+  const allowTwo: RemoteAuthenticator = {
+    async authenticate(token) {
+      if (token === CREDENTIAL) {
+        return { ok: true, deviceId: 'device-1', deviceName: 'Test iPhone', credential: null }
+      }
+      if (token === TABLET) {
+        return { ok: true, deviceId: 'device-tablet', deviceName: 'Test iPad', credential: null }
+      }
+      return { ok: false, message: 'This device is not allowed in.' }
+    },
+  }
+
+  it('travels in the welcome, so the picker is drawn before anything is tapped', async () => {
+    const sessions = creatingSessions()
+    sessions.offers.set('device-1', ['/tmp/alpha', '/tmp/beta'])
+    const harness = await serve({}, sessions)
+    const client = await connect(harness.port)
+    client.send(HELLO)
+
+    const welcome = await client.until((m) => m.t === 'welcome', 'the welcome')
+    expect(welcome.t === 'welcome' && welcome.folders).toEqual(['/tmp/alpha', '/tmp/beta'])
+  })
+
+  it('is this device’s list and not the other device’s', async () => {
+    const sessions = creatingSessions()
+    sessions.offers.set('device-1', ['/tmp/phone-only'])
+    sessions.offers.set('device-tablet', ['/tmp/tablet-only'])
+    const harness = await serve({ auth: allowTwo }, sessions)
+
+    const phone = await connect(harness.port)
+    phone.send(HELLO)
+    const forPhone = await phone.until((m) => m.t === 'welcome', 'the phone’s welcome')
+
+    const tablet = await connect(harness.port)
+    tablet.send({ ...HELLO, token: TABLET })
+    const forTablet = await tablet.until((m) => m.t === 'welcome', 'the tablet’s welcome')
+
+    expect(forPhone.t === 'welcome' && forPhone.folders).toEqual(['/tmp/phone-only'])
+    expect(forTablet.t === 'welcome' && forTablet.folders).toEqual(['/tmp/tablet-only'])
+  })
+
+  it('is absent entirely from a desktop that cannot start sessions', async () => {
+    // The default fake has no `create` and therefore no `folders`. A key with an
+    // empty array would read as "you may use nothing", which is a different
+    // claim from "this host does not do that" — and the missing `create`
+    // capability already says the second one.
+    const harness = await serve()
+    const client = await connect(harness.port)
+    client.send(HELLO)
+
+    const welcome = await client.until((m) => m.t === 'welcome', 'the welcome')
+    expect(welcome.t === 'welcome' && 'folders' in welcome).toBe(false)
+  })
+
+  it('is pushed again when it changes on the desktop, with no reconnect', async () => {
+    // A person removing a folder in the settings panel expects the phone in
+    // their other hand to stop offering it. The rule is already live without
+    // this frame — `folders()` is read per request — so what this fixes is a
+    // picker that would keep offering a tap whose only outcome is a refusal.
+    const sessions = creatingSessions()
+    sessions.offers.set('device-1', ['/tmp/alpha', '/tmp/beta'])
+    const harness = await serve({}, sessions)
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    sessions.offers.set('device-1', ['/tmp/alpha'])
+    expect(harness.endpoint.foldersChanged('device-1')).toBe(1)
+
+    const pushed = await client.until((m) => m.t === 'folders', 'the new list')
+    expect(pushed).toEqual({ t: 'folders', folders: ['/tmp/alpha'] })
+  })
+
+  it('pushes only to the device whose folders changed', async () => {
+    const sessions = creatingSessions()
+    sessions.offers.set('device-1', ['/tmp/phone-only'])
+    sessions.offers.set('device-tablet', ['/tmp/tablet-only'])
+    const harness = await serve({ auth: allowTwo }, sessions)
+
+    const phone = await connect(harness.port)
+    phone.send(HELLO)
+    await phone.until((m) => m.t === 'welcome', 'the phone’s welcome')
+    const tablet = await connect(harness.port)
+    tablet.send({ ...HELLO, token: TABLET })
+    await tablet.until((m) => m.t === 'welcome', 'the tablet’s welcome')
+
+    expect(harness.endpoint.foldersChanged('device-tablet')).toBe(1)
+    await tablet.until((m) => m.t === 'folders', 'the tablet’s new list')
+    // Not a timing artefact: the tablet's push has already been received, and
+    // this server writes in the order it is asked to.
+    expect(phone.received.some((m) => m.t === 'folders')).toBe(false)
+  })
+
+  it('says nothing, and reports nothing, for a device that is not connected', async () => {
+    const sessions = creatingSessions()
+    const harness = await serve({}, sessions)
+    expect(harness.endpoint.foldersChanged('device-1')).toBe(0)
+  })
+
+  it('takes the asking device from the connection, never from the frame', async () => {
+    // The one that would undo the whole feature: a client naming a device id
+    // would be a client choosing whose folders it gets. `parseClientMessage`
+    // rebuilds a `create` from the fields it knows, so the extra one below is
+    // dropped before this server sees it — and this server passes the id the
+    // handshake proved.
+    const sessions = creatingSessions()
+    const harness = await serve({}, sessions)
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    client.send({ t: 'create', deviceId: 'device-tablet', cwd: '/tmp/allowed' })
+    await client.until((m) => m.t === 'created', 'the new session')
+    expect(sessions.requests).toEqual([
+      { deviceId: 'device-1', cwd: '/tmp/allowed', cols: undefined, rows: undefined },
+    ])
   })
 })
 

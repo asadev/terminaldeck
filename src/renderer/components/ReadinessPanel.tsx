@@ -177,13 +177,18 @@ export function CheckRow({ check, busy, result, onApply }: RowProps) {
 
   return (
     <li className="readiness-row" data-status={check.status} data-gate={check.gate || undefined}>
-      <span className="readiness-glyph" title={STATUS_LABEL[check.status]} aria-hidden="true">
+      {/* The glyph is the status, and it is a *shape* (✓ ! ✕ –) before it is a
+          colour, so it survives being read without one. The word used to be
+          printed beside every title as well — "Passing" on all seven passing
+          rows, saying exactly what the tick already said. It moves into the
+          label, where a screen reader still gets it and the eye does not have
+          to read it ten times. */}
+      <span className="readiness-glyph" role="img" aria-label={STATUS_LABEL[check.status]}>
         {GLYPH[check.status]}
       </span>
       <div className="readiness-row-body">
         <div className="readiness-row-head">
           <span className="readiness-title">{check.title}</span>
-          <span className="readiness-status-label">{STATUS_LABEL[check.status]}</span>
           {check.gate && check.status !== 'pass' ? (
             <span className="readiness-gate-tag">caps the score</span>
           ) : null}
@@ -336,8 +341,14 @@ export function ReadinessPanel({ projectPath, bridge }: ReadinessPanelProps) {
               <p className="readiness-band" data-band={report.band}>
                 {BAND_COPY[report.band]}
               </p>
+              {/* The number in the ring is a *weighted* score out of 100 —
+                  `scoreChecks` gives every check a share of it — so "87" and
+                  "7 of 10" are both true and do not follow from one another.
+                  Printing the count alone left the 87 unexplained and looking
+                  like arithmetic that had gone wrong. */}
               <p className="readiness-summary">
-                {passing} of {applicable} checks passing
+                {report.score} out of 100 — {passing} of {applicable} checks passing, weighted by
+                how much each one matters.
               </p>
             </>
           ) : (

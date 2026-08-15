@@ -3,6 +3,15 @@ import { promisify } from 'node:util'
 import type { ProviderId } from '../shared/types'
 import { currentPlatform, envPath, isWindows, withPath, type Env, type Platform } from './platform/host'
 import { firstLookupPath, loginPathSpec, lookupSpec } from './platform/lookup'
+import {
+  IN_DISTRO_TIMEOUT_MS,
+  WSL_EXE,
+  decodeWslOutput,
+  shellCommandLine,
+  shellQuote,
+  wslLaunch,
+  type WslTarget,
+} from './wsl'
 
 const run = promisify(execFile)
 
@@ -53,7 +62,22 @@ export interface ProviderSpec {
    * themselves. Those are still only as good as the `--help` output they were
    * read from, which the note on the table below spells out.
    */
-  spawn: { command: string; args: string[]; resumeArgs: string[] }
+  spawn: {
+    command: string
+    args: string[]
+    resumeArgs: string[]
+    /**
+     * Where the *operating-system* process starts, when that is not the
+     * session's own folder.
+     *
+     * Only ever set for a WSL session, and there it is not a refinement but the
+     * difference between working and not: the session's folder is a Linux path,
+     * `node-pty` resolves the cwd it is given through `path.win32.resolve`, and
+     * `C:\home\asad\proj` does not exist. The Linux directory travels in
+     * `wsl.exe --cd` instead. See `windowsFallbackCwd` in `wsl.ts`.
+     */
+    hostCwd?: string
+  }
 }
 
 /**
@@ -61,12 +85,61 @@ export interface ProviderSpec {
  *
  * A function rather than a literal so both platforms' answers can be pinned by
  * a test on either — `PROVIDERS` below is this applied to the real platform.
+ *
+ * ## The third argument
+ *
+ * `wsl` is what turns this into the table for a session running *inside* a
+ * distribution rather than on Windows itself, and it carries the session's
+ * folder because `wsl.exe --cd` is part of the launch. That makes the table
+ * per-session on that one path, which is why `PROVIDERS` below — the table for
+ * everything that only wants `bin` or `resumeArgs` — passes nothing and stays a
+ * constant. `startSession` builds its own with the target it is about to use.
+ *
+ * A target is honoured on Windows only. `wsl.exe` exists nowhere else, and
+ * silently accepting one on macOS would produce a table that cannot spawn.
  */
-export function providersFor(platform: Platform, env: Env): Record<ProviderId, ProviderSpec> {
+export function providersFor(
+  platform: Platform,
+  env: Env,
+  wsl: WslTarget | null = null,
+): Record<ProviderId, ProviderSpec> {
   const windows = isWindows(platform)
+  const target = windows ? wsl : null
 
-  /** `cmd.exe /c <cli>` on Windows; the CLI itself everywhere else. */
+  /**
+   * `wsl.exe … -- <login shell> -lic '<cli>'` inside a distro, `cmd.exe /c <cli>`
+   * on Windows, the CLI itself everywhere else.
+   *
+   * `exec` in front of the in-distro command so the agent replaces the login
+   * shell rather than running as its child: without it the pty's foreground
+   * process is a shell, so a Ctrl-C reaches the shell, and the exit code the tab
+   * reports is the shell's rather than the agent's.
+   */
   const launch = (bin: string, args: string[], resumeArgs: string[]): ProviderSpec['spawn'] => {
+    if (target) {
+      const start = wslLaunch({
+        distro: target.distro,
+        cwd: target.cwd,
+        inner: shellCommandLine(['exec', bin, ...args]),
+        env,
+      })
+      const resume =
+        resumeArgs.length > 0
+          ? wslLaunch({
+              distro: target.distro,
+              cwd: target.cwd,
+              inner: shellCommandLine(['exec', bin, ...resumeArgs]),
+              env,
+            })
+          : null
+      return {
+        command: start.command,
+        args: start.args,
+        // Empty stays empty, for the reason the `cmd.exe` branch gives below.
+        resumeArgs: resume === null ? [] : resume.args,
+        hostCwd: start.hostCwd,
+      }
+    }
     if (!windows) return { command: bin, args, resumeArgs }
     const shell = env.COMSPEC || 'cmd.exe'
     return {
@@ -84,9 +157,19 @@ export function providersFor(platform: Platform, env: Env): Record<ProviderId, P
    * at its command processor, and it is preferred over naming PowerShell
    * because PowerShell's location and availability vary by edition while
    * `COMSPEC` is set on every install.
+   *
+   * Inside a distro it is neither: the shell is whatever that user's passwd
+   * entry says, which is a question only the distro can answer, so the thing
+   * being launched is `wsl.exe` and the login-shell resolution happens on the
+   * far side. `bin` says `wsl.exe` for the same reason — it is the name that
+   * honestly answers "what opens a shell on this machine" there, and unlike a
+   * host shell path it is not a claim about a binary that is not being run.
    */
-  const shellBin = windows ? env.COMSPEC || 'cmd.exe' : env.SHELL || '/bin/zsh'
-  const shellArgs = windows ? [] : ['-l']
+  const wslShell = target
+    ? wslLaunch({ distro: target.distro, cwd: target.cwd, inner: '', env })
+    : null
+  const shellBin = wslShell ? WSL_EXE : windows ? env.COMSPEC || 'cmd.exe' : env.SHELL || '/bin/zsh'
+  const shellArgs = wslShell ? wslShell.args : windows ? [] : ['-l']
 
   return {
     // --continue verified against `claude --help` on this machine.
@@ -125,7 +208,12 @@ export function providersFor(platform: Platform, env: Env): Record<ProviderId, P
       args: shellArgs,
       resumeArgs: [],
       // Already an executable path, so it needs no command-processor wrapper.
-      spawn: { command: shellBin, args: shellArgs, resumeArgs: [] },
+      spawn: {
+        command: shellBin,
+        args: shellArgs,
+        resumeArgs: [],
+        ...(wslShell ? { hostCwd: wslShell.hostCwd } : {}),
+      },
     },
   }
 }
@@ -170,27 +258,121 @@ export async function loginPath(platform: Platform = currentPlatform()): Promise
   return cachedPath
 }
 
-/** Which provider CLIs are actually installed, so the UI can grey out the rest. */
+/**
+ * The prefix an in-distro probe prints for each CLI it found.
+ *
+ * A marker rather than bare names because the answer comes back through a login
+ * shell, and a login shell prints whatever the user's `.bashrc` prints — a
+ * fortune, a `neofetch`, a "you have mail". `firstLookupPath` takes the first
+ * non-empty line, so unmarked output would have the app reading somebody's motd
+ * as the location of Claude Code. Only lines carrying this prefix are read, and
+ * everything else on the stream is ignored rather than guessed at.
+ */
+export const WSL_FOUND_PREFIX = 'agent-found:'
+
+/**
+ * Ask a distribution which of these CLIs it has, in one round trip.
+ *
+ * One `wsl.exe` for the whole table rather than one per agent. Each call has to
+ * start a login shell inside the distro — and, if the distro is asleep, boot a
+ * virtual machine first — so three calls is three times a cost that is already
+ * the largest thing on the New Session path.
+ *
+ * `command -v` rather than `which`: it is a POSIX shell builtin, so it is there
+ * on a distro with no `which` binary (Alpine's default install has none), and it
+ * answers about the PATH of the shell that just sourced the user's rc files,
+ * which is the entire question.
+ *
+ * Nothing here throws: a distro that is missing, refuses to start, or times out
+ * answers "none of them", and the caller's existing fallback turns the tab into
+ * a plain shell rather than a spawn that dies.
+ */
+async function detectInsideDistro(
+  target: WslTarget,
+  names: readonly string[],
+  env: Env,
+): Promise<Set<string>> {
+  const inner =
+    `for n in ${names.map(shellQuote).join(' ')}; do ` +
+    // `\\n` and not a real newline: this whole string travels as one Windows
+    // command-line argument, and a raw line break inside one is a thing that
+    // happens to survive rather than a thing that is meant to. `printf` turns
+    // the two characters into the line break on the far side, where it belongs.
+    `command -v $n >/dev/null 2>&1 && printf ${shellQuote(`${WSL_FOUND_PREFIX}%s\\n`)} $n; ` +
+    `done`
+  // No `--cd`: this asks about the distro, not about a folder, and pointing it
+  // at a folder that has since been deleted would fail the probe over something
+  // it is not asking about.
+  const launch = wslLaunch({ distro: target.distro, cwd: null, inner, env })
+
+  try {
+    const { stdout } = await run(launch.command, launch.args, {
+      timeout: IN_DISTRO_TIMEOUT_MS,
+      windowsHide: true,
+      // Decoded by hand: `wsl.exe` writes its *own* messages as UTF-16LE, and
+      // reading them as utf8 is how a working distro reports nothing installed.
+      // `decodeWslOutput` sniffs, so passthrough output from the Linux process —
+      // which is plain UTF-8 — is unaffected.
+      encoding: 'buffer',
+    })
+    const text = decodeWslOutput(Buffer.isBuffer(stdout) ? stdout : Buffer.from(String(stdout)))
+    const found = new Set<string>()
+    for (const line of text.split(/\r?\n/)) {
+      const trimmed = line.trim()
+      if (trimmed.startsWith(WSL_FOUND_PREFIX)) found.add(trimmed.slice(WSL_FOUND_PREFIX.length))
+    }
+    return found
+  } catch {
+    return new Set<string>()
+  }
+}
+
+/**
+ * Which provider CLIs are actually installed, so the UI can grey out the rest.
+ *
+ * `wsl` decides **which machine is being asked about**, and that is not a
+ * detail: whether `claude` exists is a question about Ubuntu's PATH, not about
+ * Windows', on a machine where the agent was installed inside Ubuntu. Asking the
+ * wrong side is the whole reported bug — `where.exe claude` answers "not found",
+ * every agent is reported missing, and every session quietly becomes a cmd.exe
+ * shell on a machine with a perfectly good Claude Code install six inches away.
+ */
 export async function detectProviders(
   platform: Platform = currentPlatform(),
+  wsl: WslTarget | null = null,
 ): Promise<Record<ProviderId, boolean>> {
-  const PATH = await loginPath(platform)
-  // Never `{ ...process.env, PATH }`: on Windows that leaves two spellings of
-  // the same variable in one object. `withPath` removes the ambiguity.
-  const env = withPath(process.env, PATH, platform)
   // The table for the platform being asked about, not the one this process
   // happens to be on. Identical in production, where they are the same value;
   // the difference is that a test pinning the Windows branch then looks up the
   // names Windows would look up instead of this Mac's.
+  //
+  // Built without the WSL target on purpose: what is wanted from it here is
+  // `bin`, the CLI's own name, and that is the same name on both sides of the
+  // boundary. Passing the target would build a whole `wsl.exe` launch line for
+  // a question that only needs three words out of it.
   const table = providersFor(platform, process.env)
+  const agents = (Object.keys(table) as ProviderId[]).filter((id) => id !== 'shell')
+
+  if (wsl !== null && isWindows(platform)) {
+    const found = await detectInsideDistro(wsl, agents.map((id) => table[id].bin), process.env)
+    const inside = {} as Record<ProviderId, boolean>
+    // The shell is always available: `wsl.exe` resolves the user's login shell
+    // on the far side, and a distro without one is not a distro.
+    inside.shell = true
+    for (const id of agents) inside[id] = found.has(table[id].bin)
+    return inside
+  }
+
+  const PATH = await loginPath(platform)
+  // Never `{ ...process.env, PATH }`: on Windows that leaves two spellings of
+  // the same variable in one object. `withPath` removes the ambiguity.
+  const env = withPath(process.env, PATH, platform)
   const found = {} as Record<ProviderId, boolean>
+  // The shell is never looked up: it is a path this table already resolved.
+  found.shell = true
 
   await Promise.all(
-    (Object.keys(table) as ProviderId[]).map(async (id) => {
-      if (id === 'shell') {
-        found[id] = true
-        return
-      }
+    agents.map(async (id) => {
       const spec = lookupSpec(platform, table[id].bin)
       try {
         const { stdout } = await run(spec.command, spec.args, { env, windowsHide: true })

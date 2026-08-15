@@ -30,6 +30,12 @@ export interface PtySource {
    * method that exists and always refuses.
    */
   create?(request: CreateRequest): Promise<CreateOutcome>
+  /**
+   * The folders one device may start a session in — the list `create` enforces,
+   * sent to that device so its picker matches. Optional and absent together
+   * with `create`, for the same reason it is.
+   */
+  folders?(deviceId: string): string[]
 }
 
 interface Listener {
@@ -56,9 +62,18 @@ export class SessionFanout implements SessionAccess {
    */
   readonly create?: (request: CreateRequest) => Promise<CreateOutcome>
 
+  /**
+   * Present exactly when {@link create} is, and assigned the same way for the
+   * same reason: `server.ts` reads whether these methods exist to decide what to
+   * advertise, and a prototype method always exists.
+   */
+  readonly folders?: (deviceId: string) => string[]
+
   constructor(private readonly ptys: PtySource) {
     const start = ptys.create
     if (start) this.create = (request) => start(request)
+    const offer = ptys.folders
+    if (offer) this.folders = (deviceId) => offer(deviceId)
   }
 
   /* ----------------------------------------------------- from PtyManager -- */

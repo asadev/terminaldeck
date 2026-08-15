@@ -15,11 +15,34 @@ vi.mock('node:child_process', () => {
   execFile[Symbol.for('nodejs.util.promisify.custom')] = async (
     file: string,
     args: string[],
-  ): Promise<{ stdout: string; stderr: string }> => {
+    // `stdout` is widened to a Buffer because one caller genuinely asks for
+    // one: the in-distro probe passes `encoding: 'buffer'` so it can decode
+    // UTF-16LE by hand. Widening the fake is honest; casting a Buffer to a
+    // string here would hide the very difference being exercised.
+  ): Promise<{ stdout: string | Buffer; stderr: string }> => {
     calls.ran.push({ file, args })
     if (file === '/bin/zsh') return { stdout: '/opt/homebrew/bin:/usr/bin\n', stderr: '' }
     if (file === 'which') return { stdout: `/opt/homebrew/bin/${args[0]}\n`, stderr: '' }
     if (file === 'where.exe') return { stdout: `C:\\npm\\${args[0]}.cmd\r\n`, stderr: '' }
+    // The in-distro probe. A Buffer rather than a string because that is what
+    // the real call asks for — `wsl.exe` writes UTF-16LE for its own messages,
+    // so the module decodes by hand — and because the answer is deliberately
+    // *not* the whole table: this fake distro has Claude Code and Codex and no
+    // Gemini, which is the only way the assertions below can tell a real read
+    // from a hardcoded "everything is installed".
+    //
+    // The noise line is the point of the marker. Output comes back through an
+    // interactive login shell, and a login shell prints whatever the user's
+    // .bashrc prints.
+    if (file === 'wsl.exe') {
+      return {
+        stdout: Buffer.from(
+          'Welcome to Ubuntu 24.04 LTS\nagent-found:claude\nagent-found:codex\n',
+          'utf8',
+        ),
+        stderr: '',
+      }
+    }
     return { stdout: '', stderr: '' }
   }
   return { execFile }
@@ -162,5 +185,141 @@ describe('detecting which agent CLIs are installed', () => {
     await detectProviders('win32')
     expect(calls.ran.map((call) => call.args[0])).not.toContain(shell)
     expect(calls.ran.map((call) => call.args[0]).sort()).toEqual(['claude', 'codex', 'gemini'])
+  })
+})
+
+/* ================================================================== wsl == */
+
+/**
+ * The Windows-inside-Linux table.
+ *
+ * Every assertion below is pinned from a Mac, which is the only way it can be
+ * pinned at all: `wsl.exe` does not exist here and CI is macOS-only by policy.
+ * That is exactly the situation the `cmd.exe` table above is in, and the reason
+ * both are written this way — the alternative is a branch whose first reader is
+ * a user, which is how the `PATH`/`Path` class of bug ships.
+ */
+describe('the provider table inside a distribution', () => {
+  const target = { distro: 'Ubuntu', cwd: '/home/asad/proj' }
+  const env = { COMSPEC: 'C:\\Windows\\system32\\cmd.exe', USERPROFILE: 'C:\\Users\\Asad' }
+  const wsl = providersFor('win32', env, target)
+
+  it('launches wsl.exe, not cmd.exe', () => {
+    // The reported bug in one assertion: cmd.exe cannot see a `claude` installed
+    // inside Ubuntu, and cannot take the folder as a working directory either.
+    expect(wsl.claude.spawn.command).toBe('wsl.exe')
+    expect(wsl.claude.spawn.args.slice(0, 5)).toEqual([
+      '-d',
+      'Ubuntu',
+      '--cd',
+      '/home/asad/proj',
+      '-e',
+    ])
+  })
+
+  it('runs the agent through the distribution’s own login shell', () => {
+    // `wsl.exe -d Ubuntu -- claude` finds nothing when claude came from nvm:
+    // nvm is set up in ~/.bashrc and ~/.bashrc returns immediately for a
+    // non-interactive shell. The last argument is the command that shell runs.
+    const args = wsl.claude.spawn.args
+    expect(args).toContain('sh')
+    expect(args[args.length - 1]).toBe('exec claude')
+    expect(wsl.claude.spawn.resumeArgs[wsl.claude.spawn.resumeArgs.length - 1]).toBe(
+      'exec claude --continue',
+    )
+  })
+
+  it('starts the Windows process somewhere Windows has', () => {
+    // node-pty resolves the cwd it is given: path.win32.resolve of a Linux path
+    // is C:\home\asad\proj, which does not exist, and the tab dies silently.
+    expect(wsl.claude.spawn.hostCwd).toBe('C:\\Users\\Asad')
+    expect(wsl.shell.spawn.hostCwd).toBe('C:\\Users\\Asad')
+  })
+
+  it('keeps `bin` the CLI’s own name, which is the same on both sides', () => {
+    expect(wsl.claude.bin).toBe('claude')
+    expect(wsl.codex.bin).toBe('codex')
+  })
+
+  it('leaves an empty resume list empty rather than half-built', () => {
+    // Same rule as the cmd.exe branch: a resume that silently starts a fresh
+    // session is worse than no resume at all.
+    expect(wsl.gemini.spawn.resumeArgs).toEqual([])
+  })
+
+  it('gives the shell tab the distribution’s login shell, not cmd.exe', () => {
+    expect(wsl.shell.spawn.command).toBe('wsl.exe')
+    expect(wsl.shell.spawn.args[wsl.shell.spawn.args.length - 1]).toBe('')
+    expect(wsl.shell.bin).not.toBe(env.COMSPEC)
+  })
+
+  it('omits -d when nobody has chosen a distribution', () => {
+    // What makes a session work before the probe has answered and before anybody
+    // has opened settings: wsl.exe uses the machine's own default.
+    const unchosen = providersFor('win32', env, { distro: null, cwd: '/home/asad' })
+    expect(unchosen.claude.spawn.args.slice(0, 3)).toEqual(['--cd', '/home/asad', '-e'])
+  })
+
+  it('ignores a WSL target on a platform that has no wsl.exe', () => {
+    // Honouring one on macOS would build a table that cannot spawn at all.
+    const mac = providersFor('darwin', { SHELL: '/bin/zsh' }, target)
+    expect(mac.claude.spawn).toEqual({ command: 'claude', args: [], resumeArgs: ['--continue'] })
+    expect(mac.claude.spawn.hostCwd).toBeUndefined()
+  })
+})
+
+describe('detecting agents inside a distribution', () => {
+  const target = { distro: 'Ubuntu', cwd: '/home/asad/proj' }
+
+  it('asks the distribution, not Windows', async () => {
+    // The whole bug: `where.exe claude` on a machine where claude lives in
+    // Ubuntu answers "not found", every agent is reported missing, and every
+    // session quietly becomes a cmd.exe shell.
+    const found = await detectProviders('win32', target)
+    expect(found).toEqual({ claude: true, codex: true, gemini: false, shell: true })
+    expect(calls.ran.every((call) => call.file === 'wsl.exe')).toBe(true)
+  })
+
+  it('spends one round trip on the whole table, not one per agent', async () => {
+    // Each call has to start a login shell inside the distro, and a sleeping
+    // distro has to boot a virtual machine first. Three of those is three times
+    // the largest cost on the New Session path.
+    await detectProviders('win32', target)
+    expect(calls.ran.length).toBe(1)
+  })
+
+  it('reads only its own marked lines, so a chatty .bashrc cannot answer for it', async () => {
+    // The fake distro prints a welcome banner first. Taking the first non-empty
+    // line — which is what the Windows and macOS paths do with `where`/`which` —
+    // would read somebody's motd as the location of Claude Code.
+    const found = await detectProviders('win32', target)
+    expect(found.gemini).toBe(false)
+  })
+
+  it('asks about the folder’s side only when there is a target', async () => {
+    // No target means the Windows question, unchanged.
+    await detectProviders('win32')
+    expect(calls.ran.every((call) => call.file === 'where.exe')).toBe(true)
+  })
+
+  it('never claims the shell is missing', async () => {
+    // wsl.exe resolves the user's login shell on the far side; a distribution
+    // without one is not a distribution.
+    expect((await detectProviders('win32', target)).shell).toBe(true)
+  })
+})
+
+describe('the probe command itself', () => {
+  it('carries no raw line break across the command line', async () => {
+    // The whole probe travels as one Windows command-line argument. A real
+    // newline inside one survives by accident rather than by design; the two
+    // characters `\n` are what `printf` turns into a line break on the far side,
+    // which is where the line break belongs.
+    await detectProviders('win32', { distro: 'Ubuntu', cwd: '/home/asad' })
+    const inner = calls.ran[0].args[calls.ran[0].args.length - 1]
+    expect(inner).not.toContain('\n')
+    expect(inner).toContain('\\n')
+    // And it asks about every agent in one loop rather than three lookups.
+    expect(inner).toContain('for n in claude codex gemini')
   })
 })

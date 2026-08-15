@@ -31,6 +31,7 @@
  */
 
 import { Backoff, type BackoffOptions } from './backoff'
+import { machineNoun, readHostPlatform, type HostPlatform } from './host-platform'
 import {
   decodeServerMessage,
   encode,
@@ -96,7 +97,7 @@ export type ConnectionPhase =
   | 'offline'
   | 'connecting'
   | 'online'
-  /** Paired, but a human at the Mac has not approved this device yet. */
+  /** Paired, but a human at the desktop has not approved this device yet. */
   | 'pending'
   /** A retry is scheduled. `retryAt` says when. */
   | 'waiting'
@@ -184,7 +185,27 @@ export class Connection {
    * roughly half a second after showing it.
    */
   private awaitingApproval = false
-  private approvalDetail = 'Waiting for approval on the Mac.'
+  /**
+   * The desktop's own words for the approval wait, when it sent any.
+   *
+   * Null rather than a pre-filled sentence, because the fallback has to be
+   * composed at the moment it is read: the noun in it depends on `platform`
+   * below, and a string built in a field initialiser would have been built
+   * before a single frame arrived — which is how this client came to tell a
+   * Windows user to go and approve a device on "the Mac".
+   */
+  private approvalDetail: string | null = null
+  /**
+   * What kind of machine this socket is talking to, once it has said.
+   *
+   * Sticky for the life of the connection rather than reset on each attempt: a
+   * machine does not change operating system between one reconnect and the next,
+   * and the sentences that most need the right noun are the ones printed *after*
+   * a socket has dropped. It starts at `unknown`, so a desktop that predates the
+   * field — or one that has not answered yet — gets a neutral word instead of a
+   * guess.
+   */
+  private platform: HostPlatform = 'unknown'
   private token: string
   private readonly open: (url: string) => SocketLike
   private readonly clock: Clock
@@ -205,6 +226,18 @@ export class Connection {
 
   current(): ConnectionState {
     return this.state
+  }
+
+  /**
+   * What kind of machine is on the other end, as far as this socket knows.
+   *
+   * `unknown` until a `welcome` says otherwise, and `unknown` forever against a
+   * desktop old enough not to send the field. Callers turn it into a noun with
+   * `machineNoun`; nothing here returns display text, because the same value
+   * has to serve a heading, a button and a sentence.
+   */
+  hostPlatform(): HostPlatform {
+    return this.platform
   }
 
   start(): void {
@@ -265,6 +298,21 @@ export class Connection {
 
   /* --------------------------------------------------------- internals -- */
 
+  /**
+   * What the banner says while a human is being waited on.
+   *
+   * The desktop's own sentence when it sent one — it knows more than this client
+   * does about why it refused — and otherwise a sentence composed here, now,
+   * with whatever noun is currently justified. Composed on every read rather
+   * than stored, because `platform` can become known *after* the first refusal:
+   * a desktop that mints a credential and then refuses sends the `welcome`
+   * carrying `hostPlatform` first, so a sentence frozen at the moment the
+   * refusal arrived would be one frame too early to be right.
+   */
+  private approvalSentence(): string {
+    return this.approvalDetail ?? `Waiting for approval on the ${machineNoun(this.platform)}.`
+  }
+
   private set(phase: ConnectionPhase, detail: string, retryAt: number | null): void {
     this.state = { phase, detail, retryAt, attempts: this.backoff.attempts }
     this.options.handlers.onState(this.state)
@@ -276,7 +324,7 @@ export class Connection {
     this.greeted = false
     // While waiting for approval the reconnects are the poll, and flipping the
     // banner to "Connecting…" every few seconds would bury the instruction.
-    if (this.awaitingApproval) this.set('pending', this.approvalDetail, null)
+    if (this.awaitingApproval) this.set('pending', this.approvalSentence(), null)
     else this.set('connecting', 'Connecting…', null)
 
     let socket: SocketLike
@@ -318,7 +366,7 @@ export class Connection {
       this.clearHeartbeat()
       if (this.stopped) return
       if (this.state.phase === 'rejected' || this.state.phase === 'incompatible') return
-      this.scheduleRetry(closeReason(event.code, this.greeted))
+      this.scheduleRetry(closeReason(event.code, this.greeted, machineNoun(this.platform)))
     }
 
     this.cancelHandshake = this.clock.after(HANDSHAKE_TIMEOUT_MS, () => {
@@ -339,6 +387,11 @@ export class Connection {
     const message = decoded.message
 
     if (message.t === 'welcome') {
+      // Read before the version check, and before anything decides whether this
+      // welcome is an admission. It is a fact about the machine, true even of a
+      // desktop this client is about to refuse to talk to — and the refusal is
+      // one of the sentences that wants the right noun in it.
+      this.platform = readHostPlatform(message.hostPlatform)
       if (message.protocol !== PROTOCOL_VERSION) {
         this.fatal(
           'incompatible',
@@ -369,25 +422,28 @@ export class Connection {
     // without closing the socket — and reading one of those as "not approved
     // yet" tore a working connection down and put a pairing instruction on
     // screen over a live session. It is reachable: type into a session in the
-    // window between it dying on the Mac and the client hearing about it.
+    // window between it dying on the desktop and the client hearing about it.
     //
     // A refusal that really is about the device always arrives with the socket
     // closing behind it, so the state is reached on the next attempt instead,
     // one backoff step later, with the desktop's own sentence intact.
     if (message.t === 'error' && !this.greeted) {
       if (message.code === 'unauthenticated') {
-        this.fatal('rejected', message.message || 'This device is not paired with that Mac any more.')
+        this.fatal(
+          'rejected',
+          message.message || `This device is not paired with that ${machineNoun(this.platform)} any more.`,
+        )
         return
       }
       if (message.code === 'unauthorized') {
-        // Paired but not approved. The fix is a person walking to the Mac, so
-        // this keeps trying — slowly — rather than declaring failure at someone
-        // who is three metres from the button. The backoff doubles as the poll
-        // interval.
+        // Paired but not approved. The fix is a person walking to the machine,
+        // so this keeps trying — slowly — rather than declaring failure at
+        // someone who is three metres from the button. The backoff doubles as
+        // the poll interval.
         this.awaitingApproval = true
         if (message.message !== '') this.approvalDetail = message.message
         this.closeSocket(1000, 'awaiting approval')
-        this.scheduleRetry(this.approvalDetail)
+        this.scheduleRetry(this.approvalSentence())
         return
       }
       if (message.code === 'version') {
@@ -435,7 +491,7 @@ export class Connection {
     // Pending survives a reconnect: the device is still waiting for approval,
     // and flipping the banner back to a generic "connection lost" would lose
     // the one sentence that tells the user what to actually do.
-    if (this.awaitingApproval) this.set('pending', this.approvalDetail, retryAt)
+    if (this.awaitingApproval) this.set('pending', this.approvalSentence(), retryAt)
     else this.set('waiting', detail, retryAt)
     this.cancelRetry = this.clock.after(delay, () => {
       this.cancelRetry = null
@@ -503,26 +559,35 @@ export class Connection {
  * `greeted` matters: the same code means different things before and after the
  * handshake. A close during the handshake is usually the desktop refusing this
  * device; the same code afterwards is usually the tunnel or the wifi.
+ *
+ * `noun` is what to call the far end — `machineNoun` of whatever the last
+ * `welcome` said, which before any welcome is the neutral "desktop" these
+ * sentences used to be hardcoded to. It is a required argument rather than one
+ * with a default: a default is how a caller silently keeps the generic word
+ * after the machine has told us its name, and every one of these sentences is
+ * about a specific computer the reader is standing next to.
  */
-export function closeReason(code: number, greeted: boolean): string {
+export function closeReason(code: number, greeted: boolean, noun: string): string {
   switch (code) {
     case 1000:
     case 1001:
-      return greeted ? 'The desktop closed the connection.' : 'The desktop closed the connection before pairing finished.'
+      return greeted
+        ? `The ${noun} closed the connection.`
+        : `The ${noun} closed the connection before pairing finished.`
     case 1002:
     case 1003:
-      return 'The desktop rejected a message from this client.'
+      return `The ${noun} rejected a message from this client.`
     case 1008:
-      return 'The desktop refused this device.'
+      return `The ${noun} refused this device.`
     case 1009:
-      return 'A message was too large for the desktop to accept.'
+      return `A message was too large for the ${noun} to accept.`
     case 1013:
-      return 'The desktop asked this client to try again later.'
+      return `The ${noun} asked this client to try again later.`
     case 1011:
-      return 'The desktop hit an internal error.'
+      return `The ${noun} hit an internal error.`
     default:
       return greeted
         ? 'Connection lost.'
-        : 'Could not reach the desktop. Check that it is awake and on the same tailnet.'
+        : `Could not reach the ${noun}. Check that it is awake and on the same tailnet.`
   }
 }

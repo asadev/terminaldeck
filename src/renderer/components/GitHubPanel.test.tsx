@@ -1,16 +1,29 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  bridgeSilentState,
+  ConnectionBar,
+  ConnectPage,
   countLabel,
+  DeviceCodeCard,
   FailureBlock,
   formatAge,
   IssueRow,
+  minutesLeft,
+  missingScopeCost,
   openExternal,
   PullRow,
+  repoFailed,
   reviewLabel,
+  scopeBuys,
+  showsAction,
+  sourceSentence,
+  type DeviceFlowPrompt,
+  type GitHubAuthState,
   type GitHubFailure,
   type Issue,
   type PullRequest,
+  type RepoRef,
 } from './GitHubPanel'
 
 /**
@@ -253,11 +266,389 @@ describe('FailureBlock', () => {
     expect(render(noRemote)).toContain('<details')
   })
 
+  /**
+   * Several messages name their own fix — "Connect here, or run gh auth login
+   * in a terminal" — and the command line under them then said it a second
+   * time, in the next sentence. Rendered, that reads as generated text rather
+   * than written text.
+   */
+  it('does not repeat a command the message already gave', () => {
+    expect(
+      showsAction({
+        ok: false,
+        kind: 'not-authenticated',
+        message: 'Connect here, or run gh auth login in a terminal — either one works.',
+        action: 'gh auth login',
+        detail: '',
+      }),
+    ).toBe(false)
+    expect(showsAction(noRemote)).toBe(true)
+    expect(showsAction({ ...noRemote, action: null })).toBe(false)
+  })
+
   it('titles every failure kind it can be handed', () => {
     for (const kind of ['gh-missing', 'rate-limited', 'timeout', 'repo-not-found'] as const) {
       const html = render({ ok: false, kind, message: 'x', action: null, detail: '' })
       expect(html).toContain('gh-failure-title')
       expect(html).not.toContain('undefined')
     }
+  })
+})
+
+/* ------------------------------------------------------------- connection -- */
+
+/**
+ * The sign-in half of the page. Same argument as the block above: what is being
+ * pinned is that the states read *differently*, because the complaint that
+ * started this feature was a Windows machine that looked half connected with
+ * nothing on screen saying which half.
+ *
+ * These render to static markup, so what they can check is what a user would
+ * see — the words, the buttons that exist, and the buttons that deliberately do
+ * not. That is the right level for this: every bug being guarded against here
+ * is a sentence, not a state transition.
+ */
+
+const CONNECTED: GitHubAuthState = {
+  connected: true,
+  source: 'device-flow',
+  host: 'github.com',
+  identity: {
+    login: 'asadev',
+    name: 'Asad',
+    htmlUrl: 'https://github.com/asadev',
+    avatarUrl: 'https://avatars.githubusercontent.com/u/1?v=4',
+  },
+  scopes: ['repo', 'read:org', 'notifications'],
+  scopesReported: true,
+  missingScopes: [],
+  ghInstalled: true,
+  borrowedClient: true,
+  disconnect: 'Deletes the sign-in this app stored.',
+  pending: null,
+  failure: null,
+  expiredCredentialRemoved: false,
+  repo: null,
+}
+
+const DISCONNECTED: GitHubAuthState = {
+  ...CONNECTED,
+  connected: false,
+  source: null,
+  identity: null,
+  scopes: [],
+  scopesReported: false,
+  disconnect: null,
+  failure: {
+    ok: false,
+    kind: 'not-authenticated',
+    message: 'Not signed in to GitHub. Connect here, or run gh auth login in a terminal.',
+    action: 'gh auth login',
+    detail: '',
+  },
+}
+
+const PROMPT: DeviceFlowPrompt = {
+  userCode: 'E874-5342',
+  verificationUri: 'https://github.com/login/device',
+  expiresAt: NOW + 14 * 60_000,
+  scopes: ['repo', 'read:org', 'notifications'],
+  borrowedClient: true,
+}
+
+const noop = () => {}
+
+function bar(state: GitHubAuthState, confirming = false): string {
+  return renderToStaticMarkup(
+    <ConnectionBar
+      state={state}
+      confirming={confirming}
+      onAskDisconnect={noop}
+      onDisconnect={noop}
+      onKeep={noop}
+      onReconnect={noop}
+    />,
+  )
+}
+
+describe('sourceSentence', () => {
+  /**
+   * Three sources, three sentences, and the environment one is the sentence
+   * the whole feature was written for: a token in a shell profile is
+   * indistinguishable from a sign-in until Disconnect fails to remove it.
+   */
+  it('names where the credential came from, differently every time', () => {
+    const device = sourceSentence('device-flow', 'github.com')
+    const cli = sourceSentence('gh-cli', 'github.com')
+    const env = sourceSentence('environment', 'github.com')
+
+    expect(device).toContain('this app')
+    expect(cli).toContain('GitHub CLI')
+    expect(env).toContain('GH_TOKEN')
+    expect(new Set([device, cli, env]).size).toBe(3)
+  })
+
+  it('carries an enterprise host into the sentence rather than assuming one', () => {
+    expect(sourceSentence('gh-cli', 'git.acme.co')).toContain('git.acme.co')
+    expect(sourceSentence('gh-cli', 'git.acme.co')).not.toContain('github.com')
+  })
+})
+
+describe('scopes, in the user’s terms', () => {
+  it('says what each requested scope buys, and nothing about ones we did not ask for', () => {
+    expect(scopeBuys('repo')).toContain('private')
+    expect(scopeBuys('notifications')).toContain('unread')
+    // A `gist` scope arrives on plenty of real `gh auth login` tokens. Showing
+    // it is honest; claiming to know why it is there is not.
+    expect(scopeBuys('gist')).toBeNull()
+  })
+
+  it('says what a missing scope costs, not just that it is missing', () => {
+    expect(missingScopeCost('notifications')).toContain('unread count')
+    expect(missingScopeCost('repo')).toContain('Private repositories')
+    expect(missingScopeCost('gist')).toContain('gist')
+    expect(missingScopeCost('repo')).not.toBe(missingScopeCost('read:org'))
+  })
+})
+
+describe('ConnectionBar', () => {
+  it('names the account and every scope GitHub reported', () => {
+    const html = bar(CONNECTED)
+    expect(html).toContain('asadev')
+    for (const scope of ['repo', 'read:org', 'notifications']) expect(html).toContain(scope)
+    expect(html).toContain('Disconnect')
+  })
+
+  /**
+   * A fine-grained token or a GitHub App installation sends no
+   * `X-OAuth-Scopes` header at all. Rendering that as "granted: nothing" tells
+   * somebody their working credential is broken.
+   */
+  it('does not report an unreported scope list as an empty one', () => {
+    const html = bar({ ...CONNECTED, scopes: [], scopesReported: false })
+    expect(html).toContain('fine-grained')
+    expect(html).not.toContain('gh-conn-scopes-label')
+  })
+
+  it('names the missing permission and what it costs', () => {
+    const html = bar({
+      ...CONNECTED,
+      source: 'gh-cli',
+      scopes: ['repo', 'read:org'],
+      missingScopes: ['notifications'],
+    })
+    expect(html).toContain('Missing one permission')
+    expect(html).toContain('notifications')
+    expect(html).toContain('unread count')
+    expect(html).toContain('Sign in again')
+  })
+
+  /**
+   * The dead-control case. `gh` and this panel both prefer `GH_TOKEN`, so a
+   * fresh sign-in would be stored, shadowed, and never used — a button here
+   * would do nothing at all, visibly.
+   */
+  it('offers no re-sign-in when the credential comes from the environment', () => {
+    const html = bar({
+      ...CONNECTED,
+      source: 'environment',
+      disconnect: null,
+      missingScopes: ['notifications'],
+    })
+    expect(html).not.toContain('Sign in again')
+    expect(html).toContain('GH_TOKEN')
+    // Nor a Disconnect: this process cannot unset a variable in the shell that
+    // launched it, and a button that silently does nothing is worse than none.
+    expect(html).not.toContain('gh-conn-action')
+    expect(html).toContain('Nothing to disconnect')
+  })
+
+  /**
+   * Disconnecting a `gh` login signs the user's *terminal* out. The sentence
+   * that says so has to be on screen before the press that does it, not after.
+   */
+  it('shows what disconnecting will do before it does it', () => {
+    const state: GitHubAuthState = {
+      ...CONNECTED,
+      source: 'gh-cli',
+      disconnect: 'Signs the GitHub CLI out on this machine, so your terminal is signed out too.',
+    }
+    expect(bar(state, true)).toContain('your terminal is signed out too')
+    expect(bar(state, true)).toContain('Keep it')
+    expect(bar(state, false)).toContain('Disconnect')
+    expect(bar(state, false)).not.toContain('Keep it')
+  })
+
+  /**
+   * `img-src 'self' data:` blocks avatars.githubusercontent.com outright, so an
+   * `<img>` here renders as a broken-image glyph in the one block that is
+   * claiming the app works.
+   */
+  it('never renders a remote avatar', () => {
+    expect(bar(CONNECTED)).not.toContain('<img')
+    expect(bar(CONNECTED)).not.toContain('avatars.githubusercontent.com')
+  })
+})
+
+describe('DeviceCodeCard', () => {
+  const render = (prompt = PROMPT, onCopy?: () => void) =>
+    renderToStaticMarkup(
+      <DeviceCodeCard prompt={prompt} now={NOW} onCopy={onCopy} onOpen={noop} onCancel={noop} />,
+    )
+
+  it('shows the code, where to type it, and what is being asked for', () => {
+    const html = render()
+    expect(html).toContain('E874-5342')
+    expect(html).toContain('https://github.com/login/device')
+    expect(html).toContain('repo, read:org, notifications')
+    expect(html).toContain('Cancel')
+  })
+
+  /** Borrowed OAuth client: the consent screen says GitHub CLI, so we do too. */
+  it('warns that the consent screen names somebody else', () => {
+    expect(render()).toContain('GitHub CLI')
+    expect(render({ ...PROMPT, borrowedClient: false })).not.toContain('GitHub CLI')
+  })
+
+  it('counts the code down and says when it is dead', () => {
+    expect(render()).toContain('about 14 more minutes')
+    expect(render({ ...PROMPT, expiresAt: NOW - 1000 })).toContain('expired')
+    expect(minutesLeft(NOW + 60_000, NOW)).toBe(1)
+    expect(minutesLeft(NOW - 60_000, NOW)).toBe(0)
+  })
+
+  /**
+   * Where there is no clipboard API there is no Copy button. A copy control
+   * that silently does nothing is the promise this codebase's rules put first,
+   * and the code stays selectable text either way.
+   */
+  it('offers Copy only when the panel handed it a way to copy', () => {
+    expect(render(PROMPT, noop)).toContain('Copy')
+    expect(render(PROMPT, undefined)).not.toContain('Copy')
+    expect(render(PROMPT, undefined)).toContain('E874-5342')
+  })
+})
+
+describe('ConnectPage', () => {
+  const render = (state: GitHubAuthState) =>
+    renderToStaticMarkup(<ConnectPage state={state} onConnect={noop} onRetry={noop} />)
+
+  it('offers a Connect button rather than a command to go and type', () => {
+    const html = render(DISCONNECTED)
+    expect(html).toContain('Connect to GitHub')
+    // The CLI route is still named — it works, and somebody who prefers it
+    // should not have to guess — but it is the hint, not the instruction.
+    expect(html).toContain('gh auth login')
+  })
+
+  /**
+   * The four sign-in failures a person actually hits. Each has a different fix,
+   * so each has to arrive as a different screen — collapsing them into "GitHub
+   * failed" is the bug this whole feature exists to remove.
+   */
+  it('gives every sign-in failure its own headline', () => {
+    const titles = (['gh-missing', 'auth-declined', 'auth-code-expired', 'auth-unavailable'] as const).map(
+      (kind) =>
+        render({
+          ...DISCONNECTED,
+          failure: { ok: false, kind, message: `message for ${kind}`, action: null, detail: '' },
+        }),
+    )
+    expect(titles[0]).toContain('GitHub CLI not installed')
+    expect(titles[1]).toContain('Sign-in refused')
+    expect(titles[2]).toContain('The sign-in code expired')
+    expect(titles[3]).toContain('GitHub would not start a sign-in')
+    for (const html of titles) expect(html).not.toContain('undefined')
+  })
+
+  /**
+   * Connecting cannot fix an outage, and a Connect button during one produces a
+   * second identical error. Those get Retry instead.
+   */
+  it('offers Retry, not Connect, for a failure a sign-in cannot fix', () => {
+    const html = render({
+      ...DISCONNECTED,
+      failure: {
+        ok: false,
+        kind: 'network-down',
+        message: 'Could not reach github.com — check your connection.',
+        action: null,
+        detail: '',
+      },
+    })
+    expect(html).toContain('Try again')
+    expect(html).not.toContain('Connect to GitHub')
+  })
+
+  it('says the folder’s repository while you are still signing in', () => {
+    const repo: RepoRef = {
+      host: 'github.com',
+      owner: 'asadev',
+      name: 'terminaldeck',
+      nameWithOwner: 'asadev/terminaldeck',
+      url: 'https://github.com/asadev/terminaldeck',
+      remote: 'origin',
+    }
+    expect(render({ ...DISCONNECTED, repo })).toContain('asadev/terminaldeck')
+
+    // And when the folder is the problem, that is said here too — it is not a
+    // sign-in fault and must not be reported as one.
+    const notARepo = render({
+      ...DISCONNECTED,
+      repo: {
+        ok: false,
+        kind: 'not-a-repo',
+        message: 'This folder is not a git repository.',
+        action: 'git init',
+        detail: '',
+      },
+    })
+    expect(notARepo).toContain('not a git repository')
+    expect(notARepo).toContain('Connect to GitHub')
+  })
+
+  it('says so when a dead stored sign-in was cleaned up on the way past', () => {
+    expect(render({ ...DISCONNECTED, expiredCredentialRemoved: true })).toContain('was deleted')
+    expect(render(DISCONNECTED)).not.toContain('was deleted')
+  })
+})
+
+describe('bridgeSilentState', () => {
+  /**
+   * The bridge going quiet is its own answer, and every field of it has to be a
+   * fact: claiming `ghInstalled` or a granted scope when nothing was ever
+   * probed would put an unchecked sentence on screen.
+   */
+  it('claims nothing it has not checked', () => {
+    const state = bridgeSilentState()
+    expect(state.connected).toBe(false)
+    expect(state.ghInstalled).toBe(false)
+    expect(state.scopes).toEqual([])
+    expect(state.scopesReported).toBe(false)
+    expect(state.disconnect).toBeNull()
+    expect(state.failure?.message).toContain('did not answer')
+  })
+})
+
+describe('repoFailed', () => {
+  /**
+   * The one place in this file where the discriminator is the *presence* of
+   * `ok` rather than its value: a `RepoRef` has no such field, so `isFailure`
+   * would be a near-miss that happens to compile nowhere.
+   */
+  it('tells a resolved repository from the reason there is none', () => {
+    expect(
+      repoFailed({
+        host: 'github.com',
+        owner: 'a',
+        name: 'b',
+        nameWithOwner: 'a/b',
+        url: 'https://github.com/a/b',
+        remote: 'origin',
+      }),
+    ).toBe(false)
+    expect(
+      repoFailed({ ok: false, kind: 'no-remote', message: 'x', action: null, detail: '' }),
+    ).toBe(true)
   })
 })

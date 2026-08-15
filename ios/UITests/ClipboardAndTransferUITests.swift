@@ -53,11 +53,11 @@ final class ClipboardAndTransferUITests: XCTestCase {
      *
      * Rule 7.11 says the way to do something must be *visible* — no hidden
      * gestures. Copy is reachable two ways and both are checked here, because
-     * the accessory row only exists while the keyboard is up and the menu only
-     * exists while it is down, so a phone that had one but not the other would
-     * have no way to copy in half of its states.
+     * the key grid only exists while the keyboard is up and the menu only exists
+     * while it is down, so a phone that had one but not the other would have no
+     * way to copy in half of its states.
      */
-    func testCopyIsReachableFromBothTheMenuAndTheKeyRow() throws {
+    func testCopyIsReachableFromBothTheMenuAndTheKeyGrid() throws {
         try openSession()
 
         let actions = app.buttons["terminal.actions"]
@@ -70,18 +70,27 @@ final class ClipboardAndTransferUITests: XCTestCase {
         app.buttons["terminal.copyScreen"].tap()
 
         app.buttons["terminal.keyboard"].tap()
+        try openTheKeyGrid()
         XCTAssertTrue(app.buttons["copy"].waitForExistence(timeout: 5),
-                      "Copy must also be on the accessory row, which is where a thumb already is")
-        save("copy-keyrow")
+                      "Copy must also be in the key grid, which is inside the terminal")
+        save("copy-keygrid")
     }
 
     /**
-     * A long press selects, and the accessory row's Copy puts it on the pasteboard.
+     * A long press selects, and the copy that follows puts it on the pasteboard.
      *
      * This is the half of the clipboard that had never been verified: paste-in
      * was known to work, copy-*out* was not. The gesture is the standard iOS
-     * press-and-hold; the control that copies the result is the `copy` key above
-     * the keyboard, for the reason spelled out below.
+     * press-and-hold — which, since the gesture rework, **selects on its own**
+     * rather than opening a menu that offers to.
+     *
+     * Both ways out of a selection are exercised, because the trap here is
+     * specific and this app has already fallen into it once: a selection dies
+     * the moment something outside the terminal is touched. The system callout
+     * is attached to the selection, and the key grid is the terminal's own
+     * `inputView` — those are the two places that survive. A control anywhere
+     * else does not, which is why "Copy Selection" had to be taken out of the
+     * navigation bar.
      */
     func testALongPressSelectsAndCopyPutsItOnThePasteboard() throws {
         try openSession()
@@ -93,42 +102,36 @@ final class ClipboardAndTransferUITests: XCTestCase {
 
         let terminal = app.descendants(matching: .any).matching(identifier: "terminal.view").firstMatch
         XCTAssertTrue(terminal.waitForExistence(timeout: 10))
-        // SwiftTerm's own selection, started the way a person starts it: the
-        // standard iOS press-and-hold, which is the "no hidden gesture" half of
-        // this. It does **not** select on its own — it raises the system's
-        // Paste / Select / Select All menu, and one of those two makes the
-        // selection. That second tap is part of the affordance, not a defect,
-        // and the first version of this test asserted straight past it and then
-        // blamed the app for saying "Copy Screen" — which was the truth.
+        // The press itself makes the selection now. If the system menu appears
+        // with a Select item in it, SwiftTerm's own long press is firing again
+        // and the reconciliation in `DeckTerminalView` has come undone — tapping
+        // it keeps this test honest either way rather than hiding the change.
         terminal.press(forDuration: 1.2)
-        sleep(1)
-        save("long-press-menu")
-
-        let selectAll = app.menuItems["Select All"].exists ? app.menuItems["Select All"] : app.buttons["Select All"]
-        XCTAssertTrue(selectAll.waitForExistence(timeout: 5),
-                      "a long press must offer a way to select; it offered nothing")
-        selectAll.tap()
         sleep(1)
         save("long-press-selection")
 
-        // Copied from the **accessory row**, not from the navigation-bar menu,
-        // and the difference is the whole finding of this test.
+        for label in ["Select All", "Select"] {
+            let item = app.menuItems[label].exists ? app.menuItems[label] : app.buttons[label]
+            if item.exists {
+                item.tap()
+                sleep(1)
+                break
+            }
+        }
+
+        // Copy from **inside** the terminal. The grid is its `inputView`, so
+        // reaching it is not a touch outside — which is the property the whole
+        // arrangement turns on.
         //
-        // SwiftTerm clears its selection on a touch outside the terminal — it
-        // calls `selectNone()` from its own touch handling — so tapping the
-        // toolbar's ellipsis to reach a "Copy Selection" item destroys the
-        // selection on the way there, and the item then correctly reports that
-        // nothing is selected. Measured: the run before this one selected the
-        // whole screen (verified in a screenshot), opened the menu, and got an
-        // unchanged pasteboard.
-        //
-        // The row above the keyboard is not outside the terminal in that sense —
-        // it is the terminal's `inputAccessoryView` — so the selection survives
-        // the reach. That is why Copy lives there as well as in the menu, and it
-        // is the control this asserts on.
+        // Measured, not assumed: an earlier build selected the whole screen
+        // (verified in a screenshot), opened the navigation bar's menu, and got
+        // an unchanged pasteboard, because SwiftTerm calls `selectNone()` from
+        // its own touch handling the moment a touch lands elsewhere.
+        try openTheKeyGrid()
         let copy = app.buttons["copy"]
         XCTAssertTrue(copy.waitForExistence(timeout: 5),
-                      "the accessory row must carry Copy; it is the only control a selection survives")
+                      "the key grid must carry Copy; it is inside the terminal, which is what a "
+                      + "selection survives")
         let before = UIPasteboard.general.changeCount
         copy.tap()
         let changed = NSPredicate(format: "changeCount > %d", before)
@@ -187,8 +190,9 @@ final class ClipboardAndTransferUITests: XCTestCase {
         // real shell on a real Mac, not a fixture — so a pending 400-line paste
         // left at the prompt is submitted by the *next* case that types a
         // newline, and that case then fails for a reason that has nothing to do
-        // with it. Ctrl-C is the discard, and the accessory row is where it is.
+        // with it. Ctrl-C is the discard, and the key grid is where it lives.
         app.buttons["terminal.keyboard"].tap()
+        try openTheKeyGrid()
         if app.buttons["^C"].waitForExistence(timeout: 5) { app.buttons["^C"].tap() }
         sleep(1)
     }
@@ -229,11 +233,16 @@ final class ClipboardAndTransferUITests: XCTestCase {
      * The photo is put into the simulator's library by the script that runs this
      * (`simctl addmedia`), and it is several megabytes of high-entropy noise on
      * purpose: a file of zeros would hash the same with a slice missing, so a
-     * chunking bug would pass. What is on the Mac is checked by the script
-     * afterwards with `shasum`; what this case proves is the part a hash cannot
-     * — that the bar moved, that the path was shown, and that it was typed.
+     * chunking bug would pass. That it *arrived* is asserted against the host's
+     * own list of what it is holding; that it was *shown and typed* is what the
+     * screenshots are for, because nothing here can read the terminal's pixels.
      */
     func testAPhotoLandsOnTheMacAndItsPathIsTyped() throws {
+        // Read before a byte moves. The assertion at the end is that this list
+        // *changed*, which is the only reading of it that yesterday's copy of
+        // the same file cannot satisfy.
+        let uploadsBefore = uploadsOnTheMac()
+
         try openSession()
         app.buttons["terminal.actions"].tap()
         XCTAssertTrue(app.buttons["terminal.sendPhoto"].waitForExistence(timeout: 5))
@@ -291,12 +300,28 @@ final class ClipboardAndTransferUITests: XCTestCase {
         XCTAssertTrue(row.waitForExistence(timeout: 20), "no progress row appeared")
         save("upload-in-progress")
 
-        // Moving, not merely present. The value is the sentence under the name,
-        // which counts acknowledged bytes — so a bar drawn from bytes handed to
-        // the socket would sit at its final value here instead of climbing.
-        let landed = NSPredicate(format: "value CONTAINS 'Landed at'")
-        expectation(for: landed, evaluatedWith: row, handler: nil)
-        waitForExpectations(timeout: 180)
+        /*
+         * Landed — asserted on the **Mac**, not on a label.
+         *
+         * This used to wait for the row's accessibility value to contain
+         * "Landed at" and it cannot be relied on. The row is a single
+         * accessibility element by design (`children: .combine`, so VoiceOver is
+         * told once rather than polled eleven times a second while the bar
+         * moves), and a combined element's snapshot does not refresh when the
+         * sentence under the name changes. Measured, twice, on iOS 26.5: the
+         * screenshot taken at that moment showed "Landed at …" on screen and the
+         * file was already on the Mac with a matching digest, while predicates
+         * against both `value` and `label` timed out after 180 seconds.
+         *
+         * So the assertion moved to the end of the chain that actually matters.
+         * The host lists what it has received, with digests, on its own control
+         * server — `curl 127.0.0.1:8788/uploads` — and the Simulator shares this
+         * machine's loopback. A file in that list is a file that arrived whole:
+         * the desktop deletes anything whose SHA-256 does not match what the
+         * phone said it sent.
+         */
+        XCTAssertTrue(waitForNewUpload(since: uploadsBefore, timeout: 180),
+                      "the file never reached the Mac")
         save("upload-landed")
 
         // And the path is now in the prompt, quoted, with no newline after it —
@@ -315,7 +340,7 @@ final class ClipboardAndTransferUITests: XCTestCase {
             let plus = app.buttons["sessions.new"]
             XCTAssertTrue(plus.waitForExistence(timeout: 10), "no sessions and no way to start one")
             plus.tap()
-            let menuItem = app.buttons["New session"]
+            let menuItem = app.buttons["sessions.newDefault"]
             if menuItem.waitForExistence(timeout: 3) { menuItem.tap() }
         }
         let first = rows.element(boundBy: 0)
@@ -324,6 +349,53 @@ final class ClipboardAndTransferUITests: XCTestCase {
         }
         XCTAssertTrue(app.buttons["terminal.actions"].waitForExistence(timeout: 15),
                       "the terminal screen should be open")
+    }
+
+    /**
+     * What the host is holding right now, as it reports it.
+     *
+     * `scripts/remote-host.sh` puts a control server on the relay's port plus
+     * one and lists every file that has landed, with a digest for each. Read
+     * from inside the Simulator, which shares this machine's loopback — the same
+     * reason the app itself can reach `ws://127.0.0.1:8787`.
+     */
+    private func uploadsOnTheMac() -> String {
+        let uploads = URL(string: "http://127.0.0.1:8788/uploads")!
+        guard let data = try? Data(contentsOf: uploads) else { return "" }
+        return String(data: data, encoding: .utf8) ?? ""
+    }
+
+    /**
+     * Wait until that list is not what it was.
+     *
+     * A *difference*, not a name. The uploads directory is not emptied between
+     * runs and the Mac lands a second file of the same name beside the first, so
+     * asking "is there a file called X" would be answered by yesterday's copy
+     * and this case would pass without a byte moving.
+     */
+    private func waitForNewUpload(since before: String, timeout: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if uploadsOnTheMac() != before { return true }
+            usleep(500_000)
+        }
+        return false
+    }
+
+    /**
+     * Open the grid that stands where the keyboard was.
+     *
+     * Copy, paste and `^C` live in it rather than on the bar: the bar carries
+     * only what is pressed while typing a command and never scrolls, which is
+     * the whole of the key-bar redesign. Copied from `LiveSessionUITests` for
+     * the same reason `tapAllowPaste` is — sharing it through a base class would
+     * put a `setUp` in the way of a file that is otherwise readable top to
+     * bottom.
+     */
+    private func openTheKeyGrid() throws {
+        let more = app.buttons["keys.more"]
+        XCTAssertTrue(more.waitForExistence(timeout: 5), "the key bar should be up")
+        more.tap()
     }
 
     /**

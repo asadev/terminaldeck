@@ -48,10 +48,13 @@
  * ## Running it
  *
  *     ios/Harness/run.sh host [--port 8787] [--approve-after 8000] [--selftest]
+ *                            [--host-platform darwin|win32|linux|none]
+ *                            [--folders /a,/b|none|empty]
  *
  * It prints a pairing URI. `xcrun simctl openurl booted "<uri>"` hands it to the
- * app. A control server on `--port + 1` exposes `/state`, `/approve`, `/pair`
- * and `/quit` so a script can drive approval without a keyboard.
+ * app. A control server on `--port + 1` exposes `/state`, `/approve`, `/pair`,
+ * `/folders` and `/quit` so a script can drive approval — and a folder-grant
+ * change — without a keyboard.
  */
 
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
@@ -90,6 +93,7 @@ import {
     chunkOutput,
     parseClientMessage,
     serialize,
+    type ProtocolErrorCode,
     type RemoteSession,
     type ServerMessage,
 } from '../../src/main/remote/protocol'
@@ -114,6 +118,103 @@ const PORT = Number(flag('port', '8787'))
 const CONTROL_PORT = PORT + 1
 const APPROVE_AFTER = Number(flag('approve-after', '8000'))
 const LOG_INPUT = has('log-input')
+
+/**
+ * What this stand-in claims to be, in `welcome.hostPlatform`.
+ *
+ * Defaults to the truth — the same `process.platform` a real desktop sends from
+ * `currentPlatform()` — so the ordinary run exercises the field rather than
+ * omitting it. That alone is not enough, which is why the flag exists: this
+ * harness only ever runs on a Mac, so the *only* value a default-only host could
+ * produce is `darwin`, and `darwin` is the one case that already appeared to
+ * work back when the noun was a string constant compiled into the phone. A
+ * client that reads this field correctly and a client that ignores it entirely
+ * are indistinguishable against a host that only ever says `darwin`.
+ *
+ *     ios/Harness/run.sh host --host-platform win32     the phone must say "PC"
+ *     ios/Harness/run.sh host --host-platform none      a desktop older than the
+ *                                                       field: the phone must say
+ *                                                       "desktop", never "Mac"
+ *
+ * `none` omits the key altogether rather than sending an empty string, because
+ * those are two different things on the wire and only one of them is what a
+ * shipped-before-this-existed desktop looks like.
+ */
+const HOST_PLATFORM = flag('host-platform', process.platform)
+
+/**
+ * What this stand-in grants the device, in `welcome.folders`.
+ *
+ * Three states, because the phone has to tell them apart and only one of them
+ * is the ordinary one:
+ *
+ *     --folders /a,/b   the device may start a session in either
+ *     --folders none    the key is **omitted** — a desktop older than per-device
+ *                       grants, where the phone keeps building its own list
+ *     --folders empty   an empty array — somebody granted this device nothing,
+ *                       so New Session has to disappear and say why
+ *
+ * `none` and `empty` are the pair that matters. They decode identically through
+ * anything that flattens a missing array to `[]`, and getting them the same way
+ * round is the difference between "keep doing what you did" and "you may not
+ * start anything", which are opposite screens.
+ *
+ * The default is `none`, so the ordinary run reproduces the desktop most people
+ * are still on.
+ */
+const FOLDERS = flag('folders', 'none')
+
+/**
+ * The list as it stands right now, or null for a host that predates the field.
+ *
+ * Mutable, because `/folders` on the control server changes it and pushes the
+ * result — which is the only way the `{ t: 'folders' }` frame can be exercised
+ * at all. A client only ever sees that frame while it is already connected.
+ */
+let granted: string[] | null =
+    FOLDERS === 'none'
+        ? null
+        : FOLDERS === 'empty'
+          ? []
+          : FOLDERS.split(',').map((one) => one.trim()).filter(Boolean)
+
+/** `{ folders }`, or `{}` when this host is pretending to predate the field. */
+function foldersField(): { folders?: string[] } {
+    return granted === null ? {} : { folders: granted }
+}
+
+/**
+ * `{ hostPlatform }`, or `{}` when this host is pretending to predate the field.
+ *
+ * A function rather than a constant so the two states stay one decision. The
+ * omitted case is the one worth being able to produce at all: it is every
+ * desktop shipped before `welcome.hostPlatform` existed, it is the case a client
+ * is most likely to get wrong, and getting it wrong looks exactly like the
+ * original defect — a phone that quietly says "Mac" because nothing told it
+ * otherwise.
+ */
+function hostPlatformField(): { hostPlatform?: string } {
+    return HOST_PLATFORM === 'none' ? {} : { hostPlatform: HOST_PLATFORM }
+}
+
+/**
+ * What this host calls *itself* in the sentences it sends.
+ *
+ * The desktop's own `machineNoun()` in `src/main/platform/host.ts`, reproduced against what
+ * `--host-platform` claims rather than against the machine this actually runs on. Only the two
+ * words that function has are reproduced, because only those two exist over there: it answers "PC"
+ * on Windows and "Mac" on everything else, deliberately, since it runs on a desktop that always
+ * knows what it is. Clients need the richer vocabulary — a client can be talking to something that
+ * has said nothing — and that lives in each client's own `HostPlatform`.
+ *
+ * Almost nothing should use this. Copy that crosses the wire is supposed to name no machine at all
+ * (`src/main/remote/wire-wording.test.ts` enforces it), and the sentences here follow that rule —
+ * see `SAYS`. The exception is the handful the product itself renders per platform, which have to
+ * be reproducible per platform or `--host-platform win32` cannot show what a Windows user reads.
+ */
+function hostNoun(): string {
+    return HOST_PLATFORM === 'win32' ? 'PC' : 'Mac'
+}
 const IOS_DIR = process.env.TD_IOS_DIR ?? resolve(import.meta.dirname ?? '.', '..')
 const STATE_FILE = resolve(IOS_DIR, 'Harness/.build/host-state.json')
 
@@ -219,11 +320,28 @@ function approveAll(): string[] {
     return approved
 }
 
-/** The same words the desktop uses. Copied from `authenticatorFor` in server.ts. */
+/**
+ * The same words the desktop uses. Copied from `authenticatorFor` in server.ts.
+ *
+ * "Copied" is the whole contract, and it had quietly stopped being true. Three of these said
+ * **"on the Mac"** / **"from the Mac"** while the product they claim to quote says "in the desktop
+ * app" and "from the desktop app" — it names no machine at all, which is what
+ * `src/main/remote/wire-wording.test.ts` requires of any copy that crosses the wire: use
+ * `machineNoun()` host-side, or name nothing.
+ *
+ * The drift mattered far more than a stale string usually does, because these sentences are *sent*.
+ * A client shows the desktop's own message in preference to one it composes itself — deliberately,
+ * since the desktop knows more about why it refused — so this host handed every phone the word
+ * "Mac" no matter what `--host-platform` claimed. The one harness built to prove a phone stops
+ * guessing was feeding it the guess.
+ *
+ * They name nothing rather than being rebuilt from [HOST_PLATFORM] for the same reason the product
+ * names nothing: a sentence with no machine in it is right on every platform and cannot drift.
+ */
 const SAYS = {
-    paired: 'Paired. Approve this device on the Mac, then reconnect.',
-    pending: 'This device is waiting to be approved. Approve it on the Mac, then reconnect.',
-    denied: 'This device is not allowed in. Pair it again from the Mac.',
+    paired: 'Paired. Approve this device in the desktop app, then reconnect.',
+    pending: 'This device is waiting to be approved. Approve it in the desktop app, then reconnect.',
+    denied: 'This device is not allowed in. Pair it again from the desktop app.',
     badCode: 'That pairing code is not right.',
 } as const
 
@@ -508,9 +626,16 @@ class Channel {
 
     constructor(readonly key: string, readonly channel: Buffer, private readonly link: HostLink) {}
 
-    send(message: ServerMessage | (ServerMessage & Record<string, unknown>)): void {
+    send(message: ServerMessage): void {
         if (!this.sealed) return
-        this.link.write(this.channel, this.sealed.send(Buffer.from(serialize(message as ServerMessage), 'utf8')))
+        // No cast on the way out. This used to take `ServerMessage & Record<string,
+        // unknown>` and cast it back, because `capabilities` was a field the
+        // stand-in sent and the shared type did not have — so the escape hatch
+        // was the only way to put it on the wire. Both fields it was hiding
+        // (`capabilities`, then `hostPlatform`) are declared in `protocol.ts`
+        // now, and a widened signature here would go straight back to letting
+        // this host send a shape no client has ever been told about.
+        this.link.write(this.channel, this.sealed.send(Buffer.from(serialize(message), 'utf8')))
     }
 
     close(reason: string): void {
@@ -519,7 +644,16 @@ class Channel {
         drop(this.key)
     }
 
-    refuse(code: 'unauthenticated' | 'unauthorized' | 'bad-message' | 'version', message: string): void {
+    /**
+     * `ProtocolErrorCode`, not a hand-written subset of it.
+     *
+     * The subset that used to be here — four of the codes, spelled out — went
+     * stale the moment `protocol.ts` grew `unavailable`, and the only reason
+     * nobody saw the type error is that no tsconfig in this repository includes
+     * `ios/Harness`. The one caller already forwards a code straight out of
+     * `parseClientMessage`, so the honest parameter is the whole union.
+     */
+    refuse(code: ProtocolErrorCode, message: string): void {
         this.send({ t: 'error', code, message })
         this.close(message)
     }
@@ -595,6 +729,24 @@ class Channel {
                         deviceName: outcome.device.name,
                         token: outcome.credential,
                         sessions: [],
+                        // Both of the fields below are *deliberately* what
+                        // `server.ts` sends on this branch and not what would be
+                        // nicer here.
+                        //
+                        // `capabilities` is empty because nothing is advertised
+                        // to a device that is not in yet — the desktop's own
+                        // reason, quoted rather than re-derived.
+                        //
+                        // `hostPlatform` is **absent**, because the product does
+                        // not put it on this frame either. That has a visible
+                        // consequence a client author has to see: the approval
+                        // instruction — the one sentence that sends a person
+                        // walking to a machine — is composed before any welcome
+                        // that carries the field, so it says "desktop". Making
+                        // this stand-in send it anyway would hide that, and a
+                        // stand-in that is more generous than the product
+                        // manufactures confidence. See the header.
+                        capabilities: [],
                     })
                 }
                 log(`refused ${message.device.name}: ${outcome.message}`)
@@ -618,7 +770,21 @@ class Channel {
                 // day. It is now the product's, and if the product renames it
                 // this host renames it in the same commit or not at all.
                 capabilities: CAPABILITIES,
-            } as ServerMessage & Record<string, unknown>)
+                // What kind of machine this claims to be. Spread rather than
+                // written as `hostPlatform: X`, because a desktop older than the
+                // field omits the key entirely and `--host-platform none` has to
+                // be able to reproduce that exactly — `hostPlatform: undefined`
+                // would survive as a declared-but-absent property here and then
+                // vanish in `JSON.stringify`, which happens to be the same thing
+                // on this wire and is not the same thing to read.
+                ...hostPlatformField(),
+                // Which folders this device may start a session in. Spread for
+                // the same reason `hostPlatform` is: absent and empty are
+                // different answers on this wire, and a stand-in that could only
+                // produce one of them would leave the phone's handling of the
+                // other untested. See `foldersField`.
+                ...foldersField(),
+            })
             return
         }
 
@@ -707,7 +873,15 @@ class Channel {
                     return this.send({
                         t: 'error',
                         code: 'unauthorized',
-                        message: 'This Mac will not start a session in that folder. Open it on the Mac first.',
+                        // Named after what this host *claims* to be, not after the machine the
+                        // harness happens to run on. The product composes this one the same way —
+                        // `session-create.ts` builds ``This ${machineNoun(platform)}`` — which is
+                        // why it is rebuilt here rather than naming nothing like `SAYS` does: a
+                        // sentence the product renders per platform has to be reproducible per
+                        // platform, or `--host-platform win32` cannot show what a Windows user
+                        // actually reads.
+                        message: `This ${hostNoun()} will not start a session in that folder. ` +
+                            `Open it on the ${hostNoun()} first.`,
                     })
                 }
                 const cwd = message.cwd ?? process.env.HOME ?? '/'
@@ -919,6 +1093,19 @@ async function selftest(): Promise<void> {
     expect(Array.isArray(hello!.sessions) && (hello!.sessions as unknown[]).length > 0,
         'and the welcome carries the running sessions')
     expect(Array.isArray(hello!.capabilities), 'and advertises its capabilities')
+    /*
+     * And says what kind of machine it is.
+     *
+     * Both halves are the assertion. The field has to be *there*, or a client
+     * that reads it correctly is indistinguishable from one that ignores it; and
+     * it has to be what `--host-platform` asked for, or the flag that exists to
+     * put a Windows host in front of a phone on a Mac is not doing anything. The
+     * omitted case is checked by its absence — `--host-platform none` is the only
+     * way this expectation reads `undefined`, and that is exactly the desktop a
+     * client must call "desktop" rather than "Mac".
+     */
+    expect(hello!.hostPlatform === (HOST_PLATFORM === 'none' ? undefined : HOST_PLATFORM),
+        `the welcome says what kind of machine this is (${JSON.stringify(hello!.hostPlatform)})`)
 
     const first = (hello!.sessions as Array<{ id: string }>)[0]
     inbox.length = 0
@@ -978,8 +1165,19 @@ async function selftest(): Promise<void> {
     say2({ t: 'create', cwd: '/definitely/not/offered' })
     await settle(400)
     expect(messages().some((m) => m.t === 'error' && m.code === 'unauthorized'),
-        'a folder this Mac is not offering is refused rather than quietly replaced')
+        `a folder this ${hostNoun()} is not offering is refused rather than quietly replaced`)
     expect(!messages().some((m) => m.t === 'created'), 'and nothing was started')
+    /*
+     * And the refusal names the machine this host is claiming to be.
+     *
+     * The sentence is one of the few the product renders per platform, so it is the one place a
+     * `--host-platform win32` run can show what a Windows user actually reads. Asserted here rather
+     * than trusted, because it went the other way once already: the approval sentences in `SAYS`
+     * silently kept saying "Mac" long after the product had stopped, and this host sent them.
+     */
+    const refusal = messages().find((m) => m.t === 'error' && m.code === 'unauthorized')
+    expect(typeof refusal?.message === 'string' && refusal.message.includes(`This ${hostNoun()}`),
+        `and it names this host a ${hostNoun()} (${JSON.stringify(refusal?.message)})`)
 
     guest2.close()
     process.stdout.write('\nselftest passed\n')
@@ -1018,7 +1216,7 @@ relay.server.listen(PORT, '0.0.0.0', async () => {
     log(`host id      ${HOST_ID}`)
     log(`key          ${fingerprint(macStatic.publicKey)}`)
     log(`devices      ${devices.size} known, ${[...devices.values()].filter((d) => d.approved).length} approved`)
-    log(`control      http://127.0.0.1:${CONTROL_PORT}/state | /approve | /pair | /quit`)
+    log(`control      http://127.0.0.1:${CONTROL_PORT}/state | /approve | /pair | /folders | /quit`)
     log(`pairing uri  ${uri}`)
 })
 
@@ -1042,6 +1240,31 @@ createHttpServer((req, res) => {
         case '/pair': {
             const token = mintPairingToken()
             return reply({ uri: pairingUri(token) })
+        }
+        /**
+         * Change the folder list and **push** it, the way the desktop does when
+         * somebody edits the grants while a phone is connected.
+         *
+         *     curl '127.0.0.1:8788/folders?list=/a,/b'
+         *     curl '127.0.0.1:8788/folders?list='        grants nothing
+         *
+         * This exists because the pushed frame is the half of the feature that
+         * cannot be reached by reconnecting: `welcome.folders` is checked every
+         * time a phone comes up, and `{ t: 'folders' }` is only ever seen by a
+         * client that was already connected when the list changed. Without a way
+         * to send one, that path would be tested against nothing.
+         */
+        case '/folders': {
+            const raw = new URL(req.url ?? '/', 'http://127.0.0.1').searchParams.get('list') ?? ''
+            granted = raw.split(',').map((one) => one.trim()).filter(Boolean)
+            let told = 0
+            for (const channel of channels.values()) {
+                if (!channel.deviceId) continue
+                channel.send({ t: 'folders', folders: granted })
+                told += 1
+            }
+            log(`folders → [${granted.join(', ')}] (told ${told})`)
+            return reply({ folders: granted, told })
         }
         case '/state':
             return reply({

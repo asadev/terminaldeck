@@ -196,9 +196,13 @@ describe('the browser panel is hidden per tab, parked per dialog', () => {
  *
  * The app had four: GitHub drew its own centred block with its own glyph and
  * its own retry button, MCP printed a bare sentence with literal backticks in
- * it, the Task board dropped inline text into a column, the Overview wrote a
+ * it, the task board dropped inline text into a column, the Overview wrote a
  * third title-plus-detail-plus-button by hand — four sizes of type and three
- * greys for the same thought, on four pages of the same window.
+ * greys for the same thought, on four pages of the same window. (The board has
+ * since been removed outright, so its file is no longer in the sweep below —
+ * `column-empty` stays in RETIRED because the point of that list is that no
+ * page may reinvent a blank, and the cheapest place to reinvent one is the
+ * class name somebody remembers.)
  *
  * They are all `PageEmpty` (a whole page with nothing on it) and `PageNote`
  * (one section of a working page, or a page still reading) now. Static like
@@ -227,7 +231,6 @@ describe('every panel wears the same blank', () => {
     'renderer/components/AlertsPanel.tsx',
     'renderer/components/FileViewer.tsx',
     'renderer/dashboard/Dashboard.tsx',
-    'renderer/board/Board.tsx',
     'renderer/shell/PanelView.tsx',
   ]
 

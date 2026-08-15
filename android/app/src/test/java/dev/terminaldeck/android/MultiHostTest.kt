@@ -1,6 +1,7 @@
 package dev.terminaldeck.android
 
 import dev.terminaldeck.android.protocol.ClientMessage
+import dev.terminaldeck.android.protocol.HostPlatform
 import dev.terminaldeck.android.protocol.RemoteSession
 import dev.terminaldeck.android.protocol.ServerMessage
 import dev.terminaldeck.android.store.DeviceVault
@@ -91,7 +92,19 @@ class MultiHostTest {
         }
 
         /** Come up, be let in, and say what is running — everything a real `welcome` does. */
-        fun goLive(sessions: List<RemoteSession> = emptyList(), capabilities: List<String> = listOf("create")) {
+        fun goLive(
+            sessions: List<RemoteSession> = emptyList(),
+            capabilities: List<String> = listOf("create"),
+            /**
+             * What kind of machine this one claims to be, raw off the wire.
+             *
+             * Null by default, and that default is doing work: it is what every desktop released
+             * before `welcome.hostPlatform` existed sends, so unless a test says otherwise the whole
+             * of this file runs against a host that never identifies itself — the case a client is
+             * most likely to get wrong, and the one that used to read "Mac".
+             */
+            hostPlatform: String? = null,
+        ) {
             vault.storeCredential(hostId, "durable.$hostId", "device-$hostId", "Pixel")
             vault.markApproved(hostId)
             _state.value = TransportState.Online("Pixel")
@@ -103,6 +116,7 @@ class MultiHostTest {
                     token = null,
                     sessions = sessions,
                     capabilities = capabilities,
+                    hostPlatform = hostPlatform,
                 )
             )
         }
@@ -423,5 +437,95 @@ class MultiHostTest {
     fun `an unpaired phone says so`() {
         assertEquals("not paired", state.hostLabel)
         assertTrue(state.hosts.isEmpty())
+    }
+
+    /* ------------------------------------------------------ what to call each machine -- */
+
+    /*
+     * The reported bug, and the reason it belongs in *this* file.
+     *
+     * A phone paired to a Windows PC read "Running on the Mac". The word was a constant compiled
+     * into the client, because nothing on the wire had ever said what kind of computer was at the
+     * other end — `HostLink`'s own header used to state that as a fact.
+     *
+     * It is a multi-host question as much as a wording one. One phone routinely holds a Mac and a
+     * PC at once, so the answer cannot be a single app-wide value: it would be right for whichever
+     * machine was greeted last and wrong for the other, which is the same defect with a longer
+     * fuse. The tests below therefore check the noun per machine, and check that switching between
+     * them changes it.
+     */
+
+    @Test
+    fun `a machine that says win32 is called a PC`() {
+        deck.pair(code(PC))
+        transport(PC).goLive(hostPlatform = "win32")
+
+        assertEquals("PC", state.machineNoun)
+    }
+
+    /**
+     * The regression test. A desktop that sends no platform is a desktop, and never a Mac.
+     *
+     * Every build released before `welcome.hostPlatform` existed sends nothing, so this is not a
+     * hypothetical — it is what a phone meets when it is updated before the computer is. A fallback
+     * of "Mac" here would reproduce the original bug exactly, against precisely the machines nobody
+     * would think to test.
+     */
+    @Test
+    fun `a machine that says nothing is called a desktop, never a Mac`() {
+        deck.pair(code(PC))
+        transport(PC).goLive()
+
+        assertEquals("desktop", state.machineNoun)
+    }
+
+    /** Before any welcome there is nothing to go on, and the neutral word is the honest one. */
+    @Test
+    fun `a machine that has not answered yet is a desktop`() {
+        deck.pair(code(MAC))
+
+        assertEquals("desktop", state.machineNoun)
+    }
+
+    /**
+     * The two machines keep their own nouns, and switching switches the word.
+     *
+     * This is the assertion the single-value version of this feature would fail while every other
+     * test in the file still passed.
+     */
+    @Test
+    fun `each machine keeps its own noun`() {
+        deck.pair(code(MAC))
+        transport(MAC).goLive(hostPlatform = "darwin")
+        deck.pair(code(PC))
+        transport(PC).goLive(hostPlatform = "win32")
+
+        assertEquals("PC", state.machineNoun)
+        assertEquals(HostPlatform.WINDOWS, host(PC).hostPlatform)
+        assertEquals("the Mac must not have been overwritten", HostPlatform.MAC, host(MAC).hostPlatform)
+
+        deck.select(MAC)
+        assertEquals("Mac", state.machineNoun)
+    }
+
+    /**
+     * The noun outlives the socket, unlike the session list and the capabilities.
+     *
+     * Deliberate, and the opposite of how the rest of the link's state is treated: those are claims
+     * about *now* and stop being true when the connection does. What kind of computer something is
+     * does not change between one reconnect and the next, and the sentences that most need the
+     * right word — "Could not reach that PC", "The PC closed the connection" — are printed after
+     * the connection has gone. Clearing it on disconnect would make every one of them say "desktop"
+     * at exactly the moment it matters.
+     */
+    @Test
+    fun `the noun survives the connection dropping`() {
+        deck.pair(code(PC))
+        transport(PC).goLive(hostPlatform = "win32")
+
+        transport(PC).drop()
+
+        assertFalse("the test is worthless if the link is still live", state.live)
+        assertEquals("PC", state.machineNoun)
     }
 }

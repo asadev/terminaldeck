@@ -3,7 +3,15 @@ import { describe, expect, it } from 'vitest'
 import { SettingsPanel } from './SettingsWindow'
 import { noteFor } from './sections/BrowserSection'
 import { numberOnLeaving, numberWhileTyping } from './controls'
-import { getSetting, SECTIONS, SETTINGS, settingsIn, type NumberSetting, type SectionId } from './settings-schema'
+import {
+  getSetting,
+  SECTIONS,
+  SETTINGS,
+  sectionsFor,
+  settingsIn,
+  type NumberSetting,
+  type SectionId,
+} from './settings-schema'
 import {
   errorText,
   toProfiles,
@@ -24,15 +32,46 @@ import {
  * would rot silently if a section forgot to render its list.
  */
 
+/**
+ * Rendered as Windows, deliberately.
+ *
+ * The rail is per platform — one section exists only there — and Windows is the
+ * superset, so drawing it here is what keeps *every* section covered by the two
+ * assertions below. Under vitest the real answer would be `other`, which is a
+ * fact about the test runner rather than about any machine anybody uses.
+ */
 function render(section: SectionId, bridge: SettingsBridge = {}): string {
-  return renderToStaticMarkup(<SettingsPanel bridge={bridge} initialSection={section} />)
+  return renderToStaticMarkup(
+    <SettingsPanel bridge={bridge} platform="windows" initialSection={section} />,
+  )
 }
 
 describe('the section list', () => {
   it('offers every section, with the current one selected', () => {
     const html = render('general')
-    for (const section of SECTIONS) expect(html, section.id).toContain(section.label)
+    for (const section of sectionsFor('windows')) expect(html, section.id).toContain(section.label)
     expect(html).toContain('aria-selected="true"')
+  })
+
+  it('leaves out a section that platform does not have', () => {
+    // A rail entry reading "Linux" on a Mac is a row that can only ever say
+    // "nothing here" — and a disabled control is still a description of a
+    // feature, which is the thing this project does not ship.
+    const onAMac = renderToStaticMarkup(<SettingsPanel bridge={{}} platform="mac" />)
+    expect(onAMac).not.toContain('data-section="linux"')
+    expect(sectionsFor('mac').map((section) => section.id)).not.toContain('linux')
+    expect(SECTIONS.map((section) => section.id)).toContain('linux')
+  })
+
+  it('falls back rather than opening a pane this platform has no tab for', () => {
+    // Reachable from a deep link, or from a remembered choice made on a machine
+    // that did have the section. An empty pane with nothing selected in the rail
+    // is worse than General.
+    const onAMac = renderToStaticMarkup(
+      <SettingsPanel bridge={{}} platform="mac" initialSection="linux" />,
+    )
+    expect(onAMac).toContain('aria-selected="true"')
+    expect(onAMac).toContain('id="_R_0_-panel-general"')
   })
 
   it('marks the list as a vertical tab list, so arrow keys are expected', () => {
@@ -57,7 +96,7 @@ describe('with nothing wired', () => {
 describe('the generated rows', () => {
   it('renders every declared setting on the screen its section names', () => {
     const markup = new Map<SectionId, string>(
-      SECTIONS.map((section) => [section.id, render(section.id)]),
+      sectionsFor('windows').map((section) => [section.id, render(section.id)]),
     )
     for (const setting of SETTINGS) {
       expect(markup.get(setting.section) ?? '', setting.id).toContain(setting.label)

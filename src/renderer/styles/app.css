@@ -120,7 +120,13 @@ progress {
   background: var(--accent-dim);
 }
 
+/* The pressed step is a colour change as well as a scale, because the scale
+   alone is invisible on a trackpad tap: the press and the release land inside
+   one frame and nothing appears to have happened. --accent-press is the third
+   step of the accent ramp (rest → :hover → :active), and it moves in the same
+   direction the theme's hover moves — darker on paper, brighter on charcoal. */
 .btn-primary:active {
+  background: var(--accent-press);
   transform: scale(0.985);
 }
 
@@ -152,8 +158,26 @@ kbd {
   background: var(--status-working);
   animation: pulse 1.6s var(--ease) infinite;
 }
+/*
+  "At a prompt, ready for you" — the resting state of every session in the app,
+  and therefore the one status that must not shout.
+
+  It was painted `--status-waiting`, the same amber the app uses for a warning.
+  Two things wrong with that. It made a freshly-spawned `zsh` sitting quietly at
+  its own prompt the single warmest thing in a window that is otherwise grey and
+  one blue — the only non-blue colour on the default screen, drawing the eye to
+  the healthiest session in the list. And it said "warning" about nothing at
+  all: this state is reached by `SessionStart`, and by a shell prompt matching
+  in `session-activity.ts`, neither of which is a problem.
+
+  So it carries no colour: an open ring in the idle grey, which stays tellable
+  apart from `idle` (filled) at 7px without spending the palette on it. The
+  states that have genuinely earned colour keep it — `working` pulses blue,
+  `input` (the agent asked you something) is the loud one, `completed` is green.
+*/
 .status-dot[data-status='waiting'] {
-  background: var(--status-waiting);
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--status-idle);
 }
 .status-dot[data-status='input'] {
   background: var(--status-input);
@@ -183,10 +207,15 @@ kbd {
 
 /* ------------------------------------------------------------- terminal -- */
 
+/* The host paints the terminal's paper, not just the canvas: xterm fills its
+   own box and this element's padding is what sits between that box and the
+   pane's edge. With the two different colours — which they are in the light
+   theme — the padding read as a frame drawn around the session. */
 .terminal-host {
   position: absolute;
   inset: 0;
   padding: var(--sp-3) var(--sp-4);
+  background: var(--terminal-bg);
 }
 
 /* Hidden views stay mounted so scrollback and cursor state survive switching. */
@@ -369,6 +398,97 @@ kbd {
 
 ::-webkit-scrollbar-corner {
   background: transparent;
+}
+
+/*
+  A scrolling region ends in a fade rather than a guillotine.
+
+  Five surfaces were caught doing the same thing at once: a settings row sliced
+  through the x-height of its own words at the panel's bottom edge, a section
+  heading in the composer's panel reduced to "F… t… l", a file path halved in
+  the Git widget, "Keyboard shortcuts" cut as the last row of the shortcuts
+  sheet, "Context window" cut in the cost widget. A straight cut through the
+  middle of a line reads as a rendering fault; a fade reads as "there is more
+  this way", which is what it is, and it is what macOS does at the top of a
+  scrolled sheet.
+
+  Two things about how it is built.
+
+  It is a **mask**, not a gradient overlay, because these regions sit on glass
+  as often as on paper — an overlay painted in the surface's colour is a solid
+  slab the moment the surface behind it is translucent.
+
+  The fade's length is **driven by the scroll position** rather than fixed. A
+  static mask dims the first line even when the region is already at the top,
+  which is a new defect in place of the old one; here the top fade grows from
+  nothing over the first 20px of scroll and the bottom fade shrinks to nothing
+  over the last 20px, so an unscrolled region and a fully-scrolled one are both
+  untouched. If scroll-driven animation is ever unavailable, both lengths stay
+  at their registered initial value of 0 and the mask is a no-op — the failure
+  mode is "exactly what it looks like today", not a dimmed panel.
+
+  Do not put this on a scroller with a sticky header: the header lives where the
+  top fade is and would spend its life half transparent.
+*/
+@property --scroll-fade-head {
+  syntax: '<length>';
+  inherits: false;
+  initial-value: 0px;
+}
+
+@property --scroll-fade-foot {
+  syntax: '<length>';
+  inherits: false;
+  initial-value: 0px;
+}
+
+.scroll-fade {
+  --scroll-fade: var(--sp-5);
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 var(--scroll-fade-head),
+    #000 calc(100% - var(--scroll-fade-foot)),
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 var(--scroll-fade-head),
+    #000 calc(100% - var(--scroll-fade-foot)),
+    transparent 100%
+  );
+  animation: scroll-fade-head linear both, scroll-fade-foot linear both;
+  animation-timeline: scroll(self block), scroll(self block);
+  /* Lengths, not percentages: the fade has to reach full strength after the
+     same 20px whether the region scrolls by 40px or by 4000. */
+  animation-range: 0 var(--sp-5), calc(100% - var(--sp-5)) 100%;
+}
+
+@keyframes scroll-fade-head {
+  from {
+    --scroll-fade-head: 0px;
+  }
+  to {
+    --scroll-fade-head: var(--scroll-fade);
+  }
+}
+
+@keyframes scroll-fade-foot {
+  from {
+    --scroll-fade-foot: var(--scroll-fade);
+  }
+  to {
+    --scroll-fade-foot: 0px;
+  }
+}
+
+/* The exception the note above warns about, for the one scroller that has a
+   sticky header: only the foot fades, so the header stays solid. */
+.scroll-fade[data-fade='foot'] {
+  animation: scroll-fade-foot linear both;
+  animation-timeline: scroll(self block);
+  animation-range: calc(100% - var(--sp-5)) 100%;
 }
 
 /* ---------------------------------------------------------------- error -- */

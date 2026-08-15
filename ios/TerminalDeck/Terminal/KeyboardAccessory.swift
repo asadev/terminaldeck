@@ -1,28 +1,43 @@
 /**
- * The row above the keyboard, which is most of what makes a terminal usable on
- * a phone.
+ * The bar above the keyboard, which is most of what makes a terminal usable on a
+ * phone — and, since this rewrite, the one surface in the app that is guaranteed
+ * not to move under a thumb.
  *
  * An iOS keyboard has no Escape, no Tab, no Control and no arrows, and a shell
  * without those is a read-only window. SwiftTerm ships an accessory of its own
- * and this replaces it, for three reasons rather than taste:
+ * and this replaces it.
  *
- *  1. **The keys that are missing are the ones people actually type.** `|`, `/`,
- *     `-`, `~`, `:` and Ctrl-C are behind two taps on the software keyboard, and
- *     Ctrl-C is the single most likely reason someone opens this app in a hurry.
- *  2. **Copy and paste need somewhere to live.** Selection on a terminal is
- *     fiddly with a finger; a Paste that always works and a Copy that takes the
- *     selection or the screen when there is none is what people reach for.
- *  3. **Auto-repeat.** Holding an arrow has to repeat, or scrolling back through
- *     history is one tap per line.
+ * ## What was wrong with the bar this replaces
  *
- * ## Control is sticky, and the terminal owns that state
+ * Twenty-six buttons in a single horizontal `UIScrollView`, with the dismiss
+ * button added **last**. The control people reach for most often was therefore
+ * the one furthest away: putting the keyboard down meant scrolling past
+ * `| / \ - _ ~ : *`, the four signals, home, end, pgup, pgdn, copy and paste.
+ * And because a scroll view has no fixed positions, no muscle memory could ever
+ * form for any of them — every key cost a swipe plus a hunt.
  *
- * `TerminalView.controlModifier` is consulted by SwiftTerm's own `insertText`
- * when the accessory is not one of its own — which is exactly this case — so
- * arming Control here makes the *next* character typed on the software keyboard
- * arrive as a control code, and SwiftTerm clears it afterwards and posts
- * `terminalViewControlModifierReset`. Listening to that is what keeps the button
- * from staying lit after the modifier has already been spent.
+ * ## The shape that replaces it
+ *
+ * **A bar that never scrolls, and a grid that opens where the keyboard was.**
+ *
+ * The bar carries only what is pressed constantly while typing a command —
+ * `esc` `tab` `ctrl` `↑` `↓` — plus two buttons pinned hard right that never
+ * move: **more**, which opens the grid, and **dismiss**, which puts the keyboard
+ * away. `KeyPlan` owns which keys those are and proves the set fits the
+ * narrowest supported iPhone without scrolling; if a key is ever added here and
+ * that stops being true, `KeyBarTests` fails rather than a scroll view quietly
+ * coming back.
+ *
+ * ## Control and Alt are sticky, and the terminal owns that state
+ *
+ * A finger cannot hold a chord, so both modifiers arm and are spent by the next
+ * key — the same interaction every phone keyboard uses for shift.
+ * `TerminalView.controlModifier` and `.metaModifier` are consulted by SwiftTerm's
+ * own `insertText` when the accessory is not one of its own, which is exactly
+ * this case, so arming here makes the *next* character typed on the software
+ * keyboard arrive as a control code or with an Escape prefix. SwiftTerm clears
+ * the flag afterwards and posts a notification; listening to that is what keeps
+ * the button from staying lit after the modifier has already been spent.
  */
 
 import SwiftTerm
@@ -35,193 +50,177 @@ final class KeyboardAccessory: UIInputView, UIInputViewAudioFeedback {
     var onBytes: (([UInt8]) -> Void)?
     var onCopy: (() -> Void)?
     var onPaste: (() -> Void)?
+    /// Put the keyboard away. Also closes the grid — dismiss means "give me the
+    /// screen back", and leaving a grid up would be answering half of that.
     var onDismiss: (() -> Void)?
+    /// Open or close the grid.
+    var onMore: (() -> Void)?
     /// Application-cursor mode changes what an arrow key is on the wire, and
     /// only the terminal knows which mode it is in.
     var applicationCursor: () -> Bool = { false }
-    /// Arming Control is a change to the terminal's state, not to this view's.
-    var onControl: ((Bool) -> Void)?
+    /// Arming a modifier is a change to the terminal's state, not to this
+    /// view's, so it is reported rather than stored.
+    var onModifier: ((KeyAction.Modifier, Bool) -> Void)?
 
-    private var controlButton: UIButton?
-    private var controlReset: NSObjectProtocol?
-    private var repeatTask: Task<Void, Never>?
-    private var repeatTimer: Timer?
+    /// The bar's height. 52 rather than the 44 this replaces: a 44pt *touch
+    /// target* needs 44 points of key, and the old bar spent 10 of its 44 on
+    /// padding and left 34 for the thing you actually hit.
+    static let height: CGFloat = 52
 
-    private(set) var control = false {
+    private var modifierButtons: [KeyAction.Modifier: KeyCapButton] = [:]
+    private var moreButton: KeyChromeButton?
+    private var resetObservers: [NSObjectProtocol] = []
+
+    /// Which sticky modifiers are armed right now. On this view because the
+    /// buttons are, and mirrored onto the terminal through `onModifier`.
+    private(set) var armed: Set<KeyAction.Modifier> = [] {
         didSet {
-            controlButton?.isSelected = control
-            controlButton?.backgroundColor = control ? Self.armed : Self.key
-            onControl?(control)
+            for (modifier, button) in modifierButtons {
+                button.isArmed = armed.contains(modifier)
+            }
         }
     }
 
-    private static let key = UIColor(white: 1, alpha: 0.10)
-    private static let armed = UIColor(red: 0.20, green: 0.62, blue: 0.95, alpha: 1)
+    /// Drawn on the *more* button so the two states of the grid are visible
+    /// from the bar rather than only from what is underneath it.
+    var isGridOpen = false {
+        didSet { moreButton?.isOn = isGridOpen }
+    }
 
     init(width: CGFloat) {
-        super.init(frame: CGRect(x: 0, y: 0, width: width, height: 44), inputViewStyle: .keyboard)
+        super.init(frame: CGRect(x: 0, y: 0, width: width, height: Self.height),
+                   inputViewStyle: .keyboard)
         allowsSelfSizing = true
         translatesAutoresizingMaskIntoConstraints = false
         build()
 
-        // The token is kept and removed in `deinit`. The block-based observer is
+        // The tokens are kept and removed in `deinit`. A block-based observer is
         // not released when its object is: NotificationCenter holds it until it
         // is handed back, so a session-per-accessory app would accumulate one
         // dead observer per terminal ever opened.
-        controlReset = NotificationCenter.default.addObserver(
-            forName: .terminalViewControlModifierReset,
-            object: nil,
-            queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated {
-                    // Spent by a keystroke SwiftTerm handled. The button has to
-                    // stop claiming otherwise.
-                    self?.control = false
-                }
-            }
+        observe(.terminalViewControlModifierReset, clears: .control)
+        observe(.terminalViewMetaModifierReset, clears: .meta)
     }
 
     deinit {
-        if let controlReset { NotificationCenter.default.removeObserver(controlReset) }
+        for token in resetObservers { NotificationCenter.default.removeObserver(token) }
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
-    /// The row is wider than any phone, so it scrolls. Ordered by how often a
-    /// key is needed rather than by keyboard layout: the first screenful is
-    /// Escape, Tab, Control, the arrows and the pipe.
+    /// Spent by a keystroke SwiftTerm handled. The button has to stop claiming
+    /// otherwise — a modifier that looks armed and is not is how a `w` becomes a
+    /// Ctrl+W and closes something.
+    private func observe(_ name: Notification.Name, clears modifier: KeyAction.Modifier) {
+        let token = NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.armed.remove(modifier)
+            }
+        }
+        resetObservers.append(token)
+    }
+
+    // MARK: - Layout
+
+    /**
+     * The bar, in one pass, with no scroll view anywhere in it.
+     *
+     * The keys stretch and the two pinned buttons hug, which is what keeps
+     * *more* and *dismiss* in the same place on every phone: on a 375pt screen
+     * each key comes out just under 46 points, on a 430pt screen just under 57,
+     * and the right-hand pair is at the right-hand edge on both. Measured on a
+     * real layout in `KeyBarTests`, not asserted from this arithmetic.
+     */
     private func build() {
-        let stack = UIStackView()
-        stack.axis = .horizontal
-        stack.spacing = 6
-        stack.alignment = .fill
-        stack.translatesAutoresizingMaskIntoConstraints = false
+        let keys = UIStackView(arrangedSubviews: KeyPlan.bar.map { cap in
+            let button = KeyCapButton(cap: cap) { [weak self] in self?.press($0) }
+            if case let .modifier(modifier) = cap.action { modifierButtons[modifier] = button }
+            return button
+        })
+        keys.axis = .horizontal
+        keys.spacing = KeyPlan.keySpacing
+        keys.distribution = .fillEqually
 
-        stack.addArrangedSubview(button("esc") { [weak self] in self?.send([0x1b]) })
-        stack.addArrangedSubview(button("tab") { [weak self] in self?.send([0x09]) })
-        controlButton = button("ctrl") { [weak self] in
-            guard let self else { return }
-            control.toggle()
+        let more = KeyChromeButton(systemImage: "square.grid.2x2", title: "More keys") { [weak self] in
+            self?.onMore?()
         }
-        stack.addArrangedSubview(controlButton!)
+        more.accessibilityIdentifier = "keys.more"
+        moreButton = more
 
-        stack.addArrangedSubview(repeating("chevron.left", system: true) { [weak self] in
-            guard let self else { return }
-            send(applicationCursor() ? [0x1b, 0x4f, 0x44] : [0x1b, 0x5b, 0x44])
-        })
-        stack.addArrangedSubview(repeating("chevron.up", system: true) { [weak self] in
-            guard let self else { return }
-            send(applicationCursor() ? [0x1b, 0x4f, 0x41] : [0x1b, 0x5b, 0x41])
-        })
-        stack.addArrangedSubview(repeating("chevron.down", system: true) { [weak self] in
-            guard let self else { return }
-            send(applicationCursor() ? [0x1b, 0x4f, 0x42] : [0x1b, 0x5b, 0x42])
-        })
-        stack.addArrangedSubview(repeating("chevron.right", system: true) { [weak self] in
-            guard let self else { return }
-            send(applicationCursor() ? [0x1b, 0x4f, 0x43] : [0x1b, 0x5b, 0x43])
-        })
-
-        for character in ["|", "/", "\\", "-", "_", "~", ":", "*"] {
-            stack.addArrangedSubview(button(character) { [weak self] in
-                self?.send(Array(character.utf8))
-            })
-        }
-
-        // Written out rather than composed from the ctrl button, because these
-        // are the ones worth one tap: interrupt, end-of-file, suspend, clear.
-        stack.addArrangedSubview(button("^C") { [weak self] in self?.send([0x03]) })
-        stack.addArrangedSubview(button("^D") { [weak self] in self?.send([0x04]) })
-        stack.addArrangedSubview(button("^Z") { [weak self] in self?.send([0x1a]) })
-        stack.addArrangedSubview(button("^L") { [weak self] in self?.send([0x0c]) })
-
-        stack.addArrangedSubview(button("home") { [weak self] in
-            guard let self else { return }
-            send(applicationCursor() ? [0x1b, 0x4f, 0x48] : [0x1b, 0x5b, 0x48])
-        })
-        stack.addArrangedSubview(button("end") { [weak self] in
-            guard let self else { return }
-            send(applicationCursor() ? [0x1b, 0x4f, 0x46] : [0x1b, 0x5b, 0x46])
-        })
-        stack.addArrangedSubview(button("pgup") { [weak self] in self?.send([0x1b, 0x5b, 0x35, 0x7e]) })
-        stack.addArrangedSubview(button("pgdn") { [weak self] in self?.send([0x1b, 0x5b, 0x36, 0x7e]) })
-
-        stack.addArrangedSubview(button("copy") { [weak self] in self?.onCopy?() })
-        stack.addArrangedSubview(button("paste") { [weak self] in self?.onPaste?() })
-        stack.addArrangedSubview(button("keyboard.chevron.compact.down", system: true) { [weak self] in
+        let dismiss = KeyChromeButton(systemImage: "keyboard.chevron.compact.down",
+                                      title: "Hide the keyboard") { [weak self] in
             self?.onDismiss?()
-        })
+        }
+        dismiss.accessibilityIdentifier = "keys.dismiss"
 
-        let scroll = UIScrollView()
-        scroll.translatesAutoresizingMaskIntoConstraints = false
-        scroll.showsHorizontalScrollIndicator = false
-        scroll.alwaysBounceHorizontal = true
-        scroll.addSubview(stack)
-        addSubview(scroll)
+        let pinned = UIStackView(arrangedSubviews: [more, dismiss])
+        pinned.axis = .horizontal
+        pinned.spacing = KeyPlan.keySpacing
+        pinned.distribution = .fillEqually
 
+        let row = UIStackView(arrangedSubviews: [keys, pinned])
+        row.axis = .horizontal
+        row.spacing = KeyPlan.pinnedSpacing
+        row.translatesAutoresizingMaskIntoConstraints = false
+        // Which half absorbs the spare width, stated rather than left to a tie.
+        // Both stacks default to the same hugging priority, and a stack asked to
+        // fill with two equally reluctant children has no defined answer about
+        // which one grows. The keys grow; the pinned pair is a fixed size by
+        // definition, because "the same place on every phone" is its whole job.
+        keys.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        pinned.setContentHuggingPriority(.required, for: .horizontal)
+        addSubview(row)
+
+        let capHeight = Self.height - 8
         NSLayoutConstraint.activate([
-            scroll.leadingAnchor.constraint(equalTo: leadingAnchor),
-            scroll.trailingAnchor.constraint(equalTo: trailingAnchor),
-            scroll.topAnchor.constraint(equalTo: topAnchor),
-            scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
-            stack.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor, constant: 8),
-            stack.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor, constant: -8),
-            stack.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor, constant: 5),
-            stack.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor, constant: -5),
-            stack.heightAnchor.constraint(equalTo: scroll.frameLayoutGuide.heightAnchor, constant: -10),
+            // The safe-area guide rather than the bounds: in landscape on a
+            // notched phone the bar spans the full width and the first key would
+            // otherwise sit under the sensor housing.
+            row.leadingAnchor.constraint(equalTo: safeAreaLayoutGuide.leadingAnchor, constant: KeyPlan.barMargin),
+            row.trailingAnchor.constraint(equalTo: safeAreaLayoutGuide.trailingAnchor, constant: -KeyPlan.barMargin),
+            row.topAnchor.constraint(equalTo: topAnchor, constant: 4),
+            row.heightAnchor.constraint(equalToConstant: capHeight),
+            // Each pinned button is a square of the same height as a key, which
+            // is what makes the pair read as chrome rather than as two more keys.
+            pinned.widthAnchor.constraint(equalToConstant: capHeight * 2 + KeyPlan.keySpacing),
         ])
     }
 
-    // MARK: - Buttons
-
-    private func button(_ label: String, system: Bool = false, action: @escaping () -> Void) -> UIButton {
-        let button = ActionButton(type: .system)
-        if system {
-            button.setImage(UIImage(systemName: label), for: .normal)
-        } else {
-            button.setTitle(label, for: .normal)
-            button.titleLabel?.font = .monospacedSystemFont(ofSize: 14, weight: .medium)
-        }
-        button.tintColor = .white
-        button.setTitleColor(.white, for: .normal)
-        button.backgroundColor = Self.key
-        button.layer.cornerRadius = 6
-        button.contentEdgeInsets = UIEdgeInsets(top: 0, left: 10, bottom: 0, right: 10)
-        button.widthAnchor.constraint(greaterThanOrEqualToConstant: 42).isActive = true
-        button.action = action
-        button.addTarget(button, action: #selector(ActionButton.fire), for: .touchUpInside)
-        return button
+    override var intrinsicContentSize: CGSize {
+        CGSize(width: UIView.noIntrinsicMetric, height: Self.height)
     }
 
-    /// A key that repeats while it is held. 600ms before the first repeat and
-    /// ten a second after that, which is the cadence the OS keyboard uses.
-    private func repeating(_ label: String, system: Bool, action: @escaping () -> Void) -> UIButton {
-        let button = self.button(label, system: system, action: action)
-        button.addTarget(self, action: #selector(holdBegan(_:)), for: .touchDown)
-        button.addTarget(self, action: #selector(holdEnded), for: [.touchUpInside, .touchUpOutside, .touchCancel])
-        return button
-    }
+    // MARK: - Pressing
 
-    @objc private func holdBegan(_ sender: UIButton) {
-        guard let button = sender as? ActionButton, let action = button.action else { return }
-        cancelRepeat()
-        repeatTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(600))
-            guard let self, !Task.isCancelled else { return }
-            repeatTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
-                MainActor.assumeIsolated { action() }
+    /**
+     * One place turns a key into an effect.
+     *
+     * Shared with the grid deliberately: `copy` on the bar and `copy` in the
+     * grid have to be the same act, and a second switch statement somewhere else
+     * is how they stop being.
+     */
+    func press(_ cap: KeyCap) {
+        switch cap.action {
+        case let .bytes(bytes):
+            send(bytes)
+        case let .cursor(final):
+            send(KeyPlan.cursorBytes(final, applicationCursor: applicationCursor()))
+        case let .modifier(modifier):
+            UIDevice.current.playInputClick()
+            if armed.contains(modifier) {
+                armed.remove(modifier)
+            } else {
+                armed.insert(modifier)
             }
+            onModifier?(modifier, armed.contains(modifier))
+        case .copy:
+            UIDevice.current.playInputClick()
+            onCopy?()
+        case .paste:
+            UIDevice.current.playInputClick()
+            onPaste?()
         }
-    }
-
-    @objc private func holdEnded() {
-        cancelRepeat()
-    }
-
-    private func cancelRepeat() {
-        repeatTask?.cancel()
-        repeatTask = nil
-        repeatTimer?.invalidate()
-        repeatTimer = nil
     }
 
     private func send(_ bytes: [UInt8]) {
@@ -232,15 +231,4 @@ final class KeyboardAccessory: UIInputView, UIInputViewAudioFeedback {
     /// From `UIInputViewAudioFeedback`: the keyboard click a hardware-feeling
     /// key ought to make. Without the conformance `playInputClick` is silent.
     var enableInputClicksWhenVisible: Bool { true }
-}
-
-/// A button that carries its own action, so the repeat handler can find it.
-/// Target-action with a stored closure rather than a `UIAction`, because a
-/// `UIAction` cannot be read back off the button when a hold starts repeating.
-private final class ActionButton: UIButton {
-    var action: (() -> Void)?
-
-    @objc func fire() {
-        action?()
-    }
 }

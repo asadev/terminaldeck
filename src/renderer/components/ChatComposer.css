@@ -1,10 +1,21 @@
 /* ============================================================================
-   Composer — one field, the way Mail and Messages draw one.
+   Composer — one box, and everything lives inside it.
 
-   Not a bordered bar with a bordered box and a bordered toolbar inside it: the
-   whole row *is* the field. It carries a single soft outline and a corner, the
-   plus and the microphone live inside it as ghosts, and the send button is the
-   only filled thing in the view.
+   The old shape was a single-line field with a plus on one side and a
+   microphone on the other, and then three more rows stacked underneath it: four
+   pickers, a sentence about them, and a usage readout. Five bands of chrome
+   under a one-line box, which is how a chat pane came to look like a control
+   panel with a text field bolted on.
+
+   This is the other way round. The box is the centre of gravity — tall enough
+   to read as somewhere you write a paragraph — and it carries its own controls:
+   attachments above the text, one row of controls below it, all inside the same
+   frame. Underneath the box there is nothing at all.
+
+   `.cc-chip` is the shape every labelled control in that row wears — the plus,
+   the model and permission pickers (chat/controls) and the "More" button. One
+   family, deliberately: a row where each control is drawn its own way is a row
+   you have to read rather than glance at.
    ============================================================================ */
 
 .chat-composer {
@@ -19,38 +30,55 @@
   max-width: calc(var(--content-measure) + var(--sp-6) * 2);
   align-self: center;
   margin-inline: auto;
-  padding: var(--sp-2) var(--sp-6) var(--sp-3);
+  padding: var(--sp-2) var(--sp-6) var(--sp-5);
   background: var(--bg-primary);
 }
 
-/* The field itself. */
-.cc-row {
+/* The field. Depth by layering rather than by outline: it is a surface lifted
+   off the pane, with a hairline only to catch its own edge. */
+.cc-box {
+  /* The anchor for the "More" panel (`.ac-sheet`, chat/controls). It is pinned
+     to the box rather than to the control that opens it so it can be capped at
+     `max-width: 100%` — the box's width, which is the only measurement that
+     keeps a 360px panel inside a narrow pane. Anchored to the button, it was
+     capped against the *viewport*, and a pane made narrow by the sidebar let it
+     run off the right-hand edge of the window. */
+  position: relative;
   display: flex;
-  align-items: flex-end;
-  gap: var(--sp-1);
-  padding: var(--sp-15);
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
   border: 1px solid var(--border);
-  border-radius: var(--radius-xl);
-  background: var(--bg-primary);
-  transition: border-color var(--dur-fast) var(--ease);
+  border-radius: var(--radius-2xl);
+  background: var(--bg-secondary);
+  transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
 }
 
-.cc-row:hover {
+.cc-box:hover {
   border-color: var(--border-strong);
 }
 
-/* Focus rings the whole field rather than the textarea inside it — the border
-   is the field's edge, so that is where the ring belongs. */
-.cc-row:has(.cc-input:focus-visible) {
-  border-color: transparent;
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
+/* Focus rings the whole box rather than the textarea inside it — the frame is
+   the field's edge, so that is where the ring belongs. A tinted border and a
+   soft halo rather than a hard outline: the box is 20px round and a 2px
+   rectangle sitting a pixel outside it never quite followed the corner. */
+.cc-box:has(.cc-input:focus-visible) {
+  border-color: var(--accent-line);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.cc-box-off {
+  background: var(--bg-primary);
 }
 
 .cc-input {
-  flex: 1;
   min-width: 0;
-  min-height: var(--control-h);
+  /* Three lines and a little, before a word is typed. The auto-grow in
+     ChatComposer.tsx writes an explicit height on every keystroke, and
+     `min-height` is what stops it from collapsing the box back to one line —
+     the floor lives here rather than in the measuring code so the two cannot
+     disagree. */
+  min-height: 76px;
   max-height: 40vh;
   padding: var(--sp-1) var(--sp-2);
   border: 0;
@@ -67,7 +95,7 @@
   color: var(--text-muted);
 }
 
-/* The ring is drawn by the row above; a second one inside it would read as two
+/* The ring is drawn by the box above; a second one inside it would read as two
    controls. */
 .cc-input:focus-visible {
   outline: none;
@@ -78,9 +106,79 @@
   cursor: not-allowed;
 }
 
-/* The quiet controls either side of the text: plus and microphone. They are
-   ghosts until hovered, so the filled send button stays the only thing in this
-   row that looks like an action. */
+/* ------------------------------------------------------------- the row -- */
+
+.cc-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+/* The left half gives way first: it holds the model name, which can be long,
+   while the right half holds two fixed-width controls that must never move. */
+.cc-foot-left {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-05);
+  flex: 1;
+  min-width: 0;
+}
+
+.cc-foot-right {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex-shrink: 0;
+}
+
+/* A labelled control on that row. Quiet at rest — no border, no fill — because
+   the send button is the only thing in this view that should look like an
+   action; it grows a background when you point at it, which is the promise
+   that it does something. */
+.cc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-15);
+  height: var(--control-h);
+  /* Free to shrink, so a long value inside it gives way before the row does. */
+  min-width: 0;
+  /* Matches the textarea's own horizontal padding, so a label on this row and
+     the first character of the message start on the same vertical line. */
+  padding: 0 var(--sp-2);
+  border-radius: var(--radius-pill);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: var(--t-footnote);
+  line-height: var(--lh-tight);
+  white-space: nowrap;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.cc-chip:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.cc-chip[aria-expanded='true'] {
+  background: var(--bg-active);
+}
+
+.cc-chip:disabled {
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+.cc-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.cc-chip svg {
+  display: block;
+}
+
+/* The microphone: the one control here that stays a glyph, because it is one of
+   the two the corner of a message box has meant for twenty years. It says what
+   it is on hover and to a screen reader — see DictateButton.tsx. */
 .cc-tool {
   display: grid;
   place-items: center;
@@ -138,8 +236,8 @@
   transform: scale(0.94);
 }
 
-/* Nothing to send yet: it recedes into the field rather than sitting there as
-   a dimmed accent, which reads as broken. */
+/* Nothing to send yet: it recedes into the box rather than sitting there as a
+   dimmed accent, which reads as broken. */
 .cc-send:disabled {
   background: var(--fill-tertiary);
   color: var(--text-muted);

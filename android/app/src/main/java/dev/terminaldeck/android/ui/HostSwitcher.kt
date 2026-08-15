@@ -372,7 +372,10 @@ private fun RenameDialog(host: HostSummary, onDone: (String?) -> Unit, onCancel:
                     onValueChange = { name = it },
                     singleLine = true,
                     label = { Text("Name") },
-                    placeholder = { Text("Studio Mac") },
+                    // Two examples, and the second one is the point: the list this names routinely
+                    // holds a Mac and a Windows PC at once, and a placeholder offering only the one
+                    // is the same small untruth as a screen that calls every machine a Mac.
+                    placeholder = { Text("Studio Mac, Work PC…") },
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedTextColor = MaterialTheme.colorScheme.onSurface,

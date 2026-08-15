@@ -30,6 +30,7 @@ import {
   type SessionHandle,
 } from './server'
 import type { RemoteSession } from './protocol'
+import { FolderGrants } from './folder-grants'
 
 /** Enough of a session layer to construct the server. Nothing attaches here. */
 function fakeSessions(): SessionAccess {
@@ -87,6 +88,9 @@ function register(overrides: Partial<RemoteIpcDeps> = {}): {
   const failures: string[] = []
   registerRemoteIpc(ipc.ipcMain, {
     sessions: fakeSessions(),
+    // A real store over a temp directory rather than a stand-in: it writes only
+    // when something grants a folder, and nothing in this file does.
+    folders: new FolderGrants(mkdtempSync(join(tmpdir(), 'td-autostart-grants-'))),
     webRoot: join(mkdtempSync(join(tmpdir(), 'td-autostart-')), 'nowhere'),
     storageDir: mkdtempSync(join(tmpdir(), 'td-autostart-store-')),
     broadcast: () => {},

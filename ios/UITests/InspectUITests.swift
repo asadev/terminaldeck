@@ -345,7 +345,11 @@ final class InspectUITests: XCTestCase {
         XCTAssertTrue(new.waitForExistence(timeout: 30),
                       "the harness advertises `create`, so the button should be there")
         new.tap()
-        if app.buttons["New session"].waitForExistence(timeout: 3) { app.buttons["New session"].tap() }
+        // By identifier: the toolbar button is *labelled* "New session" too, so
+        // a query on the words matches two elements once the menu is open.
+        if app.buttons["sessions.newDefault"].waitForExistence(timeout: 3) {
+            app.buttons["sessions.newDefault"].tap()
+        }
 
         _ = app.otherElements["terminal.view"].waitForExistence(timeout: 30)
         try returnToTheList()

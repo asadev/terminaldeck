@@ -156,10 +156,9 @@ Read from Claude Code's own JSONL transcripts, not scraped from terminal output.
 ### Layout
 
 - Customisable per-project dashboard, drag-and-drop widget grid
-- Kanban board per project; a card can spawn or resume a session, and moves to
-  Done when that session completes
-- **Swarm view** — every running session in one grid
-- Split panes with focus routing
+- **Split view** — sessions side by side, arranged by hand, with the divider
+  draggable and the sidebar filling whichever pane has focus
+- **Swarm view** — every running session in one grid, arranged for you
 - Multiple agent profiles with isolated config directories, so work and personal
   logins never mix
 - Live dark/light theming; terminals recolour without a restart
@@ -238,12 +237,13 @@ the file is right.
 | Open a project | `⌘O` |
 | Quick open a file | `⌘P` or `⌘⇧O` |
 | Command palette | `⌘K` or `⌘⇧P` |
-| Task board | `⌘⇧B` |
 | Project dashboard | `⌘⇧D` |
 | Files | `⌘⇧E` |
 | Search past sessions | `⌘⇧F` |
 | Source control | `⌘⇧G` |
 | Session inspector | `⌘⇧I` |
+| Split the window | `⌘D` |
+| Focus the pane left / right | `⌘⌥←` / `⌘⌥→` |
 | Swarm view | `⌘\` |
 | Toggle the sidebar | `⌘B` |
 | Settings | `⌘,` |

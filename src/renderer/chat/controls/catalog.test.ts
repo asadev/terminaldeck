@@ -1,15 +1,23 @@
 import { describe, expect, it } from 'vitest'
 import {
+  controlName,
+  describeControl,
   displayValue,
   EFFORT_OPTIONS,
+  FOLDED_CONTROLS,
   isCurrent,
   MODEL_OPTIONS,
   optionsFor,
   PERMISSION_OPTIONS,
+  PRIMARY_CONTROLS,
   reachOf,
   sourceNote,
+  type ControlId,
   type ControlReading,
 } from './catalog'
+
+/** Every control the app knows about. The lists below must partition this. */
+const ALL: ControlId[] = ['model', 'effort', 'fast', 'permission']
 
 describe('what the row is allowed to offer', () => {
   it('offers only the effort levels the CLI listed when it rejected a bad one', () => {
@@ -38,6 +46,32 @@ describe('what the row is allowed to offer', () => {
     expect(optionsFor('model')).toBe(MODEL_OPTIONS)
     expect(optionsFor('effort')).toBe(EFFORT_OPTIONS)
     expect(optionsFor('permission')).toBe(PERMISSION_OPTIONS)
+  })
+})
+
+describe('what stays on the composer and what folds away', () => {
+  it('places every control in exactly one of the two lists', () => {
+    // The point of the pairing. Folding a control away is a layout decision;
+    // dropping it from both lists is a feature quietly leaving the app, and it
+    // would not fail a single one of that control's own tests.
+    const placed = [...PRIMARY_CONTROLS, ...FOLDED_CONTROLS]
+    expect([...placed].sort()).toEqual([...ALL].sort())
+    expect(new Set(placed).size).toBe(placed.length)
+  })
+
+  it('keeps the two a session reaches for on the box itself', () => {
+    // Model changes per task, permission per phase of the work. Effort is set
+    // once if ever, and fast mode usually cannot even be read.
+    expect(PRIMARY_CONTROLS).toEqual(['model', 'permission'])
+  })
+
+  it('names and describes every control, so none is a bare icon', () => {
+    for (const control of ALL) {
+      expect(controlName(control), control).not.toBe('')
+      // A description is a sentence, not a label repeated in lower case.
+      expect(describeControl(control), control).toMatch(/\.$/)
+      expect(describeControl(control).length, control).toBeGreaterThan(controlName(control).length)
+    }
   })
 })
 

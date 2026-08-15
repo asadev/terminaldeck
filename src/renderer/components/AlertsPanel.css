@@ -27,6 +27,13 @@
 
 /* One sentence and one button. The rule that used to sit under it separated a
    summary from the list the summary is about. */
+/* Inset by the same --sp-4 the cards and the group headings are, so the three
+   things stacked down the right-hand edge of this panel — "Check again" up
+   here, and every alert's own action below — share one edge. They did not: the
+   header sat on the page's edge and the card actions sat inside the card's
+   padding, so two right-aligned buttons on one screen disagreed by exactly 16
+   pixels. Alignment is the thing that makes an app feel amateur when nobody can
+   name why. */
 .alerts-head {
   display: flex;
   align-items: center;
@@ -34,6 +41,7 @@
   flex-shrink: 0;
   min-height: var(--control-h-lg);
   margin-bottom: var(--sp-5);
+  padding: 0 var(--sp-4);
 }
 
 .alerts-headline {
@@ -117,10 +125,6 @@
   color: var(--text-muted);
 }
 
-.alerts-count {
-  font-variant-numeric: tabular-nums;
-  font-weight: var(--w-regular);
-}
 
 /* Enough gap that two rows of the same severity read as two rows and not as
    one taller wash. */

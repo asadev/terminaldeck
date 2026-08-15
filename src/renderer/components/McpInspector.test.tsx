@@ -147,6 +147,7 @@ describe('STATE_LABEL', () => {
 describe('<McpInspector>', () => {
   const bridge: McpBridge = {
     listMcpServers: async () => [server()],
+    addMcpServer: async () => ({ ok: true, message: 'Added files.' }),
     connectMcpServer: async () => server({ state: 'ready' }),
     disconnectMcpServer: async () => null,
     mcpInventory: async () => inventory(),
@@ -165,9 +166,30 @@ describe('<McpInspector>', () => {
     const html = renderToStaticMarkup(<McpInspector bridge={bridge} projectPath="/work/app" />)
     // Not the title — the panel dock owns that now, and repeating it here is
     // what made four panels render their own name twice.
-    expect(html).toContain('Read from your Claude Code configuration')
+    expect(html).toContain('Claude Code configuration')
     // Effects do not run under static rendering, so the first paint is the
     // loading state — the point is that it renders at all.
     expect(html).toContain('Reading')
+  })
+
+  /**
+   * The panel had Reload and nothing else, and its empty state sent people to a
+   * terminal. Asad's note was that silence there reads as broken — so these two
+   * pin the answer the panel now gives, whichever way it goes.
+   */
+  it('offers a way to add a server, not just to reload', () => {
+    const html = renderToStaticMarkup(<McpInspector bridge={bridge} projectPath="/work/app" />)
+    expect(html).toContain('Add server')
+    // Matched by class, not by label: effects do not run under static
+    // rendering, so the reload button is still showing "Reading…" here.
+    expect(html).toContain('mcp-refresh')
+  })
+
+  it('says on screen what it cannot do, so the gap does not read as broken', () => {
+    const html = renderToStaticMarkup(<McpInspector bridge={bridge} projectPath="/work/app" />)
+    // There is no Remove button and there is not going to be one, so the panel
+    // has to name the thing that removes a server rather than leave a user
+    // hunting for a control that was never built.
+    expect(html).toContain('claude mcp remove')
   })
 })

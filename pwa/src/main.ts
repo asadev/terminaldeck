@@ -19,6 +19,8 @@ import './styles.css'
 
 import { BRAND } from '../../src/shared/brand'
 import { Connection, type ConnectionState } from './connection'
+import { folderOffer, foldersAfter, noFoldersSentence, pickerRows } from './folders'
+import { machineNoun, readHostPlatform, type HostPlatform } from './host-platform'
 import { createKeyBar, type KeyBarHandle } from './keybar'
 import {
   clearCredential,
@@ -38,7 +40,7 @@ import { createTerminal, type TerminalHandle } from './terminal'
  *
  * Same origin as this page, always: the client is served by the very process it
  * then talks to, so there is nothing to configure and no way to point a paired
- * phone at a different Mac by editing a field.
+ * phone at a different desktop by editing a field.
  */
 // Kept in step with `WS_PATH` in src/main/remote/server.ts by hand, because
 // that module is main-process code — importing it here would drag node:http
@@ -104,6 +106,38 @@ class Deck {
   private terminalScreen: HTMLElement | null = null
   /** Set while a message needs saying on the sessions screen. */
   private notice: string | null = null
+  /**
+   * What kind of machine this client is paired to.
+   *
+   * Held here rather than read off the connection, because the screens that most
+   * need it are drawn when there is no connection to ask: the pair screen has no
+   * socket by definition, and the session list is painted from the stored
+   * credential before the first frame arrives. Seeded from that credential on
+   * launch, replaced by every `welcome`, and reset only when the machine is
+   * deliberately forgotten.
+   */
+  private hostPlatform: HostPlatform = 'unknown'
+  /**
+   * What the desktop said it can do beyond protocol v1, from its last welcome.
+   *
+   * Nothing is offered that is not in here. A `create` sent to a host that
+   * never advertised one is refused by its parser and the socket goes with it,
+   * so a hopeful button is a broken client rather than an optimistic one.
+   */
+  private capabilities: string[] = []
+  /**
+   * The folders this device may start a session in, or null when the desktop
+   * has never said.
+   *
+   * Null is not "none" and the two must not be folded together here either —
+   * see `folders.ts`, which owns the whole rule. Replaced by `foldersAfter` on
+   * every frame, so the pushed update lands without a reconnect.
+   */
+  private folders: string[] | null = null
+  /** Set between asking for a session and being told about one. */
+  private awaitingCreate = false
+  /** Set while the folder list under New session is open. */
+  private picking = false
 
   constructor(root: HTMLElement) {
     this.root = root
@@ -131,9 +165,10 @@ class Deck {
     // one-time token is not left in the address bar or the back-forward list.
     const scanned = takePairToken(window.location, window.history)
     this.credential = loadCredential(window.localStorage)
+    this.hostPlatform = this.credential?.hostPlatform ?? 'unknown'
 
     // A freshly scanned code wins over a stored credential. Someone standing at
-    // the Mac scanning a new QR is re-pairing, most likely because the old
+    // the desktop scanning a new QR is re-pairing, most likely because the old
     // device row was revoked, and using the stale credential would fail in a
     // way that looks like the QR not working.
     const token = scanned ?? this.credential?.token ?? null
@@ -179,6 +214,13 @@ class Deck {
     const wasOnline = this.state.phase === 'online'
     this.state = state
 
+    // Nothing in flight survives the socket that carried it. A `create` whose
+    // answer was on its way when the connection dropped may or may not have
+    // started something on the desktop — the next `list` says which — and the
+    // one thing this client must not do meanwhile is keep a button spinning
+    // against a socket that will never answer it.
+    if (state.phase !== 'online') this.awaitingCreate = false
+
     if (state.phase === 'online' && !wasOnline) {
       // Re-attach rather than assume. The desktop kept running while we were
       // gone, so what is on screen is from before the gap; leaving it there
@@ -196,6 +238,13 @@ class Deck {
       clearCredential(window.localStorage)
       this.credential = null
       this.attachedId = null
+      // Everything the refused machine told us about itself goes with it. A
+      // folder list is a statement about a device this desktop no longer
+      // recognises, and drawing a picker from it on the way back to the pair
+      // screen would be offering somewhere to start that nothing will start in.
+      this.capabilities = []
+      this.folders = null
+      this.picking = false
       // Not merely hidden: the terminal holds this machine's scrollback, and a
       // device that has just been told it is no longer trusted should not still
       // be carrying it around in memory.
@@ -216,18 +265,38 @@ class Deck {
       deviceId: this.credential?.deviceId ?? '',
       deviceName: this.credential?.deviceName ?? 'This device',
       pairedAt: Date.now(),
+      hostPlatform: this.hostPlatform,
     }
     saveCredential(window.localStorage, this.credential)
   }
 
+  /** What to call the machine on the other end, in a sentence. */
+  private get noun(): string {
+    return machineNoun(this.hostPlatform)
+  }
+
   private onMessage(message: ServerMessage, activity?: ReadonlyMap<string, number>): void {
+    // Before the switch, and deliberately not inside two of its cases. The
+    // folder list arrives in `welcome` *and* in a pushed frame, and the failure
+    // to design against is a client that reads one of them: the pushed one is
+    // what makes a folder removed at the desk disappear from the picker in
+    // somebody's hand, rather than at the next launch.
+    this.folders = foldersAfter(this.folders, message)
+
     switch (message.t) {
       case 'welcome':
+        // Before the credential is rebuilt, because the credential now carries
+        // it: this is the one frame that says what the machine is, and every
+        // launch after this one reads the answer back out of storage rather
+        // than waiting for a socket.
+        this.hostPlatform = readHostPlatform(message.hostPlatform)
+        this.capabilities = message.capabilities
         this.credential = {
           token: this.credential?.token ?? '',
           deviceId: message.deviceId,
           deviceName: message.deviceName,
           pairedAt: this.credential?.pairedAt ?? Date.now(),
+          hostPlatform: this.hostPlatform,
         }
         if (this.credential.token !== '') saveCredential(window.localStorage, this.credential)
         this.applySessions(message.sessions, activity)
@@ -239,6 +308,40 @@ class Deck {
         this.applySessions(message.sessions, activity)
         if (this.screen === 'sessions') this.renderContent()
         return
+
+      case 'folders':
+        // The list itself has already been taken, above. What is left is the
+        // redraw: the picker on screen is now describing a rule the desktop has
+        // stopped enforcing, and every second it stays up is a tap that would
+        // be refused. It stays *open* through an ordinary edit, which is the
+        // point of the frame — the rows change under the finger.
+        //
+        // A list that has just been emptied is the exception: there is no
+        // picker left to keep open, and leaving the flag set would spring one
+        // open by itself the moment a folder was granted again.
+        if (message.folders.length === 0) this.picking = false
+        if (this.screen === 'sessions') this.renderContent()
+        return
+
+      case 'created': {
+        this.awaitingCreate = false
+        // Put in the list here rather than waiting for a `sessions` frame: the
+        // desktop answers the phone that asked with the whole row and tells
+        // everybody else with a plain list, so this is the only frame that says
+        // *which* of the sessions is the new one. With two sessions in one
+        // folder there is no way to guess right.
+        if (!this.sessions.some((entry) => entry.id === message.session.id)) {
+          this.sessions = [...this.sessions, message.session]
+        }
+        // A session that has just been started is a session that just did
+        // something, and this client watched it happen — the same reason an
+        // `output` or a `status` frame stamps the clock rather than leaving the
+        // row with no time on it.
+        this.activity.set(message.session.id, Date.now())
+        // The tap that started it is the tap that opens it.
+        this.openSession(message.session.id)
+        return
+      }
 
       case 'output':
         if (message.id !== this.attachedId) return
@@ -268,8 +371,12 @@ class Deck {
       }
 
       case 'error':
+        // A refused request is not going to be followed by a `created`, and a
+        // button left reading "Starting…" over a session that will never exist
+        // is the same lie as a live-looking cursor over a dead socket.
+        this.awaitingCreate = false
         if (message.code === 'unknown-session') {
-          this.notice = 'That session is no longer running on the Mac.'
+          this.notice = `That session is no longer running on the ${this.noun}.`
           this.leaveTerminal()
           return
         }
@@ -341,19 +448,23 @@ class Deck {
   private pairScreen(): HTMLElement {
     const screen = element('div', 'screen')
     screen.append(
-      element('h2', undefined, 'Pair with your Mac'),
+      // Neutral on a fresh install and neutral by design: nothing has answered
+      // yet, so nothing here may claim to know what kind of computer is at the
+      // other end. It sharpens to "Mac" or "PC" the moment one does — which for
+      // a re-pair is immediately, because the stored credential remembers.
+      element('h2', undefined, `Pair with your ${this.noun}`),
       element(
         'p',
         'screen__lead',
-        `${BRAND.name} on the Mac shows a QR code holding a one-time token. Scanning it opens this page with the token attached, which is all the pairing there is.`,
+        `${BRAND.name} on the ${this.noun} shows a QR code holding a one-time token. Scanning it opens this page with the token attached, which is all the pairing there is.`,
       ),
     )
 
     const steps = element('ol', 'steps')
     for (const step of [
-      'Open the Mac and show the pairing code.',
+      `Open the ${this.noun} and show the pairing code.`,
       'Scan it with this device’s camera.',
-      'Approve this device on the Mac when it appears — pairing alone does not grant access.',
+      `Approve this device on the ${this.noun} when it appears — pairing alone does not grant access.`,
     ]) {
       steps.append(element('li', undefined, step))
     }
@@ -407,14 +518,17 @@ class Deck {
       screen.append(element('p', 'empty', this.notice))
     }
 
+    const start = this.startBlock()
+    if (start !== null) screen.append(start)
+
     if (this.sessions.length === 0) {
       screen.append(
         element(
           'p',
           'empty',
           this.state.phase === 'online'
-            ? 'No sessions are running on the Mac.'
-            : 'No sessions to show yet — this list is from the last time the Mac answered.',
+            ? `No sessions are running on the ${this.noun}.`
+            : `No sessions to show yet — this list is from the last time the ${this.noun} answered.`,
         ),
       )
     }
@@ -445,13 +559,131 @@ class Deck {
     }
     screen.append(list)
 
-    const forget = element('button', 'button button--quiet', 'Forget this Mac')
+    const forget = element('button', 'button button--quiet', `Forget this ${this.noun}`)
     forget.type = 'button'
     forget.style.margin = '20px 16px'
     forget.style.width = 'auto'
     forget.addEventListener('click', () => this.forget())
     screen.append(forget)
     return screen
+  }
+
+  /**
+   * New session, and the folders it may start in.
+   *
+   * Absent rather than disabled in the two cases where it cannot work — a
+   * desktop that never advertised `create`, and a socket that is not up. That
+   * is the design brief's rule and the repo's: a control whose only function is
+   * to explain that it does not function is a fake feature.
+   *
+   * The third case is different in kind. A desktop that has granted this device
+   * *no* folders is not broken and has not lost anything; it will simply refuse
+   * every session this phone could ask for. What that state needs is not a
+   * button but the sentence naming the machine and the screen where folders are
+   * chosen — which is the whole of the bug being fixed here, since the version
+   * of this app that showed one unexplained folder had nothing to say about
+   * where the list came from either.
+   */
+  private startBlock(): HTMLElement | null {
+    if (this.state.phase !== 'online' || !this.capabilities.includes('create')) return null
+
+    const block = element('section', 'start')
+    const offer = folderOffer(this.folders, this.sessions)
+    if (offer.kind === 'none') {
+      block.append(element('p', 'start__note', noFoldersSentence(this.noun)))
+      return block
+    }
+
+    const rows = pickerRows(offer, this.noun)
+    const label = this.awaitingCreate ? 'Starting…' : 'New session'
+
+    // One destination is not a choice, so it is not drawn as one — the standing
+    // rule against a picker with a single item in it. The folder goes under the
+    // button instead of behind it, which puts the thing the old picker never
+    // managed to say — *where this is about to start* — on screen before the
+    // tap rather than after it.
+    if (rows.length === 1) {
+      const only = rows[0]
+      const button = element('button', 'button', label)
+      button.type = 'button'
+      button.disabled = this.awaitingCreate
+      button.addEventListener('click', () => this.startSession(only.folder))
+      block.append(button)
+      if (only.path) {
+        // "Starts in" in the interface face, the path in mono. A bare path under
+        // a button is ambiguous — it reads as easily as "you are here" — and the
+        // two words are what make it a promise about the tap.
+        const where = element('p', 'start__where')
+        const path = element('span', undefined, only.label)
+        // The line ellipsises, and a deep path is longer than a phone. The same
+        // escape hatch the desktop's folder panel uses, for the same reason: a
+        // browser adds no tooltip to overflowing text on its own, and this same
+        // client is opened from a keyboard as often as from a phone.
+        path.title = only.label
+        where.append(element('span', 'start__where-label', 'Starts in'), path)
+        block.append(where)
+      }
+      return block
+    }
+
+    const toggle = element('button', 'button', label)
+    toggle.type = 'button'
+    toggle.disabled = this.awaitingCreate
+    toggle.setAttribute('aria-expanded', this.picking ? 'true' : 'false')
+    toggle.addEventListener('click', () => {
+      this.picking = !this.picking
+      this.renderContent()
+    })
+    block.append(toggle)
+    if (!this.picking) return block
+
+    // Two words over the list, because three paths under a button are not
+    // self-explanatory to somebody who has never seen this screen — and that is
+    // the bar the design brief sets.
+    block.append(element('p', 'start__caption', 'Start in'))
+    const list = element('ul', 'start__folders')
+    for (const row of rows) {
+      const item = element('li')
+      // The path is mono and the sentence is not: monospace is a promise that
+      // the characters are exact and countable, which is true of a path and not
+      // of "Wherever the Mac would".
+      const choice = element('button', row.path ? 'start__folder start__folder--path' : 'start__folder', row.label)
+      choice.type = 'button'
+      // Two projects can share a last segment, so the whole value has to stay
+      // reachable from a row that ellipsises — see the note on the line above.
+      if (row.path) choice.title = row.label
+      choice.addEventListener('click', () => this.startSession(row.folder))
+      item.append(choice)
+      list.append(item)
+    }
+    block.append(list)
+    return block
+  }
+
+  /**
+   * Ask the desktop for a session.
+   *
+   * No size travels with it, unlike `attach`. There is no emulator on this
+   * screen to measure — the desktop starts at its own default and the attach a
+   * frame later carries the real shape, which is the same correction every
+   * client makes for a session it did not start.
+   */
+  private startSession(folder: string | null): void {
+    if (this.awaitingCreate) return
+    this.picking = false
+    this.notice = null
+    const sent =
+      folder === null ? this.connection?.send({ t: 'create' }) : this.connection?.send({ t: 'create', cwd: folder })
+    if (sent !== true) {
+      // Said, not swallowed. The refusal above is a socket that went down
+      // between the render and the tap, and a button that does nothing at all
+      // is indistinguishable from one that is broken.
+      this.notice = `That did not reach the ${this.noun}, so nothing was started.`
+      this.renderContent()
+      return
+    }
+    this.awaitingCreate = true
+    this.renderContent()
   }
 
   /* ------------------------------------------------------------ terminal -- */
@@ -540,7 +772,7 @@ class Deck {
   }
 
   /**
-   * One keystroke or paste on its way to the Mac.
+   * One keystroke or paste on its way to the desktop.
    *
    * Characters are folded through the key bar's armed modifier first, so a
    * Ctrl tapped on the toolbar combines with the letter typed on the soft
@@ -572,6 +804,16 @@ class Deck {
   private forget(): void {
     clearCredential(window.localStorage)
     this.credential = null
+    // Deliberately reset here and deliberately *not* reset on a refusal. This
+    // is the user saying "that is not my machine any more", so the next pair
+    // screen must not still be naming it; a refused credential, by contrast, is
+    // the same computer at the same address telling us something, and keeping
+    // its noun makes the re-pair read correctly.
+    this.hostPlatform = 'unknown'
+    this.capabilities = []
+    this.folders = null
+    this.picking = false
+    this.awaitingCreate = false
     this.sessions = []
     this.activity.clear()
     this.attachedId = null

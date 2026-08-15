@@ -54,13 +54,31 @@ final class MultiHostTests: XCTestCase {
         }
 
         /// Come up, and say what is running.
-        func goLive(_ sessions: [RemoteSession], capabilities: Set<String> = ["create", "localhost"]) {
+        ///
+        /// `hostPlatform` defaults to `.mac` only because most of these tests
+        /// have one host and do not care; the multi-host cases pass a real one,
+        /// since a Mac and a PC in the same list is exactly the situation the
+        /// field exists for.
+        /// `folders` defaults to nil rather than to a list, because nil is what
+        /// every desktop older than per-device grants sends and it is therefore
+        /// the case most of these tests are about.
+        func goLive(_ sessions: [RemoteSession],
+                    capabilities: Set<String> = ["create", "localhost"],
+                    hostPlatform: HostPlatform = .mac,
+                    folders: [String]? = nil) {
             self.capabilities = capabilities
             state = ConnectionState(phase: .online, detail: "Connected.", retryAt: nil, attempts: 0)
             onEvent?(.state(state))
             onEvent?(.message(.welcome(protocolVersion: 1, deviceId: "d", deviceName: "iPhone",
-                                       token: nil, sessions: sessions, capabilities: capabilities),
+                                       token: nil, sessions: sessions, capabilities: capabilities,
+                                       hostPlatform: hostPlatform, folders: folders),
                               activity: [:]))
+        }
+
+        /// The pushed frame, for the case a folder list changes while the phone
+        /// is connected.
+        func pushFolders(_ folders: [String]) {
+            onEvent?(.message(.folders(folders), activity: [:]))
         }
 
         func confirmAttach(_ id: String) {
@@ -361,6 +379,101 @@ final class MultiHostTests: XCTestCase {
         model.open(URL(string: "terminaldeck://session/somebody-elses")!)
         XCTAssertEqual(model.route, [.session(host: Self.pcId, id: "somebody-elses")],
                        "with two, it falls back to the one on screen rather than guessing")
+    }
+
+    // MARK: - Folders this device may start a session in
+
+    /**
+     * The grant is what the picker offers, and the grant belongs to the machine.
+     *
+     * The list this phone used to build for itself — the working directories of
+     * the sessions it could see — was never the same set the Mac would accept.
+     * The picker showed one folder while the desktop would have taken four, and
+     * nothing on either screen explained the difference.
+     */
+    func testThePickerOffersWhatTheMachineGranted() throws {
+        model.pair(with: code(Self.macId))
+        try transport(Self.macId).goLive([session("s1", title: "alpha")],
+                                         folders: ["/Users/asad/alpha", "/Users/asad/beta"])
+
+        XCTAssertEqual(model.startableFolders, ["/Users/asad/alpha", "/Users/asad/beta"])
+        XCTAssertTrue(model.canStartSomewhere)
+        XCTAssertFalse(model.hasNoGrantedFolders)
+    }
+
+    /// A desktop that predates the field keeps the behaviour it always had.
+    /// Absent is "I have not told you", not "you may use nothing".
+    func testADesktopThatSaysNothingFallsBackToTheFoldersOnScreen() throws {
+        model.pair(with: code(Self.macId))
+        try transport(Self.macId).goLive([session("s1", title: "alpha"), session("s2", title: "beta")])
+
+        XCTAssertEqual(model.startableFolders, ["/Users/asad/alpha", "/Users/asad/beta"])
+        XCTAssertTrue(model.canStartSomewhere, "an old desktop must keep its New Session button")
+        XCTAssertFalse(model.hasNoGrantedFolders)
+    }
+
+    /**
+     * Empty is a person's answer, and it is not the same as silence.
+     *
+     * A machine that granted this device no folders will refuse every `create`,
+     * so the button goes — absent rather than disabled, the same rule the
+     * capability list follows — and the screen says where to fix it.
+     */
+    func testAMachineThatGrantedNothingOffersNoNewSession() throws {
+        model.pair(with: code(Self.macId))
+        try transport(Self.macId).goLive([session("s1", title: "alpha")], folders: [])
+
+        XCTAssertTrue(model.startableFolders.isEmpty)
+        XCTAssertTrue(model.hasNoGrantedFolders)
+        XCTAssertFalse(model.canStartSomewhere,
+                       "a button whose only outcome is a refusal is not a button")
+        // The capability itself is untouched: the machine *can* start sessions,
+        // this device just has nowhere to put one. Conflating the two would take
+        // the button away from the wrong screens.
+        XCTAssertTrue(model.canCreateSessions)
+    }
+
+    /// Pushed, not polled. Somebody edits the list on the desktop and the phone
+    /// in their other hand stops offering the folder that went.
+    func testTheFolderListIsReplacedByThePushedFrame() throws {
+        model.pair(with: code(Self.macId))
+        let mac = try transport(Self.macId)
+        mac.goLive([session("s1", title: "alpha")], folders: ["/Users/asad/alpha", "/Users/asad/beta"])
+
+        mac.pushFolders(["/Users/asad/alpha"])
+
+        XCTAssertEqual(model.startableFolders, ["/Users/asad/alpha"])
+
+        // And a push to none takes the button with it, without a reconnect.
+        mac.pushFolders([])
+        XCTAssertFalse(model.canStartSomewhere)
+    }
+
+    /// Per machine, like everything else here. Offering a Mac's folder to a
+    /// Windows PC would be a picker full of choices that fail.
+    func testEachMachineHasItsOwnGrant() throws {
+        model.pair(with: code(Self.macId))
+        model.pair(with: code(Self.pcId))
+        try transport(Self.macId).goLive([], folders: ["/Users/asad/alpha"])
+        try transport(Self.pcId).goLive([], folders: ["C:\\\\Projects\\\\deck"])
+
+        model.select(Self.macId)
+        XCTAssertEqual(model.startableFolders, ["/Users/asad/alpha"])
+        model.select(Self.pcId)
+        XCTAssertEqual(model.startableFolders, ["C:\\\\Projects\\\\deck"])
+    }
+
+    /// A grant belongs to a live connection. Remembering an empty one across a
+    /// teardown would leave the phone refusing to offer New Session on a machine
+    /// that has simply not been asked yet.
+    func testAGrantDoesNotSurviveTheConnection() throws {
+        model.pair(with: code(Self.macId))
+        let mac = try transport(Self.macId)
+        mac.goLive([], folders: [])
+        XCTAssertTrue(model.hasNoGrantedFolders)
+
+        try XCTUnwrap(model.host(Self.macId)).stop()
+        XCTAssertFalse(model.hasNoGrantedFolders, "back to “has not said”, not to “granted nothing”")
     }
 
     // MARK: - The switcher

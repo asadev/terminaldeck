@@ -339,19 +339,25 @@ final class RealDesktopUITests: XCTestCase {
         }
         // The QuickPath tutorial — *"Speed up your typing by sliding your
         // finger"* — is put up by the system keyboard the first time it appears
-        // on a fresh simulator. It sits over the accessory row, so ^C is behind
+        // on a fresh simulator. It sits over the key bar, so the keys are behind
         // it. Nothing to do with this app; dismissed the way a person would.
         let continueButton = app.buttons["Continue"]
         if continueButton.exists { continueButton.tap() }
         app.typeText(command + "\n")
     }
 
-    /// Ctrl-C, from the accessory row where a thumb already is.
+    /// Ctrl-C, from the key grid — one tap on `more`, which is pinned to the bar
+    /// and never scrolls away, and then the key. The signals moved off the bar
+    /// so that `esc`, `tab`, `ctrl` and the two arrows could stop scrolling.
     private func ctrlC() throws {
         if !app.keyboards.firstMatch.exists { app.buttons["terminal.keyboard"].tap() }
         let interrupt = app.buttons["^C"]
-        XCTAssertTrue(interrupt.waitForExistence(timeout: 15),
-                      "the accessory row should carry ^C")
+        if !interrupt.exists {
+            let more = app.buttons["keys.more"]
+            XCTAssertTrue(more.waitForExistence(timeout: 15), "the key bar should be up")
+            more.tap()
+        }
+        XCTAssertTrue(interrupt.waitForExistence(timeout: 15), "the key grid should carry ^C")
         interrupt.tap()
     }
 

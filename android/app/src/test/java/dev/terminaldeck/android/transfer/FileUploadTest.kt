@@ -19,7 +19,7 @@ import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.random.Random
 
 /**
- * The upload state machine, against a scripted Mac.
+ * The upload state machine, against a scripted desktop.
  *
  * There is no `ContentResolver` here and no socket: the file is a byte array and the wire is a list.
  * That is not a compromise — everything interesting about this class is the *ordering* it enforces
@@ -53,6 +53,31 @@ class FileUploadTest {
             upload.onFrame(ServerMessage.UploadAck(upload.id, bytes))
         }
         return slices.size
+    }
+
+    /**
+     * The row names the machine the file is going to, not the one this app was written on.
+     *
+     * "Send a photo, video or file to the Mac" on a phone paired to a Windows PC is the reported
+     * bug, and the progress row underneath it said "Asking the Mac where to put it…" all the way
+     * through the transfer. Both sentences came from literals; this pins the one that lives here.
+     *
+     * The dropped-connection case is included because it is the sentence a user is most likely to
+     * be reading closely — something has just gone wrong — and because it is composed on a
+     * different path from the progress line, so one can be fixed while the other is not.
+     */
+    @Test
+    fun `every sentence names the machine the file is going to`() = runTest {
+        val wire = Wire()
+        val upload = upload(Random(11).nextBytes(1000), wire, this, hostNoun = "PC")
+        upload.start()
+        advanceUntilIdle()
+        assertEquals("Asking the PC where to put it…", upload.view.detail)
+
+        wire.live = false
+        upload.onFrame(ServerMessage.UploadReady(upload.id, "/c/tmp/x.bin"))
+        advanceUntilIdle()
+        assertEquals("The connection to the PC dropped.", (upload.view.phase as UploadPhase.Failed).detail)
     }
 
     @Test
@@ -202,6 +227,7 @@ class FileUploadTest {
         val upload = FileUpload(
             file = PickedFile("huge.mov", Protocol.MAX_UPLOAD_BYTES + 1),
             scope = this,
+            hostNoun = "PC",
             send = wire::send,
             open = { throw AssertionError("nothing should be opened for a file that was refused") },
             onChange = {},
@@ -261,9 +287,18 @@ class FileUploadTest {
         scope: TestScope,
         onChange: (UploadView) -> Unit = {},
         onLanded: (String) -> Unit = {},
+        /**
+         * Deliberately "PC" rather than "Mac" throughout this file.
+         *
+         * The upload's sentences used to have the word Mac compiled into them, and a fixture that
+         * kept saying Mac would let a hardcoded one pass every assertion here unnoticed. A phone
+         * sending a photo to a Windows PC is also the case that was actually broken.
+         */
+        hostNoun: String = "PC",
     ): FileUpload = FileUpload(
         file = PickedFile("x.bin", payload.size.toLong()),
         scope = CoroutineScope(StandardTestDispatcher(scope.testScheduler)),
+        hostNoun = hostNoun,
         send = wire::send,
         open = { ByteArrayInputStream(payload) },
         onChange = onChange,

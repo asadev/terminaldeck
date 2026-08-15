@@ -52,9 +52,9 @@ import dev.terminaldeck.android.transport.detail
  *
  * - **No pairing.** A field for the code and a button for the camera.
  * - **Paired, waiting for approval.** The pairing worked; a human has to press a button on the
- *   Mac. This is not an error and is deliberately not drawn as one — it is the normal path, and
+ *   machine. This is not an error and is deliberately not drawn as one — it is the normal path, and
  *   the client polls it on the reconnect schedule rather than making the user retry.
- * - **A code, and no Mac at the other end of it.** The phone has stored a pairing code and nothing
+ * - **A code, and nothing at the other end of it.** The phone has stored a pairing code and nothing
  *   has ever answered it. New, and the reason for this rewrite.
  * - **Refused.** The credential is gone and the only way forward is a new code.
  *
@@ -74,12 +74,25 @@ import dev.terminaldeck.android.transport.detail
  * successful pairing awaiting a human — which is precisely the disguise that let a client unable
  * to complete a single handshake look like it was working normally, for as long as nobody looked
  * at a packet. The failure now gets its own words, its own card and no spinner, and the claim
- * "paired with a Mac" is made only when a Mac has actually answered: see [DeckUiState.macAnswered].
+ * "paired, waiting" is made only when the machine has actually answered: see
+ * [DeckUiState.awaitingApproval].
+ *
+ * ## Why every sentence here says "desktop" and not "Mac"
+ *
+ * It is the other half of the same honesty, and it is not a hedge. `welcome.hostPlatform` is what
+ * tells a client what kind of computer it is talking to, and on this screen it has usually not
+ * arrived: `server.ts` sends the field on the `welcome` that *admits* a device and deliberately not
+ * on the one that mints a credential and then refuses — so a phone waiting for approval genuinely
+ * does not know. [DeckUiState.machineNoun] answers "desktop" until something says otherwise, and
+ * that word is threaded through every sentence below rather than any of them naming a machine.
+ *
+ * The alternative is what was here before: the literal word "Mac" in eleven sentences, shown to
+ * whoever had scanned the code. A Windows user was told to go and approve a device on "the Mac".
  *
  * ## The fingerprints are shown, not hidden behind a details link
  *
- * Both of them: the Mac's, so the person can see the same six groups the desktop is showing, and
- * this phone's, so they can find the right row in the desktop's approval list. Neither is secret
+ * Both of them: the machine's, so the person can see the same six groups the desktop is showing,
+ * and this phone's, so they can find the right row in the desktop's approval list. Neither is secret
  * and neither is a security boundary on its own, but they are what turns "trust this device" from
  * a dialog you dismiss into one you can check.
  */
@@ -96,11 +109,19 @@ fun PairingScreen(
      * Null while this is the first machine — there is genuinely nowhere to go, and a Cancel that
      * leads to an empty app is worse than no Cancel. Non-null the moment one machine has been let
      * in, because from then on this screen is something the user opened rather than the state of the
-     * app, and a screen with no way out is how "add a machine" becomes "my phone forgot my Mac".
+     * app, and a screen with no way out is how "add a machine" becomes "my phone forgot my machine".
      */
     onCancel: (() -> Unit)? = null,
 ) {
     var code by remember { mutableStateOf("") }
+    /*
+     * What to call the computer at the other end, in every sentence on this screen.
+     *
+     * Read once into a local so the eleven sentences below cannot disagree with each other — and,
+     * more to the point, so there is one place to look when asking what this screen claims to know.
+     * Usually "desktop" here, and that is correct rather than vague: see the header.
+     */
+    val noun = state.machineNoun
     /*
      * Adding wins over everything below it.
      *
@@ -112,11 +133,11 @@ fun PairingScreen(
     // Three mutually exclusive readings of the same stored code. `awaitingApproval` requires the
     // machine to have answered; `unreachable` is the case that used to borrow the first one's words.
     val awaitingApproval = !adding && state.awaitingApproval
-    val unreachable = !adding && state.macUnreachable
-    // A refusal is not an unreachable Mac and must not borrow its words either — same mistake, one
-    // state along. `Rejected` clears the credential but leaves the pairing record, so without this
-    // branch a refused phone reads "Paired with a Mac that is not answering" over a card saying the
-    // Mac refused it.
+    val unreachable = !adding && state.hostUnreachable
+    // A refusal is not an unreachable machine and must not borrow its words either — same mistake,
+    // one state along. `Rejected` clears the credential but leaves the pairing record, so without
+    // this branch a refused phone reads "Paired with a desktop that is not answering" over a card
+    // saying the desktop refused it.
     val refused = unreachable &&
         (state.transport is TransportState.Rejected || state.transport is TransportState.Incompatible)
 
@@ -148,20 +169,22 @@ fun PairingScreen(
                 // Nothing is claimed about any machine here: the user asked for a field.
                 adding -> "Pair this phone with another computer. The ones you already have stay " +
                     "paired and stay connected."
-                // The Mac answered on this attempt and asked for a human. The only case in which
-                // the claim "paired with a Mac, waiting" is true of the present tense.
-                awaitingApproval -> "Paired with a Mac. Waiting to be let in."
+                // It answered on this attempt and asked for a human. The only case in which the
+                // claim "paired, waiting" is true of the present tense.
+                awaitingApproval -> "Paired with a $noun. Waiting to be let in."
                 // Answered, and said no. Not the same as silence, and waiting will not change it.
                 refused && state.transport is TransportState.Incompatible ->
-                    "That Mac and this app speak different versions."
-                refused -> "That Mac refused this phone."
+                    "That $noun and this app speak different versions."
+                refused -> "That $noun refused this phone."
                 // It has answered before but is not answering now — a true and useful distinction
                 // from the case below, because the pairing itself is fine.
-                unreachable && state.macEverAnswered -> "Paired with a Mac that is not answering."
+                unreachable && state.hostEverAnswered -> "Paired with a $noun that is not answering."
                 // And here nothing has ever answered. Says what is actually known: a code was
-                // entered. Claims nothing on the Mac's behalf, because it has said nothing.
-                unreachable -> "This phone has a code for a Mac it cannot reach."
-                else -> "Pair this phone with your Mac."
+                // entered. Claims nothing on the machine's behalf, because it has said nothing —
+                // including what kind of machine it is, which is why `noun` is at its most neutral
+                // on exactly this branch.
+                unreachable -> "This phone has a code for a $noun it cannot reach."
+                else -> "Pair this phone with your $noun."
             },
             style = MaterialTheme.typography.bodyMedium,
             color = if (unreachable) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
@@ -170,10 +193,11 @@ fun PairingScreen(
         Spacer(Modifier.height(20.dp))
 
         when {
-            awaitingApproval -> WaitingCard(state, onRetry, onForget)
-            unreachable -> UnreachableCard(state, onRetry, onForget)
+            awaitingApproval -> WaitingCard(state, noun, onRetry, onForget)
+            unreachable -> UnreachableCard(state, noun, onRetry, onForget)
             else -> EnterCard(
                 code = code,
+                noun = noun,
                 error = state.pairingError,
                 onCode = { code = it },
                 onPair = { onPair(code) },
@@ -197,6 +221,14 @@ fun PairingScreen(
 @Composable
 private fun EnterCard(
     code: String,
+    /**
+     * What to call the machine holding the code, from [DeckUiState.machineNoun].
+     *
+     * Passed in rather than defaulted to a word, because a default is how a screen quietly keeps
+     * saying "desktop" after the machine has told it what it is — and, in the other direction, how
+     * a hardcoded "Mac" survives a rewrite meant to remove it.
+     */
+    noun: String,
     error: String?,
     onCode: (String) -> Unit,
     onPair: () -> Unit,
@@ -204,7 +236,8 @@ private fun EnterCard(
 ) {
     Card {
         Text(
-            text = "On the Mac, open Terminal Deck → Remote → Pair a device. Scan the code, or paste the link it shows.",
+            text = "On the $noun, open Terminal Deck → Remote → Pair a device. " +
+                "Scan the code, or paste the link it shows.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -241,16 +274,16 @@ private fun EnterCard(
 }
 
 /**
- * The Mac answered and asked for a human. The genuine wait, and the only card that may say so.
+ * The machine answered and asked for a human. The genuine wait, and the only card that may say so.
  *
  * It used to carry a `refused` branch that dimmed the spinner and reddened the text, because this
  * card was shown for every unapproved state including the failing ones. It is now reached only from
- * [DeckUiState.awaitingApproval] — which requires [TransportState.Pending], which requires the Mac
- * to have answered on this attempt — so the spinner is unconditional and honest: something really
- * is in progress, and it really is a person.
+ * [DeckUiState.awaitingApproval] — which requires [TransportState.Pending], which requires the
+ * machine to have answered on this attempt — so the spinner is unconditional and honest: something
+ * really is in progress, and it really is a person.
  */
 @Composable
-private fun WaitingCard(state: DeckUiState, onRetry: () -> Unit, onForget: () -> Unit) {
+private fun WaitingCard(state: DeckUiState, noun: String, onRetry: () -> Unit, onForget: () -> Unit) {
     Card {
         Row(verticalAlignment = Alignment.CenterVertically) {
             CircularProgressIndicator(
@@ -267,8 +300,13 @@ private fun WaitingCard(state: DeckUiState, onRetry: () -> Unit, onForget: () ->
         }
         Spacer(Modifier.height(12.dp))
         Text(
-            text = "Approve this phone in Terminal Deck on the Mac. It keeps checking on its own — " +
-                "there is nothing to do here.",
+            // The one sentence on this screen that sends a person walking to a machine, and so the
+            // one that suffers most from naming the wrong kind. It reads "desktop" here by design:
+            // the welcome that mints a credential and then refuses carries no `hostPlatform`, so at
+            // this exact moment nothing has said what the machine is. `ios/Harness/host-standin.ts`
+            // reproduces that omission on purpose rather than being more generous than the product.
+            text = "Approve this phone in Terminal Deck on the $noun. It keeps checking on its own " +
+                "— there is nothing to do here.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -289,14 +327,15 @@ private fun WaitingCard(state: DeckUiState, onRetry: () -> Unit, onForget: () ->
  * Deliberately *not* the waiting card with different words. No spinner, because a spinner next to
  * a state that is failing is its own kind of lie — the retries are real but there is nothing to
  * wait for yet. No instruction to go and approve anything either: telling someone to press a button
- * on a Mac that has never heard from this phone sends them to the wrong room, which is exactly what
- * this screen did while the handshake was one byte short.
+ * on a machine that has never heard from this phone sends them to the wrong room, which is exactly
+ * what this screen did while the handshake was one byte short.
  *
  * What it says instead is what is actually known: the phone is trying, this is why it might be
- * failing, and here is what can be done about it.
+ * failing, and here is what can be done about it. Which extends to the noun — a machine that has
+ * never answered has never said what it is, so this card is the last place that may guess.
  */
 @Composable
-private fun UnreachableCard(state: DeckUiState, onRetry: () -> Unit, onForget: () -> Unit) {
+private fun UnreachableCard(state: DeckUiState, noun: String, onRetry: () -> Unit, onForget: () -> Unit) {
     val transport = state.transport
 
     Card {
@@ -313,18 +352,18 @@ private fun UnreachableCard(state: DeckUiState, onRetry: () -> Unit, onForget: (
                 transport is TransportState.Incompatible ->
                     "Update whichever of the two is older. Pairing again will reach the same refusal."
                 transport is TransportState.Rejected ->
-                    "That Mac refused this phone. A new pairing code is the only way forward."
+                    "That $noun refused this phone. A new pairing code is the only way forward."
                 // Paired for real, and now unreachable. Approving it changes nothing until the two
                 // can reach each other, and saying "go and approve it" would send someone to the
                 // wrong room — which is what this screen used to do.
-                state.macEverAnswered ->
-                    "This phone is paired but not approved yet, and the Mac is not answering. " +
+                state.hostEverAnswered ->
+                    "This phone is paired but not approved yet, and the $noun is not answering. " +
                         "Approving it will not help until the two can reach each other — check that " +
-                        "the Mac is awake and that Terminal Deck is running on it."
+                        "the $noun is awake and that Terminal Deck is running on it."
                 else ->
-                    "The code was accepted by this phone, but that Mac has never answered it. " +
-                        "Check that Terminal Deck is running and awake on the Mac, that both are online, " +
-                        "and that the code has not expired."
+                    "The code was accepted by this phone, but that $noun has never answered it. " +
+                        "Check that Terminal Deck is running and awake on the $noun, that both are " +
+                        "online, and that the code has not expired."
             },
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,

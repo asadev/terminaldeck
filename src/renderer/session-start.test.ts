@@ -5,13 +5,17 @@ import {
   fallbackProfileId,
   firstAvailableProvider,
   initialSessionTitle,
+  LAST_FOLDER_KEY,
   MAX_REMEMBERED_PROJECTS,
+  parseLastFolder,
+  readLastFolder,
   normalizeFirstPrompt,
   parseStartMemory,
   projectDefaultsFor,
   rememberStart,
   resolveStart,
   titleFromFirstPrompt,
+  writeLastFolder,
   type SpawnRequest,
   type StartContext,
   type StartMemory,
@@ -580,5 +584,105 @@ describe('fallbackProfileId and firstAvailableProvider', () => {
 
   it('finds nothing when nothing is installed', () => {
     expect(firstAvailableProvider(KNOWN.map((id) => provider(id, { available: false })))).toBeNull()
+  })
+})
+
+/* ------------------------------------------------------- the last folder -- */
+
+/**
+ * A tiny fake of the one Storage method pair these functions touch, plus a
+ * switch that makes every call throw.
+ *
+ * Throwing is not a hypothetical: `localStorage` raises on quota and can be
+ * disabled between one call and the next, and the whole reason the New session
+ * button no longer opens a dialog is that this value is there — so a storage
+ * that has started throwing must cost the memory and nothing else.
+ */
+function fakeStorage(initial: Record<string, string> = {}, broken = false): Storage {
+  const map = new Map(Object.entries(initial))
+  const boom = () => {
+    throw new Error('storage is unavailable')
+  }
+  return {
+    get length() {
+      return map.size
+    },
+    clear: () => map.clear(),
+    getItem: (key: string) => (broken ? boom() : map.get(key) ?? null),
+    key: (index: number) => [...map.keys()][index] ?? null,
+    removeItem: (key: string) => void map.delete(key),
+    setItem: (key: string, value: string) => {
+      if (broken) boom()
+      map.set(key, value)
+    },
+  }
+}
+
+describe('parseLastFolder', () => {
+  it('takes an absolute POSIX path', () => {
+    expect(parseLastFolder('/Users/me/app')).toBe('/Users/me/app')
+  })
+
+  it('takes a Windows path, drive-lettered or UNC', () => {
+    expect(parseLastFolder('C:\\work\\app')).toBe('C:\\work\\app')
+    expect(parseLastFolder('\\\\server\\share')).toBe('\\\\server\\share')
+  })
+
+  it('trims, because a stray newline is what a hand-edited value looks like', () => {
+    expect(parseLastFolder('  /Users/me/app  ')).toBe('/Users/me/app')
+  })
+
+  it('refuses a relative path', () => {
+    /*
+     * The main process resolves a session's cwd against its own working
+     * directory, so a stored `..` would silently start the next session
+     * somewhere inside the app bundle — a session that opens successfully in
+     * the wrong place, which is worse than one that does not open at all.
+     */
+    expect(parseLastFolder('..')).toBeNull()
+    expect(parseLastFolder('projects/app')).toBeNull()
+  })
+
+  it('refuses anything that is not a non-empty string', () => {
+    for (const value of ['', '   ', null, undefined, 7, {}, ['/tmp']]) {
+      expect(parseLastFolder(value)).toBeNull()
+    }
+  })
+})
+
+describe('readLastFolder and writeLastFolder', () => {
+  it('round-trips a folder', () => {
+    const store = fakeStorage()
+    writeLastFolder('/Users/me/app', store)
+    expect(readLastFolder(store)).toBe('/Users/me/app')
+  })
+
+  it('stores under a key of its own, not inside the per-project memory', () => {
+    const store = fakeStorage()
+    writeLastFolder('/Users/me/app', store)
+    expect(store.getItem(LAST_FOLDER_KEY)).toBe('/Users/me/app')
+  })
+
+  it('never writes a value it would refuse to read back', () => {
+    // A write that only fails on the *next* read is the kind of bug that gets
+    // blamed on the reader.
+    const store = fakeStorage()
+    writeLastFolder('../oops', store)
+    expect(store.getItem(LAST_FOLDER_KEY)).toBeNull()
+  })
+
+  it('answers null with no storage at all', () => {
+    expect(readLastFolder(null)).toBeNull()
+    expect(() => writeLastFolder('/Users/me/app', null)).not.toThrow()
+  })
+
+  it('survives a storage that throws', () => {
+    const store = fakeStorage({}, true)
+    expect(readLastFolder(store)).toBeNull()
+    expect(() => writeLastFolder('/Users/me/app', store)).not.toThrow()
+  })
+
+  it('ignores a stored value that has gone bad', () => {
+    expect(readLastFolder(fakeStorage({ [LAST_FOLDER_KEY]: 'not/absolute' }))).toBeNull()
   })
 })

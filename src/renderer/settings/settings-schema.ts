@@ -29,6 +29,7 @@
  */
 
 import type { Preferences } from '@shared/types'
+import type { UiPlatform } from '../platform'
 
 /* ------------------------------------------------------------- sections -- */
 
@@ -46,7 +47,7 @@ export const SECTIONS = [
   {
     id: 'notifications',
     label: 'Notifications',
-    blurb: 'How a banner is delivered once General has asked for one.',
+    blurb: 'How a banner and a sound are delivered, once something has asked for one.',
   },
   {
     id: 'agents',
@@ -58,6 +59,16 @@ export const SECTIONS = [
     label: 'Setup',
     blurb: 'What this app needs on your machine, and what it found.',
   },
+  /*
+   * Windows only, and gated below rather than always drawn. A rail entry
+   * reading "Linux" on a Mac is a row that can only ever say "nothing here",
+   * and this app does not put controls on screen that describe nothing.
+   */
+  {
+    id: 'linux',
+    label: 'Linux',
+    blurb: 'Which Linux a session in a Linux folder runs inside.',
+  },
   {
     id: 'browser',
     label: 'Browser',
@@ -67,6 +78,20 @@ export const SECTIONS = [
     id: 'remote',
     label: 'Remote',
     blurb: 'Reach these sessions from a phone, over your own tailnet.',
+  },
+  /*
+   * Power sits beside Remote because the two answer the same question from
+   * opposite ends — reaching this machine while you are away from it, and
+   * keeping it running while you are. It declares no settings of its own on
+   * purpose: what its switch reads and writes is a *system* setting, owned by
+   * the operating system and changeable from outside this app, so storing a
+   * copy of it here would be a cached answer to a question only the OS can
+   * answer. See `src/main/lid-awake.ts`.
+   */
+  {
+    id: 'power',
+    label: 'Power',
+    blurb: 'Keep this machine running when you close it.',
   },
   {
     id: 'shortcuts',
@@ -98,6 +123,31 @@ export const SECTIONS = [
 export type SectionId = (typeof SECTIONS)[number]['id']
 
 export const SECTION_IDS: readonly SectionId[] = SECTIONS.map((section) => section.id)
+
+export type Section = (typeof SECTIONS)[number]
+
+/**
+ * Sections that only exist on one platform, and the platforms they exist on.
+ *
+ * A separate table rather than a field on every entry, because the exception is
+ * one row and adding `platforms: ['windows', 'mac', 'other']` to twelve sections
+ * that have no such constraint is twelve places to get it wrong later.
+ *
+ * The rule for putting something here is narrow: the section must have *nothing*
+ * to say elsewhere. Power is on both platforms and says different things on
+ * each, so it is not here; Linux genuinely does not exist off Windows.
+ */
+const SECTION_PLATFORMS: Partial<Record<SectionId, readonly UiPlatform[]>> = {
+  linux: ['windows'],
+}
+
+/** The rail for one platform: every section that has something to say on it. */
+export function sectionsFor(platform: UiPlatform): readonly Section[] {
+  return SECTIONS.filter((section) => {
+    const only = SECTION_PLATFORMS[section.id]
+    return only === undefined || only.includes(platform)
+  })
+}
 
 export function sectionMeta(id: SectionId): (typeof SECTIONS)[number] {
   const found = SECTIONS.find((section) => section.id === id)
@@ -294,7 +344,7 @@ export const SETTINGS: readonly Setting[] = [
     id: 'appearance.theme',
     section: 'appearance',
     label: 'Theme',
-    help: 'System follows your desktop appearance.',
+    help: 'Dark, light, or whatever the desktop is set to.',
     store: 'prefs',
     prefsKey: 'theme',
     kind: 'select',
@@ -375,7 +425,7 @@ export const SETTINGS: readonly Setting[] = [
     id: 'notifications.soundName',
     section: 'notifications',
     label: 'Sound',
-    help: 'Which sound General’s finish-work switch plays. Synthesised by the app — nothing is downloaded or read from your sound library.',
+    help: 'Played when a session finishes. Synthesised by the app — nothing is downloaded or read from your sound library.',
     store: 'extra',
     kind: 'select',
     default: 'chime',
@@ -417,15 +467,24 @@ export const SETTINGS: readonly Setting[] = [
     id: 'advanced.restoreSessions',
     section: 'advanced',
     /*
-     * This said "Restore sessions on launch" and reopened nothing: the value
-     * was stored and no code on either side of the bridge ever read it. It is
-     * now the switch on the one part of that which is real — the projects come
-     * back, and the label no longer promises the sessions do. A session's pty
-     * dies with the app, so "restoring" one would mean starting a new agent
-     * process per row at launch, which is not what anyone means by restore.
+     * Twice wrong before this. It first said "Restore sessions on launch" and
+     * reopened nothing at all — the value was stored and no code on either side
+     * of the bridge read it. It was then narrowed to the projects, with help
+     * text that stated flatly that sessions are not reopened, on the reasoning
+     * that a pty dies with the app.
+     *
+     * That reasoning was about the wrong thing. The pty does die; the
+     * *conversation* does not. Claude Code writes it to a transcript on disk,
+     * and `--continue` reads it back, so a session can genuinely be picked up
+     * where it was left. `src/main/session-restore.ts` is that, and this label
+     * had to stop denying it the moment that shipped.
+     *
+     * Worded as an outcome rather than a mechanism on purpose. "Continues where
+     * you left off" is what happens; "resumes the transcript" is plumbing, and
+     * this app does not narrate its plumbing at people.
      */
-    label: 'Reopen your projects on launch',
-    help: 'Puts the projects you had open back in the sidebar. Sessions are not reopened — an agent process ends when the app quits.',
+    label: 'Pick up where you left off',
+    help: 'Reopens the projects and sessions you had open, continuing each conversation rather than starting it over. A session whose folder or conversation is gone opens clean.',
     store: 'prefs',
     prefsKey: 'restoreSessions',
     kind: 'toggle',

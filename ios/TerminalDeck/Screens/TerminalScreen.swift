@@ -9,7 +9,7 @@
  * on entry covers half of the thing the person came to look at, and the usual
  * reason to open this screen from a phone is to read what an agent has been
  * doing, not to type at it. Tapping the terminal, or the keyboard button in the
- * toolbar, raises it — and `KeyboardAccessory` comes with it.
+ * toolbar, raises it — and the key bar comes with it.
  *
  * ## What happens when the connection drops here
  *
@@ -17,7 +17,7 @@
  * terminal keeps showing what it already had — which is honest, because that
  * output really did arrive. What it must not do is accept keystrokes into a
  * socket that is gone, so the toolbar's keyboard button goes away with the
- * connection and the accessory's keys refuse through the same path as typing.
+ * connection and the key bar's keys refuse through the same path as typing.
  * When the socket comes back the model re-attaches by itself; the button here is
  * for the case where the user wants to force a fresh replay.
  */
@@ -71,10 +71,13 @@ struct TerminalScreen: View {
                 VStack {
                     Spacer()
                     Text(toast)
-                        .font(.system(size: 13))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 8)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(Theme.primary)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        // A material rather than a fill: this floats over the
+                        // terminal's own output and has to stay legible against
+                        // whatever happens to be underneath it.
                         .background(.ultraThinMaterial, in: Capsule())
                         .padding(.bottom, 28)
                         // Named so a UI test can find it, and because a
@@ -106,11 +109,11 @@ struct TerminalScreen: View {
                      * and the pasteboard's change count did not move.
                      *
                      * Copying a *selection* therefore lives in the two places a
-                     * selection survives: the system's own long-press → Select →
-                     * Copy, and the `copy` key on the accessory row, which is the
-                     * terminal's own `inputAccessoryView` rather than something
-                     * outside it. Both are exercised in
-                     * `ClipboardAndTransferUITests`.
+                     * selection survives, and both of them are *inside* the
+                     * terminal: the system callout that a long press puts over
+                     * the selection itself, and the `copy` key in the key grid,
+                     * which is the terminal's own `inputView`. Both are
+                     * exercised in `ClipboardAndTransferUITests`.
                      */
                     Button {
                         show(host?.copyScreen(from: sessionID) ?? "Nothing to copy.")
@@ -219,13 +222,16 @@ struct TerminalScreen: View {
     }
 
     private var header: some View {
-        VStack(spacing: 1) {
+        VStack(spacing: 2) {
             Text(title ?? session?.title ?? "Session")
                 .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(Theme.primary)
                 .lineLimit(1)
             HStack(spacing: 5) {
                 if let session {
                     StatusDot(status: session.status)
+                    // Mono, because a status is a word the desktop chose from a
+                    // fixed vocabulary rather than a sentence this app wrote.
                     Text(session.status)
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(Theme.faint)
@@ -353,11 +359,14 @@ private struct UploadRow: View {
         }
     }
 
+    /// The product's own semantic colours rather than SwiftUI's `.green` and
+    /// `.orange`, which are a different green and a different orange from the
+    /// ones every other status in this app uses.
     private var tint: Color {
         switch upload.phase {
-        case .landed: return .green
-        case .failed: return .orange
-        default: return .accentColor
+        case .landed: return Theme.positive
+        case .failed: return Theme.critical
+        default: return Theme.accent
         }
     }
 }

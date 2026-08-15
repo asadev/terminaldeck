@@ -16,6 +16,8 @@
  * comes in as an argument, which is what lets this be tested with no DOM.
  */
 
+import { asHostPlatform, type HostPlatform } from './host-platform'
+
 export interface StorageLike {
   getItem(key: string): string | null
   setItem(key: string, value: string): void
@@ -31,6 +33,19 @@ export interface StoredCredential {
   deviceId: string
   deviceName: string
   pairedAt: number
+  /**
+   * What kind of machine this credential is for, from the last `welcome`.
+   *
+   * Kept so that the first paint after a relaunch already has the right noun in
+   * it. The session list is drawn before the socket is up — it says "this list
+   * is from the last time the … answered" — and a phone that has been paired to
+   * a Windows PC for a month should not have to wait for a handshake to stop
+   * calling it a Mac. Not a security-relevant field and not trusted as one: it
+   * is read back through `readHostPlatform`, which folds anything it does not
+   * recognise onto `unknown`, so a hand-edited `localStorage` can make this
+   * client say a neutral word and nothing else.
+   */
+  hostPlatform: HostPlatform
 }
 
 /**
@@ -61,7 +76,7 @@ export function readPairToken(hash: string): string | null {
 /**
  * A token pasted in by hand, as either the whole link or the token alone.
  *
- * Not every device this runs on has a camera pointed at the Mac — the same
+ * Not every device this runs on has a camera pointed at the desktop — the same
  * client is meant to work from a Windows machine on the tailnet, where the QR
  * code is on a screen three feet away and the practical move is to copy the
  * link. Accepting both shapes costs one function and removes the only step of
@@ -130,7 +145,7 @@ export function loadCredential(storage: StorageLike): StoredCredential | null {
   }
   if (!isRecord(parsed)) return null
 
-  const { token, deviceId, deviceName, pairedAt } = parsed
+  const { token, deviceId, deviceName, pairedAt, hostPlatform } = parsed
   if (typeof token !== 'string' || token === '') return null
   if (typeof deviceId !== 'string' || deviceId === '') return null
   return {
@@ -138,6 +153,18 @@ export function loadCredential(storage: StorageLike): StoredCredential | null {
     deviceId,
     deviceName: typeof deviceName === 'string' && deviceName !== '' ? deviceName : 'This device',
     pairedAt: typeof pairedAt === 'number' && Number.isFinite(pairedAt) ? pairedAt : 0,
+    // `asHostPlatform`, not `readHostPlatform`: what is in storage is a value
+    // this client wrote in its own vocabulary (`windows`), not the desktop's
+    // (`win32`), and reading it with the wire mapping turned every stored
+    // answer back into `unknown` on the very next launch.
+    //
+    // Missing is the normal case for a credential written by a build that
+    // predates the field, and `unknown` is the honest reading of it — the same
+    // answer an absent `welcome.hostPlatform` gets, for the same reason. It is
+    // deliberately not a reason to discard the credential: a phone that had to
+    // pair again because this client learned a new noun would be an absurd
+    // trade.
+    hostPlatform: asHostPlatform(hostPlatform),
   }
 }
 
@@ -162,7 +189,7 @@ export function clearCredential(storage: StorageLike): void {
 /* -------------------------------------------------------------- device --- */
 
 /**
- * A name for this phone, for the approval prompt on the Mac.
+ * A name for this phone, for the approval prompt on the desktop.
  *
  * Deliberately coarse. The person approving needs to recognise the device they
  * are holding, and "iPhone" does that; parsing a user-agent for a model number

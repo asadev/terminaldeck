@@ -297,10 +297,13 @@ function PlanSection({
               </span>
             </span>
           ))}
-          <span className="us-sub" data-tone={stale ? 'warning' : undefined}>
-            {/* Separated from the last chip, or "80% resets Aug 14" reads as
-                one phrase. */}
-            {`· ${planFootnote(plan, age)}`}
+          {/* The separator is drawn in CSS, not written into the string. It has
+              to be there when this sits beside the last limit — "80% resets Aug
+              14" otherwise reads as one phrase — and it has to be gone when the
+              strip is stacked into a narrow column, where a hard-coded "·" was
+              starting a line on its own like a stray bullet. */}
+          <span className="us-sub us-sub-after" data-tone={stale ? 'warning' : undefined}>
+            {planFootnote(plan, age)}
           </span>
         </>
       ) : (

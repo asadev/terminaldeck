@@ -74,8 +74,19 @@ struct RootView: View {
          * it, which never had the problem.
          */
         .alert("Name this machine", isPresented: $model.renamingHost) {
+            /*
+             * No `.accessibilityIdentifier` here, and it is not an omission.
+             *
+             * An alert is a `UIAlertController`, and this becomes a UIKit text
+             * field made by `addTextField`. SwiftUI carries the placeholder and
+             * the text binding across and drops the rest, so an identifier put
+             * here is not on anything — measured on iOS 26.5, where the alert's
+             * accessibility tree shows this field with its placeholder and no
+             * identifier while the Save button below keeps its own. It was here,
+             * it matched nothing, and a UI test spent a night looking for it.
+             * The placeholder is the handle; see `MultiHostUITests`.
+             */
             TextField("MacBook, Work PC…", text: $model.renameText)
-                .accessibilityIdentifier("rename.field")
             Button("Cancel", role: .cancel) { model.renamingHost = false }
             Button("Save") { model.commitRename() }
                 .accessibilityIdentifier("rename.save")
@@ -86,30 +97,5 @@ struct RootView: View {
 
     private var awaitingApproval: Bool {
         (model.connection.phase == .pending || model.connection.awaitingApproval) && model.sessions.isEmpty
-    }
-}
-
-/// The app's own colours. Deliberately few: the terminal supplies its own
-/// palette and anything around it competing with that is noise.
-enum Theme {
-    static let accent = Color(red: 0.20, green: 0.62, blue: 0.95)
-    static let background = Color(red: 0.043, green: 0.047, blue: 0.055)
-    static let surface = Color(white: 1, opacity: 0.05)
-    static let hairline = Color(white: 1, opacity: 0.09)
-    static let secondary = Color(white: 1, opacity: 0.55)
-    static let faint = Color(white: 1, opacity: 0.35)
-
-    /// The dot on a session row. The vocabulary belongs to the desktop, so an
-    /// unknown status gets a neutral colour rather than being dropped or
-    /// guessed at.
-    static func statusColor(_ status: String) -> Color {
-        switch status {
-        case "working": return Color(red: 0.30, green: 0.78, blue: 0.42)
-        case "waiting", "input": return Color(red: 0.98, green: 0.72, blue: 0.20)
-        case "completed": return Color(red: 0.35, green: 0.60, blue: 0.95)
-        case "exited": return Color(red: 0.90, green: 0.35, blue: 0.35)
-        case "idle": return Color(white: 1, opacity: 0.30)
-        default: return Color(white: 1, opacity: 0.30)
-        }
     }
 }

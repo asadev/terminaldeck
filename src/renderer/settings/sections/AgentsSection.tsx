@@ -110,20 +110,53 @@ export function AgentsSection({ bridge, goTo }: SectionProps) {
         ) : (
           <>
             <ul className="settings-tools">
+              {/*
+                One status mark per row, not two.
+
+                Every row carried a coloured dot on the left *and* the same
+                state spelled out on the right — "Ready" said twice, once in a
+                way a colour-blind reader cannot read and once in grey. The word
+                is the one that survives, and it takes the colour: one mark,
+                meaningful colour, legible without it.
+
+                The note is shown only when it says something the title has not.
+                A row headed "Claude Code" was explaining itself with "Run
+                Claude Code sessions"; `remedy` — what to do about a tool that
+                is not working — is worth a line, and a restatement is not.
+              */}
               {agents.map((tool) => (
                 <li key={tool.id} className="settings-tool" data-state={tool.state}>
-                  <span className="settings-tool-dot" aria-hidden="true" />
                   <span className="settings-tool-main">
                     <span className="settings-tool-name">
                       {tool.label}
                       <ToolVersion tool={tool} />
                     </span>
-                    <span className="settings-tool-note">{tool.remedy ?? tool.purpose}</span>
+                    {tool.remedy && <span className="settings-tool-note">{tool.remedy}</span>}
                   </span>
-                  <span className="settings-tool-state">{STATE_LABEL[tool.state]}</span>
+                  <span className="settings-tool-state settings-tool-state-lit">
+                    {STATE_LABEL[tool.state]}
+                  </span>
                   {tool.state === 'missing' && tool.url && <LinkOut href={tool.url}>Get it</LinkOut>}
                 </li>
               ))}
+              {/*
+                Shaped like the answer, not a bare "Checking…" chip.
+
+                The check runs on every visit to this pane and takes about a
+                second, during which the section was one small word and then
+                three rows appeared and shoved everything below them down the
+                page. A placeholder the shape of the rows keeps the panel still.
+              */}
+              {agents.length === 0 &&
+                checking &&
+                AGENT_IDS.map((id) => (
+                  <li key={id} className="settings-tool settings-tool-ghost" aria-hidden="true">
+                    <span className="settings-tool-main">
+                      <span className="settings-ghost-line" />
+                    </span>
+                    <span className="settings-ghost-line settings-ghost-short" />
+                  </li>
+                ))}
               {agents.length === 0 && !checking && (
                 <li className="settings-tool" data-state="unknown">
                   <span className="settings-tool-main">

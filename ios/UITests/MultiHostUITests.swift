@@ -299,7 +299,8 @@ final class MultiHostUITests: XCTestCase {
         capture("06-mac-list")
 
         app.buttons["session.\(macSession)"].tap()
-        XCTAssertTrue(app.otherElements["terminal.view"].waitForExistence(timeout: 20))
+        XCTAssertTrue(terminalView.waitForExistence(timeout: 20),
+                      "the Mac's session should open its terminal")
         // The marker typed into the *other* machine must not be on this one.
         XCTAssertFalse(waitForText(containing: "TD-WORKPC-MARKER", timeout: 4),
                        "a keystroke meant for one machine reached the other")
@@ -332,15 +333,48 @@ final class MultiHostUITests: XCTestCase {
         let alert = app.alerts.firstMatch
         if !alert.waitForExistence(timeout: 10) { capture("zz-no-rename-alert") }
         XCTAssertTrue(alert.exists, "Rename should raise the naming alert")
-        let field = alert.textFields["rename.field"]
-        XCTAssertTrue(field.waitForExistence(timeout: 10))
-        field.tap()
-        // The field arrives pre-filled with the current label, so the old text
-        // has to go before the new name is typed over it.
-        field.press(forDuration: 1.1)
-        if app.menuItems["Select All"].waitForExistence(timeout: 3) { app.menuItems["Select All"].tap() }
+
+        /*
+         * The alert's own text field, not one found by identifier.
+         *
+         * `.accessibilityIdentifier` does not survive onto it, and that is not
+         * something the app can fix. A SwiftUI `.alert` is a `UIAlertController`,
+         * and the `TextField` in the actions builder becomes a UIKit text field
+         * made by `addTextField` — SwiftUI carries the placeholder and the text
+         * binding across and drops everything else. Measured, from the alert's own
+         * accessibility tree on iOS 26.5:
+         *
+         *     TextField, placeholderValue: 'MacBook, Work PC…', value: TBB35X
+         *     Button,    identifier: 'rename.save', label: 'Save'
+         *
+         * The button beside it keeps its identifier, which is what made this look
+         * like the alert not being up rather than the field not being findable.
+         * There is exactly one field in this alert, so `firstMatch` is not a guess;
+         * the placeholder is asserted so that "the only field" cannot quietly
+         * become some other field later.
+         */
+        let field = alert.textFields.firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 10),
+                      "the naming alert should contain a text field")
+        XCTAssertEqual(field.placeholderValue, "MacBook, Work PC…",
+                       "this should be the machine-name field")
+
+        // The field arrives pre-filled with the current label and already holding
+        // the keyboard, so the old text has to go before the new name is typed
+        // over it. One delete per character rather than a long-press and Select
+        // All: the edit menu is a system surface that may or may not come up, and
+        // the length is known from the field itself.
+        let existing = (field.value as? String) ?? ""
+        XCTAssertFalse(existing.isEmpty, "the field should arrive pre-filled with the current label")
+        field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: existing.count))
         field.typeText("Studio Mac")
-        alert.buttons["rename.save"].tap()
+        // `.firstMatch`, because the identifier resolves to two elements and a
+        // bare subscript throws *"Multiple matching elements found"* rather than
+        // picking one. SwiftUI nests the alert's button inside a button of the
+        // same identifier — both are the same 140×48 rectangle in the tree — so
+        // there is no wrong one to pick. The same shape as the "New session"
+        // ambiguity in `startSession()` below.
+        alert.buttons["rename.save"].firstMatch.tap()
 
         try pairAnother(freshCode(from: controlB))
         try waitForConnected(timeout: 60)
@@ -411,8 +445,7 @@ final class MultiHostUITests: XCTestCase {
 
         // A created session opens itself, which is the tap that started it also
         // being the tap that opens it. Come back to the list for the next step.
-        let terminal = app.otherElements["terminal.view"]
-        if terminal.waitForExistence(timeout: 30) { goBack() }
+        if terminalView.waitForExistence(timeout: 30) { goBack() }
 
         let deadline = Date().addingTimeInterval(25)
         while Date() < deadline {
@@ -477,11 +510,30 @@ final class MultiHostUITests: XCTestCase {
         XCTAssertTrue(isOnTheList(), "could not get back to the session list from the terminal")
     }
 
+    /**
+     * The terminal, whatever XCUITest decides to call it.
+     *
+     * **Not `app.otherElements["terminal.view"]`**, which is what three places in
+     * this file used to say and what can never match. The identifier is set on
+     * SwiftTerm's `TerminalView`, and that is
+     * `open class TerminalView: UIScrollView` — so the element comes through as a
+     * *scroll view*, and a query for an `other` returns nothing however plainly
+     * the terminal is on screen.
+     *
+     * It failed quietly everywhere it did not assert — `isOnTheList()` degraded to
+     * "the overflow button is somewhere", which is exactly the weaker test its own
+     * comment warns against — and loudly in the one place that did.
+     * `ClipboardAndTransferUITests` already matched on `.any` for this reason.
+     */
+    private var terminalView: XCUIElement {
+        app.descendants(matching: .any).matching(identifier: "terminal.view").firstMatch
+    }
+
     /// The list, and not a terminal on top of it. `sessions.more` alone is not
     /// enough: a tap that opened the overflow menu instead of going back leaves
     /// both on screen.
     private func isOnTheList() -> Bool {
-        !app.otherElements["terminal.view"].exists && app.buttons["sessions.more"].exists
+        !terminalView.exists && app.buttons["sessions.more"].exists
     }
 
     private func sessionIdentifiers() -> [String] {

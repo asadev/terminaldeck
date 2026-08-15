@@ -120,6 +120,25 @@ const api = {
   // named only the port would take down the wrong one.
   stopRemoteTunnel: (connectionId: string, tunnelId: string): Promise<unknown> =>
     ipcRenderer.invoke('remote:tunnel:stop', connectionId, tunnelId),
+  /**
+   * Which folders each device may start a session in, and the one write that
+   * changes them.
+   *
+   * `setDeviceFolders` sends the **whole** list rather than an add or a remove,
+   * and answers with what the main process stored. The panel then draws the
+   * answer instead of what it asked for, which is the only version that cannot
+   * show a folder that was dropped on the way in for being relative or a
+   * duplicate of one already there.
+   *
+   * A device that has never been given a list does not appear in the reply at
+   * all, and that absence is load-bearing: it is the difference between "nobody
+   * has chosen for this phone, so it gets what this desktop has open" and
+   * "somebody removed every folder, so it can start nothing". Flattening the two
+   * would describe a phone that works as one that is dead, or the reverse.
+   */
+  listDeviceFolders: (): Promise<unknown> => ipcRenderer.invoke('remote:folders'),
+  setDeviceFolders: (deviceId: string, folders: string[]): Promise<unknown> =>
+    ipcRenderer.invoke('remote:folders:set', deviceId, folders),
   onRemoteConnections: (cb: (connections: unknown) => void): (() => void) => {
     const handler = (_e: IpcRendererEvent, connections: unknown) => cb(connections)
     ipcRenderer.on('remote:connections', handler)
@@ -173,12 +192,6 @@ const api = {
   invalidateProjectFiles: (root?: string): Promise<void> =>
     ipcRenderer.invoke('search:invalidate', root),
 
-  /* ------------------------------------------------------------ board -- */
-
-  loadBoard: (projectPath: string): Promise<unknown> => ipcRenderer.invoke('board:load', projectPath),
-  saveBoard: (projectPath: string, board: unknown): Promise<void> =>
-    ipcRenderer.invoke('board:save', projectPath, board),
-
   /* -------------------------------------------------------- inspector -- */
 
   getSessionInsights: (transcriptPath: string): Promise<unknown> =>
@@ -195,6 +208,25 @@ const api = {
   clearGitHubCache: (cwd?: string): void => {
     ipcRenderer.send('github:clear-cache', cwd)
   },
+
+  /* ------------------------------------------------------ github sign-in -- */
+
+  githubAuthStatus: (cwd?: string): Promise<unknown> =>
+    ipcRenderer.invoke('github:auth-status', cwd),
+  githubConnect: (): Promise<unknown> => ipcRenderer.invoke('github:auth-connect'),
+  /**
+   * Resolves when the sign-in the user is part-way through finishes — the code
+   * being entered, refused, or expiring. It is deliberately a long-lived
+   * `invoke` rather than the renderer asking "done yet?" on a timer: nothing
+   * about a device-flow sign-in is knowable early, so a poll would be a second
+   * clock stacked on top of the one the main process already has to run.
+   */
+  githubAwaitConnect: (cwd?: string): Promise<unknown> =>
+    ipcRenderer.invoke('github:auth-await', cwd),
+  githubCancelConnect: (cwd?: string): Promise<unknown> =>
+    ipcRenderer.invoke('github:auth-cancel', cwd),
+  githubDisconnect: (cwd?: string): Promise<unknown> =>
+    ipcRenderer.invoke('github:auth-disconnect', cwd),
 
   /* -------------------------------------------------------- readiness -- */
 
@@ -326,6 +358,38 @@ const api = {
   notificationDelivery: (sinceMs: number): Promise<unknown> =>
     ipcRenderer.invoke('notifications:delivery', sinceMs),
 
+  /* ------------------------------------------------------------- power -- */
+  // Keeping the machine awake with the lid shut. Two invokes and one push, and
+  // the push channel is a different string from the request channel on purpose
+  // — an event and a request sharing a name is how the next handle/send mix-up
+  // gets written.
+  //
+  // `setLidAwake` can put the operating system's own password dialog on screen,
+  // so — like `importBrowserCookies` — nothing calls it except a control the
+  // user pressed. It is also the slowest call in this file by a wide margin:
+  // the clock runs while a person finds their password, so a caller must not
+  // put a timeout on it.
+  lidAwakeStatus: (): Promise<unknown> => ipcRenderer.invoke('power:lid-awake:get'),
+  setLidAwake: (on: boolean): Promise<unknown> => ipcRenderer.invoke('power:lid-awake:set', on),
+  onLidAwakeState: (cb: (state: unknown) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, state: unknown) => cb(state)
+    ipcRenderer.on('power:lid-awake:state', handler)
+    return () => ipcRenderer.off('power:lid-awake:state', handler)
+  },
+
+  /* --------------------------------------------------------------- wsl -- */
+  // Which Linux distributions this PC has, and which one sessions in a Linux
+  // folder run inside. Two invokes and no push: the set of installed
+  // distributions changes when a person installs one, which is not an event
+  // this app can hear and not one worth a timer.
+  //
+  // `wslStatus(true)` is the Refresh button and re-reads the machine; without
+  // the flag the main process answers from the reading it already took at
+  // launch, so opening the pane costs nothing.
+  wslStatus: (force?: boolean): Promise<unknown> => ipcRenderer.invoke('wsl:status', force === true),
+  chooseWslDistro: (distro: string | null): Promise<unknown> =>
+    ipcRenderer.invoke('wsl:choose', distro),
+
   browserSessionInfo: (): Promise<unknown> => ipcRenderer.invoke('browser-session:info'),
   browserCookies: (filter?: unknown): Promise<unknown> => ipcRenderer.invoke('browser-session:cookies', filter),
   clearBrowserCache: (): Promise<unknown> => ipcRenderer.invoke('browser-session:clear-cache'),
@@ -378,6 +442,10 @@ const api = {
 
   listMcpServers: (projectPath?: string | null): Promise<unknown> =>
     ipcRenderer.invoke('mcp:list', projectPath),
+  // The request carries its own project path rather than taking one alongside,
+  // because two of the three MCP scopes are addressed by the working directory
+  // the CLI runs in — so it is part of what is being asked for, not context.
+  addMcpServer: (request: unknown): Promise<unknown> => ipcRenderer.invoke('mcp:add', request),
   connectMcpServer: (id: string): Promise<unknown> => ipcRenderer.invoke('mcp:connect', id),
   disconnectMcpServer: (id: string): Promise<unknown> => ipcRenderer.invoke('mcp:disconnect', id),
   mcpInventory: (id: string): Promise<unknown> => ipcRenderer.invoke('mcp:inventory', id),

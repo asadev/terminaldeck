@@ -413,7 +413,18 @@ final class DeckModel {
     /// nothing.
     var resumable: RemoteSession? { route.isEmpty ? current?.resumable : nil }
     var canCreateSessions: Bool { current?.canCreateSessions ?? false }
+    /// Whether there is anywhere to start one. See `HostLink.canStartSomewhere`:
+    /// a machine can be perfectly able to start a session and still have granted
+    /// this phone no folder to start it in.
+    var canStartSomewhere: Bool { current?.canStartSomewhere ?? false }
+    /// True only when the machine explicitly granted this device nothing —
+    /// which is the one case worth a sentence on screen, because it is the only
+    /// one a person can fix, and they fix it on the desktop.
+    var hasNoGrantedFolders: Bool { current?.granted?.isEmpty == true }
     var canBrowseLocalhost: Bool { current?.canBrowseLocalhost ?? false }
+    /// The machine currently selected, for screens that name it. `.unknown`
+    /// with no host selected, which reads as a neutral noun rather than a guess.
+    var hostPlatform: HostPlatform { current?.hostPlatform ?? .unknown }
     var canSendFiles: Bool { current?.canSendFiles ?? false }
     var startableFolders: [String] { current?.startableFolders ?? [] }
     var endpointSummary: String? { current?.endpointSummary }

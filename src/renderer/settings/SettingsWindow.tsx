@@ -13,12 +13,14 @@ import { applyStoredTheme, applyTheme, isThemePreference } from '../theme'
 import {
   mergeSettings,
   SECTIONS,
+  sectionsFor,
   splitPatch,
   stringSetting,
   valuesFromPreferences,
   type SectionId,
   type SettingValues,
 } from './settings-schema'
+import { detectPlatform, type UiPlatform } from '../platform'
 import {
   errorText,
   resolveSettingsBridge,
@@ -33,9 +35,11 @@ import { AgentsSection } from './sections/AgentsSection'
 import { SetupSection } from './sections/SetupSection'
 import { RemoteSection } from '../remote/RemoteSection'
 import { BrowserSection } from './sections/BrowserSection'
+import { PowerSection } from './sections/PowerSection'
 import { ShortcutsSection } from './sections/ShortcutsSection'
 import { ProfilesSection } from './sections/ProfilesSection'
 import { AdvancedSection } from './sections/AdvancedSection'
+import { LinuxSection } from './sections/LinuxSection'
 import { HelpSection } from './sections/HelpSection'
 import { AboutSection } from './sections/AboutSection'
 import './SettingsWindow.css'
@@ -67,12 +71,31 @@ import './SettingsWindow.css'
 /** Takes no settings props: it reads its own bridge off `window.deck`. */
 const RemoteSectionView: ComponentType<SectionProps> = () => <RemoteSection />
 
+/**
+ * Wrapped for the same reason, and it is the same argument as `RemoteSection`'s:
+ * Power's switch is bound to a *system* setting read back from the OS on every
+ * change, so it holds none of this window's `values` and writes through none of
+ * its `save`. It resolves its own three channels; casting it into `SectionProps`
+ * would hand it the settings bridge as its own and it would decide the feature
+ * was missing from the build.
+ */
+const PowerSectionView: ComponentType<SectionProps> = () => <PowerSection />
+
+/**
+ * Wrapped for the same reason again: it reads its own two channels off
+ * `window.deck` and holds none of this window's values. It is also the only
+ * section in the rail on one platform and absent on the others — see
+ * `sectionsFor`.
+ */
+const LinuxSectionView: ComponentType<SectionProps> = () => <LinuxSection />
+
 const SECTION_VIEWS: Record<SectionId, ComponentType<SectionProps>> = {
   general: GeneralSection,
   appearance: AppearanceSection,
   notifications: NotificationsSection,
   agents: AgentsSection,
   setup: SetupSection,
+  linux: LinuxSectionView,
   browser: BrowserSection,
   // Wrapped, not cast. `SectionProps` carries its own `bridge` — the settings
   // bridge — and casting RemoteSection to this type handed it that object as
@@ -80,6 +103,7 @@ const SECTION_VIEWS: Record<SectionId, ComponentType<SectionProps>> = {
   // build" while every method was sitting on window.deck. RemoteSection
   // resolves its own bridge; it wants none of these props.
   remote: RemoteSectionView,
+  power: PowerSectionView,
   shortcuts: ShortcutsSection,
   profiles: ProfilesSection,
   advanced: AdvancedSection,
@@ -118,6 +142,15 @@ export const LOAD_TIMEOUT_MS = 8000
 
 export interface SettingsPanelProps {
   bridge?: SettingsBridge
+  /**
+   * Which platform's rail to draw.
+   *
+   * A parameter rather than a read, for the reason `src/main/platform/host.ts`
+   * gives at length: one section exists only on Windows, and a branch that can
+   * only be exercised on the machine it was written on is a branch whose first
+   * reader is a user. Production passes nothing and gets this window's own.
+   */
+  platform?: UiPlatform
   initialSection?: SectionId
   /** Fired after every accepted write, so the app can react to a changed value. */
   onChange?(values: SettingValues): void
@@ -133,12 +166,21 @@ export interface SettingsPanelProps {
  */
 export function SettingsPanel({
   bridge: injected,
+  platform = detectPlatform(),
   initialSection = 'general',
   onChange,
   onSaveState,
 }: SettingsPanelProps) {
   const bridge = useMemo(() => injected ?? resolveSettingsBridge(), [injected])
-  const [section, setSection] = useState<SectionId>(initialSection)
+  // The rail for this machine. A section that exists nowhere on this platform is
+  // not drawn disabled — it is not drawn.
+  const sections = useMemo(() => sectionsFor(platform), [platform])
+  const [section, setSection] = useState<SectionId>(() =>
+    // A section can be asked for that this platform does not have — a deep link,
+    // or a remembered choice from a machine that did have it. Landing on an
+    // empty pane with no rail entry selected is worse than landing on General.
+    sections.some((entry) => entry.id === initialSection) ? initialSection : sections[0].id,
+  )
   const [values, setValues] = useState<SettingValues>(() => mergeSettings({}))
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -296,24 +338,24 @@ export function SettingsPanel({
       if (!keys.includes(event.key)) return
       event.preventDefault()
 
-      const index = SECTIONS.findIndex((entry) => entry.id === section)
-      const last = SECTIONS.length - 1
+      const index = sections.findIndex((entry) => entry.id === section)
+      const last = sections.length - 1
       const nextIndex =
         event.key === 'Home'
           ? 0
           : event.key === 'End'
             ? last
             : event.key === 'ArrowDown'
-              ? (index + 1) % SECTIONS.length
-              : (index - 1 + SECTIONS.length) % SECTIONS.length
+              ? (index + 1) % sections.length
+              : (index - 1 + sections.length) % sections.length
 
-      const target = SECTIONS[nextIndex]
+      const target = sections[nextIndex]
       setSection(target.id)
       navRef.current
         ?.querySelector<HTMLButtonElement>(`[data-section="${target.id}"]`)
         ?.focus()
     },
-    [section],
+    [section, sections],
   )
 
   const View = SECTION_VIEWS[section]
@@ -328,7 +370,7 @@ export function SettingsPanel({
         ref={navRef}
         onKeyDown={onNavKeyDown}
       >
-        {SECTIONS.map((entry) => {
+        {sections.map((entry) => {
           const selected = entry.id === section
           return (
             <button
@@ -366,7 +408,7 @@ export function SettingsPanel({
          * what it is showing starts where a page starts.
          */
         key={section}
-        className="settings-panel"
+        className="settings-panel scroll-fade"
         role="tabpanel"
         id={`${ids}-panel-${section}`}
         aria-labelledby={`${ids}-tab-${section}`}
@@ -425,11 +467,30 @@ export function SettingsWindow({ open, onClose, ...panel }: SettingsWindowProps)
     <Modal
       open={open}
       title="Settings"
-      description="Applies to every project and session."
+      /*
+       * No description, deliberately.
+       *
+       * The header stack said the same thing three times before any content:
+       * "Settings / Applies to every project and session.", then the rail's
+       * selected item, then the panel's own heading and blurb. Two of those are
+       * the platform idiom — System Settings has a selected row in the sidebar
+       * and a title on the pane, and this window's section blurbs are where the
+       * "bright title, dim description" treatment actually earns its keep. The
+       * third was this line, which explains what a settings window is.
+       */
       onClose={onClose}
-      // A page, not a dialog: this has eleven sections and one of them is the
-      // whole remote-access panel. It gets the window.
-      size="page"
+      /*
+       * A large sheet, not the whole window.
+       *
+       * It used to be `page`: edge to edge, no scrim, no corners. Twelve
+       * sections do need room, but taking the window away to give it to them
+       * turned "change a setting" into "leave what you were doing" — and the
+       * thing this window is *for* is a change you make in the middle of
+       * something else. The rail is inside the sheet now, so picking a section
+       * happens within the dialog, and closing it puts the workspace back
+       * because the workspace never went anywhere.
+       */
+      size="xl"
       footer={
         <>
           <span

@@ -77,7 +77,7 @@ final class LiveTransport: Transport {
     /// browser client once lost the one sentence telling the user to go and
     /// press the button, half a second after showing it.
     private var awaitingApproval = false
-    private var approvalDetail = "Waiting for approval on the Mac."
+    private var approvalDetail = "Waiting for approval on the desktop."
     /// Whether the Mac has answered *on this attempt* — a frame that decoded,
     /// which for a relay endpoint means the sealed channel opened and the far
     /// end therefore holds the Mac's static private key.
@@ -277,7 +277,7 @@ final class LiveTransport: Transport {
         // session list. It does not have to be the answer to our own question.
         state.verified = true
 
-        if case let .welcome(version, deviceId, deviceName, token, _, advertised) = message {
+        if case let .welcome(version, deviceId, deviceName, token, _, advertised, _, _) = message {
             guard version == Wire.protocolVersion else {
                 fatal(.incompatible,
                       "The desktop speaks protocol \(version) and this app speaks \(Wire.protocolVersion). "
@@ -300,7 +300,7 @@ final class LiveTransport: Transport {
                 // the device was *not* admitted, so the pending state is known
                 // now rather than after the refusal arrives.
                 awaitingApproval = true
-                approvalDetail = "Paired. Approve this device on the Mac."
+                approvalDetail = "Paired. Approve this device on the desktop."
                 state = ConnectionState(phase: .pending, detail: approvalDetail,
                                         retryAt: nil, attempts: backoff.attempts,
                                         awaitingApproval: true)

@@ -48,6 +48,16 @@
   letter-spacing: var(--t-title3-ls);
 }
 
+/*
+  A hint that would rather disappear than be half a hint.
+
+  It ellipsised, and the half it kept was the half that says nothing: at 900px
+  wide "Drag a widget by its header · Alt+arrows to move" became "Drag a widget
+  by i…", which is an instruction with the instruction cut off. There is nothing
+  to truncate *to* here — both halves are the content — so below the width where
+  it fits, it leaves rather than lingering as a stub. The keyboard route it
+  names is also in the shortcuts sheet, so nothing is lost with it.
+*/
 .dashboard-hint {
   flex: 1;
   min-width: 0;
@@ -56,6 +66,12 @@
   white-space: nowrap;
   color: var(--text-muted);
   font-size: var(--t-footnote);
+}
+
+@media (max-width: 1100px) {
+  .dashboard-hint {
+    display: none;
+  }
 }
 
 /* A quiet fill rather than an outline — the same shape the toolbar's buttons

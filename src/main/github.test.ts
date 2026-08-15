@@ -1073,18 +1073,40 @@ function fakeIpc() {
   return { ipcMain, invoke, sent }
 }
 
+/**
+ * A storage directory that is never written to by these tests — nothing here
+ * signs in — but that must not be a real one either, because a stray write
+ * would land in the developer's own application-support folder.
+ */
+const IPC_OPTIONS = { userDataDir: join(tmpdir(), `terminaldeck-github-ipc-${process.pid}`) }
+
 describe('registerGitHubIpc', () => {
+  /**
+   * The sign-in channels are registered from here rather than from
+   * `index.ts`, so they are part of this assertion: a build where the lists
+   * answer and the Connect button has nothing behind it is the exact failure
+   * `github-auth.ts` was written to end.
+   */
   it('registers every channel the preload bridge calls', () => {
     const { ipcMain, invoke, sent } = fakeIpc()
-    registerGitHubIpc(ipcMain)
-    expect([...invoke.keys()].sort()).toEqual(['github:overview', 'github:refresh', 'github:repo'])
+    registerGitHubIpc(ipcMain, IPC_OPTIONS)
+    expect([...invoke.keys()].sort()).toEqual([
+      'github:auth-await',
+      'github:auth-cancel',
+      'github:auth-connect',
+      'github:auth-disconnect',
+      'github:auth-status',
+      'github:overview',
+      'github:refresh',
+      'github:repo',
+    ])
     expect([...sent.keys()]).toEqual(['github:clear-cache'])
   })
 
   /** IPC arguments are untrusted, so a bad path is a value, never a throw. */
   it('answers a non-absolute path with a typed failure', async () => {
     const { ipcMain, invoke } = fakeIpc()
-    registerGitHubIpc(ipcMain)
+    registerGitHubIpc(ipcMain, IPC_OPTIONS)
 
     for (const channel of ['github:overview', 'github:refresh', 'github:repo']) {
       const result = (await invoke.get(channel)?.({}, '../etc')) as GitHubFailure
@@ -1097,7 +1119,7 @@ describe('registerGitHubIpc', () => {
 
   it('clears the cache without a folder argument', async () => {
     const { ipcMain, sent } = fakeIpc()
-    registerGitHubIpc(ipcMain)
+    registerGitHubIpc(ipcMain, IPC_OPTIONS)
     let calls = 0
     await cacheThrough('probe', false, async () => ++calls, () => 60_000)
 

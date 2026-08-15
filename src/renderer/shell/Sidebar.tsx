@@ -1,4 +1,4 @@
-import { useState, type MouseEvent } from 'react'
+import { useState, type MouseEvent, type ReactNode } from 'react'
 import { StatusDot } from '../components/StatusDot'
 import type { Project } from '../state/store'
 import { tip } from '../keymap'
@@ -16,6 +16,22 @@ interface Props {
   /** Session ids with output nobody has looked at yet. */
   unread?: readonly string[]
   badges?: Partial<Record<PanelId, number>>
+  /**
+   * Showing because the pointer is near the edge, rather than because it is
+   * pinned. It floats over the content in that state instead of taking room
+   * from it, and the arrow in its gutter offers to keep it.
+   */
+  peeking?: boolean
+  /**
+   * The update notice, rendered above Settings.
+   *
+   * Passed in rather than imported so it stays mounted from `App.tsx`, which is
+   * where the wiring test can see it and where its bridge subscription belongs.
+   * It sits here because an update is the same category of thing as Alerts and
+   * Settings — the app talking to you about itself — and none of the three has
+   * anything to do with the work in the middle of the window.
+   */
+  update?: ReactNode
   onSelectTab(id: string): void
   onCloseTab(id: string): void
   onSelectPanel(id: PanelId): void
@@ -24,6 +40,10 @@ interface Props {
   onOpenProject(): void
   onCloseProject(path: string): void
   onOpenSettings(): void
+  /** Keep it open (peeking) or put it away (pinned). */
+  onToggleCollapsed(): void
+  onPeekStart(): void
+  onPeekEnd(): void
   onStartResize(event: MouseEvent): void
 }
 
@@ -56,6 +76,16 @@ function Glyph({
 
 const PLUS = 'M12 5.5v13M5.5 12h13'
 const DISCLOSURE = 'M9.5 6.5l5.5 5.5-5.5 5.5'
+/**
+ * The arrow in the gutter, and the only control that opens or closes the rail.
+ *
+ * It points the way the *content's* left edge is about to move, which is the
+ * only reading that stays true in both directions: pinned, the arrow points
+ * left and the content grows leftwards when you press it; peeked, it points
+ * right and pressing it pushes the content over to make permanent room.
+ */
+const CHEVRON_LEFT = 'M14.5 6.5 9 12l5.5 5.5'
+const CHEVRON_RIGHT = 'M9.5 6.5 15 12l-5.5 5.5'
 const RESUME = 'M4 12a8 8 0 1 0 2.7-6M4 4.5v4h4'
 const CLOSE = 'M6.5 6.5l11 11M17.5 6.5l-11 11'
 const GEAR =
@@ -82,6 +112,8 @@ export function Sidebar({
   activePanel,
   unread = [],
   badges,
+  peeking = false,
+  update,
   onSelectTab,
   onCloseTab,
   onSelectPanel,
@@ -90,6 +122,9 @@ export function Sidebar({
   onOpenProject,
   onCloseProject,
   onOpenSettings,
+  onToggleCollapsed,
+  onPeekStart,
+  onPeekEnd,
   onStartResize,
 }: Props) {
   /** Folded projects, by path. Local: it is a view state, not a preference. */
@@ -153,10 +188,42 @@ export function Sidebar({
     </li>
   )
 
+  /** Views that live at the foot rather than in a labelled run. */
+  const footPanels = PANELS.filter((panel) => panel.group === 'foot')
+
   return (
-    <aside className="sidebar" style={{ width }} aria-label="Sidebar">
-      {/* The traffic lights live over this. Nothing else may. */}
-      <div className="sidebar-gutter" />
+    <aside
+      className="sidebar"
+      style={{ width }}
+      data-peek={peeking || undefined}
+      aria-label="Sidebar"
+      // The pointer arriving anywhere on the rail keeps a peek alive; the
+      // pointer leaving starts the grace period. Both are no-ops while the rail
+      // is pinned, because `beginPeek`/`endPeek` only move a state the pinned
+      // sidebar does not read.
+      onPointerEnter={onPeekStart}
+      onPointerLeave={onPeekEnd}
+    >
+      {/* The traffic lights live over this, and now so does the one control
+          that opens and closes the rail — which is what "next to the window
+          buttons" means. It used to sit in the toolbar, on the far side of the
+          window's own divider from the thing it acts on. */}
+      <div className="sidebar-gutter">
+        <button
+          type="button"
+          className="sidebar-arrow"
+          onClick={onToggleCollapsed}
+          aria-label={peeking ? 'Keep the sidebar open' : 'Hide the sidebar'}
+          aria-expanded={!peeking}
+          title={
+            peeking
+              ? tip('Keep the sidebar open', 'view.sidebar')
+              : tip('Hide the sidebar', 'view.sidebar')
+          }
+        >
+          <Glyph path={peeking ? CHEVRON_RIGHT : CHEVRON_LEFT} size={16} />
+        </button>
+      </div>
 
       <div className="sidebar-actions">
         <button
@@ -300,8 +367,39 @@ export function Sidebar({
         </section>
       </div>
 
-      {/* Bottom-left, where every app of this shape puts it. */}
+      {/*
+        The foot: the app talking about itself, in the order you would want to
+        hear it. An update is news and goes on top; Alerts is a standing list
+        and goes under it; Settings is where you go when you have decided to
+        change something, and stays at the bottom-left where every app of this
+        shape puts it.
+
+        All three used to be somewhere else — the update strip across the top of
+        the work, Alerts in the toolbar's right-hand corner competing with the
+        controls you use while working — which put three unrelated interruptions
+        in the two places your eye is trying to read.
+      */}
       <div className="sidebar-foot">
+        {update && <div className="sidebar-update">{update}</div>}
+
+        {footPanels.map((panel) => {
+          const count = badges?.[panel.id] ?? 0
+          return (
+            <button
+              key={panel.id}
+              type="button"
+              className={`sb-row sb-nav${activePanel === panel.id ? ' active' : ''}`}
+              aria-current={activePanel === panel.id}
+              title={panel.command ? tip(panel.label, panel.command) : panel.label}
+              onClick={() => onSelectPanel(panel.id)}
+            >
+              <Glyph path={panel.icon} />
+              <span className="sb-label">{panel.label}</span>
+              {count > 0 && <span className="sb-badge">{count > 99 ? '99+' : count}</span>}
+            </button>
+          )
+        })}
+
         <button
           type="button"
           className="sb-row sb-settings"

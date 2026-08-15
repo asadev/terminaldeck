@@ -35,6 +35,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
+import dev.terminaldeck.android.protocol.HostPlatform
 import dev.terminaldeck.android.transfer.PickedFile
 import dev.terminaldeck.android.ui.PairingScreen
 import dev.terminaldeck.android.ui.SessionListScreen
@@ -182,7 +183,7 @@ fun TerminalDeckApp(
     }
 
     /*
-     * Open a session the Mac has just started for this phone.
+     * Open a session the machine has just started for this phone.
      *
      * In an effect for the same reason the pairing link is: navigating from inside a frame handler
      * would be a mutation in the middle of the frame that produced it, and `popBackStack` done that
@@ -210,7 +211,22 @@ fun TerminalDeckApp(
     val scanOptions = remember {
         ScanOptions()
             .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
-            .setPrompt("Point the camera at the code on your Mac")
+            /*
+             * The neutral noun, and here it is the *only* correct one.
+             *
+             * Not `state.machineNoun`, for two reasons that both point the same way. Nothing has
+             * answered yet — a QR code is scanned before any handshake, so no machine has said what
+             * it is. And this launcher is also how a *second* machine is added, at which point the
+             * selected machine's noun would be a confident word about the wrong computer: "point
+             * the camera at the code on your Mac", held up to a Windows PC, by an app that had been
+             * told about a Mac somewhere else entirely.
+             *
+             * Taken from the enum rather than typed out, so that if the neutral word is ever
+             * reworded this follows instead of quietly becoming the one string that still says the
+             * old one. Constant by construction, which is also what makes the keyless `remember`
+             * above safe: there is nothing here that can go stale.
+             */
+            .setPrompt("Point the camera at the code on your ${HostPlatform.UNKNOWN.noun}")
             .setBeepEnabled(false)
             .setOrientationLocked(false)
     }
@@ -313,9 +329,19 @@ fun TerminalDeckApp(
             val sessionId = entry.arguments?.getString(ARG_SESSION_ID)
             // Looked up in the machine the route names rather than in whatever is on screen. Those
             // are the same thing by the frame after `open`, and are not on the frame of it.
-            val known = state.hosts.firstOrNull { it.hostId == hostId }
-                ?.sessions?.firstOrNull { it.id == sessionId }
+            val host = state.hosts.firstOrNull { it.hostId == hostId }
+            val known = host?.sessions?.firstOrNull { it.id == sessionId }
             val binding = if (hostId != null && sessionId != null) viewModel.open(hostId, sessionId) else null
+
+            /*
+             * The noun for *this route's* machine, not for whichever one is selected.
+             *
+             * The two are the same the moment after a session is opened and are not the same on a
+             * phone with a Mac and a PC in its switcher, which is precisely the case that produced
+             * the bug this field exists to end. Falls back to the neutral word when the route names
+             * a machine that has been forgotten — by then there is nothing left to ask.
+             */
+            val hostNoun = host?.hostPlatform?.noun ?: HostPlatform.UNKNOWN.noun
 
             // The route arguments are strings from the back stack, and the back stack survives
             // process death, a machine restart and a machine being forgotten — so an id that no
@@ -331,7 +357,7 @@ fun TerminalDeckApp(
                     hostId?.let(viewModel::closeSession)
                     navController.popBackStack()
                 }
-                LeavingSession()
+                LeavingSession(hostNoun)
                 return@composable
             }
 
@@ -341,6 +367,7 @@ fun TerminalDeckApp(
                 subtitle = known.cwd,
                 screenTick = screenTick,
                 transport = state.transport,
+                hostNoun = hostNoun,
                 onBack = {
                     viewModel.closeSession(hostId)
                     navController.popBackStack()
@@ -355,7 +382,7 @@ fun TerminalDeckApp(
                     )
                 },
                 // Everything, because the point is handing a file to an agent and there is no
-                // useful subset of "a file a developer might want on their Mac". A filter here
+                // useful subset of "a file a developer might want on their machine". A filter here
                 // would grey out the one thing somebody came to send.
                 onSendFile = { documentPicker.launch(arrayOf("*/*")) },
                 upload = state.upload,
@@ -374,8 +401,8 @@ fun TerminalDeckApp(
  * a size without reading the whole stream — which matters here because the size is what the progress
  * bar is a fraction of, and what lets an oversized file be refused before a byte moves.
  *
- * The name is a suggestion and is treated as one: the Mac reduces whatever arrives to a single safe
- * path component and picks the real name. This does not try to sanitise it, because a client that
+ * The name is a suggestion and is treated as one: the desktop reduces whatever arrives to a single
+ * safe path component and picks the real name. This does not try to sanitise it, because a client that
  * sanitised it would be a second, weaker copy of a rule that already exists on the other end.
  */
 private fun describe(resolver: android.content.ContentResolver, uri: android.net.Uri): PickedFile? {
@@ -399,10 +426,10 @@ private fun describe(resolver: android.content.ContentResolver, uri: android.net
  * this composition, and a blank screen in between reads as a crash.
  */
 @Composable
-private fun LeavingSession() {
+private fun LeavingSession(hostNoun: String) {
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Text(
-            text = "That session is no longer on the Mac.",
+            text = "That session is no longer on the $hostNoun.",
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }

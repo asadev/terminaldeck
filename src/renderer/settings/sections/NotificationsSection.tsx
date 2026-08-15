@@ -2,7 +2,7 @@ import { useCallback, useState } from 'react'
 import { Button, Notice, SectionHead, SettingList } from '../controls'
 import { booleanSetting, sectionMeta, stringSetting } from '../settings-schema'
 import { isSoundId, playSound } from '../notification-sound'
-import { useNotificationCheck } from '../notification-check'
+import { turnedOnABanner, useNotificationCheck } from '../notification-check'
 import { osName } from '../../platform'
 import type { SectionProps } from '../settings-bridge'
 
@@ -51,11 +51,15 @@ export function NotificationsSection({ values, save, loading, goTo, bridge }: Se
    * gone for good and the feature silently never works again. Firing it here
    * puts it on screen while they are still on this pane, and the note that
    * follows tells them where Allow is.
+   *
+   * Which ids count is `turnedOnABanner`'s to know, not this file's. These
+   * switches have already moved between sections once, and a hard-coded id here
+   * would keep compiling and quietly stop asking the moment they move again.
    */
   const saveAndProve = useCallback(
     (patch: Record<string, unknown>) => {
       save(patch)
-      if (patch['notifications.onComplete'] === true) check.confirmEnabled()
+      if (turnedOnABanner(patch)) check.confirmEnabled()
     },
     [save, check],
   )
@@ -89,21 +93,33 @@ export function NotificationsSection({ values, save, loading, goTo, bridge }: Se
               )}
             </>
           ),
+          /*
+           * Test is a *preview*, so it is never disabled.
+           *
+           * It used to switch itself off whenever the finish-work sound was
+           * off, and print a sentence beside itself saying so with a link to
+           * the other pane. That is a control that looks pressable, is not, and
+           * needs a paragraph to explain the difference — which is the exact
+           * shape the brief rules out. Hearing what a sound is like is a
+           * reasonable thing to want *before* deciding to turn it on, and it is
+           * the only way to choose between six of them from a list of names.
+           * The line underneath now says what is true of the setting rather
+           * than what is wrong with the button.
+           */
           'notifications.soundName': (
             <>
-              <Button onClick={testSound} disabled={!soundOn}>
-                Test
-              </Button>
+              <Button onClick={testSound}>Test</Button>
               {!soundOn && (
                 <span className="settings-help">
-                  Sounds are off, so this plays nothing.{' '}
+                  Nothing plays it on its own yet —{' '}
                   <button
                     type="button"
                     className="settings-inline-btn"
                     onClick={() => goTo('general')}
                   >
-                    Turn them on in General
+                    the finish-work sound is off
                   </button>
+                  .
                 </span>
               )}
             </>

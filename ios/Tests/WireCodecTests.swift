@@ -17,7 +17,7 @@ final class WireCodecTests: XCTestCase {
     func testWelcomeWithNullTokenMeansYouAlreadyHaveOne() {
         let raw = #"{"t":"welcome","protocol":1,"deviceId":"d1","deviceName":"iPhone","token":null,"sessions":[]}"#
         guard case let .ok(message, _) = WireCodec.decode(raw),
-              case let .welcome(_, _, _, token, _, _) = message else {
+              case let .welcome(_, _, _, token, _, _, _, _) = message else {
             return XCTFail("expected a welcome")
         }
         XCTAssertNil(token)
@@ -40,7 +40,7 @@ final class WireCodecTests: XCTestCase {
         ]}
         """
         guard case let .ok(message, _) = WireCodec.decode(raw),
-              case let .welcome(version, _, _, token, sessions, _) = message else {
+              case let .welcome(version, _, _, token, sessions, _, _, _) = message else {
             return XCTFail("expected a welcome")
         }
         XCTAssertEqual(version, 1)
@@ -48,6 +48,78 @@ final class WireCodecTests: XCTestCase {
         XCTAssertEqual(sessions.count, 1)
         XCTAssertEqual(sessions[0].provider, "claude")
         XCTAssertNil(sessions[0].exitCode)
+    }
+
+    // MARK: - folders
+
+    /**
+     * Absent and empty are different answers, and this is the test that says so.
+     *
+     * A desktop that predates per-device grants sends no `folders` at all, and
+     * reading that as "granted nothing" would take the New Session button away
+     * from every machine running a shipped build. A desktop that sends `[]` is
+     * reporting a person's actual choice.
+     */
+    func testAWelcomeWithoutFoldersHasNotSaidAnything() {
+        let raw = #"{"t":"welcome","protocol":1,"deviceId":"d1","deviceName":"iPhone","token":null,"sessions":[]}"#
+        guard case let .ok(message, _) = WireCodec.decode(raw),
+              case let .welcome(_, _, _, _, _, _, _, folders) = message else {
+            return XCTFail("expected a welcome")
+        }
+        XCTAssertNil(folders)
+    }
+
+    func testAWelcomeWithAnEmptyFolderListHasSaidNone() {
+        let raw = #"{"t":"welcome","protocol":1,"deviceId":"d1","deviceName":"iPhone","token":null,"sessions":[],"folders":[]}"#
+        guard case let .ok(message, _) = WireCodec.decode(raw),
+              case let .welcome(_, _, _, _, _, _, _, folders) = message else {
+            return XCTFail("expected a welcome")
+        }
+        XCTAssertEqual(folders, [])
+    }
+
+    func testAWelcomeCarriesTheGrantedFolders() {
+        let raw = """
+        {"t":"welcome","protocol":1,"deviceId":"d1","deviceName":"iPhone","token":null,"sessions":[],
+         "folders":["/Users/asad/Projects/deck","/Users/asad/Projects/imza"]}
+        """
+        guard case let .ok(message, _) = WireCodec.decode(raw),
+              case let .welcome(_, _, _, _, _, _, _, folders) = message else {
+            return XCTFail("expected a welcome")
+        }
+        XCTAssertEqual(folders, ["/Users/asad/Projects/deck", "/Users/asad/Projects/imza"])
+    }
+
+    func testAMalformedFolderEntryIsDroppedRatherThanFatal() {
+        // The same leniency one bad session row gets: a picker with three of
+        // four folders in it is useful, and one with none is not.
+        let raw = """
+        {"t":"welcome","protocol":1,"deviceId":"d1","deviceName":"iPhone","token":null,"sessions":[],
+         "folders":["/a",7,"","/b",null]}
+        """
+        guard case let .ok(message, _) = WireCodec.decode(raw),
+              case let .welcome(_, _, _, _, _, _, _, folders) = message else {
+            return XCTFail("expected a welcome")
+        }
+        XCTAssertEqual(folders, ["/a", "/b"])
+    }
+
+    func testThePushedFolderFrameDecodes() {
+        guard case let .ok(message, _) = WireCodec.decode(#"{"t":"folders","folders":["/a"]}"#),
+              case let .folders(folders) = message else {
+            return XCTFail("expected a folders frame")
+        }
+        XCTAssertEqual(folders, ["/a"])
+    }
+
+    func testAFolderFrameWithNoListIsRefused() {
+        // Fatal here and merely silent in a `welcome`, and the difference is not
+        // pedantry: this frame exists to *change* the list, so one that cannot
+        // say what to change it to has nothing to deliver.
+        guard case let .failed(reason) = WireCodec.decode(#"{"t":"folders"}"#) else {
+            return XCTFail("expected a refusal")
+        }
+        XCTAssertEqual(reason, "folders without a list")
     }
 
     // MARK: - session rows

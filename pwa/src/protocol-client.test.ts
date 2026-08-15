@@ -61,6 +61,91 @@ describe('decoding what the desktop sends', () => {
     }
   })
 
+  it('carries the desktop’s platform through raw, and leaves the field off when it is absent', () => {
+    // Raw rather than mapped: the noun is presentation and belongs to the
+    // screens. What the decoder must not do is *invent* one — the field being
+    // missing has to stay visible as missing, because "this desktop predates
+    // the field" is the case that produced "Running on the Mac" on a PC.
+    const said = decodeServerMessage(welcome({ hostPlatform: 'win32' }))
+    expect(said.ok && said.message.t === 'welcome' && said.message.hostPlatform).toBe('win32')
+
+    const silent = decodeServerMessage(welcome())
+    expect(silent.ok && silent.message.t === 'welcome' && 'hostPlatform' in silent.message).toBe(false)
+  })
+
+  it('does not fail a welcome whose platform is the wrong shape', () => {
+    // Same rule as `capabilities`: a field this client has only just learned
+    // about must never be able to cost it the connection.
+    for (const hostPlatform of [7, null, {}, []]) {
+      const result = decodeServerMessage(welcome({ hostPlatform }))
+      expect(result.ok, JSON.stringify(hostPlatform)).toBe(true)
+      if (result.ok && result.message.t === 'welcome') expect(result.message.hostPlatform).toBeUndefined()
+    }
+  })
+
+  it('reads the folders this device was granted, and keeps an empty list empty', () => {
+    // Empty is a person having chosen no folders for this device, and it has a
+    // remedy printed next to it on screen. It is not the same fact as a desktop
+    // that never mentioned folders — see the next test — and a decoder that
+    // reported one as the other would either invent a lock-out or hide one.
+    const granted = decodeServerMessage(welcome({ folders: ['/Users/asad/Projects/api'] }))
+    expect(granted.ok && granted.message.t === 'welcome' && granted.message.folders).toEqual([
+      '/Users/asad/Projects/api',
+    ])
+
+    const none = decodeServerMessage(welcome({ folders: [] }))
+    expect(none.ok && none.message.t === 'welcome' && none.message.folders).toEqual([])
+  })
+
+  it('leaves the field off entirely when the desktop is older than it', () => {
+    const silent = decodeServerMessage(welcome())
+    expect(silent.ok && silent.message.t === 'welcome' && 'folders' in silent.message).toBe(false)
+  })
+
+  it('does not fail a welcome whose folders are the wrong shape, and drops the rows that are', () => {
+    // Same rule as `capabilities` and `hostPlatform`: a field this client has
+    // only just learned about must never be able to cost it the connection.
+    for (const folders of ['/one', 7, null, {}]) {
+      const result = decodeServerMessage(welcome({ folders }))
+      expect(result.ok, JSON.stringify(folders)).toBe(true)
+      if (result.ok && result.message.t === 'welcome') expect(result.message.folders).toBeUndefined()
+    }
+
+    const mixed = decodeServerMessage(welcome({ folders: ['/one', 4, '', null, '/two'] }))
+    expect(mixed.ok && mixed.message.t === 'welcome' && mixed.message.folders).toEqual(['/one', '/two'])
+  })
+
+  it('reads the folder list the desktop pushes when somebody edits it', () => {
+    const pushed = decodeServerMessage(JSON.stringify({ t: 'folders', folders: ['/one'] }))
+    expect(pushed.ok && pushed.message).toEqual({ t: 'folders', folders: ['/one'] })
+
+    // The frame that takes the last folder away. It has to survive decoding as
+    // an empty list rather than as nothing, because it is the moment a picker
+    // must stop offering anything.
+    const emptied = decodeServerMessage(JSON.stringify({ t: 'folders', folders: [] }))
+    expect(emptied.ok && emptied.message).toEqual({ t: 'folders', folders: [] })
+  })
+
+  it('refuses a folders frame with no list in it', () => {
+    // Unlike the optional field in `welcome`, this frame is nothing else. A
+    // client that read a malformed one as "no folders" would take the picker
+    // away on the strength of a bad message.
+    expect(decodeServerMessage(JSON.stringify({ t: 'folders' })).ok).toBe(false)
+    expect(decodeServerMessage(JSON.stringify({ t: 'folders', folders: '/one' })).ok).toBe(false)
+  })
+
+  it('reads the created session the desktop answers a request with', () => {
+    const result = decodeServerMessage(JSON.stringify({ t: 'created', session }))
+    expect(result.ok && result.message).toEqual({ t: 'created', session })
+  })
+
+  it('refuses a created frame with no usable session in it', () => {
+    // This frame *is* the session, so half of one is not usable: the id in it
+    // is what this client is about to attach to.
+    expect(decodeServerMessage(JSON.stringify({ t: 'created' })).ok).toBe(false)
+    expect(decodeServerMessage(JSON.stringify({ t: 'created', session: { id: 'x' } })).ok).toBe(false)
+  })
+
   it('accepts a welcome whose token is null — that means "you already have one"', () => {
     const result = decodeServerMessage(welcome({ token: null }))
     expect(result.ok).toBe(true)

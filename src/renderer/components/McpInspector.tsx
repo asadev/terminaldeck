@@ -6,6 +6,7 @@ import {
   missingRequired,
   pruneArguments,
 } from './McpSchemaForm'
+import { McpAddForm, type McpAddResult } from './McpAddForm'
 import { panelSpec } from '../shell/panels'
 import { PageEmpty, PageNote } from './PageEmpty'
 import './McpInspector.css'
@@ -96,6 +97,13 @@ export interface McpCallResult {
 /** The slice of the preload bridge this panel needs. */
 export interface McpBridge {
   listMcpServers(projectPath?: string | null): Promise<McpServerStatus[]>
+  /**
+   * The only writing call in this panel. It hands the request over as-is
+   * because two of the three MCP scopes are decided by the directory the write
+   * happens in, so the project path is part of the request rather than context
+   * alongside it.
+   */
+  addMcpServer(request: Record<string, unknown>): Promise<McpAddResult>
   connectMcpServer(id: string, projectPath?: string | null): Promise<McpServerStatus>
   disconnectMcpServer(id: string): Promise<McpServerStatus | null>
   mcpInventory(id: string, projectPath?: string | null): Promise<McpInventory>
@@ -119,6 +127,7 @@ export interface McpInspectorProps {
 
 const BRIDGE_METHODS = [
   'listMcpServers',
+  'addMcpServer',
   'connectMcpServer',
   'disconnectMcpServer',
   'mcpInventory',
@@ -308,6 +317,11 @@ export function McpInspector({ projectPath = null, bridge }: McpInspectorProps) 
   const [expanded, setExpanded] = useState<string | null>(null)
   const [section, setSection] = useState<SectionKey>('tools')
   const [inventories, setInventories] = useState<Record<string, InventoryState>>({})
+  const [adding, setAdding] = useState(false)
+  // Kept after the form closes: the CLI's own "Added X to local config" line is
+  // the only confirmation that the write landed somewhere the user expected,
+  // and closing the form on top of it would throw that away.
+  const [added, setAdded] = useState<string | null>(null)
 
   /**
    * Ticket for the newest list request. Switching projects, or an impatient
@@ -435,18 +449,66 @@ export function McpInspector({ projectPath = null, bridge }: McpInspectorProps) 
     )
   }
 
+  /*
+   * Nothing configured, nothing being typed, nothing being read.
+   *
+   * It is worth a name because it decides where the *one* Add affordance goes.
+   * The panel used to draw two: a chip in the header, and an empty state under
+   * it whose entire body was "Add one with the button above" — a caption about
+   * a control, on the screen the control is on. While the list is empty the
+   * empty state owns the action, in the accent, on the page's own centre line;
+   * once there is a list to work with the header owns it, because an empty
+   * state is no longer on screen to hold it.
+   */
+  const blank = !loading && servers.length === 0 && !listError && !adding
+
   return (
     <div className="mcp">
       <header className="mcp-head">
         <div>
+          {/* Both halves of this are load-bearing. Adding works from here now,
+              so it says so; removing still does not, and a panel that stays
+              quiet about the thing it cannot do reads as broken rather than as
+              limited — which is the whole reason the Add button exists. */}
           <p className="mcp-subheading">
-            Read from your Claude Code configuration — add or remove them there and they appear here.
+            These come from your Claude Code configuration. Adding one here writes to that same
+            configuration, so Claude Code picks it up too. To remove one, run{' '}
+            <code>claude mcp remove</code>.
           </p>
         </div>
-        <button type="button" className="mcp-refresh" onClick={() => void refresh()} disabled={loading}>
-          {loading ? 'Reading…' : 'Reload'}
-        </button>
+        <div className="mcp-head-actions">
+          {!blank && (
+            <button
+              type="button"
+              className="mcp-add-open"
+              onClick={() => {
+                setAdding((open) => !open)
+                setAdded(null)
+              }}
+            >
+              {adding ? 'Close' : 'Add server'}
+            </button>
+          )}
+          <button type="button" className="mcp-refresh" onClick={() => void refresh()} disabled={loading}>
+            {loading ? 'Reading…' : 'Reload'}
+          </button>
+        </div>
       </header>
+
+      {adding && (
+        <McpAddForm
+          projectPath={projectPath}
+          onSubmit={(request) => api.addMcpServer(request)}
+          onAdded={(message) => {
+            setAdding(false)
+            setAdded(message)
+            void refresh()
+          }}
+          onCancel={() => setAdding(false)}
+        />
+      )}
+
+      {added && !adding && <p className="mcp-added">{added}</p>}
 
       {listError && <p className="mcp-error">{listError}</p>}
 
@@ -456,13 +518,38 @@ export function McpInspector({ projectPath = null, bridge }: McpInspectorProps) 
         </PageNote>
       )}
 
-      {/* The action lives in the CLI, not here — this app reads that file and
-          does not write it — so the block carries the command rather than a
-          button that would have to pretend. The backticks used to be printed
-          literally, which is a markdown source file leaking into a window. */}
-      {!loading && servers.length === 0 && !listError && (
-        <PageEmpty icon={panelSpec('mcp').icon} title="No MCP servers configured">
-          Add one with <code>claude mcp add</code>, then reload.
+      {/* This used to read "Add one with `claude mcp add`, then reload", with a
+          comment arguing the action belonged in the CLI because this app reads
+          that file and does not write it. The second half was true and the
+          conclusion was not: the CLI writes it, and we can ask the CLI.
+          (The backticks were once printed literally here — a markdown source
+          file leaking into a window.) Hidden while the form is open, where it
+          would be telling the user to do what they are already doing.
+
+          It carries the action itself rather than pointing at the button above
+          it. "Add one with the button above" is an empty state describing the
+          furniture instead of offering the thing it is describing — and it is
+          the same sentence said twice on one screen, once as a button and once
+          as a caption about that button. */}
+      {blank && (
+        <PageEmpty
+          icon={panelSpec('mcp').icon}
+          title="No MCP servers configured"
+          action={{
+            label: 'Add a server',
+            primary: true,
+            onClick: () => {
+              setAdding(true)
+              setAdded(null)
+            },
+          }}
+          hint={
+            <>
+              Or run <code>claude mcp add</code> in a terminal.
+            </>
+          }
+        >
+          An MCP server is a tool your agents can reach — a database, a browser, an API.
         </PageEmpty>
       )}
 

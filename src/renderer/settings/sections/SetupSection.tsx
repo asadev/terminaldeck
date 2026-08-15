@@ -275,15 +275,34 @@ export function SetupSection({ bridge }: SectionProps) {
           {tools.map((tool) => (
             <ToolRow key={tool.id} tool={tool} />
           ))}
-          {tools.length === 0 && (
-            <li className="settings-tool" data-state="unknown">
-              <span className="settings-tool-main">
-                <span className="settings-tool-note">
-                  {checking ? 'Looking at your machine…' : 'Nothing reported yet.'}
+          {/*
+            One placeholder, shaped like the answer.
+
+            There used to be two, stacked: a full-width box reading "Looking at
+            your machine…" with a separate "Checking…" chip directly under it,
+            both saying the same thing about the same read. The button already
+            says the work is in flight — that is what a disabled button with a
+            present-tense label is for — so the list says it by *looking* like
+            the list that is coming, which also stops the panel jumping when
+            three rows land at once.
+          */}
+          {tools.length === 0 &&
+            (checking ? (
+              [0, 1, 2].map((n) => (
+                <li key={n} className="settings-tool settings-tool-ghost" aria-hidden="true">
+                  <span className="settings-tool-main">
+                    <span className="settings-ghost-line" />
+                  </span>
+                  <span className="settings-ghost-line settings-ghost-short" />
+                </li>
+              ))
+            ) : (
+              <li className="settings-tool" data-state="unknown">
+                <span className="settings-tool-main">
+                  <span className="settings-tool-note">Nothing reported yet.</span>
                 </span>
-              </span>
-            </li>
-          )}
+              </li>
+            ))}
         </ul>
         <div className="settings-actions">
           <Button onClick={load} disabled={checking}>

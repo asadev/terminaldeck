@@ -48,8 +48,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import dev.terminaldeck.android.DeckUiState
 import dev.terminaldeck.android.protocol.RemoteSessionView
@@ -166,16 +170,29 @@ fun SessionListScreen(
             )
         },
         floatingActionButton = {
-            // Absent, not disabled, when the Mac never advertised `create`. A button that exists
-            // only to explain that it does not work is a fake feature.
-            if (state.canCreateSessions) {
+            // Absent, not disabled, when the machine never advertised `create` — and equally when it
+            // has chosen no folders for this phone, because that machine will refuse every session
+            // this button could ask for. A control that exists only to be refused is a fake feature.
+            // What that state gets instead is [FolderNote], which says who has to change it, where.
+            if (state.canStartSession) {
                 Box {
                     ExtendedFloatingActionButton(
                         onClick = {
-                            // One folder to choose from is not a choice. With nothing running the
-                            // Mac picks its own default, which is exactly what its own New Session
-                            // button does with nothing filled in.
-                            if (state.startableFolders.isEmpty()) onNewSession(null) else folderMenu = true
+                            // One destination is not a choice, so it does not get a menu. A grant of
+                            // exactly one folder starts there on the tap — and the folder is named
+                            // on the line above the list, so the thing the old picker never managed
+                            // to say, *where this starts*, is on screen before the tap rather than
+                            // discovered afterwards.
+                            //
+                            // With no list at all — a machine older than the field, with nothing
+                            // running — the machine picks its own default, which is exactly what its
+                            // own New Session button does with nothing filled in.
+                            val only = state.onlyGrantedFolder
+                            when {
+                                only != null -> onNewSession(only)
+                                state.startableFolders.isEmpty() -> onNewSession(null)
+                                else -> folderMenu = true
+                            }
                         },
                         containerColor = MaterialTheme.colorScheme.primary,
                         contentColor = MaterialTheme.colorScheme.onPrimary,
@@ -183,30 +200,27 @@ fun SessionListScreen(
                         text = { Text("New session") },
                     )
                     DropdownMenu(expanded = folderMenu, onDismissRequest = { folderMenu = false }) {
-                        DropdownMenuItem(
-                            text = { Text("Where the Mac would") },
-                            onClick = {
-                                folderMenu = false
-                                onNewSession(null)
-                            },
-                        )
-                        // Only folders the Mac is already offering, which is the working directory
-                        // of a session in the list above. The Mac refuses anything else rather than
-                        // quietly starting somewhere different, so a picker built from anything but
-                        // rows on screen would offer choices that fail.
-                        for (folder in state.startableFolders) {
+                        // The rows are decided in [DeckUiState.folderChoices] rather than here: what
+                        // this menu offers is the thing that was wrong, and a list assembled inside a
+                        // composable can only be checked by reading it. Either way every row is a
+                        // folder the machine will accept — a picker built from anything else offers
+                        // choices that fail.
+                        for (choice in state.folderChoices) {
                             DropdownMenuItem(
                                 text = {
                                     Text(
-                                        text = folder,
-                                        fontFamily = FontFamily.Monospace,
+                                        text = choice.label,
+                                        // Mono for a path and nothing else. "Where the Mac would" is
+                                        // a sentence, and setting it in the terminal face would make
+                                        // it read as one more directory.
+                                        fontFamily = if (choice.isPath) FontFamily.Monospace else null,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
                                     )
                                 },
                                 onClick = {
                                     folderMenu = false
-                                    onNewSession(folder)
+                                    onNewSession(choice.folder)
                                 },
                             )
                         }
@@ -217,6 +231,7 @@ fun SessionListScreen(
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
             ConnectionBanner(state.transport, onReconnect)
+            FolderNote(state)
 
             if (state.sessions.isEmpty()) {
                 EmptyState(state)
@@ -246,6 +261,46 @@ fun SessionListScreen(
     }
 
     }
+}
+
+/**
+ * Where a new session would start, in the two cases where nothing else on screen says.
+ *
+ * This is the answer to the complaint the folder grants exist for: *the picker shows one folder and
+ * I cannot explain why*. Both sentences below name the machine, because the fact being reported is
+ * the machine's and the remedy is on it — the phone is the one device in the room that cannot fix
+ * either of these.
+ *
+ * Nothing is drawn in the ordinary case. A machine that granted several folders explains itself the
+ * moment the menu opens, and a line repeating that would be furniture on the screen someone opens
+ * to check on a build.
+ *
+ * The path is monospaced inside an otherwise ordinary sentence, deliberately: mono is this app's
+ * promise that the characters are exact and countable, which is true of a path and of nothing else
+ * in the line.
+ */
+@Composable
+private fun FolderNote(state: DeckUiState) {
+    if (!state.canCreateSessions) return
+    val only = state.onlyGrantedFolder
+    val text = when {
+        state.noFoldersGranted -> AnnotatedString(state.noFoldersSentence)
+        only != null -> buildAnnotatedString {
+            append("New sessions start in ")
+            withStyle(SpanStyle(fontFamily = FontFamily.Monospace)) { append(only) }
+            append(" — the one folder the ${state.machineNoun} has shared with this phone.")
+        }
+        else -> return
+    }
+
+    Text(
+        text = text,
+        style = MaterialTheme.typography.bodySmall,
+        // Deliberately not the error colour. Nothing has gone wrong: somebody made a choice at a
+        // keyboard, and this is that choice being reported rather than a fault being raised.
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+    )
 }
 
 @Composable

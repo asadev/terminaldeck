@@ -17,20 +17,20 @@ import java.util.UUID
 import kotlin.coroutines.CoroutineContext
 
 /**
- * One file on its way from this phone to the Mac.
+ * One file on its way from this phone to the machine at the other end.
  *
  * A person picks a photo, a video or a document in the system picker; this reads it in slices, puts
- * them on the sealed channel that is already open, and ends with a path on the Mac that the terminal
- * screen types into the session.
+ * them on the sealed channel that is already open, and ends with a path on that machine which the
+ * terminal screen types into the session.
  *
  * ## Why there is a window
  *
  * Flash on a phone reads faster than any link this travels over. Without a window a 200 MB video is
  * handed to the socket in seconds and then sits in the desktop's heap until its backpressure cap
  * drops this phone — a feature that fails *only* on the large files, which is the worst way for it
- * to fail. So the next slice is read only when there is room: the Mac acknowledges each one **from
- * its own write callback**, meaning the bytes are with its kernel rather than merely received, and
- * this stops reading once [Protocol.UPLOAD_WINDOW_BYTES] are unacknowledged.
+ * to fail. So the next slice is read only when there is room: the desktop acknowledges each one
+ * **from its own write callback**, meaning the bytes are with its kernel rather than merely
+ * received, and this stops reading once [Protocol.UPLOAD_WINDOW_BYTES] are unacknowledged.
  *
  * The same acknowledgements are what the progress bar is drawn from. Drawn from bytes handed to the
  * socket it would fill in two seconds and then sit at 100% for a minute, which is not a progress
@@ -38,7 +38,7 @@ import kotlin.coroutines.CoroutineContext
  *
  * ## Why the digest
  *
- * [ClientMessage.UploadEnd] carries the SHA-256 of everything read here; the Mac compares it against
+ * [ClientMessage.UploadEnd] carries the SHA-256 of everything read here; the desktop compares it to
  * the digest of everything it wrote and deletes the file when they differ. Nothing else can tell a
  * file that arrived from one that *nearly* arrived, and a truncated video with the right name is
  * worse than no video — it surfaces later, somewhere else, as a file nobody can open.
@@ -59,13 +59,22 @@ import kotlin.coroutines.CoroutineContext
 class FileUpload(
     private val file: PickedFile,
     private val scope: CoroutineScope,
-    /** How the bytes reach the Mac. False when the socket is down; never queues. */
+    /**
+     * What to call the machine at the other end, in the sentences below.
+     *
+     * `HostPlatform.noun` of whatever that machine said it was — "Mac", "PC", "machine", or the
+     * neutral "desktop" when it has not said. Required rather than defaulted: a default is how a
+     * caller keeps the generic word after the machine has told us its name, and these strings sit
+     * under a progress bar somebody is watching.
+     */
+    private val hostNoun: String,
+    /** How the bytes reach the machine. False when the socket is down; never queues. */
     private val send: (ClientMessage) -> Boolean,
     /** Opens the picked URI. Injected so a test needs no `ContentResolver`. */
     private val open: () -> InputStream,
     /** Fires on every state change, so the view model can republish its UI state. */
     private val onChange: (UploadView) -> Unit,
-    /** Called once, with the path on the Mac, when the file has landed. */
+    /** Called once, with the path on the machine, when the file has landed. */
     private val onLanded: (String) -> Unit,
     /**
      * Where the blocking reads happen.
@@ -82,7 +91,7 @@ class FileUpload(
     val id: String = UUID.randomUUID().toString()
 
     private var phase: UploadPhase = UploadPhase.Opening
-    /** Bytes the Mac has said it has written. The numerator of the bar. */
+    /** Bytes the machine has said it has written. The numerator of the bar. */
     private var acked = 0L
     /**
      * Bytes sent that have not been acknowledged.
@@ -95,17 +104,24 @@ class FileUpload(
     private var over = false
 
     val view: UploadView
-        get() = UploadView(id = id, name = file.name, size = file.size, acked = acked, phase = phase)
+        get() = UploadView(
+            id = id,
+            name = file.name,
+            size = file.size,
+            acked = acked,
+            phase = phase,
+            hostNoun = hostNoun,
+        )
 
     /**
-     * Announce the file. Nothing is read until the Mac answers with a path.
+     * Announce the file. Nothing is read until the machine answers with a path.
      *
      * The size is checked here rather than left to the desktop's refusal, because this side is the
      * only one that knows what the person picked and can therefore say both numbers.
      */
     fun start() {
         if (file.size <= 0) {
-            finish(UploadPhase.Failed("That file is empty."), tellMac = false)
+            finish(UploadPhase.Failed("That file is empty."), tellHost = false)
             return
         }
         if (file.size > Protocol.MAX_UPLOAD_BYTES) {
@@ -114,27 +130,27 @@ class FileUpload(
                     "That file is ${byteSize(file.size)}. The most this can send is " +
                         "${byteSize(Protocol.MAX_UPLOAD_BYTES)}."
                 ),
-                tellMac = false,
+                tellHost = false,
             )
             return
         }
         if (!send(ClientMessage.UploadBegin(id, file.name, file.size))) {
-            finish(UploadPhase.Failed("The connection to the Mac is not up."), tellMac = false)
+            finish(UploadPhase.Failed("The connection to the $hostNoun is not up."), tellHost = false)
         }
     }
 
     /** The Cancel button — and the only way to stop an upload that has stalled. */
     fun cancel(detail: String = "Cancelled.") {
-        finish(UploadPhase.Failed(detail), tellMac = true)
+        finish(UploadPhase.Failed(detail), tellHost = true)
     }
 
-    /** The socket went away. The Mac deletes its half when the connection closes. */
+    /** The socket went away. The machine deletes its half when the connection closes. */
     fun connectionLost(detail: String) {
-        finish(UploadPhase.Failed(detail), tellMac = false)
+        finish(UploadPhase.Failed(detail), tellHost = false)
     }
 
     /**
-     * A frame from the Mac. True when it belonged to this upload.
+     * A frame from the machine. True when it belonged to this upload.
      *
      * Returning a Boolean rather than filtering in the view model keeps the routing in one place:
      * the view model has no idea which upload ids are whose, and giving it one would be a second
@@ -158,14 +174,14 @@ class FileUpload(
             // prompt was there by then. Caught by a test that sends the frame twice.
             if (!over) {
                 acked = file.size
-                // The Mac decided it is over, so it is not told again.
-                finish(UploadPhase.Landed(message.path), tellMac = false)
+                // The machine decided it is over, so it is not told again.
+                finish(UploadPhase.Landed(message.path), tellHost = false)
                 onLanded(message.path)
             }
             true
         }
         message is ServerMessage.UploadFailed && message.id == id -> {
-            finish(UploadPhase.Failed(message.message), tellMac = false)
+            finish(UploadPhase.Failed(message.message), tellHost = false)
             true
         }
         else -> false
@@ -179,13 +195,13 @@ class FileUpload(
             val stream = try {
                 withContext(io) { open() }
             } catch (e: Exception) {
-                finish(UploadPhase.Failed("This phone could not read that file."), tellMac = true)
+                finish(UploadPhase.Failed("This phone could not read that file."), tellHost = true)
                 return@launch
             }
             try {
                 pump(stream, path)
             } catch (e: Exception) {
-                finish(UploadPhase.Failed("This phone could not read that file any more."), tellMac = true)
+                finish(UploadPhase.Failed("This phone could not read that file any more."), tellHost = true)
             } finally {
                 withContext(io) { runCatching { stream.close() } }
             }
@@ -203,39 +219,41 @@ class FileUpload(
             inFlight.first { it < Protocol.UPLOAD_WINDOW_BYTES }
             val n = withContext(io) { stream.read(buffer) }
             if (n <= 0) {
-                // Shorter than it said. Sending what there is would produce a truncated file the Mac
-                // refuses on the byte count; saying so from the end that knows why is clearer.
-                finish(UploadPhase.Failed("That file changed while it was being sent."), tellMac = true)
+                // Shorter than it said. Sending what there is would produce a truncated file the
+                // desktop refuses on the byte count; saying so from the end that knows why is
+                // clearer.
+                finish(UploadPhase.Failed("That file changed while it was being sent."), tellHost = true)
                 return
             }
             val slice = buffer.copyOf(n)
             digest.update(slice)
             read += n
             if (!send(ClientMessage.UploadData(id, Base64.getEncoder().encodeToString(slice)))) {
-                finish(UploadPhase.Failed("The connection to the Mac dropped."), tellMac = false)
+                finish(UploadPhase.Failed("The connection to the $hostNoun dropped."), tellHost = false)
                 return
             }
             inFlight.value += n
         }
 
-        // Every byte is on the wire; wait for the Mac to have written all of them before declaring
-        // the digest, so a failure mid-write is reported as a failure rather than as a bad checksum.
+        // Every byte is on the wire; wait for the machine to have written all of them before
+        // declaring the digest, so a failure mid-write is reported as a failure rather than as a
+        // bad checksum.
         inFlight.first { it == 0 }
         if (over) return
         phase = UploadPhase.Finishing(path)
         onChange(view)
         val hex = digest.digest().joinToString("") { "%02x".format(it) }
         if (!send(ClientMessage.UploadEnd(id, hex))) {
-            finish(UploadPhase.Failed("The connection to the Mac dropped."), tellMac = false)
+            finish(UploadPhase.Failed("The connection to the $hostNoun dropped."), tellHost = false)
         }
     }
 
-    private fun finish(next: UploadPhase, tellMac: Boolean) {
+    private fun finish(next: UploadPhase, tellHost: Boolean) {
         if (over) return
         over = true
-        // Told rather than merely abandoned: the Mac is holding an open descriptor and a half-written
+        // Told rather than merely abandoned: the machine holds an open descriptor and a half-written
         // `.part` file, and only this frame deletes it.
-        if (tellMac) send(ClientMessage.UploadCancel(id))
+        if (tellHost) send(ClientMessage.UploadCancel(id))
         job?.cancel()
         job = null
         phase = next
@@ -245,20 +263,20 @@ class FileUpload(
 
 /** A file the user picked, before anything has been sent. */
 data class PickedFile(
-    /** What to suggest calling it on the Mac. The Mac decides the real name. */
+    /** What to suggest calling it on the machine. The machine decides the real name. */
     val name: String,
     val size: Long,
 )
 
 /** Where an upload is, and what the row should say. */
 sealed interface UploadPhase {
-    /** `upload.begin` is on the wire; the Mac has not named a path yet. */
+    /** `upload.begin` is on the wire; the machine has not named a path yet. */
     data object Opening : UploadPhase
 
     /** Sending. [path] is where it will land, and it is on screen while Cancel still means something. */
     data class Sending(val path: String) : UploadPhase
 
-    /** Every byte is acknowledged and the digest has gone; the Mac is checking and renaming. */
+    /** Every byte is acknowledged and the digest has gone; the machine is checking and renaming. */
     data class Finishing(val path: String) : UploadPhase
 
     data class Landed(val path: String) : UploadPhase
@@ -273,6 +291,15 @@ data class UploadView(
     val size: Long,
     val acked: Long,
     val phase: UploadPhase,
+    /**
+     * What to call the machine in [detail].
+     *
+     * Carried on the view rather than reached for from the screen, because this row is drawn from a
+     * value and a Compose list keyed on one must not have to consult anything else to render. It is
+     * frozen for the life of the transfer, which is honest: an upload only runs while the socket is
+     * up, so the machine has already said what it is.
+     */
+    val hostNoun: String,
 ) {
     val fraction: Float get() = if (size > 0) (acked.toFloat() / size).coerceIn(0f, 1f) else 0f
 
@@ -284,7 +311,7 @@ data class UploadView(
     /** One line for the row, which is the only place any of this is explained. */
     val detail: String
         get() = when (val current = phase) {
-            is UploadPhase.Opening -> "Asking the Mac where to put it…"
+            is UploadPhase.Opening -> "Asking the $hostNoun where to put it…"
             is UploadPhase.Sending -> "${byteSize(acked)} of ${byteSize(size)} → ${current.path}"
             is UploadPhase.Finishing -> "Checking it arrived intact…"
             is UploadPhase.Landed -> current.path

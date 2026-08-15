@@ -3,6 +3,12 @@ import { stat } from 'node:fs/promises'
 import { isAbsolute } from 'node:path'
 import { promisify } from 'node:util'
 import type { IpcMain } from 'electron'
+import {
+  githubToolToken,
+  registerGitHubAuthIpc,
+  scrubGitHubSecrets,
+  type GitHubAuthenticator,
+} from './github-auth'
 import { currentPlatform, withPath, type Platform } from './platform/host'
 import { loginPath } from './providers'
 
@@ -21,6 +27,12 @@ export type GitHubErrorKind =
   | 'not-authenticated'
   | 'auth-expired'
   | 'missing-scope'
+  /** The person said no on GitHub's consent screen, or cancelled here. */
+  | 'auth-declined'
+  /** A device-flow code was never entered and timed out. */
+  | 'auth-code-expired'
+  /** GitHub would not start a sign-in at all — the OAuth client is unusable. */
+  | 'auth-unavailable'
   | 'not-a-repo'
   | 'no-such-folder'
   | 'no-remote'
@@ -169,7 +181,22 @@ function fail(
   action: string | null,
   detail = '',
 ): GitHubFailure {
-  return { ok: false, kind, message, action, detail: truncateDetail(redact(detail)) }
+  // Two passes, and the order is the same argument as truncation's. `redact`
+  // below only knows how to find a credential sitting in a URL's userinfo,
+  // which was the whole threat model while this module read `gh`'s own login
+  // and never held a token itself. It does now: `toolEnv` hands `gh` a
+  // `GH_TOKEN` when the user signed in through the app, so `gh`'s stderr is a
+  // place *our* token can appear, bare and out of any URL. A classic GitHub
+  // token is forty hex characters, which is indistinguishable from a commit
+  // SHA by shape alone — so it is removed by exact match instead of by
+  // pattern, which is what `scrubGitHubSecrets` does.
+  return {
+    ok: false,
+    kind,
+    message,
+    action,
+    detail: truncateDetail(redact(scrubGitHubSecrets(detail))),
+  }
 }
 
 /**
@@ -558,12 +585,30 @@ const GIT_TIMEOUT_MS = 5_000
 const MAX_BUFFER = 8 * 1024 * 1024
 
 async function toolEnv(platform: Platform = currentPlatform()): Promise<NodeJS.ProcessEnv> {
+  /**
+   * The sign-in the user made *in this app*, handed to `gh`.
+   *
+   * Without this, connecting through the panel achieved nothing visible: the
+   * card would say "connected as asadev" while every list under it still came
+   * back "you are not signed in", because `gh` reads its own config and knows
+   * nothing about a token this process is holding. Which is the original
+   * complaint — half connected, no way to tell what it is doing — rebuilt one
+   * layer down.
+   *
+   * `githubToolToken` returns null when the environment already carries a
+   * token, so a `GH_TOKEN` the user set in their shell profile is never
+   * overridden: whatever `gh` would have used on its own is what it uses, and
+   * the panel above reports that same credential. The two cannot disagree.
+   */
+  const token = githubToolToken()
+
   // `withPath` rather than a literal `PATH:` key in the spread: on Windows the
   // inherited variable is spelled `Path`, and an object literal would carry
   // both spellings — leaving it to `CreateProcess` which one `gh` and `git`
   // are actually looked up on. See `platform/host.ts`.
   return {
     ...withPath(process.env, await loginPath(), platform),
+    ...(token ? { GH_TOKEN: token } : {}),
     // Error text is matched on below, so it must not be localised.
     LC_ALL: 'C',
     // gh will happily block on an interactive prompt (auth, repo selection)
@@ -1141,11 +1186,20 @@ function asOptions(value: unknown): OverviewOptions {
   return { refresh: raw.refresh === true, limit: clampLimit(raw.limit) }
 }
 
+export interface GitHubIpcOptions {
+  /**
+   * `app.getPath('userData')`. Passed in rather than read here so this module
+   * keeps its property of importing nothing from Electron but a type — which
+   * is what lets the whole of it be tested without a window.
+   */
+  userDataDir: string
+}
+
 /**
  * Wire the GitHub channels. One call from the main process:
  *
  *   import { registerGitHubIpc } from './github'
- *   registerGitHubIpc(ipcMain)
+ *   registerGitHubIpc(ipcMain, { userDataDir: app.getPath('userData') })
  *
  * Channels:
  *  - `github:overview` (invoke, cwd, options) → GitHubResult
@@ -1153,9 +1207,21 @@ function asOptions(value: unknown): OverviewOptions {
  *  - `github:refresh`  (invoke, cwd)          → GitHubResult, cache bypassed
  *  - `github:clear-cache` (send)              → drops every cached entry
  *
+ * plus the sign-in channels, registered by `github-auth.ts` from here rather
+ * than from `index.ts`. They belong to the same feature and the same panel, and
+ * one registration point means there is no way to ship a build where the data
+ * channels answer and the connect button has nothing behind it.
+ *
+ * `resolveRepo` is handed over as a function so the dependency runs one way:
+ * this module imports the auth module at run time, the auth module imports
+ * nothing back but types.
+ *
  * Nothing here throws: every failure is a typed value the renderer renders.
  */
-export function registerGitHubIpc(ipcMain: IpcMain): void {
+export function registerGitHubIpc(
+  ipcMain: IpcMain,
+  options: GitHubIpcOptions,
+): GitHubAuthenticator {
   const badPath = (value: unknown): GitHubFailure =>
     fail('error', 'Project path must be absolute.', null, String(value))
 
@@ -1180,5 +1246,15 @@ export function registerGitHubIpc(ipcMain: IpcMain): void {
   // per-folder clear would leave behind the entries it was meant to drop.
   ipcMain.on('github:clear-cache', () => {
     clearGitHubCache()
+  })
+
+  return registerGitHubAuthIpc(ipcMain, {
+    storageDir: options.userDataDir,
+    resolveRepo: (cwd) => resolveRepo(cwd),
+    // Signing in or out changes what every list is allowed to see, and the
+    // overview cache holds up to a minute of answers taken under the *old*
+    // credential. Dropping it here is why pressing Connect repaints the panel
+    // with real data instead of the "not signed in" it cached a moment ago.
+    onAuthChanged: () => clearGitHubCache(),
   })
 }

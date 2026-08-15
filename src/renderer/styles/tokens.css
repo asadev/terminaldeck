@@ -1,7 +1,7 @@
 /* ============================================================================
    Terminal Deck — foundation tokens
 
-   Apple's design language, in a warm palette.
+   Apple's design language, in a neutral palette with one blue accent.
 
    Three ideas, and everything below is one of them:
 
@@ -11,12 +11,39 @@
       the two easing curves Apple animates with. Nothing here is invented where
       Apple has already decided.
 
-   2. **A warm, quiet palette.** Near-neutral paper in the light theme and warm
-      charcoal in the dark one, with a single clay accent. There is no second
-      colour in the chrome: selection, focus and the one primary button share
-      the accent, and everything else is ink on paper. Status colours stay
-      meaningful — green is done, amber is waiting, red is wrong — but they are
-      desaturated so a column of them reads as information rather than alarm.
+   2. **Grey, and one blue.** Every surface and every ink in both themes is a
+      true neutral — r = g = b, no exceptions — and the only colour in the
+      chrome is the accent, which selection, focus and the one primary button
+      all share.
+
+      This sheet used to be warm: charcoals mixed toward brown, tints written
+      as `rgba(255, 250, 240, …)`, and a clay accent. Two problems with that.
+      The first is that the clay was `#d97757`, which is Anthropic's own brand
+      orange — wearing another product's colour is not a look, it is a
+      mistake. The second is that a warm grey is not a subtle effect: at
+      `#1c1b19` the red channel runs three levels ahead of the blue and the
+      whole dark theme reads as faintly orange, which is exactly what it was
+      reported as. Both are fixed here rather than papered over downstream, and
+      the neutrality is mechanical — if you add a grey, check r = g = b before
+      you commit it.
+
+      The blue is the application icon's own blue, not an invented one. The
+      icon (`build/art/icon.mjs`) paints the card's spine as a vertical
+      gradient from `#3b8fee` at the top to `#2371d6` at the bottom; the dark
+      theme takes the top stop verbatim, and the light theme walks the same hue
+      (≈213°) down in lightness until it clears WCAG AA as text on paper — the
+      logo's own stops are too bright to read at 13px on white. So the icon in
+      the Dock and the accent in the window are the same colour, and the icon
+      script's claim that "the colours come from src/renderer/styles/tokens.css"
+      is true again.
+
+      Status colours stay meaningful — green is done, amber is waiting, red is
+      wrong — but they are desaturated so a column of them reads as information
+      rather than alarm. Every one of them is a text colour somewhere (see
+      `SetupSection.css`, `GitHubPanel.css`, `SearchPanel.css`), so every one
+      clears 4.5:1 against the *darkest* surface of its own theme, not just
+      against the lightest. The contrast figures written next to each value
+      below were computed, not estimated.
 
    3. **Material, not boxes.** Separation comes from a translucent surface
       catching light, not from a hairline around every region. The `--material`
@@ -47,69 +74,133 @@
 [data-theme='light'] {
   color-scheme: light;
 
-  /* Paper, warmed a few degrees off pure grey. --bg-primary is the content
-     canvas; --bg-secondary is the app ground the sidebar sits on. */
+  /* Paper. True neutral greys — no warmth, so the blue accent stays blue
+     rather than going violet against a yellowed ground. --bg-primary is the
+     content canvas; --bg-secondary is the app ground the sidebar sits on;
+     --bg-sunken is the darkest paper anything is ever set on, which is why it
+     is the surface every contrast figure below is checked against. */
   --bg-primary: #ffffff;
-  --bg-secondary: #f6f5f1;
-  --bg-tertiary: #efeee9;
-  --bg-sunken: #eae8e2;
+  --bg-secondary: #f5f5f5;
+  --bg-tertiary: #ededed;
+  --bg-sunken: #eaeaea;
 
   /* Apple's system fills: a tint of the ink, never a named grey, so a control
-     sits on any surface without knowing which one it is. */
-  --bg-hover: rgba(58, 53, 45, 0.055);
-  --bg-active: rgba(58, 53, 45, 0.09);
-  --fill-quaternary: rgba(58, 53, 45, 0.045);
-  --fill-tertiary: rgba(58, 53, 45, 0.075);
-  --fill-secondary: rgba(58, 53, 45, 0.11);
+     sits on any surface without knowing which one it is. rgb(56,56,56) is the
+     neutral twin of the old rgb(58,53,45) — same darkness, so every alpha
+     below still lands where it was tuned to land, without the yellow. */
+  --bg-hover: rgba(56, 56, 56, 0.055);
+  --bg-active: rgba(56, 56, 56, 0.09);
+  --fill-quaternary: rgba(56, 56, 56, 0.045);
+  --fill-tertiary: rgba(56, 56, 56, 0.075);
+  --fill-secondary: rgba(56, 56, 56, 0.11);
 
-  --text-primary: #23211d;
-  /* Both cleared against --bg-secondary, not just against white: a sidebar
-     label is the darkest surface these ever sit on. secondary ≈ 5.7:1,
-     muted ≈ 3.8:1. The previous muted grey landed at 2.6:1 there, which is
-     why the old sheet had a comment forbidding its use on headings. */
-  --text-secondary: #63605a;
-  --text-muted: #7d776e;
+  /* Three tiers of ink, all cleared against --bg-sunken (#eaeaea), not just
+     against white: a hint under a control inside a well is the darkest paper
+     these ever sit on. primary 14.2:1, secondary 6.3:1, muted 4.8:1 — so even
+     the quietest tier is AA body text wherever it lands, which the previous
+     muted grey (3.7:1 on the sidebar) was not. */
+  --text-primary: #1c1c1c;
+  --text-secondary: #545454;
+  --text-muted: #666666;
+  /* Despite the name, this is *not* the ink on the accent — that is
+     `--accent-fg`. Its one and only user is the destroy button in
+     `CloseSessionConfirm.css`, which is filled with `--color-critical`, so it
+     tracks the red and not the blue. It is left named as it is because
+     renaming a token means editing the file that reads it, and this note is
+     cheaper than that; but do not reach for it for a primary button, because
+     in the dark theme the two are opposite colours and you would get near
+     black text on a red fill by accident. 5.5:1 on the red here, 6.9:1
+     in the dark theme. */
   --text-onaccent: #ffffff;
 
-  /* One clay, and it does three jobs: selection, focus and the primary action.
-     Dark enough on paper to be read as text (5.2:1), which is why it is not
-     the brand's brighter orange here. */
-  --accent: #b4552f;
-  --accent-dim: #97431f;
-  --accent-soft: rgba(180, 85, 47, 0.1);
-  --accent-line: rgba(180, 85, 47, 0.28);
+  /* The icon's blue, walked down its own hue line until it can be read as
+     text. The logo stops are #3b8fee (3.3:1 on white) and #2371d6 (4.4:1 on
+     the sidebar) — both too bright for 13px body copy, so this is the same
+     hue at a lower lightness: 4.7:1 on the darkest paper, 5.6:1 on white.
+     One colour, three jobs: selection, focus and the primary action.
+
+     --accent-dim is the hover step and --accent-press the pressed step. In
+     the light theme both go *darker*; in the dark theme both go lighter. The
+     name is historical — nine stylesheets already say
+     `background: var(--accent-dim)` on :hover — so it means "the next step",
+     not "less saturated". White ink clears AA on all three (5.6 / 6.7 / 8.7). */
+  --accent: #1a66c4;
+  --accent-dim: #155bb0;
+  --accent-press: #124a92;
+  --accent-soft: rgba(26, 102, 196, 0.1);
+  --accent-line: rgba(26, 102, 196, 0.28);
   --accent-fg: #ffffff;
 
-  --border: rgba(58, 53, 45, 0.1);
-  --border-subtle: rgba(58, 53, 45, 0.055);
-  --border-strong: rgba(58, 53, 45, 0.18);
+  --border: rgba(56, 56, 56, 0.1);
+  --border-subtle: rgba(56, 56, 56, 0.055);
+  --border-strong: rgba(56, 56, 56, 0.18);
 
-  /* Meaningful, not loud. Each one clears 4.5:1 on paper. */
+  /* Meaningful, not loud. Each one clears 4.5:1 on --bg-sunken, the darkest
+     paper — the old sheet claimed "4.5:1 on paper" but three of these only
+     managed it against pure white and dropped to 3.7:1 in a sidebar, where
+     SetupSection and SearchPanel both set them as text. Darkened until the
+     claim is true: working 4.6, waiting 4.9, input 4.7, completed 5.0. */
   --status-working: #1667c8;
-  --status-waiting: #a9690a;
-  --status-input: #c04a12;
-  --status-completed: #1c7a4f;
-  --status-idle: #7d776e;
+  --status-waiting: #8f5800;
+  /* "The agent asked you something." Deliberately still warm: this is the one
+     state that has to jump out of a column of blue and grey, and orange is
+     what a person reads as "act now". It is not the old accent — that was
+     #c04a12, one shade off Anthropic's brand — it is a rust two hue-steps
+     away from --status-waiting so the two dots stay tellable apart at 7px. */
+  --status-input: #b83c08;
+  --status-completed: #19714a;
+  --status-idle: #666666;
 
   --color-info: #1667c8;
-  --color-warning: #a9690a;
+  --color-warning: #8f5800;
   --color-critical: #bd3a2c;
-  --color-positive: #1c7a4f;
+  --color-positive: #19714a;
 
   --tab-active: #ffffff;
-  --tab-inactive: #f6f5f1;
-  --pane-focus: var(--accent);
+  --tab-inactive: #f5f5f5;
+  /* The focused pane's ring, and it is deliberately NOT the raw accent here.
+
+     A 2px accent ring reads as a mark in the dark theme, where the accent is a
+     mid blue on near-black. On paper the same rule becomes a saturated blue
+     rectangle running the full height of the window — measured, and by a
+     distance the loudest thing on the screen, louder than any content it was
+     supposed to be pointing at. Same job, same hue, two thirds of the weight.
+     The dark theme keeps the accent verbatim. */
+  --pane-focus: color-mix(in srgb, var(--accent) 62%, transparent);
   --pane-unfocus: var(--border);
 
-  /* Ink on a filled status badge. White in both appearances, the way Apple's
-     red count badges are — `--text-onaccent` goes dark in the dark theme,
-     which is right on a clay button and unreadable on a red pill. */
+  /* The terminal's own paper, and the one surface in the light theme that is
+     not the chrome's.
+
+     "Terminal in the content, Apple in the chrome — the contrast between the
+     two is the look." In the dark theme that happens for free. In the light
+     theme the terminal was painting `--bg-primary`, which is the same #ffffff
+     the toolbar, the page and the modal are, so the terminal stopped being a
+     terminal and became an empty document with a cursor in it. This is a
+     genuinely recessed paper: a 23-level step below the chrome, so the session
+     reads as a panel let into the window. Ink on it is 14.8:1, darker than the
+     app's own body text because a terminal's job is to be exact. */
+  --terminal-bg: #e8e8e8;
+  --terminal-fg: #141414;
+
+  /* Ink on a filled count badge (`.sb-badge`), which is always drawn on
+     `--color-critical`. It has its own token because it follows the *fill* it
+     sits on, not the theme's text colour.
+
+     It used to be white in both appearances, on the reasoning that Apple's red
+     count badges are white. Apple's red is dark enough to carry white; ours is
+     not — in the dark theme `--color-critical` is a light coral, and white on
+     it measures 2.4:1, which is not a number a two-digit count can survive.
+     So the badge follows the same rule the rest of the dark theme follows and
+     the light theme does not: a bright fill takes dark ink. 5.5:1 here, 6.9:1
+     in the dark theme, and no exception left in the sheet for tokens.test.ts
+     to have to excuse. */
   --badge-fg: #ffffff;
 
   /* Liquid glass. The sheen is the part that matters: opacity alone over an
      empty area just reads as flat paint (see rule 6.2 in the build rules). */
-  --material-bg: rgba(249, 248, 244, 0.72);
-  --material-bg-strong: rgba(252, 251, 248, 0.86);
+  --material-bg: rgba(250, 250, 250, 0.72);
+  --material-bg-strong: rgba(253, 253, 253, 0.86);
   --material-sheen: linear-gradient(
     180deg,
     rgba(255, 255, 255, 0.72) 0%,
@@ -117,12 +208,15 @@
     rgba(255, 255, 255, 0.06) 100%
   );
   --material-edge: rgba(255, 255, 255, 0.7);
-  --material-hairline: rgba(58, 53, 45, 0.09);
+  --material-hairline: rgba(56, 56, 56, 0.09);
   --material-filter: saturate(180%) blur(24px);
 
-  --shadow-sm: 0 1px 1px rgba(30, 27, 22, 0.04), 0 1px 3px rgba(30, 27, 22, 0.06);
-  --shadow-md: 0 2px 6px rgba(30, 27, 22, 0.06), 0 12px 28px rgba(30, 27, 22, 0.1);
-  --shadow-lg: 0 8px 20px rgba(30, 27, 22, 0.1), 0 30px 60px rgba(30, 27, 22, 0.16);
+  /* Neutral black, not the old rgb(30,27,22). A warm shadow is invisible on
+     its own but it tints every edge in the app at once, and the saturation
+     lift in --material-filter amplifies whatever tint it is given. */
+  --shadow-sm: 0 1px 1px rgba(0, 0, 0, 0.04), 0 1px 3px rgba(0, 0, 0, 0.06);
+  --shadow-md: 0 2px 6px rgba(0, 0, 0, 0.06), 0 12px 28px rgba(0, 0, 0, 0.1);
+  --shadow-lg: 0 8px 20px rgba(0, 0, 0, 0.1), 0 30px 60px rgba(0, 0, 0, 0.16);
 }
 
 /* -------------------------------------------------------------- dark -- */
@@ -130,53 +224,87 @@
 [data-theme='dark'] {
   color-scheme: dark;
 
-  --bg-primary: #1c1b19;
-  --bg-secondary: #232220;
-  --bg-tertiary: #2a2926;
-  --bg-sunken: #151413;
+  /* Neutral charcoal, r = g = b. The previous set (#1c1b19, #232220, #2a2926)
+     carried three to four levels more red than blue, which is small enough to
+     look like nothing in a swatch and large enough to make the whole window
+     read as faintly orange once it fills a 1440px screen — which is how it was
+     reported. These are the same values the phone client already ships
+     (pwa/src/styles.css), so the two surfaces are finally one product. */
+  --bg-primary: #191919;
+  --bg-secondary: #202020;
+  --bg-tertiary: #252525;
+  --bg-sunken: #121212;
 
-  --bg-hover: rgba(255, 250, 240, 0.055);
-  --bg-active: rgba(255, 250, 240, 0.095);
-  --fill-quaternary: rgba(255, 250, 240, 0.04);
-  --fill-tertiary: rgba(255, 250, 240, 0.07);
-  --fill-secondary: rgba(255, 250, 240, 0.11);
+  /* Pure white, not the old rgba(255, 250, 240, …). Every hover, fill and
+     border in the dark theme is one of these, so a fifteen-point yellow bias
+     in the tint was most of the cast on its own. */
+  --bg-hover: rgba(255, 255, 255, 0.055);
+  --bg-active: rgba(255, 255, 255, 0.095);
+  --fill-quaternary: rgba(255, 255, 255, 0.04);
+  --fill-tertiary: rgba(255, 255, 255, 0.07);
+  --fill-secondary: rgba(255, 255, 255, 0.11);
 
-  --text-primary: #edeae3;
-  --text-secondary: #a8a399;
-  /* ≈4.5:1 on --bg-primary. Quiet, but still a label rather than a ghost. */
-  --text-muted: #857f74;
-  --text-onaccent: #23140c;
+  /* Cleared against --bg-tertiary (#252525), the lightest surface text sits
+     on here: primary 13.1:1, secondary 6.5:1, muted 4.7:1. Muted is AA body
+     text now; the old #857f74 was 3.9:1 there and only just made 4.5:1 on the
+     canvas, which is the sort of thing that passes review and fails a reader. */
+  --text-primary: #ededed;
+  --text-secondary: #a8a8a8;
+  --text-muted: #8f8f8f;
+  /* Ink on the destructive fill, not on the accent — see the light theme's
+     note. `--color-critical` is a light coral here, so this one is near black
+     while its light-theme twin is white; that inversion is the reason the
+     token cannot be used interchangeably with `--accent-fg`. */
+  --text-onaccent: #0f1114;
 
-  /* The brand clay, which is legible on charcoal where the light theme's
-     deeper shade would go muddy. Filled buttons take dark ink for the same
-     reason Apple's dark-mode tinted controls do. */
-  --accent: #d97757;
-  --accent-dim: #e28d71;
-  --accent-soft: rgba(217, 119, 87, 0.16);
-  --accent-line: rgba(217, 119, 87, 0.4);
-  --accent-fg: #23140c;
+  /* The icon's blue, taken verbatim: #3b8fee is the top stop of the spine
+     gradient in build/art/icon.mjs. 5.3:1 as text on the canvas.
 
-  --border: rgba(255, 250, 240, 0.09);
-  --border-subtle: rgba(255, 250, 240, 0.05);
-  --border-strong: rgba(255, 250, 240, 0.17);
+     Filled buttons take dark ink rather than white, and that is forced, not a
+     taste call: for the accent to be readable as text on #191919 it needs
+     luminance ≥ 0.221, and for white to be readable on the accent it needs
+     luminance ≤ 0.183. No single blue can do both, so the theme keeps the
+     bright accent and puts near-black on the button — 5.7:1 — the way Apple's
+     dark-mode tinted controls do. The ink is #0f1114, the icon's own tile
+     black, so the button reads as a chip cut out of the app icon. */
+  --accent: #3b8fee;
+  --accent-dim: #5ba2f2;
+  --accent-press: #7db4f5;
+  --accent-soft: rgba(59, 143, 238, 0.16);
+  --accent-line: rgba(59, 143, 238, 0.4);
+  --accent-fg: #0f1114;
 
+  --border: rgba(255, 255, 255, 0.09);
+  --border-subtle: rgba(255, 255, 255, 0.05);
+  --border-strong: rgba(255, 255, 255, 0.17);
+
+  /* All ≥ 5.6:1 on --bg-tertiary. --status-input was #ef8b58, a lightened
+     Anthropic salmon that was really the old accent wearing a status name;
+     this is a plain orange at the same hue as its light-theme twin. */
   --status-working: #64a6e8;
   --status-waiting: #ddb04a;
-  --status-input: #ef8b58;
+  --status-input: #f0913f;
   --status-completed: #5fbf95;
-  --status-idle: #857f74;
+  --status-idle: #8f8f8f;
 
   --color-info: #64a6e8;
   --color-warning: #ddb04a;
   --color-critical: #ff6f60;
   --color-positive: #5fbf95;
 
-  --tab-active: #1c1b19;
-  --tab-inactive: #232220;
-  --badge-fg: #ffffff;
+  --tab-active: #191919;
+  --tab-inactive: #202020;
+  /* The canvas, copied by value rather than by `var()`: `tokens.test.ts` reads
+     these declarations as text, so a reference would be unreadable to it — and
+     the test that keeps the two in step is what makes writing it twice safe. */
+  --terminal-bg: #191919;
+  --terminal-fg: #ededed;
+  /* Dark ink, not white — see the light theme's note. `--color-critical` is a
+     light coral here, so this is the same trade `--accent-fg` makes. */
+  --badge-fg: #0f1114;
 
-  --material-bg: rgba(36, 35, 32, 0.68);
-  --material-bg-strong: rgba(40, 39, 36, 0.88);
+  --material-bg: rgba(36, 36, 36, 0.68);
+  --material-bg-strong: rgba(40, 40, 40, 0.88);
   --material-sheen: linear-gradient(
     180deg,
     rgba(255, 255, 255, 0.085) 0%,

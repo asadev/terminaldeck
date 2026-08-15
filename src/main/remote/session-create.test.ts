@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { remoteSessionCreator, type SessionStarter } from './session-create'
+import { remoteSessionCreator, remoteSessionStart, type SessionStarter } from './session-create'
 import type { SessionMeta } from '../../shared/types'
 
 /**
@@ -12,6 +12,11 @@ import type { SessionMeta } from '../../shared/types'
  * accepting a path nobody offered, and *silently substituting* the default for
  * one it will not accept. The second is the dangerous one — a New Session that
  * quietly starts somewhere else is a command typed into the wrong project.
+ *
+ * Since folders became per device there is a third: answering one device with
+ * another device's list. That one is checked here at the level this file owns —
+ * the id reaching `folders()` — and end to end against a real grant store in
+ * `folder-grants.test.ts`.
  */
 
 const META: SessionMeta = {
@@ -23,51 +28,70 @@ const META: SessionMeta = {
   createdAt: 1_760_000_000_000,
 }
 
+/** The device asking, when a test does not care which one it is. */
+const PHONE = 'device-phone'
+
 function starter(overrides: Partial<SessionStarter> = {}): SessionStarter & { spawn: ReturnType<typeof vi.fn> } {
   const spawn = vi.fn(async (input: { cwd: string; cols: number; rows: number }) => ({ ...META, cwd: input.cwd }))
-  return {
+  const base: SessionStarter = {
     folders: () => ['/Users/apple/Projects/terminaldeck', '/Users/apple/Projects/imza'],
-    home: () => '/Users/apple',
     spawn,
-    ...overrides,
-    // Kept after the spread so a test overriding `folders` still gets the spy.
-    ...(overrides.spawn ? {} : { spawn }),
-  } as SessionStarter & { spawn: ReturnType<typeof vi.fn> }
+  }
+  // Kept after the spread so a test overriding `folders` still gets the spy,
+  // and so the returned object's `spawn` is the same function the test asserts
+  // against rather than a second one.
+  return { ...base, ...overrides, spawn: overrides.spawn ?? spawn } as SessionStarter & {
+    spawn: ReturnType<typeof vi.fn>
+  }
 }
 
 describe('a request that names no folder', () => {
-  it('lands in the desktop’s most recent project', async () => {
+  it('lands in the first folder this device may use', async () => {
     const deps = starter()
     const create = remoteSessionCreator(deps)
 
-    const outcome = await create({ cols: 100, rows: 30 })
+    const outcome = await create({ deviceId: PHONE, cols: 100, rows: 30 })
     expect(outcome.ok).toBe(true)
     expect(deps.spawn).toHaveBeenCalledWith({
       cwd: '/Users/apple/Projects/terminaldeck',
       cols: 100,
       rows: 30,
+      // Carried all the way down rather than stopping at the folder rule. What
+      // reads it is the git isolation: which device this session belongs to
+      // decides whose configuration it runs with and whose phone answers when
+      // git asks for a password. A spawn that did not know could only give every
+      // remote session the same answer, or none.
+      deviceId: PHONE,
     })
-  })
-
-  it('falls back to home when this Mac has no projects at all', async () => {
-    // A first launch, which is exactly when a phone starting a session is most
-    // useful and least able to name a folder.
-    const deps = starter({ folders: () => [] })
-    await remoteSessionCreator(deps)({})
-    expect(deps.spawn).toHaveBeenCalledWith({ cwd: '/Users/apple', cols: 80, rows: 24 })
   })
 
   it('uses a plain 80x24 when the phone has not measured its terminal', async () => {
     const deps = starter()
-    await remoteSessionCreator(deps)({})
+    await remoteSessionCreator(deps)({ deviceId: PHONE })
     expect(deps.spawn).toHaveBeenCalledWith(expect.objectContaining({ cols: 80, rows: 24 }))
+  })
+
+  it('refuses rather than inventing one when the device may use none', async () => {
+    // The hole this closes: there used to be a `home()` fallback for an empty
+    // list, which was right when the list was the desktop's own projects — an
+    // empty one meant a first launch — and became wrong the moment a person
+    // could empty it themselves. Falling back would turn "this device may use
+    // no folders" into "this device may start a shell in my home directory".
+    const deps = starter({ folders: () => [] })
+    const outcome = await remoteSessionCreator(deps, 'darwin')({ deviceId: PHONE })
+
+    expect(outcome).toMatchObject({ ok: false, code: 'unauthorized' })
+    expect(deps.spawn).not.toHaveBeenCalled()
+    // Actionable, and about the machine the folders live on rather than about
+    // the phone reading it.
+    if (!outcome.ok) expect(outcome.message).toContain('Choose one in its remote access settings')
   })
 })
 
 describe('a request that names one', () => {
   it('accepts a folder the desktop is already offering', async () => {
     const deps = starter()
-    const outcome = await remoteSessionCreator(deps)({ cwd: '/Users/apple/Projects/imza' })
+    const outcome = await remoteSessionCreator(deps)({ deviceId: PHONE, cwd: '/Users/apple/Projects/imza' })
 
     expect(outcome).toMatchObject({ ok: true })
     expect(deps.spawn).toHaveBeenCalledWith(expect.objectContaining({ cwd: '/Users/apple/Projects/imza' }))
@@ -78,7 +102,7 @@ describe('a request that names one', () => {
     // trailing slash and a session's cwd without one are the same directory,
     // and refusing over that would be a refusal nobody could act on.
     const deps = starter()
-    const outcome = await remoteSessionCreator(deps)({ cwd: '/Users/apple/Projects/imza/' })
+    const outcome = await remoteSessionCreator(deps)({ deviceId: PHONE, cwd: '/Users/apple/Projects/imza/' })
     expect(outcome).toMatchObject({ ok: true })
   })
 
@@ -88,12 +112,12 @@ describe('a request that names one', () => {
     // suite runs on the Windows runner too — where the unpinned answer is
     // "This PC" and the sentence would be asserted against the runner rather
     // than against the code.
-    const outcome = await remoteSessionCreator(deps, 'darwin')({ cwd: '/etc' })
+    const outcome = await remoteSessionCreator(deps, 'darwin')({ deviceId: PHONE, cwd: '/etc' })
 
     expect(outcome).toEqual({
       ok: false,
       code: 'unauthorized',
-      message: 'This Mac will not start a session in that folder. Open it there first.',
+      message: 'This Mac is not offering that folder to this device. Pick one from the list it sent.',
     })
     // The assertion that matters. A refusal that had already spawned a shell
     // would be the worst kind of pass.
@@ -104,7 +128,7 @@ describe('a request that names one', () => {
     // The failure this rule exists to prevent: the user taps New Session on a
     // project, gets a shell somewhere else, and types into it.
     const deps = starter()
-    const outcome = await remoteSessionCreator(deps)({ cwd: '/Users/apple/Projects/gone' })
+    const outcome = await remoteSessionCreator(deps)({ deviceId: PHONE, cwd: '/Users/apple/Projects/gone' })
     expect(outcome.ok).toBe(false)
     expect(deps.spawn).not.toHaveBeenCalled()
   })
@@ -116,7 +140,7 @@ describe('a request that names one', () => {
       '/Users/apple/Projects/imza/..',
       '/Users/apple/Projects/terminaldeck/node_modules',
     ]) {
-      expect((await remoteSessionCreator(deps)({ cwd })).ok, cwd).toBe(false)
+      expect((await remoteSessionCreator(deps)({ deviceId: PHONE, cwd })).ok, cwd).toBe(false)
     }
     expect(deps.spawn).not.toHaveBeenCalled()
   })
@@ -126,7 +150,7 @@ describe('a request that names one', () => {
     // against absolute paths for the wrong reason. Refused for the true one.
     const deps = starter()
     for (const cwd of ['Projects/imza', '.', '..', '~/Projects/imza']) {
-      expect((await remoteSessionCreator(deps)({ cwd })).ok, cwd).toBe(false)
+      expect((await remoteSessionCreator(deps)({ deviceId: PHONE, cwd })).ok, cwd).toBe(false)
     }
   })
 
@@ -135,10 +159,120 @@ describe('a request that names one', () => {
     const deps = starter({ folders: () => folders })
     const create = remoteSessionCreator(deps)
 
-    expect((await create({ cwd: '/Users/apple/Projects/new-one' })).ok).toBe(false)
+    expect((await create({ deviceId: PHONE, cwd: '/Users/apple/Projects/new-one' })).ok).toBe(false)
     folders = [...folders, '/Users/apple/Projects/new-one']
-    expect((await create({ cwd: '/Users/apple/Projects/new-one' })).ok).toBe(true)
+    expect((await create({ deviceId: PHONE, cwd: '/Users/apple/Projects/new-one' })).ok).toBe(true)
   })
+})
+
+/**
+ * The device the request came from reaches the rule.
+ *
+ * This is the bug the whole feature turns on: the connection has always known
+ * which phone was speaking and the request went down to this file without it,
+ * so the only answer available was one every device shared. Two phones with two
+ * lists is not a thing that can be tested at all until the id arrives here.
+ */
+describe('who is asking', () => {
+  /** Two devices, two lists, one desktop — the arrangement the panel produces. */
+  function twoPhones(): SessionStarter & { spawn: ReturnType<typeof vi.fn> } {
+    return starter({
+      folders: (deviceId) =>
+        deviceId === 'device-a' ? ['/Users/apple/Projects/alpha'] : ['/Users/apple/Projects/beta'],
+    })
+  }
+
+  it('passes it to the folder lookup on every request', async () => {
+    const folders = vi.fn(() => ['/Users/apple/Projects/alpha'])
+    const deps = starter({ folders })
+    const create = remoteSessionCreator(deps)
+
+    await create({ deviceId: 'device-a', cwd: '/Users/apple/Projects/alpha' })
+    await create({ deviceId: 'device-b' })
+
+    expect(folders.mock.calls).toEqual([['device-a'], ['device-b']])
+  })
+
+  it('starts a session in a folder granted to that device', async () => {
+    const deps = twoPhones()
+    const outcome = await remoteSessionCreator(deps)({
+      deviceId: 'device-a',
+      cwd: '/Users/apple/Projects/alpha',
+    })
+    expect(outcome).toMatchObject({ ok: true })
+    expect(deps.spawn).toHaveBeenCalledWith(expect.objectContaining({ cwd: '/Users/apple/Projects/alpha' }))
+  })
+
+  it('refuses a folder granted to a different device', async () => {
+    // The one that would look like it works: `/Users/apple/Projects/beta` is a
+    // real folder, on this desktop, granted to a phone that is paired and
+    // approved — just not to the one asking.
+    const deps = twoPhones()
+    const outcome = await remoteSessionCreator(deps)({
+      deviceId: 'device-a',
+      cwd: '/Users/apple/Projects/beta',
+    })
+    expect(outcome).toMatchObject({ ok: false, code: 'unauthorized' })
+    expect(deps.spawn).not.toHaveBeenCalled()
+  })
+
+  it('sends each device to its own default when neither names a folder', async () => {
+    const deps = twoPhones()
+    const create = remoteSessionCreator(deps)
+    await create({ deviceId: 'device-a' })
+    await create({ deviceId: 'device-b' })
+
+    expect(deps.spawn.mock.calls.map(([input]) => input.cwd)).toEqual([
+      '/Users/apple/Projects/alpha',
+      '/Users/apple/Projects/beta',
+    ])
+  })
+
+  it('takes a folder away between two requests, with no reconnect in between', async () => {
+    // What the settings panel does: the same connection, the same creator, and
+    // a list that changed underneath it. Nothing here re-reads a snapshot,
+    // because there is no snapshot to re-read.
+    const granted = new Map([['device-a', ['/Users/apple/Projects/alpha']]])
+    const deps = starter({ folders: (deviceId) => granted.get(deviceId) ?? [] })
+    const create = remoteSessionCreator(deps)
+
+    expect((await create({ deviceId: 'device-a', cwd: '/Users/apple/Projects/alpha' })).ok).toBe(true)
+    granted.set('device-a', [])
+    expect((await create({ deviceId: 'device-a', cwd: '/Users/apple/Projects/alpha' })).ok).toBe(false)
+    expect(deps.spawn).toHaveBeenCalledTimes(1)
+  })
+})
+
+/**
+ * The list the phone is shown and the list it is held to are one list.
+ *
+ * A picker built from anywhere else eventually offers a folder that is refused
+ * on tap, and from the phone there is nothing to read that explains it.
+ */
+describe('the two halves handed out together', () => {
+  it('answers the picker with exactly what create will accept', async () => {
+    const deps = twoLists()
+    const start = remoteSessionStart(deps)
+
+    expect(start.folders('device-a')).toEqual(['/Users/apple/Projects/alpha'])
+    expect((await start.create({ deviceId: 'device-a', cwd: '/Users/apple/Projects/alpha' })).ok).toBe(true)
+    expect((await start.create({ deviceId: 'device-a', cwd: '/Users/apple/Projects/beta' })).ok).toBe(false)
+  })
+
+  it('asks the starter again each time, rather than caching a list', () => {
+    const folders = vi.fn(() => ['/Users/apple/Projects/alpha'])
+    const start = remoteSessionStart(starter({ folders }))
+    start.folders('device-a')
+    start.folders('device-a')
+    expect(folders).toHaveBeenCalledTimes(2)
+  })
+
+  function twoLists(): SessionStarter & { spawn: ReturnType<typeof vi.fn> } {
+    return starter({
+      folders: (deviceId) =>
+        deviceId === 'device-a' ? ['/Users/apple/Projects/alpha'] : ['/Users/apple/Projects/beta'],
+    })
+  }
 })
 
 describe('when it cannot start one', () => {
@@ -151,7 +285,7 @@ describe('when it cannot start one', () => {
       },
     })
     const quiet = vi.spyOn(console, 'error').mockImplementation(() => {})
-    const outcome = await remoteSessionCreator(failing)({})
+    const outcome = await remoteSessionCreator(failing)({ deviceId: PHONE })
     quiet.mockRestore()
 
     expect(outcome).toMatchObject({ ok: false, code: 'unavailable' })
@@ -161,7 +295,10 @@ describe('when it cannot start one', () => {
     // The value came off the network and the sentence goes back over it and
     // onto a screen. Quoting it buys nothing and costs an output channel.
     const deps = starter()
-    const outcome = await remoteSessionCreator(deps)({ cwd: '/etc/<script>alert(1)</script>' })
+    const outcome = await remoteSessionCreator(deps)({
+      deviceId: PHONE,
+      cwd: '/etc/<script>alert(1)</script>',
+    })
     expect(outcome.ok).toBe(false)
     if (!outcome.ok) expect(outcome.message).not.toContain('script')
   })
@@ -169,7 +306,10 @@ describe('when it cannot start one', () => {
 
 describe('the session it reports back', () => {
   it('is the real one, with the id the desktop gave it', async () => {
-    const outcome = await remoteSessionCreator(starter())({ cwd: '/Users/apple/Projects/imza' })
+    const outcome = await remoteSessionCreator(starter())({
+      deviceId: PHONE,
+      cwd: '/Users/apple/Projects/imza',
+    })
     expect(outcome).toEqual({
       ok: true,
       session: {
@@ -197,7 +337,7 @@ describe('the session it reports back', () => {
  */
 describe('a Windows desktop, where case is not a difference', () => {
   function windowsStarter(): SessionStarter & { spawn: ReturnType<typeof vi.fn> } {
-    return starter({ folders: () => ['C:\\Users\\Asad\\Projects\\deck'], home: () => 'C:\\Users\\Asad' })
+    return starter({ folders: () => ['C:\\Users\\Asad\\Projects\\deck'] })
   }
 
   it.each([
@@ -208,20 +348,20 @@ describe('a Windows desktop, where case is not a difference', () => {
     ['forward slashes, which Windows accepts', 'C:/Users/Asad/Projects/deck'],
   ])('accepts %s', async (_label, cwd) => {
     const deps = windowsStarter()
-    const outcome = await remoteSessionCreator(deps, 'win32')({ cwd, cols: 100, rows: 30 })
+    const outcome = await remoteSessionCreator(deps, 'win32')({ deviceId: PHONE, cwd, cols: 100, rows: 30 })
     expect(outcome.ok, `${cwd} was refused`).toBe(true)
-    expect(deps.spawn).toHaveBeenCalledWith({ cwd, cols: 100, rows: 30 })
+    expect(deps.spawn).toHaveBeenCalledWith({ cwd, cols: 100, rows: 30, deviceId: PHONE })
   })
 
   it('still refuses a folder nobody offered', async () => {
     const deps = windowsStarter()
-    const outcome = await remoteSessionCreator(deps, 'win32')({ cwd: 'C:\\Windows\\System32' })
+    const outcome = await remoteSessionCreator(deps, 'win32')({ deviceId: PHONE, cwd: 'C:\\Windows\\System32' })
     expect(outcome.ok).toBe(false)
     expect(deps.spawn).not.toHaveBeenCalled()
   })
 
   it('tells the reader about the machine they are actually using', async () => {
-    const outcome = await remoteSessionCreator(windowsStarter(), 'win32')({ cwd: 'C:\\Windows' })
+    const outcome = await remoteSessionCreator(windowsStarter(), 'win32')({ deviceId: PHONE, cwd: 'C:\\Windows' })
     expect(outcome.ok).toBe(false)
     // Sealed up and shown on a phone. "This Mac will not start a session" is a
     // sentence about a computer the reader does not own.
@@ -235,8 +375,11 @@ describe('a Windows desktop, where case is not a difference', () => {
     // The mirror of the case above, and the reason the fold is not unconditional:
     // folding here would let a phone name a *different* directory than the one
     // the desktop offered, which is the hole the allowlist exists to close.
-    const deps = starter({ folders: () => ['/Users/apple/Projects/Deck'], home: () => '/Users/apple' })
-    const outcome = await remoteSessionCreator(deps, 'darwin')({ cwd: '/users/apple/projects/deck' })
+    const deps = starter({ folders: () => ['/Users/apple/Projects/Deck'] })
+    const outcome = await remoteSessionCreator(deps, 'darwin')({
+      deviceId: PHONE,
+      cwd: '/users/apple/projects/deck',
+    })
     expect(outcome.ok).toBe(false)
     expect(deps.spawn).not.toHaveBeenCalled()
   })

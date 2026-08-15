@@ -1,12 +1,17 @@
 /* ============================================================================
-   Terminal ⇄ Chat — a macOS segmented control.
+   The mode switch — a macOS segmented control.
 
-   A recessed track with a raised, shadowed pill on the selected half. That
-   shape is Apple's, and it is doing the whole job here: no colour is involved,
-   because this is a mode, not a selection.
+   A recessed track with a raised, shadowed pill on the selected segment. That
+   shape is Apple's, and it does the whole job here: no colour is involved,
+   because this is a mode and not an action. The accent means "this is the
+   thing to press", and a control that is always on screen never is.
+
+   Inherited from the Terminal/Chat toggle this replaces, down to the dark-mode
+   inversion — the track is the darker surface there and the pill the lighter
+   one, so "raised" still reads as raised.
    ============================================================================ */
 
-.chat-toggle {
+.mode-switch {
   display: inline-flex;
   gap: 1px;
   padding: 2px;
@@ -14,7 +19,7 @@
   background: var(--fill-tertiary);
 }
 
-.ct-option {
+.ms-option {
   appearance: none;
   border: 0;
   border-radius: var(--radius-sm);
@@ -30,25 +35,23 @@
   transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
 
-.ct-option:hover {
+.ms-option:hover {
   color: var(--text-primary);
 }
 
-/* The raised half. In light it lifts to white; in dark the track is the darker
-   surface and the pill is the lighter one, so "raised" still means "lighter". */
-.ct-on,
-.ct-on:hover {
+.ms-on,
+.ms-on:hover {
   background: var(--bg-primary);
   color: var(--text-primary);
   box-shadow: var(--shadow-sm);
 }
 
-[data-theme='dark'] .ct-on,
-[data-theme='dark'] .ct-on:hover {
+[data-theme='dark'] .ms-on,
+[data-theme='dark'] .ms-on:hover {
   background: var(--bg-tertiary);
 }
 
-.ct-option:focus-visible {
+.ms-option:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }

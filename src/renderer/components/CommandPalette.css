@@ -119,6 +119,14 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  /* Symmetry, once there is enough to scroll. The scrollbar is styled rather
+     than left to the platform (see `app.css`), which on a Mac set to "always
+     show scrollbars" makes it take 11px out of the content box — on the right
+     only. The highlight was then inset 10px on its left and 20px on its right
+     in the same list, which reads as a rounding bug rather than as a scrollbar.
+     Reserving the gutter on both edges keeps the rows centred whether the list
+     scrolls or not. */
+  scrollbar-gutter: stable both-edges;
   overscroll-behavior: contain;
   list-style: none;
   margin: 0;

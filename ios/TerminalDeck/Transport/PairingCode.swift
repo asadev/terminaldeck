@@ -160,9 +160,9 @@ enum PairingCodeError: Error, Equatable {
     var detail: String {
         switch self {
         case .empty: return "Nothing to pair with yet."
-        case .notACode: return "That does not look like a pairing code. Scan the QR on the Mac, or paste the whole link."
-        case .badHostId: return "That code names a machine id this app cannot read. Generate a new code on the Mac."
-        case .badKey: return "That code carries a key of the wrong size, so the Mac could not be identified."
+        case .notACode: return "That does not look like a pairing code. Scan the QR on the desktop, or paste the whole link."
+        case .badHostId: return "That code names a machine id this app cannot read. Generate a new code on the desktop."
+        case .badKey: return "That code carries a key of the wrong size, so the desktop could not be identified."
         case .badRelay: return "That code points at a relay address this app cannot use."
         case .badToken: return "That code has no usable pairing token in it."
         }

@@ -1,5 +1,8 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { deliveryCopy } from './notification-check'
+import { BANNER_SETTINGS, deliveryCopy, turnedOnABanner } from './notification-check'
+import { SETTINGS } from './settings-schema'
 
 /**
  * The wording is the feature, so the wording is what is tested.
@@ -69,5 +72,63 @@ describe('deliveryCopy', () => {
     const proven = deliveryCopy({ verdict: 'delivered', at: '2026-08-14 09:52:11' }, 'enabled', 'mac')
     expect(proven.text).toMatch(/proven/i)
     expect(proven.tone).toBe('info')
+  })
+})
+
+/**
+ * The ask has to survive the settings window being rearranged.
+ *
+ * macOS asks for notification authorisation exactly once, with a banner whose
+ * Allow is hidden under `Options`. Fire it when nobody is looking and the
+ * feature is dead for good, in silence — so "the switch was flipped, therefore
+ * the OS was asked" is not a nicety, it is the only chance the feature gets.
+ *
+ * These switches have already moved between sections once. The guard below is
+ * deliberately the same shape as `wiring.test.ts`: it reads the section sources
+ * and fails the build if a section that draws a banner switch stops routing its
+ * saves through the ask.
+ */
+describe('turnedOnABanner', () => {
+  it('fires only when a banner setting is switched on', () => {
+    expect(turnedOnABanner({ 'general.notifyOnAttention': true })).toBe(true)
+    expect(turnedOnABanner({ 'notifications.onComplete': true })).toBe(true)
+  })
+
+  it('does not fire when one is switched off', () => {
+    // Posting a banner to announce that banners are off would be absurd, and
+    // would also burn the one prompt the OS ever gives us.
+    expect(turnedOnABanner({ 'general.notifyOnAttention': false })).toBe(false)
+    expect(turnedOnABanner({ 'notifications.onComplete': false })).toBe(false)
+  })
+
+  it('ignores every other setting, and a merely-present key', () => {
+    expect(turnedOnABanner({ 'general.autoNameSessions': true })).toBe(false)
+    expect(turnedOnABanner({})).toBe(false)
+    expect(turnedOnABanner({ 'notifications.onComplete': 'true' })).toBe(false)
+    expect(turnedOnABanner({ 'notifications.onComplete': undefined })).toBe(false)
+  })
+
+  it('names settings that actually exist', () => {
+    // A typo here fails open — nothing matches, nothing asks, and the only
+    // symptom is notifications quietly never working.
+    const known = new Set(SETTINGS.map((setting) => setting.id))
+    for (const id of BANNER_SETTINGS) expect(known.has(id)).toBe(true)
+  })
+})
+
+describe('the ask is wired to the switch, not to a button', () => {
+  const sections = ['sections/GeneralSection.tsx', 'sections/NotificationsSection.tsx']
+
+  it('every section drawing a banner switch routes its saves through the ask', () => {
+    const detached: string[] = []
+    for (const file of sections) {
+      const text = readFileSync(join(__dirname, file), 'utf8')
+      // The section hands `save` to <SettingList>. If it hands the raw `save`
+      // rather than the wrapper that asks, the switch still works and the OS is
+      // never asked — which is exactly the failure that shipped.
+      if (!text.includes('turnedOnABanner')) detached.push(`${file}: no longer asks the OS`)
+      if (!/save=\{saveAndProve\}/.test(text)) detached.push(`${file}: SettingList is not on the asking path`)
+    }
+    expect(detached).toEqual([])
   })
 })

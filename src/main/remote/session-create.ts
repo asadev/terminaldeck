@@ -10,14 +10,15 @@
  *
  * ## What the rule is
  *
- * A phone may name a folder **only if the desktop is already offering it**:
- * a project in the desktop's own list, or the working directory of a session
- * that has already been listed to that device. Two things follow, and both
- * matter more than the rule sounds:
+ * A device may name a folder **only if this desktop is offering that folder to
+ * that device**. The list is per device and comes from `folder-grants.ts`: the
+ * folders a person chose for this phone, or — when nobody has chosen for it —
+ * the desktop's own projects and running sessions, which is what every device
+ * used to get. Two things follow, and both matter more than the rule sounds:
  *
- *  - The phone has an honest source for the value. It is a row on screen, not a
- *    path someone typed, so a folder picker built from it cannot offer a choice
- *    that fails.
+ *  - The phone has an honest source for the value. The same array is sent to it
+ *    on connect, so a folder picker built from it cannot offer a choice that
+ *    fails.
  *  - Naming one grants nothing new. The device could already attach to a
  *    session in that folder and type into it, which is strictly more access
  *    than starting a fresh shell there.
@@ -28,8 +29,25 @@
  * project and it lands in their home directory.
  *
  * Naming no folder at all is the common case and is not a refusal — it means
- * "wherever you would have started one", which is what the desktop's own button
- * does with nothing filled in.
+ * "wherever you would have started one", which is the first folder on that
+ * device's list. An **empty** list is the one case where naming nothing is
+ * still refused: it means a person removed every folder from this device, and
+ * inventing a destination for it would undo the only thing they said.
+ *
+ * ## The request has to say who is asking
+ *
+ * `CreateRequest.deviceId` is required rather than optional, and that is the
+ * whole shape of the bug it closes. The connection has always known which
+ * device it is — `hello` proved it — and the request travelled down here
+ * without it, so this file could only ever answer "may *a* phone start a
+ * session here", never "may *this* phone". A required field means the compiler
+ * asks the question at every call site instead of a reviewer having to.
+ *
+ * ## What this is not
+ *
+ * It decides where a session **starts**. A shell that starts in a granted
+ * folder can `cd` anywhere the account can reach. Nothing here is a sandbox and
+ * no sentence this file sends may imply one.
  */
 
 import { posix, win32 } from 'node:path'
@@ -68,17 +86,34 @@ const DEFAULT_ROWS = 24
 
 export interface SessionStarter {
   /**
-   * Folders this desktop will start a session in, most relevant first.
+   * Folders this desktop will start a session in **for this device**, most
+   * relevant first, and the first of them is where a request that names nothing
+   * lands.
    *
-   * Called per request rather than captured once: projects are added and
-   * sessions come and go while a phone is connected, and a list snapshotted at
-   * startup would refuse a folder the user opened five minutes ago.
+   * Called per request rather than captured once, and the device id is passed
+   * every time rather than resolved once per connection. Both are the same
+   * point: grants are edited from the settings panel while a phone is
+   * connected, projects are opened and closed, and sessions come and go. A list
+   * snapshotted at startup would refuse a folder the user granted five minutes
+   * ago — and, worse in the other direction, would keep honouring a folder that
+   * was taken away until the phone reconnected.
+   *
+   * Empty is a real answer and means this device may start nothing. See
+   * `folder-grants.ts` for why that is not flattened into "anywhere".
    */
-  folders(): string[]
-  /** Where a request that named nothing goes, when there are no folders at all. */
-  home(): string
-  /** Start it for real. Throws exactly as `PtyManager.create` throws. */
-  spawn(input: { cwd: string; cols: number; rows: number }): Promise<SessionMeta>
+  folders(deviceId: string): string[]
+  /**
+   * Start it for real. Throws exactly as `PtyManager.create` throws.
+   *
+   * `deviceId` travels with it for the same reason it travels on the request —
+   * see the header — and for a second one that only appeared once credentials
+   * were involved. The session about to be spawned inherits this machine's git
+   * login unless it is given one of its own, and "of its own" is *per device*:
+   * which folder its global config lives in, and whose phone answers when git
+   * asks for a password. A spawn that did not know whose session it was starting
+   * could only give every remote session the same isolation, or none.
+   */
+  spawn(input: { cwd: string; cols: number; rows: number; deviceId: string }): Promise<SessionMeta>
 }
 
 /**
@@ -107,12 +142,26 @@ export interface SessionStarter {
  * than the one the desktop offered, which is the exact hole the allowlist
  * exists to close.
  */
-function samePath(a: string, b: string, platform: Platform = currentPlatform()): boolean {
+export function sameFolder(a: string, b: string, platform: Platform = currentPlatform()): boolean {
   const { normalize, sep } = rules(platform)
   const left = trimEnd(normalize(a), sep)
   const right = trimEnd(normalize(b), sep)
   if (!isWindows(platform)) return left === right
   return left.toLowerCase() === right.toLowerCase()
+}
+
+/**
+ * Is this a path the rule above can compare at all?
+ *
+ * Exported for the same reason {@link sameFolder} is: `folder-grants.ts` stores
+ * the list this file checks against, and a store that accepted a relative path
+ * would be putting a row in the panel that can never match anything — a folder
+ * visibly granted and permanently refused. The two questions have to be asked
+ * with one implementation or the stored list and the enforced list are two
+ * different sets that look like one.
+ */
+export function isAbsoluteFolder(path: string, platform: Platform = currentPlatform()): boolean {
+  return rules(platform).isAbsolute(path)
 }
 
 function trimEnd(path: string, sep: string): string {
@@ -137,24 +186,35 @@ export function remoteSessionCreator(
   platform: Platform = currentPlatform(),
 ): (request: CreateRequest) => Promise<CreateOutcome> {
   const here = `This ${machineNoun(platform)}`
-  const { isAbsolute } = rules(platform)
   return async (request: CreateRequest): Promise<CreateOutcome> => {
-    const offered = starter.folders()
+    const offered = starter.folders(request.deviceId)
+    const named = request.cwd
     let cwd: string
 
-    if (request.cwd === undefined) {
-      // The desktop's own default: the folder it would have opened. Its most
-      // recent project when it has one, and the user's home when it has none —
-      // which is a first launch, and is exactly the case where a phone starting
-      // a session is most useful.
-      cwd = offered[0] ?? starter.home()
+    if (named === undefined) {
+      // Where this device would have started one: the first folder on its own
+      // list. Nothing is invented when that list is empty, because an empty list
+      // is a person's answer rather than a gap — see the header.
+      const first = offered[0]
+      if (first === undefined) {
+        return {
+          ok: false,
+          code: 'unauthorized',
+          // Two refusals with two remedies, because they are two different
+          // situations to the person holding the phone. This one is "nothing
+          // has been shared with you", which no amount of retrying changes and
+          // which is fixed at the keyboard the folders live on.
+          message: `${here} has no folders chosen for this device. Choose one in its remote access settings.`,
+        }
+      }
+      cwd = first
     } else {
       // Absolute first: `normalize('projects/..')` is `'.'`, which would then be
       // compared against a list of absolute paths and lose for the wrong
       // reason. Refusing here says the true thing.
       if (
-        !isAbsolute(request.cwd) ||
-        !offered.some((folder) => samePath(folder, request.cwd as string, platform))
+        !isAbsoluteFolder(named, platform) ||
+        !offered.some((folder) => sameFolder(folder, named, platform))
       ) {
         return {
           ok: false,
@@ -163,10 +223,15 @@ export function remoteSessionCreator(
           // sentence is both sent over the wire and shown on a phone; quoting
           // attacker-chosen text into it buys nothing and costs an output
           // channel.
-          message: `${here} will not start a session in that folder. Open it there first.`,
+          //
+          // "Pick one from the list it sent" rather than "open it there first",
+          // which was true when every device got the same list and is not now:
+          // the honest instruction for a device whose folders were chosen for
+          // it is to use them, or to change them where they were chosen.
+          message: `${here} is not offering that folder to this device. Pick one from the list it sent.`,
         }
       }
-      cwd = request.cwd
+      cwd = named
     }
 
     try {
@@ -174,6 +239,7 @@ export function remoteSessionCreator(
         cwd,
         cols: request.cols ?? DEFAULT_COLS,
         rows: request.rows ?? DEFAULT_ROWS,
+        deviceId: request.deviceId,
       })
       return {
         ok: true,
@@ -201,5 +267,35 @@ export function remoteSessionCreator(
         message: `${here} could not start a session there. The folder may have moved.`,
       }
     }
+  }
+}
+
+/**
+ * The two halves of "a phone may start a session", built from one starter.
+ *
+ * `create` enforces the list and `folders` is the list, sent to the device so
+ * its picker shows exactly what it may use. They are handed out together
+ * because they must never be two answers: a picker offering a folder the rule
+ * refuses is the failure this feature exists to end, and it is exactly what
+ * happens the first time somebody assembles the advertised list from one place
+ * and the enforced list from another. There is one call, `starter.folders`,
+ * behind both.
+ *
+ * The shape is what `SessionAccess` in `server.ts` and `PtySource` in
+ * `session-fanout.ts` both want, so `index.ts` spreads this straight into the
+ * object it builds and cannot supply one without the other.
+ */
+export interface RemoteSessionStart {
+  create(request: CreateRequest): Promise<CreateOutcome>
+  folders(deviceId: string): string[]
+}
+
+export function remoteSessionStart(
+  starter: SessionStarter,
+  platform: Platform = currentPlatform(),
+): RemoteSessionStart {
+  return {
+    create: remoteSessionCreator(starter, platform),
+    folders: (deviceId) => starter.folders(deviceId),
   }
 }

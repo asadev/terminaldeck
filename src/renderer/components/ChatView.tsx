@@ -6,6 +6,7 @@ import { AgentControls } from '../chat/controls/AgentControls'
 import { UsageStrip, useTranscriptChanges } from '../chat/usage'
 import { useEvery } from '../schedule'
 import { useSessionTranscript, type SessionScope } from '../session-transcript'
+import type { ProviderId } from '@shared/types'
 import './ChatView.css'
 
 /**
@@ -87,6 +88,23 @@ export interface ChatViewProps {
   refreshMs?: number
   /** Injectable for tests; defaults to the preload bridge on `window.deck`. */
   bridge?: ChatBridge
+  /**
+   * What is actually running in this session.
+   *
+   * Everything below it — the empty state, the placeholder in the box, the
+   * model/effort/permission row — is written for an agent CLI, and half of it
+   * is a lie about a plain shell. A `/bin/zsh -l` sitting at its own prompt was
+   * being told that "a transcript is written once a session makes its first
+   * request", offered a `Model` of `Opus 5` read out of a settings file it has
+   * never heard of, and invited to "Message the agent…" when there is no agent
+   * in it. The app has always known which it is — `SessionMeta.provider` — the
+   * view simply never asked.
+   *
+   * Optional because two callers render this for a transcript rather than for a
+   * session, and those genuinely do not know; they get the agent wording, which
+   * is what they are.
+   */
+  provider?: ProviderId
 }
 
 /* ------------------------------------------------------------------ markdown */
@@ -272,6 +290,7 @@ export type ChatEmptyState =
   | 'silent'
   | 'no-project'
   | 'unwired'
+  | 'shell'
 
 export function ChatEmpty({ state }: { state: ChatEmptyState }) {
   const copy: Record<typeof state, { title: string; detail: string }> = {
@@ -300,6 +319,15 @@ export function ChatEmpty({ state }: { state: ChatEmptyState }) {
     unwired: {
       title: 'Chat is not wired into this build',
       detail: 'The transcript reader is missing from the preload bridge.',
+    },
+    // Not "no transcript yet", which implies one is coming. A shell writes no
+    // transcript, ever — there is no conversation to read, and saying "send a
+    // first message and it will appear here" would be a promise the session
+    // cannot keep.
+    shell: {
+      title: 'This session is a shell',
+      detail:
+        'A conversation is something an agent writes down as it works. A shell just runs what you type, so there is nothing here to read — the terminal is the whole session.',
     },
   }
   const { title, detail } = copy[state]
@@ -458,6 +486,7 @@ export function ChatView({
   transcriptPath,
   refreshMs = 2000,
   bridge,
+  provider,
 }: ChatViewProps) {
   const resolved = bridge ?? resolveBridge()
   const liveSessionId = useLiveSessionId(cwd, sessionId)
@@ -612,8 +641,14 @@ export function ChatView({
     if (stickRef.current) setBehind(false)
   }, [])
 
+  // A shell short-circuits every transcript state below it: there is no file to
+  // look for, so "Reading…" followed by "nothing yet" would be a search the app
+  // knows in advance will fail.
+  const shell = provider === 'shell'
+
   const state: ChatEmptyState | null =
-    !resolved ? 'unwired'
+    shell ? 'shell'
+    : !resolved ? 'unwired'
     : scoped && !target ? (lookup.status === 'loading' ? 'loading' : 'no-session-transcript')
     : key === '' ? 'no-project'
     : found === null ? 'loading'
@@ -623,41 +658,75 @@ export function ChatView({
 
   return (
     <div className="chat-view">
-      <div className="cv-scroll" ref={scrollRef} onScroll={onScroll}>
-        {state ? (
-          <ChatEmpty state={state} />
-        ) : (
-          <div className="cv-column">
-            {messages.map((message, i) => (
-              <ChatBubble
-                key={message.id}
-                message={message}
-                heading={dayBreak(message.at, i > 0 ? messages[i - 1].at : 0)}
-              />
-            ))}
-            <p className="cv-source" title={path}>
-              Read from the session transcript — prompts and replies only.
-            </p>
-          </div>
-        )}
+      {/* The stage is what "Jump to latest" is pinned to. It used to be pinned
+          to the whole pane, 20px off the bottom — which is inside the composer,
+          and behind it, since a positioned sibling that comes later wins. The
+          button was drawn on every scroll-back and could not be seen or
+          clicked. Anchoring it to the conversation puts it where it belongs:
+          floating over the last message, just above the box. */}
+      <div className="cv-stage">
+        <div className="cv-scroll" ref={scrollRef} onScroll={onScroll}>
+          {state ? (
+            <ChatEmpty state={state} />
+          ) : (
+            <div className="cv-column">
+              {messages.map((message, i) => (
+                <ChatBubble
+                  key={message.id}
+                  message={message}
+                  heading={dayBreak(message.at, i > 0 ? messages[i - 1].at : 0)}
+                />
+              ))}
+              <p className="cv-source" title={path}>
+                Read from the session transcript — prompts and replies only.
+              </p>
+            </div>
+          )}
+        </div>
+        {behind ? (
+          <button type="button" className="cv-jump" onClick={jump}>
+            Jump to latest
+          </button>
+        ) : null}
       </div>
-      {behind ? (
-        <button type="button" className="cv-jump" onClick={jump}>
-          Jump to latest
-        </button>
-      ) : null}
-      <ChatComposer onSend={onSend} cwd={cwd} />
-      {/* Under the composer, in the CLI's own order of importance: what is
-          answering, how hard it thinks, and what it may do without asking. */}
-      <AgentControls sessionId={liveSessionId} cwd={cwd} />
-      {/* Last line: what this has cost and how close the context is to full.
-          It sits below the controls because it reports rather than asks.
 
-          The transcript goes with it. Without one the strip falls back to the
-          project's most recently active session, which is how a tab that had
-          never been prompted came to report a "Session" spend of $48 and a
-          context 47% full — both belonging to somebody else's conversation. */}
-      <UsageStrip cwd={cwd} transcriptPath={target ?? undefined} sessionId={sessionId} />
+      {/* One box, with everything it needs inside it. The controls and the
+          usage readout used to be two more bands stacked under the composer —
+          three rows of chrome below the thing you type into. They are still
+          owned here (see `wiring.test.ts`: both shipped mounted nowhere once,
+          and that table is the guard), but they are handed to the composer to
+          draw on its own bottom row instead of hanging beneath it.
+
+          The transcript goes with the usage readout. Without one the strip
+          falls back to the project's most recently active session, which is how
+          a tab that had never been prompted came to report a "Session" spend of
+          $48 and a context 47% full — both belonging to somebody else's
+          conversation. */}
+      <ChatComposer
+        onSend={onSend}
+        cwd={cwd}
+        // What pressing Return actually does. For an agent it is a message; for
+        // a shell it is a command line, typed into the pty exactly as if it had
+        // been typed in the terminal view — so the box must not call it a
+        // message to an agent that is not there.
+        placeholder={shell ? 'Run a command in this shell…' : undefined}
+        controls={
+          <AgentControls
+            sessionId={liveSessionId}
+            cwd={cwd}
+            provider={provider}
+            // The usage strip reads a transcript. With none — a shell — it
+            // falls back to the project's most recent session, which is how a
+            // pane that had never been prompted came to report somebody else's
+            // spend. No transcript, no readout.
+            extra={
+              shell ? undefined : (
+                <UsageStrip cwd={cwd} transcriptPath={target ?? undefined} sessionId={sessionId} />
+              )
+            }
+          />
+        }
+      />
     </div>
   )
 }

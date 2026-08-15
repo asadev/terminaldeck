@@ -200,6 +200,16 @@
 
 /* ------------------------------------------------------------------ rows -- */
 
+/*
+  One measure for the whole list, not one per paragraph.
+
+  The measure used to live on `.readiness-detail`, which capped the *text* at
+  74ch and left the row itself running the full width of the pane — so a row's
+  Fix button sat about 45px to the right of the description column it belongs
+  to, hanging off the block it is an action for. Capping the list puts the
+  button's right edge and the prose's right edge on the same line, whether or
+  not a given row has a button.
+*/
 .readiness-list {
   grid-column: 2;
   display: flex;
@@ -207,6 +217,7 @@
   gap: var(--sp-05);
   margin: 0;
   padding: 0;
+  max-width: 84ch;
   list-style: none;
 }
 
@@ -272,12 +283,6 @@
   color: var(--text-primary);
 }
 
-/* Sentence case. Tracked-out capitals are a Notion idiom, and this is the same
-   word the glyph beside it already carries. */
-.readiness-status-label {
-  font-size: var(--t-footnote);
-  color: var(--text-muted);
-}
 
 .readiness-row[data-status='skip'] .readiness-title {
   color: var(--text-secondary);
@@ -292,7 +297,6 @@
 }
 
 .readiness-detail {
-  max-width: 74ch;
   margin: var(--sp-1) 0 0;
   font-size: var(--t-callout);
   line-height: var(--lh-body);

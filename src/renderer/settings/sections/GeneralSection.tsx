@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Notice, SectionHead, SettingList, type OptionState } from '../controls'
 import { sectionMeta } from '../settings-schema'
-import { useNotificationCheck } from '../notification-check'
+import { turnedOnABanner, useNotificationCheck } from '../notification-check'
 import {
   errorText,
   toPrerequisites,
@@ -50,11 +50,14 @@ export function GeneralSection({ values, save, bridge, loading, goTo }: SectionP
    * they just flipped — see `notification-check.ts`. This switch lives in
    * General and the test button lives in Notifications, so without this the
    * user could turn banners on here and never once be in front of the prompt.
+   *
+   * `turnedOnABanner` rather than this section's own id, so that a switch
+   * moving between sections cannot detach the ask from the switch.
    */
   const saveAndProve = useCallback(
     (patch: Record<string, unknown>) => {
       save(patch)
-      if (patch['general.notifyOnAttention'] === true) check.confirmEnabled()
+      if (turnedOnABanner(patch)) check.confirmEnabled()
     },
     [save, check],
   )

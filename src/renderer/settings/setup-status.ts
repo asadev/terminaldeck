@@ -215,8 +215,32 @@ export const NO_VERSION = 'version not reported'
 export const NO_VERSION_HINT =
   'Found on PATH, but it did not answer when asked for its version — usually a broken or partial install.'
 
-export function toolVersionLabel(tool: { state: ToolState; version?: string }): string | null {
-  if (tool.version) return tool.version
+/**
+ * A `--version` line says more than a version, and the extra is usually the
+ * tool's own name.
+ *
+ * `claude --version` prints `2.1.233 (Claude Code)`, so a row headed
+ * "Claude Code" read **Claude Code  2.1.233 (Claude Code)** — the product named
+ * twice on one line, with the second one in the mono face reserved for data.
+ * Only a trailing parenthetical that repeats the label is dropped; a
+ * parenthetical saying something else (a build tag, a channel) is information
+ * and stays.
+ */
+function trimRepeatedName(version: string, label?: string): string {
+  if (!label) return version
+  const match = /^(.*?)\s*\(([^()]*)\)$/.exec(version)
+  if (!match) return version
+  const normalise = (text: string): string => text.toLowerCase().replace(/[^a-z0-9]/g, '')
+  if (normalise(match[2]) !== normalise(label)) return version
+  return match[1].trim() || version
+}
+
+export function toolVersionLabel(tool: {
+  state: ToolState
+  version?: string
+  label?: string
+}): string | null {
+  if (tool.version) return trimRepeatedName(tool.version, tool.label)
   // Nothing was found to ask, so there is nothing to report and no finding.
   if (tool.state === 'missing') return null
   return NO_VERSION
