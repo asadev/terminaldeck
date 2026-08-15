@@ -43,7 +43,7 @@
  */
 
 import { readFileSync, existsSync, statSync } from 'node:fs'
-import { dirname, relative, resolve } from 'node:path'
+import { dirname, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
@@ -107,7 +107,14 @@ describe('the files app.terminaldeck.dev is built from', () => {
   it('are all inside what /.vercelignore uploads', () => {
     const allowed = allowlist()
     const missing = graph()
-      .map((file) => relative(repo, file))
+      // `/` on every platform, because the thing being compared is a
+      // `.vercelignore` line — and that file uses forward slashes wherever it is
+      // read from. `relative()` follows the host instead, so on Windows every
+      // path arrived as `pwa\src\backoff.ts`, matched no prefix, and this
+      // assertion reported all 24 files as missing from a list that already
+      // named them. It failed only on the runner that builds the Windows
+      // installer, about a file that Vercel reads on Linux.
+      .map((file) => relative(repo, file).split(sep).join('/'))
       .filter((path) => !allowed.some((prefix) => path === prefix || path.startsWith(`${prefix}/`)))
       .sort()
 
@@ -125,7 +132,10 @@ describe('the files app.terminaldeck.dev is built from', () => {
     // rather than something that appears in a bundle. Adding to this list is a
     // fine thing to do; doing it without noticing is not.
     const crossings = graph()
-      .map((file) => relative(repo, file))
+      // Same separator fold as above, and for the same reason: this list is
+      // written with `/` because that is how the paths appear everywhere they
+      // matter — the ignore file, the imports, the repository.
+      .map((file) => relative(repo, file).split(sep).join('/'))
       .filter((path) => !path.startsWith('pwa/'))
       .sort()
 

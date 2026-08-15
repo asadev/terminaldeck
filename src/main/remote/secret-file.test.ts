@@ -89,7 +89,16 @@ const WINDOWS = {
   account: 'asad',
 } as const
 
-describe('on POSIX, which must not change', () => {
+/*
+ * POSIX only, and skipped rather than adapted.
+ *
+ * These pin that macOS and Linux keep the exact 0600-file-in-a-0700-folder they
+ * had before Windows ACLs existed. Windows synthesises a mode — every
+ * read-write file reports 0666 — so running them there does not check a weaker
+ * version of the same thing, it checks a number the filesystem invented. The
+ * Windows behaviour has its own cases below, driven through an injected runner.
+ */
+describe.skipIf(process.platform === 'win32')('on POSIX, which must not change', () => {
   it('writes the file 0600 inside a 0700 folder', () => {
     const dir = join(tempDir(), 'nested')
     const file = join(dir, 'machines.json')
