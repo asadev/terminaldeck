@@ -18,7 +18,14 @@ import {
   type HttpFetch,
   type HttpResponse,
 } from './github-auth'
-import { APP_CLIENT_ID_ENV, APP_SLUG_ENV } from './github-app'
+import {
+  APP_CLIENT_ID_ENV,
+  APP_SLUG_ENV,
+  FORCE_OAUTH_ENV,
+  GITHUB_APP,
+  NO_REGISTRATION,
+  type GitHubAppRegistration,
+} from './github-app'
 import { userReposUrl, type RepoAccessList } from './github-repos'
 import type { BranchRef, GitHubFailure, RepoRef } from './github'
 import type { Platform } from './platform/host'
@@ -190,6 +197,25 @@ function make(options: {
   now?: () => number
   /** Windows only where a test is about Windows; everything else is a Mac. */
   platform?: Platform
+  /**
+   * The registration compiled into the build under test.
+   *
+   * Defaulted to `NO_REGISTRATION`, and that default is load-bearing rather
+   * than lazy. Most of this file is about things that have nothing to do with
+   * which client signs in — scopes, caching, precedence, redaction, the
+   * repository list — and every one of those tests was written against the
+   * OAuth wire shape: a `scope` in the device-code body, `/user/repos` for the
+   * listing, the GitHub CLI's borrowed id. When a real registration landed in
+   * `github-app.ts`, all of them silently flipped to the GitHub App shape and
+   * nine of them failed, several with errors ("no fake route for
+   * /user/installations") that said nothing about the cause.
+   *
+   * So the registration is stated here instead of inherited. Tests about the
+   * app path opt in — through `env`, or by passing `GITHUB_APP` to assert what
+   * a shipping build actually does — and nothing in this file can be broken
+   * again by editing a constant it never mentions.
+   */
+  appRegistration?: GitHubAppRegistration
 }): GitHubAuthenticator {
   return new GitHubAuthenticator({
     storageDir: options.dir ?? tempDir(),
@@ -198,6 +224,7 @@ function make(options: {
     // precedence test below.
     env: options.env ?? {},
     platform: options.platform ?? 'darwin',
+    appRegistration: options.appRegistration ?? NO_REGISTRATION,
     http: options.fetch ?? http([userRoute('repo, read:org, notifications')]).fetch,
     gh: options.gh ?? ghMissing,
     now: options.now,
@@ -580,6 +607,12 @@ function flowRoutes(options: {
 }
 
 describe('the device-code flow', () => {
+  /**
+   * The OAuth branch of this — `borrowedClient: true` is the GitHub CLI's id,
+   * which is what a build with no registration falls back to. The GitHub App
+   * branch has its own test further down; both are named here rather than left
+   * to whichever one the shipping constant happens to select.
+   */
   it('hands back a code to show before anything is signed in', async () => {
     const auth = make({ fetch: http(flowRoutes({ pending: 1 })).fetch })
     const prompt = await auth.connect()
@@ -587,6 +620,7 @@ describe('the device-code flow', () => {
     expect(prompt).toMatchObject({
       userCode: USER_CODE,
       verificationUri: 'https://github.com/login/device',
+      clientKind: 'oauth',
       borrowedClient: true,
     })
     expect((await auth.status()).pending?.userCode).toBe(USER_CODE)
@@ -678,6 +712,10 @@ describe('the device-code flow', () => {
       storageDir: tempDir(),
       env: {},
       platform: 'darwin',
+      // Stated rather than inherited, for the reason `make` gives: this test is
+      // about the poll interval and nothing else, so it must not change shape
+      // when the shipping registration does.
+      appRegistration: NO_REGISTRATION,
       gh: ghMissing,
       resolveRepo: async () => REPO,
       sleep: async (ms) => void waits.push(ms),
@@ -737,21 +775,50 @@ describe('the device-code flow', () => {
    * nothing pointing at the id, which is how "the OAuth app is gone" gets
    * reported for months as "GitHub said no".
    */
+  const notFound = [
+    (call: Call): HttpResponse | null =>
+      call.url === deviceCodeUrl('github.com')
+        ? response(404, JSON.stringify({ error: 'Not Found' }))
+        : null,
+  ]
+
   it('names the OAuth client when GitHub will not start a flow at all', async () => {
-    const auth = make({
-      fetch: http([
-        (call) =>
-          call.url === deviceCodeUrl('github.com')
-            ? response(404, JSON.stringify({ error: 'Not Found' }))
-            : null,
-      ]).fetch,
-    })
+    const auth = make({ fetch: http(notFound).fetch })
     const result = await auth.connect()
 
     expect('ok' in result && result.ok === false).toBe(true)
     const failure = result as GitHubFailure
     expect(failure.kind).toBe('auth-unavailable')
     expect(failure.message).toContain('TERMINALDECK_GITHUB_CLIENT_ID')
+  })
+
+  /**
+   * The same 404, down the path that now ships, needs a different sentence —
+   * and this is the single most valuable one in the module.
+   *
+   * A GitHub App with **Enable Device Flow** unticked answers *byte for byte*
+   * like an app that does not exist: HTTP 404 `{"error":"Not Found"}`. That
+   * checkbox is one click on a settings page nobody revisits, it can be saved
+   * wrong or reverted, and from the response there is no way to tell "you
+   * mistyped the id" from "the box came unticked". Telling the user to check
+   * both is the only honest thing available, and it is why the registration was
+   * verified against the live endpoint by hand rather than assumed
+   * (`github-app.ts` holds the recorded response).
+   *
+   * Pointing at `TERMINALDECK_GITHUB_CLIENT_ID` here — the OAuth override —
+   * would send somebody to configure a variable that this path does not read.
+   */
+  it('names the app and the Device Flow checkbox when the app path fails', async () => {
+    const auth = make({
+      appRegistration: GITHUB_APP,
+      fetch: http(notFound).fetch,
+    })
+    const failure = (await auth.connect()) as GitHubFailure
+
+    expect(failure.kind).toBe('auth-unavailable')
+    expect(failure.message).toContain(GITHUB_APP.clientId as string)
+    expect(failure.message).toContain('Enable Device Flow')
+    expect(failure.message).not.toContain('TERMINALDECK_GITHUB_CLIENT_ID')
   })
 
   it('cancelling leaves nothing behind and nothing signed in', async () => {
@@ -884,6 +951,7 @@ describe('no token ever leaves this module', () => {
       storageDir: tempDir(),
       env: { GH_TOKEN },
       platform: 'darwin',
+      appRegistration: NO_REGISTRATION,
       gh: ghMissing,
       http: http([userRoute('repo')]).fetch,
       resolveRepo: async () => REPO,
@@ -916,6 +984,7 @@ describe('registerGitHubAuthIpc', () => {
       storageDir: tempDir(),
       env: {},
       platform: 'darwin',
+      appRegistration: NO_REGISTRATION,
       gh: ghMissing,
       http: http([userRoute('repo')]).fetch,
       resolveRepo: async () => REPO,
@@ -941,6 +1010,7 @@ describe('registerGitHubAuthIpc', () => {
       storageDir: tempDir(),
       env: {},
       platform: 'darwin',
+      appRegistration: NO_REGISTRATION,
       gh: ghMissing,
       sleep: async () => undefined,
       http: http(flowRoutes({ final: response(200, JSON.stringify({ error: 'access_denied' })) }))
@@ -1090,23 +1160,161 @@ describe('what the consent screen is asked for', () => {
   })
 
   /**
-   * The shipping default, and the reason `github-app.ts` ships with a null
-   * client id: an invented one is a Connect button that reaches GitHub, gets a
-   * 404 that does not name the id, and can never succeed.
+   * And it cannot come back through the other door either.
+   *
+   * The scope list is only half of where `read:org` could reappear. The path
+   * that ships is the GitHub App one, whose device-code request carries no
+   * `scope` at all — so a `scope` string turning up in *that* body would be
+   * both a resurrected `read:org` and a request GitHub has to reconcile against
+   * two permission models at once. Checking only `REQUESTED_SCOPES` would have
+   * left the wire unguarded on the branch users actually take.
    */
-  it('signs in through the OAuth client while no GitHub App is registered', async () => {
+  it('sends no scope whatsoever down the path that ships', async () => {
+    const { fetch, calls } = http(flowRoutes({}))
+    const auth = make({ appRegistration: GITHUB_APP, fetch })
+    await auth.connect()
+
+    const started = calls.find((call) => call.url.endsWith('/login/device/code'))
+    expect(started?.body).toBe(`client_id=${GITHUB_APP.clientId}`)
+    expect(started?.body).not.toContain('scope')
+    expect(started?.body).not.toContain('read%3Aorg')
+  })
+
+  /**
+   * Which client signs in, on both branches, said out loud.
+   *
+   * This test used to assert only the first half and call it "the shipping
+   * default", which was true right up until a registration existed — at which
+   * point it was asserting the opposite of what users get. Both halves are
+   * pinned now, each against a registration passed in rather than read off a
+   * constant, so neither can be quietly inverted by an edit to `github-app.ts`.
+   */
+  it('signs in through the OAuth client when no GitHub App is registered', async () => {
     const auth = make({ gh: ghWith(GH_TOKEN), fetch: http([userRoute('repo'), reposRoute()]).fetch })
     const state = await auth.status()
 
     expect(state.clientKind).toBe('oauth')
     expect(state.appConfigured).toBe(false)
+    // Nothing to link to: there is no app to install.
     expect(state.installUrl).toBeNull()
+    // And the consent screen will say "GitHub CLI", which the panel prints.
     expect(state.borrowedClient).toBe(true)
+  })
+
+  /**
+   * What a user who downloads the app actually gets, asserted against the real
+   * registration rather than an `Iv23liEXAMPLE` stand-in — because the install
+   * URL is built from the real slug and a wrong one is a button that opens a
+   * GitHub 404.
+   */
+  it('signs in as this app, not the GitHub CLI, in a shipping build', async () => {
+    const auth = make({
+      appRegistration: GITHUB_APP,
+      gh: ghWith(GH_TOKEN),
+      // `/user/installations`, not `/user/repos`: a GitHub App user-to-server
+      // token cannot use the account endpoint, and the unrouted-request throw
+      // in this file's transport is what would catch it going to the wrong one.
+      fetch: http([
+        userRoute(null),
+        (call) =>
+          call.url.startsWith('https://api.github.com/user/installations')
+            ? response(200, JSON.stringify({ total_count: 0, installations: [] }))
+            : null,
+      ]).fetch,
+    })
+    const state = await auth.status()
+
+    expect(state.clientKind).toBe('github-app')
+    expect(state.appConfigured).toBe(true)
+    expect(state.borrowedClient).toBe(false)
+    expect(state.installUrl).toBe('https://github.com/apps/terminal-deck/installations/new')
+  })
+
+  /**
+   * The escape hatch, at the level a user meets it.
+   *
+   * A GitHub App only ever sees repositories it was installed on, so somebody
+   * who ticks three of their forty needs a way back that is not "edit the
+   * source and rebuild". Setting it drops to the OAuth client — but it does not
+   * pretend the registration vanished: `appConfigured` stays true and the
+   * install link is still known, because the honest state is "there is an app,
+   * you asked not to use it".
+   */
+  it('drops back to OAuth when the force-OAuth variable is set', async () => {
+    const auth = make({
+      appRegistration: GITHUB_APP,
+      env: { [FORCE_OAUTH_ENV]: '1' },
+      gh: ghWith(GH_TOKEN),
+      fetch: http([userRoute('repo'), reposRoute()]).fetch,
+    })
+    const state = await auth.status()
+
+    expect(state.clientKind).toBe('oauth')
+    expect(state.borrowedClient).toBe(true)
+    expect(state.appConfigured).toBe(true)
+    expect(state.installUrl).toBe('https://github.com/apps/terminal-deck/installations/new')
   })
 })
 
 describe('the GitHub App path, once a registration exists', () => {
   const APP_ENV = { [APP_CLIENT_ID_ENV]: 'Iv23liEXAMPLE', [APP_SLUG_ENV]: 'terminal-deck' }
+
+  /**
+   * The real thing, offline.
+   *
+   * On 2026-08-16 this exact request was sent to github.com through
+   * `GitHubAuthenticator.connect()` with a recording transport, and this exact
+   * body came back:
+   *
+   *     POST https://github.com/login/device/code
+   *     client_id=Iv23limkNV4N6mChRl60
+   *     → 200 {"device_code":"3d0cf1759c7e976f0297aa34a35989776b7ae884",
+   *            "user_code":"E9EE-04C7",
+   *            "verification_uri":"https://github.com/login/device",
+   *            "expires_in":899,"interval":5}
+   *
+   * The flow was cancelled before its first poll: starting one is the proof,
+   * finishing it would have minted a real user token. The live check itself
+   * cannot be a test — an assertion that needs the network fails on an offline
+   * runner, which is worse than not having it — so the response is preserved
+   * here as a fixture instead, and what this pins is that our parsing turns
+   * *that* body into the right prompt. `expires_in: 899` and `interval: 5` are
+   * GitHub's real numbers, not the round ones an invented fixture would use.
+   */
+  it('turns the live registration’s real answer into a prompt', async () => {
+    const captured = {
+      device_code: '3d0cf1759c7e976f0297aa34a35989776b7ae884',
+      user_code: 'E9EE-04C7',
+      verification_uri: 'https://github.com/login/device',
+      expires_in: 899,
+      interval: 5,
+    }
+    const clock = Date.parse('2026-08-16T10:00:00Z')
+    const { fetch, calls } = http([
+      (call) =>
+        call.url === deviceCodeUrl('github.com') ? response(200, JSON.stringify(captured)) : null,
+      (call) =>
+        call.url.endsWith('/login/oauth/access_token')
+          ? response(200, JSON.stringify({ error: 'authorization_pending' }))
+          : null,
+    ])
+    const auth = make({ appRegistration: GITHUB_APP, fetch, now: () => clock })
+    const prompt = await auth.connect()
+    await auth.cancelConnect()
+
+    expect(calls[0]?.body).toBe('client_id=Iv23limkNV4N6mChRl60')
+    expect(prompt).toEqual({
+      userCode: 'E9EE-04C7',
+      verificationUri: 'https://github.com/login/device',
+      // 899 seconds on from the clock, so an expiry is read off GitHub's answer
+      // rather than defaulted to the 900 in the code.
+      expiresAt: clock + 899_000,
+      scopes: [],
+      borrowedClient: false,
+      clientKind: 'github-app',
+      installUrl: 'https://github.com/apps/terminal-deck/installations/new',
+    })
+  })
 
   /**
    * A GitHub App device-code request carries no `scope`. Its permissions are

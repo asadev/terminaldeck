@@ -45,10 +45,16 @@
  * select repositories" choice made at install time, read back.
  *
  * Those two endpoints are implemented from GitHub's REST reference and have
- * **not** been run against a live GitHub App, because no registration exists
- * yet (`github-app.ts` says why). Every other fixture in this feature was
- * captured from the real API; these two were not, and the first person to
- * configure a registration should check them rather than trust them.
+ * **still not been run against a live GitHub App installation.** A registration
+ * exists as of 2026-08-16 and its device flow is verified (`github-app.ts` has
+ * the recorded response), but verifying *these* needs a user-to-server token,
+ * which needs somebody to approve a device code and install the app — neither
+ * of which an automated check may do on its own. Every other fixture in this
+ * feature was captured from the real API; these two were not, and the first
+ * person to complete a GitHub App sign-in should check them rather than trust
+ * them. The likeliest wrong guess is the shape of
+ * `/user/installations/{id}/repositories`, since `total_count` there is read as
+ * exact below.
  *
  * There is deliberately no fallback from the installation endpoints to
  * `/user/repos`: if the app path is in use and its listing fails, that failure

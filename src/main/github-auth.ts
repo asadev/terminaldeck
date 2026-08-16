@@ -40,19 +40,17 @@
  *
  * ## The OAuth client is borrowed, and the UI says so
  *
- * The device flow needs a registered OAuth application. This project does not
- * have one yet, so the default client id below is the GitHub CLI's — a public
+ * The device flow needs a registered client. This project had none of its own
+ * to start with, so the fallback client id below is the GitHub CLI's — a public
  * identifier, printed in an open-source binary, with no client secret involved
  * (the device flow has none by design). It works: the constant was verified
  * against the live endpoint rather than copied from memory, and the fixtures in
  * the test file are that response.
  *
- * What it costs is honesty about identity: GitHub's consent screen will say
+ * What it costs is honesty about identity: GitHub's consent screen says
  * "GitHub CLI", not this app's name. That is not something to hide behind a
  * spinner, so `borrowedClient` is part of the status and the panel prints the
- * sentence. Registering an OAuth app and setting `TERMINALDECK_GITHUB_CLIENT_ID`
- * (or changing the constant) makes both the caveat and the sentence disappear
- * on their own.
+ * sentence.
  *
  * ## Two client kinds, and the one that lets the user choose repositories
  *
@@ -64,15 +62,25 @@
  * design, not an oversight here.
  *
  * The mechanism that *does* give per-repository choice is a **GitHub App**, and
- * this module can sign in through one: same device flow, same endpoints, no
+ * this module signs in through one: same device flow, same endpoints, no
  * `scope` parameter, because a GitHub App's permissions come from its
  * registration and its repository list comes from what the user ticked when
- * they installed it. `github-app.ts` holds that registration — currently empty,
- * because creating one requires a human clicking through github.com, and an
- * invented client id would be a Connect button that can never succeed. So the
- * OAuth path stays the shipping default and the app path switches itself on the
- * moment a real client id is configured. `clientKind` is on the status, and the
- * panel says which one is in force.
+ * they installed it. `github-app.ts` holds that registration, and **as of
+ * 2026-08-16 it holds a real one** — verified against the live device-code
+ * endpoint through this class's own `connect()`, with the response recorded
+ * there. So `github-app` is now what a shipping build does, and the OAuth path
+ * is the fallback: for a fork or an enterprise host with no registration of its
+ * own, and for anyone who sets `TERMINALDECK_GITHUB_FORCE_OAUTH` because a
+ * GitHub App can only ever see repositories it was installed on. `clientKind`
+ * is on the status, and the panel says which one is in force.
+ *
+ * Both paths stay exercised by the tests, and neither of them reads the
+ * shipping constant to decide what to expect — `appRegistration` on the options
+ * is the seam. Thirteen tests broke the hour a real client id landed because
+ * they had been pinning "the constant is still null" while believing they were
+ * pinning "the OAuth path is the default", and a module whose tests depend on a
+ * shipping constant having a particular value is a module that breaks the day
+ * it ships.
  *
  * ## Nothing here prints a token
  *
@@ -108,7 +116,9 @@ import {
   appInstallUrl,
   clientKindFor,
   githubAppRegistration,
+  GITHUB_APP,
   type ClientKind,
+  type GitHubAppRegistration,
 } from './github-app'
 import { readAccessibleRepos, type RepoAccess } from './github-repos'
 import { currentPlatform, machineNoun, withPath, type Platform } from './platform/host'
@@ -274,10 +284,15 @@ export interface GitHubAuthState {
   /** Which registration a sign-in from here would run through. */
   clientKind: ClientKind
   /**
-   * True when a real GitHub App registration exists in this build. False is the
-   * shipping state and is said on screen: the panel explains that
-   * per-repository access is not on offer *yet* rather than leaving the user to
-   * wonder why GitHub asked for everything.
+   * True when a real GitHub App registration exists in this build, which since
+   * 2026-08-16 is the shipping state.
+   *
+   * It is a separate fact from `clientKind`, not a duplicate of it: setting
+   * `TERMINALDECK_GITHUB_FORCE_OAUTH` gives `clientKind: 'oauth'` with this
+   * still true, and the two mean different things on screen. False is what a
+   * fork or an enterprise build reports, and the panel says so — "per-repository
+   * access is not on offer yet" is a fact the user can act on, where a missing
+   * option with no explanation just reads as a broken app.
    */
   appConfigured: boolean
   /**
@@ -581,6 +596,18 @@ export interface GitHubAuthOptions {
   platform?: Platform
   host?: string
   clientId?: string
+  /**
+   * The GitHub App registration compiled into this build. Defaults to the real
+   * one in `github-app.ts`, which is what the app itself gets.
+   *
+   * It is an option purely so that "what happens with no registration" is still
+   * askable now that one ships — pass `NO_REGISTRATION` for it. Before this
+   * existed, every test that meant "the OAuth path is what runs without an app"
+   * was really asserting "the module constant is still null", and all of them
+   * turned red the hour a client id was pasted in. The seam costs one line and
+   * makes the two branches independently testable forever.
+   */
+  appRegistration?: GitHubAppRegistration
   http?: HttpFetch
   gh?: GhRun
   now?: () => number
@@ -645,15 +672,20 @@ export class GitHubAuthenticator {
      * working while letting a registration take over the moment there is one.
      *
      * An explicit `clientId` option is a test or an embedder pinning a value
-     * and always wins. Otherwise a configured GitHub App is preferred, because
-     * it is the grant that lets the user choose repositories. `clientKindFor`
-     * returns `oauth` whenever there is no registration — which is today —
-     * so the shipping behaviour is byte-for-byte what it was, and the app path
-     * cannot switch itself on against a client id nobody registered.
+     * and always wins, and it forces the OAuth shape — an id somebody handed us
+     * by hand is not a GitHub App registration, and sending a GitHub App device
+     * request for it would drop the `scope` the id actually needs.
+     *
+     * Otherwise a configured GitHub App is preferred, because it is the grant
+     * that lets the user choose repositories. `clientKindFor` returns `oauth`
+     * only when there is no registration at all or the force-OAuth escape hatch
+     * is set, so a build with a registration — which is every shipping build
+     * since 2026-08-16 — signs in as this app rather than as the GitHub CLI.
      */
-    const registration = githubAppRegistration(this.env)
+    const built = options.appRegistration ?? GITHUB_APP
+    const registration = githubAppRegistration(this.env, built)
     const explicitClient = (options.clientId ?? '').trim()
-    this.clientKind = explicitClient ? 'oauth' : clientKindFor(this.env)
+    this.clientKind = explicitClient ? 'oauth' : clientKindFor(this.env, built)
     this.appConfigured = registration.clientId !== null
     this.installUrl = appInstallUrl(registration.slug, this.host)
     this.clientId =
