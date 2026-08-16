@@ -10,6 +10,8 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-08-16
+
 ### Changed
 
 - **A pairing code is six digits.** No dashes, no letters, one method. The
@@ -28,9 +30,11 @@ A release with nothing under Unreleased is refused rather than shipped blank.
   space being swept — without it, five guesses would buy nothing because an
   attacker would never need a second one.
 
-- **Machines and Remote are one section.** Everything the Machines panel could do
-  now lives in Settings → Remote, beside the phones, because they are the same
-  subject: devices paired with this machine.
+- **Machines and Remote are one section**, in the rail where Machines was. They
+  were the same subject — devices paired with this machine — described in two
+  places. It went to Settings first, which was the wrong half to keep: pairing a
+  device is something you do, standing at two keyboards, not something you
+  configure once.
 - **The "Direct on your tailnet" card is gone.** The relay is the network.
 - **Overview is a live board of running sessions** — what each agent is doing,
   how long it has been doing it, and which one is waiting on you. Deliberately no
@@ -48,6 +52,26 @@ A release with nothing under Unreleased is refused rather than shipped blank.
   the reason on the row: its token lives in one keychain slot no config directory
   moves, so a second login would overwrite the first rather than sit beside it.
 - About 900 words of on-screen prose removed, with every warning kept.
+
+- **Start the dev server behind a localhost link**, from the desktop or a phone.
+  Per project, because that is what is true — one global button would have to
+  guess which of four checkouts you meant. "Ready" means something accepted a TCP
+  connection, not that a process started or a log line matched.
+- **Sessions can be dragged into the top strip** — the strip was built and
+  nothing in the app was draggable, so it looked finished and did nothing.
+  Promote and demote also work from a row toggle and ⌥←/⌥→.
+- **A session can be renamed**, and an auto-derived title can no longer overwrite
+  the name you typed.
+- **Light and dark in the web client**, following the system by default.
+- Menus close each other. The Options menu stopped repeating the two chips beside
+  it.
+
+### Removed
+
+- **The GitHub notifications bell.** GitHub's notifications endpoints accept only
+  classic personal access tokens; a GitHub App user token is not one, and no
+  permission can be added to change that. Sign-in is the GitHub App and nothing
+  else now — the classic OAuth path went with it.
 
 ### Fixed
 
