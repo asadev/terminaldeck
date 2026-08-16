@@ -1,12 +1,12 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import * as panelModule from './GitHubPanel'
 import {
   AccessNotice,
   accessSummary,
   bridgeSilentState,
   ConnectionBar,
   ConnectPage,
-  consentWording,
   countLabel,
   DeviceCodeCard,
   FailureBlock,
@@ -15,13 +15,11 @@ import {
   formatAge,
   IssueRow,
   minutesLeft,
-  missingScopeCost,
   openExternal,
   PullRow,
   RepositoryList,
   repoFailed,
   reviewLabel,
-  scopeBuys,
   selectionSentence,
   showsAction,
   sourceSentence,
@@ -328,17 +326,15 @@ const CONNECTED: GitHubAuthState = {
     htmlUrl: 'https://github.com/asadev',
     avatarUrl: 'https://avatars.githubusercontent.com/u/1?v=4',
   },
-  // A token from a `gh auth login`, which still carries `read:org` even though
-  // this app stopped asking for it — that is what puts a scope under "Also
-  // granted" rather than under "Used here".
+  // A `gh auth login` token, which reports whatever scopes that login happens
+  // to carry. Nothing here asks GitHub for scopes any more, so this is a fact
+  // the card shows rather than a list measured against a request.
   scopes: ['repo', 'read:org', 'notifications'],
   scopesReported: true,
-  missingScopes: [],
   ghInstalled: true,
-  borrowedClient: true,
-  clientKind: 'oauth',
-  appConfigured: false,
-  installUrl: null,
+  credentialKind: 'oauth',
+  appConfigured: true,
+  installUrl: 'https://github.com/apps/terminal-deck/installations/new',
   disconnect: 'Deletes the sign-in this app stored.',
   pending: null,
   failure: null,
@@ -369,10 +365,7 @@ const PROMPT: DeviceFlowPrompt = {
   userCode: 'E874-5342',
   verificationUri: 'https://github.com/login/device',
   expiresAt: NOW + 14 * 60_000,
-  scopes: ['repo', 'notifications'],
-  borrowedClient: true,
-  clientKind: 'oauth',
-  installUrl: null,
+  installUrl: 'https://github.com/apps/terminal-deck/installations/new',
 }
 
 const noop = () => {}
@@ -385,7 +378,6 @@ function bar(state: GitHubAuthState, confirming = false): string {
       onAskDisconnect={noop}
       onDisconnect={noop}
       onKeep={noop}
-      onReconnect={noop}
     />,
   )
 }
@@ -413,23 +405,6 @@ describe('sourceSentence', () => {
   })
 })
 
-describe('scopes, in the user’s terms', () => {
-  it('says what each requested scope buys, and nothing about ones we did not ask for', () => {
-    expect(scopeBuys('repo')).toContain('private')
-    expect(scopeBuys('notifications')).toContain('unread')
-    // A `gist` scope arrives on plenty of real `gh auth login` tokens. Showing
-    // it is honest; claiming to know why it is there is not.
-    expect(scopeBuys('gist')).toBeNull()
-  })
-
-  it('says what a missing scope costs, not just that it is missing', () => {
-    expect(missingScopeCost('notifications')).toContain('unread count')
-    expect(missingScopeCost('repo')).toContain('Private repositories')
-    expect(missingScopeCost('gist')).toContain('gist')
-    expect(missingScopeCost('repo')).not.toBe(missingScopeCost('read:org'))
-  })
-})
-
 describe('ConnectionBar', () => {
   it('names the account and every scope GitHub reported', () => {
     const html = bar(CONNECTED)
@@ -445,39 +420,40 @@ describe('ConnectionBar', () => {
    */
   it('does not report an unreported scope list as an empty one', () => {
     const html = bar({ ...CONNECTED, scopes: [], scopesReported: false })
-    expect(html).toContain('fine-grained')
+    expect(html).toContain('GitHub App sign-in')
     expect(html).not.toContain('gh-conn-scopes-label')
   })
 
-  it('names the missing permission and what it costs', () => {
-    const html = bar({
-      ...CONNECTED,
-      source: 'gh-cli',
-      scopes: ['repo', 'read:org'],
-      missingScopes: ['notifications'],
-    })
-    expect(html).toContain('Missing one permission')
-    expect(html).toContain('notifications')
-    expect(html).toContain('unread count')
-    expect(html).toContain('Sign in again')
+  /**
+   * Scopes are shown, not graded.
+   *
+   * There used to be a "Missing one permission" block with a re-authorise
+   * button under it, driven by comparing a token's scopes against the list this
+   * app requested. It requests none — a GitHub App device request carries no
+   * `scope` at all — so the comparison had one answer for every token ever
+   * issued, and the button could not have granted anything. What is left is one
+   * labelled run of what GitHub reported.
+   */
+  it('grades nothing, because nothing is asked for', () => {
+    const html = bar({ ...CONNECTED, source: 'gh-cli', scopes: ['repo', 'read:org'] })
+    expect(html).toContain('Granted')
+    expect(html).toContain('repo')
+    expect(html).not.toContain('Missing')
+    expect(html).not.toContain('Sign in again')
+    // And no second run to sort them into: "Also granted" with nothing before
+    // it is a label describing a distinction that no longer exists.
+    expect(html).not.toContain('Also granted')
+    expect(html).not.toContain('Used here')
   })
 
   /**
-   * The dead-control case. `gh` and this panel both prefer `GH_TOKEN`, so a
-   * fresh sign-in would be stored, shadowed, and never used — a button here
-   * would do nothing at all, visibly.
+   * The dead-control case, which survives the removal above: this process
+   * cannot unset a variable in the shell that launched it, and a Disconnect
+   * that silently does nothing is worse than none.
    */
-  it('offers no re-sign-in when the credential comes from the environment', () => {
-    const html = bar({
-      ...CONNECTED,
-      source: 'environment',
-      disconnect: null,
-      missingScopes: ['notifications'],
-    })
-    expect(html).not.toContain('Sign in again')
+  it('offers no Disconnect when the credential comes from the environment', () => {
+    const html = bar({ ...CONNECTED, source: 'environment', disconnect: null })
     expect(html).toContain('GH_TOKEN')
-    // Nor a Disconnect: this process cannot unset a variable in the shell that
-    // launched it, and a button that silently does nothing is worse than none.
     expect(html).not.toContain('gh-conn-action')
     expect(html).toContain('Nothing to disconnect')
   })
@@ -515,18 +491,29 @@ describe('DeviceCodeCard', () => {
       <DeviceCodeCard prompt={prompt} now={NOW} onCopy={onCopy} onOpen={noop} onCancel={noop} />,
     )
 
-  it('shows the code, where to type it, and what is being asked for', () => {
+  it('shows the code, where to type it, and what is about to be asked', () => {
     const html = render()
     expect(html).toContain('E874-5342')
     expect(html).toContain('https://github.com/login/device')
-    expect(html).toContain('repo, notifications')
+    expect(html).toContain('which repositories')
     expect(html).toContain('Cancel')
   })
 
-  /** Borrowed OAuth client: the consent screen says GitHub CLI, so we do too. */
-  it('warns that the consent screen names somebody else', () => {
-    expect(render()).toContain('GitHub CLI')
-    expect(render({ ...PROMPT, borrowedClient: false })).not.toContain('GitHub CLI')
+  /**
+   * The card no longer apologises for the name on GitHub's page.
+   *
+   * It used to, and it had to: the OAuth path signed in with the GitHub CLI's
+   * public client id, so the consent screen said "GitHub CLI" rather than this
+   * app's name. That path is gone, the screen names this app, and a warning
+   * about somebody else's would now be false.
+   */
+  it('does not warn about a consent screen naming somebody else', () => {
+    expect(render()).not.toContain('GitHub CLI')
+  })
+
+  /** No scope list either: a GitHub App request carries none to print. */
+  it('never renders an empty "asking for" list', () => {
+    expect(render()).not.toContain('Asking for')
   })
 
   it('counts the code down and says when it is dead', () => {
@@ -624,6 +611,39 @@ describe('ConnectPage', () => {
     })
     expect(notARepo).toContain('not a git repository')
     expect(notARepo).toContain('Connect to GitHub')
+  })
+
+  /**
+   * A build with no GitHub App registered cannot start a sign-in, so it is not
+   * offered one.
+   *
+   * This is the case the deleted OAuth fallback used to absorb: with nothing
+   * registered it borrowed the GitHub CLI's client id and signed the user in as
+   * another application. There is nothing to send now, so a Connect button here
+   * would reach GitHub, take a 404 that names nothing, and do it again every
+   * time it was pressed — the "looks clickable, does nothing" failure this
+   * codebase puts first. The failure's own sentence carries the two real ways
+   * out, and the permissions block is withheld because there are no permissions
+   * about to be asked for.
+   */
+  it('offers no Connect button in a build with no registration', () => {
+    const html = render({
+      ...DISCONNECTED,
+      appConfigured: false,
+      installUrl: null,
+      failure: {
+        ok: false,
+        kind: 'not-authenticated',
+        message:
+          'This build has no GitHub App registered, so there is nothing here to sign in through. Run gh auth login in a terminal and this app will use it, or set TERMINALDECK_GITHUB_APP_CLIENT_ID to a registration of your own.',
+        action: 'gh auth login',
+        detail: '',
+      },
+    })
+    expect(html).not.toContain('Connect to GitHub')
+    expect(html).toContain('no GitHub App registered')
+    expect(html).toContain('TERMINALDECK_GITHUB_APP_CLIENT_ID')
+    expect(html).not.toContain('What this asks for')
   })
 
   it('says so when a dead stored sign-in was cleaned up on the way past', () => {
@@ -728,46 +748,35 @@ describe('folderLine', () => {
  * The block that exists because of a screenshot: GitHub's page said "Full
  * control of private repositories" and there was no way to pick which ones.
  * These assertions are about the words, because the words are the fix.
+ *
+ * The screen it warned about was the OAuth path's, and that path is gone. What
+ * the block says now is what the one remaining consent screen actually shows,
+ * which is a repository picker — and it still renders *before* the button,
+ * because the point was never the wording, it was that nobody arrives at
+ * GitHub's page surprised.
  */
 describe('AccessNotice', () => {
   const render = (state: GitHubAuthState) =>
     renderToStaticMarkup(<AccessNotice state={state} />)
 
-  it('prints GitHub’s own wording before the button is pressed', () => {
-    expect(consentWording('repo')).toBe('Full control of private repositories')
-    const html = render(DISCONNECTED)
-    expect(html).toContain('Full control of private repositories')
-    expect(html).toContain('Access notifications')
+  it('promises the repository choice the sign-in actually offers', () => {
+    const html = render({ ...DISCONNECTED, appConfigured: true })
+    expect(html).toContain('only select repositories')
+    expect(html).toContain('Choose repositories on GitHub')
   })
 
   /**
-   * Softening it would be worse than saying nothing — the user is thirty
-   * seconds from reading GitHub's own page. What the app owes them is the
-   * reason: GitHub offers no narrower scope, and the thing that would change
-   * it is a GitHub App registration this build does not have.
+   * And it never says the sentence the OAuth grant made it say. `repo` is a
+   * single all-or-nothing grant over every private repository the account can
+   * reach, write included, and GitHub renders it exactly this way — printing it
+   * now would describe a consent screen this app cannot produce.
    */
-  it('says why there is no repository picker, and what would give one', () => {
-    const html = render(DISCONNECTED)
-    expect(html).toContain('no narrower scope')
-    expect(html).toContain('GitHub App')
-    expect(html).toContain('does not have yet')
-  })
-
-  it('does not ask for anything this app stopped using', () => {
-    expect(render(DISCONNECTED)).not.toContain('read:org')
-  })
-
-  /** With a registration the sentence is the opposite one: you choose. */
-  it('promises a repository choice once a GitHub App is registered', () => {
-    const html = render({
-      ...DISCONNECTED,
-      clientKind: 'github-app',
-      appConfigured: true,
-      installUrl: 'https://github.com/apps/terminal-deck/installations/new',
-    })
-    expect(html).toContain('only select repositories')
-    expect(html).toContain('Choose repositories on GitHub')
+  it('no longer warns about a whole-account grant it cannot ask for', () => {
+    const html = render({ ...DISCONNECTED, appConfigured: true })
     expect(html).not.toContain('Full control of private repositories')
+    expect(html).not.toContain('no narrower scope')
+    expect(html).not.toContain('Access notifications')
+    expect(html).not.toContain('read:org')
   })
 })
 
@@ -919,5 +928,46 @@ describe('RepositoryList', () => {
    */
   it('explains an empty list instead of showing a blank page', () => {
     expect(render({ ...ACCESS, repos: [], atLeast: 0 })).toContain('cannot reach any repositories')
+  })
+})
+
+/* --------------------------------------------------- the bell, removed -- */
+
+/**
+ * The notifications bell is gone from this panel, and this is what fails if it
+ * comes back.
+ *
+ * Not a taste decision. GitHub's reference for its notifications endpoints
+ * carries the note, verbatim: *"These endpoints only support authentication
+ * using a personal access token (classic)."* This app signs in through a GitHub
+ * App and nothing else, so the credential it holds is refused by the endpoint
+ * itself — there is no permission to tick and no scope to ask for. The feature
+ * could not work, so it is not on screen as an empty count or as a standing
+ * error explaining itself.
+ *
+ * The header is where it lived: a count beside the refresh button, tinted with
+ * the accent when something was waiting on this repository.
+ */
+describe('the notifications bell', () => {
+  it('is not part of this module’s surface any more', () => {
+    expect(Object.keys(panelModule).filter((name) => /notification/i.test(name))).toEqual([])
+  })
+
+  /**
+   * And no failure kind describes its absence. `notifications-unsupported`
+   * existed only to say "GitHub will not serve the bell to this sign-in", which
+   * is a sentence about a feature that is no longer there — and it had a
+   * headline in `FAILURE_TITLE` that would render for any payload still
+   * carrying the kind.
+   */
+  it('has no failure headline left to render', () => {
+    const html = renderToStaticMarkup(
+      <FailureBlock
+        failure={{ ok: false, kind: 'error', message: 'x', action: null, detail: '' }}
+        onRetry={noop}
+      />,
+    )
+    expect(html).not.toContain('Notifications')
+    expect(html).not.toContain('classic sign-in')
   })
 })

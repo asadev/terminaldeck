@@ -115,6 +115,37 @@ Ticked items were applied directly by me because no agent held the file.
       step will produce a signed-but-not-notarized build while Apple's hold
       lasts, and flip back by changing that variable alone.
 
+## Found by Asad testing the local build — both confirmed in code
+
+- [ ] **Nothing can be dragged into the tab strip.** The strip renders and accepts
+      drops; the sidebar was never made a drag *source*. `Sidebar.tsx` has no
+      `draggable` and never calls `startTabDrag` — confirmed by grep, so this is
+      unfinished wiring rather than a bug. The contract it must use is already
+      written and tested in `shell/workspace-tabs.ts` (`TAB_DRAG_MIME`,
+      `startTabDrag`), and the strip's drop side is done. Three lines, blocked
+      only because `Sidebar.tsx` was owned by another agent at the time — and
+      then not closed, which is why he found it.
+
+- [ ] **Remote belongs in the sidebar, where Machines was — not inside Settings.**
+      His words: *"the remote page I asked you to keep it in the side panel, same
+      as machines we had before, at the same placement — I want remote, not
+      inside that settings."*
+
+      This is a decision of mine that was wrong, not a missed instruction. He
+      asked for Machines and Remote to be *one* thing; I merged them into
+      Settings → Remote and deleted the rail entry. But pairing a device is
+      something you **do**, not something you configure once — which is why
+      Machines was in the rail to begin with. `remote` is not in `panels.ts` at
+      all today.
+
+      The move: add `remote` to `PanelId` and `PANELS` (in the `foot` group,
+      where `machines` sat, beside Alerts), render it from `PanelView.tsx`, and
+      leave Settings → Remote as the *settings* about remote access if anything
+      genuinely settings-shaped remains — the pairing UI, device list and machine
+      sessions go to the panel. One live pairing code is minted by one desk in
+      the main process, so exactly one screen may show it: whichever surface
+      keeps the code, the other must not mint a second.
+
 ## Coupling to preserve, not a task
 
 - `src/renderer/dashboard/useBoard.ts` imports `useTranscriptChanges` from

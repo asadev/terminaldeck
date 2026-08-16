@@ -3,15 +3,16 @@
  *
  * ## The screen that started it
  *
- * Pressing Connect sends the user to GitHub's consent page, and that page says
- * **"Full control of private repositories"** with no way to choose which ones.
- * That is not a wording problem this app can fix by asking more politely: an
- * OAuth application's `repo` scope is a single all-or-nothing grant over every
- * private repository the account can reach, present and future, with write
- * included. GitHub offers no read-only private-repository scope and no
- * per-repository OAuth scope — `public_repo` exists, and it excludes exactly
- * the repositories a work machine cares about. So an OAuth app that wants to
- * list pull requests on a private repo has to ask for all of them.
+ * Pressing Connect used to send the user to GitHub's *OAuth* consent page, and
+ * that page said **"Full control of private repositories"** with no way to
+ * choose which ones. That is not a wording problem this app could have fixed by
+ * asking more politely: an OAuth application's `repo` scope is a single
+ * all-or-nothing grant over every private repository the account can reach,
+ * present and future, with write included. GitHub offers no read-only
+ * private-repository scope and no per-repository OAuth scope — `public_repo`
+ * exists, and it excludes exactly the repositories a work machine cares about.
+ * So an OAuth app that wanted to list pull requests on a private repo had to
+ * ask for all of them.
  *
  * ## What actually gives per-repository choice
  *
@@ -28,6 +29,22 @@
  *    change shape: same endpoints, same code on screen, minus the `scope`
  *    parameter, because permissions come from the registration rather than
  *    from the request.
+ *
+ * ## There is one way to sign in, and this is it
+ *
+ * Until 2026-08-16 this sat behind an OAuth path that borrowed the GitHub CLI's
+ * public client id, kept as a fallback for builds with no registration of their
+ * own. That fallback is gone. It was two consent screens, two grant shapes, two
+ * repository-listing endpoints and a switch between them, all to keep alive a
+ * sign-in whose own consent screen said the wrong app's name and asked for
+ * everything the account could reach. A build with no registration now says so
+ * — see `APP_UNCONFIGURED_REASON` — rather than quietly signing the user in as
+ * somebody else's application.
+ *
+ * A fork or an enterprise host registers its own app and points this build at
+ * it with `TERMINALDECK_GITHUB_APP_CLIENT_ID` and `TERMINALDECK_GITHUB_APP_SLUG`.
+ * That is the only override there is, and the steps below are written for
+ * whoever is about to use it.
  *
  * ## The registration exists now, and this file stopped being a plan
  *
@@ -54,8 +71,8 @@
  * 1.  github.com → profile photo → **Settings** → **Developer settings** →
  *     **GitHub Apps** → **New GitHub App**.
  * 2.  **GitHub App name**: `Terminal Deck` (names are global). This is the name
- *     the consent screen shows instead of "GitHub CLI", which is the whole
- *     reason the OAuth path was worth leaving.
+ *     the consent screen shows. The OAuth path it replaced showed "GitHub CLI",
+ *     because that is whose client id it borrowed.
  * 3.  **Homepage URL**: `https://terminaldeck.dev`.
  * 4.  **Callback URL**: `https://terminaldeck.dev/oauth/callback`. The field is
  *     required; the device flow never visits it.
@@ -142,9 +159,8 @@ export interface GitHubAppRegistration {
  *
  * ## Verified live, by hand, on 2026-08-16
  *
- * Checked rather than assumed, for the same reason `github-auth.ts` checked the
- * borrowed CLI client id: a client id GitHub does not know, and a registration
- * with **Enable Device Flow** left unticked, both answer HTTP 404
+ * Checked rather than assumed, because a client id GitHub does not know, and a
+ * registration with **Enable Device Flow** left unticked, both answer HTTP 404
  * `{"error":"Not Found"}` with nothing that names the cause. "The checkbox did
  * not save" is therefore invisible from the response, and the only way to know
  * is to start a flow.
@@ -183,8 +199,8 @@ export const GITHUB_APP: GitHubAppRegistration = {
  * The absence of a registration, as a value.
  *
  * Every function below took the registration off the module constant, which was
- * fine for exactly as long as that constant was null: the tests that pin "no
- * registration ⇒ the OAuth path" were really pinning "the constant is still
+ * fine for exactly as long as that constant was null: the tests that pin "what
+ * happens with no registration" were really pinning "the constant is still
  * empty", and thirteen of them broke the hour a real client id landed. A module
  * whose tests depend on a shipping constant having a particular value is a
  * module that breaks the day it ships.
@@ -196,23 +212,19 @@ export const GITHUB_APP: GitHubAppRegistration = {
  */
 export const NO_REGISTRATION: GitHubAppRegistration = { clientId: null, slug: null }
 
+/**
+ * The two overrides a fork needs, and the only two there are.
+ *
+ * A fork, or an enterprise host, registers its own GitHub App by following the
+ * steps in the header and points this build at it with these — no rebuild, no
+ * source edit. There used to be a third variable, `TERMINALDECK_GITHUB_CLIENT_ID`,
+ * naming an *OAuth* application; it is gone with the path that read it, because
+ * an OAuth client id sent through a GitHub App device request would be a
+ * request with no `scope` for an id that requires one, which GitHub answers with
+ * a 404 that names nothing.
+ */
 export const APP_CLIENT_ID_ENV = 'TERMINALDECK_GITHUB_APP_CLIENT_ID'
 export const APP_SLUG_ENV = 'TERMINALDECK_GITHUB_APP_SLUG'
-
-/**
- * The escape hatch that keeps the old path reachable once a registration
- * exists.
- *
- * Set it and the app signs in through the OAuth client even when a GitHub App
- * is configured. It is here because the two grants are not interchangeable: a
- * GitHub App can only see repositories it has been installed on, so somebody
- * who installs it on three repositories and then wonders where the other forty
- * went needs a way back that is not "edit the source and rebuild".
- */
-export const FORCE_OAUTH_ENV = 'TERMINALDECK_GITHUB_FORCE_OAUTH'
-
-/** Which kind of client a sign-in is running through. */
-export type ClientKind = 'oauth' | 'github-app'
 
 function clean(value: string | null | undefined): string | null {
   const trimmed = (value ?? '').trim()
@@ -231,9 +243,7 @@ function clean(value: string | null | undefined): string | null {
  * built-in rather than clearing it. That is deliberate: `TERMINALDECK_…=` with
  * nothing after it is what an empty shell variable or an unset value in a
  * launcher plist looks like, and reading that as "disable the GitHub App" would
- * turn a stray export into a silent downgrade to whole-account OAuth access.
- * `TERMINALDECK_GITHUB_FORCE_OAUTH` is the switch for wanting that, and it says
- * so by name.
+ * turn a stray export into a build that cannot sign in at all.
  *
  * A slug with no client id is deliberately *not* a registration: the slug only
  * builds a link, and offering "install this app" for an app that cannot then be
@@ -257,25 +267,6 @@ export function githubAppConfigured(
 }
 
 /**
- * Which client a fresh sign-in should use.
- *
- * The GitHub App wins whenever one is registered, because it is strictly the
- * better grant for this product: the user chooses which repositories it may
- * see, the consent screen names this app rather than the GitHub CLI, and the
- * permissions are the ones on the registration instead of a `repo` scope that
- * means "everything, including write". As of 2026-08-16 a registration ships,
- * so `github-app` is the shipping answer and `oauth` is the fallback for a
- * build without one — the reverse of how this started.
- */
-export function clientKindFor(
-  env: NodeJS.ProcessEnv = process.env,
-  built: GitHubAppRegistration = GITHUB_APP,
-): ClientKind {
-  if (clean(env[FORCE_OAUTH_ENV])) return 'oauth'
-  return githubAppConfigured(env, built) ? 'github-app' : 'oauth'
-}
-
-/**
  * Where the user picks which repositories the app may see.
  *
  * `github.com` is not hardcoded: an enterprise host serves the same path, and
@@ -292,18 +283,18 @@ export function appInstallUrl(slug: string | null, host = 'github.com'): string 
 }
 
 /**
- * What to say when somebody asks why the fine-grained path is not on offer.
+ * What a build with no registration says when Connect is pressed.
  *
- * A sentence rather than a silent absence: "this build has no GitHub App
- * registered" is a fact the user can act on — or at least understand — and a
- * missing option with no explanation reads as a broken app.
+ * It used to be a note about a feature that was merely unavailable, because
+ * there was an OAuth fallback underneath it that would sign the user in anyway.
+ * There is not any more, so this is the whole answer: without a registration
+ * this app has nothing to send GitHub, and the sentence says what to do instead
+ * rather than leaving a button that can only ever fail.
  *
- * Since 2026-08-16 this is no longer the shipping case; it is what a fork or an
- * enterprise build says, and what any build says under
- * `TERMINALDECK_GITHUB_APP_CLIENT_ID=` pointing nowhere. `GitHubPanel.tsx`
- * builds the equivalent sentence inline off `state.appConfigured` rather than
- * importing this, so nothing in the app renders this string today — it is kept
- * as the wording, not as a live code path.
+ * `gh auth login` is named because it genuinely works — an existing GitHub CLI
+ * login is still picked up and used, and it is the one way into a fork's build
+ * that needs nothing registered at all. The environment variable is named
+ * second because it is the permanent fix for whoever maintains that fork.
  */
 export const APP_UNCONFIGURED_REASON =
-  'This build has no GitHub App registered, so per-repository access is not available yet. Signing in uses an OAuth app, and GitHub only offers whole-account access there.'
+  'This build has no GitHub App registered, so there is nothing here to sign in through. Run gh auth login in a terminal and this app will use it, or set TERMINALDECK_GITHUB_APP_CLIENT_ID to a registration of your own.'

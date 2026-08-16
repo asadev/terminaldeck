@@ -1,4 +1,5 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
+import { useOneMenu } from '../../shell/one-menu'
 import type { ControlId, ControlOption, ControlReading } from './catalog'
 import { displayValue, isCurrent, sourceNote, unreadNote } from './catalog'
 
@@ -43,6 +44,17 @@ export function ControlPicker({ control, name, reading, options, reach, busy, di
   const [above, setAbove] = useState(true)
   const rootRef = useRef<HTMLDivElement>(null)
   const menuId = useId()
+  const close = useCallback(() => setOpen(false), [])
+
+  /*
+   * Opening this shuts every other menu in the window, and this is the picker
+   * that made the rule necessary. It sits *inside* `.agent-controls`, which is
+   * the element the Options panel measures its own outside-clicks against — so
+   * pressing Model or Permission with that panel open was a click inside the
+   * panel, the panel stayed, and this menu opened over the top of it. That is
+   * the overlap in the recording. See `one-menu.ts`.
+   */
+  useOneMenu(open, close)
 
   // Close on an outside click or Escape. Both are needed: a popover that only
   // closes on Escape traps the pointer, and one that only closes on click

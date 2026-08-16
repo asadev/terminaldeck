@@ -58,14 +58,18 @@ describe('the table itself', () => {
 describe('remote access is not in the store', () => {
   /*
    * Every surface remote owns, named the way the app names it: the Remote
-   * settings section — which absorbed the old Machines page, so remote owns no
-   * panel at all any more — and Power, the desk-side half of the same feature,
+   * *panel* in the rail — it was briefly a settings section after the Machines
+   * merge and has moved back, because pairing a device is something you do
+   * rather than configure — and Power, the desk-side half of the same feature,
    * because keeping the machine awake is what makes a session survive the lid
    * closing, and reaching it from a phone is why you would want that.
    */
   it('claims none of its settings sections', () => {
-    expect(featureOwningSection('remote')).toBeNull()
     expect(featureOwningSection('power')).toBeNull()
+  })
+
+  it('claims no panel of its own, including the one it moved back to', () => {
+    expect(featureOwningPanel('remote')).toBeNull()
   })
 
   it('claims no command belonging to it', () => {

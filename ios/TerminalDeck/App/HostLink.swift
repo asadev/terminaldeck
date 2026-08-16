@@ -199,6 +199,32 @@ final class HostLink: Identifiable {
         connection.isLive && (transport?.capabilities.contains(WireCapability.upload) ?? false)
     }
 
+    /**
+     * Whether git on this machine may ask **this phone** for a login.
+     *
+     * The one capability that runs backwards, so this is not a button being
+     * gated — it is whether a sentence on the session sheet is true. A machine
+     * that never advertised `credential` will never ask, and telling somebody
+     * their GitHub account answers pushes from a machine that cannot ask would
+     * be a promise nothing here can keep.
+     */
+    var canAskForGitLogins: Bool {
+        connection.isLive && (transport?.capabilities.contains(WireCapability.credential) ?? false)
+    }
+
+    /**
+     * Whether this machine will discuss its projects' dev servers.
+     *
+     * Its own capability rather than part of `canBrowseLocalhost`, and the two
+     * genuinely come apart: every desktop can tunnel a port, while starting a
+     * dev server needs a session layer that can start a session *and* a folder
+     * this device was granted. A host can offer either without the other, and
+     * the public demo box offers neither.
+     */
+    var canUseDevServers: Bool {
+        connection.isLive && (transport?.capabilities.contains(WireCapability.devserver) ?? false)
+    }
+
     var endpointSummary: String { credential.endpoint.summary }
 
     /**
@@ -270,6 +296,13 @@ final class HostLink: Identifiable {
         // The host's scan spawns `lsof`; polling it from a phone in a pocket
         // would run that on somebody's laptop every few seconds forever.
         if canBrowseLocalhost { transport?.send(.ports) }
+        // Pull-to-refresh, and nothing else, asks these again. A dev server's
+        // changes are *pushed* — see `askDevServers` — so a timer here would be
+        // this app polling a question the desktop is already answering, which is
+        // the one thing the frame's own documentation asks clients not to do.
+        // What a pull genuinely fixes is a folder whose reply was lost with a
+        // socket the app has since replaced.
+        askDevServers()
     }
 
     /// Take this machine down without forgetting it — the app is closing, or the
@@ -281,6 +314,10 @@ final class HostLink: Identifiable {
         transport = nil
         sessions = []
         ports = []
+        // The subscription these rows were kept alive by belonged to the socket
+        // that is being dropped. Keeping them would leave a `starting` spinner
+        // over a folder nothing is going to report on again.
+        devServers = [:]
         lastActivity = [:]
         // Back to "this machine has not said", not to "this machine granted
         // nothing". The grant belongs to a live connection, and remembering an
@@ -419,6 +456,120 @@ final class HostLink: Identifiable {
     func closeLocalhost() {
         tunnel?.stop()
         tunnel = nil
+    }
+
+    // MARK: - Dev servers
+
+    /**
+     * One row per project folder, **keyed by the folder the desktop named**.
+     *
+     * A dictionary rather than an array because of the one rule this feature
+     * cannot get wrong: a `dev.state` **replaces** the row for its folder and
+     * never merges into it. The fields on a report are not independent — `port`
+     * and `url` exist only on `ready`, `message` only on `failed` — so a merge
+     * leaves a dead address sitting under a live row, which the protocol calls
+     * the one genuinely wrong thing a client of this frame can display. A
+     * subscript assignment cannot do anything else, which is why it is a
+     * dictionary of whole values rather than a mutable row somebody updates.
+     *
+     * The key is the desktop's spelling of the folder, taken off the frame,
+     * never the string this phone sent: the two can differ by a trailing
+     * separator or by case on Windows and still be the same directory. That
+     * matches, because every folder this app can name came out of
+     * `welcome.folders` — the desktop's own list — so the string it sends and
+     * the string that comes back are the same string.
+     *
+     * Cleared with the connection, deliberately: pushes stop when the socket
+     * does, so a `starting` row kept across a drop would spin forever
+     * describing a moment that has passed.
+     */
+    private(set) var devServers: [String: DevServerReport] = [:]
+
+    /**
+     * How many folders this connection will ask about.
+     *
+     * The desktop's `MAX_DEV_FOLDERS`, mirrored. It is not a display limit: the
+     * desktop *answers* a `dev.status` for any granted folder but only
+     * **subscribes** the first eight, so a ninth would get one reply and then go
+     * quiet — a row that says `starting` and never changes again, which is worse
+     * than a row that is not there. Asking for what will be pushed keeps every
+     * row on screen live.
+     */
+    static let maxDevFolders = 8
+
+    /**
+     * The folders this phone will ask about, in the order the desktop offered
+     * them — most relevant first, which is what makes the cap land on the ones
+     * least likely to be looked at.
+     *
+     * Read from `granted` rather than from `startableFolders`, and the
+     * difference matters only in the case that should never happen. Those two
+     * are the same list whenever a machine has said anything about folders;
+     * where they differ is the fallback, which invents a list out of the working
+     * directories of sessions this phone can see. That fallback is right for the
+     * New Session picker — it is what a desktop older than per-device grants
+     * would have accepted — and it is wrong here, because this capability is
+     * authorised against the grant list and nothing else. A machine that somehow
+     * advertised `devserver` without sending a grant would be asked about
+     * folders it never offered, and every one of those questions comes back as
+     * an `unauthorized` error banner on the session list. Nil means "I have not
+     * been told", and the honest thing to do with that is ask nothing.
+     */
+    var devFolders: [String] {
+        guard canUseDevServers, let granted else { return [] }
+        return Array(granted.prefix(Self.maxDevFolders))
+    }
+
+    /**
+     * The rows worth drawing, in the desktop's own order.
+     *
+     * `noDevScript` folders are filtered out here rather than in the view, and
+     * that is the protocol's rule rather than a layout choice: it means "there is
+     * nothing to press, and there never will be for this folder". A row for one
+     * could only ever carry a button whose single possible outcome is a refusal.
+     * A folder that has not answered yet has no row either — there is nothing
+     * true to say about it until it does.
+     */
+    var devServerRows: [DevServerReport] {
+        devFolders.compactMap { devServers[$0] }.filter { $0.status != .noDevScript }
+    }
+
+    func devServer(for folder: String) -> DevServerReport? {
+        devServers[folder]
+    }
+
+    /**
+     * Ask about every folder, which is also what subscribes to them.
+     *
+     * Called on each `welcome` rather than once, because the subscription lives
+     * on the desktop's *connection*: a reconnect is a new connection and knows
+     * nothing about what the last one was watching. Called again when the grant
+     * list changes, because a folder added on the desktop has never been asked
+     * about at all.
+     */
+    func askDevServers() {
+        guard canUseDevServers else { return }
+        for folder in devFolders { transport?.send(.devStatus(folder: folder)) }
+    }
+
+    /**
+     * Start one project's dev server. **The tap is the consent.**
+     *
+     * Nothing runs on the far machine because of this feature until this is
+     * sent. There is no queue and no retry: the desktop answers immediately with
+     * `starting` and then pushes every change, so a press that does not reach
+     * the socket is a press that did nothing, and saying so is better than a row
+     * that spins over a message that was never sent.
+     */
+    func startDevServer(in folder: String) {
+        guard canUseDevServers else {
+            lastError = "\(label) cannot start dev servers from the phone."
+            return
+        }
+        guard transport?.send(.devStart(folder: folder)) == true else {
+            lastError = "Not connected — \(label) was not asked to start that."
+            return
+        }
     }
 
     // MARK: - Clipboard
@@ -652,6 +803,11 @@ final class HostLink: Identifiable {
                 tunnel?.connectionLost(state.detail)
                 tunnel = nil
                 ports = []
+                // Same reason the ports go: these rows are only true while
+                // something is pushing them, and a spinner nobody is going to
+                // update is a screen that lies about what the machine is doing.
+                // They come back on the next `welcome`, which re-subscribes.
+                devServers = [:]
                 upload?.connectionLost(state.detail)
             }
             if state.isLive && !wasLive {
@@ -690,6 +846,10 @@ final class HostLink: Identifiable {
             hostPlatform = platform
             granted = folders
             if capabilities.contains(WireCapability.localhost) { transport?.send(.ports) }
+            // After `granted` is set, because the folders this asks about are
+            // read from it — and on every welcome, because the desktop's
+            // subscription belongs to the connection this welcome arrived on.
+            askDevServers()
             // A welcome is by definition the first list on a new connection, so
             // whatever changed in it changed while this phone was not attached.
             onSessionsChanged?(sessions, .catchUp)
@@ -704,6 +864,25 @@ final class HostLink: Identifiable {
             // being offered here without a reconnect, which is the only way the
             // picker and the rule the Mac enforces can stay the same thing.
             granted = list
+            /*
+             * A folder that has just been taken away must lose its row, and it
+             * must lose it here rather than by being filtered out at the point
+             * of drawing.
+             *
+             * `devServerRows` does read through `devFolders`, so a dropped
+             * folder does disappear from the screen either way — but the state
+             * would still be sitting in this dictionary, and a folder that is
+             * granted again a minute later would come back showing whatever it
+             * was doing before it was revoked, with no `dev.status` yet sent to
+             * say whether that is still true.
+             */
+            let keep = Set(list)
+            devServers = devServers.filter { keep.contains($0.key) }
+            // And a folder that has just been *added* has never been asked
+            // about. Asking again for the ones already known costs one frame
+            // each and re-subscribes them, which is harmless — the answer is
+            // the state they are already showing.
+            askDevServers()
 
         case let .created(session):
             if !sessions.contains(where: { $0.id == session.id }) { sessions.append(session) }
@@ -757,6 +936,22 @@ final class HostLink: Identifiable {
 
         case let .ports(list):
             ports = list
+
+        case let .devState(report):
+            /*
+             * Replace. Never merge.
+             *
+             * A subscript assignment of a whole value is the entire enforcement
+             * of the rule, and it is written as one line on purpose: anything
+             * that reached in to update a field would be the merge the protocol
+             * warns about, and would leave a `ready` row's `url` under a
+             * `starting` or a `failed` that has no address at all.
+             *
+             * Idempotent by construction, which the wire requires: a `dev.start`
+             * is answered directly *and* pushed, so the same state arrives
+             * twice. Writing it twice costs nothing.
+             */
+            devServers[report.folder] = report
 
         case let .credentialRequest(id, origin, repo, operation, prompt):
             // The machine's *name* travels with the question, not just its id.

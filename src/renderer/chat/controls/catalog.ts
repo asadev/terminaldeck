@@ -99,34 +99,7 @@ export function optionsFor(control: ControlId): ControlOption[] {
 }
 
 /**
- * What the Options panel lists: **every** control the app has.
- *
- * There used to be a second list here called `FOLDED_CONTROLS`, holding the two
- * that the panel showed and the composer's row did not, and it is worth writing
- * down why it is gone rather than quietly deleting it. Asked for "one large
- * chat box with the options folded neatly inside it", a pass over this composer
- * put model and permission on the row, effort and fast mode behind a button
- * labelled "More", and the usage readout behind it too. Read back from the
- * screen, that is not a fold — nothing on screen said the word "effort", so
- * there was no way to look for it, and the report was: "all the options you
- * have actually removed."
- *
- * So the panel is the complete inventory, and hiding is no longer something
- * this file can express.
- *
- * The order is not the reading order of the table at the top of
- * `AgentControls.tsx`, and that is deliberate: the two without a chip on the
- * row come first, because they are the reason anybody opens this. Measured in
- * the harness at 1280×900 — five sections are 1,634px of content in a 540px
- * panel, so what is at the top is what is found without scrolling, and putting
- * the two controls that are already one click away up there would spend that
- * space on the people who did not need the panel at all.
- */
-export const MENU_CONTROLS: readonly ControlId[] = ['effort', 'fast', 'model', 'permission']
-
-/**
- * Which of them *also* get a chip on the composer's own row, for the one-click
- * case.
+ * Which controls get a chip on the composer's own row, in reach at one click.
  *
  * By how often a session reaches for the thing, not by how interesting it is:
  *
@@ -137,15 +110,59 @@ export const MENU_CONTROLS: readonly ControlId[] = ['effort', 'fast', 'model', '
  *               `unreadLabel`), so it spends most of its life
  *               reporting that it has nothing to report.
  *
- * A subset of `MENU_CONTROLS`, and `catalog.test.ts` asserts that — which is
- * the guard the pair of lists used to provide, moved to where it now belongs.
- * The consequence looks like duplication and is not: model and permission
- * appear twice, once as a chip and once as a section, and both are the same
- * control reading the same value and sending the same keystrokes. A menu that
- * is a complete inventory is worth a repeated row. A menu whose contents you
- * have to already know is not.
+ * These two are the row, and — since the Options panel stopped repeating them,
+ * see {@link MENU_CONTROLS} — they are the *only* place either can be changed.
+ * `AgentControls` draws this list under exactly the condition under which it
+ * draws the panel's sections (`usable`), so neither can be on screen without
+ * the other: there is no state in which a control here has no home.
  */
 export const PRIMARY_CONTROLS: readonly ControlId[] = ['model', 'permission']
+
+/**
+ * What the Options panel lists: the controls that have **no other home**.
+ *
+ * This list has now been wrong in both directions, and both reports are worth
+ * keeping because the rule that satisfies them is not the midpoint between
+ * them.
+ *
+ * It began as a second list called `FOLDED_CONTROLS`: model and permission on
+ * the row, effort and fast mode behind a button labelled "More", and the usage
+ * readout behind it too. Nothing on screen said the word "effort", so there was
+ * no way to look for it, and the report was *"all the options you have actually
+ * removed."* The answer then was to make the panel the complete inventory of
+ * every control, chip or no chip.
+ *
+ * That fixed the finding and created the opposite one, reported watching the
+ * app: *"options is having all of the things that we already have here and
+ * there. So let's keep everything separate rather than having everything on one
+ * page like on options."* And he is right — with the panel open, Model and
+ * Permission were on screen twice, three centimetres apart, as a chip and as a
+ * section, each showing the same value and sending the same keystrokes.
+ *
+ * The rule that satisfies both is neither "everything" nor "the leftovers". It
+ * is **one home per control**:
+ *
+ *   - a control with a chip on the row is on the row, and only there;
+ *   - a control without one is in the panel, and only there.
+ *
+ * The old regression cannot come back through this door, and the reason is
+ * worth being precise about rather than trusting. What made "More" unfindable
+ * was that nothing on screen named what it held. Nothing on screen still names
+ * what is in *this* panel either — except that the button's own hover label is
+ * built from this very list (`optionsLabel` in `AgentControls.tsx`), so it
+ * reads "Effort and fast mode", which is precisely the naming "More" lacked.
+ * And the two controls dropped from the list did not go behind anything: they
+ * are chips, with their names printed on them, beside the button. Nothing moved
+ * further away; two things stopped being said twice.
+ *
+ * `catalog.test.ts` pins that this list and `PRIMARY_CONTROLS` partition the
+ * four controls — every one in exactly one of them. That is the guard the old
+ * "the panel contains everything" assertion was providing, restated as the rule
+ * that is actually wanted: a control deleted from both lists still leaves the
+ * app with all of its own tests passing, and that is what these two files are
+ * here to catch.
+ */
+export const MENU_CONTROLS: readonly ControlId[] = ['effort', 'fast']
 
 /** The short name on the button. Sentence case; it is a name, not a heading. */
 export function controlName(control: ControlId): string {

@@ -9,6 +9,7 @@ import {
   titleFromOutput,
   titleFromTranscript,
   truncateOnWordBoundary,
+  userSessionTitle,
 } from './session-title'
 
 /**
@@ -454,5 +455,49 @@ describe('deriveSessionTitle', () => {
       expect(result.title.trim(), JSON.stringify(broken)).not.toBe('')
     }
     expect(deriveSessionTitle({ cwd: '' })).toEqual({ title: 'Session', source: 'folder' })
+  })
+})
+
+describe('userSessionTitle', () => {
+  it('keeps a name this module would have rejected as a guess', () => {
+    /*
+     * The distinction the whole function exists for. `isUsableTitle` throws out
+     * anything under three characters, anything opening with a slash, and the
+     * word "Untitled" — all correct for a *derived* title, where a bad guess is
+     * worse than the folder name. None of it applies to a name somebody sat and
+     * typed. An app that quietly shows something other than what was typed into
+     * its own rename field has not renamed anything.
+     */
+    expect(isUsableTitle('ab')).toBe(false)
+    expect(userSessionTitle('ab')).toBe('ab')
+
+    expect(isUsableTitle('/tmp')).toBe(false)
+    expect(userSessionTitle('/tmp')).toBe('/tmp')
+
+    expect(isUsableTitle('Untitled')).toBe(false)
+    expect(userSessionTitle('Untitled')).toBe('Untitled')
+  })
+
+  it('reads a blank field as a cancel rather than as a blank name', () => {
+    // A session called '' is a row in the sidebar with nothing written on it
+    // and no label left to click back into.
+    for (const nothing of ['', '   ', '\t', '\n\n', ' ']) {
+      expect(userSessionTitle(nothing), JSON.stringify(nothing)).toBeNull()
+    }
+  })
+
+  it('flattens what a paste can put into a one-line field', () => {
+    // The value arrives from a text field and ends up inside a <span> in the
+    // rail and an <h1> in the toolbar.
+    expect(userSessionTitle('  two   lines\nof it  ')).toBe('two lines of it')
+    expect(userSessionTitle('bell\u0007 and \u001b[31mescape')).toBe('bell and escape')
+  })
+
+  it('cuts to the same budget every other title in this module is cut to', () => {
+    const long = 'Rewrite the relay handshake and prove it against the phone'
+    const name = userSessionTitle(long)
+    expect(name).not.toBeNull()
+    expect(name?.length).toBeLessThanOrEqual(MAX_TITLE_LENGTH)
+    expect(name?.endsWith('…')).toBe(true)
   })
 })

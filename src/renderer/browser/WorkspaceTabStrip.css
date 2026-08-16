@@ -40,16 +40,35 @@
    grey text rather than an empty shelf. */
 .strip-empty {
   justify-content: center;
+  transition: background var(--dur-fast) var(--ease), box-shadow var(--dur) var(--ease);
+}
+
+/* A tab is being dragged *somewhere in this window*.
+
+   The edge is the whole point: at rest this bar is a sentence with no
+   boundary, so there is nothing on screen saying how far the target extends or
+   even that it is one. It is drawn inset rather than as a border so the strip
+   keeps its height and the panes below do not shift by a pixel the moment a
+   drag begins — a target that moves when you reach for it is worse than one
+   that was hard to find. */
+.strip-empty[data-armed] {
+  background: color-mix(in srgb, var(--accent) 6%, var(--bg-secondary));
+  box-shadow: inset 0 0 0 1.5px var(--accent-line);
 }
 
 .strip-empty[data-over] {
   background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1.5px var(--accent);
 }
 
 .strip-hint {
   margin: 0;
   color: var(--text-muted);
   font-size: var(--t-footnote);
+}
+
+.strip-empty[data-armed] .strip-hint {
+  color: var(--text-secondary);
 }
 
 /* -------------------------------------------------------------- one tab -- */
@@ -65,7 +84,8 @@
   padding: 0 var(--sp-1) 0 var(--sp-2);
   border-radius: var(--radius-sm);
   color: var(--text-secondary);
-  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease),
+    opacity var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
 }
 
 .strip-tab:hover {
@@ -74,10 +94,31 @@
 }
 
 /* The page's own colour, so the selected tab reads as the top edge of the
-   content under it rather than as a highlighted row. */
+   content under it rather than as a highlighted row.
+
+   That fill alone was not enough to see. `--bg-primary` and `--bg-secondary`
+   are one step apart on purpose — the whole palette moves in small steps — and
+   at 26px tall on a 38px bar the difference between #191919 and #202020 is
+   invisible in a dark room, which is where this app is used. So the fill is
+   joined by the two things the rest of the shell already uses to mean "this is
+   the one you are in": the small shadow that lifts a surface off its
+   background, and the accent on the icon, exactly as `.sb-row.active` does in
+   the sidebar. Nothing new was invented for the strip. */
 .strip-tab[data-active] {
-  background: var(--bg-primary);
+  background: var(--tab-active);
   color: var(--text-primary);
+  box-shadow: var(--shadow-sm);
+}
+
+.strip-tab[data-active] .strip-tab-label {
+  font-weight: var(--w-medium);
+}
+
+/* The tab being dragged, seen through the drag image that is following the
+   cursor. Left in place rather than removed from the flow: a strip that
+   reflowed as you picked a tab up would move every gap you were aiming at. */
+.strip-tab[data-dragging] {
+  opacity: 0.35;
 }
 
 /* The insertion caret. A line in the gap, not a gap that opens — a strip that
@@ -110,6 +151,14 @@
   height: 100%;
   color: inherit;
   font-size: var(--t-footnote);
+  /* It can be picked up, and the cursor is the only thing that says so before
+     the mouse goes down. `button` is `cursor: pointer` app-wide, so this has to
+     be said here rather than inherited from the row. */
+  cursor: grab;
+}
+
+.strip-tab-face:active {
+  cursor: grabbing;
 }
 
 .strip-tab-icon {
@@ -119,12 +168,16 @@
 
 .strip-tab[data-active] .strip-tab-icon {
   opacity: 1;
+  color: var(--accent);
 }
 
 .strip-tab-label {
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
+  /* The backstop under `middleEllipsis`. The budget is in characters and this
+     is in pixels, so a title of unusually wide glyphs still ends politely
+     rather than running under the fold button. */
   text-overflow: ellipsis;
 }
 
@@ -150,9 +203,15 @@
 
 /* Revealed on hover and on focus. Focus matters as much as hover here: these
    are the only way to empty the strip without knowing the drag gesture, and a
-   control that appears only under a pointer is unreachable from a keyboard. */
+   control that appears only under a pointer is unreachable from a keyboard.
+
+   The tab you are actually in keeps its close button out, the way every browser
+   does and the way `.sb-row.active .sb-close` already does one panel to the
+   left. Its fold control still waits for a hover: two permanent buttons on a
+   26px tab leaves the title about eight characters to live in. */
 .strip-tab:hover .strip-tab-fold,
 .strip-tab:hover .strip-tab-close,
+.strip-tab[data-active] .strip-tab-close,
 .strip-tab-fold:focus-visible,
 .strip-tab-close:focus-visible {
   opacity: 1;

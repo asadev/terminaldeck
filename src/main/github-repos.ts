@@ -37,12 +37,18 @@
  *
  * ## GitHub Apps list a different thing, from a different endpoint
  *
- * An OAuth token answers `GET /user/repos`, which is every repository the
- * account can reach. A GitHub App user-to-server token cannot use that: what it
- * can see is the set of installations the user has, and the repositories
- * selected inside each — `GET /user/installations` then
- * `GET /user/installations/{id}/repositories`, which is exactly the "only
- * select repositories" choice made at install time, read back.
+ * A classic token answers `GET /user/repos`, which is every repository the
+ * account can reach. That covers three credentials this app still meets: a
+ * `gh auth login` reused from the CLI, a PAT in `GH_TOKEN`, and any credential
+ * left on disk by the OAuth sign-in that was deleted on 2026-08-16 — those keep
+ * working until GitHub stops honouring them.
+ *
+ * A GitHub App user-to-server token, which is the only kind this app can mint
+ * now, cannot use that endpoint at all: what it can see is the set of
+ * installations the user has, and the repositories selected inside each —
+ * `GET /user/installations` then `GET /user/installations/{id}/repositories`,
+ * which is exactly the "only select repositories" choice made at install time,
+ * read back.
  *
  * Those two endpoints are implemented from GitHub's REST reference and have
  * **still not been run against a live GitHub App installation.** A registration
@@ -66,7 +72,7 @@ import type { GitHubErrorKind, GitHubFailure } from './github'
 // Type-only, and that is what keeps the runtime edge pointing one way:
 // `github-auth.ts` imports this module for real, so a value import back would
 // be a cycle. `import type` is erased before the bundler sees it.
-import type { HttpFetch } from './github-auth'
+import type { CredentialKind, HttpFetch } from './github-auth'
 import { redact } from './redact'
 
 /* ----------------------------------------------------------------- types -- */
@@ -112,9 +118,10 @@ export interface RepoAccessList {
   /** `/user/repos`, or the installation endpoints a GitHub App uses. */
   source: 'account' | 'installation'
   /**
-   * Whether the grant covers everything or a chosen subset. Null for an OAuth
-   * token, where the question does not arise — `repo` is all-or-nothing, and
-   * saying "all repositories" there would read as a choice somebody made.
+   * Whether the grant covers everything or a chosen subset. Null for a classic
+   * token, where the question does not arise — its `repo` scope is
+   * all-or-nothing, and saying "all repositories" there would read as a choice
+   * somebody made.
    */
   selection: 'all' | 'selected' | null
   /** Requests left on the credential's hourly budget, when GitHub said. */
@@ -288,7 +295,7 @@ export interface RepoFetchOptions {
   secrets?: readonly string[]
   now?: () => number
   /** How the credential was obtained, which decides which endpoints answer. */
-  kind?: 'oauth' | 'github-app'
+  kind?: CredentialKind
 }
 
 interface Fetched {

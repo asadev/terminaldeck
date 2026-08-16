@@ -127,13 +127,6 @@ export interface Issue {
   assignees: string[]
 }
 
-export interface NotificationSummary {
-  total: number
-  repo: number
-  capped: boolean
-  reasons: Record<string, number>
-}
-
 export type Section<T> = { ok: true; value: T } | GitHubFailure
 
 export interface GitHubOverview {
@@ -142,7 +135,6 @@ export interface GitHubOverview {
   repo: RepoRef
   pulls: Section<PullRequest[]>
   issues: Section<Issue[]>
-  notifications: Section<NotificationSummary>
   limit: number
   fetchedAt: number
 }
@@ -161,17 +153,17 @@ export interface GitHubIdentity {
   avatarUrl: string | null
 }
 
-/** Which registration the sign-in runs through. See `src/main/github-app.ts`. */
-export type ClientKind = 'oauth' | 'github-app'
+/**
+ * What kind of grant a credential is. Mirrors `CredentialKind` in
+ * `src/main/github-auth.ts` — never a statement about which client a sign-in
+ * would use, because there is only one of those.
+ */
+export type CredentialKind = 'oauth' | 'github-app'
 
 export interface DeviceFlowPrompt {
   userCode: string
   verificationUri: string
   expiresAt: number
-  /** Empty in `github-app` mode — permissions come from the registration. */
-  scopes: string[]
-  borrowedClient: boolean
-  clientKind: ClientKind
   installUrl: string | null
 }
 
@@ -182,10 +174,10 @@ export interface GitHubAuthState {
   identity: GitHubIdentity | null
   scopes: string[]
   scopesReported: boolean
-  missingScopes: string[]
   ghInstalled: boolean
-  borrowedClient: boolean
-  clientKind: ClientKind
+  /** How the credential in use was obtained, null while nothing is connected. */
+  credentialKind: CredentialKind | null
+  /** False in a build with no GitHub App registered, where Connect cannot work. */
   appConfigured: boolean
   installUrl: string | null
   disconnect: string | null
@@ -494,61 +486,6 @@ export function sourceSentence(source: AuthSource | null, host: string): string 
 }
 
 /**
- * What each requested permission is *for*.
- *
- * A consent screen that lists `repo, notifications` and nothing else is how a
- * person learns to click Authorize without reading. Every scope this app asks
- * for is named here in terms of something visible on this page, and a scope
- * with no entry is one we never asked for — a leftover from a `gh auth login`
- * that wanted more — so it is shown without a claim about what it does.
- *
- * `read:org` was removed from the request on 2026-08-16 and so is gone from
- * here too. A token that still carries it now lands under "Also granted",
- * which is the truth: it was granted, and this app does not use it.
- */
-const SCOPE_BUYS: Record<string, string> = {
-  repo: 'Pull requests and issues, private repositories included',
-  notifications: 'The unread count on the bell',
-}
-
-/**
- * GitHub's own wording for a scope, which is what the consent screen will say.
- *
- * This exists because of the screenshot that started this work: the page said
- * **"Full control of private repositories"** and there was no way to pick which
- * ones. Printing GitHub's phrase *here*, before the button is pressed, is the
- * difference between a surprise and a decision. Softening it would be worse
- * than saying nothing — the user is about to read the real thing.
- */
-const SCOPE_CONSENT_WORDING: Record<string, string> = {
-  repo: 'Full control of private repositories',
-  notifications: 'Access notifications',
-}
-
-export function consentWording(scope: string): string | null {
-  return SCOPE_CONSENT_WORDING[scope] ?? null
-}
-
-export function scopeBuys(scope: string): string | null {
-  return SCOPE_BUYS[scope] ?? null
-}
-
-/**
- * What is lost while a scope is missing — the half of the sentence that makes
- * the warning worth reading. "Missing the notifications scope" tells the user
- * nothing they can act on; "the bell will stay empty" tells them whether they
- * care enough to sign in again.
- */
-const SCOPE_COST: Record<string, string> = {
-  repo: 'Private repositories will not appear in either list.',
-  notifications: 'The unread count stays empty.',
-}
-
-export function missingScopeCost(scope: string): string {
-  return SCOPE_COST[scope] ?? `Anything that needs the ${scope} permission will fail.`
-}
-
-/**
  * Which repository and branch the open folder is, in one line.
  *
  * It is built from the *sign-in* payload rather than from the pull-request
@@ -576,60 +513,31 @@ export function folderLine(repo: RepoRef | GitHubFailure | null, branch: BranchR
  *
  * This block exists because of a screenshot. GitHub's authorisation page said
  * "Full control of private repositories" with no repository picker anywhere on
- * it, and the app had given no warning that it was going to. The fix is not to
- * soften the wording — the user is thirty seconds from reading GitHub's own —
- * it is to say the same thing first, explain why it is the only option GitHub
- * offers an OAuth app, and name the thing that would change it.
+ * it, and the app had given no warning that it was going to. That screen was
+ * the OAuth sign-in's, and the sign-in itself is gone now — so this says what
+ * the one remaining path actually shows, which is a repository picker.
+ *
+ * It still renders before the button rather than after it. The point was never
+ * the wording; it was that nobody arrives at GitHub's consent screen surprised.
  */
 export function AccessNotice({ state }: { state: GitHubAuthState }) {
-  if (state.clientKind === 'github-app') {
-    return (
-      <div className="gh-asks">
-        <p className="gh-asks-title">What this asks for</p>
-        <p className="gh-asks-body">
-          Signing in installs a GitHub App, so GitHub will ask you to choose{' '}
-          <strong>all repositories</strong> or <strong>only select repositories</strong>, and the app
-          gets read-only access to what you pick — repository metadata, pull requests and issues.
-        </p>
-        {state.installUrl && (
-          <button
-            type="button"
-            className="gh-asks-link"
-            onClick={() => state.installUrl && openExternal(state.installUrl)}
-          >
-            Choose repositories on GitHub
-          </button>
-        )}
-      </div>
-    )
-  }
-
   return (
     <div className="gh-asks">
       <p className="gh-asks-title">What this asks for</p>
-      <ul className="gh-asks-list">
-        {['repo', 'notifications'].map((scope) => (
-          <li key={scope}>
-            <code>{scope}</code>
-            {consentWording(scope) && <span className="gh-asks-wording">{consentWording(scope)}</span>}
-            <span className="gh-asks-why">{scopeBuys(scope)}</span>
-          </li>
-        ))}
-      </ul>
-      {/*
-        The sentence the screenshot deserved. GitHub has no read-only scope for
-        private repositories and no per-repository OAuth scope — `public_repo`
-        exists and excludes exactly the repositories this is for — so `repo` is
-        the only thing that can answer "show me pull requests on my private
-        repo". Saying so is not an excuse; it is the difference between an app
-        that is greedy and a platform that offers one lever.
-      */}
       <p className="gh-asks-body">
-        GitHub has no narrower scope than <code>repo</code> for reading a private repository, and an
-        OAuth app cannot offer a repository picker. Per-repository choice needs this app to be
-        registered as a GitHub App
-        {state.appConfigured ? '' : ', which this build does not have yet'}.
+        Signing in installs a GitHub App, so GitHub will ask you to choose{' '}
+        <strong>all repositories</strong> or <strong>only select repositories</strong>, and the app
+        gets read-only access to what you pick — repository metadata, pull requests and issues.
       </p>
+      {state.installUrl && (
+        <button
+          type="button"
+          className="gh-asks-link"
+          onClick={() => state.installUrl && openExternal(state.installUrl)}
+        >
+          Choose repositories on GitHub
+        </button>
+      )}
     </div>
   )
 }
@@ -673,7 +581,6 @@ export function ConnectionBar({
   onAskDisconnect,
   onDisconnect,
   onKeep,
-  onReconnect,
 }: {
   state: GitHubAuthState
   busy?: boolean
@@ -681,18 +588,8 @@ export function ConnectionBar({
   onAskDisconnect(): void
   onDisconnect(): void
   onKeep(): void
-  onReconnect(): void
 }) {
   const login = state.identity?.login ?? 'unknown account'
-  const missing = state.missingScopes
-  /**
-   * A second sign-in cannot fix a missing scope when the credential comes from
-   * the environment: `gh` and this panel both prefer `GH_TOKEN`, so the newly
-   * granted token would be stored, shadowed, and never used. Offering the
-   * button anyway is the "looks clickable, does nothing" bug in its purest
-   * form, so the sentence says what actually has to change instead.
-   */
-  const canReauthorize = state.source !== 'environment'
 
   return (
     <div className="gh-conn" data-confirming={confirming || undefined}>
@@ -715,86 +612,41 @@ export function ConnectionBar({
 
         {state.scopesReported ? (
           /*
-            Two labelled runs, not one row in two colours.
-            
-            Every chip used to sit under a single "Granted" label with the ones
-            this app actually uses tinted blue and the rest grey — a colour
-            distinction with no key anywhere on the screen, which reads as a
-            rendering bug rather than as information. The tint still carries it
-            for anyone who has learned it; the label now says what it means, so
-            nobody has to.
+            One labelled run, not two.
+
+            It used to be split into "Used here" and "Also granted", because
+            this app asked GitHub for a named list of scopes and the split said
+            which of a token's scopes were on it. It asks for none now — a
+            GitHub App device request carries no `scope` at all — so every chip
+            would land in "Also granted", and a label that says "also" with
+            nothing before it is worse than no label. What is left is the honest
+            fact: GitHub reports these on this credential.
           */
-          <>
+          <p className="gh-conn-scopes">
+            <span className="gh-conn-scopes-label">Granted</span>
             {state.scopes.length === 0 ? (
-              <p className="gh-conn-scopes">
-                <span className="gh-conn-scopes-label">Granted</span>
-                <span className="gh-scope" data-empty="true">
-                  nothing
-                </span>
-              </p>
+              <span className="gh-scope" data-empty="true">
+                nothing
+              </span>
             ) : (
-              ([
-                ['Used here', state.scopes.filter((scope) => scopeBuys(scope) !== null), true],
-                ['Also granted', state.scopes.filter((scope) => scopeBuys(scope) === null), false],
-              ] as const).map(
-                ([label, scopes, asked]) =>
-                  scopes.length > 0 && (
-                    <p className="gh-conn-scopes" key={label}>
-                      <span className="gh-conn-scopes-label">{label}</span>
-                      {scopes.map((scope) => (
-                        <span
-                          key={scope}
-                          className="gh-scope"
-                          data-asked={asked || undefined}
-                          title={
-                            scopeBuys(scope) ??
-                            'Granted to this token, but not asked for by this app.'
-                          }
-                        >
-                          {scope}
-                        </span>
-                      ))}
-                    </p>
-                  ),
-              )
+              state.scopes.map((scope) => (
+                <span key={scope} className="gh-scope">
+                  {scope}
+                </span>
+              ))
             )}
-          </>
+          </p>
         ) : (
           /* A fine-grained token or a GitHub App installation sends no
-             `X-OAuth-Scopes` header at all. That is not the same fact as a
-             token with no permissions, and printing "Granted: nothing" for a
-             credential that works perfectly would send the user to fix
-             something that is not broken. */
+             `X-OAuth-Scopes` header at all — which is what a sign-in from this
+             app now always produces. That is not the same fact as a token with
+             no permissions, and printing "Granted: nothing" for a credential
+             that works perfectly would send the user to fix something that is
+             not broken. */
           <p className="gh-conn-source">
             GitHub did not report a permission list for this credential, which is normal for a
-            fine-grained token. Whether a list loads is the real test.
+            GitHub App sign-in. Whether a list loads is the real test.
           </p>
-        )}
-
-        {missing.length > 0 && (
-          <div className="gh-conn-missing">
-            <p className="gh-conn-missing-title">
-              Missing {missing.length === 1 ? 'one permission' : `${missing.length} permissions`}
-            </p>
-            <ul className="gh-conn-missing-list">
-              {missing.map((scope) => (
-                <li key={scope}>
-                  <code>{scope}</code> — {missingScopeCost(scope)}
-                </li>
-              ))}
-            </ul>
-            {canReauthorize ? (
-              <button type="button" className="gh-conn-fix" onClick={onReconnect} disabled={busy}>
-                Sign in again to grant {missing.length === 1 ? 'it' : 'them'}
-              </button>
-            ) : (
-              <p className="gh-conn-source">
-                This credential comes from an environment variable, so signing in again here would
-                be ignored. Replace the token in <code>GH_TOKEN</code> with one that carries{' '}
-                {missing.join(', ')}, then restart.
-              </p>
-            )}
-          </div>
         )}
       </div>
 
@@ -837,10 +689,10 @@ export function ConnectionBar({
  * What the sign-in card shows when the bridge itself never answered.
  *
  * A disconnected state rather than a blank one, because every field below has
- * to be a fact: claiming `ghInstalled` or `borrowedClient` when nothing has
- * been probed would put a sentence on screen that was never checked. The
- * failure is the honest one — the app could not ask, which is different from
- * GitHub saying no.
+ * to be a fact: claiming `ghInstalled` or `appConfigured` when nothing has been
+ * probed would put a sentence on screen that was never checked. The failure is
+ * the honest one — the app could not ask, which is different from GitHub saying
+ * no.
  */
 export function bridgeSilentState(): GitHubAuthState {
   return {
@@ -850,13 +702,11 @@ export function bridgeSilentState(): GitHubAuthState {
     identity: null,
     scopes: [],
     scopesReported: false,
-    missingScopes: [],
     ghInstalled: false,
-    // Every field here has to be a fact, and none of these has been probed.
-    // `oauth` is not a guess: it is what the app does when nothing is
-    // configured, so it is true of a build whose main process never answered.
-    borrowedClient: false,
-    clientKind: 'oauth',
+    // Nothing is connected in this state, and null is what "no credential" is
+    // spelled as everywhere else. A kind here would describe a sign-in that
+    // does not exist.
+    credentialKind: null,
     appConfigured: false,
     installUrl: null,
     disconnect: null,
@@ -945,20 +795,13 @@ export function DeviceCodeCard({
           : 'This code has expired — press Connect again for a new one.'}
       </p>
 
+      {/* One sentence, because there is one sign-in. This used to branch on the
+          prompt's client kind and print a scope list for the other arm; that
+          arm is gone, and with it the "GitHub's page will say GitHub CLI"
+          apology the borrowed client id needed. */}
       <p className="gh-device-asks">
-        {/* A GitHub App request carries no scopes at all, so an empty list is a
-            different sentence rather than a shorter one. Rendering "Asking for
-            ." would be the one place on this page that reads as a bug. */}
-        {prompt.clientKind === 'github-app'
-          ? 'GitHub will ask which repositories this app may see — all of them, or only the ones you pick.'
-          : `Asking for ${prompt.scopes.join(', ')}.`}
-        {prompt.borrowedClient && (
-          <>
-            {' '}
-            GitHub’s page will say <strong>GitHub CLI</strong>: this app signs in with the CLI’s
-            public client id rather than one of its own, and that is what you are approving.
-          </>
-        )}
+        GitHub will ask which repositories this app may see — all of them, or only the ones you
+        pick.
       </p>
 
       <div className="gh-device-row">
@@ -1002,6 +845,18 @@ export function ConnectPage({
    * an outage produces a second, identical error, so those get Retry instead.
    */
   const retryOnly = failure !== null && RETRYABLE.has(failure.kind)
+  /**
+   * No registration, no button.
+   *
+   * Connect sends a `client_id` to GitHub's device endpoint, and a build with
+   * no GitHub App registered has none to send — the request would come back as
+   * a 404 that names nothing, every time, for ever. This used to fall through
+   * to the OAuth client and sign the user in as the GitHub CLI, which is the
+   * fallback that was deleted. What is left is the honest shape: the failure's
+   * own sentence, which names `gh auth login` and the environment variable a
+   * fork sets, and no control that cannot work.
+   */
+  const canConnect = state.appConfigured
 
   return (
     <>
@@ -1011,23 +866,17 @@ export function ConnectPage({
         action={
           retryOnly
             ? { label: 'Try again', onClick: onRetry, busy }
-            : { label: busy ? 'Connecting…' : 'Connect to GitHub', onClick: onConnect, busy, primary: true }
+            : canConnect
+              ? { label: busy ? 'Connecting…' : 'Connect to GitHub', onClick: onConnect, busy, primary: true }
+              : { label: 'Check again', onClick: onRetry, busy }
         }
         hint={
-          <>
-            {state.borrowedClient && !retryOnly && (
-              <>
-                GitHub’s page will say <strong>GitHub CLI</strong> — this app has no OAuth
-                application of its own yet.{' '}
-              </>
-            )}
-            {state.ghInstalled && !retryOnly && (
-              <>
-                An existing <code>gh auth login</code> is reused automatically, so nothing here
-                signs you in twice.
-              </>
-            )}
-          </>
+          state.ghInstalled && !retryOnly ? (
+            <>
+              An existing <code>gh auth login</code> is reused automatically, so nothing here signs
+              you in twice.
+            </>
+          ) : null
         }
         extra={
           <>
@@ -1035,8 +884,9 @@ export function ConnectPage({
                 nobody arrives at GitHub's consent screen surprised by what it
                 says — which is what happened, and is what this whole change is
                 about. It is withheld for a rate limit or a dead network, where
-                the next press is Retry and the permissions are not the story. */}
-            {!retryOnly && <AccessNotice state={state} />}
+                the next press is Retry and the permissions are not the story,
+                and for a build that cannot start a sign-in at all. */}
+            {!retryOnly && canConnect && <AccessNotice state={state} />}
             {failure?.detail && (
               <details className="gh-failure-detail">
                 <summary>Details</summary>
@@ -1686,7 +1536,6 @@ export function GitHubPanel({ cwd, bridge, now, initialTab = 'pulls' }: GitHubPa
       onAskDisconnect={() => setConfirmingDisconnect(true)}
       onDisconnect={() => void disconnect()}
       onKeep={() => setConfirmingDisconnect(false)}
-      onReconnect={() => void connect()}
     />
   )
 
@@ -1718,12 +1567,10 @@ export function GitHubPanel({ cwd, bridge, now, initialTab = 'pulls' }: GitHubPa
   const access = state.access
   const pulls = overview?.pulls ?? null
   const issues = overview?.issues ?? null
-  const notifications = overview?.notifications ?? null
   const limit = overview?.limit ?? 0
   const pullCount = countLabel(pulls?.ok ? pulls.value.length : null, limit)
   const issueCount = countLabel(issues?.ok ? issues.value.length : null, limit)
   const repoCount = access && access.ok ? (access.truncated ? `${access.atLeast}+` : String(access.repos.length)) : null
-  const unread = notifications?.ok ? notifications.value : null
 
   /**
    * What a list tab shows when the folder has no repository behind it.
@@ -1802,23 +1649,6 @@ export function GitHubPanel({ cwd, bridge, now, initialTab = 'pulls' }: GitHubPa
 
         <span className="gh-head-spacer" />
 
-        {unread && unread.total > 0 && (
-          <span
-            className="gh-bell"
-            data-mine={unread.repo > 0}
-            title={
-              unread.repo > 0
-                ? `${unread.repo} unread in this repository, ${unread.capped ? '50+' : unread.total} on your account`
-                : `${unread.capped ? '50+' : unread.total} unread notifications on your account`
-            }
-          >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
-              <path d="M18 8a6 6 0 1 0-12 0c0 7-3 8-3 8h18s-3-1-3-8M13.7 21a2 2 0 0 1-3.4 0" />
-            </svg>
-            {unread.repo > 0 ? unread.repo : unread.capped ? '50+' : unread.total}
-          </span>
-        )}
-
         <button
           type="button"
           className="gh-refresh"
@@ -1895,17 +1725,19 @@ export function GitHubPanel({ cwd, bridge, now, initialTab = 'pulls' }: GitHubPa
             query={repoQuery}
             onQuery={setRepoQuery}
             current={folderRepo?.nameWithOwner ?? null}
-            installUrl={state.clientKind === 'github-app' ? state.installUrl : null}
+            // The *credential's* kind, and it still has to be checked even
+            // though this build only ever mints GitHub App credentials. Three
+            // classic ones still reach this panel — a `gh auth login` reused
+            // from the CLI, a `GH_TOKEN` in the environment, and anything left
+            // on disk by the OAuth sign-in deleted on 2026-08-16 — and none of
+            // them has an installation to change. Offering "choose which
+            // repositories this app can see" to those is a link to a screen
+            // that has nothing to do with the list above it.
+            installUrl={state.credentialKind === 'github-app' ? state.installUrl : null}
             onRetry={() => void loadAuth()}
             now={clock}
           />
         </div>
-      )}
-
-      {notifications !== null && isFailure(notifications) && notifications.kind === 'missing-scope' && (
-        // Worth one quiet line rather than a full failure block: the lists
-        // above loaded fine, and the only thing missing is the bell.
-        <p className="gh-note">Notifications need the <code>notifications</code> token scope.</p>
       )}
     </section>
   )

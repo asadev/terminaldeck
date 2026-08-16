@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
+import { DevServerPanel, type DevServerBridge } from './DevServerPanel'
 import './StartPage.css'
 
 /**
@@ -45,7 +46,13 @@ export interface DevPort {
   guessed: boolean
 }
 
-export interface StartPageBridge {
+/**
+ * `DevServerBridge` is folded in rather than kept separate because the page has
+ * one bridge and passes it down. Its methods are optional there, which is what
+ * lets a build whose preload predates the dev-server feature render this page
+ * with the section simply absent — see `DevServerPanel`.
+ */
+export interface StartPageBridge extends DevServerBridge {
   devPorts(force?: boolean): Promise<unknown>
 }
 
@@ -222,6 +229,15 @@ export function StartPage({ onOpen, failure = null, onRetry, bridge }: Props) {
             </ul>
           </>
         )}
+
+        {/*
+          Directly under the list of ports that are up, because it is the other
+          half of the same answer: those are the links that work, these are the
+          projects whose links would work if something were running. The panel
+          draws nothing at all when there is no project with a dev script, so on
+          a machine this does not apply to the page is exactly as it was.
+        */}
+        <DevServerPanel onOpen={onOpen} bridge={api} />
 
         {load.state !== 'loading' && (
           <button type="button" className="bw-start-refresh" onClick={() => scan(true)}>

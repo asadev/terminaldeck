@@ -13,6 +13,7 @@ import {
   type RemoteSession,
   type ServerMessage,
 } from './protocol'
+import type { DevServerState, DevServers } from '../dev-server'
 import type { TailnetReady } from './tailnet'
 import { MAX_FAILED_ATTEMPTS, RemoteAuth } from './device-auth'
 import { CODE_LENGTH, isCode } from '../../shared/short-code'
@@ -1837,3 +1838,245 @@ function ready(): TailnetReady {
     binary: '/opt/homebrew/bin/tailscale',
   }
 }
+
+/* ----------------------------------------------------- capability `devserver` */
+
+/**
+ * A dev-server module the socket tests drive by hand.
+ *
+ * Deliberately *not* the real one. What is under test here is the server's half
+ * — the capability negotiation, the folder gate, which folder string travels
+ * onward, and who hears a pushed `dev.state` — and every one of those is a
+ * question about this file. Whether "ready" means a port accepted a connection
+ * is `dev-server.test.ts`'s question, and answering it twice with two fakes is
+ * how two files end up disagreeing about it.
+ */
+function fakeDevServers(): DevServers & {
+  asked: string[]
+  started: string[]
+  push(state: DevServerState): void
+} {
+  const listeners = new Set<(state: DevServerState) => void>()
+  const asked: string[] = []
+  const started: string[] = []
+  return {
+    asked,
+    started,
+    status(folder: string): DevServerState {
+      asked.push(folder)
+      return { folder, status: 'idle', script: 'dev', command: 'pnpm run dev' }
+    },
+    async start(folder: string, open): Promise<DevServerState> {
+      started.push(folder)
+      const opened = await open(folder)
+      return opened.ok
+        ? { folder, status: 'starting', script: 'dev', command: 'pnpm run dev', sessionId: opened.sessionId }
+        : { folder, status: 'failed', script: 'dev', command: 'pnpm run dev', message: opened.message }
+    },
+    onChange(listener) {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
+    noteExit() {},
+    dispose() {},
+    push(state: DevServerState) {
+      for (const listener of listeners) listener(state)
+    },
+  }
+}
+
+describe('starting a project’s dev server from a phone', () => {
+  it('is not advertised by a host that has no dev-server module', async () => {
+    const harness = await serve({}, creatingSessions())
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    const welcome = await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    expect(welcome).toMatchObject({ capabilities: expect.not.arrayContaining(['devserver']) })
+  })
+
+  it('is not advertised by a host that cannot start a session', async () => {
+    // Starting a dev server *is* starting a session — there is no second
+    // spawning path on purpose — so a host with no `create` must not offer it.
+    const harness = await serve({ devServers: fakeDevServers() }, fakeSessions())
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    const welcome = await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    expect(welcome).toMatchObject({ capabilities: expect.not.arrayContaining(['devserver']) })
+  })
+
+  it('is advertised when the module, create and a folder list are all there', async () => {
+    const harness = await serve({ devServers: fakeDevServers() }, creatingSessions())
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    const welcome = await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    expect(welcome).toMatchObject({ capabilities: expect.arrayContaining(['devserver']) })
+  })
+
+  it('cannot be asked about before the device has said who it is', async () => {
+    const harness = await serve({ devServers: fakeDevServers() }, creatingSessions())
+    const client = await connect(harness.port)
+    client.send({ t: 'dev.status', folder: '/tmp/allowed' })
+
+    const error = await client.until((m) => m.t === 'error', 'the refusal')
+    expect(error).toEqual({ t: 'error', code: 'unauthenticated', message: 'Say hello first.' })
+    await expect(client.closed).resolves.toBe(CLOSE.policyViolation)
+  })
+
+  it('answers dev.status for a folder this device was granted', async () => {
+    const dev = fakeDevServers()
+    const harness = await serve({ devServers: dev }, creatingSessions(['/tmp/allowed']))
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+    client.send({ t: 'dev.status', folder: '/tmp/allowed' })
+
+    const state = await client.until((m) => m.t === 'dev.state', 'the state')
+    expect(state).toEqual({
+      t: 'dev.state',
+      state: { folder: '/tmp/allowed', status: 'idle', script: 'dev', command: 'pnpm run dev' },
+    })
+  })
+
+  it('refuses a folder this device was not granted, without reading anything', async () => {
+    // The load-bearing one. `dev.status`'s answer is derived from a
+    // `package.json`, so a desktop that read first and authorised second would
+    // let a paired phone ask whether any path on the machine is a Node project
+    // and what its scripts are called. `dev.asked` staying empty is the
+    // assertion — the refusal alone would not prove the disk was untouched.
+    const dev = fakeDevServers()
+    const harness = await serve({ devServers: dev }, creatingSessions(['/tmp/allowed']))
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+    client.send({ t: 'dev.status', folder: '/Users/asad/private' })
+
+    const error = await client.until((m) => m.t === 'error', 'the refusal')
+    expect(error).toMatchObject({ t: 'error', code: 'unauthorized' })
+    // And the path it named is not quoted back at it.
+    expect(JSON.stringify(error)).not.toContain('private')
+    expect(dev.asked).toEqual([])
+    expect(dev.started).toEqual([])
+  })
+
+  it('refuses a folder granted to a *different* device', async () => {
+    const dev = fakeDevServers()
+    const sessions = creatingSessions(['/tmp/shared'])
+    // This device has its own list, and the shared folder is not on it.
+    sessions.offers.set('device-1', ['/tmp/mine'])
+    const harness = await serve({ devServers: dev }, sessions)
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+    client.send({ t: 'dev.start', folder: '/tmp/shared' })
+
+    await client.until((m) => m.t === 'error', 'the refusal')
+    expect(dev.started).toEqual([])
+    expect(sessions.requests).toEqual([])
+  })
+
+  it('starts it through create, as a shell, in the desktop’s own spelling of the folder', async () => {
+    const dev = fakeDevServers()
+    const sessions = creatingSessions(['/tmp/allowed'])
+    const harness = await serve({ devServers: dev }, sessions)
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+    // The client's spelling has a trailing separator. The same directory, and
+    // not the string that should travel onward.
+    client.send({ t: 'dev.start', folder: '/tmp/allowed/' })
+
+    const state = await client.until((m) => m.t === 'dev.state', 'the state')
+    expect(state).toMatchObject({ state: { status: 'starting', sessionId: 'made-1' } })
+    // Through `create`, which is the layer that checks the grant a second time
+    // and confines the session. There is no other way this feature spawns.
+    expect(sessions.requests).toEqual([
+      { deviceId: 'device-1', cwd: '/tmp/allowed', provider: 'shell', cols: undefined, rows: undefined },
+    ])
+    expect(dev.started).toEqual(['/tmp/allowed'])
+  })
+
+  it('passes the session layer’s refusal through as the failure', async () => {
+    const dev = fakeDevServers()
+    const sessions = creatingSessions(['/tmp/allowed'])
+    sessions.refuseWith = {
+      ok: false,
+      code: 'unavailable',
+      message: 'This Mac could not keep a session inside that folder, so it did not start one.',
+    }
+    const harness = await serve({ devServers: dev }, sessions)
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+    client.send({ t: 'dev.start', folder: '/tmp/allowed' })
+
+    const state = await client.until((m) => m.t === 'dev.state', 'the state')
+    expect(state).toMatchObject({
+      state: {
+        status: 'failed',
+        message: 'This Mac could not keep a session inside that folder, so it did not start one.',
+      },
+    })
+  })
+
+  it('pushes later changes to the phone that asked, without being polled', async () => {
+    const dev = fakeDevServers()
+    const harness = await serve({ devServers: dev }, creatingSessions(['/tmp/allowed']))
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+    client.send({ t: 'dev.status', folder: '/tmp/allowed' })
+    await client.until((m) => m.t === 'dev.state', 'the first state')
+
+    dev.push({
+      folder: '/tmp/allowed',
+      status: 'ready',
+      script: 'dev',
+      command: 'pnpm run dev',
+      sessionId: 'made-1',
+      port: 5173,
+      url: 'http://localhost:5173',
+    })
+
+    const ready = await client.until(
+      (m) => m.t === 'dev.state' && m.state.status === 'ready',
+      'the ready push',
+    )
+    expect(ready).toMatchObject({ state: { port: 5173, url: 'http://localhost:5173' } })
+  })
+
+  it('does not push a folder the phone never asked about', async () => {
+    const dev = fakeDevServers()
+    const harness = await serve({ devServers: dev }, creatingSessions(['/tmp/allowed', '/tmp/other']))
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+    client.send({ t: 'dev.status', folder: '/tmp/allowed' })
+    await client.until((m) => m.t === 'dev.state', 'the first state')
+
+    dev.push({ folder: '/tmp/other', status: 'ready', port: 3000, url: 'http://localhost:3000' })
+    // Round-trip something the server answers immediately, so "nothing arrived"
+    // is a measurement rather than a race with the event loop.
+    client.send({ t: 'ping' })
+    await client.until((m) => m.t === 'pong', 'the pong')
+
+    expect(client.received.filter((m) => m.t === 'dev.state').length).toBe(1)
+  })
+
+  it('refuses the verb outright on a host that never advertised it', async () => {
+    const harness = await serve({}, creatingSessions(['/tmp/allowed']))
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+    client.send({ t: 'dev.start', folder: '/tmp/allowed' })
+
+    const error = await client.until((m) => m.t === 'error', 'the refusal')
+    expect(error).toEqual({
+      t: 'error',
+      code: 'unauthorized',
+      message: 'Dev servers cannot be started from a phone here.',
+    })
+  })
+})

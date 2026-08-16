@@ -1,10 +1,12 @@
 /* ============================================================================
-   Terminal Deck — phone client
+   Terminal Deck — browser client
 
-   Mobile-first and dark by default. The values match the desktop's
-   `src/renderer/styles/tokens.css`; they are restated rather than imported
-   because that file's @font-face rules point at paths relative to the renderer,
-   and pulling it in whole would break this build over a font URL.
+   Mobile-first, and it wears whichever appearance the reader asked for. The
+   values match the desktop's `src/renderer/styles/tokens.css`; they are restated
+   rather than imported because that file's @font-face rules point at paths
+   relative to the renderer, and pulling it in whole would break this build over
+   a font URL. `src/renderer/styles/tokens.test.ts` holds the two sheets against
+   each other so the restatement cannot drift.
 
    Three layout rules do most of the work here:
 
@@ -16,6 +18,38 @@
      3. The frame is the window, at every width. What is capped is the column a
         given screen reads in, never the frame around it — see "wider" at the
         foot of this file, which is where that argument is made in full.
+
+   ---------------------------------------------------------------- appearance
+
+   **Three states, and this sheet carries two of them.** The person can choose
+   light, can choose dark, or can leave it to follow the system — which is the
+   default and the one clients forget. `theme.ts` owns that decision and stamps
+   the resolved answer on `<html data-theme="light|dark">`, because the *terminal*
+   can only be re-coloured from JavaScript: xterm.js takes a colour object, not a
+   stylesheet, and a page that themed its chrome from a media query and left the
+   emulator alone would be a black terminal in a white window.
+
+   So the cascade below is in three parts and the order is load bearing:
+
+     1. `:root` is the **dark** palette. It is the base, it is this client's
+        historical look, and it is what a browser paints before any script has
+        run.
+     2. The media query is the **first paint on a light machine**, and only that:
+        it is guarded on `:not([data-theme])`, so it stands down the instant
+        `theme.ts` stamps an answer and can never fight an explicit choice.
+     3. `:root[data-theme='light']` is the light palette proper, and it wins
+        whatever the system says, because a person who chose light on a machine
+        set to dark has said something this sheet must not overrule.
+
+   Parts 2 and 3 are the same list of colours written twice. That is a copy, and
+   a copy needs a mechanism rather than a promise: `pwa/tests/theme-tokens.test.ts`
+   reads both blocks and fails if they stop agreeing, the same way tokens.test.ts
+   holds this file against the desktop's.
+
+   Dark is `:root` rather than light — the desktop's sheet is the other way round
+   — for two reasons. It is what this client shipped with, and it is the palette
+   somebody reading a terminal at night lands on if every question above them
+   goes unanswered.
    ============================================================================ */
 
 @font-face {
@@ -70,6 +104,14 @@
   --status-idle: #8f8f8f;
   --color-critical: #ff6f60;
 
+  /* The terminal's own paper, which in this theme is the page's. It has its own
+     token because the light theme's is *not* the page's — see the note there —
+     and because the emulator is painted from JavaScript: `terminal.ts` carries
+     the same two colours as a xterm theme object, and the suite holds the two
+     copies against each other. */
+  --terminal-bg: #191919;
+  --terminal-fg: #d4d4d4;
+
   --radius-sm: 4px;
   --radius-md: 6px;
   --radius-lg: 10px;
@@ -104,6 +146,100 @@
   --dock-safe: env(safe-area-inset-bottom, 0px);
 
   color-scheme: dark;
+}
+
+/* ------------------------------------------------------- light, first paint */
+
+/* The light palette, for the moments before `theme.ts` has said anything.
+   Guarded on `:not([data-theme])` so it stands down the instant a choice is
+   stamped — including a stamped *dark* on a light machine, which is the case a
+   `:not([data-theme='dark'])` guard would get right and a bare `:root` would
+   get wrong.
+
+   It cannot be folded into the rule below it, because that one has to apply
+   whatever the system says. Two copies of one palette, held together by
+   `pwa/tests/theme-tokens.test.ts` rather than by hope. */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    --bg-primary: #ffffff;
+    --bg-secondary: #f5f5f5;
+    --bg-tertiary: #ededed;
+    --bg-hover: rgba(56, 56, 56, 0.055);
+    --bg-active: rgba(56, 56, 56, 0.09);
+
+    --text-primary: #1c1c1c;
+    --text-secondary: #545454;
+    --text-muted: #666666;
+
+    --accent: #1a66c4;
+    --accent-soft: rgba(26, 102, 196, 0.1);
+    --accent-fg: #ffffff;
+
+    --border: rgba(56, 56, 56, 0.1);
+    --border-subtle: rgba(56, 56, 56, 0.055);
+
+    --status-working: #1667c8;
+    --status-waiting: #8f5800;
+    --status-input: #b83c08;
+    --status-completed: #19714a;
+    --status-idle: #666666;
+    --color-critical: #bd3a2c;
+
+    --terminal-bg: #e8e8e8;
+    --terminal-fg: #141414;
+
+    color-scheme: light;
+  }
+}
+
+/* ------------------------------------------------------------------- light */
+
+/* The light theme, as chosen — by the person, or by `theme.ts` on their
+   machine's behalf.
+
+   Every value is the desktop's own light theme, not a second vocabulary
+   invented here: the accent is the icon's blue walked down its own hue line
+   until it can be read as text on paper, the three inks clear AA on the darkest
+   paper in the sheet rather than only on white, and the status ramp is
+   desaturated so a column of dots reads as information rather than as alarm.
+   The argument for each of them is written out at length in
+   `src/renderer/styles/tokens.css`, which is where they come from.
+
+   The one value that is a decision of this sheet's own is `--terminal-bg`. In
+   the dark theme the terminal is the page; on paper it must not be, or the
+   session stops being a terminal and becomes an empty document with a cursor in
+   it. A 23-level step below white makes it read as a panel let into the window,
+   and its ink is darker than the app's body text because a terminal's whole
+   promise is that the characters are exact. */
+:root[data-theme='light'] {
+  --bg-primary: #ffffff;
+  --bg-secondary: #f5f5f5;
+  --bg-tertiary: #ededed;
+  --bg-hover: rgba(56, 56, 56, 0.055);
+  --bg-active: rgba(56, 56, 56, 0.09);
+
+  --text-primary: #1c1c1c;
+  --text-secondary: #545454;
+  --text-muted: #666666;
+
+  --accent: #1a66c4;
+  --accent-soft: rgba(26, 102, 196, 0.1);
+  --accent-fg: #ffffff;
+
+  --border: rgba(56, 56, 56, 0.1);
+  --border-subtle: rgba(56, 56, 56, 0.055);
+
+  --status-working: #1667c8;
+  --status-waiting: #8f5800;
+  --status-input: #b83c08;
+  --status-completed: #19714a;
+  --status-idle: #666666;
+  --color-critical: #bd3a2c;
+
+  --terminal-bg: #e8e8e8;
+  --terminal-fg: #141414;
+
+  color-scheme: light;
 }
 
 * {
@@ -212,6 +348,71 @@ button {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* -------------------------------------------------------------- appearance */
+
+/* Auto / Light / Dark, in the header, on every screen.
+
+   In the header rather than in a settings block at the foot of the session list,
+   and that is the whole of the placement argument: the appearance is the one
+   preference a person changes *because of what is on the screen right now* —
+   the sun came out, or the room went dark — and the pair screen, which is the
+   first thing a new reader sees, has no settings block to put it in.
+
+   Three pills rather than a switch, because there are three answers. A two-state
+   toggle can express "light" and "dark" and cannot express "whatever this
+   computer says", which is the default and the one people notice missing.
+
+   It shares the tab strip's shape on purpose: same pill, same radius, same
+   filled-when-current treatment. Two controls that behave alike should look
+   alike, and there is no line between this and anything else — the separation
+   is the space, then the tint, in that order. */
+.appearance {
+  display: flex;
+  flex: none;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--radius-md);
+  background: var(--bg-hover);
+}
+
+.appearance__choice {
+  min-height: 26px;
+  padding: 4px 9px;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.appearance__choice:active {
+  background: var(--bg-active);
+}
+
+/* The current one is a filled chip, the way a macOS segmented control marks its
+   selection — not merely brighter text, which at 12px is a difference nobody
+   reads at a glance. */
+.appearance__choice--here {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+/* Inside a terminal, on a phone, the header is the session's name.
+
+   Three pills take about 150 of a 390px header, and with the back chevron and
+   the folder line under it that left "Rework the localhost sc…" — measured on a
+   screenshot. The session's name is what somebody in a terminal needs from that
+   bar; the appearance is one tap away on the screen they came from, and on any
+   window wide enough for both they are both there.
+
+   `display: none` in a query rather than the `hidden` attribute, because this is
+   a fact about the width and not about the state — nothing in `main.ts` decides
+   it, so nothing in `main.ts` can get it wrong. */
+@media (max-width: 559px) {
+  #app.is-terminal .appearance {
+    display: none;
+  }
 }
 
 /* ------------------------------------------------------------------ banner */
@@ -419,12 +620,11 @@ button {
 
 /* The pairing field.
 
-   It borrows `.button--quiet` for its fill, and used to keep the browser's own
-   2px inset border on top of that — a hard light rectangle in a screen where
-   every other surface is a borderless fill, and the only outlined thing on the
-   pair screen. Depth here comes from layering, so the border goes and the focus
-   ring is the accent, which is also the state a field with no border needs in
-   order to still answer a keyboard. */
+   It used to keep the browser's own 2px inset border — a hard light rectangle
+   in a screen where every other surface is a borderless fill, and the only
+   outlined thing on the pair screen. Depth here comes from layering, so the
+   border goes and the focus ring is the accent, which is also the state a field
+   with no border needs in order to still answer a keyboard. */
 input[type='text'] {
   border: none;
   outline: none;
@@ -432,6 +632,33 @@ input[type='text'] {
 
 input[type='text']:focus-visible {
   box-shadow: 0 0 0 2px var(--accent);
+}
+
+/* Six digits, read off another screen and typed here.
+
+   It used to borrow `.button--quiet`, which meant it wore the *secondary* text
+   colour — right for a button that is a way out, wrong for the one field on the
+   screen, where what somebody has typed has to be the most legible thing on the
+   page. The spacing and the tabular figures were inline styles in `main.ts`; a
+   presentation decision written there is one this stylesheet cannot be held to.
+   `code-field.ts` still owns every *behavioural* attribute, and says why. */
+.code-field {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  margin-top: 10px;
+  padding: 12px;
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 20px;
+  text-align: center;
+  letter-spacing: 0.35em;
+  /* So the field does not reflow by a pixel as the digits change — a 1 is
+     narrower than an 8 in most faces, and six of them moving under a thumb
+     reads as the field twitching. */
+  font-variant-numeric: tabular-nums;
 }
 
 /* The same question, restated after pairing, where the answer can be changed.
@@ -728,6 +955,37 @@ input[type='text']:focus-visible {
   text-overflow: ellipsis;
 }
 
+/* The folder the session is running in, on its own line and in mono.
+
+   It used to be the third clause of the meta line — `Working · 4m ago ·
+   …/two/parts` — where it was the first thing to be ellipsised away and read as
+   more prose. It is not prose: it is a path, and monospace is the promise that
+   the characters are exact and countable. Its own line also means the row can
+   show more of it before the ellipsis, and `main.ts` puts the whole thing in the
+   row's `title` for the deep ones. */
+.session__where {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Which agent is in there — `claude`, `codex`, `shell`. A chip rather than
+   another clause in the meta line, because it is a *name* and the rest of that
+   line is a state and a time; two kinds of fact reading as one sentence is what
+   made the old row hard to scan. */
+.session__provider {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
 .session__chevron {
   flex: none;
   color: var(--text-muted);
@@ -838,6 +1096,178 @@ input[type='text']:focus-visible {
   color: var(--status-completed);
 }
 
+/* ------------------------------------------------------------- dev servers */
+
+/* One project per row, under the ports, because the two halves answer the same
+   question in opposite directions: the list above says what *is* listening, and
+   this says what could be. `dev-server.ts` owns every word and every rule here;
+   this is only how they sit.
+
+   A project whose package.json declares no dev script has no row at all — not a
+   row with a disabled button, which is a promise that some future press might
+   work. */
+
+.dev__caption {
+  margin: 20px 16px 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.dev {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.dev__row {
+  padding: 10px 16px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.dev__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 34px;
+}
+
+/* The same dot vocabulary as the session list, because it is the same question
+   — is this thing alive, and does it want me — and a second set of colours for
+   it would be a second thing to learn. */
+.dev__dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--status-idle);
+}
+/* The one moving thing in this client, and it is earned: a dev server takes
+   seconds to tens of seconds, and this is the state that was asked for in those
+   words — "if it's not quick then we can show some animation, loading or
+   activating". It is a heartbeat rather than a progress bar, because a
+   percentage would be a number this client made up. */
+.dev__dot--busy {
+  background: var(--status-waiting);
+  animation: dev-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes dev-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+/* Somebody who has asked their system not to animate things has asked this one
+   too. The dot stays, at full strength, which is the state that says the most. */
+@media (prefers-reduced-motion: reduce) {
+  .dev__dot--busy {
+    animation: none;
+  }
+}
+.dev__dot--ready {
+  background: var(--status-completed);
+}
+.dev__dot--failed {
+  background: var(--color-critical);
+}
+
+.dev__name {
+  flex: 1;
+  min-width: 0;
+  font-size: 15px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The command, the progress line, the port or the failure — whichever this row
+   is. Indented to the dot's column so the rows read as a list rather than as
+   four paragraphs. */
+.dev__line {
+  margin: 2px 0 0 19px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.4;
+  max-width: var(--prose);
+}
+
+/* The command that will be typed. Mono, because the characters are exact and
+   countable — the same promise the port labels and the folder paths make, and
+   the same reason. `dev-server.ts` decides which lines get it; a failure message
+   is a sentence and must not be dressed as a command. */
+.dev__line--exact {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+}
+
+/* The dev server's own latest output line. Untrusted text, drawn as text and
+   nothing else — never parsed, never interpreted, never turned into a
+   percentage this client made up. */
+.dev__note {
+  margin: 4px 0 0 19px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.4;
+  max-width: var(--prose);
+  /* One line, whatever the process printed. A build tool that emits a hundred
+     columns of progress bar must not push the row down the screen. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The address, and it is deliberately not a link — see `DevRowView.address`.
+   That URL means the *desktop's* loopback, and a browser following it would go
+   to the reader's own machine. */
+.dev__address {
+  margin: 4px 0 0 19px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+}
+
+.dev__actions {
+  display: flex;
+  gap: 8px;
+  margin: 10px 0 0 19px;
+}
+
+/* `.button` is display:block, width:100% and carries a top margin, because every
+   other button in this client is the primary action of its screen. These two sit
+   side by side under a row. */
+.dev__actions .button {
+  width: auto;
+  margin: 0;
+  min-height: 34px;
+  padding: 6px 14px;
+  font-size: 13px;
+}
+
+/* Start and Try again are **not** the accent's filled button, and that is the
+   house rule rather than restraint for its own sake: one accent, for the single
+   primary action of a screen. With eight projects on this list, eight filled
+   blue buttons would be the loudest thing in the client and none of them would
+   be the primary anything — it was measured on a screenshot and it was exactly
+   that.
+
+   A tint instead. It still reads as the action of its row, it sits at the same
+   weight as the Check buttons on the ports above it, and the quiet grey one
+   beside it stays visibly secondary. */
+.dev__actions .button:not(.button--quiet) {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.dev__actions .button:not(.button--quiet):active {
+  filter: none;
+  background: var(--bg-active);
+}
+
 /* --------------------------------------------------------------- terminal */
 
 .terminal-screen {
@@ -847,11 +1277,17 @@ input[type='text']:focus-visible {
   min-height: 0;
 }
 
+/* The terminal's paper is `--terminal-bg`, not the page's canvas, and the
+   difference only exists in the light theme: there the emulator sits a step
+   below the chrome so the session reads as a panel let into the window rather
+   than as an empty document with a cursor in it. `terminal.ts` paints the same
+   colour into xterm's own theme object, so this fill and the canvas meet without
+   a seam. */
 .terminal {
   flex: 1;
   min-height: 0;
   padding: 4px 0 4px 8px;
-  background: var(--bg-primary);
+  background: var(--terminal-bg);
 }
 
 /* Not connected: dimmed, and the cursor stops blinking (terminal.ts). A live
@@ -868,7 +1304,7 @@ input[type='text']:focus-visible {
    side of the canvas read as a border drawn around the terminal. The theme
    colour is what the canvas itself uses, so this makes the seam disappear. */
 .terminal .xterm-viewport {
-  background-color: var(--bg-primary);
+  background-color: var(--terminal-bg);
 }
 
 /* ---------------------------------------------------------------- key bar */
@@ -974,6 +1410,23 @@ input[type='text']:focus-visible {
 @media (min-width: 700px) {
   .keybar__key {
     flex: 0 0 64px;
+  }
+
+  /* New session stops being a banner.
+
+     `.button` is `width: 100%` because on a phone every one of them is the
+     primary action of its screen and a thumb should not have to aim. Across a
+     1280px window the same rule paints a 1150px blue bar above the session list,
+     which was measured on a screenshot and is by a distance the loudest thing on
+     the page — louder than the sessions it is sitting on top of.
+
+     Only this one. The pair screen's button is already capped by `--form`, and
+     every other `.button` in the client sets its own width because it is a
+     secondary action. */
+  .start > .button {
+    width: auto;
+    min-width: 200px;
+    padding-inline: 24px;
   }
 
   /* Breathing room the phone cannot spare. The left inset was always 8px for

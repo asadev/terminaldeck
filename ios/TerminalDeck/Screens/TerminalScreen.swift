@@ -55,6 +55,9 @@ struct TerminalScreen: View {
     /// The file the share sheet is showing, if any. Written at the moment Share
     /// is chosen — see `ShareOutput`.
     @State private var sharing: SharedFile?
+    /// Whether the details sheet is up: the folder this session runs in, its
+    /// agent, its status and the machine it is on. See `SessionDetailView`.
+    @State private var showingDetails = false
 
     /// The two ways in. Both run out of process; see `FilePickers.swift`.
     private enum Picking: String, Identifiable {
@@ -150,6 +153,24 @@ struct TerminalScreen: View {
                         Label("Find in output", systemImage: "magnifyingglass")
                     }
                     .accessibilityIdentifier("terminal.find")
+
+                    /*
+                     * Where this session runs, what it runs as, and on which
+                     * machine — the desktop's folder and account chips, which
+                     * have no room to be chips on a phone.
+                     *
+                     * Named in the menu as well as reachable by a long press on
+                     * the list row, because a gesture nobody is told about is a
+                     * feature nobody has. Deferred by a turn of the run loop for
+                     * the same reason Find above it is: a presentation asked for
+                     * in the frame a menu is dismissing in is dropped.
+                     */
+                    Button {
+                        DispatchQueue.main.async { showingDetails = true }
+                    } label: {
+                        Label("Session details", systemImage: "info.circle")
+                    }
+                    .accessibilityIdentifier("terminal.details")
 
                     Divider()
 
@@ -323,6 +344,15 @@ struct TerminalScreen: View {
         }
         .sheet(item: $sharing) { file in
             ShareSheet(url: file.url, subject: file.subject)
+        }
+        // No `open` handed in: this sheet was raised from inside the session, so
+        // a button leading to the screen underneath it would be furniture.
+        .sheet(isPresented: $showingDetails) {
+            SessionDetailView(model: model,
+                              hostID: hostID,
+                              sessionID: sessionID,
+                              open: nil,
+                              dismiss: { showingDetails = false })
         }
         .onAppear {
             bridge.onTitle = { title = $0 }

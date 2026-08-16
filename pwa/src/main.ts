@@ -30,6 +30,17 @@ import {
   loadDeviceIdentity,
   type DeckEndpoint,
 } from './endpoint'
+import {
+  DEV_CAPTION,
+  NO_DEV,
+  cannotOpenSentence,
+  devRowView,
+  devStep,
+  devWaitingSentence,
+  devserverOffered,
+  type DevAction,
+  type DevState,
+} from './dev-server'
 import { folderOffer, foldersAfter, noFoldersSentence, pickerRows } from './folders'
 import { machineNoun, readHostPlatform, type HostPlatform } from './host-platform'
 import { createKeyBar, type KeyBarHandle } from './keybar'
@@ -64,6 +75,20 @@ import { lookupMachine } from './rendezvous'
 import { chunkInput, type RemoteSession, type ServerMessage } from './protocol-client'
 import { formatSince, sessionTone, shortenPath, sortSessions, statusLabel } from './sessions'
 import { createTerminal, type TerminalHandle } from './terminal'
+import {
+  THEME_CHOICES,
+  THEME_COLOR,
+  THEME_DESCRIPTION,
+  THEME_LABEL,
+  readChoice,
+  resolveAppearance,
+  stampAppearance,
+  watchSystemAppearance,
+  writeChoice,
+  type Appearance,
+  type SystemAppearance,
+  type ThemeChoice,
+} from './theme'
 
 /**
  * Where a *direct* connection answers.
@@ -136,6 +161,15 @@ class Deck {
   private readonly banner = element('div', 'banner')
   private readonly bannerText = element('span', 'banner__text')
   private readonly bannerAction = element('button', 'banner__action', 'Retry now')
+  /**
+   * Auto / Light / Dark, in the header rather than in a settings block.
+   *
+   * Part of the chrome and not of a screen, for the same reason the tab strip
+   * is: it has to survive every screen it is drawn over, and it has to be
+   * reachable before pairing — the pair screen is the first thing a new reader
+   * sees, and it is a whole screen of paper or charcoal with nothing else on it.
+   */
+  private readonly appearanceStrip = element('div', 'appearance')
   /**
    * Where a machine's request for a GitHub login is reported.
    *
@@ -263,6 +297,20 @@ class Deck {
   private picking = false
   /** What the machine is serving, and the check in flight. See `localhost.ts`. */
   private localhost: LocalhostState = NO_LOCALHOST
+  /** One row per project that can be served, and the start in flight. See `dev-server.ts`. */
+  private dev: DevState = NO_DEV
+  /**
+   * The appearance, as the person answered it and as it is painted.
+   *
+   * Two fields rather than one, because they are two different facts: `system`
+   * is a real answer and is not a palette. See `theme.ts`, which owns the whole
+   * question and explains why the resolution happens here rather than in a
+   * media query.
+   */
+  private themeChoice: ThemeChoice = 'system'
+  private appearance: Appearance = 'dark'
+  /** The `prefers-color-scheme` subscription, so a machine can change its mind. */
+  private systemAppearance: SystemAppearance | null = null
   /** The timer behind `CHECK_PATIENCE_MS`, or null when nothing is being checked. */
   private checkTimer: number | null = null
   /**
@@ -297,7 +345,7 @@ class Deck {
 
     const titles = element('div', 'header__titles')
     titles.append(this.title, this.subtitle)
-    this.header.append(this.back, titles)
+    this.header.append(this.back, titles, this.appearanceStrip)
 
     this.bannerAction.type = 'button'
     this.bannerAction.addEventListener('click', () => this.connection?.resume())
@@ -309,6 +357,11 @@ class Deck {
   /* ------------------------------------------------------------- startup -- */
 
   start(): void {
+    // Before anything is drawn. Everything below paints in whichever appearance
+    // this settles on, and a page that renders once in the wrong one and then
+    // corrects itself is a flash somebody sees on every visit.
+    this.startTheme()
+
     const found = loadPairing(this.stores, Date.now())
     this.credential = found?.credential ?? null
     this.remember = found?.remember ?? 'this-tab'
@@ -404,6 +457,86 @@ class Deck {
     this.connection.start()
   }
 
+  /* --------------------------------------------------------------- theme -- */
+
+  /**
+   * Settle the appearance, and keep following the machine if that is the answer.
+   *
+   * The stored choice comes out of `localStorage` rather than out of whichever
+   * store the pairing chose — see `theme.ts`, which explains why a preference and
+   * a bearer credential do not belong under the same rule.
+   *
+   * `matchMedia` is passed rather than reached for, the same way
+   * `watchPhysicalKeyboard` takes it: that is what keeps the decision in a file
+   * the suite can ask questions of.
+   */
+  private startTheme(): void {
+    this.themeChoice = readChoice(this.stores.browser)
+    const media: MatchMedia | undefined =
+      typeof window.matchMedia === 'function' ? (query) => window.matchMedia(query) : undefined
+    this.systemAppearance = watchSystemAppearance(media, () => {
+      // Only while the answer is "follow the machine". A person who chose light
+      // has said something this must not overrule, and the listener stays
+      // subscribed rather than being torn down and rebuilt as the choice moves.
+      if (this.themeChoice === 'system') this.applyAppearance()
+    })
+    this.applyAppearance()
+  }
+
+  /**
+   * Paint the resolved appearance everywhere it has to be painted.
+   *
+   * Three places, and the third is the one that gets forgotten: the document,
+   * the browser's own chrome, and **the emulator**. xterm takes a colour object
+   * rather than reading the cascade, so a client that stamped the attribute and
+   * stopped would leave a dark terminal in a white window — which looks like a
+   * bug rather than like a choice, and is the failure this whole feature is
+   * judged on.
+   */
+  private applyAppearance(): void {
+    this.appearance = resolveAppearance(this.themeChoice, this.systemAppearance?.dark ?? true)
+    stampAppearance(document.documentElement, this.appearance)
+    const meta = document.querySelector('meta[name="theme-color"]')
+    if (meta !== null) meta.setAttribute('content', THEME_COLOR[this.appearance])
+    this.terminal?.setAppearance(this.appearance)
+    this.renderAppearance()
+  }
+
+  /** The person moved the switch. */
+  private chooseTheme(choice: ThemeChoice): void {
+    if (choice === this.themeChoice) return
+    this.themeChoice = choice
+    writeChoice(this.stores.browser, choice)
+    this.applyAppearance()
+  }
+
+  /**
+   * The three pills, redrawn from the one source of truth.
+   *
+   * `aria-pressed` rather than `aria-current`: these are not two places to be,
+   * they are one setting with three values, and the pressed state is what a
+   * screen reader needs to say which one is on.
+   */
+  private renderAppearance(): void {
+    this.appearanceStrip.replaceChildren(
+      ...THEME_CHOICES.map((choice) => {
+        const here = this.themeChoice === choice
+        const pill = element(
+          'button',
+          here ? 'appearance__choice appearance__choice--here' : 'appearance__choice',
+          THEME_LABEL[choice],
+        )
+        pill.type = 'button'
+        pill.setAttribute('aria-pressed', here ? 'true' : 'false')
+        // The label is two syllables because it lives in a phone's header; the
+        // sentence that says what it actually does is free here.
+        pill.setAttribute('aria-label', THEME_DESCRIPTION[choice])
+        pill.addEventListener('click', () => this.chooseTheme(choice))
+        return pill
+      }),
+    )
+  }
+
   /**
    * Follow the input hardware, so the key bar is there exactly when it is needed.
    *
@@ -463,6 +596,10 @@ class Deck {
     // socket that will never answer it is the lie this client exists not to
     // tell. The port list survives and is labelled as old rather than blanked.
     if (state.phase !== 'online') this.localhostDo({ t: 'offline' })
+    // And a dev server left reading "Starting…" against a dead socket. The
+    // server itself may well still be starting on the desktop — which is what
+    // the re-ask on reconnect below is for.
+    if (state.phase !== 'online') this.devDo({ t: 'offline' })
 
     if (state.phase === 'online' && !wasOnline) {
       // Re-attach rather than assume. The desktop kept running while we were
@@ -477,6 +614,11 @@ class Deck {
       // ports it is serving now — a reconnect is the one moment this list is
       // certainly stale, and the screen showing it is the one place that matters.
       if (this.screen === 'localhost') this.localhostDo({ t: 'list' })
+      // Same for the projects, and it is also what re-subscribes: the desktop
+      // pushes a folder's changes only to connections that have asked about it
+      // *on this connection*, so a reconnected client that did not re-ask would
+      // draw rows that never change again.
+      if (this.screen === 'localhost') this.askDevServers()
     }
 
     if (state.phase === 'rejected') {
@@ -566,13 +708,60 @@ class Deck {
     }, CHECK_PATIENCE_MS)
   }
 
-  /** Everything this client knew about what the machine was serving. */
+  /* --------------------------------------------------------- dev servers -- */
+
+  /**
+   * One transition of the dev-server machine, and the frames it asked for.
+   *
+   * `localhostDo`'s twin, and deliberately its twin: the rules live in
+   * `dev-server.ts` where the suite can reach them, and everything here is
+   * delivery. A frame that does not reach the desktop puts the machine straight
+   * back to its offline state rather than leaving a button spinning — the banner
+   * is already saying why, in the desktop's own words.
+   */
+  private devDo(action: DevAction): void {
+    const step = devStep(this.dev, action)
+    if (step.state === this.dev && step.send.length === 0) return
+    this.dev = step.state
+
+    for (const message of step.send) {
+      if (this.connection?.send(message) === true) continue
+      this.dev = devStep(this.dev, { t: 'offline' }).state
+      break
+    }
+
+    if (this.screen === 'localhost') this.renderContent()
+  }
+
+  /**
+   * Ask the desktop about every folder it is offering this device.
+   *
+   * Sent on arrival at the screen, on reconnect while looking at it, and when
+   * the folder list itself changes — never on a timer. After one of these the
+   * desktop pushes that folder's changes on its own, so a client with a poll
+   * loop would be asking a question that is already being answered.
+   */
+  private askDevServers(): void {
+    if (!devserverOffered(this.capabilities) || this.state.phase !== 'online') return
+    this.devDo({ t: 'ask', folders: this.folders ?? [] })
+  }
+
+  /**
+   * Everything this client knew about what the machine was serving — the ports
+   * and the projects both.
+   *
+   * One method for the two features because they are one screen and one fact:
+   * a port list and a dev-server row are each a statement about a machine this
+   * browser is no longer talking to, and leaving either on screen behind the
+   * pair form is the stale truth this client exists not to tell.
+   */
   private forgetLocalhost(): void {
     if (this.checkTimer !== null) {
       window.clearTimeout(this.checkTimer)
       this.checkTimer = null
     }
     this.localhost = NO_LOCALHOST
+    this.dev = NO_DEV
     if (this.screen === 'localhost') this.screen = 'sessions'
   }
 
@@ -646,6 +835,13 @@ class Deck {
     // test can reach. Every other frame leaves the machine untouched and returns
     // the identical object, so this costs one comparison per line of output.
     this.localhostDo({ t: 'frame', message })
+    // And `dev.state`, which arrives **unsolicited**: after one `dev.status` for
+    // a folder the desktop pushes that folder's every later change, which is why
+    // this is here rather than in a `case` that only runs for an answer this
+    // client is waiting on. It reads `error` too — a refused start comes back
+    // with no folder in it, and the only honest thing to do with one is stop the
+    // button spinning.
+    this.devDo({ t: 'frame', message })
 
     switch (message.t) {
       case 'welcome':
@@ -674,15 +870,16 @@ class Deck {
         this.keep()
         this.applySessions(message.sessions, activity)
         if (this.screen === 'pair') this.screen = 'sessions'
-        // A desktop that no longer offers tunnelling — a different machine on
-        // the same pairing, or one launched with a narrower `offer` — must not
-        // leave this browser sitting on a screen whose every control it would
-        // now refuse.
-        if (this.screen === 'localhost' && !localhostOffered(this.capabilities)) this.forgetLocalhost()
+        // A desktop that offers neither tunnelling nor dev servers — a different
+        // machine on the same pairing, or one launched with a narrower `offer` —
+        // must not leave this browser sitting on a screen whose every control it
+        // would now refuse.
+        if (this.screen === 'localhost' && !this.servesLocalhost) this.forgetLocalhost()
         // Asked on arrival rather than on the first tap, but only for somebody
         // already looking at it — which is the reconnect case, since the tab is
         // what asks otherwise.
-        if (this.screen === 'localhost') this.localhostDo({ t: 'list' })
+        if (this.screen === 'localhost' && localhostOffered(this.capabilities)) this.localhostDo({ t: 'list' })
+        if (this.screen === 'localhost') this.askDevServers()
         this.render()
         return
 
@@ -703,6 +900,12 @@ class Deck {
         // open by itself the moment a folder was granted again.
         if (message.folders.length === 0) this.picking = false
         if (this.screen === 'sessions') this.renderContent()
+        // The dev-server rows are one per *folder*, so this frame is the one
+        // that decides which of them may still exist. Re-asking prunes the rows
+        // for folders that have gone and picks up any that have arrived — and it
+        // is the only way to be subscribed to a new one, since the desktop
+        // pushes only about folders this connection has named.
+        if (this.screen === 'localhost') this.askDevServers()
         return
 
       case 'created': {
@@ -785,6 +988,11 @@ class Deck {
   /* -------------------------------------------------------------- render -- */
 
   private render(): void {
+    // The one thing the stylesheet cannot work out for itself: which screen this
+    // is. A phone-width header inside a terminal has room for the session's name
+    // or for the appearance control and not for both, and on that screen the name
+    // is what somebody needs — see the width rules at the foot of styles.css.
+    this.root.classList.toggle('is-terminal', this.screen === 'terminal')
     this.renderHeader()
     this.renderBanner()
     this.renderCredentialAsk()
@@ -803,7 +1011,7 @@ class Deck {
    */
   private renderTabs(): void {
     const listing = this.screen === 'sessions' || this.screen === 'localhost'
-    const show = listing && this.credential !== null && localhostOffered(this.capabilities)
+    const show = listing && this.credential !== null && this.servesLocalhost
     this.tabs.hidden = !show
     if (!show) {
       this.tabs.replaceChildren()
@@ -840,10 +1048,34 @@ class Deck {
   private goTo(screen: Screen): void {
     if (this.screen === screen) return
     this.screen = screen
-    if (screen === 'localhost' && this.localhost.ports === null && this.state.phase === 'online') {
+    if (
+      screen === 'localhost' &&
+      this.localhost.ports === null &&
+      this.state.phase === 'online' &&
+      localhostOffered(this.capabilities)
+    ) {
       this.localhostDo({ t: 'list' })
     }
+    // The dev-server ask is unconditional on arrival rather than "only if we
+    // have no rows", and that is the difference between the two features: a port
+    // list is a scan somebody pays for, while `dev.status` reads a `package.json`
+    // the desktop has usually already read — and asking is also what subscribes
+    // this connection to the pushes.
+    if (screen === 'localhost') this.askDevServers()
     this.render()
+  }
+
+  /**
+   * Whether the second tab has anything behind it.
+   *
+   * Two capabilities, one screen. `localhost` fills the port list and `devserver`
+   * fills the projects below it, and a desktop may advertise either without the
+   * other — the public demo box deliberately withholds `localhost` so a stranger
+   * is not offered a byte pipe to its loopback. So the tab appears when *either*
+   * half can be drawn, and each half checks for itself.
+   */
+  private get servesLocalhost(): boolean {
+    return localhostOffered(this.capabilities) || devserverOffered(this.capabilities)
   }
 
   /**
@@ -989,10 +1221,11 @@ class Deck {
     // a test can reach it. Nothing in this file can be rendered by the suite, so
     // a keypad decision written here is one that nothing checks.
     const input = asCodeField(element('input'))
-    input.className = 'button button--quiet'
-    input.style.textAlign = 'center'
-    input.style.letterSpacing = '0.35em'
-    input.style.fontVariantNumeric = 'tabular-nums'
+    // One class, and the presentation lives in the sheet with the rest of it.
+    // It used to borrow `.button--quiet` and then patch three inline styles on
+    // top, which meant the one field on the screen wore the *secondary* ink and
+    // no stylesheet could be held to it.
+    input.className = 'code-field'
     screen.append(label, input)
 
     screen.append(this.rememberChoice())
@@ -1209,10 +1442,26 @@ class Deck {
       const since = formatSince(now, this.activity.get(session.id) ?? null)
       const meta = element('div', 'session__meta')
       // The time is only printed when one is actually known — see formatSince.
-      meta.textContent = [statusLabel(session), since, shortenPath(session.cwd)]
-        .filter((part): part is string => part !== null)
-        .join(' · ')
+      meta.append(
+        element(
+          'span',
+          undefined,
+          [statusLabel(session), since].filter((part): part is string => part !== null).join(' · '),
+        ),
+      )
+      // Which agent is in there. It was only ever visible from inside the
+      // session, under the title, which is the one place somebody already knows
+      // — the list is where it decides which row to open.
+      if (session.provider !== '') meta.append(element('span', 'session__provider', session.provider))
       body.append(meta)
+
+      // The folder, on its own line and in mono. It used to be the last clause
+      // of the meta line, where it was the first thing to be ellipsised away and
+      // read as more prose; a path is not prose. The whole value stays reachable
+      // from a row that ellipsises, which is what the title is for.
+      const where = element('div', 'session__where', shortenPath(session.cwd))
+      where.title = session.cwd
+      body.append(where)
 
       button.append(dot, body, element('span', 'session__chevron', '›'))
       button.addEventListener('click', () => this.openSession(session.id))
@@ -1244,17 +1493,43 @@ class Deck {
    * honest as the feature changes around it.
    *
    * The order of the page is the order of the questions. What is listening, then
-   * one press per port to find out whether it really answers, then — last,
-   * because it is the answer to a question somebody asks after they have looked
-   * — why this client stops there.
+   * one press per port to find out whether it really answers, then what could be
+   * listening and is not — the dev servers — and then, last, because it is the
+   * answer to a question somebody asks after they have looked, why this client
+   * stops there.
+   *
+   * Both halves are gated on their own capability and neither assumes the other.
+   * A desktop can advertise `localhost` without `devserver` or the other way
+   * round, and the screen is whatever it actually offers.
    */
   private localhostScreen(): HTMLElement {
     const screen = element('div', 'screen')
     // Edge to edge, like the session list it sits beside: the rows carry their
     // own gutters so a row highlights across the full width of the column.
     screen.style.padding = '0'
-    const { ports, listing, checking, outcome } = this.localhost
     const online = this.state.phase === 'online'
+    const tunnels = localhostOffered(this.capabilities)
+
+    if (tunnels) this.portsInto(screen, online)
+    this.devInto(screen, online)
+    // The screen's footnote, and it is the last thing on purpose: it answers a
+    // question somebody asks *after* they have looked at the list and wondered
+    // why nothing here opens a page. It covers the dev servers' addresses as
+    // well, which is why `devInto` writes its own shorter version of it only
+    // when this one is absent.
+    if (tunnels) screen.append(element('p', 'note localhost__note', cannotServeSentence(this.noun)))
+    return screen
+  }
+
+  /**
+   * The port list, its Refresh and its check results.
+   *
+   * Split out of `localhostScreen` when the dev servers joined it: two features
+   * on one screen, each with four states, is a method nobody can read as one
+   * thing. Nothing here changed with the split.
+   */
+  private portsInto(screen: HTMLElement, online: boolean): void {
+    const { ports, listing, checking, outcome } = this.localhost
 
     // No heading. The tab above already says Localhost, and a title repeating
     // the control that got you here is exactly the "nothing extra" this pass was
@@ -1327,9 +1602,98 @@ class Deck {
 
       if (!online) screen.append(element('p', 'note localhost__note', stalePortsSentence(this.noun)))
     }
+  }
 
-    screen.append(element('p', 'note localhost__note', cannotServeSentence(this.noun)))
-    return screen
+  /**
+   * The projects this desktop could start a dev server in.
+   *
+   * Every word comes out of `dev-server.ts` and every rule with it; this is
+   * delivery. Two of those rules are visible in the shape of the code and are
+   * worth naming where somebody editing the DOM will see them:
+   *
+   *  - **The rows are whatever the reducer holds, in its order.** They are never
+   *    assembled here from `folders`, because a folder with no dev script has no
+   *    row — and a row built from the folder list would put one there, with a
+   *    button whose only outcome is a refusal.
+   *  - **`note` is process output.** It goes on screen as text, through `plain`
+   *    like every other string that came off this socket, and is never parsed.
+   *
+   * The whole section is absent — not empty, not a heading with nothing under it
+   * — when there is nothing to draw. A desktop that never advertised `devserver`,
+   * or one whose every project is a folder with no dev script, is a desktop this
+   * screen says nothing about.
+   */
+  private devInto(screen: HTMLElement, online: boolean): void {
+    if (!devserverOffered(this.capabilities)) return
+    const rows = this.dev.rows
+
+    if (rows.length === 0) {
+      // One sentence for the round trip between arriving here and the first
+      // answer, and nothing at all once the answer is "no project here has a dev
+      // script". Silence is the honest state for that: there is nothing to press
+      // and nothing to explain.
+      if (online && (this.folders?.length ?? 0) > 0) {
+        screen.append(element('p', 'empty', devWaitingSentence(this.noun)))
+      }
+      return
+    }
+
+    screen.append(element('p', 'dev__caption', DEV_CAPTION))
+    const list = element('ul', 'dev')
+    for (const row of rows) {
+      const view = devRowView(row, { online, starting: this.dev.starting === row.folder })
+      const item = element('li', 'dev__row')
+      // The whole path, reachable from a row that shows only the project's name.
+      // The same escape hatch the folder picker uses, for the same reason: two
+      // checkouts can share a last segment.
+      item.title = view.folder
+
+      const head = element('div', 'dev__head')
+      head.append(
+        element('span', `dev__dot dev__dot--${view.tone}`),
+        element('span', 'dev__name', view.name),
+      )
+      item.append(head)
+      item.append(element('p', view.exact ? 'dev__line dev__line--exact' : 'dev__line', plain(view.line)))
+      if (view.note !== null) item.append(element('p', 'dev__note', plain(view.note)))
+      if (view.address !== null) item.append(element('p', 'dev__address', plain(view.address)))
+
+      const actions = element('div', 'dev__actions')
+      if (view.start !== null) {
+        const start = element('button', 'button', view.start)
+        start.type = 'button'
+        // Disabled while *any* start is in flight, not just this row's: the
+        // desktop allows one at a time and refuses the second with a sentence,
+        // so a live-looking button on the row below is a press that produces an
+        // error message rather than a dev server.
+        start.disabled = this.dev.starting !== null
+        start.addEventListener('click', () => this.devDo({ t: 'start', folder: view.folder }))
+        actions.append(start)
+      }
+      const sessionId = view.sessionId
+      if (sessionId !== null) {
+        // The dev server runs in an ordinary session. This is how its output is
+        // read, how a failure is investigated, and — since there is no stop verb
+        // and should not be — how it is stopped: Ctrl-C, in the session it is
+        // running in, like any other process.
+        const open = element('button', 'button button--quiet', 'Open session')
+        open.type = 'button'
+        open.addEventListener('click', () => this.openSession(sessionId))
+        actions.append(open)
+      }
+      if (actions.childElementCount > 0) item.append(actions)
+      list.append(item)
+    }
+    screen.append(list)
+
+    // Why the address above is text and not a link. Only when this screen has no
+    // port list under it — with one, the footnote at the bottom of the screen
+    // says the same thing at more length and a second copy would be the sort of
+    // duplication this pass was asked to take out.
+    const serving = rows.some((row) => row.status === 'ready' && row.url !== undefined)
+    if (serving && !localhostOffered(this.capabilities)) {
+      screen.append(element('p', 'note localhost__note', cannotOpenSentence(this.noun)))
+    }
   }
 
   /**
@@ -1561,7 +1925,12 @@ class Deck {
           this.connection?.send({ t: 'resize', id: this.attachedId, cols: size.cols, rows: size.rows })
         }
       },
-    })
+    },
+    // Built in the appearance that is on screen, rather than built dark and
+    // corrected: xterm paints its first frame from the theme it was constructed
+    // with, and a terminal that flashes charcoal before going white is the
+    // failure this feature is judged on, in miniature.
+    this.appearance)
     const keybar = createKeyBar({ onData: (data) => this.sendInput(data) })
 
     const dock = element('div', 'keybar-dock')

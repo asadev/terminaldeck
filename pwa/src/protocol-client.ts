@@ -63,8 +63,10 @@
 import {
   CAPABILITY,
   CREDENTIAL_OPERATIONS,
+  DEV_SERVER_STATUSES,
   MAX_CREDENTIAL_HOST_LENGTH,
   MAX_CREDENTIAL_REPO_LENGTH,
+  MAX_CWD_BYTES,
   MAX_INPUT_BYTES,
   MAX_MESSAGE_BYTES,
   PROTOCOL_VERSION,
@@ -72,6 +74,8 @@ import {
   parseSession,
   type ClientMessage,
   type CredentialOperation,
+  type DevServerReport,
+  type DevServerStatus,
   type DeviceDescriptor,
   type LocalPort,
   type ProtocolErrorCode,
@@ -82,6 +86,8 @@ import {
 export type {
   ClientMessage,
   CredentialOperation,
+  DevServerReport,
+  DevServerStatus,
   DeviceDescriptor,
   LocalPort,
   ProtocolErrorCode,
@@ -337,6 +343,93 @@ function localhostFrame(parsed: unknown): DecodeResult | null {
 }
 
 /**
+ * `dev.state`, the third frame `parseServerFrame` does not read.
+ *
+ * ## Why this is the third exception and still not a habit
+ *
+ * The argument is `credentialRequest`'s and `localhostFrame`'s, applied to a
+ * third capability, and it is the same argument because it is the same seam: the
+ * shared parser was written for a desktop acting as the **guest** of another
+ * desktop, and that guest negotiates nothing, so refusing a frame it has never
+ * heard of is right *for it*. This client negotiates. It reads
+ * `welcome.capabilities` and sends `dev.status` only after seeing `devserver` in
+ * there, which makes `dev.state` a frame it has agreed to receive.
+ *
+ * The right home for all seven branches is `parseServerFrame` itself, the day the
+ * guest also starts dev servers. Moving them there deletes these functions and
+ * changes nothing else.
+ *
+ * ## What is refused and what is merely dropped
+ *
+ * A frame with no folder, or with a status this build has never heard of, is
+ * **refused whole**. That is deliberately harsher than the port list one row
+ * over, and the asymmetry is the point: a bad row in a list of ten leaves nine
+ * useful ones, whereas this frame *is* the one project, and a row drawn as some
+ * other state is precisely the wrong thing — a sixth status added on the desktop
+ * should produce a missing row in an old client, never a row that lies about
+ * which state it is in. `DevServerPanel.tsx` drops such a row on the desktop for
+ * the same reason and in the same words.
+ *
+ * Every optional field is taken only when it is genuinely there and genuinely
+ * usable, and never invented. The fields are not independent — `port` and `url`
+ * exist only on `ready`, `message` only on `failed` — so a reader that filled in
+ * a blank would be manufacturing the one state this capability's author calls
+ * the genuinely wrong thing to display.
+ */
+function devStateFrame(parsed: unknown): DecodeResult | null {
+  if (typeof parsed !== 'object' || parsed === null) return null
+  const frame = parsed as Record<string, unknown>
+  if (frame.t !== 'dev.state') return null
+
+  const raw = frame.state
+  if (typeof raw !== 'object' || raw === null) return { ok: false, reason: 'dev.state without a state' }
+  const row = raw as Record<string, unknown>
+
+  // Bounded by the same cap the wire puts on a folder anywhere else, because it
+  // is the same value: the desktop echoes back its own spelling of a path it
+  // already offered, and a client keying its rows on this string should not key
+  // them on a megabyte.
+  const folder = typeof row.folder === 'string' ? row.folder : ''
+  if (folder === '' || folder.length > MAX_CWD_BYTES) {
+    return { ok: false, reason: 'dev.state without a folder' }
+  }
+  const status = DEV_SERVER_STATUSES.find((known) => known === row.status)
+  if (status === undefined) return { ok: false, reason: 'dev.state with an unknown status' }
+
+  const state: DevServerReport = { folder, status }
+  const port = wholePort(row.port)
+  if (port !== null) state.port = port
+  for (const field of ['script', 'command', 'sessionId', 'url'] as const) {
+    const value = row[field]
+    // Short by nature — a script name, a command line, a session id, a
+    // `http://localhost:3000`. The cap is what stops a machine having a bad day
+    // from pushing a wall of text into a row somebody is trying to read.
+    if (typeof value === 'string' && value !== '' && value.length <= MAX_DEV_FIELD_CHARS) {
+      state[field] = value
+    }
+  }
+  // `note` is the dev server's own latest output line and `message` is the
+  // desktop's sentence about a failure. Both are display text that lands on a
+  // screen, both go through `plain` in main.ts like every other string that came
+  // off this socket, and neither is ever parsed — the note especially, which is
+  // bytes a process on somebody's machine printed.
+  for (const field of ['note', 'message'] as const) {
+    const value = row[field]
+    if (typeof value === 'string' && value !== '') state[field] = value.slice(0, MAX_REFUSAL_CHARS)
+  }
+  return { ok: true, message: { t: 'dev.state', state } }
+}
+
+/**
+ * How long a script name, a command line, a session id or a URL may be.
+ *
+ * All four are short in reality and all four are drawn on one line of a row, so
+ * this is a display bound rather than a security one — `MAX_MESSAGE_BYTES` has
+ * already been applied to the whole frame before any of this runs.
+ */
+const MAX_DEV_FIELD_CHARS = 512
+
+/**
  * How much of a desktop's refusal is worth putting on a phone.
  *
  * The real ones are one sentence — `tunnel.ts` writes them — and the cap is here
@@ -411,6 +504,8 @@ export function decodeServerMessage(raw: string): DecodeResult {
   if (credential !== null) return credential
   const localhost = localhostFrame(frame)
   if (localhost !== null) return localhost
+  const dev = devStateFrame(frame)
+  if (dev !== null) return dev
   const parsed = parseServerFrame(frame)
   if (!parsed.ok) return parsed
   const message = parsed.message

@@ -1617,6 +1617,12 @@ function Workspace() {
           onCloseTab={closeTab}
           onSelectPanel={showPanel}
           onNewSession={newSession}
+          // The chevron half of the split button. The press beside it still starts a
+          // session immediately in the remembered folder — that one-click path was
+          // deliberate and is unchanged; this opens the options dialog, which until now
+          // was reachable only from the command palette. Without this prop the chevron
+          // is absent rather than dead, which is the honest failure and is pinned.
+          onNewSessionOptions={() => setNewSessionOpen(true)}
           onNewBrowserTab={newBrowserTab}
           onOpenProject={openProject}
           onCloseProject={closeProject}

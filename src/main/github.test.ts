@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import type { IpcMain } from 'electron'
 import { beforeEach, describe, expect, it } from 'vitest'
+import * as githubModule from './github'
 import {
   cacheThrough,
   clampLimit,
@@ -15,7 +16,6 @@ import {
   mapIssue,
   mapPullRequest,
   MAX_CACHE_ENTRIES,
-  notificationArgs,
   parseRemoteConfig,
   parseRemoteUrl,
   parseResolved,
@@ -27,7 +27,6 @@ import {
   registerGitHubIpc,
   resolveRepo,
   sectionKey,
-  summarizeNotifications,
   type GitHubFailure,
   type RemoteEntry,
   type RepoRef,
@@ -677,59 +676,6 @@ describe('mapIssue', () => {
   })
 })
 
-/* --------------------------------------------------------- notifications -- */
-
-describe('summarizeNotifications', () => {
-  const item = (fullName: string, reason: string) => ({
-    unread: true,
-    reason,
-    repository: { full_name: fullName },
-  })
-
-  it('counts the account total and the project’s own share', () => {
-    const summary = summarizeNotifications(
-      [item('cli/cli', 'mention'), item('cli/cli', 'review_requested'), item('other/repo', 'subscribed')],
-      'cli/cli',
-    )
-    expect(summary.total).toBe(3)
-    expect(summary.repo).toBe(2)
-    expect(summary.reasons).toEqual({ mention: 1, review_requested: 1, subscribed: 1 })
-  })
-
-  /** GitHub is case-insensitive about owner and repo names; the filter must be too. */
-  it('matches the repository regardless of case', () => {
-    expect(summarizeNotifications([item('CLI/CLI', 'mention')], 'cli/cli').repo).toBe(1)
-  })
-
-  it('ignores threads that are already read', () => {
-    expect(summarizeNotifications([{ unread: false, reason: 'mention' }], 'cli/cli').total).toBe(0)
-  })
-
-  /**
-   * The endpoint pages at 50 and reports no grand total, so a full page has to
-   * be reported as "at least 50" rather than as exactly 50.
-   */
-  it('flags a full page as capped', () => {
-    const full = Array.from({ length: 50 }, () => item('cli/cli', 'ci_activity'))
-    expect(summarizeNotifications(full, 'cli/cli').capped).toBe(true)
-    expect(summarizeNotifications(full.slice(0, 49), 'cli/cli').capped).toBe(false)
-  })
-
-  it('returns an empty summary for anything that is not an array', () => {
-    expect(summarizeNotifications(null, 'cli/cli')).toEqual({
-      total: 0,
-      repo: 0,
-      capped: false,
-      reasons: {},
-    })
-    expect(summarizeNotifications({ message: 'Not Found' }, 'cli/cli').total).toBe(0)
-  })
-
-  it('buckets a notification with no reason rather than dropping it', () => {
-    expect(summarizeNotifications([{ unread: true }], 'cli/cli').reasons).toEqual({ other: 1 })
-  })
-})
-
 /* ---------------------------------------------------------------- limits -- */
 
 describe('clampLimit', () => {
@@ -959,18 +905,53 @@ describe('gh arguments', () => {
     expect(pullListArgs(enterprise, 20)).toContain('git.acme.co/cli/cli')
     expect(issueListArgs(enterprise, 20)).toContain('git.acme.co/cli/cli')
   })
+})
+
+/* ------------------------------------------------------ the bell, removed -- */
+
+/**
+ * The notifications bell is gone, and these are the two assertions that fail if
+ * it comes back.
+ *
+ * It is not a feature that was cut for taste. GitHub's reference for its
+ * notifications endpoints carries the note, verbatim: *"These endpoints only
+ * support authentication using a personal access token (classic)."* Read off
+ * the live page on 2026-08-16, and corroborated by GitHub's own OpenAPI
+ * description, where all ten operations in the `notifications` subcategory are
+ * marked `"enabledForGitHubApps": false`. This app signs in through a GitHub
+ * App and nothing else, so the credential it holds is refused by the endpoint
+ * itself — no permission on any registration changes that, and there is no
+ * scope to ask for. A feature that cannot work does not ship as an empty list
+ * or as a permanent error.
+ */
+describe('nothing in this module asks GitHub about notifications', () => {
+  /**
+   * The module surface, which is where it would reappear first: a
+   * `fetchNotifications`, a `notificationArgs`, a `summarizeNotifications`, or
+   * a `notificationsUnsupportedFailure` to describe its own failure with.
+   */
+  it('exports nothing that fetches, counts or excuses them', () => {
+    expect(Object.keys(githubModule).filter((name) => /notification/i.test(name))).toEqual([])
+  })
 
   /**
-   * Regression: `gh api` defaults to github.com. Without --hostname, an
-   * enterprise project's bell counted the user's *github.com* notifications
-   * and then filtered them by `owner/repo` — which matches a same-named
-   * repository on the wrong host.
+   * And the classifier no longer carries the special case that existed only for
+   * the bell.
+   *
+   * `Resource not accessible by integration` is GitHub's phrase for "this
+   * credential is the wrong kind for this endpoint", and it used to be
+   * intercepted and relabelled `notifications-unsupported`. On every endpoint
+   * this app still calls it means what the general branch says — the account
+   * cannot read this repository — so intercepting it now would put a sentence
+   * about a deleted feature in front of somebody with a permissions problem.
    */
-  it('asks the repository’s own host for notifications', () => {
-    const args = notificationArgs(enterprise)
-    expect(args[args.indexOf('--hostname') + 1]).toBe('git.acme.co')
-    expect(notificationArgs(dotCom)).toContain('github.com')
-    expect(args.some((arg) => arg.includes('per_page=50'))).toBe(true)
+  it('reads GitHub’s wrong-credential-kind refusal as the access problem it now is', () => {
+    for (const body of [
+      'gh: Resource not accessible by integration (HTTP 403)',
+      'gh: Resource not accessible by personal access token (HTTP 403)',
+    ]) {
+      expect(classifyGhError(execError(body)).kind, body).toBe('no-access')
+    }
   })
 })
 

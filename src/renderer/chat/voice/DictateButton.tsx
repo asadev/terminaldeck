@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useOneMenu } from '../../shell/one-menu'
 import { dictationGuidance, speechSupport } from './dictation'
 import './DictateButton.css'
 
@@ -35,6 +36,11 @@ export function DictateButton({ onFocusComposer, disabled = false }: Props) {
   }, [])
 
   const close = useCallback(() => setOpen(false), [])
+
+  // The window's one-menu-at-a-time rule — see `one-menu.ts`. This popover is
+  // the tallest thing on the composer's row and it overlapped the Options panel
+  // beside it.
+  useOneMenu(open, close)
 
   useEffect(() => {
     if (!open) return

@@ -2,18 +2,25 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import {
   isTabDrag,
+  middleEllipsis,
   readTabDrag,
   startTabDrag,
+  STRIP_LABEL_BUDGET,
+  tabLabel,
+  tabTooltip,
   TAB_DRAG_MIME,
   type TabTransfer,
   type WorkspaceTab,
 } from '../shell/workspace-tabs'
+import { Sidebar } from '../shell/Sidebar'
 import { WorkspaceTabStrip } from './WorkspaceTabStrip'
 import {
+  createPromotedStore,
   demote,
   dropIndex,
   MAX_PROMOTED,
   promote,
+  promotedStore,
   pruneOrder,
   readPromoted,
   stripTabs,
@@ -331,5 +338,307 @@ describe('the strip on a window with nothing in it', () => {
       <WorkspaceTabStrip tabs={tabs} activeTabId="s1" onSelect={() => {}} storage={null} />,
     )
     expect(html).toContain('Drag a session or a page here')
+  })
+})
+
+/* ------------------------------------------------- what a tab is called -- */
+
+describe('middleEllipsis', () => {
+  /*
+   * Not a style preference. The window this was written in had three sessions
+   * in one folder, all titled by the agent as "Update Claude Code terminal to
+   * …", and cutting the end — the only thing CSS can do — printed the same
+   * twenty-three characters on all three. The half that tells them apart is the
+   * tail.
+   */
+  it('leaves a label that already fits alone', () => {
+    expect(middleEllipsis('Session 2', 22)).toBe('Session 2')
+    expect(middleEllipsis('x'.repeat(22), 22)).toBe('x'.repeat(22))
+  })
+
+  it('keeps both ends of a label that does not', () => {
+    const cut = middleEllipsis('Update Claude Code terminal to new API', 22)
+    expect(cut.startsWith('Update Cla')).toBe(true)
+    expect(cut.endsWith('to new API')).toBe(true)
+    expect(cut).toContain('…')
+    expect(cut.length).toBeLessThanOrEqual(22)
+  })
+
+  it('tells two labels apart that share a long opening', () => {
+    const [a, b] = ['Update Claude Code terminal to new API', 'Update Claude Code terminal to new UI']
+    expect(middleEllipsis(a, 22)).not.toBe(middleEllipsis(b, 22))
+    // Which is exactly what cutting the end cannot do — the failure this fixes.
+    expect(a.slice(0, 22)).toBe(b.slice(0, 22))
+  })
+
+  it('does not leave a space stranded against the ellipsis', () => {
+    expect(middleEllipsis('Update Claude Code terminal', 22)).not.toContain(' …')
+    expect(middleEllipsis('Update Claude Code terminal', 22)).not.toContain('… ')
+  })
+
+  it('gives up rather than returning a lone ellipsis', () => {
+    // There is nothing to show on either side of the mark at these budgets, and
+    // a tab reading "…" says less than a clipped word.
+    expect(middleEllipsis('Session 2', 3)).toBe('Session 2')
+    expect(middleEllipsis('Session 2', Number.NaN)).toBe('Session 2')
+  })
+})
+
+describe('tabLabel', () => {
+  const inProject = (id: string, label: string): WorkspaceTab => ({
+    id,
+    kind: 'session',
+    label,
+    projectPath: '/Users/apple/Projects/terminaldeck',
+    closable: true,
+  })
+
+  it('numbers an unnamed session the way the sidebar does', () => {
+    /*
+     * Seen on screen, which is the only way it could have been: the strip drew
+     * `tab.label` raw, so a session the agent had not yet named read
+     * "terminaldeck" along the top and "Session 1" down the side — one window
+     * with two names, and promoting it looked like it had renamed it.
+     */
+    const tabs = [inProject('a', 'terminaldeck'), inProject('b', 'terminaldeck')]
+    expect(tabs.map((tab) => tabLabel(tab, tabs))).toEqual(['Session 1', 'Session 2'])
+  })
+
+  it('keeps a title the agent actually wrote', () => {
+    const tabs = [inProject('a', 'Fix the login redirect')]
+    expect(tabLabel(tabs[0], tabs)).toBe('Fix the login redirect')
+  })
+
+  it('counts siblings per folder, not per strip', () => {
+    // The strip holds an arbitrary subset in an arbitrary order, so numbering by
+    // position in it would call the same window different things on different
+    // days.
+    const other: WorkspaceTab = {
+      id: 'z',
+      kind: 'session',
+      label: 'science-locus',
+      projectPath: '/Users/apple/Projects/science-locus',
+      closable: true,
+    }
+    const tabs = [other, inProject('a', 'terminaldeck'), inProject('b', 'terminaldeck')]
+    expect(tabLabel(tabs[2], tabs)).toBe('Session 2')
+    expect(tabLabel(other, tabs)).toBe('Session 1')
+  })
+
+  it('leaves a browser page named after its page', () => {
+    const page: WorkspaceTab = { id: 'p', kind: 'browser', label: 'localhost:5173', closable: true }
+    expect(tabLabel(page, [page])).toBe('localhost:5173')
+  })
+})
+
+describe('tabTooltip', () => {
+  it('carries the whole title and the folder under it', () => {
+    const tab = session('a', 'Fix the login redirect')
+    expect(tabTooltip({ ...tab, projectPath: '/Users/apple/Projects/terminaldeck' }, tab.label)).toBe(
+      'Fix the login redirect\n/Users/apple/Projects/terminaldeck',
+    )
+  })
+
+  it('says nothing about a folder a browser page does not have', () => {
+    // An empty second line reads as a value that failed to load.
+    expect(tabTooltip(session('a', 'localhost:5173'), 'localhost:5173')).toBe('localhost:5173')
+  })
+})
+
+/* -------------------------------------------- the order, shared two ways -- */
+
+describe('the promoted store', () => {
+  it('reads its opening value out of storage', () => {
+    const held = createPromotedStore(store({ 'terminaldeck.strip.promoted': '["b","a"]' }))
+    expect(held.get()).toEqual(['b', 'a'])
+  })
+
+  it('writes through, and tells everyone who asked', () => {
+    const disk = store()
+    const held = createPromotedStore(disk)
+    let heard = 0
+    held.subscribe(() => (heard += 1))
+    held.set(['a'])
+    expect(heard).toBe(1)
+    expect(held.get()).toEqual(['a'])
+    expect(readPromoted(disk)).toEqual(['a'])
+  })
+
+  it('ignores a set that changes nothing', () => {
+    /*
+     * Load-bearing, not an optimisation. The strip prunes its order against the
+     * live tab list inside an effect that runs on every render; without this
+     * guard that effect would hand back a new array identity every time, wake
+     * itself, and never settle.
+     */
+    const held = createPromotedStore(store())
+    let heard = 0
+    held.subscribe(() => (heard += 1))
+    held.set(['a', 'b'])
+    held.set(['a', 'b'])
+    expect(heard).toBe(1)
+  })
+
+  it('hands the same store back for the same storage, and only then', () => {
+    // The sidebar's toggle and the strip have to be looking at one list. They
+    // find each other by both asking for `window.localStorage`.
+    const disk = store()
+    expect(promotedStore(disk)).toBe(promotedStore(disk))
+    expect(promotedStore(disk)).not.toBe(promotedStore(store()))
+  })
+
+  it('stops listening when told to', () => {
+    const held = createPromotedStore(store())
+    let heard = 0
+    const off = held.subscribe(() => (heard += 1))
+    off()
+    held.set(['a'])
+    expect(heard).toBe(0)
+  })
+
+  it('keeps the arrangement when there is nowhere to write it', () => {
+    // A window with storage disabled by policy still gets a working strip for
+    // as long as it is open; only the memory across a reload is lost.
+    const held = createPromotedStore(null)
+    held.set(['a'])
+    expect(held.get()).toEqual(['a'])
+  })
+})
+
+/* ------------------------------------------------ the gesture, and not it -- */
+
+describe('a strip tab', () => {
+  const long = 'Update Claude Code terminal to new API'
+  const tabs: WorkspaceTab[] = [
+    { ...session('a', long), projectPath: '/Users/apple/Projects/terminaldeck' },
+    { ...session('b', 'terminaldeck'), projectPath: '/Users/apple/Projects/terminaldeck' },
+  ]
+  const html = renderToStaticMarkup(
+    <WorkspaceTabStrip
+      tabs={tabs}
+      activeTabId="a"
+      onSelect={() => undefined}
+      onClose={() => undefined}
+      storage={store({ 'terminaldeck.strip.promoted': '["a","b"]' })}
+    />,
+  )
+
+  it('cuts a long title in the middle rather than at the end', () => {
+    expect(html).toContain(middleEllipsis(long, STRIP_LABEL_BUDGET))
+    expect(html).not.toContain(`>${long}<`)
+  })
+
+  it('carries the whole title and the folder in its tooltip', () => {
+    // The tab is 220px wide; this is where the rest of the answer lives.
+    expect(html).toContain('title="Update Claude Code terminal to new API')
+    expect(html).toContain('/Users/apple/Projects/terminaldeck"')
+  })
+
+  it('calls an unnamed session what the sidebar calls it', () => {
+    expect(html).toContain('>Session 2<')
+    expect(html).not.toContain('>terminaldeck<')
+  })
+
+  it('is draggable, and says which one is in hand to nobody but CSS', () => {
+    // `data-dragging` is set from an event this renderer never fires; what is
+    // pinned here is that the attribute is absent at rest, so a tab is not born
+    // looking like it is being dragged.
+    expect(html).toContain('draggable="true"')
+    expect(html).not.toContain('data-dragging')
+  })
+})
+
+/* ----------------------------------------- the same thing, without a drag -- */
+
+describe('promoting from the sidebar', () => {
+  const noop = (): void => {}
+  const projects = [{ path: '/Users/apple/Projects/terminaldeck', name: 'terminaldeck' }]
+  const tabs: WorkspaceTab[] = [
+    { ...session('a', 'Fix the login redirect'), projectPath: projects[0].path },
+    { ...session('b', 'terminaldeck'), projectPath: projects[0].path },
+  ]
+
+  function rail(disk: Storage, extra: { onNewSessionOptions?: () => void } = {}): string {
+    return renderToStaticMarkup(
+      <Sidebar
+        width={264}
+        projects={projects}
+        tabs={tabs}
+        activeTabId="a"
+        activePanel={null}
+        storage={disk}
+        {...extra}
+        onSelectTab={noop}
+        onCloseTab={noop}
+        onSelectPanel={noop}
+        onNewSession={noop}
+        onNewBrowserTab={noop}
+        onOpenProject={noop}
+        onCloseProject={noop}
+        onOpenSettings={noop}
+        onToggleCollapsed={noop}
+        onPeekStart={noop}
+        onPeekEnd={noop}
+        onStartResize={noop}
+      />,
+    )
+  }
+
+  it('offers every open window a way up that is not a gesture', () => {
+    /*
+     * A drag is invisible until somebody tries it and impossible without a
+     * mouse, and it was the only route into the strip. This button is both
+     * halves of that: the row's hover controls are revealed by
+     * `:focus-within` as well as `:hover`, so it is reachable by Tab.
+     */
+    const html = rail(store())
+    expect(html).toContain('aria-label="Show Fix the login redirect at the top"')
+    expect(html.match(/class="sb-row-action sb-promote"/g)).toHaveLength(2)
+  })
+
+  it('reads its pressed state off the same order the strip draws', () => {
+    // The failure this rules out is the one that makes assistive tech lie: a
+    // toggle with private state, next to a strip with its own.
+    const disk = store({ 'terminaldeck.strip.promoted': '["a"]' })
+    const html = rail(disk)
+    expect(html).toContain('aria-pressed="true"')
+    expect(html.match(/aria-pressed="true"/g)).toHaveLength(1)
+    expect(html).toContain('aria-label="Fold Fix the login redirect back into the sidebar"')
+  })
+
+  it('refuses rather than silently dropping a tab off the far end', () => {
+    const full = Array.from({ length: MAX_PROMOTED }, (_, index) => `t${index}`)
+    const disk = store({ 'terminaldeck.strip.promoted': JSON.stringify(full) })
+    const html = rail(disk)
+    // Disabled and saying why, because `promote` past the cap is a no-op and a
+    // button that does nothing when pressed is indistinguishable from a bug.
+    expect(html).toMatch(/class="sb-row-action sb-promote"[^>]*disabled/)
+    expect(html).toContain(`The top strip is full (${MAX_PROMOTED})`)
+    // And live again the moment there is room, rather than staying dead.
+    expect(rail(store())).not.toMatch(/class="sb-row-action sb-promote"[^>]*disabled/)
+  })
+
+  it('carries a drag image that is a tab, not a photograph of the row', () => {
+    // The node `setDragImage` is handed. Off-screen rather than hidden: both
+    // `display: none` and a negative z-index make the browser fall back to its
+    // own ghost of the 264px row, which is the look this replaced.
+    expect(rail(store())).toContain('class="tab-ghost"')
+  })
+
+  it('offers the options dialog beside New session, but only once wired', () => {
+    /*
+     * Pressing New session spawns immediately — deliberately; the dialog that
+     * used to stand in front of ⌘T was taken away on purpose. What was missing
+     * is any route *from here* to the panel that names the folder and the
+     * agent, which lives behind a command-palette entry.
+     *
+     * Absent rather than inert when no host wired it: this component cannot
+     * open a dialog mounted in `App.tsx`, and a chevron that does nothing is
+     * the thing this app calls a fake feature.
+     */
+    expect(rail(store())).not.toContain('sb-new-more')
+    expect(rail(store(), { onNewSessionOptions: noop })).toContain(
+      'aria-label="New session with options"',
+    )
   })
 })

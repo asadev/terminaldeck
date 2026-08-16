@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react'
+import { useOneMenu } from './one-menu'
 
 /**
  * The mechanics behind a chip's dropdown, shared by the two of them.
@@ -29,6 +30,16 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObje
  * close the menu. Listening on the document catches the click wherever in the
  * HTML it lands, and `pointerdown` rather than `click` so the menu is gone
  * before whatever was clicked reacts.
+ *
+ * ## Why that listener is not enough on its own
+ *
+ * It answers "was this click outside me", which is a question about markup —
+ * and one of the other menus on a session screen contains the buttons that open
+ * two more, so "outside" gives the wrong answer for that pair. `one-menu.ts`
+ * has the whole account of it; {@link useOneMenu} below is this hook taking
+ * part in the rule. Neither replaces the other: the document listener closes a
+ * menu when the click lands on nothing in particular, and the rule closes it
+ * when the click lands on another menu's button.
  */
 
 /** Between the chip and its menu, and between the menu and the window's edges. */
@@ -97,6 +108,9 @@ export function useChipMenu(remeasure?: unknown, holdEscape = false): ChipMenu {
   const hostRef = useRef<HTMLDivElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
 
+  /** Shut, and nothing else. What both dismissals and the window rule call. */
+  const closeSelf = useCallback(() => setOpen(false), [])
+
   /**
    * Measure the button, then the menu, then place it. In a layout effect so the
    * move happens before paint — in a plain effect the menu renders at 0,0 for
@@ -158,6 +172,12 @@ export function useChipMenu(remeasure?: unknown, holdEscape = false): ChipMenu {
       document.removeEventListener('keydown', onKey, true)
     }
   }, [open, holdEscape])
+
+  // Opening this chip's menu shuts whatever else in the window was open — the
+  // other chip beside it, or any of the four inside the chat box. See the head
+  // of this file, and `one-menu.ts` for why a dismiss listener per menu was not
+  // already doing it.
+  useOneMenu(open, closeSelf)
 
   const toggle = useCallback(() => setOpen((value) => !value), [])
   const choose = useCallback((next: () => void) => {

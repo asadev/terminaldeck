@@ -55,11 +55,36 @@ struct SessionListView: View {
     /// else, which is what makes the tap the consent.
     @State private var browsing: PortTunnel?
 
+    /**
+     * Which session the details sheet is about, if it is up.
+     *
+     * The machine as well as the session, for the reason `TerminalScreen` names
+     * one: ids come from each machine's own session layer and nothing makes them
+     * unique across machines, so a sheet holding an id alone would describe
+     * whichever machine happened to be current when it was drawn.
+     */
+    @State private var detailing: SessionRef?
+
+    private struct SessionRef: Identifiable, Hashable {
+        let host: String
+        let session: String
+        var id: String { "\(host)/\(session)" }
+    }
+
     var body: some View {
         ZStack {
             Theme.background.ignoresSafeArea()
 
-            if model.sessions.isEmpty && model.ports.isEmpty {
+            /*
+             * The dev servers count towards "is there anything here".
+             *
+             * Without them in this test, the one moment they are most useful is
+             * the one moment they are hidden: a machine whose projects are all
+             * stopped has no sessions and no listening ports, so the screen
+             * would draw "No sessions" over the top of the Start buttons that
+             * are the answer to it.
+             */
+            if model.sessions.isEmpty && model.ports.isEmpty && model.devServers.isEmpty {
                 empty
             } else {
                 list
@@ -69,6 +94,25 @@ struct SessionListView: View {
             LocalhostBrowser(model: model, tunnel: tunnel) {
                 browsing = nil
             }
+        }
+        /*
+         * Everything the wire says about one session.
+         *
+         * A sheet rather than a second navigation destination, because it is a
+         * reference somebody opens, reads and closes — not a place they are
+         * going. Reached by a long press here and by a named item in the
+         * session's own menu, which is the pair this app already uses for
+         * "quick, if you know it" and "findable, if you do not".
+         */
+        .sheet(item: $detailing) { ref in
+            SessionDetailView(model: model,
+                              hostID: ref.host,
+                              sessionID: ref.session,
+                              open: {
+                                  detailing = nil
+                                  model.open(session: ref.session, on: ref.host)
+                              },
+                              dismiss: { detailing = nil })
         }
         .onChange(of: browsing == nil) { _, dismissed in
             // Covers the swipe-down as well as the Done button: whichever way
@@ -265,6 +309,24 @@ struct SessionListView: View {
                     }
                     .buttonStyle(RowButtonStyle())
                     .accessibilityIdentifier("session.\(session.id)")
+                    /*
+                     * The shortcut to the details sheet.
+                     *
+                     * A long press rather than a second control on the row: the
+                     * row's whole job is to open the session, and a row with two
+                     * tap targets on a phone is a row people hit the wrong half
+                     * of. It is deliberately not the *only* way in — the same
+                     * screen is a named item inside the session, where somebody
+                     * who has never long-pressed anything will find it.
+                     */
+                    .contextMenu {
+                        Button {
+                            detailing = SessionRef(host: model.current?.id ?? "", session: session.id)
+                        } label: {
+                            Label("Details", systemImage: "info.circle")
+                        }
+                        .accessibilityIdentifier("session.details")
+                    }
                 }
 
                 alertsOffer
@@ -273,7 +335,13 @@ struct SessionListView: View {
                 // about the sessions. Put at the very bottom it sat under a
                 // screen's worth of localhost rows on a busy machine and read as
                 // a footnote about those instead.
+                //
+                // It stays glued to the sessions now that two sections follow
+                // it rather than one: moved below the dev servers it would read
+                // as a footnote about those, which is the same mistake one
+                // section further down.
                 scopeNote
+                devServers
                 localhost
             }
             .padding(.horizontal, 16)
@@ -371,6 +439,43 @@ struct SessionListView: View {
             .buttonStyle(RowButtonStyle())
             .padding(.top, 6)
             .accessibilityIdentifier("sessions.alertsOffer")
+        }
+    }
+
+    /**
+     * The machine's projects, and a button that starts the one you want.
+     *
+     * The section the port list could never be. `localhost` below lists what is
+     * *already* listening; this lists what *could* be, which on a machine in
+     * another room is the far more common case — the port is not there because
+     * the dev server is not running. `DevServerSection.swift` holds the row and
+     * the reasoning about its five states.
+     *
+     * Absent when the machine does not offer the capability, and absent when it
+     * does and none of its granted folders has a dev script: a header over no
+     * rows is a promise the machine has not made.
+     *
+     * `canTunnel` is passed through rather than assumed. `devserver` and
+     * `localhost` are separate capabilities and a machine can offer either
+     * without the other, and the row draws a different thing for each — an Open
+     * button when the page can genuinely be put on this phone, the address in
+     * text when it cannot.
+     */
+    @ViewBuilder
+    private var devServers: some View {
+        if model.canUseDevServers && !model.devServers.isEmpty {
+            SectionHeader(text: "Dev servers")
+            ForEach(model.devServers) { report in
+                DevServerRow(report: report,
+                             canTunnel: model.canBrowseLocalhost,
+                             start: { model.startDevServer(in: report.folder) },
+                             // The same door a port row uses, so a dev server
+                             // this phone just started opens exactly the way a
+                             // port that was already up does — and closing the
+                             // page is the same teardown.
+                             openPort: { port in browsing = model.openLocalhost(port: port) },
+                             openSession: { model.open(session: $0) })
+            }
         }
     }
 
@@ -616,22 +721,18 @@ private struct SessionRow: View {
         .contentShape(Rectangle())
     }
 
+    /// Both halves come from `SessionDetails`, which is also what the details
+    /// sheet prints. Two copies of "what is this session doing" is two answers
+    /// that drift, and the row and the sheet are the two places somebody would
+    /// notice — they can be on screen a second apart.
+    ///
+    /// Nothing is printed for the time when the desktop did not timestamp the
+    /// row; see `lastActivity` in `WireCodec` for why that field is read rather
+    /// than declared.
     private var statusLine: String {
-        var parts = [session.status]
-        if let code = session.exitCode { parts.append("exit \(code)") }
-        // Nothing is printed when the desktop did not timestamp the row; see
-        // `lastActivity` in `WireCodec` for why the field is read rather than
-        // declared.
-        if let at = lastActivity { parts.append(Self.ago(at)) }
+        var parts = [SessionDetails.statusLine(session)]
+        if let line = SessionDetails.activityLine(lastActivity) { parts.append(line) }
         return parts.joined(separator: " · ")
-    }
-
-    private static func ago(_ epochMilliseconds: Double) -> String {
-        let seconds = Date().timeIntervalSince1970 - epochMilliseconds / 1000
-        if seconds < 60 { return "just now" }
-        if seconds < 3600 { return "\(Int(seconds / 60))m ago" }
-        if seconds < 86_400 { return "\(Int(seconds / 3600))h ago" }
-        return "\(Int(seconds / 86_400))d ago"
     }
 }
 

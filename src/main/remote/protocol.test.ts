@@ -74,6 +74,8 @@ const CLIENT_TYPES: Record<ClientMessage['t'], true> = {
   'credential.ack': true,
   'credential.answer': true,
   'credential.deny': true,
+  'dev.status': true,
+  'dev.start': true,
 }
 
 /** Same guard for the other direction. */
@@ -100,6 +102,7 @@ const SERVER_TYPES: Record<ServerMessage['t'], true> = {
   'upload.done': true,
   'upload.failed': true,
   'credential.request': true,
+  'dev.state': true,
 }
 
 const VALID_CLIENT: ClientMessage[] = [
@@ -136,6 +139,8 @@ const VALID_CLIENT: ClientMessage[] = [
   { t: 'credential.answer', id: 'req-1', username: 'octocat', password: 'ghp_notarealtoken', remember: true },
   { t: 'credential.deny', id: 'req-1' },
   { t: 'credential.deny', id: 'req-1', reason: 'no-account' },
+  { t: 'dev.status', folder: '/Users/apple/Projects/terminaldeck' },
+  { t: 'dev.start', folder: '/Users/apple/Projects/terminaldeck' },
 ]
 
 const SESSION: RemoteSession = {
@@ -199,6 +204,48 @@ const VALID_SERVER: ServerMessage[] = [
   // Null is a frame that gets sent: git supplied no path to derive a name from,
   // and a client is expected to say so rather than invent one.
   { t: 'credential.request', id: 'req-2', host: 'github.com', repo: null, operation: 'read', prompt: false },
+  // The five dev-server states, because a client has to draw all five and the
+  // serialiser has to carry the fields each one sets. `ready` is the one that
+  // matters: `port` and `url` appear on it and on nothing else.
+  { t: 'dev.state', state: { folder: '/Users/apple/Projects/x', status: 'no-dev-script' } },
+  {
+    t: 'dev.state',
+    state: { folder: '/Users/apple/Projects/x', status: 'idle', script: 'dev', command: 'pnpm run dev' },
+  },
+  {
+    t: 'dev.state',
+    state: {
+      folder: '/Users/apple/Projects/x',
+      status: 'starting',
+      script: 'dev',
+      command: 'pnpm run dev',
+      sessionId: SESSION_ID,
+      note: 'VITE v7.1.0  ready in 412 ms',
+    },
+  },
+  {
+    t: 'dev.state',
+    state: {
+      folder: '/Users/apple/Projects/x',
+      status: 'ready',
+      script: 'dev',
+      command: 'pnpm run dev',
+      sessionId: SESSION_ID,
+      port: 5173,
+      url: 'http://localhost:5173',
+    },
+  },
+  {
+    t: 'dev.state',
+    state: {
+      folder: '/Users/apple/Projects/x',
+      status: 'failed',
+      script: 'dev',
+      command: 'pnpm run dev',
+      sessionId: SESSION_ID,
+      message: 'Nothing accepted a connection within 90 seconds.',
+    },
+  },
 ]
 
 /**

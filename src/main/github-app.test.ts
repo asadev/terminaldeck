@@ -3,8 +3,7 @@ import {
   APP_CLIENT_ID_ENV,
   APP_SLUG_ENV,
   appInstallUrl,
-  clientKindFor,
-  FORCE_OAUTH_ENV,
+  APP_UNCONFIGURED_REASON,
   GITHUB_APP,
   githubAppConfigured,
   githubAppRegistration,
@@ -31,11 +30,16 @@ import {
  * beside it, rather than as a value that quietly drifted.
  *
  * Everything else here now passes the registration in explicitly. The old
- * tests took it off the module constant, which meant "no registration ⇒ the
- * OAuth path" was really asserting "the constant is still null" — thirteen
- * tests across two files died the hour that stopped being true. A module whose
- * tests depend on a shipping constant having a particular value is a module
- * that breaks the day it ships.
+ * tests took it off the module constant, which meant "no registration" was
+ * really asserting "the constant is still null" — thirteen tests across two
+ * files died the hour that stopped being true. A module whose tests depend on a
+ * shipping constant having a particular value is a module that breaks the day
+ * it ships.
+ *
+ * The OAuth fallback these tests used to describe was deleted on 2026-08-16.
+ * What replaced its coverage is the pair below: a shipping build is configured,
+ * and a build without a registration reports that fact instead of quietly
+ * signing somebody in through somebody else's client id.
  */
 
 describe('the registration that ships', () => {
@@ -64,8 +68,8 @@ describe('the registration that ships', () => {
 
   /**
    * The slug is not decoration: it is the only thing that builds the install
-   * screen link, and that screen is the entire reason for preferring a GitHub
-   * App over OAuth. A slug that does not resolve is a button that opens a 404.
+   * screen link, and that screen is the entire reason this app is registered as
+   * a GitHub App at all. A slug that does not resolve is a button opening a 404.
    */
   it('holds a slug that builds the install screen', () => {
     expect(GITHUB_APP.slug).toBe('terminal-deck')
@@ -75,25 +79,51 @@ describe('the registration that ships', () => {
   })
 
   /**
-   * The pair that decides which sign-in a shipping build runs, asserted from
-   * the constant rather than from an environment override — because what a user
-   * gets out of the box is precisely the case no override can speak for.
+   * What a user gets out of the box, asserted from the constant rather than
+   * through an environment override — because that is precisely the case no
+   * override can speak for.
    */
-  it('makes the GitHub App the path a shipping build takes', () => {
+  it('makes a shipping build able to sign in with no configuration at all', () => {
     expect(githubAppConfigured({})).toBe(true)
-    expect(clientKindFor({})).toBe('github-app')
   })
 
   /**
-   * The other branch, which used to be the shipping one and is still real: a
-   * fork, an enterprise host, or anyone who has not registered an app of their
-   * own. It must keep working, and it must keep being *tested* — a GitHub App
-   * client id sent down the OAuth path, or the reverse, is a 404 either way.
+   * The other branch, and since the OAuth fallback was deleted it is a
+   * genuinely different outcome rather than a quieter one: a fork or an
+   * enterprise host with no registration cannot start a device flow, because
+   * there is no client id to send. It used to fall through to the GitHub CLI's
+   * borrowed id, which signed the user in as another application without ever
+   * saying so.
    */
-  it('falls back to the OAuth client when there is no registration', () => {
+  it('reports a build with no registration as unconfigured', () => {
     expect(githubAppConfigured({}, NO_REGISTRATION)).toBe(false)
-    expect(clientKindFor({}, NO_REGISTRATION)).toBe('oauth')
     expect(githubAppRegistration({}, NO_REGISTRATION)).toEqual({ clientId: null, slug: null })
+  })
+
+  /**
+   * The sentence that build shows instead of a Connect button, and the two ways
+   * out it has to name. Both are real: `gh auth login` is picked up by
+   * `github-auth.ts` with no registration involved at all, and the environment
+   * variable is the permanent fix for whoever maintains the fork.
+   *
+   * Pinned as content rather than as an exact string so the wording can be
+   * improved; what may not go is either escape route, because a dead end with no
+   * way out is what this replaced.
+   */
+  it('names both ways into a build that has no registration', () => {
+    expect(APP_UNCONFIGURED_REASON).toContain('gh auth login')
+    expect(APP_UNCONFIGURED_REASON).toContain(APP_CLIENT_ID_ENV)
+  })
+
+  /**
+   * The variable a fork points at its own registration with, spelled exactly.
+   * It is documented in the module header and named inside the sentence above,
+   * so a rename that missed either would ship instructions naming a variable
+   * nothing reads.
+   */
+  it('keeps the two override names a fork needs', () => {
+    expect(APP_CLIENT_ID_ENV).toBe('TERMINALDECK_GITHUB_APP_CLIENT_ID')
+    expect(APP_SLUG_ENV).toBe('TERMINALDECK_GITHUB_APP_SLUG')
   })
 })
 
@@ -105,7 +135,6 @@ describe('githubAppRegistration', () => {
       slug: 'terminal-deck',
     })
     expect(githubAppConfigured(env, NO_REGISTRATION)).toBe(true)
-    expect(clientKindFor(env, NO_REGISTRATION)).toBe('github-app')
   })
 
   /** The environment beats the built-in, or an enterprise build cannot exist. */
@@ -134,16 +163,16 @@ describe('githubAppRegistration', () => {
   /**
    * A present-but-blank variable is an unset shell export or an empty value in
    * a launcher plist, not an instruction. Reading it as "disable the GitHub
-   * App" would silently downgrade a user to whole-account OAuth access on the
-   * strength of a stray `export TERMINALDECK_GITHUB_APP_CLIENT_ID=`.
-   * `FORCE_OAUTH_ENV` is the switch for wanting that, and it says so by name.
+   * App" costs more than it used to: with the OAuth fallback gone there is
+   * nothing underneath, so a stray `export TERMINALDECK_GITHUB_APP_CLIENT_ID=`
+   * would turn a working build into one that cannot sign in at all.
    */
   it('falls through a blank override to the built-in rather than clearing it', () => {
     expect(githubAppRegistration({ [APP_CLIENT_ID_ENV]: '   ' })).toEqual({
       clientId: 'Iv23limkNV4N6mChRl60',
       slug: 'terminal-deck',
     })
-    expect(clientKindFor({ [APP_CLIENT_ID_ENV]: '' })).toBe('github-app')
+    expect(githubAppConfigured({ [APP_CLIENT_ID_ENV]: '' })).toBe(true)
   })
 
   /**
@@ -155,27 +184,6 @@ describe('githubAppRegistration', () => {
       clientId: null,
       slug: null,
     })
-  })
-
-  /**
-   * The way back for somebody who installs the app on three repositories and
-   * then wonders where the other forty went. It matters far more now than when
-   * it was written: the app path is what ships, so this is the only lever a
-   * user has that does not involve editing source and rebuilding.
-   *
-   * It changes which client signs in and nothing else — the registration is
-   * still there, so `githubAppConfigured` stays true and the panel can still
-   * offer the install link.
-   */
-  it('honours the force-OAuth escape hatch even with a registration', () => {
-    const env = { [APP_CLIENT_ID_ENV]: 'Iv23liEXAMPLE', [FORCE_OAUTH_ENV]: '1' }
-    expect(githubAppConfigured(env, NO_REGISTRATION)).toBe(true)
-    expect(clientKindFor(env, NO_REGISTRATION)).toBe('oauth')
-
-    // And against the registration that actually ships, which is the case a
-    // user will hit.
-    expect(githubAppConfigured({ [FORCE_OAUTH_ENV]: '1' })).toBe(true)
-    expect(clientKindFor({ [FORCE_OAUTH_ENV]: '1' })).toBe('oauth')
   })
 })
 

@@ -73,6 +73,30 @@ describe('a live agent session', () => {
     }
   })
 
+  it('does not advertise a control that is already a chip on the row', () => {
+    /*
+     * The duplication complaint, asserted from the one place it is visible in a
+     * static render: "options is having all of the things that we already have
+     * here and there."
+     *
+     * The label is built from the panel's own contents, so a control that
+     * reappeared in `MENU_CONTROLS` would be named here — which makes this the
+     * cheapest available proof that the panel is not repeating the row. The
+     * panel's markup itself cannot be read: it is shut in a static render, and
+     * this project has no DOM in its test setup to open it with.
+     */
+    withBridge()
+    const html = render({ sessionId: 's1', cwd: '/tmp/p', provider: 'claude' })
+    const tag = (html.match(/<button[^>]*>/g) ?? []).find((one) =>
+      one.includes('aria-haspopup="dialog"'),
+    )
+    const label = /title="([^"]*)"/.exec(tag ?? '')?.[1] ?? ''
+    expect(label).not.toBe('')
+    for (const control of PRIMARY_CONTROLS) {
+      expect(label.toLowerCase(), control).not.toContain(controlName(control).toLowerCase())
+    }
+  })
+
   it('mentions the usage readout too when there is one to show', () => {
     withBridge()
     const html = render({

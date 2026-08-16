@@ -18,9 +18,10 @@
  */
 
 import { FitAddon } from '@xterm/addon-fit'
-import { Terminal } from '@xterm/xterm'
+import { Terminal, type ITheme } from '@xterm/xterm'
 import { MAX_COLS, MAX_ROWS, MIN_COLS, MIN_ROWS } from '../../src/main/remote/protocol'
 import { controlByteForCode } from './keybar'
+import type { Appearance } from './theme'
 
 export interface TerminalSize {
   cols: number
@@ -45,18 +46,38 @@ export interface TerminalHandle {
   focus(): void
   /** Dim the surface while the connection is not live. */
   setLive(live: boolean): void
+  /**
+   * Repaint in the other appearance, without losing the session.
+   *
+   * The whole scrollback stays: xterm re-renders what it already has when its
+   * theme changes, so somebody switching to light mid-session keeps every line
+   * of output. Rebuilding the emulator instead would lose the buffer, the
+   * focus and the negotiated size, which is a high price for a colour.
+   */
+  setAppearance(appearance: Appearance): void
   dispose(): void
 }
 
 /**
  * Colours, taken from the desktop's own tokens so the two look like one app.
  *
- * They are restated rather than imported: `styles/tokens.css` is CSS custom
- * properties on a `[data-theme]` element, and xterm wants a colour object at
- * construction time. Reading them back out of the cascade would mean this could
- * not build a terminal before the stylesheet had loaded.
+ * They are restated rather than imported: `styles.css` holds custom properties
+ * on a `[data-theme]` element, and xterm wants a colour *object* — which is the
+ * whole reason `theme.ts` resolves the appearance in JavaScript rather than
+ * leaving it to a media query. Reading the values back out of the cascade would
+ * mean this could not build a terminal before the stylesheet had loaded.
+ *
+ * `background` and `foreground` are the same two values as `--terminal-bg` and
+ * `--terminal-fg` in that sheet, written twice because there is no import
+ * between a stylesheet and a colour object. `pwa/tests/theme-tokens.test.ts`
+ * holds the copies against each other; two colours that must agree and are
+ * written twice are two colours that will one day not agree.
+ *
+ * Dark is declared first, and that order is load bearing:
+ * `src/renderer/styles/tokens.test.ts` reads the *first* `selectionBackground`
+ * in this file and holds it against the desktop's dark accent.
  */
-const THEME = {
+const DARK_TERMINAL: ITheme = {
   background: '#191919',
   foreground: '#d4d4d4',
   cursor: '#d4d4d4',
@@ -85,14 +106,71 @@ const THEME = {
   brightMagenta: '#b085e5',
   brightCyan: '#5fc2b0',
   brightWhite: '#f0f0f0',
-} as const
+}
+
+/**
+ * The same terminal on paper.
+ *
+ * This is the half of light mode that gets skipped, and skipping it is the
+ * failure the whole feature is judged on: a dark emulator sitting in a white
+ * window is worse than no light theme at all, because it looks like a bug rather
+ * than like a choice. So the sixteen slots are a real light ramp, not the dark
+ * one on a pale ground.
+ *
+ * Two rules produced these values and both are the inverse of the dark theme's:
+ *
+ *   1. **Ink is dark.** Every slot a program prints *text* with clears 4.5:1 on
+ *      `#e8e8e8`, which on paper means a luminance ceiling rather than a floor.
+ *      The dark theme's pastels measure about 1.4:1 there — invisible, which is
+ *      exactly what "the same palette, on a light page" gets you.
+ *   2. **Bright means more ink, not less.** On charcoal a bright variant is
+ *      lighter because that is further from the paper; on paper it is *darker*,
+ *      for the same reason. `brightBlack` is the one exception and keeps its job
+ *      as the dim grey a TUI draws its borders and comments in — still legible,
+ *      deliberately quiet.
+ *
+ * `white` is a mid grey rather than the near-white convention some light themes
+ * keep. Those themes accept that a program printing white text prints nothing at
+ * all; this one would rather be readable than traditional.
+ */
+const LIGHT_TERMINAL: ITheme = {
+  background: '#e8e8e8',
+  foreground: '#141414',
+  cursor: '#141414',
+  cursorAccent: '#e8e8e8',
+  /* The light theme's accent — the icon's blue walked down its own hue line —
+     at an alpha that stays visible under a finger on paper. */
+  selectionBackground: 'rgba(26, 102, 196, 0.28)',
+  black: '#1c1c1c',
+  red: '#a32b1f',
+  green: '#14654a',
+  yellow: '#7a5300',
+  blue: '#1a4f9c',
+  magenta: '#7b3aa0',
+  cyan: '#0f6165',
+  white: '#4d4d4d',
+  brightBlack: '#666666',
+  brightRed: '#8c2116',
+  brightGreen: '#0f4f3a',
+  brightYellow: '#614100',
+  brightBlue: '#143f7d',
+  brightMagenta: '#622d80',
+  brightCyan: '#0c4d50',
+  brightWhite: '#2b2b2b',
+}
+
+/** The emulator's palette for each appearance. */
+export const TERMINAL_THEMES: Record<Appearance, ITheme> = {
+  dark: DARK_TERMINAL,
+  light: LIGHT_TERMINAL,
+}
 
 function clamp(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min
   return Math.min(max, Math.max(min, Math.round(value)))
 }
 
-export function createTerminal(handlers: TerminalHandlers): TerminalHandle {
+export function createTerminal(handlers: TerminalHandlers, appearance: Appearance = 'dark'): TerminalHandle {
   const element = document.createElement('div')
   element.className = 'terminal'
 
@@ -103,7 +181,7 @@ export function createTerminal(handlers: TerminalHandlers): TerminalHandle {
     fontSize: 13,
     lineHeight: 1.2,
     fontFamily: "'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace",
-    theme: THEME,
+    theme: TERMINAL_THEMES[appearance],
     cursorBlink: true,
     // Enough to scroll back through a build, small enough that a phone with
     // 2 GB of RAM does not start swapping while a session logs at speed.
@@ -170,6 +248,9 @@ export function createTerminal(handlers: TerminalHandlers): TerminalHandle {
       // Not just a class: a blinking cursor over frozen output is the single
       // most convincing part of a fake-connected terminal.
       term.options.cursorBlink = live
+    },
+    setAppearance(next: Appearance): void {
+      term.options.theme = TERMINAL_THEMES[next]
     },
     dispose(): void {
       term.dispose()

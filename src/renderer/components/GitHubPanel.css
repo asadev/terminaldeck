@@ -78,37 +78,6 @@
   min-width: var(--sp-4);
 }
 
-.gh-bell {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--sp-1);
-  flex-shrink: 0;
-  height: var(--control-h-sm);
-  padding: 0 var(--sp-2);
-  border-radius: var(--radius-pill);
-  background: var(--fill-tertiary);
-  color: var(--text-secondary);
-  font-size: var(--t-footnote);
-  font-variant-numeric: tabular-nums;
-}
-
-/*
-  Something is waiting on *this* project, not just somewhere in the account.
-
-  It used to paint `--status-input`, on the reasoning that the token means
-  "act now". It does — for a *session*: it is the colour of the dot that says an
-  agent has asked you a question, and it is a pure orange (hue 28). Borrowing a
-  session-status token for a notification count put the loudest warm colour in
-  the palette on a GitHub unread badge, in an app whose only colour is meant to
-  be one blue, and it said "something is wrong" where the truth is "there is
-  something here for you". The accent is exactly the colour for that, and it is
-  the same colour the rest of the window uses to mean "this is the thing to
-  act on".
-*/
-.gh-bell[data-mine='true'] {
-  color: var(--accent);
-}
-
 .gh-refresh {
   display: grid;
   place-items: center;
@@ -646,8 +615,12 @@
   letter-spacing: var(--t-caption-ls);
 }
 
-/* A scope this app asked for reads as granted; one that came along with an
-   existing `gh auth login` is shown, but without a claim about what it does. */
+/* Every scope GitHub reports on the credential, shown flat.
+
+   There used to be a tinted `[data-asked]` variant marking the ones this app
+   had requested. Nothing is requested now — a GitHub App device request carries
+   no `scope` — so the tint would either mark everything or nothing, and a
+   distinction with no second case is a colour that means nothing. */
 .gh-scope {
   height: var(--control-h-sm);
   display: inline-flex;
@@ -661,57 +634,11 @@
   user-select: text;
 }
 
-.gh-scope[data-asked] {
-  background: var(--accent-soft);
-  color: var(--accent);
-}
-
 .gh-scope[data-empty] {
   font-family: var(--font-ui);
   font-style: italic;
 }
 
-/*
-  A standing note about the token's scopes, not an alarm — and therefore not a
-  colour.
-
-  It was a thick amber rule down its left edge: the exact treatment
-  `UpdateBanner.css` records having removed for being wrong, and the second warm
-  thing on a screen that is supposed to have none. A wash of the warning colour
-  was tried in its place and is still the wrong idea — "one scope was not
-  granted, so the unread count stays empty" is a standing fact about a working
-  connection, the same category as that banner's `unsupported` phase, which is
-  deliberately untinted. So: a plain quiet surface and a corner. The sentence
-  inside carries the whole message; nothing needs to shout it.
-*/
-.gh-conn-missing {
-  margin-top: var(--sp-4);
-  padding: var(--sp-3);
-  border-radius: var(--radius-lg);
-  background: var(--fill-quaternary);
-}
-
-.gh-conn-missing-title {
-  margin: 0;
-  color: var(--text-primary);
-  font-size: var(--t-callout);
-  font-weight: var(--w-medium);
-}
-
-.gh-conn-missing-list {
-  margin: var(--sp-2) 0 0;
-  padding: 0;
-  list-style: none;
-  color: var(--text-secondary);
-  font-size: var(--t-callout);
-  line-height: var(--lh-body);
-}
-
-.gh-conn-missing-list li + li {
-  margin-top: var(--sp-1);
-}
-
-.gh-conn-missing-list code,
 .gh-conn-source code,
 .gh-conn-note code,
 .gh-device-body code {
@@ -724,7 +651,6 @@
   user-select: text;
 }
 
-.gh-conn-fix,
 .gh-conn-action,
 .gh-conn-keep,
 .gh-conn-danger,
@@ -739,12 +665,7 @@
   transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
 
-.gh-conn-fix {
-  margin-top: var(--sp-3);
-}
-
 .gh-conn-action,
-.gh-conn-fix:hover:not(:disabled),
 .gh-conn-keep:hover:not(:disabled),
 .gh-device-cancel:hover:not(:disabled) {
   background: var(--fill-secondary);
@@ -793,7 +714,6 @@
   margin-top: var(--sp-3);
 }
 
-.gh-conn-fix:disabled,
 .gh-conn-action:disabled,
 .gh-conn-keep:disabled,
 .gh-conn-danger:disabled,
@@ -973,41 +893,6 @@ button.gh-device-code:hover {
   font-weight: var(--w-semibold);
 }
 
-.gh-asks-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-2);
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-
-.gh-asks-list li {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-
-.gh-asks-list code {
-  align-self: flex-start;
-  padding: 1px var(--sp-1);
-  border-radius: var(--radius-sm);
-  background: var(--fill-tertiary);
-  font-family: var(--font-mono);
-  font-size: var(--t-footnote);
-  color: var(--text-primary);
-  user-select: text;
-}
-
-/* GitHub's own phrase for the scope, which is what the consent screen prints.
-   It is the loudest line in the block on purpose: it is the sentence the user
-   is about to read on somebody else's page. */
-.gh-asks-wording {
-  color: var(--text-primary);
-  font-size: var(--t-callout);
-}
-
-.gh-asks-why,
 .gh-asks-body {
   color: var(--text-muted);
   font-size: var(--t-footnote);

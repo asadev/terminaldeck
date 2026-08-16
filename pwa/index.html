@@ -10,8 +10,20 @@
       that is the real reason people reach for user-scalable=no.
     -->
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <!--
+      The browser's own chrome, and the pair of them are the pre-script state.
+      `theme-color` is rewritten by `theme.ts` the moment the appearance is
+      settled — it cannot hold a `var()`, and there is no inline script to work
+      it out here because `script-src 'self'` forbids one, deliberately. The
+      value below is the dark canvas, which is what the stylesheet's base paints.
+    -->
     <meta name="theme-color" content="#191919" />
-    <meta name="color-scheme" content="dark" />
+    <!--
+      Both, not `dark`. This is the document telling the browser which
+      appearances it can actually render, and it is what makes form controls, the
+      scrollbars and the caret follow the page instead of staying dark on paper.
+    -->
+    <meta name="color-scheme" content="light dark" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <!-- black-translucent puts the page under the status bar, which is the
@@ -37,7 +49,13 @@
   <body>
     <div id="app"></div>
     <noscript>
-      <p style="padding: 24px; color: #d4d4d4; font-family: system-ui">
+      <!--
+        No colour of its own. The body already carries the theme's ink, and the
+        `#d4d4d4` that used to be here was invisible on the light palette — which
+        is exactly the reader this paragraph exists for: somebody whose browser
+        never ran the script that would have set the appearance.
+      -->
+      <p style="padding: 24px; font-family: system-ui">
         This client is a terminal. It needs JavaScript.
       </p>
     </noscript>

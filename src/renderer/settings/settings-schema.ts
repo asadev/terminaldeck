@@ -104,17 +104,26 @@ export const SECTIONS = [
     label: 'Browser',
     blurb: 'The built-in browser tab and what it remembers.',
   },
-  {
-    id: 'remote',
-    label: 'Remote',
-    // Not "over your own tailnet". This section is reached by people who have
-    // never heard of Tailscale, and naming it here made an optional extra look
-    // like the requirement — which is the third time that framing has been
-    // objected to. The relay is the network: it needs no account, no install and
-    // no configuration, and it is what the row below actually dials. It also
-    // covers another computer now, not just a phone, since Machines merged in.
-    blurb: 'Reach these sessions from a phone or another computer.',
-  },
+  /*
+   * There is no GitHub section here, and that is a decision rather than a gap.
+   *
+   * One existed for exactly one row — "Use classic GitHub sign-in", the switch
+   * between this app's GitHub App and an OAuth client borrowed from the GitHub
+   * CLI. The OAuth path was deleted on 2026-08-16, so the switch had nothing
+   * left to choose between, and a section holding a single row that no longer
+   * exists is a rail entry that can only ever say "nothing here". Which
+   * credential the app asks GitHub for is now answered by the GitHub panel's
+   * own Connect and Disconnect, where the sign-in it describes actually lives.
+   */
+  /*
+   * Remote is not a settings section any more — it is a rail panel, beside
+   * Alerts, where Machines used to be. See `shell/panels.ts`.
+   *
+   * Pairing a device is something you do rather than something you configure,
+   * and it declared no settings of its own: this entry existed only to give the
+   * pairing screen somewhere to render. Putting it back here would put the one
+   * live pairing code on two screens, and only one may mint it.
+   */
   /*
    * Power sits beside Remote because the two answer the same question from
    * opposite ends — reaching this machine while you are away from it, and

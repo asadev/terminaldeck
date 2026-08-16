@@ -267,15 +267,132 @@ enum WireCapability {
     static let credential = "credential"
 
     /**
+     * The desktop can say what a project's dev server is doing, and start it.
+     *
+     * Its own name rather than part of `localhost`, and the split is not
+     * tidiness — it is the difference between two things a host can do
+     * independently. `localhost` needs nothing but a socket, so every desktop
+     * can serve it; this one needs a session layer that can start a session
+     * *and* a per-device folder grant to start it in. The public demo box is the
+     * case that makes it concrete: it offers `create` and nothing else, and it
+     * must not draw a button on a stranger's phone that runs `npm run dev` in
+     * somebody's checkout.
+     *
+     * Keyed by **folder**, never by port, for the reason `DevServerReport` gives:
+     * a dev server is a script in one project's `package.json`, there is no such
+     * thing as *the* dev server on a machine with four checkouts, and the port
+     * does not exist until the thing is up — which is the state this whole
+     * feature exists to get out of.
+     */
+    static let devserver = "devserver"
+
+    /**
      * What this build tells a desktop it can do, in `hello.capabilities`.
      *
-     * Only names that run desktop→phone belong here. `create`, `localhost` and
-     * `upload` are things this phone *asks for* and are gated by what the
-     * desktop advertised, so claiming them would say nothing; `credential` is a
-     * frame the desktop will only send once it has been told somebody is
-     * listening for it.
+     * Only names that run desktop→phone belong here. `create`, `localhost`,
+     * `upload` and `devserver` are things this phone *asks for* and are gated by
+     * what the desktop advertised, so claiming them would say nothing;
+     * `credential` is a frame the desktop will only send once it has been told
+     * somebody is listening for it.
      */
     static let claimed: [String] = [credential]
+}
+
+/**
+ * The five things one project's dev server can be, as one word.
+ *
+ * A port of `DEV_SERVER_STATUSES`. They are five and not three because this app
+ * has to draw five different things, and it is the two collapses that would hurt:
+ *
+ *  - `noDevScript` is **not** `idle`. `idle` means "press this"; this means
+ *    "there is nothing to press, and there never will be for this folder,
+ *    because its `package.json` declares no `dev`, `start` or `serve`". A row
+ *    that flattened them would draw a button whose only possible outcome is a
+ *    refusal — so this app draws no row at all for one.
+ *  - `failed` is **not** `idle` either. The session that failed is still there
+ *    with the reason printed in it, and the useful thing to offer is *that
+ *    session* rather than a fresh Start button drawn as though nothing had
+ *    happened.
+ *
+ * A status this build has never heard of is refused by the codec rather than
+ * mapped onto a neighbour, because every one of the five draws a different
+ * control and there is no honest default among them.
+ */
+enum DevServerStatus: String, Equatable {
+    case noDevScript = "no-dev-script"
+    case idle
+    case starting
+    case ready
+    case failed
+}
+
+/**
+ * One project's dev server, as this phone sees it.
+ *
+ * A port of `DevServerReport` in `protocol.ts`, which is itself a deliberate
+ * trim of the desktop's own `DevServerState` — so this is the third hand-written
+ * copy of one shape and the rule that comes with it is the rule the rest of this
+ * file lives under: it changes when `protocol.ts` changes, with the same fields
+ * and the same meanings.
+ *
+ * Which fields are set for which status, from the desktop's own table:
+ *
+ * | status         | script/command | sessionId | port/url | note  | message |
+ * |----------------|----------------|-----------|----------|-------|---------|
+ * | `noDevScript`  | –              | –         | –        | –     | –       |
+ * | `idle`         | ✓              | –         | –        | –     | –       |
+ * | `starting`     | ✓              | ✓         | –        | maybe | –       |
+ * | `ready`        | ✓              | ✓         | ✓        | –     | –       |
+ * | `failed`       | ✓              | maybe     | –        | –     | ✓       |
+ *
+ * ## Replace a row; never merge into one
+ *
+ * The fields are not independent — `port` and `url` exist only on `ready`,
+ * `message` only on `failed` — so folding a new state into an old one leaves a
+ * dead address under a live row. The protocol calls that "the one genuinely
+ * wrong thing a client of this frame can display", and it is why this is a
+ * `struct` with `let` fields rather than something a view model updates in
+ * place: there is no path here that can carry a stale `url` forward.
+ *
+ * ## Everything on it is display text somebody else wrote
+ *
+ * `note` is a line a process on the far machine printed and is the field that
+ * says so out loud, but `script` and `command` come from a `package.json` — a
+ * file in a repository that may well have been cloned from a stranger — and
+ * `message` is composed by a desktop this phone authenticated but does not
+ * control. All four are drawn as text, never as markup, and the codec bounds and
+ * cleans them on the way in. See `WireCodec.displayLine`.
+ */
+struct DevServerReport: Equatable, Identifiable, Hashable {
+    /// The project folder, in **the desktop's** spelling — it comes back as the
+    /// entry the desktop matched from its own grant list rather than as the
+    /// string this phone sent, which can differ by a trailing separator or by
+    /// case on Windows and still be the same directory. Rows are keyed on this.
+    let folder: String
+    let status: DevServerStatus
+    /// The `package.json` script that runs it, e.g. `dev`.
+    let script: String?
+    /// The command line the desktop will type, e.g. `pnpm run dev`. Display it.
+    let command: String?
+    /**
+     * The session it runs in — an **ordinary session**, in the same list every
+     * other session is in, which this phone can open, read and kill exactly like
+     * any other. That is why there is no stop verb in this feature and why this
+     * app does not draw a Stop button: stopping a dev server is Ctrl-C in its
+     * session, which already works.
+     */
+    let sessionId: String?
+    /// Proven reachable: the desktop only ever sends this after something
+    /// accepted a TCP connection on it. Safe to tunnel to — see `PortTunnel`.
+    let port: Int?
+    /// `http://localhost:<port>`, the address the tunnel will serve at.
+    let url: String?
+    /// The server's own latest output line, while `starting`. Untrusted.
+    let note: String?
+    /// Why it failed, in a sentence written by the desktop.
+    let message: String?
+
+    var id: String { folder }
 }
 
 /**
@@ -398,6 +515,43 @@ enum ClientMessage: Equatable {
     /// "I have written this many bytes to my socket." See `Wire.netWindowBytes`.
     case netAck(ch: String, bytes: Int)
     case netClose(ch: String)
+
+    /* ---- capability `devserver`. Never sent unless the desktop offered it. -- */
+
+    /**
+     * What is this project's dev server doing?
+     *
+     * `folder` is one the desktop is **already offering this device** —
+     * `welcome.folders`, kept current by the pushed `folders` frame — and the
+     * desktop refuses anything else rather than answering about a path off the
+     * network. So this app never composes one: every folder it can name is a row
+     * that was on screen.
+     *
+     * Sending it also **subscribes** this connection to that folder. Every later
+     * change arrives as a pushed `devState` with no timer on this side, which is
+     * the whole reason a two-minute cold start is readable on a phone. The
+     * subscription belongs to the socket, so it is re-sent on each `welcome`
+     * rather than remembered across a reconnect.
+     */
+    case devStatus(folder: String)
+    /**
+     * Start it. **This message is the consent, and there is no standing one.**
+     *
+     * Nothing runs on the far machine because of this feature until this is
+     * sent, and it is sent because a person tapped a row for a folder their
+     * desktop has granted them. There is no configured list of auto-start
+     * projects and nothing to revoke: removing the folder from the grant on the
+     * desktop is the whole of the revocation.
+     *
+     * The command is not on this wire and cannot be. The desktop reads the
+     * folder's own `package.json` and runs the script it declares; a client that
+     * could name a command would be a client that could run one.
+     *
+     * Answered with a `devState` carrying `starting`, immediately — not held
+     * open until the server is up, because a dev server takes seconds to tens of
+     * seconds and this app needs something to draw for all of them.
+     */
+    case devStart(folder: String)
 
     /* ---- capability `upload`. Never sent unless the desktop offered it. ----- */
 
@@ -524,6 +678,30 @@ enum ServerMessage: Equatable {
     case netData(ch: String, data: Data)
     case netAck(ch: String, bytes: Int)
     case netClose(ch: String)
+
+    /* ---- capability `devserver` ------------------------------------------- */
+
+    /**
+     * One project's dev server, now.
+     *
+     * The single frame for the whole capability: it answers `devStatus`, it
+     * answers `devStart`, and it arrives **unsolicited** every time the state
+     * changes after a start — a new progress line, the moment a port accepts, a
+     * timeout. One frame rather than three, because to this end they are one
+     * event: a row now says something different.
+     *
+     * **The same state can arrive twice, and that is by design.** A `devStart`
+     * gets its state as a direct answer *and* as a push; deduplicating the
+     * overlap would mean the desktop guessing which of the two a client had
+     * already acted on. Handle it idempotently — replace the row keyed by
+     * `folder` and the duplicate costs nothing. See `HostLink.devServers`.
+     *
+     * A refusal — a folder this device was not granted, a host that cannot start
+     * sessions — comes back as a plain `error` with `unauthorized`, never as a
+     * `devState`, because there is no folder state to report about a folder the
+     * desktop will not discuss.
+     */
+    case devState(DevServerReport)
 
     /* ---- capability `upload` ---------------------------------------------- */
 

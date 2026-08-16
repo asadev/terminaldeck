@@ -732,6 +732,13 @@ final class DeckModel {
     /// one a person can fix, and they fix it on the desktop.
     var hasNoGrantedFolders: Bool { current?.granted?.isEmpty == true }
     var canBrowseLocalhost: Bool { current?.canBrowseLocalhost ?? false }
+    /// Whether this machine will discuss its projects' dev servers. A separate
+    /// question from `canBrowseLocalhost` — see `HostLink.canUseDevServers`.
+    var canUseDevServers: Bool { current?.canUseDevServers ?? false }
+    /// The dev-server rows worth drawing, in the order the machine offered its
+    /// folders. Folders with no dev script are already out; see
+    /// `HostLink.devServerRows`.
+    var devServers: [DevServerReport] { current?.devServerRows ?? [] }
     /// The machine currently selected, for screens that name it. `.unknown`
     /// with no host selected, which reads as a neutral noun rather than a guess.
     var hostPlatform: HostPlatform { current?.hostPlatform ?? .unknown }
@@ -760,6 +767,13 @@ final class DeckModel {
     func createSession(in folder: String?) { current?.createSession(in: folder) }
     func openLocalhost(port: Int) -> PortTunnel? { current?.openLocalhost(port: port) }
     func closeLocalhost() { current?.closeLocalhost() }
+    /// One project's dev server on the machine on screen, or nil when it has not
+    /// been asked about — a folder past the subscription cap, or a machine that
+    /// does not offer the capability at all.
+    func devServer(for folder: String) -> DevServerReport? { current?.devServer(for: folder) }
+    /// **The tap is the consent.** Nothing runs on the machine because of this
+    /// feature until this is called. See `HostLink.startDevServer`.
+    func startDevServer(in folder: String) { current?.startDevServer(in: folder) }
     func paste(into id: String) { current?.paste(into: id) }
 
     @discardableResult

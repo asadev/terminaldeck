@@ -193,6 +193,55 @@ const KNOWN_PROVIDERS: readonly ProviderId[] = PROVIDER_OPTIONS.map((option) => 
 /** How many recent projects are worth listing before it stops being a shortlist. */
 const MAX_RECENT = 8
 
+/**
+ * Narrow a project list to what somebody typed.
+ *
+ * Against the name *and* the path, because the two answer different questions —
+ * "terminaldeck" finds it by what it is called, "Projects/" finds everything
+ * under one parent — and against the whole list rather than the shortlist,
+ * which is the entire point. With nine folders open the ninth was unreachable
+ * from this panel: the list is capped at {@link MAX_RECENT}, and the only other
+ * route was Browse, which is a system dialog for a folder the app has never
+ * seen.
+ *
+ * Case-insensitive, and no fuzzy matching: this project has a fuzzy matcher for
+ * the command palette, where you are guessing at a verb. A folder is something
+ * you already know the name of.
+ */
+export function matchProjects(
+  projects: readonly RecentProject[],
+  query: string,
+): RecentProject[] {
+  const needle = query.trim().toLowerCase()
+  if (needle === '') return [...projects]
+  return projects.filter(
+    (project) =>
+      project.name.toLowerCase().includes(needle) || project.path.toLowerCase().includes(needle),
+  )
+}
+
+/**
+ * What the Project section actually draws: the rows, whether a filter is worth
+ * a line of the panel, and how many folders are still out of sight.
+ *
+ * Pulled out as a function because it is the part with decisions in it, and
+ * because the effect that loads the project list does not run under
+ * `react-dom/server` — a render test of the dialog sees an empty list no matter
+ * what, so the only way to pin the nine-projects case is to pin it here.
+ */
+export function projectShortlist(
+  projects: readonly RecentProject[],
+  filter: string,
+  max = MAX_RECENT,
+): { filtering: boolean; shown: RecentProject[]; hidden: number } {
+  // The field appears at the first project the cap can hide, and not before: a
+  // search box over a list that is entirely on screen is a control with nothing
+  // to do.
+  const filtering = projects.length > max
+  const matched = filtering ? matchProjects(projects, filter) : [...projects]
+  return { filtering, shown: matched.slice(0, max), hidden: Math.max(0, matched.length - max) }
+}
+
 /* ------------------------------------------------------------- component -- */
 
 interface Props {
@@ -215,6 +264,8 @@ export function NewSessionDialog({ open, projectPath, onClose, onStart }: Props)
   const [chosenResume, setChosenResume] = useState<boolean | null>(null)
   const [prompt, setPrompt] = useState('')
   const [remember, setRemember] = useState(true)
+  /** What has been typed into the folder filter. Only drawn when it is needed. */
+  const [filter, setFilter] = useState('')
 
   const [projects, setProjects] = useState<RecentProject[]>([])
   const [detected, setDetected] = useState<unknown>(null)
@@ -273,7 +324,6 @@ export function NewSessionDialog({ open, projectPath, onClose, onStart }: Props)
   const decided = resolution.ok ? resolution.request : null
   const activeRow = providerRows.find((row) => row.id === decided?.provider)
   const resumeState = resumeAvailability(activeRow)
-  const activeProfile = profiles.find((profile) => profile.id === decided?.profileId) ?? null
   const profileNotice = isolationNotice(decided?.provider)
 
   /* ------------------------------------------------------------- loading -- */
@@ -292,6 +342,7 @@ export function NewSessionDialog({ open, projectPath, onClose, onStart }: Props)
     setChosenResume(null)
     setPrompt('')
     setRemember(true)
+    setFilter('')
     setDetected(null)
     setError(null)
     setStarting(false)
@@ -438,14 +489,22 @@ export function NewSessionDialog({ open, projectPath, onClose, onStart }: Props)
     formRef.current?.requestSubmit()
   }, [])
 
-  const recent = projects.slice(0, MAX_RECENT)
+  const { filtering, shown: recent, hidden } = projectShortlist(projects, filter)
   const confirmChord = formatChord('mod+enter')
 
   return (
+    /*
+     * No standing description under the title.
+     *
+     * It read "Pick what runs, where, and as whom", which is a sentence naming
+     * the three headings directly underneath it — Project, Agent, Login. The
+     * budget in `settings/sections/copy-length.test.tsx` exists because this
+     * app grows walls of text one defensible clause at a time, and a subtitle
+     * that repeats the headings is the first clause of one.
+     */
     <Modal
       open={open}
       title="New session"
-      description="Pick what runs, where, and as whom."
       onClose={onClose}
       size="lg"
       footer={
@@ -472,6 +531,28 @@ export function NewSessionDialog({ open, projectPath, onClose, onStart }: Props)
           </p>
         )}
 
+        {/*
+          What is wrong, and what the resolver quietly changed — at the top,
+          with the error, rather than under the last section.
+
+          These used to sit above the Remember checkbox, at the foot of a panel
+          that is taller than the window it opens in. So the one state where
+          Start session is disabled put its only explanation off-screen: a dead
+          primary button and, to see why, a scroll nobody has a reason to make.
+          A form says what is wrong where a form says things, which is the top.
+        */}
+        {!resolution.ok && <p className="ns-problem">{resolution.problem.message}</p>}
+
+        {resolution.notices.length > 0 && (
+          <ul className="ns-notices">
+            {resolution.notices.map((notice) => (
+              <li key={notice.code} className="ns-notice">
+                {notice.message}
+              </li>
+            ))}
+          </ul>
+        )}
+
         {/* ------------------------------------------------------- project -- */}
 
         <section className="ns-section">
@@ -484,9 +565,24 @@ export function NewSessionDialog({ open, projectPath, onClose, onStart }: Props)
             </button>
           </div>
 
+          {/* Only past the cap — see `filtering`. A search field over a list
+              that is entirely on screen is a control with nothing to do. */}
+          {filtering && (
+            <input
+              type="search"
+              className="ns-filter"
+              value={filter}
+              placeholder={`Filter ${projects.length} folders`}
+              aria-label="Filter projects"
+              onChange={(event) => setFilter(event.target.value)}
+            />
+          )}
+
           {recent.length === 0 ? (
             <p className="ns-empty">
-              No recent projects. Browse for a folder to run the session in.
+              {filter.trim() === ''
+                ? 'No recent projects. Browse for a folder to run the session in.'
+                : 'No folder matches that. Browse for one instead.'}
             </p>
           ) : (
             <div className="ns-projects" role="radiogroup" aria-labelledby={`${ids}-project`}>
@@ -511,6 +607,13 @@ export function NewSessionDialog({ open, projectPath, onClose, onStart }: Props)
                 </label>
               ))}
             </div>
+          )}
+
+          {/* Said out loud rather than left to a scrollbar: a list that quietly
+              stops at eight is a list somebody keeps scrolling for a folder
+              that is not in it. */}
+          {hidden > 0 && (
+            <p className="ns-caveat">{hidden} more — narrow the filter, or Browse.</p>
           )}
 
           {selectedPath && !recent.some((project) => project.path === selectedPath) && (
@@ -565,10 +668,14 @@ export function NewSessionDialog({ open, projectPath, onClose, onStart }: Props)
               <label className="ns-row-label" htmlFor={`${ids}-profile`}>
                 Login
               </label>
+              {/* The config directory used to be printed here whenever a login
+                  was resolved, so the line under "Login" was
+                  `/Users/apple/.claude` — the mechanism, in a panel that is
+                  otherwise about decisions, and unreadable as an answer to
+                  "which login is this". The name is in the control beside it,
+                  where a value belongs. */}
               <span className="ns-hint">
-                {profileNotice ??
-                  activeProfile?.configDir ??
-                  'Which Claude login this session should run as.'}
+                {profileNotice ?? 'Which Claude login this session should run as.'}
               </span>
             </div>
             <span className="ns-select-wrap">
@@ -606,10 +713,12 @@ export function NewSessionDialog({ open, projectPath, onClose, onStart }: Props)
 
               What replaces it is what the row is actually for, because a login
               this app has never seen is the case people get stuck on. */}
+          {/* Down to the half that is news. "Each login keeps its own history"
+              is what the word Login means one line above it; that a login this
+              app has never seen will stop and ask inside the terminal is the
+              thing people get stuck on. */}
           {profileNotice === null && profiles.length > 0 && (
-            <p className="ns-caveat">
-              Each login keeps its own history. A new one asks you to sign in inside the session.
-            </p>
+            <p className="ns-caveat">A login you have not used before asks you to sign in here.</p>
           )}
         </section>
 
@@ -684,32 +793,17 @@ export function NewSessionDialog({ open, projectPath, onClose, onStart }: Props)
           )}
         </section>
 
-        {/* ----------------------------------------------------- outcomes -- */}
-
-        {!resolution.ok && <p className="ns-problem">{resolution.problem.message}</p>}
-
-        {resolution.notices.length > 0 && (
-          <ul className="ns-notices">
-            {resolution.notices.map((notice) => (
-              <li key={notice.code} className="ns-notice">
-                {notice.message}
-              </li>
-            ))}
-          </ul>
-        )}
-
         <label className="ns-remember">
           <input
             type="checkbox"
             checked={remember}
             onChange={(event) => setRemember(event.target.checked)}
           />
-          <span className="ns-agent-text">
-            <span className="ns-agent-label">Remember these choices for this project</span>
-            <span className="ns-hint">
-              The next session in this folder opens with the same agent, login and history.
-            </span>
-          </span>
+          {/* No second line. It read "The next session in this folder opens
+              with the same agent, login and history", which is the label again
+              with the three sections named — and it was the last 34px keeping
+              the panel taller than the window it opens in. */}
+          <span className="ns-agent-label">Remember these choices for this project</span>
         </label>
       </form>
     </Modal>

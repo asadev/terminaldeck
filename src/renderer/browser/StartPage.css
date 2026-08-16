@@ -205,3 +205,133 @@
   background: var(--bg-hover);
   color: var(--text-primary);
 }
+
+/* ============================================================================
+   The dev-server rows.
+
+   They sit in the same `.bw-start-list` as the ports above them and share its
+   card idiom, because they are the same kind of thing said twice: a port row is
+   a link that works, a dev-server row is a link that would. A `ready` row is
+   drawn as an actual `.bw-start-port` — at that point it *is* a port, and giving
+   it a shape of its own would be two visual languages for one fact.
+
+   Space and a fill, no rules between rows and no outlines. `tokens.css` says why
+   at length; the short version is that a list of rows needs no line between
+   them.
+   ============================================================================ */
+
+.bw-dev-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  width: 100%;
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--radius-lg);
+  background: var(--fill-quaternary);
+  color: var(--text-primary);
+  font-size: var(--t-body);
+  text-align: left;
+}
+
+.bw-dev-name {
+  flex-shrink: 0;
+  font-weight: var(--w-medium);
+}
+
+/* The command, in the same mono the port numbers use: it is a thing you could
+   have typed, and it should look like one. Truncated rather than wrapped — a
+   two-line row in a list of one-line rows reads as an error. */
+.bw-dev-cmd {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--t-footnote);
+}
+
+/* The server's own output while it boots. Same truncation, because this text is
+   whatever a process printed and its length is nobody's decision. */
+.bw-dev-note {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-secondary);
+  font-size: var(--t-callout);
+}
+
+.bw-dev-note-failed {
+  color: var(--status-input);
+}
+
+.bw-dev-start {
+  flex-shrink: 0;
+  height: var(--control-h);
+  margin-left: auto;
+  padding: 0 var(--sp-4);
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: var(--t-callout);
+  font-weight: var(--w-medium);
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.bw-dev-start:hover {
+  background: var(--accent-dim);
+}
+
+.bw-dev-start:active {
+  background: var(--accent-press);
+}
+
+/* A row that is working on something is quieter than one waiting to be pressed:
+   there is nothing to do to it. */
+.bw-dev-row-busy {
+  color: var(--text-secondary);
+}
+
+.bw-dev-spinner {
+  flex-shrink: 0;
+  width: 12px;
+  height: 12px;
+  border-radius: var(--radius-pill);
+  border: 2px solid var(--accent-line);
+  border-top-color: var(--accent);
+  animation: bw-dev-spin 700ms linear infinite;
+}
+
+@keyframes bw-dev-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* The one animation on this page, and it is off when the system says so. A
+   spinner that cannot spin still reads as "this row is different" through the
+   ring, which is why it is a ring rather than a bare dot. */
+@media (prefers-reduced-motion: reduce) {
+  .bw-dev-spinner {
+    animation: none;
+  }
+}
+
+/* "running", beside a port that has been proved reachable. Reuses the shape of
+   `.bw-start-port-tag` and changes only the colour, because it is the same
+   grammar — a quiet word at the end of a row — saying a different thing. */
+.bw-dev-tag {
+  flex-shrink: 0;
+  margin-left: auto;
+  padding: 0 var(--sp-2);
+  border-radius: var(--radius-pill);
+  background: var(--fill-tertiary);
+  color: var(--text-muted);
+  font-size: var(--t-footnote);
+  line-height: 18px;
+}
+
+.bw-dev-tag-ready {
+  color: var(--status-completed);
+}

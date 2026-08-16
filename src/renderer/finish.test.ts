@@ -157,9 +157,33 @@ describe('the only colour in the chrome is the blue', () => {
 
   it('does not spend a session-status token on a GitHub notification', () => {
     const css = read('renderer/components/GitHubPanel.css')
-    expect(rule(css, ".gh-bell[data-mine='true']")).not.toContain('--status-input')
-    // The rule down the left edge that `UpdateBanner.css` records removing.
-    expect(rule(css, '.gh-conn-missing')).not.toMatch(/border-left/)
+    /*
+     * There is no bell any more, so the strongest form of "it does not spend a
+     * session-status colour on a notification" is that the rule is gone.
+     *
+     * The notifications feature was removed when the app moved to a GitHub App
+     * sign-in: GitHub's notifications endpoints accept only classic personal
+     * access tokens, and a GitHub App user token is not one — no permission can
+     * be added to change that, so the feature could not work at all. This
+     * assertion is inverted rather than deleted because a returning bell should
+     * have to come here and argue for its colour again.
+     */
+    expect(rule(css, ".gh-bell[data-mine='true']")).toBeNull()
+    expect(css).not.toContain('gh-bell')
+
+    /*
+     * Asserted over the whole stylesheet rather than against two named rules.
+     *
+     * Both rules this test used to reach for — `.gh-bell[data-mine='true']` and
+     * `.gh-conn-missing` — no longer exist, and `rule()` answers `null` for a
+     * selector it cannot find, which is not a failure so much as a test that has
+     * quietly stopped checking anything. The rule being defended is a property
+     * of the panel, not of two selectors that happened to hold it, so it is now
+     * stated that way and cannot rot the same way twice.
+     */
+    expect(css).not.toContain('--status-input')
+    // The accent bar down the left edge that `UpdateBanner.css` records removing.
+    expect(css).not.toMatch(/border-left:\s*[^;]*var\(--/)
   })
 })
 

@@ -295,6 +295,27 @@ const api = {
   }): Promise<unknown> => ipcRenderer.invoke('session-search:run', request),
   cancelSessionSearch: (): Promise<void> => ipcRenderer.invoke('session-search:cancel'),
 
+  /* ------------------------------------------------------ dev servers -- */
+  //
+  // Starting the dev server behind a localhost link, for the case Asad
+  // described: the link is listed, you tap it, and nothing answers because the
+  // dev environment is not running.
+  //
+  // `listDevServers` takes no folder and `startDevServer` takes one the main
+  // process must already have open — the window cannot name an arbitrary path,
+  // so this channel cannot be used to hunt for `package.json` files across the
+  // disk. State arrives on a push rather than a poll: a boot takes as long as
+  // it takes, and a timer asking "is it up yet" is the thing this app's own
+  // rules say not to write.
+  listDevServers: (): Promise<unknown> => ipcRenderer.invoke('dev:server:list'),
+  startDevServer: (folder: string): Promise<unknown> =>
+    ipcRenderer.invoke('dev:server:start', folder),
+  onDevServerState: (cb: (state: unknown) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, state: unknown) => cb(state)
+    ipcRenderer.on('dev:server:state', handler)
+    return () => ipcRenderer.off('dev:server:state', handler)
+  },
+
   /* ------------------------------------------------------- artifacts -- */
   //
   // What the agents in a project actually wrote, read back out of the

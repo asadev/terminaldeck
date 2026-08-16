@@ -1,6 +1,7 @@
 import { FileTree } from '../components/FileTree'
 import { FileViewer } from '../components/FileViewer'
 import { ArtifactsPanel } from '../components/ArtifactsPanel'
+import { RemoteSection } from '../remote/RemoteSection'
 import { GitPanel, type GitFileGroup } from '../components/GitPanel'
 import { GitHubPanel } from '../components/GitHubPanel'
 import { ReadinessPanel } from '../components/ReadinessPanel'
@@ -145,6 +146,16 @@ export function PanelView({
         return <HooksPanel />
       case 'mcp':
         return <McpInspector projectPath={projectPath} />
+      /*
+       * Above the project gate, deliberately — like `hooks` and `mcp`.
+       *
+       * The devices paired with this machine have nothing to do with which
+       * folder is open, and a phone is most worth pairing on a fresh install
+       * where no project has been opened yet. Gating it behind "open a project
+       * first" would hide the feature at exactly the moment somebody wants it.
+       */
+      case 'remote':
+        return <RemoteSection />
       // There was a `machines` case here, above the project check, and it is
       // gone with the panel: the machines this desktop is paired to are now part
       // of Settings → Remote, beside the phones, because they are the same

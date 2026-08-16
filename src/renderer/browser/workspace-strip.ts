@@ -1,3 +1,4 @@
+import { useCallback, useSyncExternalStore } from 'react'
 import type { WorkspaceTab } from '../shell/workspace-tabs'
 
 /**
@@ -150,4 +151,122 @@ export function writePromoted(storage: Storage | null, order: readonly string[])
   } catch {
     // Quota, or a disabled store. Forgetting the arrangement costs a drag.
   }
+}
+
+/* --------------------------------------------------------------- sharing -- */
+
+/**
+ * The promoted order, held where more than one part of the window can reach it.
+ *
+ * ## Why this stopped being `useState` inside the strip
+ *
+ * A drag is a mouse-only gesture, and this one was the only way in or out of
+ * the strip. Anything else that wants to promote a tab — the "Show at the top"
+ * toggle on a sidebar row, which is what makes the feature reachable from a
+ * keyboard — has to change the same list the strip is rendering from, and it
+ * lives in a different component with no ancestor to hold the state between
+ * them. Lifting it to `App.tsx` would work and would put a piece of tab-strip
+ * bookkeeping in the file that is already the largest in the renderer; a store
+ * the two of them read directly keeps it beside the functions that operate on
+ * it.
+ *
+ * ## Why it is a store rather than a module-level array
+ *
+ * Because React has to be told. `useSyncExternalStore` is the supported way to
+ * read a value that changes outside React, and it is what makes the sidebar's
+ * toggle repaint the strip in the same commit — a plain array plus a re-render
+ * hope is the shape of the bug where the aria state and the screen disagree.
+ *
+ * The snapshot is a cached array, not a fresh copy per call: `getSnapshot` is
+ * compared by identity, and returning `[...order]` each time is an infinite
+ * render loop with a confusing error message.
+ */
+export interface PromotedStore {
+  /** The current order. Stable by identity until it actually changes. */
+  get(): readonly string[]
+  /** Replace it. A no-op — and no notification — when nothing moved. */
+  set(next: readonly string[]): void
+  subscribe(listener: () => void): () => void
+}
+
+export function createPromotedStore(storage: Storage | null): PromotedStore {
+  let order: readonly string[] = readPromoted(storage)
+  const listeners = new Set<() => void>()
+
+  return {
+    get: () => order,
+    set(next) {
+      /*
+       * The guard is load-bearing, not an optimisation. The strip prunes its
+       * order against the live tab list in an effect on every render; without
+       * this, that effect would write a new array identity every time, wake
+       * every subscriber, and re-run itself for ever.
+       */
+      if (next.length === order.length && next.every((id, index) => id === order[index])) return
+      order = [...next]
+      writePromoted(storage, order)
+      // A copy of the set, so a listener that unsubscribes itself while being
+      // notified does not shorten the list being walked.
+      for (const listener of [...listeners]) listener()
+    },
+    subscribe(listener) {
+      listeners.add(listener)
+      return () => {
+        listeners.delete(listener)
+      }
+    },
+  }
+}
+
+/**
+ * `window.localStorage`, when this window has one.
+ *
+ * Reading the property can itself throw where storage is disabled by policy,
+ * so this is a try/catch and not a `typeof` test alone — the same guard
+ * `NewSessionDialog` uses, for the same reason.
+ */
+export function defaultStorage(): Storage | null {
+  try {
+    return typeof window === 'undefined' ? null : window.localStorage
+  } catch {
+    return null
+  }
+}
+
+/**
+ * One store per backing storage.
+ *
+ * Keyed on the storage object rather than kept as a single global, so a test
+ * that hands the strip its own `Storage` stand-in gets its own order and cannot
+ * leak it into the next test. The real app passes `window.localStorage` every
+ * time, which is one object, so the sidebar and the strip meet on one store.
+ */
+const stores = new WeakMap<Storage, PromotedStore>()
+/** The store for `storage === null`: nothing to key a WeakMap on. */
+let unbacked: PromotedStore | null = null
+
+export function promotedStore(storage: Storage | null): PromotedStore {
+  if (!storage) return (unbacked ??= createPromotedStore(null))
+  const existing = stores.get(storage)
+  if (existing) return existing
+  const made = createPromotedStore(storage)
+  stores.set(storage, made)
+  return made
+}
+
+/**
+ * The promoted order, as React state, from either end of the window.
+ *
+ * The third argument to `useSyncExternalStore` is the server snapshot, and it
+ * is not optional here even though this is a desktop app: every render test in
+ * this project goes through `react-dom/server`, and React throws
+ * "Missing getServerSnapshot" rather than rendering without it.
+ */
+export function usePromotedOrder(
+  storage: Storage | null = defaultStorage(),
+): [readonly string[], (next: readonly string[]) => void] {
+  const store = promotedStore(storage)
+  const order = useSyncExternalStore(store.subscribe, store.get, store.get)
+  const set = useCallback((next: readonly string[]) => store.set(next), [store])
+  return [order, set]
 }

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { useOneMenu } from '../../shell/one-menu'
 import { ControlPicker } from './ControlPicker'
 import { ControlSection } from './ControlSection'
 import {
@@ -36,22 +37,31 @@ import './AgentControls.css'
  * says "Not reported" and its panel explains the difference, instead of showing
  * the same "Unknown" that everywhere else here means "something failed".
  *
- * ## Where each of them is, and why it is in two places
+ * ## Where each of them is, and why each is in exactly one place
  *
  * This was a strip of four pickers and two lines of prose under the chat box,
  * and it read as clutter rather than as control — the complaint that started
  * the redesign was, exactly, "a lot of options under the chat box". The pass
  * that answered it moved two pickers onto the box and put the other two behind
  * a button labelled "More", and the report that came back was the opposite
- * complaint: *"all the options you have actually removed"*.
+ * complaint: *"all the options you have actually removed"*. The pass after
+ * *that* made the panel a complete inventory of all four, and drew the third
+ * report, watching the app: *"options is having all of the things that we
+ * already have here and there. So let's keep everything separate rather than
+ * having everything on one page like on options."*
  *
- * Both readings were fair, and the second one is the reason this file no longer
- * has a hidden set. There is one panel and it lists **every** control
- * (`MENU_CONTROLS`), each with its name, a sentence describing it and all of
- * its options; `PRIMARY_CONTROLS` decides only which of them *also* get a chip
- * on the row for the one-click case. So the row stays two chips long and
- * nothing is behind a word that names nothing — the button says Options, and
- * what it opens is the whole list rather than the remainder of one.
+ * So: one home per control. `PRIMARY_CONTROLS` are chips on the row and are not
+ * repeated in the panel; `MENU_CONTROLS` are the ones with no chip, and the
+ * panel is where they live. `catalog.ts` carries the full account of the three
+ * reports and of why this cannot slide back into the "More" failure — the short
+ * version is that the button's hover label is built out of `MENU_CONTROLS`, so
+ * the panel's contents are named on screen, which is the one thing "More" never
+ * did.
+ *
+ * The two lists are drawn under the *same* condition (`usable`), which is what
+ * makes "one home" safe rather than merely tidy: there is no state of this
+ * component in which the chips are withheld and the panel is not, so a control
+ * cannot lose its only home to a branch.
  *
  * The panel is also where the descriptions finally have room to be sentences,
  * which is the half a chip cannot do at any width.
@@ -263,6 +273,20 @@ export function AgentControls({ sessionId, cwd, provider, extra }: Props) {
     return () => clearTimeout(timer)
   }, [notice])
 
+  /*
+   * The window's one-menu-at-a-time rule — see `one-menu.ts`.
+   *
+   * This panel is the reason the rule exists. Its outside-click test below is
+   * measured against `rootRef`, which is `.agent-controls` — and the Model and
+   * Permission chips are inside that element, one row above the panel. So
+   * pressing a chip while the panel was open was a click *inside* the panel's
+   * own root, the panel stayed put, and the chip's menu opened across it. No
+   * amount of care in the listener fixes that, because the listener is
+   * answering the right question about the wrong boundary.
+   */
+  const shut = useCallback(() => setOpen(false), [])
+  useOneMenu(open, shut)
+
   // Escape closes the panel from anywhere inside it, and a click outside
   // dismisses. Both are needed: a panel that only closes on Escape traps the
   // pointer, and one that only closes on click ignores the keyboard. Registered
@@ -339,6 +363,13 @@ export function AgentControls({ sessionId, cwd, provider, extra }: Props) {
    * removed six months earlier — and this composer has already lost controls
    * once. Building the sentence from `MENU_CONTROLS` means the two cannot
    * disagree: delete a control and its name leaves the sentence with it.
+   *
+   * It carries more weight now than when it was written. The panel no longer
+   * repeats the chips beside it, so this sentence is the *only* place on screen
+   * that names what is behind the button — which is exactly what a button
+   * labelled "More" did not have, and exactly why "More" read as a deletion.
+   * Replacing this with a fixed string would recreate that failure with no
+   * other change.
    *
    * Sentence case, so it reads as prose rather than as a row of proper nouns:
    * only the first name keeps its capital.

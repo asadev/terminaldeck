@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import {
+  matchProjects,
   parseRecentProjects,
+  projectShortlist,
   readStartMemory,
   toStartProviders,
   withProject,
   writeStartMemory,
+  type RecentProject,
 } from './NewSessionDialog'
 import { buildProviderRows } from './ProviderPicker'
 import { START_MEMORY_KEY } from '../session-start'
@@ -176,5 +179,97 @@ describe('start memory', () => {
       [START_MEMORY_KEY]: JSON.stringify({ '/w/app': { provider: 'kimi', resume: true } }),
     })
     expect(readStartMemory(KNOWN, storage)).toEqual({ '/w/app': { resume: true } })
+  })
+})
+
+/* ----------------------------------------------- finding a folder to run in -- */
+
+/**
+ * The Project section, once somebody has more folders than the shortlist holds.
+ *
+ * Pinned here rather than in `dialog-render.test.tsx` because the project list
+ * arrives in an effect and effects do not run under `react-dom/server`: a
+ * rendered dialog sees an empty list whatever the store contains, so the
+ * nine-projects case has no other place it can be held.
+ */
+function projectsNamed(...names: string[]): RecentProject[] {
+  return names.map((name, index) => ({
+    path: `/Users/apple/Projects/${name}`,
+    name,
+    lastOpenedAt: names.length - index,
+  }))
+}
+
+const MANY = projectsNamed(
+  'terminaldeck',
+  'science-locus',
+  'mookhayo',
+  'engineerings-pk',
+  'asadiqbal-ai',
+  'luxury-fleet',
+  'vfs-sentinel',
+  'odysseus',
+  'hermes',
+)
+
+describe('matchProjects', () => {
+  it('finds a folder by its name', () => {
+    expect(matchProjects(MANY, 'hermes').map((p) => p.name)).toEqual(['hermes'])
+  })
+
+  it('finds folders by where they live', () => {
+    // The other half of the question a list of paths is asked: everything under
+    // one parent, rather than one folder by name.
+    expect(matchProjects(MANY, '/Users/apple/Projects/')).toHaveLength(MANY.length)
+  })
+
+  it('does not care about case, or about the spaces around what was typed', () => {
+    expect(matchProjects(MANY, '  MOOKHAYO ').map((p) => p.name)).toEqual(['mookhayo'])
+  })
+
+  it('is the whole list until something is typed', () => {
+    expect(matchProjects(MANY, '')).toHaveLength(MANY.length)
+    expect(matchProjects(MANY, '   ')).toHaveLength(MANY.length)
+  })
+
+  it('is empty when nothing matches, rather than falling back to everything', () => {
+    // A filter that quietly shows the whole list on a miss is one that makes
+    // somebody start a session in the wrong folder.
+    expect(matchProjects(MANY, 'zzz')).toEqual([])
+  })
+})
+
+describe('projectShortlist', () => {
+  it('draws no filter while the whole list is on screen', () => {
+    const eight = MANY.slice(0, 8)
+    const list = projectShortlist(eight, '')
+    expect(list.filtering).toBe(false)
+    expect(list.shown).toHaveLength(8)
+    expect(list.hidden).toBe(0)
+  })
+
+  it('offers one at the first project the cap can hide', () => {
+    /*
+     * Nine is the number that matters: the list stops at eight, so from here on
+     * a folder somebody has open can be missing from this panel with nothing on
+     * screen saying so, and Browse — a system dialog for folders the app has
+     * never seen — was the only way to reach it.
+     */
+    const list = projectShortlist(MANY, '')
+    expect(list.filtering).toBe(true)
+    expect(list.shown).toHaveLength(8)
+    expect(list.hidden).toBe(1)
+  })
+
+  it('searches the whole list, not the eight rows already visible', () => {
+    // `hermes` is ninth. Before the filter existed it could not be picked here
+    // at all.
+    const list = projectShortlist(MANY, 'hermes')
+    expect(list.shown.map((p) => p.name)).toEqual(['hermes'])
+    expect(list.hidden).toBe(0)
+  })
+
+  it('never reports a negative number of hidden folders', () => {
+    expect(projectShortlist(MANY, 'zzz').hidden).toBe(0)
   })
 })

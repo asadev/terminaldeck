@@ -335,7 +335,18 @@ describe('what a public host offers', () => {
     // to `CAPABILITIES` later is off by default on the demo host and somebody
     // has to come here to change that on purpose.
     const withheld = CAPABILITIES.filter((name) => !PUBLIC_HOST_OFFER.includes(name))
-    expect(withheld).toEqual([CAPABILITY.localhost, CAPABILITY.upload, CAPABILITY.credential])
+    expect(withheld).toEqual([
+      CAPABILITY.localhost,
+      CAPABILITY.upload,
+      CAPABILITY.credential,
+      // `devserver` joined this list the day it was built, and it is exactly the
+      // kind of capability this test exists to catch. It reads a `package.json`
+      // and then *runs a command out of it* — on a box that is handed to
+      // strangers for the App Store review, whose whole design is that a guest
+      // gets a throwaway container and nothing else. The demo needs a terminal;
+      // it does not need to start anybody's dev server.
+      CAPABILITY.devserver,
+    ])
   })
 })
 

@@ -197,6 +197,14 @@ enum WireCodec {
             guard let ch = string(object["ch"]) else { return .failed(reason: "net.close without a channel") }
             return .ok(.netClose(ch: ch), activity: [:])
 
+        /* ---- capability `devserver` ---------------------------------------- */
+
+        case "dev.state":
+            guard let report = devServerReport(object["state"]) else {
+                return .failed(reason: "dev.state without a usable state")
+            }
+            return .ok(.devState(report), activity: [:])
+
         /* ---- capability `upload` ------------------------------------------ */
 
         case "upload.ready":
@@ -277,6 +285,91 @@ enum WireCodec {
         guard let number = whole(value), number >= 1, number <= 65_535 else { return nil }
         return number
     }
+
+    /**
+     * One project's dev server. Exposed for the tests, which check the field
+     * rules directly rather than through a whole frame.
+     *
+     * Two things are refused outright and everything else is read leniently,
+     * which is the split the rest of this file makes for the same reason: the
+     * two refused fields are what the *row exists to say*, and a row with
+     * neither is not a shorter row, it is a row about nothing.
+     *
+     *  - **A folder.** It is the identity — the key a row is replaced under —
+     *    so a frame without one could only ever be filed under a guess.
+     *  - **A status this build knows.** All five draw different controls and
+     *    there is no honest default among them; mapping an unknown word onto
+     *    `idle` would put a Start button under a state nobody here understands.
+     *
+     * ## Why `port` and `url` are dropped unless the status is `ready`
+     *
+     * The desktop promises they appear only on `ready`, and tests that promise
+     * on its own side. This end enforces it anyway, because it is the one field
+     * pair on this frame that does not merely get *drawn*: `port` is handed to
+     * `HostLink.openLocalhost`, which opens a tunnel and points a web view at
+     * it. The header of this file explains why a client narrows a peer it
+     * supposedly trusts — the desktop is not always what answers — and this is
+     * that argument at its sharpest. A `starting` row carrying a port from a
+     * frame nobody checked is exactly the dead address under a live row that the
+     * replace-never-merge rule exists to prevent, arriving from the wire instead
+     * of from a merge.
+     */
+    static func devServerReport(_ value: Any?) -> DevServerReport? {
+        guard let row = value as? [String: Any],
+              let folder = string(row["folder"]), !folder.isEmpty,
+              let word = string(row["status"]),
+              let status = DevServerStatus(rawValue: word) else { return nil }
+        let ready = status == .ready
+        return DevServerReport(folder: folder,
+                               status: status,
+                               script: displayLine(row["script"]),
+                               command: displayLine(row["command"]),
+                               sessionId: string(row["sessionId"]).flatMap { SessionID.isValid($0) ? $0 : nil },
+                               port: ready ? port(row["port"]) : nil,
+                               url: ready ? displayLine(row["url"]) : nil,
+                               note: displayLine(row["note"]),
+                               message: displayLine(row["message"]))
+    }
+
+    /**
+     * A string from the wire that a person is about to read, on one line.
+     *
+     * Every optional field on a `dev.state` goes through here, and it is worth
+     * saying why all four rather than only the one the protocol labels
+     * untrusted. `note` is bytes a process printed and is the obvious case.
+     * `script` and `command` are read out of a `package.json` — a file in a
+     * repository that may well have been cloned from a stranger — so they are
+     * somebody else's text too. `message` is written by a desktop this phone has
+     * authenticated, which makes it the most trustworthy of the four and still
+     * not a reason to have a second rule.
+     *
+     * Two things happen: control characters are removed, and the result is cut
+     * to the same 200 characters the desktop caps a note at. Neither is a
+     * security boundary — SwiftUI's `Text` draws a string as glyphs and has no
+     * markup to be injected with — they are about a row that stays a row. A
+     * stray newline turns one line into three and pushes the button off the
+     * card; a carriage return from a progress bar leaves a line that reads as
+     * gibberish. `\u{7f}` and the C1 block go for the same reason the wire's own
+     * `DISPLAY_STRIP` takes them: they are invisible in every editor and render
+     * as boxes on a phone.
+     *
+     * Empty after cleaning reads as absent, so a field the desktop sent as `""`
+     * does not become a blank line with space reserved for it.
+     */
+    static func displayLine(_ value: Any?) -> String? {
+        guard let raw = string(value) else { return nil }
+        let cleaned = String(raw.unicodeScalars.filter { scalar in
+            !(scalar.value <= 0x1f || (scalar.value >= 0x7f && scalar.value <= 0x9f))
+        })
+        let trimmed = cleaned.trimmingCharacters(in: .whitespaces)
+        if trimmed.isEmpty { return nil }
+        return trimmed.count <= maxDisplayLine ? trimmed : String(trimmed.prefix(maxDisplayLine))
+    }
+
+    /// The desktop's own `MAX_NOTE_CHARS`. Repeated rather than trusted, for the
+    /// reason every other bound in `Wire` is: a cap that is only enforced by the
+    /// other end is not a cap.
+    static let maxDisplayLine = 200
 
     /**
      * Base64, checked before Foundation is allowed to be lenient about it.
@@ -402,6 +495,10 @@ enum WireCodec {
             object = ["t": "net.ack", "ch": ch, "bytes": bytes]
         case let .netClose(ch):
             object = ["t": "net.close", "ch": ch]
+        case let .devStatus(folder):
+            object = ["t": "dev.status", "folder": folder]
+        case let .devStart(folder):
+            object = ["t": "dev.start", "folder": folder]
         case let .uploadBegin(id, name, size):
             object = ["t": "upload.begin", "id": id, "name": name, "size": size]
         case let .uploadData(id, data):

@@ -36,7 +36,6 @@ import { AppearanceSection } from './sections/AppearanceSection'
 import { NotificationsSection } from './sections/NotificationsSection'
 import { AgentsSection } from './sections/AgentsSection'
 import { SetupSection } from './sections/SetupSection'
-import { RemoteSection } from '../remote/RemoteSection'
 import { BrowserSection } from './sections/BrowserSection'
 import { PowerSection } from './sections/PowerSection'
 import { ShortcutsSection } from './sections/ShortcutsSection'
@@ -72,7 +71,6 @@ import './SettingsWindow.css'
  */
 
 /** Takes no settings props: it reads its own bridge off `window.deck`. */
-const RemoteSectionView: ComponentType<SectionProps> = () => <RemoteSection />
 
 /**
  * Wrapped for the same reason, and it is the same argument as `RemoteSection`'s:
@@ -106,7 +104,6 @@ const SECTION_VIEWS: Record<SectionId, ComponentType<SectionProps>> = {
   // its `bridge` prop, so it decided remote access was "not wired into this
   // build" while every method was sitting on window.deck. RemoteSection
   // resolves its own bridge; it wants none of these props.
-  remote: RemoteSectionView,
   power: PowerSectionView,
   shortcuts: ShortcutsSection,
   // The section id stays `profiles` — it is what the main process calls them —

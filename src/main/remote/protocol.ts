@@ -104,11 +104,35 @@ export const PROTOCOL_VERSION = 1
  * client exactly where a capability it has never heard of should leave it:
  * dark, and working, until it is updated.
  */
+/**
+ * `devserver` is the answer to "the localhost link you sent me is not up".
+ *
+ * `localhost` can list a port and tunnel to it, and neither of those has ever
+ * had anything to say about the far more common case: the port is not there,
+ * because the dev server is not running, and the machine it would run on is in
+ * another room. This capability is `dev.status` (what is this project's dev
+ * server doing) and `dev.start` (start it), plus the `dev.state` frames the
+ * desktop pushes while it comes up.
+ *
+ * Its own name rather than part of `localhost`, and that is not tidiness. A host
+ * can serve `localhost` with nothing but a socket — every build can — while this
+ * one needs a session layer that can start a session *and* a device that has
+ * been granted a folder to start it in. The public demo box is the case that
+ * makes the split concrete: it offers `create` and nothing else, and it must not
+ * offer a stranger a button that runs `npm run dev` in the owner's checkout.
+ *
+ * It is deliberately keyed by **folder**, not by port. A dev server is a script
+ * in a project's `package.json`, run in that project's directory; there is no
+ * such thing as *the* dev server on a machine with four checkouts, and the port
+ * does not exist until the thing is up, which is the state the feature exists to
+ * get out of. `src/main/dev-server.ts` argues this at length.
+ */
 export const CAPABILITY = {
   localhost: 'localhost',
   create: 'create',
   upload: 'upload',
   credential: 'credential',
+  devserver: 'devserver',
 } as const
 
 /**
@@ -126,6 +150,7 @@ export const CAPABILITIES: string[] = [
   CAPABILITY.create,
   CAPABILITY.upload,
   CAPABILITY.credential,
+  CAPABILITY.devserver,
 ]
 
 /**
@@ -174,6 +199,86 @@ export interface LocalPort {
   port: number
   process: string
   guessed: boolean
+}
+
+/**
+ * The five things one project's dev server can be, as one word.
+ *
+ * They are five and not three because a client has to be able to draw five
+ * different things, and two of the pairs are the ones that get collapsed:
+ *
+ *  - `no-dev-script` is **not** `idle`. `idle` means "press this"; this means
+ *    "there is nothing to press, and there never will be for this folder,
+ *    because its `package.json` declares no `dev`, `start` or `serve`". A client
+ *    that flattens them draws a button whose only possible outcome is a refusal.
+ *  - `failed` is **not** `idle` either. The session that failed is still there
+ *    with the reason printed in it, and the useful thing to offer is that
+ *    session — not a fresh Start button drawn as though nothing had happened.
+ *
+ * `starting` is the state this whole feature was asked for: "if it's not [quick]
+ * then we can show some animation, loading or 'activating'". It is the one that
+ * carries {@link DevServerReport.note}.
+ */
+export const DEV_SERVER_STATUSES = ['no-dev-script', 'idle', 'starting', 'ready', 'failed'] as const
+
+export type DevServerStatus = (typeof DEV_SERVER_STATUSES)[number]
+
+/**
+ * One project's dev server, as a client sees it.
+ *
+ * Mirrors `DevServerState` in `src/main/dev-server.ts` and is declared here
+ * rather than imported from it, for exactly the reason {@link LocalPort} is: the
+ * shape a phone is sent is a contract with three clients in three languages, and
+ * a field added to the desktop's own type must not reach the wire by accident.
+ * `server.ts` rebuilds this field by field, so adding one there is a deliberate
+ * act rather than a spread.
+ *
+ * Which fields are set for which status:
+ *
+ * | status          | script/command | sessionId | port/url | note | message |
+ * |-----------------|----------------|-----------|----------|------|---------|
+ * | `no-dev-script` | –              | –         | –        | –    | –       |
+ * | `idle`          | ✓              | –         | –        | –    | –       |
+ * | `starting`      | ✓              | ✓         | –        | maybe| –       |
+ * | `ready`         | ✓              | ✓         | ✓        | –    | –       |
+ * | `failed`        | ✓              | maybe     | –        | –    | ✓       |
+ *
+ * A client must still read defensively — this arrives as JSON — but it may rely
+ * on the one rule the desktop enforces and tests: **`port` and `url` appear only
+ * on `ready`, and `ready` is only ever sent after something accepted a TCP
+ * connection on that port.** Not after a scan listed it, and not after a line of
+ * the server's output mentioned it. That is the whole promise of this frame.
+ */
+export interface DevServerReport {
+  /** The project folder, exactly as the desktop offered it in `welcome.folders`. */
+  folder: string
+  status: DevServerStatus
+  /** The `package.json` script that runs it, e.g. `dev`. */
+  script?: string
+  /** The command line that will be typed, e.g. `pnpm run dev`. Display it. */
+  command?: string
+  /**
+   * The session it is running in — a real session in `sessions`, which the
+   * client can attach to, read and kill exactly like any other. This is how a
+   * failure is investigated and how a dev server is stopped; there is no
+   * separate stop verb, because there is no separate kind of process.
+   */
+  sessionId?: string
+  /** Proven reachable. See the rule above. */
+  port?: number
+  /** `http://localhost:<port>`, ready to open through a `tunnel.open` on `port`. */
+  url?: string
+  /**
+   * The server's own latest output line, while `starting`.
+   *
+   * Untrusted display text and the only field here that is: it is bytes a
+   * process on the desktop printed. Draw it as text, never as markup, and never
+   * parse it — the desktop has already done the only parsing anyone should do
+   * with it.
+   */
+  note?: string
+  /** Why it failed, in a sentence written by the desktop. */
+  message?: string
 }
 
 /**
@@ -525,6 +630,43 @@ export type ClientMessage =
   /** "I have written this many bytes to my socket." See `NET_WINDOW_BYTES`. */
   | { t: 'net.ack'; ch: string; bytes: number }
   | { t: 'net.close'; ch: string }
+  /* ---- capability `devserver`. Refused when it is not advertised. --------- */
+  /**
+   * What is this project's dev server doing?
+   *
+   * `folder` is a folder the *client* named and nothing has checked yet — the
+   * same rule and the same wording as `create.cwd`, because it is the same
+   * question with the same answer. The desktop accepts only a folder it is
+   * already offering **this device** in `welcome.folders`, so the value has an
+   * honest source on the phone (a row that is on screen) and naming it grants
+   * nothing the device could not already do.
+   *
+   * The check happens *before* anything on disk is touched, and that ordering is
+   * the point rather than a detail: this verb's answer is derived from a
+   * `package.json`, so a desktop that read the file first and authorised second
+   * would be a way for a paired phone to ask whether an arbitrary path on
+   * somebody's machine is a Node project and what its scripts are called.
+   */
+  | { t: 'dev.status'; folder: string }
+  /**
+   * Start it. **This message is the consent, and there is no standing one.**
+   *
+   * Nothing runs on the desktop because of this feature until one of these
+   * arrives, and one only arrives because a person tapped a row for a folder
+   * their desktop has granted them. There is no configured list of auto-start
+   * projects to get wrong and nothing to revoke: removing the folder from that
+   * device's grants is the whole of the revocation, and it takes effect on the
+   * next message rather than on the next reconnect.
+   *
+   * The command is not on the wire and cannot be. The desktop reads the folder's
+   * own `package.json` and runs the script it declares; a client that could name
+   * a command would be a client that could run one.
+   *
+   * Answered with `dev.state`, immediately, carrying `starting` — not held open
+   * until the server is up. A dev server takes seconds to tens of seconds and
+   * the client needs something to draw for all of them.
+   */
+  | { t: 'dev.start'; folder: string }
   /* ---- capability `upload`. Refused outright when it is not advertised. ---- */
   /**
    * A file is coming. **This message is the consent, and it is the phone's.**
@@ -724,6 +866,41 @@ export type ServerMessage =
   | { t: 'net.data'; ch: string; data: string }
   | { t: 'net.ack'; ch: string; bytes: number }
   | { t: 'net.close'; ch: string }
+  /* ---- capability `devserver` -------------------------------------------- */
+  /**
+   * One project's dev server, now.
+   *
+   * The single frame for the whole capability: it answers `dev.status`, it
+   * answers `dev.start`, and it arrives **unsolicited** every time the state
+   * changes after a start — a new progress line, the moment a port accepts, a
+   * timeout. One frame rather than three because to a client they are one event:
+   * this row now says something different.
+   *
+   * Pushed rather than polled, and only to the connections that have asked about
+   * that folder in this session. A client therefore does not need a timer: send
+   * `dev.start`, draw whatever comes back, and keep drawing whatever arrives
+   * next. There is no "are we there yet" verb and adding one would be a client
+   * asking a question the desktop is already answering.
+   *
+   * **Handle it idempotently: the same state can arrive twice.** A `dev.start`
+   * gets the state as its direct answer *and* as a push, because the direct
+   * answer is what makes the state reach a client whose request changed nothing
+   * (a folder already `ready`, or one with no dev script), while the push is what
+   * makes every *later* change arrive. Deduplicating the overlap would mean the
+   * desktop guessing which of the two a given client had already acted on.
+   * Replace the row keyed by `folder` and the duplicate costs nothing.
+   *
+   * **Replace, do not merge.** The fields are not independent — `port` and `url`
+   * exist only on `ready`, `message` only on `failed` — so folding a new state
+   * into an old one leaves a dead address under a live row. That is the one
+   * genuinely wrong thing a client of this frame can display.
+   *
+   * A refusal — a folder this device was not granted, a host that cannot start
+   * sessions — comes back as a plain `error` with `unauthorized`, not as a
+   * `dev.state`, because there is no folder state to report about a folder the
+   * desktop will not discuss.
+   */
+  | { t: 'dev.state'; state: DevServerReport }
   /* ---- capability `upload` ---------------------------------------------- */
   /**
    * The file is accepted, and this is where it will be.
@@ -903,6 +1080,30 @@ const PROVIDER_RE = /^[a-z][a-z0-9-]*$/
 /** A port a phone may name. Zero and anything past 65535 are not ports. */
 function portNumber(value: unknown): number | null {
   return whole(value, 1, 65535)
+}
+
+/**
+ * A project folder a client named, checked exactly the way `create.cwd` is.
+ *
+ * One function for the two `dev.*` verbs rather than the checks written out
+ * twice, because they are the same value with the same fate: compared against
+ * the folder list this desktop granted the device, and then handed to something
+ * that opens a directory. The three rules are `create.cwd`'s and the reasons are
+ * `create.cwd`'s — a control byte is **refused** rather than stripped, since
+ * stripping turns a hostile value into a *different* legal-looking path, which
+ * is the worse failure.
+ *
+ * Two ways of failing, distinguished, because the caller answers them
+ * differently: a path over the cap is `too-large`, which is the code that says
+ * "your message was too big" rather than "your message was wrong".
+ */
+type FolderCheck = { ok: true; folder: string } | { ok: false; tooLarge: boolean }
+
+function devFolder(value: unknown): FolderCheck {
+  if (typeof value !== 'string' || value === '') return { ok: false, tooLarge: false }
+  if (overBytes(value, MAX_CWD_BYTES)) return { ok: false, tooLarge: true }
+  if (CONTROL_CHARS.test(value)) return { ok: false, tooLarge: false }
+  return { ok: true, folder: value }
 }
 
 /**
@@ -1342,6 +1543,26 @@ export function parseClientMessage(raw: unknown): ParseResult {
       return channel
         ? { ok: true, message: { t: 'net.close', ch: channel } }
         : bad('net.close without a channel id')
+    }
+
+    /* ---- capability `devserver` ----------------------------------------- */
+    // Shape only, and authorised nowhere near here. Whether this desktop offers
+    // the capability at all, and whether this device may see or start anything
+    // in the folder named, are the server's questions — it is the only thing
+    // that knows which device the socket belongs to. See the header.
+    case 'dev.status':
+    case 'dev.start': {
+      // Read once into a local, for the reason spelled out on `input.data`: on
+      // the object path a property can be a getter, and the string that is
+      // measured has to be the string that is forwarded.
+      const verb = parsed.t
+      const checked = devFolder(parsed.folder)
+      if (!checked.ok) {
+        return checked.tooLarge
+          ? tooLarge(`${verb} with a folder over the path limit`)
+          : bad(`${verb} with an unusable folder`)
+      }
+      return { ok: true, message: { t: verb, folder: checked.folder } }
     }
 
     /* ---- capability `upload` -------------------------------------------- */

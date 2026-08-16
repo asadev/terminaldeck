@@ -73,10 +73,18 @@ import {
   serialize,
   type ClientMessage,
   type DeviceDescriptor,
+  type DevServerReport,
   type ProtocolErrorCode,
   type RemoteSession,
   type ServerMessage,
 } from './protocol'
+// The one comparison this app has for "are these two paths the same folder",
+// borrowed rather than restated. A second idea of folder equality here would be
+// a device granted `/Users/asad/proj` being refused `/Users/asad/proj/`, and on
+// Windows a folder visibly on the list being refused over a drive letter's case.
+// `session-create.ts`'s only runtime dependency in this direction is a type, so
+// there is no cycle.
+import { sameFolder } from './session-create'
 import {
   MAX_STREAMS_TOTAL,
   createTunnelHub,
@@ -97,6 +105,11 @@ import {
 // session spawn path closes over it — so constructing one here would give the
 // sockets a different object from the one sessions are keyed against.
 import type { CredentialMessage, CredentialProxy } from './credentials'
+// Type-only for the same reason again, plus one of its own: `dev-server.ts`
+// reads `package.json` files off the disk, and a socket server whose module
+// graph reaches `node:fs` is a socket server that has to be tested with a
+// filesystem. The instance is injected; nothing here constructs one.
+import type { DevServerState, DevServers, SessionOpener } from '../dev-server'
 import { scanDevPortsDetailed } from '../dev-ports'
 import { currentPlatform, machineNoun } from '../platform/host'
 import { createRelayClient, relayEnabled, relayUrl, type RelayLink, type RelayState } from './relay-client'
@@ -367,6 +380,27 @@ export interface RemoteEndpointOptions {
    * without either module importing the other.
    */
   credentials?: CredentialProxy
+  /**
+   * Starting a project's dev server. **Absent is the switch**, as everywhere else.
+   *
+   * A host with no dev-server module does not advertise the `devserver`
+   * capability, so a client never draws a Start button for it and never sends a
+   * verb this server would refuse. Same negotiation as `uploadsDir` and
+   * `SessionAccess.create`, same reason.
+   *
+   * It is injected rather than constructed here for a reason that is not merely
+   * symmetry: the module has to be handed the *same* one the desktop window is
+   * driving, or a phone and the window would each be watching their own idea of
+   * whether a project's server is up. There is one dev server per project, so
+   * there is one state per project, and it lives with the sessions rather than
+   * with a socket.
+   *
+   * Typed as an import so this file cannot drift from the module — but a **type**
+   * import, so nothing about the dev-server module, its `node:fs` reads or its
+   * Electron typings ends up in the module graph of a server that is tested over
+   * a plain loopback socket.
+   */
+  devServers?: DevServers
   /**
    * The most this host is willing to advertise, whatever it is able to do.
    *
@@ -961,6 +995,21 @@ interface LiveConnection {
    * be sixty-four objects on a machine where nobody has sent anything.
    */
   uploads: UploadDesk | null
+  /**
+   * Project folders this connection has asked about, in the desktop's own
+   * spelling.
+   *
+   * A subscription list, and the only reason `dev.state` can be pushed rather
+   * than polled. A client sends `dev.status` or `dev.start` for a folder and
+   * then hears about every change to it for as long as the socket lives — which
+   * is what makes a two-minute cold start readable on a phone without a timer
+   * asking "is it up yet" forty times.
+   *
+   * Only ever holds folders that passed the grant check, so a device cannot use
+   * it to learn that something happened in a folder it was never given. Capped,
+   * because it is a per-connection allocation driven by a message.
+   */
+  devFolders: Set<string>
   helloTimer: NodeJS.Timeout | null
   /**
    * Set while a `hello` is being checked. Verification is asynchronous — scrypt
@@ -1070,8 +1119,72 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
     // be asked for a GitHub login and then never ask, which is a screen in
     // somebody's app for a thing that cannot happen.
     if (name === CAPABILITY.credential) return options.credentials !== undefined
+    /*
+     * Three conditions, and all three are load-bearing.
+     *
+     * The module is the obvious one. `create` is there because starting a dev
+     * server *is* starting a session — this feature has no process-spawning path
+     * of its own, on purpose — so a host that cannot start a session cannot start
+     * one of these either. And `folders` is there because it is the entire
+     * authorisation: without a per-device folder list there is nothing to check a
+     * request against, and the correct behaviour for a host that cannot answer
+     * "may this device use this folder" is to not offer the feature rather than
+     * to answer it optimistically.
+     */
+    if (name === CAPABILITY.devserver) {
+      return (
+        options.devServers !== undefined &&
+        typeof options.sessions.create === 'function' &&
+        typeof options.sessions.folders === 'function'
+      )
+    }
     return true
   })
+
+  /**
+   * Push a folder's new state to every connection that has asked about it.
+   *
+   * Subscribed once for the endpoint rather than once per connection, because
+   * there is one dev server per project and its state does not depend on who is
+   * watching. Compared with `sameFolder` and not with `Set.has`, so a device that
+   * asked about `/p` and a window that started `/p/` are looking at one project.
+   */
+  const stopDevWatch =
+    options.devServers?.onChange((state) => {
+      for (const connection of live.values()) {
+        if (!connection.deviceId) continue
+        let watching = false
+        for (const folder of connection.devFolders) {
+          if (sameFolder(folder, state.folder)) {
+            watching = true
+            break
+          }
+        }
+        if (!watching) continue
+        send(connection, { t: 'dev.state', state: devReport(state) })
+      }
+    }) ?? null
+
+  /**
+   * The desktop's dev-server state, trimmed to what the wire carries.
+   *
+   * Rebuilt field by field rather than passed through, for exactly the reason
+   * `offerPorts` in `tunnel.ts` rebuilds a `LocalPort`: `DevServerState` is the
+   * desktop's own type and `DevServerReport` is a contract with three clients, so
+   * whatever this copies becomes what they are allowed to see. A field added to
+   * the module reaches a phone only when somebody writes a line here.
+   */
+  function devReport(state: DevServerState): DevServerReport {
+    const report: DevServerReport = { folder: state.folder, status: state.status }
+    if (state.script !== undefined) report.script = state.script
+    if (state.command !== undefined) report.command = state.command
+    if (state.sessionId !== undefined) report.sessionId = state.sessionId
+    if (state.port !== undefined) report.port = state.port
+    if (state.url !== undefined) report.url = state.url
+    if (state.note !== undefined) report.note = state.note
+    if (state.message !== undefined) report.message = state.message
+    return report
+  }
 
   /**
    * When each device was last swept off this server, and a counter to date it.
@@ -1418,6 +1531,149 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
    * cannot name anything the desktop has not already offered it — see
    * `CreateRequest`.
    */
+  /**
+   * Folders one connection may be subscribed to at once.
+   *
+   * A person looks at one project, occasionally two. The cap is here because the
+   * set is a per-connection allocation driven by a message, and every one of
+   * those needs a ceiling whether or not anybody would reach it.
+   */
+  const MAX_DEV_FOLDERS = 8
+
+  /**
+   * Look at, or start, one project's dev server.
+   *
+   * ## Where the folder grant is enforced — both times
+   *
+   * **Here, first, before anything touches the disk.** `folders(deviceId)` is the
+   * same call `create` is checked against and the same array the device was sent
+   * in its `welcome`, so a folder on the phone's screen is a folder that works
+   * and nothing else is. The check comes before the `package.json` is read
+   * because the answer to `dev.status` is *derived from that file*: a desktop
+   * that read first and authorised second would let a paired phone ask whether
+   * any path on the machine is a Node project and what its scripts are called.
+   * That is a small disclosure and it is a disclosure, and it costs one
+   * comparison to not have.
+   *
+   * **Then again, underneath, by the code that already owns the question.** The
+   * session is opened through `SessionAccess.create`, which is
+   * `remoteSessionCreator` in `session-create.ts` — so the folder is checked a
+   * second time by the function that has always checked it, and the session that
+   * results is confined to the folder and given a guest git identity exactly like
+   * every other session a device starts. There is deliberately no second
+   * spawning path: this feature cannot start a process that an ordinary `create`
+   * could not.
+   *
+   * What travels onward is **the desktop's spelling of the folder**, taken from
+   * its own list, never the string the client sent. The two can differ by a
+   * trailing separator or by case on Windows and still be the same directory —
+   * `sameFolder` is what says so — and passing the desktop's copy means nothing
+   * downstream has to trust a path off the network.
+   */
+  async function devServe(
+    connection: LiveConnection,
+    // Passed in rather than read off the connection inside, for the reason
+    // `create` spells out: this is the value that decides whose folders apply,
+    // and it has to come from the authenticated socket at the call site.
+    deviceId: string,
+    message: Extract<ClientMessage, { t: 'dev.status' | 'dev.start' }>,
+  ): Promise<void> {
+    const servers = options.devServers
+    const start = options.sessions.create
+    if (!servers || !start) {
+      // A client sending a verb this host never advertised is not a client of
+      // ours — the same refusal `create` and the uploads give, for the same
+      // reason.
+      send(connection, {
+        t: 'error',
+        code: 'unauthorized',
+        message: 'Dev servers cannot be started from a phone here.',
+      })
+      return
+    }
+
+    const offered = options.sessions.folders?.(deviceId) ?? []
+    const granted = offered.find((folder) => sameFolder(folder, message.folder))
+    if (granted === undefined) {
+      send(connection, {
+        t: 'error',
+        code: 'unauthorized',
+        // The folder is not echoed back, for the reason `session-create.ts`
+        // gives: it came off the network and this sentence is drawn on a phone.
+        message:
+          `This ${machineNoun(currentPlatform())} is not offering that folder to this device. ` +
+          'Pick one from the list it sent.',
+      })
+      return
+    }
+
+    // Subscribed only after the grant passed, so the set cannot be used to learn
+    // that something happened in a folder this device was never given.
+    if (connection.devFolders.size < MAX_DEV_FOLDERS) connection.devFolders.add(granted)
+
+    if (message.t === 'dev.status') {
+      send(connection, { t: 'dev.state', state: devReport(servers.status(granted)) })
+      return
+    }
+
+    /*
+     * One start at a time per connection, sharing `create`'s own flag.
+     *
+     * Shared rather than a second one of its own, because they are the same
+     * resource: both end in a spawned session, and a client that alternated
+     * between the two verbs could otherwise start as many processes as it liked
+     * on somebody's machine while each individual guard was satisfied.
+     */
+    if (connection.creating) {
+      send(connection, {
+        t: 'error',
+        code: 'unavailable',
+        message: 'A session is already starting. Wait for it to appear.',
+      })
+      return
+    }
+
+    connection.creating = true
+    let state: DevServerState
+    try {
+      state = await servers.start(granted, devOpener(deviceId, start))
+    } finally {
+      connection.creating = false
+    }
+    // The phone can be gone by now — starting reads the disk, scans the ports
+    // and spawns a shell. The dev server is still real and still on this
+    // machine, which is the honest outcome of "start something"; there is just
+    // no socket left to tell.
+    if (!live.has(connection.id)) return
+    send(connection, { t: 'dev.state', state: devReport(state) })
+  }
+
+  /**
+   * How a dev server's session is opened for a device: through `create`, and
+   * through nothing else.
+   *
+   * `provider: 'shell'` because the command is typed into a shell — see
+   * `dev-server.ts` — and naming it explicitly rather than letting the desktop's
+   * default apply matters: a desktop whose default provider is `claude` would
+   * otherwise start an agent and have `pnpm run dev` typed into its prompt.
+   *
+   * No `cols`/`rows`. The frame does not carry a size and should not: this
+   * session is a server that will be read occasionally rather than typed into,
+   * and a client that attaches to it sends a `resize` with its real viewport at
+   * that moment. Inventing a size here would be inventing it twice.
+   */
+  function devOpener(deviceId: string, start: NonNullable<SessionAccess['create']>): SessionOpener {
+    return async (folder: string) => {
+      const outcome = await start({ deviceId, cwd: folder, provider: 'shell' })
+      // The refusal is passed through as written. It is the only layer that knows
+      // whether the folder was ungranted, deleted, or could not be confined, and
+      // it has already written the sentence for each.
+      return outcome.ok
+        ? { ok: true as const, sessionId: outcome.session.id }
+        : { ok: false as const, message: outcome.message }
+    }
+  }
+
   async function create(
     connection: LiveConnection,
     // Passed in rather than read off `connection` inside, because this is the
@@ -1603,6 +1859,22 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
         // build instead of quietly falling through to the tunnel hub.
         hubFor(connection).handle(message satisfies LocalhostMessage)
         return
+      case 'dev.status':
+      case 'dev.start':
+        // Not awaited, for the same reason `create` is not: this reads a
+        // `package.json`, scans the machine's ports and may spawn a session, and
+        // the message loop is the socket's data handler. It must not stop reading
+        // for the length of any of that.
+        void devServe(connection, connection.deviceId, message).catch((error) => {
+          console.error('[remote] dev server request failed:', error)
+          if (!live.has(connection.id)) return
+          send(connection, {
+            t: 'error',
+            code: 'unavailable',
+            message: 'That dev server could not be looked at.',
+          })
+        })
+        return
       case 'upload.begin':
       case 'upload.data':
       case 'upload.end':
@@ -1682,6 +1954,7 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
       handles: new Map(),
       tunnels: null,
       uploads: null,
+      devFolders: new Set(),
       helloTimer: null,
       greeting: false,
       creating: false,
@@ -1853,6 +2126,9 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
       )
     },
     closeAll(): void {
+      // Before the sockets, so a state change that lands mid-teardown cannot try
+      // to send on a wire that is going away.
+      stopDevWatch?.()
       for (const connection of [...live.values()]) connection.wire.close(CLOSE.goingAway, 'server stopping')
     },
   }
@@ -2512,6 +2788,15 @@ export interface RemoteIpcDeps {
    */
   credentials?: CredentialProxy
   /**
+   * The dev-server module, when this build has one.
+   *
+   * Passed in for the same reason `folders` and `credentials` are: `index.ts`
+   * builds it before this function is called, because the desktop's own start
+   * page drives the same object. One instance, or a phone and the window each
+   * watch their own idea of whether a project's server is up.
+   */
+  devServers?: DevServers
+  /**
    * The ceiling on what this host advertises. See {@link RemoteEndpointOptions.offer}.
    *
    * Forwarded rather than recomputed, because the thing that knows a host is a
@@ -2729,6 +3014,9 @@ export function registerRemoteIpc(ipcMain: InvokeRegistrar, deps: RemoteIpcDeps)
     certDir: deps.storageDir,
     ...(deps.uploadsDir ? { uploadsDir: deps.uploadsDir } : {}),
     ...(deps.credentials ? { credentials: deps.credentials } : {}),
+    // Spread rather than passed as possibly-undefined, like everything else that
+    // is a switch: absent means this host does not advertise `devserver` at all.
+    ...(deps.devServers ? { devServers: deps.devServers } : {}),
     ...(deps.offer ? { offer: deps.offer } : {}),
     port: deps.port,
     onConnections: (connections) => deps.broadcast(REMOTE_CONNECTIONS_CHANNEL, connections),

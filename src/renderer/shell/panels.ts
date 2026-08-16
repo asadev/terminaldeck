@@ -27,6 +27,7 @@ export type PanelId =
   | 'readiness'
   | 'mcp'
   | 'hooks'
+  | 'remote'
 
 /**
  * Where a view sits in the sidebar.
@@ -154,6 +155,35 @@ export const PANELS: PanelSpec[] = [
     group: 'integrations',
     icon: 'M4.5 5.5h15v4.2h-15zM4.5 14.3h15v4.2h-15zM7.6 7.6h.01M7.6 16.4h.01',
     blurb: 'The tools your agents can reach, and what they expose.',
+  },
+  {
+    /*
+     * Remote lives in the rail, where Machines used to, and not inside Settings.
+     *
+     * The merge that folded Machines into Remote put the result in Settings and
+     * deleted this row. That was the wrong half to keep, and Asad said so as
+     * soon as he used it: *"the remote page I asked you to keep it in the side
+     * panel, same as machines we had before, at the same placement — I want
+     * remote, not inside that settings."*
+     *
+     * He is right about the category. Pairing a device is something you **do**,
+     * repeatedly, standing at two keyboards — not something you configure once
+     * and forget, which is what everything else in Settings is. That is why
+     * Machines was in the rail to begin with, and the merge should have moved
+     * Remote *out* rather than pulling Machines *in*.
+     *
+     * The foot, with Alerts and Settings: another machine is not something this
+     * project integrates with, and the machines you can reach do not change when
+     * you open a different folder.
+     */
+    id: 'remote',
+    label: 'Remote',
+    group: 'foot',
+    // Two rectangles, one behind the other, joined by a line — Machines' own
+    // glyph, kept because it is the same subject and people already know it.
+    // Screens, not servers: the thing on the other end is somebody's desk.
+    icon: 'M3.5 5.5h11v8h-11zM9 17.5h11v-8h-5.5M6.5 17.5h2.5M9 13.5v4',
+    blurb: 'Phones and computers that can reach this machine.',
   },
   {
     id: 'hooks',

@@ -88,6 +88,7 @@ export const PANEL_HELP: Record<PanelId, string> = {
   alerts: 'Things worth knowing without watching: a session filling its context window, a tool failing repeatedly, work that has stalled.',
   mcp: 'Connect to MCP servers, browse the tools, resources and prompts they expose, and call one by hand to see what it returns.',
   hooks: 'Installs callbacks into each agent CLI’s own settings file, so the app knows what the agent is doing without scraping the terminal.',
+  remote: 'Pair a phone or another computer with this one, then drive these sessions from it. A code is six digits, lives a minute, and is used once — and the device still has to be approved here before it gets in.',
   // No `machines` line, because there is no Machines view: your other computers
   // live in Settings → Remote now, beside the phones that can reach this one.
   // `PANEL_HELP` is keyed by `PanelId`, so a line for a view that no longer

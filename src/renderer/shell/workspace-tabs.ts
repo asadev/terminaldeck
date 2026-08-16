@@ -1,4 +1,5 @@
 import type { ProviderId, SessionStatus } from '@shared/types'
+import { folderName } from '../session-title'
 
 /**
  * A tab in the top header.
@@ -107,6 +108,87 @@ export const KIND_ICON: Record<TabKind, string> = {
  */
 export function sessionLabel(title: string, index: number, folderName?: string): string {
   return title && title !== folderName ? title : `Session ${index + 1}`
+}
+
+/**
+ * The same name, for a tab that is being drawn away from the sidebar's tree.
+ *
+ * The strip drew `tab.label` raw, and the sidebar draws it through
+ * {@link sessionLabel}, so one window was "terminaldeck" along the top and
+ * "Session 1" down the side until the agent got round to naming it — seen on
+ * screen, not reasoned about. Promoting a tab is a *placement*; it is not a
+ * rename, and nothing about the top of the window should make it look like one.
+ *
+ * The index is recovered from the tab list rather than passed in, because the
+ * strip's own order is the promoted order and the number in "Session 3" counts
+ * siblings in a folder. Both ends filter the same array the same way, so the
+ * numbering cannot drift.
+ */
+export function tabLabel(tab: WorkspaceTab, tabs: readonly WorkspaceTab[]): string {
+  if (tab.kind !== 'session') return tab.label
+  const siblings = tabs.filter(
+    (other) => other.kind === 'session' && other.projectPath === tab.projectPath,
+  )
+  const index = siblings.findIndex((other) => other.id === tab.id)
+  return sessionLabel(
+    tab.label,
+    index === -1 ? 0 : index,
+    tab.projectPath ? folderName(tab.projectPath) : undefined,
+  )
+}
+
+/**
+ * A tab's name, cut to fit, with the *middle* taken out rather than the end.
+ *
+ * Verified against this machine rather than imagined: the window this was
+ * written in had three sessions open in one folder, and every one of them was
+ * an agent-written title beginning "Update Claude Code terminal to …". Cut at
+ * the end — which is all `text-overflow: ellipsis` can do — the strip read
+ * "Update Claude Code ter…" three times and the tabs were genuinely
+ * indistinguishable. The half that tells them apart is the tail, and the only
+ * way to keep both halves is to lose the middle.
+ *
+ * A character budget rather than a measured width, because the alternative is
+ * measuring text in a layout effect and re-measuring on every resize, and
+ * because a budget is a pure function that a test can hold. CSS keeps its own
+ * `text-overflow` as the backstop for a run of unusually wide glyphs, so the
+ * failure mode of a budget that is slightly too generous is the old behaviour,
+ * not an overflowing tab.
+ *
+ * Budgets under four are returned untouched: there is nothing left to show on
+ * either side of an ellipsis, and a lone "…" is worse than a clipped word.
+ */
+export function middleEllipsis(label: string, budget: number): string {
+  if (!Number.isFinite(budget) || budget < 4 || label.length <= budget) return label
+  const keep = Math.trunc(budget) - 1
+  const head = Math.ceil(keep / 2)
+  // Trimmed on the inside edges only. Without it a cut that lands on a space
+  // prints "Update Claude …o new API", where the gap reads as part of the name.
+  return `${label.slice(0, head).trimEnd()}…${label.slice(label.length - (keep - head)).trimStart()}`
+}
+
+/**
+ * How many characters of a title a tab in the top strip can hold.
+ *
+ * Measured off the real thing rather than guessed: a strip tab is capped at
+ * 220px, and its icon, status dot, two trailing controls and padding take
+ * about 80 of them, leaving 138px of 11px UI text. Twenty-four characters
+ * rendered 146px into that box and the CSS backstop clipped the last one, so
+ * the tab read "…to ne…" — this is the number that lets the middle cut be the
+ * only cut, which is the point of making one.
+ */
+export const STRIP_LABEL_BUDGET = 22
+
+/**
+ * What a strip tab's tooltip should say: the whole title, and the folder under
+ * it when there is one.
+ *
+ * Two lines rather than one joined by a dash, because the title can itself be a
+ * sentence with dashes in it. A browser page has no folder and gets one line —
+ * an empty second line would read as a missing value.
+ */
+export function tabTooltip(tab: WorkspaceTab, label: string): string {
+  return tab.projectPath ? `${label}\n${tab.projectPath}` : label
 }
 
 /**

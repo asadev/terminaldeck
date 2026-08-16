@@ -331,6 +331,55 @@
   color: var(--text-primary);
 }
 
+/* The other half of the primary button.
+
+   Joined to it rather than floating beside it: same tint, same height, square
+   on the edge they meet and rounded on the outside, so the pair reads as one
+   split control — press for a session, press the chevron to be asked which
+   folder and which agent. A separate button of its own would read as a third
+   action in a row that already has two. */
+.sb-new-more {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: var(--sp-6);
+  height: var(--control-h-lg);
+  flex-shrink: 0;
+  /* Cancels the row's own gap: these two touch, the globe beside them does not. */
+  margin-left: calc(-1 * var(--sp-1));
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  background: var(--accent-soft);
+  color: var(--text-secondary);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.sb-new-more:hover {
+  background: color-mix(in srgb, var(--accent) 26%, transparent);
+  color: var(--text-primary);
+}
+
+.sb-new-more:active {
+  background: color-mix(in srgb, var(--accent) 34%, transparent);
+}
+
+/* The seam. A hairline of the page's own colour, so the two halves are told
+   apart by a gap in the tint rather than by a drawn line. */
+.sb-new-more::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 1px;
+  height: 16px;
+  transform: translateY(-50%);
+  background: var(--bg-secondary);
+}
+
+/* Square off the primary's trailing corners only when it has a partner. */
+.sb-new:has(+ .sb-new-more) {
+  border-radius: var(--radius-md) 0 0 var(--radius-md);
+}
+
 .sidebar-scroll {
   flex: 1;
   min-height: 0;
@@ -511,6 +560,126 @@
 .sb-row-action:hover {
   background: var(--bg-active);
   color: var(--text-primary);
+}
+
+/* Dimmed on reveal, not revealed by being dimmed. Setting the opacity on
+   `:disabled` alone beats the `opacity: 0` above it, which would have put a
+   faint arrow on every row in the rail for as long as the strip was full. */
+.sb-row-action:disabled {
+  cursor: default;
+}
+
+.sb-row:hover .sb-row-action:disabled,
+.sb-row:focus-within .sb-row-action:disabled {
+  opacity: 0.35;
+}
+
+/* ------------------------------------------------- dragging a row upward -- */
+
+/* A row that can be picked up says so before the mouse goes down.
+
+   `button` is `cursor: pointer` app-wide, so the grab hand has to be set on the
+   button that fills the row rather than on the row around it — the row's own
+   cursor never wins over its child's. Only `.sb-open`: the ten project views
+   and Settings are not windows and cannot be promoted, and a grab cursor over
+   them would promise a gesture that does nothing. */
+.sb-open,
+.sb-open .sb-row-main {
+  cursor: grab;
+}
+
+.sb-open .sb-row-main:active {
+  cursor: grabbing;
+}
+
+/* The row while its contents are following the cursor.
+
+   Faded rather than removed: a rail that closed the gap as you picked a row up
+   would move every other row under the pointer mid-gesture. The same 0.35 the
+   strip's own dragged tab uses, so one drag does not have two looks. */
+.sb-open[data-dragging] {
+  opacity: 0.35;
+}
+
+/* Already up in the strip. Lit rather than hover-only, because this mark is
+   then the only thing on this side of the window saying which rows the top
+   strip is showing — and the accent is what this app uses for "this one"
+   everywhere else. */
+.sb-promote[aria-pressed='true'] {
+  opacity: 1;
+  color: var(--accent);
+}
+
+/* What follows the cursor: a copy of the strip tab this row is about to
+   become. Off-screen rather than hidden — `display: none` and `visibility:
+   hidden` both make `setDragImage` fall back to the browser's own ghost of the
+   source element, silently, which is the failure this exists to avoid.
+
+   `fixed` so no ancestor's scroll or transform can move it, and no shadow: the
+   snapshot is composited by the window server against whatever is under the
+   pointer, and a soft edge there comes out as a grey smear. */
+/* No `z-index: -1` to help it hide: sending it behind the app's own opaque
+   background is the same category of mistake as `display: none` — the element
+   stops being painted where anyone can see it, and the drag image goes back to
+   being a photograph of the row. Off the top of the window is enough. */
+.tab-ghost {
+  position: fixed;
+  top: -1000px;
+  left: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  max-width: 220px;
+  height: 26px;
+  padding: 0 var(--sp-2);
+  border-radius: var(--radius-sm);
+  background: var(--tab-active);
+  box-shadow: inset 0 0 0 1px var(--accent-line);
+  color: var(--text-primary);
+  font-size: var(--t-footnote);
+  pointer-events: none;
+}
+
+.tab-ghost svg {
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
+.tab-ghost-label {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* A session row with its name being typed.
+
+   The form already wears `.sb-row`, so the only thing that changes is that the
+   label has become a field — no border on the row, no lift, no highlight. It is
+   the same shape as `.account-menu-input` on purpose: there are two places in
+   this app where a name is edited in the row it is printed on, and one look
+   between them is what makes the second one recognisable. Hover is suppressed
+   because the pointer is not what is acting on this row any more. */
+.sb-renaming:hover {
+  background: none;
+}
+
+.sb-rename-input {
+  flex: 1;
+  min-width: 0;
+  padding: 0 var(--sp-1);
+  height: 22px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--fill-secondary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--t-body);
+}
+
+.sb-rename-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
 }
 
 /* Something arrived on a session nobody is looking at — most often one a

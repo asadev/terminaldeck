@@ -35,6 +35,75 @@ export interface Session extends SessionMeta {
    * it cannot know. See `statusObserved` in `dashboard/board.ts`.
    */
   statusSince: number
+  /**
+   * True once somebody has typed a name for this session themselves.
+   *
+   * It exists to make {@link withSessionTitle} stop doing something, and that
+   * is the whole of the rename feature that is worth anything. `AutoTitler`
+   * reads a title out of the session's own output and pushes it here on every
+   * pause in that output — for the life of the session, not once at the start —
+   * so without this flag a name the user typed would survive only until the
+   * agent next printed its own heading, which is usually seconds. A rename that
+   * is silently undone a moment later is worse than no rename at all: the app
+   * then looks like it lost the name rather than like it never offered to keep
+   * one.
+   *
+   * Optional, and absent means no. A session nobody has renamed does not carry
+   * the field, so nothing else in the app has to know it exists.
+   */
+  namedByUser?: boolean
+}
+
+/**
+ * The session list with one session retitled — or the same list, unchanged.
+ *
+ * Pulled out of the provider as a plain function because it is the only place
+ * in this app where a *rule* about titles lives, and a rule buried in a
+ * `useCallback` inside a context provider cannot be tested at all in a project
+ * that deliberately has no DOM in its test setup. `store.test.ts` drives it
+ * directly.
+ *
+ * Two callers, and they want opposite things when they disagree with what is
+ * already on the session:
+ *
+ *   `fromUser: true`   somebody typed this into the rename field. It wins over
+ *                      anything, and it latches: from here on the session is
+ *                      named, and stays named.
+ *
+ *   `fromUser: false`  `AutoTitler` derived this from the session's own output.
+ *                      It beats a folder name or an older derivation, and it
+ *                      loses — completely, silently, every time — to a name the
+ *                      user typed.
+ *
+ * Returning `sessions` unchanged rather than a rebuilt array is not a tidy-up
+ * here, it is the contract with React: a derived title is offered on every
+ * pause in the session's output, and mapping the array each time would rebuild
+ * every consumer's memo for a no-op.
+ */
+export function withSessionTitle(
+  sessions: Session[],
+  id: string,
+  title: string,
+  fromUser = false,
+): Session[] {
+  const found = sessions.find((session) => session.id === id)
+  if (!found) return sessions
+  // The substance of the whole feature: an automatic title never touches a
+  // session somebody has named.
+  if (!fromUser && found.namedByUser) return sessions
+
+  const named = fromUser || found.namedByUser === true
+  // `=== true` on both sides, because absent and `false` are the same state and
+  // a raw comparison reads them as different — which was enough on its own to
+  // rebuild the whole list on every pause in a session's output, for a change
+  // of `undefined` to `false` that nothing can see.
+  if (found.title === title && named === (found.namedByUser === true)) return sessions
+
+  // The flag is only ever written when it is true. A session nobody has renamed
+  // keeps the shape it was created with, which is what lets the rest of the app
+  // go on not knowing this field exists.
+  const renamed: Session = named ? { ...found, title, namedByUser: true } : { ...found, title }
+  return sessions.map((session) => (session.id === id ? renamed : session))
 }
 
 interface StoreValue {
@@ -60,8 +129,12 @@ interface StoreValue {
    *
    * Ignored when the name has not actually changed, so a title derived on
    * every chunk of output does not re-render the sidebar on every chunk.
+   *
+   * `fromUser` marks a name somebody typed rather than one the app worked out,
+   * and it is not a hint — it decides which of the two wins from then on. See
+   * {@link withSessionTitle}, which holds the rule.
    */
-  setSessionTitle(id: string, title: string): void
+  setSessionTitle(id: string, title: string, options?: { fromUser?: boolean }): void
   sessionsForProject(path: string): Session[]
 }
 
@@ -140,13 +213,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     )
   }, [])
 
-  const setSessionTitle = useCallback((id: string, title: string) => {
-    setSessions((prev) =>
-      prev.some((s) => s.id === id && s.title !== title)
-        ? prev.map((s) => (s.id === id ? { ...s, title } : s))
-        : prev,
-    )
-  }, [])
+  const setSessionTitle = useCallback(
+    (id: string, title: string, options?: { fromUser?: boolean }) => {
+      setSessions((prev) => withSessionTitle(prev, id, title, options?.fromUser === true))
+    },
+    [],
+  )
 
   const sessionsForProject = useCallback(
     (path: string) => sessions.filter((s) => s.projectPath === path),

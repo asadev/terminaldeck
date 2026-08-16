@@ -26,12 +26,21 @@ export type GitHubErrorKind =
   | 'gh-missing'
   | 'not-authenticated'
   | 'auth-expired'
+  /**
+   * `gh` said a scope is missing, in its own stderr. Nothing in this app asks
+   * GitHub for scopes any more — a GitHub App device request carries none — but
+   * a `gh auth login` token reused from the CLI can still be short of one, and
+   * `classifyGhError` recognises the sentence when `gh` prints it.
+   */
   | 'missing-scope'
   /** The person said no on GitHub's consent screen, or cancelled here. */
   | 'auth-declined'
   /** A device-flow code was never entered and timed out. */
   | 'auth-code-expired'
-  /** GitHub would not start a sign-in at all — the OAuth client is unusable. */
+  /**
+   * GitHub would not start a sign-in at all: this build has no GitHub App
+   * registered, or the one it has was deleted or had Device Flow unticked.
+   */
   | 'auth-unavailable'
   | 'not-a-repo'
   | 'no-such-folder'
@@ -137,23 +146,21 @@ export interface Issue {
   assignees: string[]
 }
 
-export interface NotificationSummary {
-  /** Unread threads across every repository the user watches. */
-  total: number
-  /** How many of those belong to the project's own repository. */
-  repo: number
-  /**
-   * The notifications endpoint pages at 50 and reports no total, so a busy
-   * account reads as "50+" rather than a number that is quietly wrong.
-   */
-  capped: boolean
-  /** Unread counts by GitHub's `reason`, e.g. review_requested, mention. */
-  reasons: Record<string, number>
-}
-
 /**
- * One section of the panel. A missing `notifications` scope must not blank out
- * the pull requests that loaded fine, so each section carries its own outcome.
+ * One section of the panel. A list that fails must not blank out the one beside
+ * it that loaded fine, so each section carries its own outcome.
+ *
+ * There were three sections until 2026-08-16. The third was the notifications
+ * bell, and it is gone — not emptied, not left showing a permanent error.
+ * GitHub's reference for its notifications endpoints carries the note,
+ * verbatim: *"These endpoints only support authentication using a personal
+ * access token (classic)."* Read off the live page rather than recalled, and
+ * corroborated by GitHub's own OpenAPI description, where all ten operations in
+ * the `notifications` subcategory are marked `"enabledForGitHubApps": false`.
+ * This app signs in through a GitHub App and nothing else, so the credential it
+ * holds can never call them, and there is no permission on any registration
+ * that would change it. A feature that cannot work does not ship as an empty
+ * list.
  */
 export type Section<T> = { ok: true; value: T } | GitHubFailure
 
@@ -163,7 +170,6 @@ export interface GitHubOverview {
   repo: RepoRef
   pulls: Section<PullRequest[]>
   issues: Section<Issue[]>
-  notifications: Section<NotificationSummary>
   /**
    * Rows asked for per list. The renderer needs it to tell "20 open pull
    * requests" apart from "the first 20 of however many there are" — a full
@@ -916,34 +922,6 @@ export function mapIssue(raw: RawIssue): Issue | null {
   }
 }
 
-interface RawNotification {
-  unread?: boolean
-  reason?: string
-  repository?: { full_name?: string }
-}
-
-/** GitHub's notifications endpoint refuses anything above 50 per page. */
-export const NOTIFICATION_PAGE_SIZE = 50
-
-export function summarizeNotifications(
-  raw: unknown,
-  nameWithOwner: string,
-): NotificationSummary {
-  const list = Array.isArray(raw) ? (raw as RawNotification[]) : []
-  const reasons: Record<string, number> = {}
-  let repo = 0
-
-  for (const item of list) {
-    if (item?.unread === false) continue
-    const reason = item?.reason ?? 'other'
-    reasons[reason] = (reasons[reason] ?? 0) + 1
-    if (item?.repository?.full_name?.toLowerCase() === nameWithOwner.toLowerCase()) repo += 1
-  }
-
-  const total = Object.values(reasons).reduce((sum, count) => sum + count, 0)
-  return { total, repo, capped: list.length >= NOTIFICATION_PAGE_SIZE, reasons }
-}
-
 /* ------------------------------------------------------------------ cache -- */
 
 /** Long enough that scrolling or re-rendering the panel costs nothing. */
@@ -1143,23 +1121,6 @@ export function issueListArgs(repo: RepoRef, limit: number): string[] {
   ]
 }
 
-/**
- * `gh api` talks to github.com unless told otherwise, so without --hostname an
- * enterprise project's bell counted the user's *github.com* notifications —
- * and then filtered them by `owner/repo`, which happily matches a same-named
- * repository on the wrong host.
- */
-export function notificationArgs(repo: RepoRef): string[] {
-  return [
-    'api',
-    '--hostname',
-    repo.host,
-    `notifications?all=false&per_page=${NOTIFICATION_PAGE_SIZE}`,
-    '-H',
-    'Accept: application/vnd.github+json',
-  ]
-}
-
 export async function fetchPulls(repo: RepoRef, limit: number): Promise<Section<PullRequest[]>> {
   try {
     const out = await gh(pullListArgs(repo, limit))
@@ -1192,28 +1153,11 @@ export async function fetchIssues(repo: RepoRef, limit: number): Promise<Section
 }
 
 /**
- * Unread notifications, fetched once for the whole account and then filtered
- * to this repository. One request answers both the global badge and the
- * per-repo count; asking `repos/{owner}/{repo}/notifications` as well would
- * double the cost for a number already sitting in this response.
- */
-export async function fetchNotifications(repo: RepoRef): Promise<Section<NotificationSummary>> {
-  try {
-    const out = await gh(notificationArgs(repo))
-    return { ok: true, value: summarizeNotifications(parseJson<unknown>(out), repo.nameWithOwner) }
-  } catch (error) {
-    return error instanceof SyntaxError
-      ? fail('error', 'gh returned output that could not be parsed.', null, error.message)
-      : classifyGhError(error)
-  }
-}
-
-/**
  * Everything the panel needs for one project folder.
  *
- * The three sections are fetched in parallel and cached independently, so a
- * notification scope the token does not have costs the user nothing but a
- * greyed-out bell.
+ * The two sections are fetched in parallel and cached independently, so a
+ * repository whose issues are disabled still shows its pull requests rather
+ * than an error over the whole panel.
  */
 export async function readGitHubOverview(
   cwd: string,
@@ -1232,7 +1176,7 @@ export async function readGitHubOverview(
   if ('ok' in repo) return repo
 
   const ref = repo
-  const [pulls, issues, notifications] = await Promise.all([
+  const [pulls, issues] = await Promise.all([
     cacheThrough(sectionKey('pulls', ref, limit), refresh, () => fetchPulls(ref, limit), sectionTtl),
     cacheThrough(
       sectionKey('issues', ref, limit),
@@ -1240,10 +1184,9 @@ export async function readGitHubOverview(
       () => fetchIssues(ref, limit),
       sectionTtl,
     ),
-    cacheThrough(sectionKey('notifications', ref), refresh, () => fetchNotifications(ref), sectionTtl),
   ])
 
-  return { ok: true, cwd, repo: ref, pulls, issues, notifications, limit, fetchedAt: Date.now() }
+  return { ok: true, cwd, repo: ref, pulls, issues, limit, fetchedAt: Date.now() }
 }
 
 /* --------------------------------------------------------------------- ipc -- */

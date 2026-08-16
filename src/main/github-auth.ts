@@ -8,17 +8,18 @@
  * `gh auth login` in a terminal, and it is indistinguishable from a broken app
  * on a machine where they did not: the panel says "not signed in", there is
  * nothing to press, and the fix is a command in a program that may not be
- * installed. On Windows it reads *half* connected — `gh` is there, a token is
- * there, the scope for notifications is not — and nothing on screen says which
- * of those three things is the one that is wrong.
+ * installed. On Windows it read *half* connected — `gh` is there, a token is
+ * there, something about it is wrong — and nothing on screen said which.
  *
  * So this module answers three questions the old code could not:
  *
  *   1. **Is there a credential at all, and where did it come from?** Three
  *      places can supply one and they do not agree, so the answer names the
  *      source rather than hiding it.
- *   2. **What is it allowed to do?** Scopes, read from GitHub itself rather
- *      than assumed, with the ones we asked for and did not get named.
+ *   2. **What is it allowed to do?** Whatever scopes GitHub reports for it,
+ *      read back from GitHub itself rather than assumed. Reported as a fact
+ *      and not as a score: this app asks for no scopes, so there is no list to
+ *      measure a token against.
  *   3. **How do I get one without leaving the app?** The device-code flow,
  *      which needs no `gh`, no local web server and no redirect URI — a code
  *      on screen, a browser tab, and this process polling until it is entered.
@@ -38,49 +39,54 @@
  * reused rather than forcing a second sign-in for an account that is already
  * there. Connecting is only ever offered when there is genuinely nothing.
  *
- * ## The OAuth client is borrowed, and the UI says so
+ * ## One way in: the GitHub App
  *
- * The device flow needs a registered client. This project had none of its own
- * to start with, so the fallback client id below is the GitHub CLI's — a public
- * identifier, printed in an open-source binary, with no client secret involved
- * (the device flow has none by design). It works: the constant was verified
- * against the live endpoint rather than copied from memory, and the fixtures in
- * the test file are that response.
+ * The device flow needs a registered client, and there is exactly one — the
+ * GitHub App in `github-app.ts`, verified against the live device-code endpoint
+ * through this class's own `connect()` with the response recorded there.
  *
- * What it costs is honesty about identity: GitHub's consent screen says
- * "GitHub CLI", not this app's name. That is not something to hide behind a
- * spinner, so `borrowedClient` is part of the status and the panel prints the
- * sentence.
+ * It used to have company. A second, *OAuth* path borrowed the GitHub CLI's
+ * public client id, and it was deleted on 2026-08-16 along with every branch
+ * that chose between the two. What it cost was worth naming, because it is why
+ * it is gone rather than demoted:
  *
- * ## Two client kinds, and the one that lets the user choose repositories
+ *  - **The consent screen said the wrong name.** Borrowing an id means
+ *    borrowing an identity, so GitHub's page said "GitHub CLI" and the app had
+ *    to print a sentence apologising for it.
+ *  - **It asked for everything.** An OAuth app's `repo` scope is a single
+ *    all-or-nothing grant over every private repository the account can reach,
+ *    write included, and GitHub renders it as **"Full control of private
+ *    repositories"** with no repository picker anywhere on the page. There is
+ *    no narrower OAuth scope that can read a private repository; that is
+ *    GitHub's design, not an oversight here.
+ *  - **It was a second everything.** Two grant shapes, two device-request
+ *    bodies, two repository-listing endpoints and a switch, kept alive for a
+ *    path nobody would choose once the other one worked.
  *
- * Borrowing the CLI's client id also borrows the CLI's appetite: `gh` asks for
- * everything `gh` can do. The consent screen the user sees says **"Full control
- * of private repositories"** with no repository picker anywhere on it, because
- * an OAuth app's `repo` scope is a single all-or-nothing grant. There is no
- * narrower OAuth scope that can read a private repository — that is GitHub's
- * design, not an oversight here.
+ * A GitHub App answers all three: the consent screen names this app, the
+ * permissions come from the registration, and the repositories come from what
+ * the user ticked when they installed it. A build with no registration — a fork
+ * before it registers its own — says so and points at `gh auth login`, rather
+ * than silently signing somebody in as another application.
  *
- * The mechanism that *does* give per-repository choice is a **GitHub App**, and
- * this module signs in through one: same device flow, same endpoints, no
- * `scope` parameter, because a GitHub App's permissions come from its
- * registration and its repository list comes from what the user ticked when
- * they installed it. `github-app.ts` holds that registration, and **as of
- * 2026-08-16 it holds a real one** — verified against the live device-code
- * endpoint through this class's own `connect()`, with the response recorded
- * there. So `github-app` is now what a shipping build does, and the OAuth path
- * is the fallback: for a fork or an enterprise host with no registration of its
- * own, and for anyone who sets `TERMINALDECK_GITHUB_FORCE_OAUTH` because a
- * GitHub App can only ever see repositories it was installed on. `clientKind`
- * is on the status, and the panel says which one is in force.
+ * The tests do not read the shipping constant to decide what to expect;
+ * `appRegistration` on the options is the seam. Thirteen tests broke the hour a
+ * real client id landed because they had been pinning "the constant is still
+ * null" while believing they were pinning something about behaviour, and a
+ * module whose tests depend on a shipping constant having a particular value is
+ * a module that breaks the day it ships.
  *
- * Both paths stay exercised by the tests, and neither of them reads the
- * shipping constant to decide what to expect — `appRegistration` on the options
- * is the seam. Thirteen tests broke the hour a real client id landed because
- * they had been pinning "the constant is still null" while believing they were
- * pinning "the OAuth path is the default", and a module whose tests depend on a
- * shipping constant having a particular value is a module that breaks the day
- * it ships.
+ * ## Credentials from before the OAuth path was removed still work
+ *
+ * Deleting the path did not delete the tokens it minted. A stored OAuth
+ * credential keeps being used until GitHub stops honouring it, at which point
+ * the existing expiry handling deletes it and the panel says so. Clearing them
+ * on upgrade was the alternative and it was rejected: the token still works,
+ * GitHub has not revoked anything, and signing somebody out to tidy up our own
+ * source tree is a destructive act taken for our convenience. `credentialKind`
+ * is what keeps them working — it reads how the credential in hand was
+ * obtained, so a legacy OAuth token is still listed through `/user/repos`
+ * rather than through the installation endpoints it has no installation for.
  *
  * ## Nothing here prints a token
  *
@@ -114,10 +120,9 @@ import type { IpcMain } from 'electron'
 import type { BranchRef, GitHubErrorKind, GitHubFailure, RepoRef } from './github'
 import {
   appInstallUrl,
-  clientKindFor,
   githubAppRegistration,
+  APP_UNCONFIGURED_REASON,
   GITHUB_APP,
-  type ClientKind,
   type GitHubAppRegistration,
 } from './github-app'
 import { readAccessibleRepos, type RepoAccess } from './github-repos'
@@ -131,72 +136,21 @@ const run = promisify(execFile)
 /* ------------------------------------------------------------- constants -- */
 
 /**
- * The GitHub CLI's public device-flow client id. See the header for why this
- * is borrowed rather than ours, and what the user is told about it.
+ * There is no scope list here any more, and its absence is the point.
  *
- * Verified against the live endpoint on 2026-08-15:
+ * A GitHub App device-code request carries no `scope` at all: the permissions
+ * are fixed by the registration and the repositories are chosen at install
+ * time, so there is nothing for a scope string to say and sending one asks
+ * GitHub to reconcile two permission models in one request.
  *
- *   $ curl -s -X POST https://github.com/login/device/code \
- *       -H 'Accept: application/json' \
- *       -d 'client_id=178c6fc778ccc68e1d6a&scope=repo%20read:org'
- *   {"device_code":"…","user_code":"E874-5342",
- *    "verification_uri":"https://github.com/login/device",
- *    "expires_in":899,"interval":5}
- *
- * A wrong client id does not fail loudly, which is why this was checked rather
- * than trusted: GitHub answers `{"error":"Not Found"}` with HTTP 404 and no
- * hint that the id is the problem.
+ * What was here was `['repo', 'notifications']`, requested by the deleted OAuth
+ * path. Both are gone for reasons worth keeping: `repo` is the grant GitHub
+ * renders as "Full control of private repositories" with no repository picker,
+ * which is the screen that started the move to a GitHub App; `notifications`
+ * bought the unread bell, and that feature is gone too, because GitHub serves
+ * its notifications endpoints to classic personal access tokens only and no
+ * permission on any registration changes that.
  */
-const GH_CLI_CLIENT_ID = '178c6fc778ccc68e1d6a'
-
-/** Override for anyone who registers a real OAuth app for this product. */
-const CLIENT_ID_ENV = 'TERMINALDECK_GITHUB_CLIENT_ID'
-
-/**
- * What this app asks for, and why each one is here. Nothing is requested "just
- * in case": every extra scope is something the user has to agree to hand over,
- * and an unexplained one is how a consent screen starts looking like a trap.
- *
- *  - `repo`          — pull requests and issues on private repositories, and
- *                      the repository list itself. The panel is useless on a
- *                      work machine without it. It is also the scope GitHub
- *                      renders as "Full control of private repositories", and
- *                      there is no narrower one: `public_repo` excludes exactly
- *                      the repositories this is for, and no read-only private
- *                      scope exists. Per-repository choice needs a GitHub App;
- *                      see `github-app.ts`.
- *  - `notifications` — the unread bell. This one is genuinely optional, and a
- *                      token without it still shows every list.
- *
- * **`read:org` was removed on 2026-08-16 and must not come back without a
- * reason.** It was here on the belief that org-owned repositories need it. They
- * do not: `repo` covers private repositories whoever owns them, and everything
- * this product asks GitHub for — `gh pr list -R`, `gh issue list -R`, the
- * notifications endpoint, `/user`, `/user/repos?affiliation=…,organization_member`
- * — works without it. What `read:org` actually grants is read access to
- * organisation membership, org projects and team membership, none of which is
- * read anywhere in `github.ts`. `gh` requests it because `gh` has commands that
- * list teams and organisations; borrowing its client id is not a reason to
- * borrow its appetite.
- *
- * Cutting it removes a whole line from the consent screen ("Read org and team
- * membership, read org projects"). If organisation repositories ever go missing
- * from the lists, that is the symptom to match against this decision — but
- * re-adding the scope should follow a reproduction, not a hunch.
- */
-export const REQUESTED_SCOPES = ['repo', 'notifications'] as const
-
-/**
- * Which scopes satisfy which. GitHub's scopes nest, so a token holding
- * `admin:org` has `read:org` without the string appearing anywhere, and
- * reporting that as missing would send a user to re-authorise a token that is
- * already sufficient.
- */
-const SCOPE_IMPLIES: Record<string, readonly string[]> = {
-  'read:org': ['read:org', 'write:org', 'admin:org'],
-  repo: ['repo'],
-  notifications: ['notifications'],
-}
 
 /** Long enough that opening the panel twice costs one request, not two. */
 export const IDENTITY_TTL_MS = 60_000
@@ -219,6 +173,28 @@ const MAX_DETAIL = 4_000
 
 /* ----------------------------------------------------------------- types -- */
 
+/**
+ * What kind of grant a credential *is* — never which client a sign-in would
+ * use, because there is only one of those now.
+ *
+ * It survived the removal of the OAuth sign-in path because credentials outlive
+ * paths. Three kinds of token reach this app and only one of them is a GitHub
+ * App user token:
+ *
+ *  - `github-app` — minted here, through the one device flow there is.
+ *  - `oauth`      — anything else: a token stored before the OAuth path was
+ *                   deleted, a `gh auth login` reused from the CLI, a classic
+ *                   PAT in `GH_TOKEN`. They differ in provenance and not in
+ *                   what they can do here, which is the only distinction this
+ *                   type is asked to carry.
+ *
+ * It decides one thing: which endpoint lists repositories. A GitHub App user
+ * token cannot use `/user/repos` and everything else cannot use
+ * `/user/installations`, so getting this wrong empties the Repositories tab for
+ * somebody whose sign-in is working perfectly.
+ */
+export type CredentialKind = 'oauth' | 'github-app'
+
 /** Where the credential in use came from. */
 export type AuthSource =
   /** `GH_TOKEN` or `GITHUB_TOKEN` in the environment this app was launched with. */
@@ -236,7 +212,14 @@ export interface GitHubIdentity {
   avatarUrl: string | null
 }
 
-/** The code on screen while a device-flow sign-in is waiting on the user. */
+/**
+ * The code on screen while a device-flow sign-in is waiting on the user.
+ *
+ * There is no scope list on it, and there is no client kind: this attempt is a
+ * GitHub App attempt because that is the only kind there is. Both fields were
+ * here to let the card say two different things for two different sign-ins, and
+ * the card now says one.
+ */
 export interface DeviceFlowPrompt {
   /** Typed into GitHub by hand. Shown, never logged. */
   userCode: string
@@ -244,19 +227,6 @@ export interface DeviceFlowPrompt {
   verificationUri: string
   /** Epoch ms after which the code stops working. */
   expiresAt: number
-  /**
-   * Scopes this attempt asked for. **Empty in `github-app` mode**, and that is
-   * a fact rather than an omission: a GitHub App device-flow request carries no
-   * `scope` at all, because the permissions are fixed by the registration and
-   * the repositories are chosen at install time. The card on screen has to say
-   * two different things for the two cases, so it needs to be able to tell them
-   * apart — hence `clientKind` beside this rather than an empty list standing
-   * in for "nothing was asked for".
-   */
-  scopes: string[]
-  /** True while the consent screen names the GitHub CLI rather than this app. */
-  borrowedClient: boolean
-  clientKind: ClientKind
   /** Where to choose repositories, when a GitHub App slug is configured. */
   installUrl: string | null
 }
@@ -275,24 +245,28 @@ export interface GitHubAuthState {
    */
   scopes: string[]
   scopesReported: boolean
-  /** Requested scopes this token does not carry. Empty when unknowable. */
-  missingScopes: string[]
   /** Whether `gh` is on the login PATH at all. */
   ghInstalled: boolean
-  /** True when the OAuth client is the GitHub CLI's rather than this app's. */
-  borrowedClient: boolean
-  /** Which registration a sign-in from here would run through. */
-  clientKind: ClientKind
+  /**
+   * How the credential *in use* was obtained, or null while nothing is
+   * connected. See `CredentialKind`.
+   *
+   * It is not a statement about what a *new* sign-in would do — that question
+   * has one answer now and needs no field. It describes the token the panel in
+   * front of the user is reading GitHub with, which is why a legacy OAuth
+   * credential still reports `oauth` on a build that can only mint GitHub App
+   * ones.
+   */
+  credentialKind: CredentialKind | null
   /**
    * True when a real GitHub App registration exists in this build, which since
    * 2026-08-16 is the shipping state.
    *
-   * It is a separate fact from `clientKind`, not a duplicate of it: setting
-   * `TERMINALDECK_GITHUB_FORCE_OAUTH` gives `clientKind: 'oauth'` with this
-   * still true, and the two mean different things on screen. False is what a
-   * fork or an enterprise build reports, and the panel says so — "per-repository
-   * access is not on offer yet" is a fact the user can act on, where a missing
-   * option with no explanation just reads as a broken app.
+   * False is what a fork or an enterprise build reports before it registers its
+   * own, and it is now the difference between a Connect button and a sentence:
+   * with no registration there is nothing to send GitHub, so offering the
+   * button would be the "looks clickable, does nothing" failure this codebase
+   * puts first. The panel says what to do instead.
    */
   appConfigured: boolean
   /**
@@ -350,6 +324,14 @@ export interface GitHubAuthState {
  * token, which never expires on its own. It is stored rather than ignored so
  * that a dead token produces "your sign-in expired, connect again" instead of a
  * 401 from whichever list happened to load first.
+ *
+ * **`clientKind` keeps its name on disk, and must.** The type it holds is now
+ * called `CredentialKind`, but this is a key in a JSON file that was written by
+ * earlier builds and is read by this one. Renaming it would make every existing
+ * GitHub App credential read as `undefined` — which defaults to `oauth` — and
+ * send its repository list to `/user/repos`, an endpoint a GitHub App user
+ * token cannot use. A working sign-in would appear to lose its repositories on
+ * upgrade, for a tidier field name.
  */
 interface StoredCredential {
   version: 1
@@ -360,8 +342,8 @@ interface StoredCredential {
   obtainedAt: number
   /** Epoch ms, or absent/null for a credential that does not expire. */
   expiresAt?: number | null
-  /** Which registration issued it, so the right endpoints are asked later. */
-  clientKind?: ClientKind
+  /** Which kind of grant issued it, so the right endpoints are asked later. */
+  clientKind?: CredentialKind
 }
 
 /* ---------------------------------------------------------- http plumbing -- */
@@ -484,24 +466,23 @@ function isEnoent(error: unknown): boolean {
 
 /* ---------------------------------------------------------------- scopes -- */
 
-/** Split `X-OAuth-Scopes`, which GitHub sends comma-and-space separated. */
+/**
+ * Split `X-OAuth-Scopes`, which GitHub sends comma-and-space separated.
+ *
+ * Still here with the OAuth sign-in gone, because the header is not: a `gh
+ * auth login` token and a classic PAT in `GH_TOKEN` both report their scopes,
+ * and the connection card shows them. What went with the OAuth path is the
+ * *comparison* — `missingScopes` and the scope hierarchy behind it answered
+ * "which of the scopes we asked for is absent", and this app asks for none.
+ * Keeping that machinery over an empty request list would have produced a
+ * "Missing 0 permissions" branch that can never render.
+ */
 export function parseScopes(header: string | null): string[] {
   if (header === null) return []
   return header
     .split(',')
     .map((scope) => scope.trim())
     .filter((scope) => scope !== '')
-}
-
-/** Whether `granted` satisfies `want`, honouring GitHub's scope hierarchy. */
-export function hasScope(granted: readonly string[], want: string): boolean {
-  const accepted = SCOPE_IMPLIES[want] ?? [want]
-  return accepted.some((scope) => granted.includes(scope))
-}
-
-/** Which of the scopes we asked for this token does not carry. */
-export function missingScopes(granted: readonly string[]): string[] {
-  return REQUESTED_SCOPES.filter((scope) => !hasScope(granted, scope))
 }
 
 /* -------------------------------------------------------------- endpoints -- */
@@ -595,17 +576,15 @@ export interface GitHubAuthOptions {
   env?: NodeJS.ProcessEnv
   platform?: Platform
   host?: string
-  clientId?: string
   /**
    * The GitHub App registration compiled into this build. Defaults to the real
    * one in `github-app.ts`, which is what the app itself gets.
    *
-   * It is an option purely so that "what happens with no registration" is still
-   * askable now that one ships — pass `NO_REGISTRATION` for it. Before this
-   * existed, every test that meant "the OAuth path is what runs without an app"
-   * was really asserting "the module constant is still null", and all of them
-   * turned red the hour a client id was pasted in. The seam costs one line and
-   * makes the two branches independently testable forever.
+   * It is an option so that "what happens with no registration" — a fork before
+   * it registers its own — is still askable now that one ships; pass
+   * `NO_REGISTRATION` for it. Before this existed, every test that meant "no
+   * registration" was really asserting "the module constant is still null", and
+   * all of them turned red the hour a client id was pasted in.
    */
   appRegistration?: GitHubAppRegistration
   http?: HttpFetch
@@ -627,7 +606,6 @@ export class GitHubAuthenticator {
   private readonly file: string
   private readonly env: NodeJS.ProcessEnv
   private readonly platform: Platform
-  private readonly clientId: string
   private readonly http: HttpFetch
   private readonly ghRun: GhRun
   private readonly now: () => number
@@ -635,10 +613,15 @@ export class GitHubAuthenticator {
   private readonly resolveRepo: (cwd: string) => Promise<RepoRef | GitHubFailure>
   private readonly resolveBranch: (cwd: string) => Promise<BranchRef | null>
   private readonly onAuthChanged: () => void
+  /** The registration compiled into this build. See `appRegistration`. */
+  private readonly built: GitHubAppRegistration
+  /**
+   * The client id the device flow sends, or null when this build has no
+   * registration and therefore nothing to send.
+   */
+  private readonly clientId: string | null
 
   readonly host: string
-  /** Which registration a *new* sign-in runs through. See `github-app.ts`. */
-  readonly clientKind: ClientKind
   readonly appConfigured: boolean
   readonly installUrl: string | null
 
@@ -668,31 +651,20 @@ export class GitHubAuthenticator {
     this.host = (options.host ?? this.env.GH_HOST ?? 'github.com').trim().toLowerCase() || 'github.com'
 
     /*
-     * Client selection, in the order that keeps every existing deployment
-     * working while letting a registration take over the moment there is one.
+     * There is one client, resolved once.
      *
-     * An explicit `clientId` option is a test or an embedder pinning a value
-     * and always wins, and it forces the OAuth shape — an id somebody handed us
-     * by hand is not a GitHub App registration, and sending a GitHub App device
-     * request for it would drop the `scope` the id actually needs.
-     *
-     * Otherwise a configured GitHub App is preferred, because it is the grant
-     * that lets the user choose repositories. `clientKindFor` returns `oauth`
-     * only when there is no registration at all or the force-OAuth escape hatch
-     * is set, so a build with a registration — which is every shipping build
-     * since 2026-08-16 — signs in as this app rather than as the GitHub CLI.
+     * It used to be a getter over a three-way choice — an explicit id, an
+     * environment variable, a stored preference — because the answer could
+     * change while the process ran. It cannot now: a registration is compiled
+     * in or supplied by `TERMINALDECK_GITHUB_APP_CLIENT_ID` at launch, and
+     * nothing a user does inside the app moves it. A field says that, where a
+     * getter would leave a reader looking for what makes it vary.
      */
-    const built = options.appRegistration ?? GITHUB_APP
-    const registration = githubAppRegistration(this.env, built)
-    const explicitClient = (options.clientId ?? '').trim()
-    this.clientKind = explicitClient ? 'oauth' : clientKindFor(this.env, built)
+    this.built = options.appRegistration ?? GITHUB_APP
+    const registration = githubAppRegistration(this.env, this.built)
+    this.clientId = registration.clientId
     this.appConfigured = registration.clientId !== null
     this.installUrl = appInstallUrl(registration.slug, this.host)
-    this.clientId =
-      explicitClient ||
-      (this.clientKind === 'github-app' && registration.clientId
-        ? registration.clientId
-        : (this.env[CLIENT_ID_ENV] ?? '').trim() || GH_CLI_CLIENT_ID)
 
     this.http = options.http ?? globalFetch
     this.now = options.now ?? (() => Date.now())
@@ -716,9 +688,43 @@ export class GitHubAuthenticator {
     this.ghRun = options.gh ?? ((args) => runGh(args, this.env, this.platform))
   }
 
-  /** True while the consent screen will name the GitHub CLI, not this app. */
-  get borrowedClient(): boolean {
-    return this.clientId === GH_CLI_CLIENT_ID
+  /* ---------------------------------------------- what a credential is -- */
+
+  /**
+   * How the credential in hand was *obtained*.
+   *
+   * It decides one thing and it is not cosmetic: `readAccessibleRepos` picks
+   * `/user/installations` or `/user/repos` off this value, and the two are not
+   * interchangeable — a GitHub App user token is refused by the second and
+   * everything else is refused by the first. Answering it from anything other
+   * than the credential in hand empties the Repositories tab for a sign-in that
+   * is working.
+   *
+   * Exact for a credential this app minted, because `connect()` records the
+   * kind in the file beside the token. A file written before that field existed
+   * is OAuth — the GitHub App path did not exist then — and that is a fact on
+   * disk rather than a deduction: the credential in this machine's own
+   * `userData/github/auth.json` on 2026-08-16 has no `clientKind` and a `gho_`
+   * token, which is an OAuth-app token. Defaulting the missing field the other
+   * way would send its repository list to `/user/installations`, where it has no
+   * installation, and a sign-in that had worked for months would come back
+   * empty the day it upgraded.
+   *
+   * That default is also what keeps every credential minted by the deleted
+   * OAuth path working: they are on disk with `clientKind: 'oauth'` or with no
+   * `clientKind` at all, and both read as `oauth` here.
+   *
+   * A token out of the environment or out of `gh`'s own login is `oauth` too,
+   * and that is not a guess about provenance — it is what those tokens are.
+   * `gh auth login` mints an OAuth-app token and `GH_TOKEN` normally holds a
+   * classic PAT; both answer `/user/repos` and neither has an installation to
+   * list. A GitHub App user token exported by hand into `GH_TOKEN` would be the
+   * one exception, and it would report its refusal from GitHub rather than be
+   * mislabelled here.
+   */
+  private credentialKind(source: AuthSource): CredentialKind {
+    if (source !== 'device-flow') return 'oauth'
+    return this.readStored()?.clientKind ?? 'oauth'
   }
 
   /**
@@ -1010,8 +1016,13 @@ export class GitHubAuthenticator {
    * reason: a rate limit or a flapping network must not be frozen on screen for
    * the life of a cache entry, while a good answer is worth keeping so that
    * opening the panel twice does not cost two round trips.
+   *
+   * `kind` is the *credential's* — see `credentialKind`. It is never a
+   * statement about what this build would mint if Connect were pressed, which
+   * is how a legacy OAuth token would end up asked for an installation it does
+   * not have.
    */
-  private async readAccess(token: string): Promise<RepoAccess> {
+  private async readAccess(token: string, kind: CredentialKind): Promise<RepoAccess> {
     const cached = this.accessCache
     if (cached && this.now() - cached.at < ACCESS_TTL_MS && cached.token === token) {
       return cached.value
@@ -1022,7 +1033,7 @@ export class GitHubAuthenticator {
       http: this.http,
       secrets: this.secretsWith(token),
       now: this.now,
-      kind: this.clientKind,
+      kind,
     })
     if (value.ok) this.accessCache = { at: this.now(), token, value }
     return value
@@ -1040,11 +1051,17 @@ export class GitHubAuthenticator {
    * network round trip in front of every first paint of the panel, which
    * everybody notices.
    */
-  private async check(token: string): Promise<
+  private async check(
+    token: string,
+    source: AuthSource,
+  ): Promise<
     | { ok: true; identity: GitHubIdentity; scopes: string[]; scopesReported: boolean; access: RepoAccess }
     | { ok: false; failure: GitHubFailure }
   > {
-    const [checked, access] = await Promise.all([this.identify(token), this.readAccess(token)])
+    const [checked, access] = await Promise.all([
+      this.identify(token),
+      this.readAccess(token, this.credentialKind(source)),
+    ])
     if (!checked.ok) return checked
     return { ...checked, access }
   }
@@ -1127,10 +1144,8 @@ export class GitHubAuthenticator {
       identity: null,
       scopes: [],
       scopesReported: false,
-      missingScopes: [],
       ghInstalled,
-      borrowedClient: this.borrowedClient,
-      clientKind: this.clientKind,
+      credentialKind: null,
       appConfigured: this.appConfigured,
       installUrl: this.installUrl,
       disconnect: null,
@@ -1146,16 +1161,16 @@ export class GitHubAuthenticator {
 
     const fromEnv = this.envToken()
     if (fromEnv) {
-      const checked = await this.check(fromEnv)
+      const checked = await this.check(fromEnv, 'environment')
       if (checked.ok) {
         return {
           ...base,
           connected: true,
           source: 'environment',
+          credentialKind: this.credentialKind('environment'),
           identity: checked.identity,
           scopes: checked.scopes,
           scopesReported: checked.scopesReported,
-          missingScopes: checked.scopesReported ? missingScopes(checked.scopes) : [],
           access: checked.access,
           // Deliberately not offering a button. This app cannot unset a
           // variable in the shell that launched it, and a Disconnect that
@@ -1187,16 +1202,16 @@ export class GitHubAuthenticator {
               null,
             ),
           } as const)
-        : await this.check(stored.token)
+        : await this.check(stored.token, 'device-flow')
       if (checked.ok) {
         return {
           ...base,
           connected: true,
           source: 'device-flow',
+          credentialKind: this.credentialKind('device-flow'),
           identity: checked.identity,
           scopes: checked.scopes,
           scopesReported: checked.scopesReported,
-          missingScopes: checked.scopesReported ? missingScopes(checked.scopes) : [],
           access: checked.access,
           disconnect: ghInstalled
             ? 'Deletes the sign-in this app stored. The GitHub CLI in your terminal keeps its own.'
@@ -1217,16 +1232,16 @@ export class GitHubAuthenticator {
 
     const fromGh = ghInstalled ? await this.ghToken() : null
     if (fromGh) {
-      const checked = await this.check(fromGh)
+      const checked = await this.check(fromGh, 'gh-cli')
       if (checked.ok) {
         return {
           ...base,
           connected: true,
           source: 'gh-cli',
+          credentialKind: this.credentialKind('gh-cli'),
           identity: checked.identity,
           scopes: checked.scopes,
           scopesReported: checked.scopesReported,
-          missingScopes: checked.scopesReported ? missingScopes(checked.scopes) : [],
           access: checked.access,
           disconnect:
             'Signs the GitHub CLI out on this machine, so your terminal is signed out too.',
@@ -1245,12 +1260,22 @@ export class GitHubAuthenticator {
         // headline directly above this sentence, and rendered together they
         // said it twice in two consecutive lines. A message is the *next step*,
         // never a restatement of the title over it.
-        ghInstalled
-          ? 'Connect here, or run gh auth login in a terminal — either one works.'
-          : 'Connect here; the GitHub CLI is not needed to sign in.',
+        //
+        // A build with no registration has no next step *here* — Connect would
+        // have nothing to send — so it gets its own sentence rather than an
+        // invitation to press a button that cannot work. That case used to be
+        // covered by the OAuth fallback, which signed the user in as the GitHub
+        // CLI instead of saying anything.
+        !this.appConfigured
+          ? APP_UNCONFIGURED_REASON
+          : ghInstalled
+            ? 'Connect here, or run gh auth login in a terminal — either one works.'
+            : 'Connect here; the GitHub CLI is not needed to sign in.',
         // Only offered when the program exists. Printing a command for a
         // binary that is not installed is the sentence this whole module was
-        // written to stop the app producing.
+        // written to stop the app producing. The unconfigured sentence names
+        // the command inside itself, and `showsAction` in the panel drops a
+        // duplicate rather than printing it twice.
         ghInstalled ? 'gh auth login' : null,
       ),
     }
@@ -1270,6 +1295,23 @@ export class GitHubAuthenticator {
   async connect(): Promise<DeviceFlowPrompt | GitHubFailure> {
     if (this.flow) return this.flow.prompt
 
+    /*
+     * Refused before a request is spent, and this is the branch the deleted
+     * OAuth fallback used to hide.
+     *
+     * With no registration there is no client id to send, and GitHub answers a
+     * device-code request with a missing or unknown `client_id` with HTTP 404
+     * `{"error":"Not Found"}` — a reply that names nothing and reads exactly
+     * like an outage. Saying it here, before the network, is the only version
+     * of this the user can act on. The panel does not draw the button at all
+     * when `appConfigured` is false; this is the second door, for a caller that
+     * reaches the channel directly.
+     */
+    const clientId = this.clientId
+    if (clientId === null) {
+      return fail('auth-unavailable', APP_UNCONFIGURED_REASON, null)
+    }
+
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), HTTP_TIMEOUT_MS)
     let body: string
@@ -1283,19 +1325,14 @@ export class GitHubAuthenticator {
           'User-Agent': 'terminaldeck',
         },
         /*
-         * A GitHub App device-code request carries no `scope`, and that is not
-         * an omission to tidy up later. A GitHub App's permissions are fixed by
-         * its registration and its repositories are chosen at install time, so
-         * there is nothing for a scope string to say; sending one asks GitHub
-         * to reconcile two different permission models in the same request.
-         * The OAuth path sends the scopes it needs, spelled out in
-         * `REQUESTED_SCOPES` with the reasoning for each.
+         * No `scope`, and that is not an omission to tidy up later. A GitHub
+         * App's permissions are fixed by its registration and its repositories
+         * are chosen at install time, so there is nothing for a scope string to
+         * say; sending one asks GitHub to reconcile two different permission
+         * models in the same request. The recorded live response in
+         * `github-app.ts` is the reply to exactly this body.
          */
-        body: form(
-          this.clientKind === 'github-app'
-            ? { client_id: this.clientId }
-            : { client_id: this.clientId, scope: REQUESTED_SCOPES.join(' ') },
-        ),
+        body: form({ client_id: clientId }),
         signal: controller.signal,
       })
       body = await response.text()
@@ -1316,18 +1353,12 @@ export class GitHubAuthenticator {
     if (!response.ok || !parsed?.device_code || !parsed.user_code) {
       // A wrong or unregistered client id answers 404 `{"error":"Not Found"}`
       // with nothing pointing at the id, so it is named here rather than left
-      // as "GitHub said no".
+      // as "GitHub said no". The single most likely cause is invisible from the
+      // response: a GitHub App with "Enable Device Flow" left unticked answers
+      // exactly like one that does not exist.
       return fail(
         'auth-unavailable',
-        this.clientKind === 'github-app'
-          ? // The single most likely cause, and it is invisible from the
-            // response: a GitHub App with "Enable Device Flow" left unticked
-            // answers exactly like one that does not exist.
-            `GitHub would not start a sign-in for GitHub App client ${this.clientId}. Check the app still exists and has Enable Device Flow ticked.`
-          : this.borrowedClient
-            ? 'GitHub would not start a sign-in for this app. Its OAuth client may have been revoked; set ' +
-              `${CLIENT_ID_ENV} to a client id you control.`
-            : `GitHub would not start a sign-in for client ${this.clientId}. Check the OAuth app still exists and has device flow enabled.`,
+        `GitHub would not start a sign-in for GitHub App client ${clientId}. Check the app still exists and has Enable Device Flow ticked.`,
         null,
         body,
       )
@@ -1338,9 +1369,6 @@ export class GitHubAuthenticator {
       userCode: parsed.user_code,
       verificationUri: parsed.verification_uri ?? `https://${this.host}/login/device`,
       expiresAt: this.now() + Math.max(60, parsed.expires_in ?? 900) * 1000,
-      scopes: this.clientKind === 'github-app' ? [] : [...REQUESTED_SCOPES],
-      borrowedClient: this.borrowedClient,
-      clientKind: this.clientKind,
       installUrl: this.installUrl,
     }
 
@@ -1348,7 +1376,13 @@ export class GitHubAuthenticator {
     const flow: FlowRun = {
       prompt,
       controller: flowController,
-      settled: this.poll(parsed.device_code, prompt, intervalMs, flowController.signal).finally(
+      settled: this.poll(
+        parsed.device_code,
+        prompt,
+        clientId,
+        intervalMs,
+        flowController.signal,
+      ).finally(
         () => {
           if (this.flow === flow) this.flow = null
         },
@@ -1391,6 +1425,14 @@ export class GitHubAuthenticator {
   private async poll(
     deviceCode: string,
     prompt: DeviceFlowPrompt,
+    /**
+     * The client this attempt was *started* with, passed down rather than read
+     * again. Polling a different `client_id` than the device code was issued
+     * for is refused outright, and this loop runs for up to fifteen minutes
+     * while somebody types a code into a browser — long enough that "read it
+     * again at the bottom" is a habit worth not having.
+     */
+    clientId: string,
     intervalMs: number,
     signal: AbortSignal,
   ): Promise<void> {
@@ -1419,7 +1461,7 @@ export class GitHubAuthenticator {
             'User-Agent': 'terminaldeck',
           },
           body: form({
-            client_id: this.clientId,
+            client_id: clientId,
             device_code: deviceCode,
             grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
           }),
@@ -1461,7 +1503,12 @@ export class GitHubAuthenticator {
               typeof parsed.expires_in === 'number' && parsed.expires_in > 0
                 ? this.now() + parsed.expires_in * 1000
                 : null,
-            clientKind: this.clientKind,
+            // The only kind this app can mint. Written explicitly rather than
+            // left to a default, because the default on read is `oauth` — for
+            // the credentials the deleted path left on disk — and a GitHub App
+            // token that arrived without this field would be listed through
+            // `/user/repos`, which refuses it.
+            clientKind: 'github-app',
           })
         } catch (error) {
           /*
@@ -1538,13 +1585,13 @@ export class GitHubAuthenticator {
   /**
    * Give up whatever credential is in use, on this machine.
    *
-   * "Locally" is load-bearing and is said on screen too. Revoking an OAuth
-   * grant for real needs `DELETE /applications/{client_id}/token`, which is
-   * authenticated with the client *secret* — and the device flow has no client
-   * secret, by design. So no desktop app can do it, and claiming otherwise
-   * would be the most dangerous kind of lie this app could tell: a user who
-   * believes a stolen laptop's token is dead when it is not. The panel links to
-   * GitHub's own authorised-apps page, which is where the real revoke lives.
+   * "Locally" is load-bearing and is said on screen too. Revoking a grant for
+   * real needs `DELETE /applications/{client_id}/token`, which is authenticated
+   * with the client *secret* — and the device flow has no client secret, by
+   * design. So no desktop app can do it, and claiming otherwise would be the
+   * most dangerous kind of lie this app could tell: a user who believes a
+   * stolen laptop's token is dead when it is not. Revoking a GitHub App's
+   * access for real is done on GitHub, on the app's own installation page.
    */
   async disconnect(cwd?: string): Promise<GitHubAuthState> {
     const before = await this.status(undefined, { refresh: true })

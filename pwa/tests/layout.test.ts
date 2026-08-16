@@ -115,7 +115,56 @@ describe('the layout decisions that cannot be seen from a test', () => {
 
     // Everything else that is flex is never hidden. If this list has to grow,
     // check whether the new one is hidden anywhere before adding it.
-    const never = ['#app', '.banner', '.content', '.header', '.keybar', '.session', '.terminal-screen']
+    //
+    // `.appearance` is on that list rather than the one above deliberately: the
+    // appearance control is drawn on every screen including the pair screen,
+    // because it is the one preference somebody changes *because of what is on
+    // the screen right now*, and a control that disappeared before pairing would
+    // be missing from the first screen anybody sees.
+    const never = [
+      '#app',
+      '.appearance',
+      '.banner',
+      '.content',
+      '.header',
+      '.keybar',
+      '.session',
+      '.terminal-screen',
+    ]
     expect(flexBlocks.filter((selector) => !hidden.includes(selector)).sort()).toEqual(never)
+  })
+
+  it('gives the session’s name the phone header it needs', () => {
+    /*
+     * The appearance control is drawn on every screen, which is right everywhere
+     * except one: three pills across a 390px header inside a terminal truncated
+     * the session's title to "Rework the localhost sc…".
+     *
+     * Two halves, and both have to be here or the rule silently stops working.
+     * `main.ts` marks the frame while a terminal is on screen; the stylesheet
+     * decides, from the width alone, whether that costs the strip.
+     */
+    expect(styles).toContain('#app.is-terminal .appearance {')
+    expect(block('#app.is-terminal .appearance')).toContain('display: none')
+    const source = readFileSync(fileURLToPath(new URL('../src/main.ts', import.meta.url)), 'utf8')
+    expect(source).toContain("classList.toggle('is-terminal'")
+  })
+
+  it('paints the terminal in the terminal’s own paper, in both appearances', () => {
+    /*
+     * The failure this exists to stop is the one that makes a light theme look
+     * broken rather than absent: the chrome flips to paper and the emulator
+     * stays charcoal, because the surface under xterm was painted with the
+     * page's canvas.
+     *
+     * Two rules, because there are two layers — the box `.terminal` fills, and
+     * the scrolling viewport xterm paints inside it — and a mismatch between
+     * them is the black gutter this stylesheet already fixed once.
+     */
+    expect(block('.terminal')).toContain('background: var(--terminal-bg)')
+    expect(block('.terminal .xterm-viewport')).toContain('background-color: var(--terminal-bg)')
+    // And never the page's canvas, which is the value both of them used to have
+    // and which is only correct by accident in the dark theme.
+    expect(block('.terminal')).not.toContain('var(--bg-primary)')
   })
 })

@@ -32,6 +32,12 @@ import { registerSearchIpc } from './file-search'
 import { registerInsightsIpc } from './session-insights'
 import { registerChatIpc } from './chat-transcript'
 import { registerDevPortsIpc } from './dev-ports'
+import {
+  createDevServers,
+  registerDevServerIpc,
+  DEV_SERVER_STATE_CHANNEL,
+  type DevServerState,
+} from './dev-server'
 import { autoUpdater } from 'electron-updater'
 import { registerAgentControlsIpc } from './agent-controls'
 import { registerUpdateIpc } from './updates/updater'
@@ -284,6 +290,10 @@ const core = createHostCore({
   onExit: (id, exitCode) => {
     liveStatus.delete(id)
     dropPlanSession(id)
+    // A dev server *is* a session, so its death is this event and nothing else.
+    // Without this the row keeps a `url` for a server that is gone — the one
+    // genuinely wrong thing this feature can put on screen.
+    devServers.noteExit(id)
     send('session:exit', id, exitCode)
   },
   onStatus: (id, status) => {
@@ -319,6 +329,25 @@ const core = createHostCore({
  * seven hundred lines of incidental churn.
  */
 const { ptys, wsl, sessions: remoteSessions, ledger, startSession, statablePath } = core
+
+/**
+ * The dev servers this window has started, one per project folder.
+ *
+ * Declared here rather than beside `core` because it needs `ptys`, and
+ * referenced from `core`'s `onExit` above — which is safe, because that is a
+ * closure the pty manager calls long after this line has run.
+ *
+ * All three dependencies are the *same* calls the window makes for an ordinary
+ * session. That is deliberate and load-bearing: a dev server is a session, it
+ * appears in the session list, and it is killed the ordinary way. There is no
+ * second spawning path and no hidden process, which is the whole reason the
+ * feature can be trusted to say a server is running.
+ */
+const devServers = createDevServers({
+  type: (id, data) => ptys.write(id, data),
+  read: (id) => ptys.scrollback(id),
+  alive: (id) => ptys.list().some((meta) => meta.id === id),
+})
 
 /**
  * The appearance the window's own chrome has to be painted in.
@@ -738,6 +767,32 @@ function registerIpc(): void {
   registerInsightsIpc(ipcMain)
   registerChatIpc(ipcMain)
   registerDevPortsIpc(ipcMain)
+
+  /*
+   * The dev-server channel.
+   *
+   * `projects` is the folders this desktop has open, and the handler will only
+   * act on a folder that appears in it — so a compromised renderer cannot use
+   * this channel to hunt for `package.json` files across the disk. Not a
+   * boundary against the person at the keyboard, whose machine this is; it is
+   * simply the narrowest input the channel can take and still do its job.
+   *
+   * `open` is `startSession` — the same call the New Session button makes — so a
+   * dev server is an ordinary visible session that can be read and killed like
+   * any other, rather than a hidden child process.
+   */
+  registerDevServerIpc(ipcMain, {
+    servers: devServers,
+    projects: () => store().getProjects().map((project) => project.path),
+    open: async (folder) => {
+      // A plain shell, not an agent: this session exists to run one command.
+      // 120x30 because a dev server's output is read, not worked in — and a pty
+      // with no size prints its progress bars into a single column.
+      const meta = await startSession({ cwd: folder, cols: 120, rows: 30, provider: 'shell' })
+      return { ok: true, sessionId: meta.id }
+    },
+    broadcast: (state: DevServerState) => send(DEV_SERVER_STATE_CHANNEL, state),
+  })
   // PtyManager is the SessionAccess: controls are read off the rendered
   // screen and applied by typing, exactly as a person would.
   registerAgentControlsIpc(ipcMain, ptys)
@@ -795,6 +850,12 @@ function registerIpc(): void {
   // has to be paired and approved before a byte moves.
   const remote = registerRemoteIpc(ipcMain, {
     sessions: remoteSessions,
+    // The same tracker the window uses, so a dev server started from the phone
+    // and one started from the desktop are one thing rather than two views that
+    // can disagree. `server.ts` only advertises the `devserver` capability when
+    // this is present, so a build without it says nothing rather than offering a
+    // button that answers `unauthorized`.
+    devServers,
     autoStart: storedValue(REMOTE_ENABLED_KEY) !== false,
     onEnabledChange: (on) => {
       patchStoredSettings({ [REMOTE_ENABLED_KEY]: on })

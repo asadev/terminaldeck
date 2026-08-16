@@ -436,11 +436,49 @@ export interface TitleInput {
  * new evidence lands — it is cheap and has no memory, so a session that gains
  * a transcript mid-flight simply gets a better answer next call.
  */
+/**
+ * A name the user typed for a session, reduced to something a tab can carry —
+ * or null when they did not really type one.
+ *
+ * The counterpart of everything above it, and deliberately a *different* set of
+ * rules. Everything else in this module is guessing, so it is allowed to be
+ * fussy: a two-character line, a slash command, the word "Untitled" are all
+ * rejected by {@link isUsableTitle} because a bad guess is worse than falling
+ * back to the folder name. None of that applies to a name somebody sat and
+ * typed. If they want to call a session `ab`, or `/tmp`, that is what it is
+ * called; this app does not get to overrule it and quietly show something else.
+ *
+ * So only two things happen here, and both are about what a tab can physically
+ * do rather than about whether the name is any good:
+ *
+ *   - {@link cleanTitleText} runs, because a name arrives from a text field and
+ *     a pasted multi-line brief, or a stray control character, would otherwise
+ *     reach a `<span>` in the sidebar and the toolbar's `<h1>`. Whitespace
+ *     collapses to single spaces and the ends are trimmed.
+ *   - it is cut to {@link MAX_TITLE_LENGTH}, the same budget every other title
+ *     in this module is cut to, because the tab that has to show it is the same
+ *     width whoever wrote the words.
+ *
+ * Null means "nothing was typed" — an empty field, or one holding only spaces.
+ * That is a cancel, not a request to be called `''`: a session with a blank
+ * name is a row in the sidebar with nothing on it and no way to click back into
+ * the field to fix it.
+ *
+ * {@link deriveSessionTitle} calls this for its own `userTitle` branch rather
+ * than repeating the two steps, so there is one answer to "what does a typed
+ * name become" no matter which door it came through.
+ */
+export function userSessionTitle(typed: string, max = MAX_TITLE_LENGTH): string | null {
+  const cleaned = cleanTitleText(typed)
+  if (cleaned.length === 0) return null
+  return truncateOnWordBoundary(cleaned, max)
+}
+
 export function deriveSessionTitle(input: TitleInput): DerivedTitle {
   const max = input.maxLength ?? MAX_TITLE_LENGTH
 
-  const explicit = input.userTitle ? cleanTitleText(input.userTitle) : ''
-  if (explicit.length > 0) return { title: truncateOnWordBoundary(explicit, max), source: 'user' }
+  const explicit = input.userTitle == null ? null : userSessionTitle(input.userTitle, max)
+  if (explicit !== null) return { title: explicit, source: 'user' }
 
   const found =
     (input.transcriptLines ? titleFromTranscript(input.transcriptLines) : null) ??

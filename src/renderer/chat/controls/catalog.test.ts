@@ -49,30 +49,52 @@ describe('what the row is allowed to offer', () => {
   })
 })
 
-describe('what the panel holds and what also gets a chip', () => {
+describe('what the panel holds and what gets a chip', () => {
   it('keeps the two a session reaches for on the box itself', () => {
     // Model changes per task, permission per phase of the work. Effort is set
     // once if ever, and fast mode usually cannot even be read.
     expect(PRIMARY_CONTROLS).toEqual(['model', 'permission'])
   })
 
-  it('lists every control in the Options panel, once each', () => {
-    // The regression this pins, in the words it was reported in: "all the
-    // options you have actually removed". Two controls were on the row, two
-    // were behind a button called "More", and nothing on screen named what
-    // "More" held — so a panel that lists only the remainder is the shape that
-    // failed. A control dropped from this list leaves the app while every one
-    // of its own tests keeps passing, which is the failure this file's
-    // neighbours exist to prevent.
-    expect([...MENU_CONTROLS].sort()).toEqual([...ALL].sort())
-    expect(new Set(MENU_CONTROLS).size).toBe(MENU_CONTROLS.length)
+  it('gives every control exactly one home, and leaves none homeless', () => {
+    /*
+     * The rule, and it replaces an assertion that said the opposite — so the
+     * reversal is written down here rather than in a commit message.
+     *
+     * What was pinned before: the panel lists *every* control, chip or no chip.
+     * That was the answer to "all the options you have actually removed", where
+     * two controls sat behind a button called "More" and nothing on screen
+     * named what "More" held.
+     *
+     * What was then reported, watching the app: "options is having all of the
+     * things that we already have here and there. So let's keep everything
+     * separate rather than having everything on one page like on options." With
+     * the panel open, Model and Permission were on screen twice at once — a
+     * chip and a section, the same value, the same keystrokes.
+     *
+     * The rule that answers both is a partition: every control is in exactly
+     * one of the two lists. Nothing is said twice, and — the half the old
+     * assertion was really protecting — nothing is in neither list, which is
+     * how a control leaves the app while all of its own tests keep passing.
+     */
+    expect([...PRIMARY_CONTROLS, ...MENU_CONTROLS].sort()).toEqual([...ALL].sort())
+    expect(new Set([...PRIMARY_CONTROLS, ...MENU_CONTROLS]).size).toBe(ALL.length)
   })
 
-  it('keeps every chip on the row inside the panel as well', () => {
-    // A control reachable only from the row is a control that disappears the
-    // next time the row is shortened for being busy — which is exactly how the
-    // last two went missing.
-    for (const control of PRIMARY_CONTROLS) expect(MENU_CONTROLS).toContain(control)
+  it('does not repeat a chip inside the panel that opens beside it', () => {
+    // Stated separately from the partition above because this is the complaint
+    // itself, and a partition could be satisfied by moving a chip into the
+    // panel rather than by not duplicating it.
+    for (const control of PRIMARY_CONTROLS) {
+      expect(MENU_CONTROLS, `${control} is on the row and in the panel`).not.toContain(control)
+    }
+  })
+
+  it('keeps the panel worth opening — more than one thing is behind it', () => {
+    // A menu holding a single entry is a menu that should have been that entry.
+    // If this ever drops to one, fold it out onto the row and delete the panel
+    // rather than leaving a button that opens onto one section.
+    expect(MENU_CONTROLS.length).toBeGreaterThan(1)
   })
 
   it('names and describes every control, so none is a bare icon', () => {

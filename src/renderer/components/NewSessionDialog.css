@@ -14,10 +14,16 @@
   --ns-select-min: 168px;
 }
 
+/* 20px between sections, not 24.
+
+   Five sections in a panel that has to fit a 900px window: the four pixels a
+   gap gives back are worth having when they decide whether the last control is
+   on screen, and at this density 20px still separates the sections without a
+   rule — which is the rule this app holds itself to. */
 .ns {
   display: flex;
   flex-direction: column;
-  gap: var(--sp-6);
+  gap: var(--sp-5);
   padding-top: var(--sp-1);
 }
 
@@ -200,13 +206,54 @@
   color: var(--text-secondary);
 }
 
+/* The folder filter, which only exists past eight projects. A fill and no
+   border, like the first-message field, so the panel keeps one control
+   language; the native search decorations are dropped for the same reason. */
+.ns-filter {
+  width: 100%;
+  height: var(--control-h);
+  padding: 0 var(--sp-3);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--fill-quaternary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--t-callout);
+}
+
+.ns-filter::placeholder {
+  color: var(--text-muted);
+}
+
+.ns-filter:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.ns-filter::-webkit-search-decoration,
+.ns-filter::-webkit-search-cancel-button {
+  appearance: none;
+}
+
 /* ----------------------------------------------------------------- agent -- */
 
+/* Two columns, not four stacked cards.
+
+   Measured, not preferred: as one column this panel was 820px tall inside a
+   900px window, so the primary button, the first message and the whole
+   Conversation section were below a fold — in a dialog whose entire job is to
+   show you the decision before you commit to it. The agents alone were 340 of
+   those pixels. Paired, the same four rows are 172 and everything fits with
+   room to spare.
+
+   `auto-fit` with a floor rather than a hard `1fr 1fr`, so a narrower window
+   drops it back to one column instead of squeezing two unreadable ones. */
 .ns-agents,
 .ns-choices {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: var(--sp-1);
+  align-items: stretch;
 }
 
 /* A fill, not an outline. Nine bordered cards in one dialog read as a form
@@ -219,7 +266,10 @@
   display: flex;
   align-items: flex-start;
   gap: var(--sp-3);
-  padding: var(--sp-3);
+  /* Tighter up and down than across. Twelve all round was 24px of air per row
+     of cards, which is what put the last control of the panel past the bottom
+     of a 900px window; eight still reads as a card and not as a table row. */
+  padding: var(--sp-2) var(--sp-3);
   border: none;
   border-radius: var(--radius-lg);
   background: var(--fill-quaternary);
@@ -442,7 +492,7 @@
 
 .ns-remember {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: var(--sp-3);
   cursor: pointer;
 }

@@ -181,6 +181,62 @@ async function listeningPorts(platform: Platform): Promise<DevPortDetail[]> {
 const FALLBACK_PORTS = [3000, 5173, 8080, 4200, 8000, 5174, 4321, 3001]
 
 /**
+ * How long the fallback probe below waits for a loopback to answer.
+ *
+ * A quarter of a second is a very long time for a connection that never leaves
+ * the machine: a listening socket is accepted by the kernel's backlog with no
+ * process involved, and a port nobody holds is refused in microseconds. What
+ * the budget is really covering is a loaded machine, not a slow network.
+ */
+const PROBE_TIMEOUT_MS = 250
+
+/**
+ * Connect, then hang up. True when something accepted.
+ *
+ * ## Why this is exported rather than copied
+ *
+ * There are two questions about a port and only one of them a scan can answer.
+ * `lsof` and `netstat` say a socket is *bound*; they do not say it will *accept*,
+ * and `remote/tunnel.ts` documents the measured Windows case where those two
+ * answers differed — a port listed as listening that refused every dial. Every
+ * feature that has to know a port is genuinely usable therefore ends in a real
+ * TCP connection, and there should be exactly one of those in the app.
+ *
+ * `dev-server.ts` is the second caller. It could not reuse the dial inside
+ * `tunnel.ts` because that one is a closure over the hub's injected `connect`
+ * seam and cannot leave `createTunnelHub` without rearranging it; this function
+ * was already here, doing the identical thing, and exporting it is strictly
+ * better than a third socket. It pairs with `loopbackCandidates` from
+ * `tunnel.ts`, which is the *other* half of that module's dial and already
+ * exported: candidates decide where, this decides whether.
+ *
+ * `(port, host)` and not `(host, port)` — the order `tunnel.ts` uses for the
+ * same pair, because two functions that take the same two values in opposite
+ * orders is a bug waiting for the day someone reads one and calls the other.
+ *
+ * `timeoutMs` is a parameter because the two callers are asking under different
+ * pressure. The scan fallback below fires eight of these at once and wants them
+ * over quickly; a readiness watcher polls one at a time behind a spinner and can
+ * afford to wait a little longer for a machine that is busy building.
+ */
+export function dialPort(port: number, host: string, timeoutMs = PROBE_TIMEOUT_MS): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = createConnection({ host, port })
+    let settled = false
+    const done = (live: boolean) => {
+      if (settled) return
+      settled = true
+      socket.destroy()
+      resolve(live)
+    }
+    socket.setTimeout(timeoutMs)
+    socket.once('connect', () => done(true))
+    socket.once('timeout', () => done(false))
+    socket.once('error', () => done(false))
+  })
+}
+
+/**
  * Used only when the OS scan is unavailable, so the page is never empty by
  * default.
  *
@@ -192,20 +248,7 @@ const FALLBACK_PORTS = [3000, 5173, 8080, 4200, 8000, 5174, 4321, 3001]
  * eight ports in the list.
  */
 function probe(host: string, port: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    const socket = createConnection({ host, port })
-    let settled = false
-    const done = (live: boolean) => {
-      if (settled) return
-      settled = true
-      socket.destroy()
-      resolve(live)
-    }
-    socket.setTimeout(250)
-    socket.once('connect', () => done(true))
-    socket.once('timeout', () => done(false))
-    socket.once('error', () => done(false))
-  })
+  return dialPort(port, host, PROBE_TIMEOUT_MS)
 }
 
 async function probeFamilies(port: number): Promise<PortFamilies> {

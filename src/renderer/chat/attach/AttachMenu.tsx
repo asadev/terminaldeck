@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { useOneMenu } from '../../shell/one-menu'
 import { AttachPicker, type PickerMode } from './AttachPicker'
 import { McpServers } from './McpServers'
 import { useControlOffer } from '../../features/offer'
@@ -165,6 +166,18 @@ export function AttachMenu({
     setSurface(null)
     onClose()
   }, [onClose])
+
+  /*
+   * Shut, and nothing else — what the window's one-menu-at-a-time rule calls.
+   *
+   * Deliberately not `close`. `close` also hands focus back to the text box,
+   * which is right when *this* popover is being dismissed and wrong when it is
+   * being displaced: the user has just pressed a different control, and pulling
+   * the caret into the composer would take focus off the thing under their
+   * pointer. See `one-menu.ts`.
+   */
+  const shut = useCallback(() => setSurface(null), [])
+  useOneMenu(surface !== null, shut)
 
   // Escape closes from anywhere inside, and a click outside dismisses. Both are
   // registered only while something is open, so the composer costs nothing when

@@ -95,10 +95,30 @@ import {
     chunkOutput,
     parseClientMessage,
     serialize,
+    type DevServerReport,
     type ProtocolErrorCode,
     type RemoteSession,
     type ServerMessage,
 } from '../../src/main/remote/protocol'
+/*
+ * The dev-server feature, imported rather than stood in for.
+ *
+ * This is the third thing in this file that used to be an invention and is not
+ * one — after the sealed framing and after `create`, both of which are argued
+ * at length in the header. The pattern is the same and so is the reason: a
+ * stand-in that reimplements a feature can agree with its client about a shape
+ * no desktop would ever send, and a green run then proves only that this file
+ * and the phone made the same mistake.
+ *
+ * So `createDevServers` is the product's own module. It reads a real
+ * `package.json`, it scans the real listening ports, it types the real command
+ * into a real PTY, and it says `ready` only after something accepted a TCP
+ * connection on a port that was not listening before the start. What this file
+ * supplies is the three things the module asks for — write to a session, read
+ * what it printed, is it still alive — all of which this harness already had.
+ */
+import { createDevServers, type DevServerState } from '../../src/main/dev-server'
+import { sameFolder } from '../../src/main/remote/session-create'
 
 const require = createRequire(import.meta.url)
 // Marked external in run.sh: it is a native module and cannot be bundled.
@@ -120,6 +140,34 @@ const PORT = Number(flag('port', '8787'))
 const CONTROL_PORT = PORT + 1
 const APPROVE_AFTER = Number(flag('approve-after', '8000'))
 const LOG_INPUT = has('log-input')
+
+/**
+ * Where the *pairing slot* lives, which is not the same relay the session runs
+ * over and never has been.
+ *
+ * Two addresses, because a rendezvous is two hops. The beacon sits in a slot at
+ * one relay and publishes an **offer**; the offer names the relay the phone then
+ * dials for the session itself. This host has always set both to its own local
+ * relay, and that quietly made every self-pairing UI test unrunnable: the phone
+ * has no relay setting — `RendezvousLookup.defaultRelay` is `relay.terminaldeck.dev`
+ * and nothing overrides it — so six digits typed into the Simulator were looked
+ * up somewhere this host was not sitting, every time, and the suites skipped
+ * with "no harness" while the harness was plainly running.
+ *
+ * So the slot is a flag and the session address is not:
+ *
+ *     ios/Harness/run.sh host --rendezvous wss://relay.terminaldeck.dev
+ *
+ * What goes onto the public relay that way is a slot named by six digits that
+ * expire in a minute, holding an offer whose address is `127.0.0.1` — useless to
+ * anybody who is not on this machine. Every byte of the session that follows
+ * stays on this Mac's loopback, which is what makes the arrangement worth having
+ * rather than merely convenient.
+ *
+ * The default is unchanged, so nothing that was working starts depending on the
+ * network.
+ */
+const RENDEZVOUS = flag('rendezvous', `ws://127.0.0.1:${PORT}`)
 
 /**
  * What this stand-in claims to be, in `welcome.hostPlatform`.
@@ -322,7 +370,9 @@ function mintPairingToken(): string {
     pairingToken = codeFromBytes(randomBytes(CODE_ENTROPY_BYTES))
     beacon = startBeacon({
         code: pairingToken,
-        relayUrl: `ws://127.0.0.1:${PORT}`,
+        // Where the slot is — see `RENDEZVOUS`. The offer below still names this
+        // machine's own relay, so the session never leaves the loopback.
+        relayUrl: RENDEZVOUS,
         offer: {
             relayUrl: `ws://127.0.0.1:${PORT}`,
             hostId: HOST_ID,
@@ -479,6 +529,13 @@ function startSession(options: { title: string; cwd: string; provider: string; c
     child.onExit(({ exitCode }) => {
         session.exitCode = exitCode
         setStatus(session, 'exited')
+        // A dev server whose session has gone is a folder back at rest. The
+        // module self-heals the next time anything asks it, so this is only the
+        // difference between the phone hearing about it now and hearing about it
+        // when somebody pulls to refresh — which on the screen this feeds is the
+        // difference between a row that corrects itself and one that sits there
+        // claiming a port.
+        devServers.noteExit(id)
         for (const channel of attachedBy.get(id) ?? []) channel.send({ t: 'exit', id, exitCode })
     })
 
@@ -525,6 +582,86 @@ function announce(): void {
         if (channel.deviceId) channel.send({ t: 'sessions', sessions: list() })
     }
 }
+
+/* -------------------------------------------------------------------------- */
+/* Dev servers                                                                 */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The real module, wired to this harness's real PTYs.
+ *
+ * `scan` and `dial` are left at their defaults, which are the product's own
+ * `scanDevPortsDetailed` and `dialPort`. That is the whole reason a `ready` here
+ * means anything: the module snapshots what is listening *before* it starts
+ * anything, then dials the candidates it finds in the session's own output, and
+ * only calls a folder ready once a port that was not there before accepts a
+ * connection. A stand-in that answered `ready` on a timer would let a phone draw
+ * an Open button over nothing, which is precisely the bug the real module goes
+ * to some trouble not to have.
+ *
+ *     ios/Harness/run.sh host --folders /tmp/demo-app,/tmp/demo-plain
+ *
+ * Point it at a folder with a `dev` script and the phone gets a Start button
+ * that starts a real server; point it at one without, and the phone must draw no
+ * row at all.
+ */
+const devServers = createDevServers({
+    type: (sessionId, data) => {
+        sessions.get(sessionId)?.process.write(data)
+    },
+    read: (sessionId) => sessions.get(sessionId)?.scrollback ?? '',
+    // `exitCode === null` rather than a status word: `status` is display text
+    // this file also drives from an idle timer, and liveness is not a matter of
+    // what the row last said.
+    alive: (sessionId) => {
+        const session = sessions.get(sessionId)
+        return session !== undefined && session.exitCode === null
+    },
+})
+
+/**
+ * The desktop's state, trimmed to what the wire carries — rebuilt field by
+ * field, exactly as `server.ts` does it and for exactly the same reason.
+ *
+ * `DevServerState` is the module's own type and `DevServerReport` is a contract
+ * with three clients in three languages. Spreading one into the other is how a
+ * field added for the desktop's own window reaches somebody's phone by accident,
+ * and the phone is the end that cannot be updated in step.
+ */
+function devReport(state: DevServerState): DevServerReport {
+    const report: DevServerReport = { folder: state.folder, status: state.status }
+    if (state.script !== undefined) report.script = state.script
+    if (state.command !== undefined) report.command = state.command
+    if (state.sessionId !== undefined) report.sessionId = state.sessionId
+    if (state.port !== undefined) report.port = state.port
+    if (state.url !== undefined) report.url = state.url
+    if (state.note !== undefined) report.note = state.note
+    if (state.message !== undefined) report.message = state.message
+    return report
+}
+
+/**
+ * Push a folder's new state to every channel that asked about it.
+ *
+ * Subscribed once for the process rather than once per channel, because there is
+ * one dev server per project and its state does not depend on who is watching.
+ * Compared with `sameFolder` rather than by string equality, so a device that
+ * asked about `/p` and a module reporting `/p/` are looking at one project.
+ */
+devServers.onChange((state) => {
+    for (const channel of channels.values()) {
+        if (!channel.deviceId) continue
+        for (const folder of channel.devFolders) {
+            if (sameFolder(folder, state.folder)) {
+                channel.send({ t: 'dev.state', state: devReport(state) })
+                break
+            }
+        }
+    }
+})
+
+/** The desktop's `MAX_DEV_FOLDERS`. A per-channel allocation driven by a frame. */
+const MAX_DEV_FOLDERS = 8
 
 /* -------------------------------------------------------------------------- */
 /* A minimal WebSocket client                                                  */
@@ -665,6 +802,15 @@ class Channel {
      */
     claimed: string[] = []
     readonly handles = new Set<string>()
+    /**
+     * Project folders this channel has asked about, in this host's spelling.
+     *
+     * The subscription list, and the only reason `dev.state` can be pushed
+     * rather than polled. Only ever holds folders that passed the grant check,
+     * so a device cannot use it to learn that something happened in a folder it
+     * was never given — the same rule `server.ts` states at more length.
+     */
+    readonly devFolders = new Set<string>()
 
     constructor(readonly key: string, readonly channel: Buffer, private readonly link: HostLink) {}
 
@@ -971,6 +1117,73 @@ class Channel {
             }
             case 'ping':
                 return this.send({ t: 'pong' })
+
+            /* ---- capability `devserver` --------------------------------- */
+            /*
+             * Look at, or start, one project's dev server.
+             *
+             * The grant is checked **before anything touches the disk**, which
+             * is the desktop's ordering and is the point rather than a detail:
+             * the answer to `dev.status` is derived from a `package.json`, so a
+             * host that read first and authorised second would be a way for a
+             * paired phone to ask whether an arbitrary path on this machine is a
+             * Node project and what its scripts are called.
+             *
+             * What travels onward is **this host's spelling** of the folder,
+             * taken from its own grant list, never the string the client sent —
+             * the two can differ by a trailing separator and still be the same
+             * directory, and passing our own copy means nothing downstream has
+             * to trust a path off the network.
+             */
+            case 'dev.status':
+            case 'dev.start': {
+                const offered = granted ?? []
+                const match = offered.find((folder) => sameFolder(folder, message.folder))
+                if (match === undefined) {
+                    return this.send({
+                        t: 'error',
+                        code: 'unauthorized',
+                        // The folder is not echoed back: it came off the network
+                        // and this sentence is drawn on a phone.
+                        message: `This ${hostNoun()} is not offering that folder to this device. `
+                            + 'Pick one from the list it sent.',
+                    })
+                }
+                // Subscribed only after the grant passed.
+                if (this.devFolders.size < MAX_DEV_FOLDERS) this.devFolders.add(match)
+
+                if (message.t === 'dev.status') {
+                    return this.send({ t: 'dev.state', state: devReport(devServers.status(match)) })
+                }
+
+                /*
+                 * The session is opened through this host's ordinary
+                 * `startSession`, and through nothing else — the same rule the
+                 * desktop keeps, where a dev server goes through `create` and
+                 * there is deliberately no second spawning path. `provider` is
+                 * `shell` because the command is typed into a shell, by the
+                 * module, once it has seen a prompt.
+                 *
+                 * Answered directly *and* pushed: `onChange` above will fire for
+                 * this same state, and the client is required to handle the
+                 * duplicate by replacing the row rather than merging into it.
+                 * Sending both is what the protocol asks for, so sending both is
+                 * what exercises the client's half of it.
+                 */
+                void devServers
+                    .start(match, async (folder) => {
+                        const session = startSession({
+                            title: basename(folder) || folder,
+                            cwd: folder,
+                            provider: 'shell',
+                        })
+                        return { ok: true, sessionId: session.id }
+                    })
+                    .then((state) => {
+                        this.send({ t: 'dev.state', state: devReport(state) })
+                    })
+                return
+            }
 
             /* ---- capability `credential` ------------------------------- */
             /*
