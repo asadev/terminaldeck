@@ -321,7 +321,12 @@ describe('the strip on a window with nothing in it', () => {
   })
 
   it('still offers the drop target once something exists to promote', () => {
-    const tabs: WorkspaceTab[] = [{ id: 's1', kind: 'session', title: 'Session 1' }]
+    // Through `session()` like every other fixture in this file, rather than an
+    // object literal of its own. The literal that was here named a `title` field
+    // — `WorkspaceTab` has `label` — and left out `closable`, so it compiled to
+    // nothing the component could have rendered. Vitest never noticed because it
+    // does not typecheck; `npm run typecheck` did.
+    const tabs: WorkspaceTab[] = [session('s1', 'Session 1')]
     const html = renderToStaticMarkup(
       <WorkspaceTabStrip tabs={tabs} activeTabId="s1" onSelect={() => {}} storage={null} />,
     )
