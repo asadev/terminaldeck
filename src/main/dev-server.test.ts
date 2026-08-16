@@ -28,11 +28,27 @@ import {
 
 /* ----------------------------------------------------------------- fixtures */
 
-/** A fake filesystem: paths to contents, and the set of paths that exist. */
+/**
+ * A fake filesystem: paths to contents, and the set of paths that exist.
+ *
+ * The keys below are written with forward slashes because they are easier to
+ * read that way, and the lookup folds separators so they keep matching on
+ * Windows.
+ *
+ * That fold is not cosmetic. `findDevScript` builds its paths with `node:path`'s
+ * `join`, which is correct — on Windows it produces `\p\package.json`, which is
+ * what a real Windows folder looks like. The fixture keys are `/p/package.json`,
+ * so every lookup missed, `findDevScript` answered `null` for every project, and
+ * ten tests failed on `windows-latest` while passing on every Mac. It took a
+ * release build to find, which is exactly the class of bug the CRLF work was
+ * about: a test that encodes one platform's spelling and calls it the answer.
+ */
 function io(files: Record<string, string>): ProjectIo {
+  const norm = (path: string): string => path.replace(/\\/g, '/')
+  const table = new Map(Object.entries(files).map(([path, body]) => [norm(path), body]))
   return {
-    readFile: (path) => files[path] ?? null,
-    exists: (path) => path in files,
+    readFile: (path) => table.get(norm(path)) ?? null,
+    exists: (path) => table.has(norm(path)),
   }
 }
 

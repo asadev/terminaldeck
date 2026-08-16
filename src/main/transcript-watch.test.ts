@@ -90,7 +90,21 @@ async function until(
   what: string,
   watcher: TranscriptWatcher,
   ready: (summary: ProjectSummary) => boolean,
-  ceilingMs = 8_000,
+  /*
+   * Thirty seconds, raised from eight after a release build failed on a
+   * `macos-latest` runner with "waited 8000ms for the third request … and it
+   * never happened".
+   *
+   * Raising it weakens nothing, and this file already says why: the ceiling is
+   * not a tuned timeout, it exists only so a watcher that *genuinely* never
+   * fires reports a readable failure instead of hanging until vitest kills the
+   * test. The loop waits on the condition, so a slow machine gets the same
+   * answer, just later — and a hosted runner sharing a host with other jobs is
+   * exactly the slow machine that sentence was written for. A watcher that is
+   * actually broken still fails here, thirty seconds later, with the same
+   * message.
+   */
+  ceilingMs = 30_000,
 ): Promise<ProjectSummary> {
   const deadline = Date.now() + ceilingMs
   for (;;) {
