@@ -64,6 +64,14 @@ final class DeckTerminalView: TerminalView {
         owned.insert(ObjectIdentifier(recognizer))
     }
 
+    /// Whether a recogniser is this app's. Readable rather than private because
+    /// SwiftTerm attaches recognisers of the same *classes* this app does — a
+    /// long press and two pans — so a test that wants "ours" cannot ask for it by
+    /// class, and the claim is the only thing that tells them apart.
+    func owns(_ recognizer: UIGestureRecognizer) -> Bool {
+        owned.contains(ObjectIdentifier(recognizer))
+    }
+
     override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
         if gestureRecognizer === panGestureRecognizer {
             // The scroll view's own pan. Refused only while a selection drag

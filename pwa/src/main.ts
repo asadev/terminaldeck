@@ -34,6 +34,20 @@ import { folderOffer, foldersAfter, noFoldersSentence, pickerRows } from './fold
 import { machineNoun, readHostPlatform, type HostPlatform } from './host-platform'
 import { createKeyBar, type KeyBarHandle } from './keybar'
 import {
+  CHECK_PATIENCE_MS,
+  NO_LOCALHOST,
+  cannotServeSentence,
+  checkSentence,
+  localhostOffered,
+  localhostStep,
+  noPortsSentence,
+  portLabel,
+  stalePortsSentence,
+  type LocalhostAction,
+  type LocalhostState,
+} from './localhost'
+import { watchPhysicalKeyboard, type KeyBarFit, type MatchMedia } from './physical-keyboard'
+import {
   clearPairing,
   describeDevice,
   loadPairing,
@@ -75,7 +89,17 @@ function socketUrl(location: Location): string {
   return `${scheme}//${location.host}${SOCKET_PATH}`
 }
 
-type Screen = 'pair' | 'sessions' | 'terminal'
+/**
+ * The screens, and why `localhost` is one of them rather than a panel.
+ *
+ * A person on this page is doing one of two things — driving a session, or
+ * looking at what the machine is serving — and on a phone those cannot share a
+ * viewport. So it is a screen, reached from the same strip of tabs the session
+ * list is, and it appears only when the desktop advertised `localhost`. See
+ * `localhost.ts` for what that screen can honestly do from a browser tab and
+ * what it deliberately does not pretend to.
+ */
+type Screen = 'pair' | 'sessions' | 'localhost' | 'terminal'
 
 /**
  * Text on its way into the terminal rather than into the DOM.
@@ -121,6 +145,17 @@ class Deck {
    * looking when it happens.
    */
   private readonly credentialCard = element('section', 'ask')
+  /**
+   * The two places this client can be when it is not in a terminal.
+   *
+   * A strip rather than a menu, and a sibling of the content rather than part of
+   * a screen, because it has to survive both of the screens it switches between
+   * — a control that is redrawn by the thing it selects cannot show which thing
+   * is selected. It is empty and hidden entirely against a desktop that does not
+   * advertise `localhost`: one tab is not a choice, and the standing rule here is
+   * that a control with one option is not drawn as one.
+   */
+  private readonly tabs = element('nav', 'tabs')
   private readonly content = element('main', 'content')
 
   private connection: Connection | null = null
@@ -226,6 +261,31 @@ class Deck {
   private awaitingCreate = false
   /** Set while the folder list under New session is open. */
   private picking = false
+  /** What the machine is serving, and the check in flight. See `localhost.ts`. */
+  private localhost: LocalhostState = NO_LOCALHOST
+  /** The timer behind `CHECK_PATIENCE_MS`, or null when nothing is being checked. */
+  private checkTimer: number | null = null
+  /**
+   * Names the tunnels this client opens, and never repeats one.
+   *
+   * A counter rather than a random string, because the ids only have to be
+   * unique against *this* connection — the desktop tears its hub down when the
+   * socket goes — and a counter is the version a test can predict. It never
+   * resets, so a reconnect cannot reuse an id the desktop is still holding.
+   * `ID_RE` on the far side accepts it: a letter, then letters, digits and
+   * hyphens.
+   */
+  private checks = 0
+  /**
+   * Whether the person reading this has an Esc key of their own.
+   *
+   * Watched rather than read once — an iPad leaves its keyboard mid-session. See
+   * `physical-keyboard.ts`, which owns the whole question and explains why the
+   * signal is the input hardware and not the user agent.
+   */
+  private keyboard: KeyBarFit | null = null
+  /** The strip the key bar sits in, so its visibility can follow the hardware. */
+  private keybarDock: HTMLElement | null = null
 
   constructor(root: HTMLElement) {
     this.root = root
@@ -243,7 +303,7 @@ class Deck {
     this.bannerAction.addEventListener('click', () => this.connection?.resume())
     this.banner.append(this.bannerText, this.bannerAction)
 
-    root.append(this.header, this.banner, this.credentialCard, this.content)
+    root.append(this.header, this.banner, this.credentialCard, this.tabs, this.content)
   }
 
   /* ------------------------------------------------------------- startup -- */
@@ -275,6 +335,7 @@ class Deck {
       this.render()
     }
 
+    this.watchKeyboard()
     this.watchViewport()
     this.watchWakeups()
     // Every second, because the banner counts down. Cheap, and it stops the
@@ -343,6 +404,41 @@ class Deck {
     this.connection.start()
   }
 
+  /**
+   * Follow the input hardware, so the key bar is there exactly when it is needed.
+   *
+   * `matchMedia` is passed rather than reached for, which is what keeps the
+   * decision in a file the suite can ask questions of; a browser without it gets
+   * `undefined` and keeps the bar. See `physical-keyboard.ts` for why that is the
+   * right way to be wrong.
+   */
+  private watchKeyboard(): void {
+    const media: MatchMedia | undefined =
+      typeof window.matchMedia === 'function' ? (query) => window.matchMedia(query) : undefined
+    this.keyboard = watchPhysicalKeyboard(media, () => this.applyKeyBar())
+    this.applyKeyBar()
+  }
+
+  /**
+   * Show or hide the key row for the hardware that is attached right now.
+   *
+   * The bar is hidden rather than destroyed. It holds the armed-Ctrl state that
+   * `sendInput` folds characters through, and a tablet that leaves its keyboard
+   * mid-session must get the row back with the terminal underneath it untouched
+   * — rebuilding it would mean rebuilding the emulator, which loses focus and
+   * reflows every line of scrollback.
+   *
+   * The refit is not cosmetic: the terminal is `flex: 1` above the dock, so
+   * taking forty-eight pixels away gives it four more rows, and an emulator that
+   * has not been told is one whose bottom four lines are painted over.
+   */
+  private applyKeyBar(): void {
+    const dock = this.keybarDock
+    if (dock === null) return
+    dock.hidden = !(this.keyboard?.wanted ?? true)
+    this.terminal?.fit()
+  }
+
   /** Reconnect early when the OS gives us a reason to think it will work. */
   private watchWakeups(): void {
     window.addEventListener('online', () => this.connection?.resume())
@@ -363,6 +459,10 @@ class Deck {
     // one thing this client must not do meanwhile is keep a button spinning
     // against a socket that will never answer it.
     if (state.phase !== 'online') this.awaitingCreate = false
+    // Same argument, for the same reason: a port check left spinning against a
+    // socket that will never answer it is the lie this client exists not to
+    // tell. The port list survives and is labelled as old rather than blanked.
+    if (state.phase !== 'online') this.localhostDo({ t: 'offline' })
 
     if (state.phase === 'online' && !wasOnline) {
       // Re-attach rather than assume. The desktop kept running while we were
@@ -373,6 +473,10 @@ class Deck {
         this.attach(this.attachedId)
       }
       this.connection?.send({ t: 'list' })
+      // The ports the desktop was serving before the gap say nothing about the
+      // ports it is serving now — a reconnect is the one moment this list is
+      // certainly stale, and the screen showing it is the one place that matters.
+      if (this.screen === 'localhost') this.localhostDo({ t: 'list' })
     }
 
     if (state.phase === 'rejected') {
@@ -391,6 +495,10 @@ class Deck {
       this.capabilities = []
       this.folders = null
       this.picking = false
+      // And what it was serving. A port list is a statement about a machine
+      // that no longer recognises this browser, and it must not still be on
+      // screen behind the pair form.
+      this.forgetLocalhost()
       // Not merely hidden: the terminal holds this machine's scrollback, and a
       // device that has just been told it is no longer trusted should not still
       // be carrying it around in memory.
@@ -402,7 +510,70 @@ class Deck {
 
     this.terminal?.setLive(state.phase === 'online')
     this.renderBanner()
-    if (this.screen === 'sessions') this.renderContent()
+    // Both list screens redraw: what they offer — New session, Refresh, Check —
+    // is drawn only while there is a socket to carry it.
+    if (this.screen === 'sessions' || this.screen === 'localhost') this.renderContent()
+  }
+
+  /* ----------------------------------------------------------- localhost -- */
+
+  /**
+   * One transition of the localhost machine, and the frames it asked for.
+   *
+   * The state lives in `localhost.ts` precisely so this method is the only part
+   * of it that cannot be tested: everything here is delivery. A frame that does
+   * not reach the desktop puts the machine straight back to its offline state
+   * rather than leaving a check spinning — `Connection.send` refuses only when
+   * the socket is not up, and when it is not up the banner is already saying so
+   * in the desktop's own words, which is a better sentence than one composed
+   * here would be.
+   */
+  private localhostDo(action: LocalhostAction): void {
+    const step = localhostStep(this.localhost, action)
+    if (step.state === this.localhost && step.send.length === 0) return
+    this.localhost = step.state
+
+    for (const message of step.send) {
+      if (this.connection?.send(message) === true) continue
+      this.localhost = localhostStep(this.localhost, { t: 'offline' }).state
+      break
+    }
+
+    this.armCheckTimer()
+    if (this.screen === 'localhost') this.renderContent()
+  }
+
+  /**
+   * Give up on a check that nothing has answered.
+   *
+   * Re-armed from scratch on every transition rather than cleared in the two
+   * places a check can end, because "the timer matches whatever is in flight" is
+   * one rule and "clear it here, and here, and here" is three that drift. A
+   * fired timer that names a check which has already finished is ignored by the
+   * machine itself, so the worst a stale one costs is a no-op.
+   */
+  private armCheckTimer(): void {
+    if (this.checkTimer !== null) {
+      window.clearTimeout(this.checkTimer)
+      this.checkTimer = null
+    }
+    const checking = this.localhost.checking
+    if (checking === null) return
+    const id = checking.id
+    this.checkTimer = window.setTimeout(() => {
+      this.checkTimer = null
+      this.localhostDo({ t: 'silence', id })
+    }, CHECK_PATIENCE_MS)
+  }
+
+  /** Everything this client knew about what the machine was serving. */
+  private forgetLocalhost(): void {
+    if (this.checkTimer !== null) {
+      window.clearTimeout(this.checkTimer)
+      this.checkTimer = null
+    }
+    this.localhost = NO_LOCALHOST
+    if (this.screen === 'localhost') this.screen = 'sessions'
   }
 
   private onCredential(token: string): void {
@@ -468,6 +639,13 @@ class Deck {
     // what makes a folder removed at the desk disappear from the picker in
     // somebody's hand, rather than at the next launch.
     this.folders = foldersAfter(this.folders, message)
+    // And before it, for the same reason: `ports`, `tunnel.opened` and
+    // `tunnel.closed` are answers to questions the localhost screen asked, and
+    // the switch below has no case for them by design — routing them through a
+    // second `case` here would put half of that feature's rules in a file no
+    // test can reach. Every other frame leaves the machine untouched and returns
+    // the identical object, so this costs one comparison per line of output.
+    this.localhostDo({ t: 'frame', message })
 
     switch (message.t) {
       case 'welcome':
@@ -496,6 +674,15 @@ class Deck {
         this.keep()
         this.applySessions(message.sessions, activity)
         if (this.screen === 'pair') this.screen = 'sessions'
+        // A desktop that no longer offers tunnelling — a different machine on
+        // the same pairing, or one launched with a narrower `offer` — must not
+        // leave this browser sitting on a screen whose every control it would
+        // now refuse.
+        if (this.screen === 'localhost' && !localhostOffered(this.capabilities)) this.forgetLocalhost()
+        // Asked on arrival rather than on the first tap, but only for somebody
+        // already looking at it — which is the reconnect case, since the tab is
+        // what asks otherwise.
+        if (this.screen === 'localhost') this.localhostDo({ t: 'list' })
         this.render()
         return
 
@@ -601,7 +788,62 @@ class Deck {
     this.renderHeader()
     this.renderBanner()
     this.renderCredentialAsk()
+    this.renderTabs()
     this.renderContent()
+  }
+
+  /**
+   * The strip that switches between the session list and localhost.
+   *
+   * Absent — not disabled, and not drawn with one tab in it — whenever there is
+   * nothing to switch *to*: on the pair screen, inside a terminal, and against
+   * any desktop that did not advertise `localhost`. That is the same rule
+   * `startBlock` follows for New session, and it is the reason a browser paired
+   * to an older machine sees exactly what it saw before this existed.
+   */
+  private renderTabs(): void {
+    const listing = this.screen === 'sessions' || this.screen === 'localhost'
+    const show = listing && this.credential !== null && localhostOffered(this.capabilities)
+    this.tabs.hidden = !show
+    if (!show) {
+      this.tabs.replaceChildren()
+      return
+    }
+
+    const options: Array<{ screen: Screen; label: string }> = [
+      { screen: 'sessions', label: 'Sessions' },
+      { screen: 'localhost', label: 'Localhost' },
+    ]
+    this.tabs.replaceChildren(
+      ...options.map((option) => {
+        const here = this.screen === option.screen
+        const tab = element('button', here ? 'tab tab--here' : 'tab', option.label)
+        tab.type = 'button'
+        // `aria-current` rather than `aria-pressed`: these are two places to be,
+        // not two switches, and a screen reader should say "current page".
+        if (here) tab.setAttribute('aria-current', 'page')
+        tab.addEventListener('click', () => this.goTo(option.screen))
+        return tab
+      }),
+    )
+  }
+
+  /**
+   * Move between the two list screens.
+   *
+   * The port list is asked for on arrival rather than kept fresh in the
+   * background: a `ports` frame runs a real `lsof` on somebody's machine, and
+   * polling it while nobody is looking is the kind of cost that only shows up on
+   * a laptop's battery. Asked once, and only when there is a socket — offline,
+   * the screen shows the last answer and says how old it is.
+   */
+  private goTo(screen: Screen): void {
+    if (this.screen === screen) return
+    this.screen = screen
+    if (screen === 'localhost' && this.localhost.ports === null && this.state.phase === 'online') {
+      this.localhostDo({ t: 'list' })
+    }
+    this.render()
   }
 
   /**
@@ -682,7 +924,11 @@ class Deck {
       this.showTerminalScreen()
       return
     }
-    this.content.replaceChildren(this.screen === 'pair' ? this.pairScreen() : this.sessionsScreen())
+    if (this.screen === 'pair') {
+      this.content.replaceChildren(this.pairScreen())
+      return
+    }
+    this.content.replaceChildren(this.screen === 'localhost' ? this.localhostScreen() : this.sessionsScreen())
   }
 
   /**
@@ -708,7 +954,11 @@ class Deck {
    * asks a question with one possible answer.
    */
   private pairScreen(): HTMLElement {
-    const screen = element('div', 'screen')
+    // `screen--form`, which caps the column far tighter than the list screens
+    // do. A six-digit field and a full-width primary button stretched across a
+    // 27" monitor is not "using the window", it is a form nobody can aim at —
+    // see the width rules at the foot of styles.css.
+    const screen = element('div', 'screen screen--form')
 
     screen.append(
       // Neutral on a fresh install and neutral by design: nothing has answered
@@ -984,6 +1234,105 @@ class Deck {
   }
 
   /**
+   * What the machine is serving, and whether it is answering.
+   *
+   * Everything on this screen is a value out of `localhost.ts`, including every
+   * sentence — the rows, the three outcomes of a check, the empty states, and the
+   * paragraph explaining why there is no button that opens a page. That is not
+   * tidiness: a wording decision written into this file is one nothing can check,
+   * and the sentence at the bottom of this screen is the one that has to stay
+   * honest as the feature changes around it.
+   *
+   * The order of the page is the order of the questions. What is listening, then
+   * one press per port to find out whether it really answers, then — last,
+   * because it is the answer to a question somebody asks after they have looked
+   * — why this client stops there.
+   */
+  private localhostScreen(): HTMLElement {
+    const screen = element('div', 'screen')
+    // Edge to edge, like the session list it sits beside: the rows carry their
+    // own gutters so a row highlights across the full width of the column.
+    screen.style.padding = '0'
+    const { ports, listing, checking, outcome } = this.localhost
+    const online = this.state.phase === 'online'
+
+    // No heading. The tab above already says Localhost, and a title repeating
+    // the control that got you here is exactly the "nothing extra" this pass was
+    // asked for. Refresh exists only while there is a socket to carry it — the
+    // standing rule against a control whose only function is to explain that it
+    // does not function — so offline there is no row here at all rather than an
+    // empty one, and the sentence under the list says how old it is instead.
+    if (online) {
+      const heading = element('div', 'localhost__head')
+      const refresh = element('button', 'button button--quiet localhost__refresh', listing ? 'Asking…' : 'Refresh')
+      refresh.type = 'button'
+      refresh.disabled = listing
+      refresh.addEventListener('click', () => this.localhostDo({ t: 'list' }))
+      heading.append(refresh)
+      screen.append(heading)
+    }
+
+    if (ports === null) {
+      screen.append(
+        element(
+          'p',
+          'empty',
+          listing
+            ? `Asking the ${this.noun} what is listening…`
+            : `The ${this.noun} has not said what it is serving yet.`,
+        ),
+      )
+    } else if (ports.length === 0) {
+      screen.append(element('p', 'empty', noPortsSentence(this.noun)))
+    } else {
+      const list = element('ul', 'ports')
+      for (const port of ports) {
+        const row = element('li', 'port')
+        const line = element('div', 'port__line')
+        line.append(element('span', 'port__label', portLabel(port)))
+
+        // One check at a time, and only with a socket. A second Check pressed
+        // while one is running is refused by the machine itself; disabling it
+        // is what stops somebody pressing a button that does nothing.
+        if (online) {
+          const here = checking?.port === port.port
+          const check = element('button', 'port__check', here ? 'Checking…' : 'Check')
+          check.type = 'button'
+          check.disabled = checking !== null
+          check.addEventListener('click', () => {
+            this.checks += 1
+            this.localhostDo({ t: 'check', port: port.port, id: `localhost-${this.checks}` })
+          })
+          line.append(check)
+        }
+        row.append(line)
+
+        // The answer sits under the port it is about. A single result line at
+        // the foot of the list would be correct and unreadable: three ports in,
+        // nobody can tell which one "it answered" is about.
+        if (outcome !== null && outcome.port === port.port) {
+          const said = element(
+            'p',
+            outcome.kind === 'answered' ? 'port__result port__result--ok' : 'port__result',
+            // Through `plain` like every other string that came off this socket:
+            // a refusal is composed on the desktop, and this end is the one that
+            // pays if that ever stops being true.
+            plain(checkSentence(outcome, this.noun)),
+          )
+          row.append(said)
+        }
+        list.append(row)
+      }
+      screen.append(list)
+
+      if (!online) screen.append(element('p', 'note localhost__note', stalePortsSentence(this.noun)))
+    }
+
+    screen.append(element('p', 'note localhost__note', cannotServeSentence(this.noun)))
+    return screen
+  }
+
+  /**
    * What this browser is holding and for how long, plus the one press that
    * changes it.
    *
@@ -1055,7 +1404,9 @@ class Deck {
     if (this.state.phase !== 'online' || !this.capabilities.includes('create')) return null
 
     const block = element('section', 'start')
-    const offer = folderOffer(this.folders, this.sessions)
+    // The platform decides how two spellings of one path are compared — NTFS
+    // does not distinguish case and a POSIX filesystem does. See `samePath`.
+    const offer = folderOffer(this.folders, this.sessions, this.hostPlatform)
     if (offer.kind === 'none') {
       block.append(element('p', 'start__note', noFoldersSentence(this.noun)))
       return block
@@ -1221,7 +1572,12 @@ class Deck {
 
     this.terminal = terminal
     this.keybar = keybar
+    this.keybarDock = dock
     this.terminalScreen = screen
+    // Before the first paint, so a laptop never sees the row appear and go. It
+    // is a fill of the frame's height either way, and a bar that flashes on for
+    // one frame reads as a rendering fault rather than as a decision.
+    this.applyKeyBar()
     terminal.setLive(this.state.phase === 'online')
   }
 
@@ -1234,6 +1590,7 @@ class Deck {
     this.keybar?.destroy()
     this.terminal?.dispose()
     this.keybar = null
+    this.keybarDock = null
     this.terminal = null
     this.terminalScreen = null
   }
@@ -1289,6 +1646,7 @@ class Deck {
     this.folders = null
     this.picking = false
     this.awaitingCreate = false
+    this.forgetLocalhost()
     this.sessions = []
     this.activity.clear()
     this.attachedId = null

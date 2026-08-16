@@ -1,6 +1,16 @@
 /**
  * Three screens and the rules for which one is showing.
  *
+ * ## Past the gate it is a tab bar, not a list
+ *
+ * The third of those three used to be a bare `NavigationStack` over the session
+ * list, and everything the app could do that was not "open a session" lived
+ * behind a `…` in its corner. It is now `DeckTabs` — Sessions, Machines,
+ * Settings — which is where the reasoning about *which* tabs and *why only
+ * three* is written down. The gate above it is unchanged: a phone that is not
+ * paired, and a first machine that has not been approved, still take the whole
+ * window, because a tab bar over a screen that has nothing to list is furniture.
+ *
  * The order is a state machine, not a preference: an unpaired phone has nothing
  * to list, and a phone waiting for a human to approve it has nothing to list
  * either — the desktop sends an empty session list with the refusal, and a list
@@ -44,15 +54,7 @@ struct RootView: View {
             } else if model.hosts.count == 1 && awaitingApproval {
                 PendingApprovalView(model: model)
             } else {
-                NavigationStack(path: $model.route) {
-                    SessionListView(model: model)
-                        .navigationDestination(for: DeckModel.Route.self) { route in
-                            switch route {
-                            case let .session(host, id):
-                                TerminalScreen(model: model, hostID: host, sessionID: id)
-                            }
-                        }
-                }
+                DeckTabs(model: model)
             }
         }
         .animation(.default, value: model.isPaired)
@@ -104,7 +106,7 @@ struct RootView: View {
              * The placeholder is the handle; see `MultiHostUITests`.
              */
             TextField("MacBook, Work PC…", text: $model.renameText)
-            Button("Cancel", role: .cancel) { model.renamingHost = false }
+            Button("Cancel", role: .cancel) { model.cancelRename() }
             Button("Save") { model.commitRename() }
                 .accessibilityIdentifier("rename.save")
         } message: {

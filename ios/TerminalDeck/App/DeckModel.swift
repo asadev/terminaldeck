@@ -52,6 +52,34 @@ final class DeckModel {
     /// The navigation stack. `RootView` binds to it, and a deep link pushes onto it.
     var route: [Route] = []
 
+    /**
+     * Which tab is on screen.
+     *
+     * On the model rather than in `@State` on the tab view, because two things
+     * that are not the tab bar have to be able to change it: a deep link, and a
+     * notification tap, both of which arrive as a session to open and must land
+     * on the tab that can show a session. A `@State` selection would leave the
+     * app on Settings with a terminal pushed onto a stack nobody is looking at.
+     */
+    var tab: Tab = .sessions
+
+    /**
+     * The three surfaces this phone genuinely has.
+     *
+     * Deliberately three, and the omissions are the design. The desktop's
+     * sidebar has ten entries; most of them are a file tree, a diff view or a
+     * search box, and a tab leading to any of those on a phone would be a tab
+     * leading to a placeholder — which is worse than not having the tab, because
+     * it is a promise the app cannot keep. What is here is what is written and
+     * proved: the sessions on a machine, the machines themselves, and the two
+     * app-wide settings that already exist behind a menu nobody finds.
+     */
+    enum Tab: Hashable {
+        case sessions
+        case machines
+        case settings
+    }
+
     /// Whether the "pair another machine" sheet is up. A flag rather than a
     /// route, because it can be raised from the switcher on any screen.
     var addingHost = false
@@ -75,16 +103,41 @@ final class DeckModel {
     var renamingHost = false
     var renameText = ""
 
+    /**
+     * Which machine the rename alert is about.
+     *
+     * Named rather than assumed to be `current`, because the Machines tab renames
+     * a row — and a row is very often not the machine on screen. Renaming the
+     * wrong computer is the sort of thing that is only noticed a week later, when
+     * somebody taps the machine labelled "Work PC" and gets their Mac.
+     */
+    private(set) var renamingHostId: String?
+
     /// Raise the rename alert for the machine on screen.
     func beginRename() {
         guard let current else { return }
-        renameText = current.label
+        beginRename(current.id)
+    }
+
+    /// Raise the rename alert for one named machine.
+    func beginRename(_ hostId: String) {
+        guard let host = host(hostId) else { return }
+        renamingHostId = hostId
+        renameText = host.label
         renamingHost = true
     }
 
-    /// Commit whatever is in `renameText` to the machine on screen.
+    /// Commit whatever is in `renameText` to the machine the alert was raised for.
     func commitRename() {
-        if let id = current?.id { rename(id, to: renameText) }
+        if let id = renamingHostId ?? current?.id { rename(id, to: renameText) }
+        renamingHostId = nil
+        renamingHost = false
+    }
+
+    /// Take the alert down without writing anything. The id goes with it, so a
+    /// later Save cannot land on a machine somebody cancelled out of.
+    func cancelRename() {
+        renamingHostId = nil
         renamingHost = false
     }
 
@@ -617,6 +670,11 @@ final class DeckModel {
         let host = hostId ?? currentHostId
         guard let host, hosts.contains(where: { $0.id == host }) else { return }
         if host != currentHostId { select(host) }
+        // The stack this route is pushed onto belongs to one tab. A session
+        // opened from a notification tap, a deep link or the Machines tab while
+        // another tab is showing would otherwise be pushed somewhere nobody is
+        // looking, which reads as the tap having done nothing.
+        tab = .sessions
         let next = Route.session(host: host, id: id)
         if route.last != next { route.append(next) }
     }
@@ -651,6 +709,11 @@ final class DeckModel {
     // MARK: - Facade over the current machine
 
     var connection: ConnectionState { current?.connection ?? .offline }
+    /// Whether the connection is worth drawing at all. See `ConnectionGrace`:
+    /// connected says nothing, and a drop says nothing for its first five
+    /// seconds. Every screen that draws a pill or a warning bar reads this
+    /// rather than `connection.isLive`.
+    var showsConnectionNotice: Bool { current?.notice.isShowing ?? false }
     var sessions: [RemoteSession] { current?.sessions ?? [] }
     var lastActivity: [String: Double] { current?.lastActivity ?? [:] }
     var ports: [LocalPort] { current?.ports ?? [] }

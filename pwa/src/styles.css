@@ -6,13 +6,16 @@
    because that file's @font-face rules point at paths relative to the renderer,
    and pulling it in whole would break this build over a font URL.
 
-   Two layout rules do most of the work here:
+   Three layout rules do most of the work here:
 
      1. The page never scrolls. It is a fixed frame with one scrolling region
         inside it, because a terminal that rubber-bands the whole document
         under a finger is unusable.
      2. The bottom of the frame is wherever the keyboard is not. See
         --dock-safe, which main.ts drives from visualViewport.
+     3. The frame is the window, at every width. What is capped is the column a
+        given screen reads in, never the frame around it — see "wider" at the
+        foot of this file, which is where that argument is made in full.
    ============================================================================ */
 
 @font-face {
@@ -73,6 +76,29 @@
 
   --font-ui: 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* How wide a screen's content may get, by what is on it.
+
+     Three numbers rather than one, because the three kinds of screen in this
+     client want different things from a wide window and giving them all the
+     same number is what produced the narrow strip down the middle of a monitor.
+
+     --column   a list. Rows are scannable well past a paragraph's width, and
+                the session list and the port list both read as "the app is
+                using the window" at this size on a laptop.
+     --form     the pair screen. A six-digit field and one primary button, and
+                `.button` is width:100% — stretched to --column that is a form
+                nobody can aim at.
+     --prose    anything somebody reads a sentence at a time. Roughly 75
+                characters, which is where a line stops being comfortable
+                whatever the container does.
+
+     The terminal is on none of this list and is deliberately uncapped: an
+     emulator's job is columns, and a terminal that leaves two thirds of a
+     monitor empty is the thing this is fixing. */
+  --column: 72rem;
+  --form: 30rem;
+  --prose: 46rem;
 
   /* Home-indicator padding, dropped to zero while the keyboard covers it. */
   --dock-safe: env(safe-area-inset-bottom, 0px);
@@ -279,6 +305,47 @@ button {
   padding-inline: 16px;
 }
 
+/* -------------------------------------------------------------------- tabs */
+
+/* Sessions | Localhost. Two places to be, not two switches.
+
+   It shares the header's fill so the two read as one band of chrome rather than
+   as a second bar bolted under the first — the separation is the space around
+   the pills, then the tint on the current one, and there is no line anywhere.
+   That is the house rule in order.
+
+   Hidden outright when there is nothing to switch to: on the pair screen, inside
+   a terminal, and against any desktop that did not advertise `localhost`. The
+   `[hidden]` rule is not optional — `display: flex` outranks the UA rule that
+   `hidden` relies on, which is the same trap `.header__back` documents. */
+.tabs {
+  display: flex;
+  flex: none;
+  gap: 4px;
+  padding: 8px 12px;
+  background: var(--bg-secondary);
+}
+.tabs[hidden] {
+  display: none;
+}
+
+.tab {
+  min-height: 34px;
+  padding: 6px 14px;
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+.tab:active {
+  background: var(--bg-hover);
+}
+
+.tab--here {
+  background: var(--bg-active);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
 /* ----------------------------------------------------------------- content */
 
 /* A flex column, not a plain block. The terminal screen is `flex: 1` and needs
@@ -293,8 +360,30 @@ button {
   -webkit-overflow-scrolling: touch;
 }
 
+/* A screen is as wide as the window allows and as wide as its content wants,
+   whichever is smaller. `width: 100%` because a flex item's max-width caps a
+   stretch rather than replacing it, and `margin-inline: auto` because an auto
+   margin in flexbox's cross axis is what absorbs the leftover and centres it. */
 .screen {
+  width: 100%;
+  max-width: var(--column);
+  margin-inline: auto;
   padding: 16px 16px calc(24px + var(--dock-safe));
+}
+
+.screen--form {
+  max-width: var(--form);
+}
+
+/* Sentences stop at a readable measure inside a wide screen. The container may
+   be a thousand pixels; a paragraph across a thousand pixels is one your eye
+   loses its place in on the way back to the left. */
+.screen__lead,
+.steps,
+.note,
+.start__note,
+.lifetime__note {
+  max-width: var(--prose);
 }
 
 .screen__lead {
@@ -651,6 +740,104 @@ input[type='text']:focus-visible {
   text-align: center;
 }
 
+/* --------------------------------------------------------------- localhost */
+
+/* What the machine is serving. `localhost.ts` explains at length what this
+   screen can honestly do from a browser tab — list the ports, and ask the
+   desktop to dial one — and why there is no button that opens the page. */
+
+.localhost__head {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 12px 16px 4px;
+}
+
+/* `.button` is display:block, width:100% and carries a top margin, because
+   every other button in this client is the primary action of its screen. This
+   one sits beside a heading. */
+.localhost__refresh {
+  width: auto;
+  margin: 0;
+  min-height: 34px;
+  padding: 6px 14px;
+  font-size: 13px;
+}
+
+/* The list is edge to edge, so the paragraphs around it carry their own gutter
+   — the same arrangement `.start` and `.lifetime` use on the session screen. The
+   last one is also the bottom of the screen, and the screen's own bottom padding
+   went with the edge-to-edge layout, so the home-indicator strip is paid for
+   here or it is not paid for at all. */
+.localhost__note {
+  margin: 16px 16px calc(16px + var(--dock-safe));
+}
+
+.ports {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.port {
+  padding: 6px 16px 10px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.port__line {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+}
+
+/* Mono, because a port number and a process name are exact and countable — the
+   same promise the folder rows make. `min-width: 0` so a long process name
+   ellipsises instead of pushing Check off the side of a phone. */
+.port__label {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.port__check {
+  flex: none;
+  min-height: 34px;
+  padding: 6px 14px;
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+.port__check:active {
+  background: var(--bg-active);
+}
+.port__check:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* The answer sits under the port it is about, not at the foot of the list —
+   three ports in, nobody can tell which one "it answered" refers to. */
+.port__result {
+  margin: 2px 0 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.45;
+  max-width: var(--prose);
+}
+
+/* The one green in this client, and it is earned: a check that answered means
+   the desktop really opened a connection to that port a second ago. Everything
+   else on this screen is a refusal or a silence, and those stay muted. */
+.port__result--ok {
+  color: var(--status-completed);
+}
+
 /* --------------------------------------------------------------- terminal */
 
 .terminal-screen {
@@ -696,6 +883,22 @@ input[type='text']:focus-visible {
   padding-bottom: var(--dock-safe);
 }
 
+/* Gone where there is a real keyboard, and gone completely.
+
+   `physical-keyboard.ts` decides — from `(hover: hover) and (pointer: fine)`,
+   which is the browser reporting the hardware attached right now rather than a
+   user-agent string guessing at it — and main.ts sets `hidden` from the answer,
+   live, because an iPad leaves its keyboard mid-session.
+
+   Not shrunk, not floated, not tucked into a corner: eleven buttons duplicating
+   eleven keys under somebody's fingers are worth zero pixels, and the space they
+   were taking is four more rows of terminal. The rule has to exist because
+   `flex: none` above outranks the UA rule `hidden` relies on — the same trap
+   `.header__back` documents, which shipped once already. */
+.keybar-dock[hidden] {
+  display: none;
+}
+
 .keybar {
   display: flex;
   gap: 3px;
@@ -735,17 +938,48 @@ input[type='text']:focus-visible {
 
 /* ------------------------------------------------------------------ wider */
 
-/* A tablet or a desktop browser: the same layout, centred, with room for the
-   key bar to stop stretching each key across a third of the screen. */
-@media (min-width: 700px) {
-  #app {
-    max-width: 900px;
-    margin: 0 auto;
-    border-left: 1px solid var(--border-subtle);
-    border-right: 1px solid var(--border-subtle);
-  }
+/* A tablet or a desktop browser.
 
+   ## What was here, and why it was wrong
+
+   `#app { max-width: 900px; margin: 0 auto }`, with a hairline down each side.
+   It is the obvious way to make a phone layout survive a monitor, and on this
+   client it produced the complaint that started this: "this is not full page …
+   and it's not terminal experience as well". It was right about both. A frame
+   capped at 900px puts a *terminal* in a strip down the middle of a 27" screen
+   with grey either side, and 900px is about 110 columns — so the emulator was
+   throwing away most of the window it had been given, on the one screen in this
+   product whose entire job is columns.
+
+   ## What replaces it
+
+   Nothing caps the frame. The frame is the window at every width, and the cap
+   moved onto the *content of a screen*, per kind — `--column` for a list,
+   `--form` for the pair screen, `--prose` for anything read a sentence at a
+   time. The terminal is capped by nothing at all, which is the point.
+
+   This is responsive rather than "desktop mode": the same rules run on a phone,
+   where every one of those caps is larger than the viewport and therefore does
+   nothing. There is no width at which the layout changes shape — only widths at
+   which a screen stops growing, and a terminal that never does.
+
+   ## The key bar is not here
+
+   It was, in the sense that this breakpoint was the closest thing to "is this a
+   computer". It is not that question and never was: a 1024px viewport is an iPad
+   in landscape with no keys, and a 780px window on a MacBook has a full one.
+   `physical-keyboard.ts` asks about the hardware instead. What stays here is the
+   part that really is about width — eleven keys stretched across a wide screen
+   are eleven very wide keys. */
+@media (min-width: 700px) {
   .keybar__key {
     flex: 0 0 64px;
+  }
+
+  /* Breathing room the phone cannot spare. The left inset was always 8px for
+     xterm's own gutter; the right one is new, and without it the last column of
+     output sits against the edge of the window. */
+  .terminal {
+    padding: 6px 12px 6px 12px;
   }
 }

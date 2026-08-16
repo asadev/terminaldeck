@@ -113,19 +113,10 @@ final class InspectUITests: XCTestCase {
         "A host and a dev server on \(port) are needed. Start them as described at the top of this "
         + "file and pass TEST_RUNNER_TD_CONTROL."
 
-    /// Tap Forget until the pairing screen is what is on screen.
+    /// Tap Forget until the pairing screen is what is on screen. The item lives
+    /// on the Machines tab now — see `TabNavigation.swift`.
     private func forgetEverything() {
-        for _ in 0 ..< 6 {
-            guard app.buttons["sessions.more"].waitForExistence(timeout: 3) else { return }
-            app.buttons["sessions.more"].tap()
-            let forget = app.buttons["sessions.unpair"]
-            guard forget.waitForExistence(timeout: 3) else {
-                app.tap()
-                return
-            }
-            forget.tap()
-            _ = app.textFields["pairing.field"].waitForExistence(timeout: 3)
-        }
+        app.forgetEveryMachine()
     }
 
     /// Mint a code on the host, now. `/pair` calls the pairing desk's own

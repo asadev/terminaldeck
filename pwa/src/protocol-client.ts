@@ -73,13 +73,22 @@ import {
   type ClientMessage,
   type CredentialOperation,
   type DeviceDescriptor,
+  type LocalPort,
   type ProtocolErrorCode,
   type RemoteSession,
   type ServerMessage,
 } from '../../src/main/remote/protocol'
 
-export type { ClientMessage, CredentialOperation, DeviceDescriptor, ProtocolErrorCode, RemoteSession, ServerMessage }
-export { PROTOCOL_VERSION }
+export type {
+  ClientMessage,
+  CredentialOperation,
+  DeviceDescriptor,
+  LocalPort,
+  ProtocolErrorCode,
+  RemoteSession,
+  ServerMessage,
+}
+export { CAPABILITY, PROTOCOL_VERSION }
 
 /**
  * What this client tells a desktop it can do, in `hello.capabilities`.
@@ -252,6 +261,127 @@ function credentialRequest(parsed: unknown): DecodeResult | null {
 }
 
 /**
+ * The three `localhost` frames, which `parseServerFrame` does not read either.
+ *
+ * ## Why this is a second exception and not the start of a habit
+ *
+ * The argument is `credentialRequest`'s, word for word, applied to a different
+ * capability. The shared parser was written for a desktop acting as the **guest**
+ * of another desktop; that guest speaks protocol v1 and negotiates nothing, so a
+ * frame it has never heard of is genuinely one it never asked for, and refusing
+ * unknown types is right *for it*. This client negotiates. It reads
+ * `welcome.capabilities`, and it sends `{"t":"ports"}` only after seeing
+ * `localhost` in there — which makes `ports`, `tunnel.opened` and `tunnel.closed`
+ * frames it has agreed to receive, exactly as `credential` in `hello.capabilities`
+ * makes `credential.request` one.
+ *
+ * The right home for all six branches is `parseServerFrame` itself, the day the
+ * guest also tunnels. Moving them there deletes this function and changes
+ * nothing else.
+ *
+ * ## Why there are three and not seven
+ *
+ * `net.data`, `net.ack` and `net.close` are deliberately absent, and their
+ * absence is a statement about what this client does rather than an oversight.
+ * A byte stream inside a tunnel begins with a `net.open` that this client never
+ * sends — see `localhost.ts` for why a browser tab cannot host one — so
+ * `openStream` in the desktop's `tunnel.ts` is never reached and no `net.*`
+ * frame can originate. Reading frames nobody can send would be a parser for a
+ * conversation this client is not in.
+ *
+ * Null means "not one of mine", not "bad frame": the caller then delegates to
+ * the shared parser, which is what every other message type still goes through.
+ */
+function localhostFrame(parsed: unknown): DecodeResult | null {
+  if (typeof parsed !== 'object' || parsed === null) return null
+  const frame = parsed as Record<string, unknown>
+
+  if (frame.t === 'ports') {
+    const rows = frame.ports
+    // A frame with no list at all is refused rather than read as "nothing is
+    // listening" — the same argument the shared parser makes about `folders`.
+    // An empty machine and a malformed message are different facts, and the
+    // screen says different things about them.
+    if (!Array.isArray(rows)) return { ok: false, reason: 'ports without a list' }
+    const ports: LocalPort[] = []
+    for (const row of rows) {
+      // One bad row does not discard the list, for the same reason `parseSession`
+      // does not: a page showing nine of ten ports is useful, and one showing
+      // none because the tenth had a null process name is not.
+      const port = plausiblePort(row)
+      if (port !== null) ports.push(port)
+    }
+    return { ok: true, message: { t: 'ports', ports } }
+  }
+
+  if (frame.t === 'tunnel.opened') {
+    const id = typeof frame.id === 'string' ? frame.id : ''
+    const port = wholePort(frame.port)
+    if (id === '' || port === null) return { ok: false, reason: 'incomplete tunnel.opened' }
+    return { ok: true, message: { t: 'tunnel.opened', id, port } }
+  }
+
+  if (frame.t === 'tunnel.closed') {
+    const id = typeof frame.id === 'string' ? frame.id : ''
+    if (id === '') return { ok: false, reason: 'tunnel.closed without an id' }
+    // The sentence is the whole payload of this frame — it is the desktop
+    // explaining a refusal in words a person reads — so an absent one is
+    // accepted as the empty string and the screen supplies its own. Bounded
+    // because it lands on a screen; `plain` in main.ts strips control bytes out
+    // of it, like every other string that came off this socket.
+    const said = typeof frame.message === 'string' ? frame.message : ''
+    return { ok: true, message: { t: 'tunnel.closed', id, message: said.slice(0, MAX_REFUSAL_CHARS) } }
+  }
+
+  return null
+}
+
+/**
+ * How much of a desktop's refusal is worth putting on a phone.
+ *
+ * The real ones are one sentence — `tunnel.ts` writes them — and the cap is here
+ * so that a machine having a bad day cannot push a wall of text into a card
+ * somebody is trying to read. Not a security bound; `MAX_MESSAGE_BYTES` is
+ * already applied to the whole frame before anything here runs.
+ */
+const MAX_REFUSAL_CHARS = 300
+
+/** A port number as the wire may carry one: a whole number in the TCP range. */
+function wholePort(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isInteger(value)) return null
+  return value >= 1 && value <= 65535 ? value : null
+}
+
+/**
+ * One row of the port list, or null.
+ *
+ * `guessed` is the desktop's own word for "the process name is unknown" — see
+ * `dev-ports.ts`, which sets `process: 'unknown', guessed: true` for a port
+ * whose owner it could not name. So a row that arrives with an implausible name
+ * is folded into exactly that shape rather than being dropped or truncated: the
+ * port is real, it is answering, and the screen can say so honestly without
+ * repeating a string that is not a process name.
+ */
+function plausiblePort(value: unknown): LocalPort | null {
+  if (typeof value !== 'object' || value === null) return null
+  const row = value as Record<string, unknown>
+  const port = wholePort(row.port)
+  if (port === null) return null
+  const named = typeof row.process === 'string' ? row.process : ''
+  const usable = named !== '' && named.length <= MAX_PROCESS_NAME_CHARS
+  return {
+    port,
+    process: usable ? named : 'unknown',
+    // True whenever the desktop said so *or* whenever this end could not use
+    // the name it sent. Either way the honest claim is the same one.
+    guessed: row.guessed === true || !usable,
+  }
+}
+
+/** A command name, not a command line. `lsof` and `tasklist` both answer short. */
+const MAX_PROCESS_NAME_CHARS = 64
+
+/**
  * The only door inbound text comes through, mirroring `parseClientMessage`.
  *
  * One parse, then branches. The three readers below all want the same decoded
@@ -279,6 +409,8 @@ export function decodeServerMessage(raw: string): DecodeResult {
 
   const credential = credentialRequest(frame)
   if (credential !== null) return credential
+  const localhost = localhostFrame(frame)
+  if (localhost !== null) return localhost
   const parsed = parseServerFrame(frame)
   if (!parsed.ok) return parsed
   const message = parsed.message

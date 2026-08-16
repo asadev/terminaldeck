@@ -158,6 +158,106 @@ final class TerminalGesturesTests: XCTestCase {
         XCTAssertTrue(view.gestureRecognizerShouldBegin(view.panGestureRecognizer))
     }
 
+    // MARK: - The relationships, asked one at a time
+
+    /**
+     * The scroll and the selection gestures are declared **exclusive**.
+     *
+     * This is the hole `gestureRecognizerShouldBegin` cannot close. A recogniser
+     * that has already begun is never asked whether it may begin, so the refusals
+     * above only cover the case where the scroll has not started yet — and the
+     * other case is reachable: the long press allows ten points of movement and a
+     * scroll view's slop is about the same, so a finger that drifts nine points
+     * and then holds still can have the scroll running when the press fires. With
+     * a blanket "yes, run together" both then own the finger and the selection
+     * grows while the content slides under it.
+     *
+     * Asked of the delegate directly, because the delegate is where the answer
+     * is and a gesture cannot be performed in a unit test.
+     */
+    func testTheScrollAndTheSelectionGesturesMayNotRunTogether() throws {
+        let view = terminal()
+        let gestures = TerminalGestures(terminal: view)
+        let scroll = view.panGestureRecognizer
+
+        let press = try XCTUnwrap(ours(UILongPressGestureRecognizer.self, on: view),
+                                  "the long press that selects")
+        let drag = try XCTUnwrap(ours(UIPanGestureRecognizer.self, on: view),
+                                 "the pan that adjusts a selection")
+
+        XCTAssertFalse(gestures.gestureRecognizer(press, shouldRecognizeSimultaneouslyWith: scroll),
+                       "holding still mid-scroll must not start selecting under the moving text")
+        XCTAssertFalse(gestures.gestureRecognizer(scroll, shouldRecognizeSimultaneouslyWith: press),
+                       "and the question has to be answered the same way whichever way round it is asked")
+        XCTAssertFalse(gestures.gestureRecognizer(drag, shouldRecognizeSimultaneouslyWith: scroll))
+    }
+
+    /**
+     * …but the tap and the pinch still may.
+     *
+     * The tap exists only to notice that a tap happened — it does not cancel
+     * touches, and SwiftTerm's own tap is what dismisses a selection and raises
+     * the keyboard — and the pinch is two fingers, which the scroll can no longer
+     * begin with. Denying either would be fixing a problem neither has.
+     */
+    func testTheTapAndThePinchStillRunAlongsideTheScroll() throws {
+        let view = terminal()
+        let gestures = TerminalGestures(terminal: view)
+        let scroll = view.panGestureRecognizer
+
+        let tap = try XCTUnwrap(ours(UITapGestureRecognizer.self, on: view))
+        let pinch = try XCTUnwrap(ours(UIPinchGestureRecognizer.self, on: view))
+
+        XCTAssertTrue(gestures.gestureRecognizer(tap, shouldRecognizeSimultaneouslyWith: scroll))
+        XCTAssertTrue(gestures.gestureRecognizer(pinch, shouldRecognizeSimultaneouslyWith: scroll))
+    }
+
+    /**
+     * The scroll waits for the selection drag to fail.
+     *
+     * Both are pans with the same threshold, so they reach the moment of decision
+     * on the same touch event and the order UIKit asks them in is undefined. Left
+     * to chance, dragging the end of a selection scrolls the terminal about half
+     * the time. The failure requirement makes it a rule; it costs nothing in the
+     * normal case because the selection drag refuses itself in that same event
+     * unless the finger came down on a selection's end.
+     */
+    func testTheScrollWaitsForTheSelectionDragToSayNo() throws {
+        let view = terminal()
+        let gestures = TerminalGestures(terminal: view)
+        let scroll = view.panGestureRecognizer
+        let drag = try XCTUnwrap(ours(UIPanGestureRecognizer.self, on: view))
+        let press = try XCTUnwrap(ours(UILongPressGestureRecognizer.self, on: view))
+
+        XCTAssertTrue(gestures.gestureRecognizer(drag, shouldBeRequiredToFailBy: scroll))
+        // And nothing else claims that relationship — a scroll that had to wait
+        // for the long press would stall for half a second before every scroll,
+        // which is the exact opposite of the point.
+        XCTAssertFalse(gestures.gestureRecognizer(press, shouldBeRequiredToFailBy: scroll))
+        XCTAssertFalse(gestures.gestureRecognizer(drag, shouldBeRequiredToFailBy: press))
+    }
+
+    /**
+     * One finger scrolls, and only one.
+     *
+     * `UIScrollView` will drive its pan with any number of fingers, so without
+     * this a two-finger pinch also slides the scrollback out from under the text
+     * it is resizing. Asad asked for the one-finger rule twice; this is the
+     * literal reading of it.
+     */
+    func testOnlyOneFingerScrolls() {
+        let view = terminal()
+        _ = TerminalGestures(terminal: view)
+        XCTAssertEqual(view.panGestureRecognizer.maximumNumberOfTouches, 1)
+    }
+
+    /// This app's recogniser of a given kind, which is the one it claimed.
+    /// SwiftTerm attaches its own of the same classes, so a query by class alone
+    /// finds the wrong one about half the time.
+    private func ours<T: UIGestureRecognizer>(_ kind: T.Type, on view: DeckTerminalView) -> T? {
+        (view.gestureRecognizers ?? []).compactMap { $0 as? T }.first { view.owns($0) }
+    }
+
     /// Installing the gestures adds this app's three and nothing else — and, in
     /// particular, does not disturb the taps SwiftTerm uses to dismiss a
     /// selection and raise the keyboard.

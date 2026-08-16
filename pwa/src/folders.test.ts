@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { PROTOCOL_VERSION, type RemoteSession, type ServerMessage } from './protocol-client'
-import { folderOffer, foldersAfter, noFoldersSentence, pickerRows } from './folders'
+import { folderOffer, foldersAfter, noFoldersSentence, pickerRows, samePath } from './folders'
 
 /**
  * The one-folder bug, asked from the client side.
@@ -96,6 +96,85 @@ describe('what the picker offers', () => {
   it('does not list one folder twice because two sessions are in it', () => {
     const twice = [session('a', '/Users/asad/Projects/api'), session('b', '/Users/asad/Projects/api')]
     expect(folderOffer(null, twice)).toEqual({ kind: 'unsaid', folders: ['/Users/asad/Projects/api'] })
+  })
+})
+
+/**
+ * The duplicate the screen recording caught, from the wire inwards.
+ *
+ * The array in the first test is not invented. It is what
+ * `foldersForDevice(grants, id, () => [...projects, ...sessionCwds], home)`
+ * returns for two open projects that each have a session running in them, which
+ * is what `src/main/host-core.ts` passes and what his machine was doing — run
+ * against the real function, that input produces exactly these four strings in
+ * exactly this order. The header explains why the merge belongs here as well as
+ * on the host: this client is a web page that updates on reload and talks to
+ * desktops that were installed months ago.
+ */
+describe('a folder the desktop sent twice', () => {
+  const asHeSawIt = [
+    '/home/asad/ClaudeImza',
+    '/home/asad/ClaudeImzacrm',
+    '/home/asad/ClaudeImza',
+    '/home/asad/ClaudeImzacrm',
+  ]
+
+  it('draws two rows for the four the host sent, in the order it sent them', () => {
+    expect(pickerRows(folderOffer(asHeSawIt, []), 'PC').map((row) => row.folder)).toEqual([
+      '/home/asad/ClaudeImza',
+      '/home/asad/ClaudeImzacrm',
+    ])
+  })
+
+  it('collapses a repeated single folder back to the no-choice form', () => {
+    // Worth its own case: one folder listed twice used to draw a picker, and a
+    // picker with one destination in it is the thing `startBlock` deliberately
+    // does not draw. The duplicate did not just add a row, it changed the shape
+    // of the screen.
+    const offer = folderOffer(['/home/asad/ClaudeImza', '/home/asad/ClaudeImza'], [])
+    expect(offer).toEqual({ kind: 'granted', folders: ['/home/asad/ClaudeImza'] })
+    expect(pickerRows(offer, 'PC')).toHaveLength(1)
+  })
+
+  it('merges a trailing separator, because the two sources spell it differently', () => {
+    // A project stored with a trailing slash and a session `cwd` without one are
+    // one directory; the host's own `sameFolder` says so, and this is the seam
+    // where the desktop's two lists meet.
+    const offer = folderOffer(['/home/asad/ClaudeImza/', '/home/asad/ClaudeImza'], [])
+    expect(offer).toEqual({ kind: 'granted', folders: ['/home/asad/ClaudeImza/'] })
+  })
+
+  it('merges case on Windows and keeps it everywhere else', () => {
+    const spellings = ['C:\\Users\\Asad\\proj', 'c:\\users\\asad\\proj']
+    expect(folderOffer(spellings, [], 'windows')).toEqual({ kind: 'granted', folders: ['C:\\Users\\Asad\\proj'] })
+    // A POSIX filesystem really does distinguish these, so merging them would
+    // hide a folder somebody could have started in. Under-merge, never over.
+    expect(folderOffer(['/home/asad/Proj', '/home/asad/proj'], [], 'linux')).toEqual({
+      kind: 'granted',
+      folders: ['/home/asad/Proj', '/home/asad/proj'],
+    })
+  })
+
+  it('compares exactly for a desktop that never said what it is', () => {
+    // An absent `hostPlatform` is a desktop older than the field, not a Windows
+    // one. Folding case on a guess would merge two real folders on Linux.
+    expect(samePath('/home/asad/Proj', '/home/asad/proj', 'unknown')).toBe(false)
+    expect(samePath('/home/asad/proj/', '/home/asad/proj', 'unknown')).toBe(true)
+  })
+
+  it('leaves a root path alone rather than trimming it to nothing', () => {
+    expect(samePath('/', '/', 'linux')).toBe(true)
+    expect(samePath('/', '/home', 'linux')).toBe(false)
+  })
+
+  it('does not merge two folders that merely share a prefix', () => {
+    // The pair in the recording is the reason this is worth an assertion:
+    // `ClaudeImza` is a prefix of `ClaudeImzacrm`, so a rule written with
+    // `startsWith` instead of equality would have collapsed them into one and
+    // taken a real project off the picker.
+    expect(samePath('/home/asad/ClaudeImza', '/home/asad/ClaudeImzacrm', 'linux')).toBe(false)
+    expect(folderOffer(asHeSawIt, [], 'linux').kind).toBe('granted')
+    expect(pickerRows(folderOffer(asHeSawIt, [], 'linux'), 'machine')).toHaveLength(2)
   })
 })
 

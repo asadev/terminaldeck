@@ -79,6 +79,10 @@ struct TerminalScreen: View {
     private var bridge: TerminalBridge { host?.bridge(for: sessionID) ?? model.bridge(for: sessionID) }
     private var session: RemoteSession? { host?.session(sessionID) }
     private var connection: ConnectionState { host?.connection ?? .offline }
+    /// Read from the machine rather than computed here, so this screen and the
+    /// session list under it cannot disagree about whether the connection is
+    /// worth mentioning. See `HostLink.notice`.
+    private var showsConnectionNotice: Bool { host?.notice.isShowing ?? false }
 
     var body: some View {
         ZStack {
@@ -273,10 +277,22 @@ struct TerminalScreen: View {
         }
         .safeAreaInset(edge: .top, spacing: 0) {
             VStack(spacing: 0) {
-                if !connection.isLive {
-                    // The one thing this screen must never do is look connected when
-                    // it is not. The banner is the honest half of that; `send`
-                    // refusing rather than buffering is the other.
+                if showsConnectionNotice {
+                    /*
+                     * The one thing this screen must never do is look connected
+                     * when it is not. The banner is the honest half of that;
+                     * `send` refusing rather than buffering is the other, and
+                     * *that* half is unconditional — it is keyed off
+                     * `connection.isLive` and always has been.
+                     *
+                     * What the grace period changes is only whether the bar is
+                     * drawn, and the reason it is safe to leave a two-second drop
+                     * undrawn here is the same reason it is safe on the list: the
+                     * keys stop working either way, and a bar that flashes on
+                     * every reconnect teaches people to ignore it — which is
+                     * worse than not having it at the moment it matters. See
+                     * `ConnectionGrace`.
+                     */
                     Banner(text: connection.detail, tone: .warning)
                 }
                 if let upload = host?.upload {

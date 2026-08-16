@@ -78,19 +78,11 @@ final class MultiHostUITests: XCTestCase {
         forgetEverything()
     }
 
-    /// Tap Forget until the pairing screen is what is on screen.
+    /// Tap Forget until the pairing screen is what is on screen. The item is on
+    /// the Machines tab now rather than in the list's overflow menu — see
+    /// `TabNavigation.swift`.
     private func forgetEverything() {
-        for _ in 0 ..< 6 {
-            guard app.buttons["sessions.more"].waitForExistence(timeout: 3) else { return }
-            app.buttons["sessions.more"].tap()
-            let forget = app.buttons["sessions.unpair"]
-            guard forget.waitForExistence(timeout: 3) else {
-                dismissMenu()
-                return
-            }
-            forget.tap()
-            _ = app.textFields["pairing.field"].waitForExistence(timeout: 3)
-        }
+        app.forgetEveryMachine()
     }
 
     private static let notRunning =
@@ -318,9 +310,14 @@ final class MultiHostUITests: XCTestCase {
         try pair(freshCode(from: controlA))
         try waitForConnected(timeout: 60)
 
-        app.buttons["sessions.more"].tap()
-        let rename = app.buttons["sessions.rename"]
-        XCTAssertTrue(rename.waitForExistence(timeout: 10), "the overflow menu should offer Rename")
+        XCTAssertTrue(app.openMachinesTab(), "the Machines tab should be reachable")
+        let menu = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH 'machine.more.'"))
+            .firstMatch
+        XCTAssertTrue(menu.waitForExistence(timeout: 10), "every machine row carries its own menu")
+        menu.tap()
+        let rename = app.buttons["machine.rename"]
+        XCTAssertTrue(rename.waitForExistence(timeout: 10), "the row menu should offer Rename")
         rename.tap()
 
         // Scoped to the alert, not to the app.
@@ -400,13 +397,14 @@ final class MultiHostUITests: XCTestCase {
         capture("zz-code-submitted")
     }
 
-    /// The second machine and every one after it, through the sheet.
+    /// The second machine and every one after it, through the sheet the Machines
+    /// tab raises.
     private func pairAnother(_ code: String) throws {
-        app.buttons["sessions.more"].tap()
-        let add = app.buttons["sessions.addHost"]
-        XCTAssertTrue(add.waitForExistence(timeout: 10))
-        add.tap()
+        XCTAssertTrue(app.beginPairingAnotherMachine(),
+                      "Machines should offer Pair another machine, and it should open the sheet")
         try pair(code)
+        // Back to the sessions, which is where the rest of this suite looks.
+        app.openSessionsTab()
     }
 
     /// Start a session on the machine on screen and hand back its id, read off

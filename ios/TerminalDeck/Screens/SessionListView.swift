@@ -1,5 +1,10 @@
 /**
- * The root screen: what is running on the Mac.
+ * The Sessions tab: what is running on the Mac.
+ *
+ * It used to be the whole app, and the `…` in its corner used to be the only way
+ * to reach anything that was not a session. It is one of three tabs now and that
+ * menu holds two items — see `DeckTabs.swift` for where the other seven went and
+ * why there are three tabs rather than five.
  *
  * ## Which buttons exist is decided by the wire, not by the design
  *
@@ -16,11 +21,20 @@
  * offers what will work rather than what this phone could see. A machine that
  * granted nothing gets no button at all and a sentence saying where to fix it.
  *
- * ## The connection pill is the most important thing on this screen
+ * ## The connection pill is the most important thing on this screen — and most
+ * of the time it is not on it
  *
  * Every other element assumes the list is current. When it is not, the pill is
  * the only thing saying so, and it says which of the six ways it is not current —
  * connecting, waiting, pending approval, offline — rather than going grey.
+ *
+ * What changed is *when* it is allowed to say that. A connected phone shows
+ * nothing, a launch shows nothing while it dials, and a drop shows nothing for
+ * its first five seconds; only an outage that is actually in the person's way
+ * gets a pill and a bar. `ConnectionGrace` is the rule and the reasoning, and it
+ * is his, in his words. The three places this screen used to key off
+ * `connection.isLive` — the pill, the warning bar and the empty state — all read
+ * `showsConnectionNotice` now, so they cannot drift apart.
  *
  * ## Space, not lines
  *
@@ -30,6 +44,9 @@
  */
 
 import SwiftUI
+// For `ConnectionAccessibility` at the foot of this file, which is a `UIView`
+// on purpose — see `ConnectionPill`.
+import UIKit
 
 struct SessionListView: View {
     let model: DeckModel
@@ -72,6 +89,25 @@ struct SessionListView: View {
             ToolbarItem(placement: .principal) { HostSwitcher(model: model) }
             ToolbarItemGroup(placement: .topBarTrailing) {
                 if model.canStartSomewhere { newSession }
+                /*
+                 * Two items, and it used to be nine.
+                 *
+                 * Everything that was about a *machine* — pair another, rename,
+                 * forget, which endpoint this is — is on the Machines tab, and
+                 * everything that was about the *app* — the GitHub account, the
+                 * alert switches — is on Settings. Neither is repeated here.
+                 * Asad, on the desktop's equivalent in the same recording:
+                 * *"options is having all of the things that we already have
+                 * here and there. So let's keep everything separate rather than
+                 * having everything on one page."*
+                 *
+                 * What is left is the two things that act on *this list*: ask the
+                 * machine for it again, and stop waiting out a backoff. Exactly
+                 * one of them is ever enabled, which is why they are two items
+                 * rather than one — a single "Refresh" that silently meant
+                 * "reconnect" when the socket was down would be a button doing a
+                 * different thing from the one it names.
+                 */
                 Menu {
                     Button {
                         model.refresh()
@@ -79,6 +115,7 @@ struct SessionListView: View {
                         Label("Refresh", systemImage: "arrow.clockwise")
                     }
                     .disabled(!model.connection.isLive)
+                    .accessibilityIdentifier("sessions.refresh")
 
                     Button {
                         model.resume()
@@ -86,67 +123,7 @@ struct SessionListView: View {
                         Label("Reconnect now", systemImage: "bolt.horizontal")
                     }
                     .disabled(model.connection.isLive)
-
-                    Button {
-                        model.addingHost = true
-                    } label: {
-                        Label("Pair another machine", systemImage: "plus.rectangle.on.rectangle")
-                    }
-                    .accessibilityIdentifier("sessions.addHost")
-
-                    Button {
-                        /*
-                         * Deferred by one turn of the run loop.
-                         *
-                         * Raised in the frame the menu is dismissing in, the
-                         * request arrives while a presentation is already in
-                         * flight and is dropped, and Rename reads as a dead menu
-                         * item. "Pair another machine" two rows up does not have
-                         * the problem because a `.sheet` is queued rather than
-                         * dropped.
-                         *
-                         * The alert itself is on `RootView`, not here — see
-                         * `DeckModel.renamingHost`.
-                         */
-                        DispatchQueue.main.async { model.beginRename() }
-                    } label: {
-                        Label("Rename this machine", systemImage: "pencil")
-                    }
-                    .disabled(model.current == nil)
-                    .accessibilityIdentifier("sessions.rename")
-
-                    // In its own section because these are the items here that
-                    // are not about the machine on screen: there is one GitHub
-                    // account on this phone and it answers for every machine,
-                    // and there is one set of alerts for every machine too.
-                    Section {
-                        Button {
-                            DispatchQueue.main.async { model.showingAlerts = true }
-                        } label: {
-                            Label("Alerts", systemImage: "bell")
-                        }
-                        .accessibilityIdentifier("sessions.alerts")
-
-                        Button {
-                            DispatchQueue.main.async { model.showingGitHub = true }
-                        } label: {
-                            Label(gitHubLabel, systemImage: "person.crop.circle")
-                        }
-                        .accessibilityIdentifier("sessions.github")
-                    }
-
-                    if let endpoint = model.endpointSummary {
-                        Section("Paired with") { Text(endpoint) }
-                    }
-
-                    Button(role: .destructive) {
-                        model.unpairCurrent()
-                    } label: {
-                        // Named, because with several machines paired "unpair
-                        // this device" does not say which one is about to go.
-                        Label("Forget \(model.current?.label ?? "this machine")", systemImage: "minus.circle")
-                    }
-                    .accessibilityIdentifier("sessions.unpair")
+                    .accessibilityIdentifier("sessions.reconnect")
                 } label: {
                     Image(systemName: "ellipsis.circle")
                 }
@@ -222,14 +199,6 @@ struct SessionListView: View {
         }
     }
 
-    /// The account, when there is one, so the menu answers "am I connected"
-    /// without being opened. A row that only ever read "GitHub account" would
-    /// make somebody tap it to find out nothing had changed.
-    private var gitHubLabel: String {
-        guard let account = model.gitHubAccount else { return "Connect GitHub" }
-        return "GitHub: @\(account.login)"
-    }
-
     /// The folder's own name. A full path does not fit in a menu row and the
     /// last component is what the desktop titles the session after anyway.
     private func folderName(_ path: String) -> String {
@@ -240,7 +209,17 @@ struct SessionListView: View {
     @ViewBuilder
     private var banners: some View {
         VStack(spacing: 0) {
-            if !model.connection.isLive {
+            /*
+             * The yellow bar, and the rule about when it is allowed to appear.
+             *
+             * `showsConnectionNotice` rather than `!connection.isLive`, which is
+             * what this was and which is why the app opened onto a warning every
+             * single time: the first frame of a launch is `.offline`, the second
+             * is `.connecting`, and both of them drew this. `ConnectionGrace`
+             * has the whole rule; the short version is that a connection is only
+             * worth a bar once it has been in the way for five seconds.
+             */
+            if model.showsConnectionNotice {
                 Banner(text: model.connection.detail, tone: .warning)
             }
             if let error = model.lastError {
@@ -431,8 +410,29 @@ struct SessionListView: View {
      * own action, because "no sessions" said over a dead socket is a lie by
      * omission and "no sessions" said over a machine that granted this phone no
      * folders sends someone looking for a bug that is a setting.
+     *
+     * ## And a fourth, which says nothing at all
+     *
+     * The first seconds of a launch, before there is an answer. The three
+     * sentences below are all wrong there — "No sessions" is a claim nobody has
+     * checked, and "Connecting" is the yellow-thing complaint written larger —
+     * so what is drawn is a spinner. Asad: *"otherwise it will just load, so they
+     * will not even feel that it takes time for connecting."* Once the grace
+     * period is over the honest sentence takes over; see `ConnectionGrace`.
      */
+    @ViewBuilder
     private var empty: some View {
+        if !model.connection.isLive && !model.showsConnectionNotice {
+            ProgressView()
+                .controlSize(.large)
+                .tint(Theme.secondary)
+                .accessibilityIdentifier("sessions.loading")
+        } else {
+            settledEmpty
+        }
+    }
+
+    private var settledEmpty: some View {
         ContentUnavailableView {
             Label(emptyTitle, systemImage: emptyIcon)
         } description: {
@@ -775,12 +775,11 @@ private struct HostSwitcher: View {
                         .accessibilityIdentifier("host.\(host.id)")
                     }
                 }
-                Button {
-                    model.addingHost = true
-                } label: {
-                    Label("Pair another machine", systemImage: "plus")
-                }
-                .accessibilityIdentifier("host.add")
+                // No "Pair another machine" here any more. This menu answers
+                // *which machine am I typing into*, which is a question worth
+                // one tap from the session list; adding one is management, and
+                // management is the Machines tab. The item was in both places
+                // and that is exactly the shape he objected to.
             } label: {
                 VStack(spacing: 1) {
                     HStack(spacing: 4) {
@@ -792,7 +791,7 @@ private struct HostSwitcher: View {
                             .font(.system(size: 9, weight: .semibold))
                             .foregroundStyle(Theme.faint)
                     }
-                    ConnectionPill(state: model.connection)
+                    ConnectionPill(state: model.connection, showing: model.showsConnectionNotice)
                 }
             }
             .accessibilityIdentifier("host.switcher")
@@ -802,7 +801,7 @@ private struct HostSwitcher: View {
                 Text(Brand.name)
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(Theme.primary)
-                ConnectionPill(state: model.connection)
+                ConnectionPill(state: model.connection, showing: model.showsConnectionNotice)
             }
         }
     }
@@ -829,17 +828,76 @@ private struct HostSwitcher: View {
 /* -------------------------------------------------------------------------- */
 
 /**
- * The connection, in three words and a colour.
+ * The connection, in three words and a colour — when there is anything worth
+ * saying at all.
  *
  * Green only for `online`. Everything else is amber or grey and says what it is,
  * because the failure this whole app has to avoid is looking connected when it
  * is not — a person who trusts a green dot will type Ctrl+C into a dead socket
  * and walk away believing the job stopped.
+ *
+ * ## Most of the time it draws nothing
+ *
+ * `showing` comes from `ConnectionGrace`, which holds the whole rule and the
+ * reasoning: a connected phone says nothing, a drop says nothing for its first
+ * five seconds, and a launch says nothing while it dials. What is left is the
+ * case where the connection really is the thing in the person's way.
+ *
+ * ## Why there is still an element here when nothing is drawn
+ *
+ * Because *not drawing something* is a decision about a screen, not about the
+ * fact. The connection state is still true, still worth answering when asked,
+ * and VoiceOver asking "what is this app's connection" is a person asking a
+ * question the screen has deliberately stopped shouting — which is exactly the
+ * case an accessibility label exists for. So the element is always present and
+ * always carries the real state; only its ink is conditional.
+ *
+ * That it also keeps `connection.pill` queryable for the UI suite is a
+ * consequence rather than the reason, but it is a welcome one: nine of those
+ * tests wait on this label to know a real desktop is answering.
+ *
+ * ## And why that element is a UIKit view rather than a SwiftUI modifier
+ *
+ * Because a claim ten tests depend on has to be checkable, and the SwiftUI
+ * version is not — in this process. `.accessibilityElement(children: .ignore)`
+ * with a label was tried first and is almost certainly correct on a device, but
+ * SwiftUI generates its accessibility elements as part of a render pass driven by
+ * an accessibility *client*, and there is none inside a unit test: a hosted view
+ * with the pill plainly laid out reports an empty tree through both
+ * `accessibilityElements` and `accessibilityElementCount()`. Measured on iOS
+ * 26.5, for the visible pill as well as the invisible one — so the failure said
+ * nothing at all about the app.
+ *
+ * A `UIView` that sets `isAccessibilityElement` itself has none of that
+ * indirection. It is in the hierarchy the moment it is made, it is what XCUITest
+ * walks, and `ConnectionPillTests` can find it by walking `subviews` — which is
+ * the difference between a documented intention and a pinned one. The drawing
+ * above is then marked `accessibilityHidden`, so there is exactly one element
+ * here in both states rather than two that could disagree.
  */
 struct ConnectionPill: View {
     let state: ConnectionState
+    /// Whether the connection is worth drawing. See `ConnectionGrace`.
+    let showing: Bool
 
     var body: some View {
+        ZStack {
+            if showing {
+                pill
+            } else {
+                // One point, so the overlay below has a frame and the toolbar
+                // has something to lay out. Nothing is drawn into it.
+                Color.clear.frame(width: 1, height: 1)
+            }
+        }
+        // The ink is decoration; the element below is the identity. Without this
+        // there would be two overlapping elements saying the same thing, and
+        // VoiceOver would read the connection twice.
+        .accessibilityHidden(true)
+        .overlay { ConnectionAccessibility(state: state) }
+    }
+
+    private var pill: some View {
         HStack(spacing: 5) {
             if state.isTrying {
                 ProgressView()
@@ -855,8 +913,12 @@ struct ConnectionPill: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
         .background(color.opacity(0.12), in: Capsule())
-        .accessibilityIdentifier("connection.pill")
-        .accessibilityLabel("Connection: \(state.label). \(state.detail)")
+    }
+
+    /// What the connection state reads as. One sentence, written once, so the
+    /// element and any future reader of it cannot drift.
+    static func spoken(_ state: ConnectionState) -> String {
+        "Connection: \(state.label). \(state.detail)"
     }
 
     /// The three semantic colours, from the same set the desktop uses for the
@@ -869,6 +931,37 @@ struct ConnectionPill: View {
         case .rejected, .incompatible: return Theme.critical
         case .offline: return Theme.secondary
         }
+    }
+}
+
+/**
+ * The connection, as a thing that can be asked rather than a thing that is drawn.
+ *
+ * A bare `UIView` whose whole job is to be one accessibility element. See
+ * `ConnectionPill`'s header for why it is UIKit: SwiftUI's own accessibility
+ * elements are generated by a render pass that no unit test can drive, so the
+ * claim that this element survives the pill being invisible could be written down
+ * but not checked. This one is in the view hierarchy the moment it is made.
+ *
+ * It carries no traits beyond `.staticText` and takes no touches. It is not a
+ * control and must not read as one — the connection is a fact, and the actions
+ * for a connection that has gone wrong are on the list underneath.
+ */
+private struct ConnectionAccessibility: UIViewRepresentable {
+    let state: ConnectionState
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        view.backgroundColor = .clear
+        view.isUserInteractionEnabled = false
+        view.isAccessibilityElement = true
+        view.accessibilityIdentifier = "connection.pill"
+        view.accessibilityTraits = .staticText
+        return view
+    }
+
+    func updateUIView(_ view: UIView, context: Context) {
+        view.accessibilityLabel = ConnectionPill.spoken(state)
     }
 }
 

@@ -310,7 +310,30 @@ export function foldersForDevice(
   const chosen = grants.granted(deviceId)
   if (chosen !== null) return chosen
 
-  const list = [...offered()]
+  /*
+   * Deduplicated, because `offered` concatenates two sources that overlap.
+   *
+   * `host-core.ts` builds it as the open projects *plus* the cwd of every
+   * running session — and a session almost always runs in a project that is
+   * open, so two projects with a session in each offer four entries, two of
+   * them repeats. Asad's recording caught exactly that: the browser client's
+   * "Start in" list showed `/home/asad/ClaudeImza` and
+   * `/home/asad/ClaudeImzacrm`, and then both again.
+   *
+   * The asymmetry that let it through is a few lines up: the *granted* branch
+   * returns a hand-chosen list, which cannot repeat itself, so nothing on this
+   * path had ever needed merging. This branch is not hand-chosen.
+   *
+   * `sameFolder` rather than a Set, so `/a/b` and `/a/b/` are one folder and
+   * Windows' case-insensitivity is honoured — the same comparison `granted`
+   * already uses a hundred lines above, rather than a second idea of what makes
+   * two paths the same.
+   */
+  const list: string[] = []
+  for (const path of offered()) {
+    if (list.some((seen) => sameFolder(seen, path))) continue
+    list.push(path)
+  }
   // A first launch: nothing open, nothing running, and a phone starting a
   // session is at its most useful and least able to name a folder.
   return list.length > 0 ? list : [home()]

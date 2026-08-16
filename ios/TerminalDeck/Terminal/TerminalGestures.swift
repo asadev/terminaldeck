@@ -29,6 +29,24 @@
  *     alongside SwiftTerm's own tap rather than replacing it, because that tap
  *     is what dismisses a selection and raises the keyboard.
  *
+ * ## The three of them are *related* to the scroll, not merely attached to it
+ *
+ * Attaching a recogniser to a view says nothing about what happens when two of
+ * them want the same finger, and "it seems to work" is what an undeclared
+ * relationship looks like right up until it does not. All three relationships
+ * are therefore stated out loud, in the two delegate methods at the bottom of
+ * this file and in `DeckTerminalView`:
+ *
+ *  - the scroll may not begin while a selection drag owns the finger
+ *    (`DeckTerminalView.gestureRecognizerShouldBegin`);
+ *  - the scroll and the two selection gestures may never run **simultaneously**,
+ *    so whichever recognised first keeps the finger;
+ *  - the scroll must wait for the selection drag to **fail**, because the two are
+ *    pans with the same threshold and the order UIKit asks them in is undefined.
+ *
+ * `TerminalGesturesTests` asks the delegate each of those questions directly.
+ *
+
  * ## Why the Copy affordance is the system callout and nothing else
  *
  * **A selection dies when you touch outside the terminal.** SwiftTerm calls
@@ -105,6 +123,17 @@ final class TerminalGestures: NSObject, UIGestureRecognizerDelegate {
         self.terminal = terminal
         super.init()
 
+        /*
+         * One finger, and only one, scrolls.
+         *
+         * `UIScrollView` will happily drive its pan with any number of fingers,
+         * which on this view means a two-finger pinch also slides the scrollback
+         * out from under the text it is resizing. Asad asked for the one-finger
+         * rule twice; this is the literal reading of it, and it is what makes the
+         * pinch a clean second gesture rather than a pinch-and-a-scroll.
+         */
+        terminal.panGestureRecognizer.maximumNumberOfTouches = 1
+
         let press = UILongPressGestureRecognizer(target: self, action: #selector(longPress))
         // Half a second rather than SwiftTerm's 0.7. The press is now doing the
         // selecting rather than opening a menu, so it is on the critical path of
@@ -117,6 +146,7 @@ final class TerminalGestures: NSObject, UIGestureRecognizerDelegate {
         press.allowableMovement = 10
         press.delegate = self
         install(press)
+        selectionPress = press
 
         let drag = UIPanGestureRecognizer(target: self, action: #selector(adjust))
         drag.delegate = self
@@ -139,6 +169,9 @@ final class TerminalGestures: NSObject, UIGestureRecognizerDelegate {
     }
 
     private var selectionDrag: UIPanGestureRecognizer?
+    /// The long press that starts a selection. Held so the relationships below
+    /// can name it rather than matching on its class — SwiftTerm has one too.
+    private var selectionPress: UILongPressGestureRecognizer?
 
     private func install(_ recognizer: UIGestureRecognizer) {
         terminal.claim(recognizer)
@@ -247,12 +280,68 @@ final class TerminalGestures: NSObject, UIGestureRecognizerDelegate {
         return false
     }
 
-    /// Ours may run alongside the library's. Returning true from *this* delegate
-    /// is enough — only one side of a pair has to agree — and it is the side
-    /// this app owns.
+    /**
+     * Ours may run alongside the library's — **except** alongside the scroll.
+     *
+     * This used to return `true` for every pair, which is the blanket answer and
+     * it is wrong in one specific, invisible way: a recogniser that has *already*
+     * begun is never asked `gestureRecognizerShouldBegin` again, so the refusals
+     * in `DeckTerminalView` only protect the case where the scroll has not
+     * started yet. The other case is real and reachable — `allowableMovement` on
+     * the press is 10 points and a scroll view's own slop is about the same, so a
+     * finger that drifts nine points and then stops for half a second can have
+     * the scroll running when the press fires. Under a blanket `true` both then
+     * own the finger: the selection grows while the content slides under it,
+     * which is the exact ambiguity the whole of `DeckTerminalView`'s header is
+     * about, arriving through the one door that file cannot close.
+     *
+     * So the two gestures that move or mark content are declared **exclusive**
+     * with the scroll, and the arbitration is UIKit's normal one — whichever
+     * recognised first keeps the finger. That makes the outcome a rule rather
+     * than a race, and the rule it produces is the platform's: once a scroll is
+     * under way, holding still does not start selecting. Safari does not either.
+     *
+     * The tap and the pinch stay simultaneous with everything. The tap only
+     * observes — it exists to close the key grid and does not cancel touches —
+     * and the pinch is two fingers, which after `maximumNumberOfTouches = 1`
+     * above is a number the scroll can no longer begin with.
+     */
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
                            shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
-        true
+        let scroll = terminal.panGestureRecognizer
+        guard gestureRecognizer === scroll || other === scroll else { return true }
+        return !isSelectionGesture(gestureRecognizer) && !isSelectionGesture(other)
+    }
+
+    /**
+     * The scroll waits for the selection drag to say no.
+     *
+     * The other half of the same problem, and simultaneity alone cannot fix it.
+     * Both of these are pans with the same ten-point threshold, so they reach the
+     * moment of truth on the same touch event and which one UIKit asks first is
+     * not defined anywhere. Left to chance, dragging the end of a selection
+     * scrolls the terminal about half the time.
+     *
+     * A failure requirement removes the chance: the scroll may not recognise
+     * until the selection drag has failed. That costs nothing in the normal case,
+     * because the selection drag fails *in that same event* — see
+     * `gestureRecognizerShouldBegin`, which refuses it outright unless the finger
+     * came down within a couple of cells of an existing selection's end. The only
+     * drags it delays at all are the ones it is meant to win.
+     *
+     * Declared from this side because this is the side this app owns; the scroll
+     * view's own recogniser has UIKit's delegate on it, and a failure requirement
+     * only needs one of the two to ask for it.
+     */
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                           shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool {
+        gestureRecognizer === selectionDrag && other === terminal.panGestureRecognizer
+    }
+
+    /// One of the two that own the finger when they are running: the long press
+    /// that starts a selection, and the pan that adjusts one.
+    private func isSelectionGesture(_ recognizer: UIGestureRecognizer) -> Bool {
+        recognizer === selectionPress || recognizer === selectionDrag
     }
 
     /// Two cells across and one row up or down, which is about a fingertip. The

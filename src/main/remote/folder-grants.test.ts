@@ -296,3 +296,51 @@ describe('two phones on one desktop', () => {
     expect(spawn).not.toHaveBeenCalled()
   })
 })
+
+describe('the folders a device is offered when nobody has chosen for it', () => {
+  const grants = { granted: () => null }
+  const home = () => '/Users/someone'
+
+  /*
+   * The bug Asad's recording caught, at its source.
+   *
+   * `host-core.ts` offers the open projects plus every running session's cwd,
+   * and a session normally runs in a project that is open — so the two lists
+   * overlap and the wire carried each folder twice. His browser client showed
+   * `/home/asad/ClaudeImza` and `/home/asad/ClaudeImzacrm`, then both again,
+   * which is this array verbatim.
+   */
+  it('offers a folder once when a session is running in an open project', () => {
+    const offered = () => [
+      '/home/asad/ClaudeImza',
+      '/home/asad/ClaudeImzacrm',
+      '/home/asad/ClaudeImza',
+      '/home/asad/ClaudeImzacrm',
+    ]
+    expect(foldersForDevice(grants, 'device-1', offered, home)).toEqual([
+      '/home/asad/ClaudeImza',
+      '/home/asad/ClaudeImzacrm',
+    ])
+  })
+
+  it('treats a trailing separator as the same folder', () => {
+    const offered = () => ['/home/asad/work', '/home/asad/work/']
+    expect(foldersForDevice(grants, 'device-1', offered, home)).toEqual(['/home/asad/work'])
+  })
+
+  /*
+   * The rule this must NOT become. A prefix test would merge these two — they
+   * are the pair from his own machine, and they are different projects.
+   */
+  it('does not merge one folder into another whose name it is a prefix of', () => {
+    const offered = () => ['/home/asad/ClaudeImza', '/home/asad/ClaudeImzacrm']
+    expect(foldersForDevice(grants, 'device-1', offered, home)).toEqual([
+      '/home/asad/ClaudeImza',
+      '/home/asad/ClaudeImzacrm',
+    ])
+  })
+
+  it('still falls back to home when nothing is offered at all', () => {
+    expect(foldersForDevice(grants, 'device-1', () => [], home)).toEqual(['/Users/someone'])
+  })
+})

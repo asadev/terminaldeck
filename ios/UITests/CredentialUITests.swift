@@ -249,7 +249,7 @@ final class CredentialUITests: XCTestCase {
         // explanation of this feature, so nothing here repeats it.
         add(screenshot(named: "github account"))
         if app.staticTexts["github.login"].exists {
-            app.buttons["github.done"].tap()
+            closeGitHub()
             return
         }
         app.buttons["github.useTokenInstead"].tap()
@@ -267,7 +267,7 @@ final class CredentialUITests: XCTestCase {
                       "the account should appear once GitHub has named it")
         XCTAssertEqual(app.staticTexts["github.login"].label, "@harness-user",
                        "the name must be the one GitHub gave, not the one typed")
-        app.buttons["github.done"].tap()
+        closeGitHub()
     }
 
     private func disconnectGitHub() {
@@ -275,18 +275,23 @@ final class CredentialUITests: XCTestCase {
         if app.buttons["github.disconnect"].waitForExistence(timeout: 5) {
             app.buttons["github.disconnect"].tap()
         }
-        app.buttons["github.done"].tap()
+        closeGitHub()
     }
 
+    /// The GitHub screen, which is now a row on the Settings tab rather than an
+    /// item seven deep in the session list's overflow menu. See
+    /// `TabNavigation.swift` and `DeckTabs.swift` for where everything went.
     private func openGitHub() {
-        let more = app.buttons["sessions.more"]
-        XCTAssertTrue(more.waitForExistence(timeout: 20), "the overflow menu should be on the list")
-        more.tap()
-        let item = app.buttons["sessions.github"]
-        XCTAssertTrue(item.waitForExistence(timeout: 10), "the menu should offer the GitHub account")
-        item.tap()
-        XCTAssertTrue(app.buttons["github.done"].waitForExistence(timeout: 10),
-                      "the GitHub screen should open")
+        XCTAssertTrue(app.openGitHubAccount(),
+                      "Settings should offer the GitHub account, and it should open")
+    }
+
+    /// Put the app back where every other case in this file expects to find it.
+    /// Closing the GitHub sheet leaves the Settings tab showing, and the next
+    /// thing these tests reach for is a session.
+    private func closeGitHub() {
+        app.buttons["github.done"].tap()
+        app.openSessionsTab()
     }
 
     // MARK: - Being the machine that asks
@@ -336,17 +341,7 @@ final class CredentialUITests: XCTestCase {
     // MARK: - Pairing
 
     private func forgetEveryMachine() {
-        for _ in 0 ..< 6 {
-            guard app.buttons["sessions.more"].waitForExistence(timeout: 3) else { return }
-            app.buttons["sessions.more"].tap()
-            let forget = app.buttons["sessions.unpair"]
-            guard forget.waitForExistence(timeout: 3) else {
-                app.tap()
-                return
-            }
-            forget.tap()
-            _ = app.textFields["pairing.field"].waitForExistence(timeout: 3)
-        }
+        app.forgetEveryMachine()
     }
 
     /// Mint a code on the machine, now. A pairing token is worth sixty seconds.
@@ -390,23 +385,8 @@ final class CredentialUITests: XCTestCase {
      * SwiftUI drops it on the way to `UIAlertController`.
      */
     private func renameMachine(to name: String) {
-        let more = app.buttons["sessions.more"]
-        guard more.waitForExistence(timeout: 20) else { return }
-        more.tap()
-        let rename = app.buttons["sessions.rename"]
-        guard rename.waitForExistence(timeout: 10) else { return }
-        rename.tap()
-
-        let alert = app.alerts.firstMatch
-        guard alert.waitForExistence(timeout: 10) else { return }
-        let field = alert.textFields.firstMatch
-        guard field.waitForExistence(timeout: 10) else { return }
-        let existing = (field.value as? String) ?? ""
-        field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: existing.count))
-        field.typeText(name)
-        // `.firstMatch`, because SwiftUI nests the alert's button inside a button
-        // of the same identifier and a bare subscript throws on the ambiguity.
-        alert.buttons["rename.save"].firstMatch.tap()
+        app.renameFirstMachine(to: name)
+        app.openSessionsTab()
     }
 
     // MARK: - Helpers

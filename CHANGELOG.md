@@ -10,6 +10,68 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+### Changed
+
+- **A pairing code is six digits.** No dashes, no letters, one method. The
+  pairing **link and the QR code are gone entirely** — deleted, not hidden: the
+  QR encoder, the iOS scanner and its camera permission, the Android scanner and
+  its `CAMERA` permission, and every `terminaldeck://pair` route into a
+  credential write. Every client takes six digits on a numeric keypad and submits
+  on the sixth.
+
+  Six digits is a million codes where eight Crockford characters were 1.1
+  trillion — a **1,099,511-fold** reduction, stated here rather than buried. What
+  makes it sound is unchanged and now pinned as values rather than assumed: a
+  code lives 60 seconds, is single-use, and dies after five wrong guesses; and
+  redeeming one still only creates a *pending* device a human approves. The
+  rendezvous slot is derived through memory-hard scrypt, which is what stops the
+  space being swept — without it, five guesses would buy nothing because an
+  attacker would never need a second one.
+
+- **Machines and Remote are one section.** Everything the Machines panel could do
+  now lives in Settings → Remote, beside the phones, because they are the same
+  subject: devices paired with this machine.
+- **The "Direct on your tailnet" card is gone.** The relay is the network.
+- **Overview is a live board of running sessions** — what each agent is doing,
+  how long it has been doing it, and which one is waiting on you. Deliberately no
+  progress bar: an agent does not report progress, and a number the app invented
+  is worse on that screen than no number.
+- **Search is replaced by Artifacts** — every file your agents wrote or changed,
+  with the diff of each change. Searching past sessions moved to the command
+  palette's `?`, where it is one keystroke from what you were already doing.
+  Search's own results had never been clickable.
+- **Windows has one title bar** instead of an OS strip, a menu strip and the app's
+  own chrome. Real Windows minimise/maximise/close, snap layouts intact. The menu
+  is hidden rather than removed, so every accelerator still works.
+- **An account belongs to an agent.** Adding one asks which — Claude Code or
+  Codex CLI, both verified to isolate a login. Gemini is listed and refused, with
+  the reason on the row: its token lives in one keychain slot no config directory
+  moves, so a second login would overwrite the first rather than sit beside it.
+- About 900 words of on-screen prose removed, with every warning kept.
+
+### Fixed
+
+- **Keep-awake held nothing.** The app's own power-save blocker was gated behind
+  the *privileged* system sleep setting, so on every machine where that had not
+  been granted — including every machine on first run — no lock was held at all.
+  An unreadable `pmset` also released a lock that was correctly held and then
+  cancelled the timer that would have retried.
+- **Sessions did not come back on Windows.** `encodeProjectPath` resolved a WSL
+  path against the Windows host, so `/home/you/x` became `C:\home\you\x` and
+  matched nothing the Linux agent had written. The same fault emptied the Files
+  page on Windows.
+- **Adding an account always signed you into Claude.** The preload dropped the
+  options object, so the provider never crossed the bridge. Signing in beside a
+  Codex account opened a Claude session, which then correctly refused the account
+  — so it was silently discarded too.
+- The Overview git tile printed git's raw stderr at the user.
+- A new browser tab opened on `localhost:3000` whether or not anything was
+  listening, landing on Chromium's error page instead of the start page.
+- Browser popups and the session flyout rendered *behind* web content — a native
+  view is composited above the whole page, so no `z-index` could ever have fixed
+  it.
+- The trailing "Read from the session transcript" line under a conversation.
+
 ## [0.1.9] — 2026-08-16
 
 Four batches of work since 0.1.8 and **none of it is in a tagged build**. Anyone

@@ -485,3 +485,116 @@ describe('the one frame the shared parser deliberately does not read', () => {
     }
   })
 })
+
+/**
+ * The `localhost` frames, which the shared parser deliberately does not read.
+ *
+ * `parseServerFrame` refuses anything past protocol v1 because it was written
+ * for a guest desktop that negotiates nothing. This client negotiates: it sends
+ * `ports` only after seeing `localhost` advertised, which makes these three
+ * frames ones it agreed to receive. Without the branch that reads them, every
+ * port list and every check answer is silently dropped while everything still
+ * compiles — so these are the tests that would notice.
+ */
+describe('the localhost frames', () => {
+  it('reads a port list', () => {
+    const result = decodeServerMessage(
+      JSON.stringify({ t: 'ports', ports: [{ port: 5173, process: 'node', guessed: false }] }),
+    )
+    expect(result).toEqual({ ok: true, message: { t: 'ports', ports: [{ port: 5173, process: 'node', guessed: false }] } })
+  })
+
+  it('is the only reader of them — the shared parser refuses all three', () => {
+    // Not a criticism of that parser: this is what makes the branch necessary
+    // rather than redundant, and the day it moves there this assertion is the
+    // one that says so.
+    for (const frame of [
+      { t: 'ports', ports: [] },
+      { t: 'tunnel.opened', id: 'a', port: 5173 },
+      { t: 'tunnel.closed', id: 'a', message: 'no' },
+    ]) {
+      expect(parseServerMessage(JSON.stringify(frame)).ok).toBe(false)
+      expect(decodeServerMessage(JSON.stringify(frame)).ok).toBe(true)
+    }
+  })
+
+  it('drops one unusable row rather than the whole list', () => {
+    // The same rule `parseSession` follows: a page showing nine of ten ports is
+    // useful, and one showing none because the tenth had a null port is not.
+    const result = decodeServerMessage(
+      JSON.stringify({
+        t: 'ports',
+        ports: [
+          { port: 5173, process: 'node', guessed: false },
+          { port: 'nope', process: 'node', guessed: false },
+          null,
+          { port: 70000, process: 'node', guessed: false },
+          { port: 5432, process: 'postgres', guessed: false },
+        ],
+      }),
+    )
+    expect(result.ok && result.message.t === 'ports' && result.message.ports.map((row) => row.port)).toEqual([
+      5173, 5432,
+    ])
+  })
+
+  it('refuses a ports frame carrying no list at all', () => {
+    // An empty machine and a malformed message are different facts — the same
+    // argument the shared parser makes about `folders`. Read as "nothing is
+    // listening", a broken frame would take the whole screen away.
+    const result = decodeServerMessage(JSON.stringify({ t: 'ports' }))
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.reason).toBe('ports without a list')
+  })
+
+  it('calls a port with an unusable name unknown, rather than dropping it', () => {
+    // `guessed` is the desktop's own word for "I could not name the owner", so a
+    // name this end cannot use folds into exactly that shape. The port is real
+    // and is still answering; hiding it would be the worse error.
+    const result = decodeServerMessage(
+      JSON.stringify({
+        t: 'ports',
+        ports: [
+          { port: 5173, process: 'x'.repeat(500), guessed: false },
+          { port: 5174, process: '', guessed: false },
+          { port: 5175, guessed: false },
+        ],
+      }),
+    )
+    expect(result.ok && result.message.t === 'ports' && result.message.ports).toEqual([
+      { port: 5173, process: 'unknown', guessed: true },
+      { port: 5174, process: 'unknown', guessed: true },
+      { port: 5175, process: 'unknown', guessed: true },
+    ])
+  })
+
+  it('refuses a tunnel answer that names nothing', () => {
+    expect(decodeServerMessage(JSON.stringify({ t: 'tunnel.opened', id: '', port: 1 })).ok).toBe(false)
+    expect(decodeServerMessage(JSON.stringify({ t: 'tunnel.opened', id: 'a' })).ok).toBe(false)
+    expect(decodeServerMessage(JSON.stringify({ t: 'tunnel.closed', message: 'no' })).ok).toBe(false)
+  })
+
+  it('accepts a refusal with no words in it, and bounds one with too many', () => {
+    // The sentence is the whole payload of `tunnel.closed`, so an absent one is
+    // the empty string and the screen supplies its own. A machine having a bad
+    // day cannot push a wall of text into a card somebody is reading.
+    const empty = decodeServerMessage(JSON.stringify({ t: 'tunnel.closed', id: 'a' }))
+    expect(empty).toEqual({ ok: true, message: { t: 'tunnel.closed', id: 'a', message: '' } })
+
+    const long = decodeServerMessage(JSON.stringify({ t: 'tunnel.closed', id: 'a', message: 'y'.repeat(5000) }))
+    expect(long.ok && long.message.t === 'tunnel.closed' && long.message.message.length).toBe(300)
+  })
+
+  it('does not read the byte-stream frames, because this client never opens one', () => {
+    // `net.*` exists only inside a stream begun by a `net.open` this client
+    // cannot send — a browser tab has no socket to serve bytes into. A reader
+    // for them would be a parser for a conversation this client is not in.
+    for (const frame of [
+      { t: 'net.data', ch: 'a', data: 'AAAA' },
+      { t: 'net.ack', ch: 'a', bytes: 4 },
+      { t: 'net.close', ch: 'a' },
+    ]) {
+      expect(decodeServerMessage(JSON.stringify(frame)).ok).toBe(false)
+    }
+  })
+})

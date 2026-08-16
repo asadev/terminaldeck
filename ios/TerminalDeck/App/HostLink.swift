@@ -48,6 +48,20 @@ final class HostLink: Identifiable {
     private(set) var credential: StoredCredential
 
     private(set) var connection: ConnectionState = .offline
+
+    /**
+     * Whether this machine's connection is worth putting on screen, which is not
+     * the same question as what its connection *is*.
+     *
+     * `ConnectionGrace` holds the whole rule and says why. What matters here is
+     * that it lives on the machine rather than on a screen: a link that has been
+     * down for a minute must not get a fresh five seconds of silence every time
+     * somebody navigates back to the list, and the pill, the list's banner and a
+     * terminal's banner must not each have their own opinion about whether now
+     * is the moment to say something.
+     */
+    let notice: ConnectionNotice
+
     private(set) var sessions: [RemoteSession] = []
     /// Epoch-millisecond stamps, only for the sessions the host timestamped.
     private(set) var lastActivity: [String: Double] = [:]
@@ -149,14 +163,19 @@ final class HostLink: Identifiable {
     /// Lines from inspect mode waiting for their session to finish attaching.
     private var pendingAgentLines: [String: [String]] = [:]
 
+    /// `notice` is a seam for the tests in the same way `makeTransport` is: the
+    /// real one holds a clock and a timer, and a test hands in one whose clock it
+    /// controls so five seconds can pass without five seconds passing.
     init(credential: StoredCredential,
          credentials: CredentialStore,
          device: DeviceDescriptor,
-         makeTransport: ((String, CredentialStore, DeviceDescriptor) -> Transport)? = nil) {
+         makeTransport: ((String, CredentialStore, DeviceDescriptor) -> Transport)? = nil,
+         notice: ConnectionNotice? = nil) {
         self.id = credential.hostId
         self.credential = credential
         self.credentials = credentials
         self.device = device
+        self.notice = notice ?? ConnectionNotice()
         // Defaulted inside the body rather than in the signature: a default
         // argument is evaluated outside the actor, and `LiveTransport` is
         // main-actor isolated.
@@ -228,12 +247,20 @@ final class HostLink: Identifiable {
     // MARK: - Lifecycle
 
     func start() {
+        // The grace period starts here rather than at the first state event, so
+        // that the five seconds cover the dial itself. A transport that is slow
+        // to say anything at all is exactly the case the rule is written for.
+        notice.observe(connection)
         if transport == nil { build() }
         transport?.start()
     }
 
     /// The app came back to the foreground, or the network changed.
     func resume() {
+        // A suspended app runs no timers, so the notice may be holding a
+        // deadline that passed while the phone was in a pocket. See
+        // `ConnectionNotice.refresh`.
+        notice.refresh()
         transport?.resume()
     }
 
@@ -265,6 +292,11 @@ final class HostLink: Identifiable {
         bridges = [:]
         pendingAgentLines = [:]
         connection = .offline
+        // Told rather than reset. A machine that is being torn down and brought
+        // straight back up — which is what re-pairing does — is one continuous
+        // outage from the person's point of view, so the clock that was already
+        // running keeps running.
+        notice.observe(connection)
         lastError = nil
     }
 
@@ -609,6 +641,10 @@ final class HostLink: Identifiable {
         case let .state(state):
             let wasLive = connection.isLive
             connection = state
+            // Every state, including the ones that change nothing on screen.
+            // The rule is a function of the whole sequence, not of the
+            // interesting parts of it — see `ConnectionGrace.unsettledSince`.
+            notice.observe(state)
             onConnectionChange?(state)
             if !state.isLive && wasLive {
                 attached.removeAll()

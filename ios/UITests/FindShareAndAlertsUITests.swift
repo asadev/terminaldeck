@@ -337,13 +337,9 @@ final class FindShareAndAlertsUITests: XCTestCase {
      * for a buzz that was never coming.
      */
     func testTheAlertsScreenSaysWhatItCanAndCannotDo() throws {
-        openTheOverflowMenu()
-        let alerts = app.buttons["sessions.alerts"]
-        XCTAssertTrue(alerts.waitForExistence(timeout: 5), "Alerts should be in the menu")
-        alerts.tap()
-
-        XCTAssertTrue(app.buttons["alerts.done"].waitForExistence(timeout: 10),
-                      "the alerts screen should open")
+        backToTheList()
+        XCTAssertTrue(app.openAlerts(),
+                      "Settings should offer Alerts, and the alerts screen should open")
         // Never tapped — see the header. Its presence is the assertion.
         XCTAssertTrue(app.buttons["alerts.turnOn"].exists || app.buttons["alerts.openSettings"].exists
                       || app.switches["alerts.needsYou"].exists,
@@ -354,6 +350,9 @@ final class FindShareAndAlertsUITests: XCTestCase {
         save("alerts-01-screen")
 
         app.buttons["alerts.done"].tap()
+        // Closing the sheet leaves the Settings tab showing, so this screenshot
+        // is of the sessions only if it is asked for.
+        app.openSessionsTab()
         sleep(1)
         save("alerts-02-list")
     }
@@ -387,10 +386,8 @@ final class FindShareAndAlertsUITests: XCTestCase {
                           "opt-in: this spends the one system permission prompt this install has")
 
         // 1. Ask for permission, and answer it.
-        openTheOverflowMenu()
-        let alerts = app.buttons["sessions.alerts"]
-        XCTAssertTrue(alerts.waitForExistence(timeout: 5))
-        alerts.tap()
+        backToTheList()
+        XCTAssertTrue(app.openAlerts(), "Settings should offer Alerts")
         let turnOn = app.buttons["alerts.turnOn"]
         XCTAssertTrue(turnOn.waitForExistence(timeout: 10),
                       "permission has already been answered on this install — reinstall to run this")
@@ -403,6 +400,7 @@ final class FindShareAndAlertsUITests: XCTestCase {
         sleep(2)
         save("alerts-03-permitted")
         app.buttons["alerts.done"].tap()
+        app.openSessionsTab()
 
         // 2. Set something going that will finish after we have looked away.
         try openSession()
@@ -468,14 +466,21 @@ final class FindShareAndAlertsUITests: XCTestCase {
         sleep(1)
     }
 
-    private func openTheOverflowMenu() {
+    /**
+     * Stand on the session list, whatever is on top of it.
+     *
+     * The tab bar is not reachable from a pushed terminal — a `NavigationStack`
+     * inside a tab hides it — so anything that wants Settings has to come back
+     * to the root of the Sessions tab first. `sessions.more` is the sentinel for
+     * "the list is showing" and is still there, holding Refresh and Reconnect.
+     */
+    private func backToTheList() {
         let more = app.buttons["sessions.more"]
         if !more.waitForExistence(timeout: 10) {
             // A terminal is open on top of the list; back out to it.
             app.navigationBars.buttons.element(boundBy: 0).tap()
         }
         XCTAssertTrue(more.waitForExistence(timeout: 10), "the session list should be showing")
-        more.tap()
     }
 
     private func raiseTheKeyboard() {

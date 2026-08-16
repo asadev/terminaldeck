@@ -91,6 +91,53 @@ Worth being precise, because "compiled" and "works" are different claims:
   transcribed from `pwa/src/connection.ts`, which is exactly the claim the relay
   transport carried before someone pointed it at a socket and found two bugs.
 
+## Navigation, and the connection indicator
+
+Three things from the screen recording of 2026-08-16, all of them his and two of
+them asked for twice.
+
+**A bottom tab bar.** *"we need to give a proper menu … maybe we can have some
+tab bar, and down here like a pill."* **Sessions**, **Machines**, **Settings** —
+and no fourth, because there is no fourth thing this app can do. The desktop's
+sidebar has ten entries and most of them are a file tree, a diff or a search box;
+a tab leading to any of those on a phone would lead to a placeholder, which is
+the complaint rather than the fix. What moved is everything that was buried in
+the session list's `…`: pair, rename, forget and which endpoint a machine is, to
+Machines; the GitHub account, the alert switches and the terminal's text size, to
+Settings. Nothing is in two places. That menu now holds Refresh and Reconnect,
+which are the only two things in it that act on the list. `DeckTabs.swift`.
+
+**The connection is only mentioned when it is in the way.** *"when we just open
+the application, it shows connecting … let it give a few seconds; after five
+seconds if it is still not connected, then show … no need to show connected all
+the time … if it gets disconnected for more than five seconds, then start showing
+connecting … less than five seconds, let's not show anything."* Implemented as a
+state machine rather than as timers in views, because the rule had to hold in
+three places at once — the pill, the warning bar and the empty state — and one of
+each per screen is how a rule ends up almost-implemented three different ways.
+`ConnectionGrace` is the rule (pure, takes the instant as a parameter),
+`ConnectionNotice` holds one against a real clock, and there is one per machine on
+`HostLink` so an outage that started a minute ago does not get a fresh five
+seconds of silence every time somebody navigates back to the list. All four of his
+cases are pinned in `Tests/ConnectionGraceTests.swift` with a fake clock and no
+sleeping.
+
+The pill's accessibility element stays on screen when the pill does not. The
+state is still true when it is not being shouted about, and VoiceOver asking for
+it is somebody asking a question the screen has deliberately stopped answering
+out loud — `Tests/ConnectionPillTests.swift` hosts the real view and walks the
+real accessibility tree to check both halves.
+
+**One finger scrolls; selecting is a long press.** Asked for a second time, and
+most of it was already built — see *Gestures in the terminal* in
+[`../IOS-DESIGN.md`](../IOS-DESIGN.md). What was missing was that the gestures
+were *attached* rather than *related*: the delegate said yes to every pair, so
+the refusals in `DeckTerminalView` only covered the case where the scroll had not
+started yet. The scroll and the two selection gestures are now declared exclusive,
+the scroll is declared to wait for the selection drag to fail, and the scroll view's
+own pan is limited to one finger. `TerminalGesturesTests` asks the delegate each
+of those three questions directly.
+
 ## What the phone can do beyond attaching to a session
 
 The four things below were added on 2026-08-15, after the design pass, because
