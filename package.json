@@ -23,12 +23,13 @@
     "postinstall": "electron-builder install-app-deps",
     "art": "node build/art/icon.mjs && iconutil -c icns build/icon.iconset -o build/icon.icns && node build/art/dmg-background.mjs",
     "dist:mac": "npm run build && npm run build:pwa && electron-builder --mac --publish never",
-    "dist:win": "npm run build && npm run build:pwa && electron-builder --win --publish never",
+    "dist:win": "npm run build && npm run build:pwa && npm run build:win-confine && electron-builder --win --publish never",
     "pack:mac": "npm run build && npm run build:pwa && electron-builder --mac dir:arm64 --publish never",
     "release:check": "node scripts/check-release.mjs",
     "preversion": "npm run typecheck && npm test && node scripts/version.mjs check",
     "version": "node scripts/version.mjs stamp && git add CHANGELOG.md",
-    "postversion": "node scripts/version.mjs next"
+    "postversion": "node scripts/version.mjs next",
+    "build:win-confine": "powershell -ExecutionPolicy Bypass -File native/win-confine/build.ps1 -OutDir native/win-confine"
   },
   "engines": {
     "node": ">=22"

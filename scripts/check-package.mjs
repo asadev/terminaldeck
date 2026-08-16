@@ -219,6 +219,37 @@ if (resources === null || !existsSync(join(resources, 'app.asar'))) {
   }
 }
 
+/*
+ * The Windows confinement launcher, by the same argument and against the same
+ * failure.
+ *
+ * `electron-builder.yml` carries `extraResources: native/win-confine/tdconfine.exe`,
+ * and the binary is not committed — only the `.c` it is built from. An
+ * `extraResources` entry whose source does not exist does NOT fail the build:
+ * it packages nothing and says nothing, which is precisely how three releases
+ * shipped with no phone client and why the check above exists.
+ *
+ * The consequence here is quieter than a missing phone client and therefore
+ * worse to find. Confinement is gated on the launcher being present at runtime,
+ * so the app would not claim a boundary it does not have — it would report
+ * every Windows session as unconfined, on every machine, forever, and the cause
+ * would be four layers from anything anyone would think to look at.
+ *
+ * `npm run dist:win` builds it (`build:win-confine`). This is what proves it.
+ */
+if (platform === 'win' && resources !== null) {
+  const launcher = join(resources, 'tdconfine.exe')
+  if (!existsSync(launcher)) {
+    problems.push(
+      'the confinement launcher is missing — no resources/tdconfine.exe. ' +
+        'Run `npm run build:win-confine` before packaging; without it every ' +
+        'Windows session reports itself unconfined and nothing says why.',
+    )
+  } else {
+    note(`ok    the confinement launcher is present (${(statSync(launcher).size / 1024).toFixed(1)} KB)`)
+  }
+}
+
 const installers = readdirSync(RELEASE).filter((f) =>
   platform === 'win' ? f.endsWith('.exe') : f.endsWith('.dmg') || f.endsWith('.zip'),
 )
