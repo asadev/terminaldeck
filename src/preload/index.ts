@@ -107,6 +107,22 @@ const api = {
   startRemote: (): Promise<unknown> => ipcRenderer.invoke('remote:start'),
   stopRemote: (): Promise<unknown> => ipcRenderer.invoke('remote:stop'),
   listRemoteDevices: (): Promise<unknown> => ipcRenderer.invoke('remote:devices'),
+  /**
+   * The minted code, forwarded whole.
+   *
+   * Whole matters. The answer is `{ token, expiresAt, findable }`, and
+   * `findable` is the field that says whether anything can look those digits up
+   * at the rendezvous — the difference between a code a phone can type and six
+   * digits only the tailnet-served browser client can redeem. It was computed in
+   * the main process and dropped on the way out once already, and the result was
+   * a panel that showed a working-looking code and a countdown for a pairing
+   * that could not happen.
+   *
+   * So nothing here picks fields out of it. Everything on this bridge crosses as
+   * `unknown` and is narrowed on the far side precisely so that a field added in
+   * the main process reaches the renderer without a second edit here — a preload
+   * that repacked this object would be the place the next one goes missing.
+   */
   startRemotePairing: (): Promise<unknown> => ipcRenderer.invoke('remote:pair'),
   cancelRemotePairing: (): Promise<unknown> => ipcRenderer.invoke('remote:pair:cancel'),
   approveRemoteDevice: (deviceId: string): Promise<unknown> =>

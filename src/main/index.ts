@@ -999,6 +999,46 @@ function registerIpc(): void {
 }
 
 
+/*
+ * One copy of this app per machine, and the reason is not tidiness.
+ *
+ * `pinUserData` rewrites userData to a fixed path, so a second copy — a dev
+ * build, a second launch, an installer run while the app is open — lands on the
+ * *same* `~/Library/Application Support/terminaldeck` as the first. They then
+ * share `relay-identity.json`, and both present that one identity to the relay.
+ *
+ * `Rendezvous.attachHost` replaces an incumbent rather than refusing a
+ * newcomer, which is correct: a reconnecting host must be able to take its name
+ * back, and a second copy is indistinguishable from a reconnect. So the two
+ * processes evict each other, measured here every 25–55 seconds, forever.
+ *
+ * The damage is not obvious from either window. The rendezvous slot is named by
+ * the *code*, so it is claimed cleanly and every measurement aimed at it comes
+ * back healthy — but the address inside the offer is the shared host id. A
+ * phone dials it and the relay routes it to whichever copy holds the name at
+ * that instant. Half the time that is the copy with no code on screen, which
+ * refuses the sealed handshake silently and by design. The phone clears, no
+ * machine appears, and no approval prompt is ever shown.
+ *
+ * That is a real bug report, from this machine, and it cost a long time to find
+ * precisely because nothing anywhere is in an error state.
+ *
+ * They also share `state.json` and `remote-auth.json`, and contend for port
+ * 8443. The guard belongs here rather than in the relay client: nothing further
+ * down can tell a second copy from a reconnect, and it should not try.
+ */
+if (!app.requestSingleInstanceLock()) {
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    // Somebody tried to launch it again — almost always because they forgot it
+    // was running. Show them the window they already have.
+    if (mainWindow === null) return
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    mainWindow.focus()
+  })
+}
+
 app.whenReady().then(() => {
   if (process.platform === 'darwin') app.setName(BRAND.name)
   applySecurityPolicy()

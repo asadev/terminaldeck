@@ -43,8 +43,19 @@ import './RemoteSection.css'
  * live bearer token in it whose only route between two machines was a messaging
  * app — a pairing token somebody else's server keeps. What replaced them is what
  * `shared/short-code.ts` mints: six digits a person reads off one screen and
- * types into another, findable by any device because the code names a slot at
+ * types into another, which any device can find because the code names a slot at
  * the rendezvous rather than carrying an address.
+ *
+ * That last clause is a claim about a *dial that has to succeed*, not a property
+ * of the digits, and this file used to state it as though it were the latter.
+ * The machine has to be sitting in the slot its code names before anything can
+ * look the code up, and it can fail to get there — no address to publish, a
+ * beacon that would not build, a slot that did not come up in six seconds. So
+ * the main process answers `remote:pair` with `findable` alongside the code, and
+ * this panel draws the two states differently. A code that nothing can look up
+ * must never be drawn like one that anything can: they are the same six digits,
+ * and the failure lands a minute later on a different device, which has no way
+ * to say which end was at fault.
  *
  * This file never states the format. `CODE_LENGTH` and `normaliseCode` come
  * from that module, because the format has already changed once — eight
@@ -318,11 +329,31 @@ export interface RemoteState {
   connections: RemoteConnection[]
 }
 
-/** Mirrors `PairingToken`. The token is shown once and never stored by this panel. */
+/** Mirrors `ShownPairingCode`. The token is shown once and never stored by this panel. */
 export interface RemotePairing {
   token: string
   /** Epoch ms. Null when the main process did not say, and then nothing counts down. */
   expiresAt: number | null
+  /**
+   * Can anything look this code up, or is it six digits with nothing behind them?
+   *
+   * A code only reaches a phone, a tablet or a second desktop if this machine is
+   * sitting in the rendezvous slot the code names, answering with its address.
+   * The main process claims that slot as it mints, and this is what it says
+   * about the attempt — false when it had no address to publish, when the
+   * beacon could not be built, or when the slot did not come up in time.
+   *
+   * Null is "the main process did not say", the same convention `expiresAt`
+   * uses: an older main process against a newer window. Nothing is invented
+   * from it — the panel falls back to what it can see for itself, which is
+   * whether the relay row is connected.
+   *
+   * This is the field the panel exists to be honest about. False and drawn like
+   * success is a person typing six digits into a phone that will never find
+   * anything, and being told so a minute later by the device that is not the one
+   * at fault.
+   */
+  findable: boolean | null
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -504,12 +535,25 @@ export function toRemoteState(status: unknown, deviceList: unknown): RemoteState
   }
 }
 
-/** Narrow a minted pairing code. Null without a token, which is the whole code. */
+/**
+ * Narrow a minted pairing code. Null without a token, which is the whole code.
+ *
+ * `findable` is read as three states rather than coerced to a boolean, and the
+ * difference is the whole point of narrowing it here. `Boolean(undefined)` is
+ * `false`, which would have a build whose main process never sends the field
+ * printing "nothing can find this code" over a code that is perfectly findable;
+ * `record.findable !== false` goes the other way and calls a dead code live.
+ * Absent is its own answer and the panel says nothing it cannot support.
+ */
 export function toRemotePairing(raw: unknown): RemotePairing | null {
   const record = asRecord(raw)
   const token = asString(record?.token)
   if (token === '') return null
-  return { token, expiresAt: asTime(record?.expiresAt) }
+  return {
+    token,
+    expiresAt: asTime(record?.expiresAt),
+    findable: typeof record?.findable === 'boolean' ? record.findable : null,
+  }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1064,11 +1108,27 @@ export function RemoteView({
   // remembered: a path that goes away while a code is on screen has to stop
   // being offered, not stay drawn until something re-renders.
   const canPair = canMintCode(state)
-  // A code on a machine whose relay is down but which has a direct route is not
-  // useless — it is narrower, and saying which is the difference between a
-  // person walking to the other computer and a person typing six digits into a
-  // machine that cannot look them up.
-  const tailnetOnly = !relayLive && direct !== null
+  /*
+   * Whether the code on screen can be looked up, and what to say when it cannot.
+   *
+   * Two different facts feed one sentence, and they are different on purpose.
+   * `pairing.findable` is what the main process learned while it was claiming
+   * the rendezvous slot for *this* code — the only thing that knows whether the
+   * claim landed. `relayLive` is what the status read a moment ago says about
+   * the relay, which is fresher but coarser: it can go down after a code was
+   * published, and then a code that was findable when it was minted is not any
+   * more. Either is enough to stop calling a code generally usable.
+   *
+   * A code that cannot be looked up is not automatically dead. On a machine with
+   * a direct address a device already on that tailnet can still reach it and
+   * redeem the code there, so that case keeps the digits and narrows the claim.
+   * With no direct route there is nothing left to point them at, and the digits
+   * come off the screen — six digits nothing can use are worse than no digits,
+   * because somebody types them and waits.
+   */
+  const lookupDown = pairing?.findable === false || !relayLive
+  const tailnetOnly = lookupDown && direct !== null
+  const reachesNothing = pairing?.findable === false && direct === null
 
   return (
     <>
@@ -1326,7 +1386,33 @@ export function RemoteView({
                 <Notice tone="warn">That code has expired. Show another one.</Notice>
               )}
 
-              {pairing && canPair && !expired && (
+              {pairing && canPair && !expired && reachesNothing && (
+                /*
+                 * The code was minted and its slot was not claimed, on a machine
+                 * with no direct route — so there is no client anywhere that
+                 * could use these six digits.
+                 *
+                 * The digits are withheld rather than dimmed, and that is the
+                 * whole correction. This state used to be drawn exactly like
+                 * success: the code, the countdown, a Copy button. Somebody
+                 * reads them onto a phone, the phone derives the slot, finds
+                 * nobody in it, and says "no machine is showing that code" —
+                 * which is true, unhelpful, and arrives on the one device that
+                 * cannot know why. Nothing on this screen is allowed to invite
+                 * that.
+                 *
+                 * It is deliberately not a claim about the relay's health. The
+                 * relay row above says whatever the link is doing; what failed
+                 * here is this code's own dial, which can fail with the link up.
+                 */
+                <Notice tone="warn">
+                  This machine could not take its place at the rendezvous, so nothing can look this
+                  code up — and there is no direct route here to fall back on. The digits are not
+                  shown, because nothing could use them. Try again below.
+                </Notice>
+              )}
+
+              {pairing && canPair && !expired && !reachesNothing && (
                 <>
                   {/*
                     The code itself, and the largest thing in the section.
@@ -1343,11 +1429,22 @@ export function RemoteView({
                   </p>
 
                   {tailnetOnly && (
-                    // True and narrow: with the relay down, nothing can look this
-                    // code up — but a device already on the tailnet can still
-                    // reach the address above and redeem it there.
+                    /*
+                     * True and narrow: nothing can look this code up, but a
+                     * device already on the tailnet can still reach the address
+                     * above and redeem it there.
+                     *
+                     * It no longer names the relay as the cause. Two different
+                     * things land here — the relay row being down, and this
+                     * code's own rendezvous dial failing under a relay that is
+                     * up — and the old sentence asserted the first, which sent
+                     * somebody to stare at a relay row that said Connected.
+                     * What both have in common is the only thing the reader can
+                     * act on: these digits will not be found, so use them from
+                     * the tailnet or show another.
+                     */
                     <Notice tone="warn">
-                      The relay is not connected, so only a device already on your tailnet can use
+                      Nothing can look this code up, so only a device already on your tailnet can use
                       this code — at the address above.
                     </Notice>
                   )}
@@ -1356,7 +1453,16 @@ export function RemoteView({
 
               {pairing && (
                 <>
-                  {secondsLeft !== null ? (
+                  {/*
+                    No countdown on a code nothing can use.
+
+                    A timer is a promise that something will happen before it
+                    runs out. On the unfindable-and-no-direct-route state there
+                    is nothing to wait for, and a minute of ticking beside a
+                    withheld code reads as "keep waiting" — which is the one
+                    thing that will not help.
+                  */}
+                  {reachesNothing ? null : secondsLeft !== null ? (
                     <p
                       className={
                         expired ? 'remote-countdown remote-countdown-done' : 'remote-countdown'
@@ -1373,7 +1479,7 @@ export function RemoteView({
                     </p>
                   )}
 
-                  {relay !== null && relay.fingerprint !== '' && !expired && canPair && (
+                  {relay !== null && relay.fingerprint !== '' && !expired && canPair && !reachesNothing && (
                     // The one check a person can actually make. The device shows
                     // these same six groups before it sends anything, because it
                     // learned the key from the offer this code names — so a
@@ -1389,19 +1495,25 @@ export function RemoteView({
                   )}
 
                   <div className="settings-chips">
-                    {expired ? (
+                    {expired || reachesNothing ? (
                       // Enabled on the same condition the first press was, and
                       // that is the fix for the dead end he hit: an expired code
                       // beside a button that could not mint another one is a
                       // screen telling you to do something it will not let you
                       // do. When nothing can mint, the notice above says so
                       // instead.
+                      //
+                      // A code nothing can look up gets the same treatment for
+                      // the same reason, and the *other* half of that matters
+                      // more: there is no Copy button in this state. Copying six
+                      // digits that reach nothing is the panel handing somebody
+                      // the failure to carry to another device.
                       <Button
                         tone="primary"
                         onClick={actions.pair}
                         disabled={busy !== null || !canPair}
                       >
-                        {busy === 'pair' ? 'Asking…' : 'Show another one'}
+                        {busy === 'pair' ? 'Asking…' : expired ? 'Show another one' : 'Try again'}
                       </Button>
                     ) : (
                       <CopyCode code={codeShown(pairing.token)} disabled={busy !== null} />
@@ -1410,7 +1522,7 @@ export function RemoteView({
                         thing it does not mean: it takes the code off screen and
                         cancels it. */}
                     <Button onClick={actions.closePairing} disabled={busy !== null}>
-                      {expired ? 'Done' : 'Hide the code'}
+                      {expired || reachesNothing ? 'Done' : 'Hide the code'}
                     </Button>
                   </div>
                 </>

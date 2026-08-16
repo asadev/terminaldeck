@@ -576,7 +576,7 @@ describe('a phone with a page open on one of this Mac’s ports', () => {
  * back would pass every positive check in this file and fail these.
  */
 describe('a live pairing code', () => {
-  const pairing = { token: '482913', expiresAt: NOW + 45_000 }
+  const pairing = { token: '482913', expiresAt: NOW + 45_000, findable: true }
   const html = render({ state: RUNNING, pairing, secondsLeft: 45 })
 
   it('shows the code as digits, exactly as the main process minted it', () => {
@@ -659,6 +659,89 @@ describe('a live pairing code', () => {
 })
 
 /**
+ * A code the rendezvous never took, which is the state this panel used to draw
+ * as success.
+ *
+ * The failure it stands for is real and was measured on the live relay: the
+ * main process mints a code and claims the slot that code names, and that claim
+ * can fail — nothing to publish, a beacon that would not build, or a slot that
+ * did not come up in six seconds — under a relay row that says Connected. The
+ * handler computed the answer, dropped it, and returned the code alone, so all
+ * four of those paths produced six digits, a countdown and a Copy button.
+ *
+ * What made it expensive is where the failure surfaced. The person reads the
+ * digits onto a phone, the phone derives the same slot, finds nobody in it, and
+ * says "no machine is showing that code" — a minute later, on the device that
+ * did nothing wrong, with no way to name the end that did. Every assertion here
+ * is about saying it on this screen instead, while somebody is still standing in
+ * front of the machine.
+ */
+describe('a code the rendezvous never took', () => {
+  const unfindable = { token: '482913', expiresAt: NOW + 45_000, findable: false }
+
+  it('does not present the digits as usable when nothing can look them up', () => {
+    // No direct route, so there is no client left that could redeem this code.
+    // The digits come off the screen: six digits nobody can use are worse than
+    // none, because somebody types them and then waits out the minute.
+    const html = render({ state: RELAY_ONLY, pairing: unfindable, secondsLeft: 45 })
+    expect(html).not.toContain('>482913<')
+    expect(html).toContain('could not take its place at the rendezvous')
+    expect(html).toContain('The digits are not shown')
+  })
+
+  it('does not offer to copy a code that reaches nothing', () => {
+    // Copy is the panel handing somebody the failure to carry to another
+    // device, which is the one thing this state must not do.
+    const html = render({ state: RELAY_ONLY, pairing: unfindable, secondsLeft: 45 })
+    expect(html).not.toContain('>Copy</button>')
+    expect(html).toMatch(/<button(?![^>]*disabled)[^>]*>Try again<\/button>/)
+  })
+
+  it('does not count down, because there is nothing to wait for', () => {
+    const html = render({ state: RELAY_ONLY, pairing: unfindable, secondsLeft: 45 })
+    expect(html).not.toContain('Expires in 45s')
+    // And it does not claim the code expired either — it did not, and "expired"
+    // would send somebody to mint another one exactly like it.
+    expect(html).not.toContain('That code has expired')
+  })
+
+  it('blames the rendezvous rather than the relay row, which may say Connected', () => {
+    // RELAY_ONLY's relay *is* connected. A sentence asserting the relay is down
+    // sends the reader to stare at a row that disagrees with it.
+    const html = render({ state: RELAY_ONLY, pairing: unfindable, secondsLeft: 45 })
+    expect(html).toContain('>Connected<')
+    expect(html).not.toContain('The relay is not connected')
+  })
+
+  it('keeps the digits when this machine has a direct route, and narrows the claim', () => {
+    /*
+     * The other half, and the reason this is not one flag.
+     *
+     * With a tailnet address the code is not dead: the browser client this
+     * machine serves has the address in its own origin and needs no lookup, so
+     * a device already on that tailnet can still redeem it. Withholding the
+     * digits here would take away a pairing that works.
+     */
+    const html = render({ state: RUNNING, pairing: unfindable, secondsLeft: 45 })
+    expect(html).toContain('>482913<')
+    expect(html).toContain('Nothing can look this code up')
+    expect(html).toContain('only a device already on your tailnet can use this code')
+  })
+
+  it('says nothing about findability when the main process did not say', () => {
+    // An older main process against this window. Absent is not false, and the
+    // panel falls back to what it can see for itself — a connected relay, so
+    // nothing to warn about.
+    const quiet = { token: '482913', expiresAt: NOW + 45_000, findable: null }
+    const html = render({ state: RELAY_ONLY, pairing: quiet, secondsLeft: 45 })
+    expect(html).toContain('>482913<')
+    expect(html).toContain('Expires in 45s')
+    expect(html).not.toContain('could not take its place at the rendezvous')
+    expect(html).not.toContain('Nothing can look this code up')
+  })
+})
+
+/**
  * The state he screenshotted, on Windows, and the dead end behind it.
  *
  * The wording is his and it is right: it says what happened and what to do
@@ -668,7 +751,7 @@ describe('a live pairing code', () => {
  * So the sentence is pinned *and* the button under it is, in both directions.
  */
 describe('a code that expired while the panel was open', () => {
-  const pairing = { token: '482913', expiresAt: NOW - 1_000 }
+  const pairing = { token: '482913', expiresAt: NOW - 1_000, findable: true }
   const html = render({ state: RUNNING, pairing, secondsLeft: 0 })
 
   it('says so in the words that were already right', () => {
@@ -990,7 +1073,7 @@ describe('the noun for the machine', () => {
       devices: [PHONE],
       connections: [TUNNELLED],
     },
-    pairing: { token: '482913', expiresAt: NOW + 60_000 } as RemotePairing,
+    pairing: { token: '482913', expiresAt: NOW + 60_000, findable: true } as RemotePairing,
     secondsLeft: 42,
     confirmEnable: true,
   }
@@ -1111,8 +1194,36 @@ describe('narrowing what the main process sends', () => {
   it('drops a pairing with no token, because the token is the whole code', () => {
     expect(toRemotePairing({ expiresAt: 1 })).toBeNull()
     expect(toRemotePairing(null)).toBeNull()
-    expect(toRemotePairing({ token: 'abc' })).toEqual({ token: 'abc', expiresAt: null })
+    expect(toRemotePairing({ token: 'abc' })).toEqual({
+      token: 'abc',
+      expiresAt: null,
+      findable: null,
+    })
     expect(toRemotePairing({ token: 'abc', expiresAt: 'soon' })?.expiresAt).toBeNull()
+  })
+
+  it('carries whether the code can be looked up, in all three of its states', () => {
+    /*
+     * The field this panel lost, pinned at the seam it was lost in.
+     *
+     * `remote:pair` computes `findable` while it claims the rendezvous slot the
+     * code names, and it used to answer with the code alone — so a code nothing
+     * could look up arrived here indistinguishable from one anything could, and
+     * was drawn the same. If this narrowing ever goes back to picking `token`
+     * and `expiresAt` out of the answer, this is what fails.
+     *
+     * Three states rather than a boolean, because absent is not false: a main
+     * process too old to send the field has not said the code is unfindable,
+     * and printing that over a working code is the same class of lie in the
+     * other direction.
+     */
+    expect(toRemotePairing({ token: 'abc', expiresAt: 1, findable: true })?.findable).toBe(true)
+    expect(toRemotePairing({ token: 'abc', expiresAt: 1, findable: false })?.findable).toBe(false)
+    expect(toRemotePairing({ token: 'abc', expiresAt: 1 })?.findable).toBeNull()
+    // Not coerced. A string, a number or a null in that field is a main process
+    // saying something this window cannot read, which is "did not say".
+    expect(toRemotePairing({ token: 'abc', expiresAt: 1, findable: 'yes' })?.findable).toBeNull()
+    expect(toRemotePairing({ token: 'abc', expiresAt: 1, findable: 1 })?.findable).toBeNull()
   })
 })
 
@@ -1404,7 +1515,7 @@ describe('the switch', () => {
     // turning remote access back on inside that window would still let a
     // photographed QR redeem.
     const { bridge, calls } = fakeBridge()
-    const h = harness(bridge, { token: 'abc', expiresAt: NOW + 60_000 })
+    const h = harness(bridge, { token: 'abc', expiresAt: NOW + 60_000, findable: true })
     h.actions.enable(false)
     await h.settled()
     expect(calls).toEqual(['cancelRemotePairing()', 'stopRemote()'])
@@ -1601,7 +1712,10 @@ describe('pairing', () => {
     h.actions.pair()
     await h.settled()
     expect(calls).toEqual(['startRemotePairing()'])
-    expect(h.pairing).toEqual({ token: 'tok-1', expiresAt: NOW + 60_000 })
+    // `findable: null` because this fixture's main process did not say — which
+    // is a state the panel has to hold rather than resolve, and is exactly what
+    // a window running against an older build would get.
+    expect(h.pairing).toEqual({ token: 'tok-1', expiresAt: NOW + 60_000, findable: null })
     h.actions.closePairing()
     await h.settled()
     expect(calls).toEqual(['startRemotePairing()', 'cancelRemotePairing()'])
@@ -1614,21 +1728,24 @@ describe('pairing', () => {
     // refused while `pairing` was still set — the expired code is still in
     // state at that moment — would leave the button doing nothing at all.
     const { bridge, calls } = fakeBridge({
-      startRemotePairing: { token: '913482', expiresAt: NOW + 60_000 },
+      startRemotePairing: { token: '913482', expiresAt: NOW + 60_000, findable: true },
     })
-    const dead = { token: '482913', expiresAt: NOW - 1_000 }
+    const dead = { token: '482913', expiresAt: NOW - 1_000, findable: true }
     const h = harness(bridge, dead)
     h.actions.pair()
     await h.settled()
     expect(calls).toEqual(['startRemotePairing()'])
-    expect(h.pairing).toEqual({ token: '913482', expiresAt: NOW + 60_000 })
+    // The whole answer, findability included: the panel narrows what the main
+    // process sent rather than rebuilding a code out of the fields it happens to
+    // care about, which is how the field went missing on the way through before.
+    expect(h.pairing).toEqual({ token: '913482', expiresAt: NOW + 60_000, findable: true })
   })
 
   it('leaves no stale code on screen when the mint fails', async () => {
     // Otherwise the expired code stays up next to a failure notice, which reads
     // as a code somebody could still type.
     const { bridge } = fakeBridge({ startRemotePairing: { expiresAt: NOW } })
-    const h = harness(bridge, { token: '482913', expiresAt: NOW - 1_000 })
+    const h = harness(bridge, { token: '482913', expiresAt: NOW - 1_000, findable: true })
     h.actions.pair()
     await h.settled()
     expect(h.pairing).toBeNull()

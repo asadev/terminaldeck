@@ -2152,6 +2152,24 @@ export interface ShownCode {
 }
 
 /**
+ * What `remote:pair` answers with: the code, and whether anything can look it up.
+ *
+ * A flatter shape than {@link ShownCode} on purpose. This one crosses the
+ * preload, where it is `unknown` and has to be narrowed field by field by the
+ * renderer, and a nested `code` object would mean two narrowings for one answer
+ * — which is how the field this type exists to carry got dropped the first time.
+ *
+ * `findable` is the difference between a code a phone can use and six digits
+ * that only the browser client this machine serves on its own tailnet can
+ * redeem. The panel must be able to tell those apart, because they look
+ * identical on screen and the failure they produce lands sixty seconds later on
+ * a different device, where nothing can explain it.
+ */
+export interface ShownPairingCode extends PairingToken {
+  findable: boolean
+}
+
+/**
  * The one pairing code that is on screen.
  *
  * `RemoteAuth` will happily keep sixteen live tokens at once, which is right
@@ -3080,16 +3098,28 @@ export function registerRemoteIpc(ipcMain: InvokeRegistrar, deps: RemoteIpcDeps)
    * where the page's own origin is the address and no lookup is needed. Every
    * other client — iOS, Android, a second desktop — needs the slot.
    *
-   * A caller that wants to know reads `findable` off `desk.show`; this handler
-   * deliberately does not, because narrowing its return type is a change to the
-   * contract the Remote panel is written against. See the note in the handover
-   * for this change: the panel should say "only reachable from your tailnet"
-   * when the slot did not come up, rather than showing six digits that most
-   * clients cannot use.
+   * ## Why the answer carries `findable`, and why that is not optional
+   *
+   * `desk.show` computes it on four separate paths — no address to publish, a
+   * beacon that could not be constructed, a slot that did not come up inside
+   * `BEACON_READY_TIMEOUT_MS`, and a code that died while the slot was being
+   * claimed — and this handler used to throw it away and answer with the
+   * code alone. Every one of those paths therefore produced the same screen as
+   * success: six digits and a countdown, on a machine that nothing could look
+   * up. The person types them into a phone, the phone finds an empty slot, and
+   * the only sentence anybody sees is the phone's "no machine is showing that
+   * code" — sixty seconds later, on the wrong device, blaming the wrong end.
+   *
+   * So it travels. The panel refuses to present an unfindable code as one a
+   * phone can use, which is the only place that failure can be reported while
+   * somebody is still standing in front of the machine that caused it. This
+   * stays true even after every cause is fixed: a relay that is down, a network
+   * that blocks it, or a laptop that woke up on a captive-portal wifi all land
+   * here again, and silence is the one answer that must not be possible.
    */
-  ipcMain.handle('remote:pair', async (): Promise<PairingToken> => {
+  ipcMain.handle('remote:pair', async (): Promise<ShownPairingCode> => {
     const shown = await desk.show(offerFrom(server.status().relay))
-    return shown.code
+    return { ...shown.code, findable: shown.findable }
   })
   ipcMain.handle('remote:pair:cancel', (): { cancelled: true } => {
     // Both halves. `cancel` leaves the rendezvous slot as well as forgetting the

@@ -156,9 +156,19 @@ const api: Record<string, unknown> = new Proxy(
       return remoteState()
     },
     listRemoteDevices: async () => remote.devices,
-    // `PairingToken` is a token and an expiry. It has never carried a URL: the
-    // link is built in the renderer, from the status.
-    startRemotePairing: async () => ({ token: 'stub-token', expiresAt: Date.now() + 60_000 }),
+    // `ShownPairingCode` is a token, an expiry and whether anything can look the
+    // code up. It has never carried a URL: the link is built in the renderer,
+    // from the status.
+    //
+    // `findable` is here because a stub that omitted it would put the panel in
+    // its "the main process did not say" branch for every code the harness
+    // shows, which is the one state a real build never produces — and this stub
+    // exists to be the shapes the preload actually sends.
+    startRemotePairing: async () => ({
+      token: 'stub-token',
+      expiresAt: Date.now() + 60_000,
+      findable: true,
+    }),
     cancelRemotePairing: async () => ({ ok: true }),
     // Each of these answers with the list the main process answers with, and
     // each actually changes it. A stub that returned `{ ok: true }` and left

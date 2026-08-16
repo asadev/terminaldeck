@@ -104,7 +104,11 @@ describe('nextClockChange', () => {
   })
 
   it('lands on the second the pairing countdown changes', () => {
-    const pairing = { token: 'tok', expiresAt: NOW + 42_300 }
+    // `findable` is stated on every code in this file and read by none of it.
+    // The clock does not care whether anything can look a code up — but the type
+    // requires an answer, deliberately, so that no screen can build a code
+    // without having decided. It is the field this panel lost once already.
+    const pairing = { token: 'tok', expiresAt: NOW + 42_300, findable: true }
     const at = nextClockChange(null, pairing, NOW)
     if (at === null) throw new Error('a live code has to tick')
 
@@ -115,11 +119,11 @@ describe('nextClockChange', () => {
   })
 
   it('stops ticking once the code has expired', () => {
-    expect(nextClockChange(null, { token: 'tok', expiresAt: NOW - 1 }, NOW)).toBeNull()
+    expect(nextClockChange(null, { token: 'tok', expiresAt: NOW - 1, findable: true }, NOW)).toBeNull()
   })
 
   it('a code with no expiry never asks for a tick', () => {
-    expect(nextClockChange(null, { token: 'tok', expiresAt: null }, NOW)).toBeNull()
+    expect(nextClockChange(null, { token: 'tok', expiresAt: null, findable: true }, NOW)).toBeNull()
   })
 
   it('lands on the minute "last seen" changes', () => {
@@ -185,7 +189,7 @@ describe('nextClockChange', () => {
   })
 
   it('takes the soonest of several moving things', () => {
-    const pairing = { token: 'tok', expiresAt: NOW + 30_500 }
+    const pairing = { token: 'tok', expiresAt: NOW + 30_500, findable: true }
     const both = state({ devices: [device({ lastSeenAt: NOW - 20_000 })] })
     const at = nextClockChange(both, pairing, NOW)
     // The code moves in half a second; "last seen" not for another ten.
@@ -208,7 +212,7 @@ describe('nextClockChange', () => {
   it('re-arms from the moment it returns, so the chain does not stall', () => {
     // Walking the chain forward has to reach the end of the countdown rather
     // than sitting on one second forever.
-    const pairing = { token: 'tok', expiresAt: NOW + 5000 }
+    const pairing = { token: 'tok', expiresAt: NOW + 5000, findable: true }
     let clock = NOW
     const seen: number[] = []
     for (let step = 0; step < 20; step++) {
@@ -224,7 +228,7 @@ describe('nextClockChange', () => {
 
 describe('unsettled', () => {
   it('is true while a code is on screen, because a pending device is not pushed', () => {
-    expect(unsettled(state(), { token: 'tok', expiresAt: NOW + 60_000 })).toBe(true)
+    expect(unsettled(state(), { token: 'tok', expiresAt: NOW + 60_000, findable: true })).toBe(true)
   })
 
   it('is true while the relay is mid-dial', () => {
@@ -279,7 +283,7 @@ describe('codeSecondsLeft', () => {
     // The countdown's wake-up comes from `nextClockChange`, so the two have to
     // land on the same second: a tick computed a millisecond early redraws the
     // number that is already on screen and then never fires again.
-    const pairing = { token: '482913', expiresAt: NOW + 45_000 }
+    const pairing = { token: '482913', expiresAt: NOW + 45_000, findable: true }
     const at = nextClockChange(state(), pairing, NOW)
     expect(at).not.toBeNull()
     expect(codeSecondsLeft(pairing.expiresAt, (at ?? 0) - 1)).toBe(45)

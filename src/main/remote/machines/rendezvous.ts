@@ -321,6 +321,26 @@ export interface BeaconOptions {
  *
  * Returns null when the code is not a code. A beacon for a string nobody can
  * type is a socket held open for nothing.
+ *
+ * ## Measured against the public relay, 2026-08-16
+ *
+ * Written down because this function was once accused of never claiming its
+ * slot, on the strength of a probe that could not have shown that. Three runs
+ * against `wss://relay.terminaldeck.dev` on that date, one from plain Node and
+ * two through the shipped 0.2.0 desktop over CDP:
+ *
+ *  - `ready()` resolved true in ~0.5s, and the relay's `/healthz` host count
+ *    rose by exactly one for the life of the code and fell back after `stop`;
+ *  - `lookupMachine` — a separate process holding nothing but the six digits —
+ *    read the offer back in under a second;
+ *  - `pairWithCode` from that same process completed the whole chain and left a
+ *    pending device on the desktop awaiting approval.
+ *
+ * The probe that said otherwise upgraded to `/?host=<slot>` and read its 404 as
+ * an empty slot. `/v1/join` is the guest path; the relay 404s every other path,
+ * claimed slot or not, and `/v1/join` answers 101 either way on purpose so it
+ * cannot be used to ask which machines are online. Both halves of that are
+ * pinned in `live.test.ts` under "probing a rendezvous slot over plain HTTP".
  */
 export function startBeacon(options: BeaconOptions): Beacon | null {
   const identity = rendezvousIdentity(options.code)
