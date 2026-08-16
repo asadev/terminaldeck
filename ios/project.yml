@@ -73,7 +73,7 @@ targets:
         # through 0.1.5, 0.1.6, 0.1.7 and 0.1.8 because nothing but a release
         # reads it, and preflight is a `fail` rather than a warning precisely so
         # the drift cannot reach an upload.
-        MARKETING_VERSION: "0.1.9"
+        MARKETING_VERSION: "0.2.0"
         # A stamp in the same yymmddHHMM shape release.sh generates, not a
         # counter. "1" was not merely stale, it was a collision waiting: build
         # number 1 has already been uploaded to this app record, and App Store
@@ -82,7 +82,7 @@ targets:
         # every build already on Apple's side, which is the only property a
         # build number has to have. Refresh it whenever the marketing version
         # moves; a fixed number here can only ever go stale.
-        CURRENT_PROJECT_VERSION: "2608151550"
+        CURRENT_PROJECT_VERSION: "2608161932"
         # 1 = iPhone only, and the asymmetry in Apple's rules is the whole
         # reason. A device family can be *added* to a shipped app whenever the
         # layout is ready for it; it cannot be taken away — App Store Connect
