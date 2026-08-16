@@ -164,6 +164,25 @@ async function terminal(
     shell.exited = true
   })
 
+  /*
+   * Wait for the shell to exist before typing at it.
+   *
+   * `pty.spawn` returns as soon as the process is created, not when zsh is
+   * ready to read — and every step below writes immediately. On this Mac the
+   * gap is invisible; on a shared CI runner it is not, and a keystroke written
+   * into a shell that has not started yet is simply lost. The symptom is this
+   * test's own failure mode: the capture holds the echoed command and none of
+   * its output, which reads as "the confinement broke git" when the truth is
+   * that git was never asked.
+   *
+   * Any byte is enough — a login zsh prints a prompt, and nothing else is
+   * printing yet. Ceiling rather than sleep, for the same reason as the steps.
+   */
+  const ready = Date.now() + 10_000
+  while (out === '' && !shell.exited && Date.now() < ready) {
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  }
+
   for (const step of steps) {
     const [text, wait] = step
     const until = step.length === 3 ? step[2] : null
@@ -243,11 +262,15 @@ describe.skipIf(!onMac)('a confined session in a real terminal', () => {
     // they have to work in.
     // 15s ceiling, satisfied the instant 42 appears — see `terminal`.
     const seen = await terminal([
-      ['git --version && node -e "console.log(6*7)"\r', 15_000, /42/],
+      ['git --version && node -e "console.log(6*7)"\r', 30_000, /42/],
     ])
     expect(seen).toMatch(/git version/)
     expect(seen).toContain('42')
-  }, 20_000)
+    // 45s, raised with the ceiling above after this failed a release build on a
+    // `macos-latest` runner. Neither number is a tuned timeout: the step ends
+    // the instant `42` appears, so a fast machine is unaffected and a slow one
+    // gets the same answer later.
+  }, 45_000)
 
   /**
    * The helper waits for the shell it started to actually exit.
