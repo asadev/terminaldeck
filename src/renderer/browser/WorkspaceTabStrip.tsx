@@ -158,9 +158,24 @@ export function WorkspaceTabStrip({
     droppedHere.current = false
   }
 
+  /*
+   * Nothing exists to drag, so there is nothing to teach.
+   *
+   * The hint below is right whenever there is something in the side panel that
+   * could be promoted, and wrong the moment there is not: on a fresh launch,
+   * with no project open and no session started, it invites a gesture that
+   * cannot be performed and takes a strip of the window forever to say so.
+   * Rendered against the real build, that is exactly how it looked — a bar
+   * across an otherwise empty window, above the words "Nothing open yet".
+   *
+   * `tabs`, not `promoted`: the question is whether a drag is *possible*, not
+   * whether one has happened.
+   */
+  if (tabs.length === 0) return null
+
   if (promoted.length === 0) {
     /*
-     * Nothing promoted yet.
+     * Nothing promoted yet, but something could be.
      *
      * A thin drop target with a sentence in it, rather than nothing at all. An
      * invisible drop zone is undiscoverable, and this is a gesture nobody has

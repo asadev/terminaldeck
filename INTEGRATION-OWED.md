@@ -94,6 +94,27 @@ Ticked items were applied directly by me because no agent held the file.
       OAuth apps have no per-repo scope — this is a GitHub platform limit, not a
       shortcut taken here. Steps for him are in that agent's report.
 
+## Held out of the push
+
+- [ ] **`.github/workflows/release.yml`** — committed nowhere, sitting in the
+      working tree. GitHub refuses a workflow file pushed by a token without the
+      `workflow` scope, and no account here has it (checked live against the API:
+      `admin:public_key, gist, read:org, repo`). One command grants it:
+      `gh auth refresh -h github.com -s workflow`, approved for **asadev** —
+      which `gh` still labels `imzapremium`, its pre-rename name.
+
+      Two things ride on that file, and both fail *quietly* without it:
+      - the macOS signing step, so a tag would build an unsigned dmg again and
+        every download would say the app "is damaged";
+      - the step that compiles `tdconfine.exe`, without which
+        `extraResources: native/win-confine/tdconfine.exe` matches nothing, the
+        installer ships no launcher, and electron-builder says nothing at all.
+        Confinement then reports itself unavailable — honestly, but forever.
+
+      The repo variable `TD_MAC_SIGNED_ONLY=true` is already set, so the signing
+      step will produce a signed-but-not-notarized build while Apple's hold
+      lasts, and flip back by changing that variable alone.
+
 ## Coupling to preserve, not a task
 
 - `src/renderer/dashboard/useBoard.ts` imports `useTranscriptChanges` from

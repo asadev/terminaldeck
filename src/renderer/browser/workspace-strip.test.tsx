@@ -300,3 +300,31 @@ describe('remembering the arrangement', () => {
     expect(() => writePromoted(null, ['a'])).not.toThrow()
   })
 })
+
+describe('the strip on a window with nothing in it', () => {
+  /*
+   * Caught by rendering the real build and looking at it, not by reading this
+   * file: on a fresh launch — no project, no session — the strip drew a bar
+   * across the window reading "Drag a session or a page here to keep it along
+   * the top", directly above a side panel that said "Nothing open yet".
+   *
+   * The hint is right whenever something *could* be dragged. It is wrong when
+   * nothing exists, because it advertises a gesture that cannot be performed
+   * and spends a strip of every empty window doing it. The distinguishing fact
+   * is `tabs`, not `promoted`.
+   */
+  it('draws nothing when there is nothing that could be dragged into it', () => {
+    const html = renderToStaticMarkup(
+      <WorkspaceTabStrip tabs={[]} activeTabId={null} onSelect={() => {}} storage={null} />,
+    )
+    expect(html).toBe('')
+  })
+
+  it('still offers the drop target once something exists to promote', () => {
+    const tabs: WorkspaceTab[] = [{ id: 's1', kind: 'session', title: 'Session 1' }]
+    const html = renderToStaticMarkup(
+      <WorkspaceTabStrip tabs={tabs} activeTabId="s1" onSelect={() => {}} storage={null} />,
+    )
+    expect(html).toContain('Drag a session or a page here')
+  })
+})
