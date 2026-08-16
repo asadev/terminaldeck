@@ -206,7 +206,7 @@ interface RowProps {
  * said so was a paragraph in the Accounts screen, which is exactly the sort of
  * fact that is true in one list and forgotten in the next.
  */
-function ProviderRow({ row, group, selected, onSelect, hint, disabledReason, tag }: RowProps) {
+function AgentRow({ row, group, selected, onSelect, hint, disabledReason, tag }: RowProps) {
   const blocked = disabledReason ?? null
   const available = row.available && blocked === null
 
@@ -338,7 +338,7 @@ export function ProviderPicker({ open, projectPath, defaultProvider, onClose, on
 
         <div className="picker-list" role="radiogroup" aria-label="Agent">
           {rows.map((row) => (
-            <ProviderRow
+            <AgentRow
               key={row.id}
               row={row}
               group={`${formId}-provider`}
@@ -377,16 +377,16 @@ export function ProviderPicker({ open, projectPath, defaultProvider, onClose, on
  * > choose which LLM I want to connect."*
  *
  * The engine was never Claude-only; the *concept* was. An account is a config
- * directory handed to an agent CLI, and until this dialog existed there was
- * nowhere to say which CLI. So this is the missing first step: pick the agent,
- * then name the account, then sign in *inside a session on that agent*, which is
- * how a fresh Claude account has always been signed in here and works unchanged
- * for Codex.
+ * directory handed to an agent CLI, and until this list existed there was
+ * nowhere to say which CLI. So this is the missing first step, and the Accounts
+ * pane draws it above the name field: pick the agent, then name the account,
+ * then sign in *inside a session on that agent*, which is how a fresh Claude
+ * account has always been signed in here and works unchanged for Codex.
  *
  * ## Why the refused agents are still listed
  *
  * Because a missing row is indistinguishable from a bug, and because Gemini is
- * the row this dialog most needs to explain. Gemini has a config-directory
+ * the row this list most needs to explain. Gemini has a config-directory
  * variable and it does not move the login — two Gemini accounts would address
  * one keychain entry, and signing into the second would overwrite the first.
  * `provider-accounts.ts` holds that measurement and the sentence; this shows it
@@ -403,10 +403,10 @@ export interface AccountProviderView {
 /**
  * Narrow the `profiles:account-providers` answer.
  *
- * Returns an empty list for anything unrecognised, and the dialog then draws
- * from its own catalogue — which has the same booleans and shorter sentences.
- * A dialog that refused to open because an IPC answered oddly would be worse
- * than one that opens with less to say.
+ * Returns an empty list for anything unrecognised, and the list then draws from
+ * its own catalogue — which has the same booleans and shorter sentences. A
+ * screen that refused to draw because an IPC answered oddly would be worse than
+ * one that draws with less to say.
  */
 export function parseAccountProviders(value: unknown): AccountProviderView[] {
   const raw = typeof value === 'object' && value !== null ? (value as { providers?: unknown }) : null
@@ -475,24 +475,26 @@ export function firstAccountProvider(rows: readonly AccountProviderRow[]): Provi
   return rows.find((row) => row.canAdd)?.id ?? null
 }
 
-interface AccountPickerProps {
-  open: boolean
-  onClose(): void
-  /** Runs with the chosen agent. The caller names the account and signs it in. */
-  onPick(provider: ProviderId): void
-}
-
-export function AccountProviderPicker({ open, onClose, onPick }: AccountPickerProps) {
+/**
+ * The Add-account list, ready to draw.
+ *
+ * Both the two questions behind it are asked here — what is on PATH, and which
+ * agents this build will isolate — because they arrive separately and neither
+ * of them is allowed to hold the list back. The catalogue's own booleans are
+ * what the first paint uses, so the rows are correct before either answers and
+ * do not change from selectable to disabled under a pointer already moving.
+ *
+ * @param active false parks it: nothing is fetched and the last answers are
+ *   dropped. A dialog passes `open` so that reopening it re-detects rather than
+ *   offering an agent that was uninstalled in between; a settings pane that is
+ *   only mounted while it is on screen passes `true`.
+ */
+export function useAccountProviderRows(active: boolean): AccountProviderRow[] {
   const [detected, setDetected] = useState<unknown>(null)
   const [fromMain, setFromMain] = useState<readonly AccountProviderView[]>([])
-  const [selected, setSelected] = useState<ProviderId | null>(null)
-  const formId = useId()
-
-  const rows = useMemo(() => buildAccountProviderRows(detected, fromMain), [detected, fromMain])
-  const current = rows.find((row) => row.id === selected) ?? null
 
   useEffect(() => {
-    if (!open) return
+    if (!active) return
     let cancelled = false
 
     // Reset on open, not on close: leaving the previous visit's answers up
@@ -500,7 +502,6 @@ export function AccountProviderPicker({ open, onClose, onPick }: AccountPickerPr
     // an agent that has since been uninstalled.
     setDetected(null)
     setFromMain([])
-    setSelected(null)
 
     const bridge = (globalThis as { deck?: Record<string, unknown> }).deck
     const detect = bridge?.detectProviders
@@ -532,68 +533,87 @@ export function AccountProviderPicker({ open, onClose, onPick }: AccountPickerPr
     return () => {
       cancelled = true
     }
-  }, [open])
+  }, [active])
 
-  // Preselect the first agent that can take an account, and move off one that
-  // an arriving answer has just ruled out. Done here rather than in the fetch
-  // handlers so it holds however the selection got into that state.
-  useEffect(() => {
-    if (!open) return
-    if (current?.canAdd === true) return
-    setSelected(firstAccountProvider(rows))
-  }, [open, current, rows])
+  return useMemo(() => buildAccountProviderRows(detected, fromMain), [detected, fromMain])
+}
 
-  const submit = useCallback(
-    (event: FormEvent) => {
-      event.preventDefault()
-      if (!current?.canAdd) return
-      onPick(current.id)
-    },
-    [current, onPick],
-  )
+interface AccountListProps {
+  /** Radio group name. Two of these can be mounted at once; their rows must not join. */
+  group: string
+  rows: readonly AccountProviderRow[]
+  selected: ProviderId | null
+  onSelect(id: ProviderId): void
+}
 
+/**
+ * "Which agent is this a login for?", as a list of rows.
+ *
+ * A component rather than a loop written twice, because the two places that ask
+ * it — the Accounts pane's Add form and the dialog below — must give the same
+ * answer, and the row that matters most is the one nobody clicks. Gemini is
+ * *listed*, disabled, with the measured reason beside it: a missing row is
+ * indistinguishable from an oversight, and Gemini is the agent somebody will
+ * most reasonably assume was forgotten, because it does have a
+ * config-directory variable. What it does not have is a way to keep two logins
+ * apart — `provider-accounts.ts` holds the measurement — so signing into a
+ * second Gemini account would overwrite the first rather than sit beside it.
+ */
+export function AccountProviderList({ group, rows, selected, onSelect }: AccountListProps) {
   return (
-    <Modal
-      open={open}
-      title="Add an account"
-      description="Which agent is this a login for?"
-      onClose={onClose}
-      size="lg"
-      footer={
-        <>
-          <button type="button" className="modal-btn" onClick={onClose}>
-            Cancel
-          </button>
-          <button
-            type="submit"
-            form={formId}
-            className="modal-btn primary"
-            disabled={!current?.canAdd}
-          >
-            Continue
-          </button>
-        </>
-      }
-    >
-      <form id={formId} className="picker" onSubmit={submit}>
-        <div className="picker-list" role="radiogroup" aria-label="Agent">
-          {rows.map((row) => (
-            <ProviderRow
-              key={row.id}
-              row={row}
-              group={`${formId}-account-provider`}
-              selected={row.id === selected}
-              onSelect={setSelected}
-              // An agent that is not installed keeps its own "not installed"
-              // reason and install line; one that is installed but cannot hold
-              // a second login gets the sentence explaining that instead.
-              hint={row.available ? row.note : null}
-              disabledReason={row.canAdd ? null : (row.note ?? 'Not available.')}
-              tag={row.available && !row.canAdd ? 'One login only' : undefined}
-            />
-          ))}
-        </div>
-      </form>
-    </Modal>
+    <div className="picker-list" role="radiogroup" aria-label="Agent">
+      {rows.map((row) => (
+        <AgentRow
+          key={row.id}
+          row={row}
+          group={group}
+          selected={row.id === selected}
+          onSelect={onSelect}
+          // An agent that is not installed keeps its own "not installed"
+          // reason and install line; one that is installed but cannot hold
+          // a second login gets the sentence explaining that instead.
+          hint={row.available ? row.note : null}
+          disabledReason={row.canAdd ? null : (row.note ?? 'Not available.')}
+          tag={row.available && !row.canAdd ? 'One login only' : undefined}
+        />
+      ))}
+    </div>
   )
 }
+
+/**
+ * Which agent a new account will actually belong to, given what was clicked.
+ *
+ * Derived, never stored, and that is the whole point of it being a function.
+ * The rows change under the selection twice — once when `detectProviders`
+ * answers and once when the main process does — so a selection kept in state
+ * has to be corrected by an effect, and an effect does not run on the first
+ * paint. That is the paint where nobody has clicked anything yet and the form
+ * must still show which agent Add would use. Computing it instead means the
+ * answer is right immediately and stays right when a row stops being addable,
+ * with no render in between where Add is lit over a row that refuses.
+ *
+ * Null only when no agent on this machine can take an account at all.
+ */
+export function chosenAccountProvider(
+  rows: readonly AccountProviderRow[],
+  selected: ProviderId | null,
+): AccountProviderRow | null {
+  return (
+    rows.find((row) => row.id === selected && row.canAdd) ?? rows.find((row) => row.canAdd) ?? null
+  )
+}
+
+/*
+ * There is no Add-account *dialog* here, and that is a decision rather than an
+ * omission.
+ *
+ * One was written, as a `Modal` the Accounts pane would open. It cannot ship:
+ * `Modal` binds Escape to `window`, the Settings sheet is itself a `Modal`, and
+ * listeners on one target fire in the order they were added — so Escape inside
+ * a dialog opened from Settings closes Settings *and* the dialog, throwing away
+ * the pane the user was working in. The three pieces above are what that dialog
+ * was made of, and the Accounts pane draws them inline instead, where the choice
+ * of agent sits directly above the name field it belongs with and there is no
+ * second sheet to dismiss.
+ */

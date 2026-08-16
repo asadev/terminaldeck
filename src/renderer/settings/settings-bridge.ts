@@ -15,6 +15,7 @@
  * sentence; the alternative is a dialog that throws on open.
  */
 
+import type { ProviderId } from '@shared/types'
 import type { SettingValues } from './settings-schema'
 
 /* -------------------------------------------------------------- sections -- */
@@ -42,8 +43,14 @@ export interface SectionProps {
    *
    * Optional, like every other capability here: a panel rendered without it
    * draws no Sign in button rather than a button that does nothing.
+   *
+   * `provider` is which agent to start, and it is not optional decoration: an
+   * account is a login of one specific CLI, so a session started on a different
+   * one shows the wrong login screen and the account is dropped on the way past.
+   * Omitted still means "whatever the default coding tool is", which is what
+   * every caller meant while Claude was the only agent that could hold one.
    */
-  startSession?(request: { profileId: string }): void
+  startSession?(request: { profileId: string; provider?: ProviderId }): void
 }
 
 /* ------------------------------------------------------------ mirrored -- */

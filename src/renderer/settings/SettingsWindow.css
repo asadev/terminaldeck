@@ -940,6 +940,17 @@
   flex: 1;
 }
 
+/* The name field, under the list of agents it belongs to.
+
+   Space rather than a rule, which is the separation this app reaches for
+   first. Without it the field sat directly under the last agent's hint line
+   and read as part of that row — and the last row is Gemini, the one that
+   cannot be chosen, so the field looked like it belonged to a disabled
+   option. */
+.settings-add-account {
+  margin-top: var(--sp-3);
+}
+
 /* ------------------------------------------------------ paths and about -- */
 
 .settings-path {

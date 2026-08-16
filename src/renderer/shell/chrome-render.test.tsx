@@ -273,7 +273,10 @@ describe('placeMenu', () => {
 })
 
 describe('accountsWorthShowing', () => {
-  const session = (id: string, account?: { id: string; name: string }): WorkspaceTab => ({
+  const session = (
+    id: string,
+    account?: { id: string; name: string; provider: 'claude' },
+  ): WorkspaceTab => ({
     id,
     kind: 'session',
     label: id,
@@ -281,8 +284,8 @@ describe('accountsWorthShowing', () => {
     closable: true,
     ...(account ? { account } : {}),
   })
-  const work = { id: 'work', name: 'Work' }
-  const home = { id: 'home', name: 'Home' }
+  const work = { id: 'work', name: 'Work', provider: 'claude' } as const
+  const home = { id: 'home', name: 'Home', provider: 'claude' } as const
 
   it('stays quiet while every session is on the same account', () => {
     // A label that appears on every row carries no information, and this is the
@@ -437,7 +440,7 @@ describe('Sidebar', () => {
             kind: 'session',
             label: 'Fix the parser',
             projectPath: projects[0].path,
-            account: { id: 'work', name: 'Work' },
+            account: { id: 'work', name: 'Work', provider: 'claude' },
             closable: true,
           },
           {
@@ -445,7 +448,7 @@ describe('Sidebar', () => {
             kind: 'session',
             label: 'Fix the parser',
             projectPath: projects[0].path,
-            account: { id: 'home', name: 'Home' },
+            account: { id: 'home', name: 'Home', provider: 'claude' },
             closable: true,
           },
         ]}
@@ -481,7 +484,7 @@ describe('Sidebar', () => {
             kind: 'session',
             label: 'Fix the parser',
             projectPath: projects[0].path,
-            account: { id: 'work', name: 'Work' },
+            account: { id: 'work', name: 'Work', provider: 'claude' },
             closable: true,
           },
         ]}

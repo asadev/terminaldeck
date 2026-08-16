@@ -91,6 +91,40 @@ describe('preload → main transport', () => {
   })
 })
 
+/**
+ * Arguments a preload method declares and then does not send.
+ *
+ * A fourth kind of failure at this seam, and the only one that type-checks
+ * clean on both sides: the parameter is in the signature, so callers pass it
+ * and TypeScript is satisfied, and the `invoke` below simply leaves it out. The
+ * handler then runs its no-argument default and everything looks like it worked.
+ *
+ * Both entries here are that bug, shipped. `deleteProfile` dropped its options
+ * and "delete this profile's files too" removed the profile and left the
+ * directory. `createProfile` dropped its options and `profiles:create` fell
+ * back to Claude for every account ever added on the Accounts screen, whichever
+ * agent had been chosen — reported as "if I add any new account it just
+ * redirects me to claude only".
+ */
+const FORWARDED: ReadonlyArray<{ method: string; channel: string; argument: string }> = [
+  { method: 'createProfile', channel: 'profiles:create', argument: 'options' },
+  { method: 'deleteProfile', channel: 'profiles:delete', argument: 'options' },
+]
+
+describe('preload arguments reach the channel', () => {
+  for (const { method, channel, argument } of FORWARDED) {
+    it(`${method} sends its ${argument} to ${channel}`, () => {
+      // The method's own body, taken as everything up to its `invoke` — the
+      // comments above these are long, so the window has to be generous.
+      const call = new RegExp(
+        `\\b${method}:[\\s\\S]{0,800}?ipcRenderer\\.invoke\\(\\s*'${channel}'([^)]*)\\)`,
+      ).exec(preload)
+      expect(call, `${method} does not invoke ${channel}`).not.toBeNull()
+      expect(call?.[1]).toContain(argument)
+    })
+  }
+})
+
 describe('renderer → preload contract', () => {
   const exposed = new Set([...preload.matchAll(/^\s{2}([a-zA-Z][A-Za-z0-9_]*):\s*\(/gm)].map((m) => m[1]))
 

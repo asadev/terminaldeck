@@ -25,6 +25,8 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { ProviderId } from '@shared/types'
+import { isProviderId } from './preferences'
 
 /* -------------------------------------------------------------- bridging -- */
 
@@ -37,7 +39,21 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
  */
 export interface AccountsBridge {
   listProfiles(): Promise<unknown>
-  createProfile(name: string): Promise<unknown>
+  /**
+   * Which agents can hold an account of their own, and why the others cannot.
+   *
+   * Asked at the moment the Add form is drawn rather than baked in, because the
+   * answer is a measurement the main process made — see `provider-accounts.ts`,
+   * where each agent's entry sits next to the commands it was established with.
+   * The renderer's catalogue in `ProviderPicker.tsx` carries the same booleans
+   * so the form can draw before this answers; this is what makes them provable.
+   */
+  accountProviders(): Promise<unknown>
+  /**
+   * @param options.provider which agent the account is a login of. Absent means
+   *   Claude, which is what every caller meant before the form asked.
+   */
+  createProfile(name: string, options?: { provider?: ProviderId }): Promise<unknown>
   renameProfile(id: string, name: string): Promise<unknown>
   deleteProfile(id: string, options?: { deleteFiles?: boolean }): Promise<unknown>
   setDefaultProfile(id: string | null): Promise<unknown>
@@ -59,6 +75,17 @@ export function accountsBridge(host?: unknown): Partial<AccountsBridge> | null {
 export interface AccountView {
   id: string
   name: string
+  /**
+   * Which agent this is a login of, or null when the main process did not say.
+   *
+   * Not decoration. It decides which CLI a session started under this account
+   * runs — handing a Codex directory to Claude Code is a broken session, not a
+   * login — and it is what the mark beside the name is drawn from. Null draws no
+   * mark and claims no agent, which is the honest answer for a payload from a
+   * build that predates accounts having providers; guessing Claude there would
+   * put an Anthropic mark beside somebody's ChatGPT login.
+   */
+  provider: ProviderId | null
   /** The directory handed to the CLI. Two names can look alike; two paths cannot. */
   configDir: string
   /** The user's own install — the account every fallback chain ends on. */
@@ -144,6 +171,11 @@ export function parseAccount(value: unknown): AccountView | null {
   return {
     id,
     name,
+    // Narrowed rather than cast: `profiles.json` is a file a person can edit,
+    // and an unrecognised string would reach `hasProviderMark` as a provider
+    // this build has no mark for. Null is the answer for both cases and both
+    // draw nothing.
+    provider: isProviderId(raw.provider) ? raw.provider : null,
     configDir: typeof configDir === 'string' ? configDir : '',
     system: raw.system === true,
     color: typeof raw.color === 'string' && CUSTOM_PROPERTY.test(raw.color) ? raw.color : '--accent',

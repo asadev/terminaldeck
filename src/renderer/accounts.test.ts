@@ -26,6 +26,7 @@ const SNAPSHOT: AccountsSnapshot = {
     {
       id: 'system',
       name: 'Default',
+      provider: 'claude',
       configDir: '/Users/me/.claude',
       system: true,
       color: '--accent',
@@ -34,6 +35,7 @@ const SNAPSHOT: AccountsSnapshot = {
     {
       id: 'work',
       name: 'Work',
+      provider: 'codex',
       configDir: '/Users/me/Library/Application Support/deck/profiles/work',
       system: false,
       color: '--status-completed',
@@ -90,6 +92,24 @@ describe('parseAccount', () => {
     // writes into it too.
     expect(parseAccount({ id: 'a', name: 'A' })?.lastUsedAt).toBeNull()
     expect(parseAccount({ id: 'a', name: 'A', lastUsedAt: 12 })?.lastUsedAt).toBe(12)
+  })
+
+  it('keeps the agent an account is a login of', () => {
+    // It decides which CLI a session under this account runs, and which mark is
+    // drawn beside the name. Both go wrong quietly if it is dropped.
+    expect(parseAccount({ id: 'a', name: 'A', provider: 'codex' })?.provider).toBe('codex')
+  })
+
+  it('claims no agent for one it was not told about, or does not recognise', () => {
+    /*
+     * Two situations, one answer. A record written before accounts had
+     * providers, and a `profiles.json` somebody hand-edited or a newer build
+     * wrote — both would put a mark beside a name on the strength of a guess.
+     * The mark says which service a login belongs to; a wrong one is worse than
+     * none, and none is what null draws.
+     */
+    expect(parseAccount({ id: 'a', name: 'A' })?.provider).toBeNull()
+    expect(parseAccount({ id: 'a', name: 'A', provider: 'grok' })?.provider).toBeNull()
   })
 })
 

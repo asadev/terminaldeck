@@ -1,4 +1,4 @@
-import type { SessionStatus } from '@shared/types'
+import type { ProviderId, SessionStatus } from '@shared/types'
 
 /**
  * A tab in the top header.
@@ -35,8 +35,13 @@ export interface WorkspaceTab {
    * config directory this app cannot redirect. Absent is not "the default": it
    * means there is nothing true to say, and a row that says nothing is better
    * than one that names an account the session is not actually isolated to.
+   *
+   * `provider` is the agent the session was launched as, carried here so the
+   * account chip can draw that agent's mark beside the name without reading the
+   * account list — which it only does when its menu is opened, because reading
+   * it spawns a process per account.
    */
-  account?: { id: string; name: string }
+  account?: { id: string; name: string; provider: ProviderId }
   /** True for tabs the user can close. */
   closable: boolean
 }

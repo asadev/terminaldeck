@@ -181,6 +181,91 @@ describe('the presence signal itself', () => {
   })
 })
 
+describe('which agent the chip is about', () => {
+  /**
+   * His words:
+   *
+   *   > "in the dropdown we can see which account is connected — but next to it
+   *   > we should also see the logo of the LLM. If I'm using Claude then the
+   *   > Claude logo should be up there, if ChatGPT then the ChatGPT logo, if
+   *   > Gemini then the Gemini logo."
+   *
+   * The menu is portalled and only exists once opened, which a static render
+   * cannot do — so what is pinned here is the *button*, which is the part that
+   * is on screen for the whole life of a session and the part he was looking at.
+   *
+   * It has to come off the running session, not off the account list: the list
+   * is only read when the menu opens, deliberately, because reading it spawns a
+   * process per account. A badge sourced from the list would therefore be blank
+   * exactly when he is using the session.
+   */
+  const chip = (current: { id: string; name: string; provider?: 'claude' | 'codex' | 'gemini' }) =>
+    renderToStaticMarkup(
+      <AccountChip current={current} projectPath="/w/app" onPick={noop} onManage={noop} />,
+    )
+
+  it('draws the agent’s mark beside the account name', () => {
+    expect(chip({ id: 'work', name: 'Work', provider: 'claude' })).toContain(
+      'data-provider="claude"',
+    )
+    expect(chip({ id: 'work', name: 'Work', provider: 'codex' })).toContain('data-provider="codex"')
+    expect(chip({ id: 'work', name: 'Work', provider: 'gemini' })).toContain(
+      'data-provider="gemini"',
+    )
+  })
+
+  it('names the agent for anyone not looking at the screen', () => {
+    // Nothing else in the chip says which agent it is — the account name is a
+    // word the user typed — so the mark is the only carrier of that fact and
+    // cannot be purely decorative here.
+    expect(chip({ id: 'work', name: 'Work', provider: 'codex' })).toContain('Codex CLI')
+  })
+
+  it('draws no mark for a session whose agent is not known', () => {
+    /*
+     * A restored session from a build that did not record one, or an account
+     * the main process did not name an agent for. The mark says which service
+     * a login belongs to; a placeholder there would be a wrong claim rather
+     * than a missing one.
+     */
+    expect(chip({ id: 'work', name: 'Work' })).not.toContain('provider-badge')
+  })
+
+  it('falls back to the agent a new session here would run', () => {
+    // With no session account, the chip is describing what a *new* session
+    // would use — so the mark is that agent's, and it is right before the
+    // account list has been read even once.
+    const html = renderToStaticMarkup(
+      <AccountChip
+        current={null}
+        projectPath="/w/app"
+        provider="codex"
+        onPick={noop}
+        onManage={noop}
+      />,
+    )
+    expect(html).toContain('data-provider="codex"')
+  })
+
+  it('draws no mark when that agent cannot hold an account at all', () => {
+    /*
+     * With the default coding tool set to Plain shell the rows are inert and
+     * the menu says why. A shell glyph beside an account name would be claiming
+     * a pairing the notice underneath calls impossible.
+     */
+    const html = renderToStaticMarkup(
+      <AccountChip
+        current={null}
+        projectPath="/w/app"
+        provider="shell"
+        onPick={noop}
+        onManage={noop}
+      />,
+    )
+    expect(html).not.toContain('provider-badge')
+  })
+})
+
 describe('renaming an account where you can see it', () => {
   /**
    * His words:

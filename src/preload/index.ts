@@ -320,7 +320,29 @@ const api = {
   /* --------------------------------------------------------- profiles -- */
 
   listProfiles: (): Promise<unknown> => ipcRenderer.invoke('profiles:list'),
-  createProfile: (name: string): Promise<unknown> => ipcRenderer.invoke('profiles:create', name),
+  /**
+   * Which agents an account can belong to, and the sentence for each one that
+   * cannot hold a second login.
+   *
+   * `profiles:account-providers` was registered in the main process and called
+   * by nobody, because there was no method here to call it with — so the Add an
+   * account form had no way to ask the question and every account it made was a
+   * Claude one. That is the whole of the bug reported as *"if I add any new
+   * account it just redirects me to claude only"*: not a wrong answer, an
+   * unasked question.
+   */
+  accountProviders: (): Promise<unknown> => ipcRenderer.invoke('profiles:account-providers'),
+  /**
+   * The options object is forwarded, exactly as `deleteProfile`'s is and for the
+   * same reason it had to be fixed there: `profiles:create` reads `provider` off
+   * it and defaults to Claude when it is absent. Dropping it here would not
+   * fail — it would quietly make every account a Claude account, which is
+   * indistinguishable from the app ignoring the choice the user just made.
+   */
+  createProfile: (
+    name: string,
+    options?: { provider?: string; configDir?: string },
+  ): Promise<unknown> => ipcRenderer.invoke('profiles:create', name, options),
   renameProfile: (id: string, name: string): Promise<unknown> =>
     ipcRenderer.invoke('profiles:rename', id, name),
   // The options object is forwarded rather than dropped. It was not, and

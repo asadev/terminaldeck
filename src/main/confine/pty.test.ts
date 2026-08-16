@@ -53,6 +53,25 @@ const SECRET = 'pty-canary-8c31aa07-do-not-leak'
  */
 const CTRL_C = '\u0003'
 
+/**
+ * How long {@link terminal} will wait for the shell it started to actually die.
+ *
+ * A ceiling, not a sleep — the wait ends the instant `onExit` fires, which on
+ * this machine is a few milliseconds. It exists so that a shell which refuses to
+ * go leaves a slow test rather than a hung suite.
+ */
+const EXIT_GRACE_MS = 5_000
+
+/**
+ * The shell the last {@link terminal} call started, and whether it has been reaped.
+ *
+ * Module-level so a case can assert on it, which is the only way to pin the wait
+ * inside `terminal` from outside: the process itself is a local, and a helper
+ * that quietly stopped waiting would otherwise surface only as the intermittent
+ * teardown failure described on `afterAll`.
+ */
+let lastShell: { pid: number; exited: boolean } | null = null
+
 beforeAll(() => {
   if (!onMac) return
   root = realpathSync(mkdtempSync(join(tmpdir(), 'confine-pty-')))
@@ -74,6 +93,25 @@ beforeAll(() => {
   )
 })
 
+/**
+ * Delete the tree the confined shells ran in.
+ *
+ * This threw `ENOTEMPTY` under a full-suite run — never on its own, and never
+ * three times in a row — and the leftover was always the same single file:
+ * `device-home/.zsh_history`. That is the whole diagnosis. `confinedEnv` points
+ * `HOME` at `device-home`, a login shell writes its history **as it exits**, and
+ * `terminal` used to call `proc.kill()` and return on the next line. So the
+ * shell was still dying while this ran: `rmSync` emptied the directory, zsh
+ * wrote its history back into it, and the `rmdir` that follows found it
+ * occupied.
+ *
+ * The fix is in `terminal` — it now waits for the process to be reaped — and it
+ * belongs there rather than here, because "the shell is still running after the
+ * helper returned" is also wrong for the *next* case in the file, which starts a
+ * second shell inside the same boundary. Retrying the delete would have hidden
+ * that half of it. `waits for the shell it started to actually exit` below is
+ * what fails if the wait is ever taken back out.
+ */
 afterAll(() => {
   if (root !== '') rmSync(root, { recursive: true, force: true })
 })
@@ -116,6 +154,16 @@ async function terminal(
   proc.onData((data) => {
     out += data
   })
+
+  // Recorded before the first keystroke so that a case which fails mid-script
+  // still leaves the shell's fate observable rather than leaving `lastShell`
+  // pointing at the previous call's process.
+  const shell = { pid: proc.pid, exited: false }
+  lastShell = shell
+  proc.onExit(() => {
+    shell.exited = true
+  })
+
   for (const step of steps) {
     const [text, wait] = step
     const until = step.length === 3 ? step[2] : null
@@ -134,6 +182,27 @@ async function terminal(
   } catch {
     /* already gone */
   }
+
+  /*
+   * Wait for it to actually be gone, not merely for the signal to be sent.
+   *
+   * `kill()` returns as soon as the signal is delivered, and a login shell has
+   * work left to do after that — zsh writes `$HOME/.zsh_history` on its way out,
+   * into the very directory `afterAll` is about to remove. Returning here while
+   * that was in flight is what produced the intermittent `ENOTEMPTY`; see the
+   * note on `afterAll` for the full diagnosis.
+   *
+   * A ceiling rather than an unbounded wait, so that a shell wedged in an
+   * uninterruptible state costs five seconds instead of the whole run. Falling
+   * through with `exited` still false is deliberate and is not silent: the case
+   * that asserts on it fails, which is the right way to find out that a confined
+   * shell would not die.
+   */
+  const deadline = Date.now() + EXIT_GRACE_MS
+  while (!shell.exited && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+
   // Escape sequences would otherwise split a word the assertions are looking
   // for: a shell repaints its prompt with cursor moves between every character
   // it echoes.
@@ -178,5 +247,31 @@ describe.skipIf(!onMac)('a confined session in a real terminal', () => {
     ])
     expect(seen).toMatch(/git version/)
     expect(seen).toContain('42')
+  }, 20_000)
+
+  /**
+   * The helper waits for the shell it started to actually exit.
+   *
+   * Not housekeeping. `confinedEnv` puts `HOME` inside the temporary tree, and a
+   * login shell writes its history file **during** its exit — so a helper that
+   * returns on the line after `kill()` leaves a process writing into a directory
+   * that `afterAll` is already deleting. That is a one-in-several-runs
+   * `ENOTEMPTY` in teardown: green on its own, red under a loaded full-suite run,
+   * and pointing at `rmSync` rather than at the shell.
+   *
+   * Asserted on `exited` rather than on the directory's contents, because the
+   * absence of a file is exactly the thing a race answers differently each time.
+   * `exited` is set from `onExit`, which node-pty fires after it has reaped the
+   * process, so this is false the instant somebody takes the wait back out and
+   * true only when there is genuinely nothing left running.
+   */
+  it('waits for the shell it started to actually exit', async () => {
+    await terminal([['echo MARK-ALIVE\r', 500, /MARK-ALIVE/]])
+    expect(lastShell).not.toBeNull()
+    expect(
+      lastShell?.exited,
+      'terminal() returned while its confined shell was still alive — it will write its ' +
+        'history into the tree afterAll is deleting',
+    ).toBe(true)
   }, 20_000)
 })

@@ -3,6 +3,8 @@ import { createPortal } from 'react-dom'
 import type { ProviderId } from '@shared/types'
 import { useChipMenu } from './chip-menu'
 import { isolationNotice } from '../components/ProfilePicker'
+import { ProviderBadge } from '../components/ProviderBadge'
+import { providerOption } from '../components/ProviderPicker'
 import { chipMode, useAgentPresence, type ChromeSession } from './agent-presence'
 import {
   accountForFolder,
@@ -47,13 +49,31 @@ import './AccountChip.css'
  * an answer that could not be read says "Unknown". A tick is only ever drawn
  * for an account the agent said it was signed into.
  *
+ * ## Which agent, as well as which login
+ *
+ *   > "in the dropdown we can see which account is connected — but next to it we
+ *   > should also see the logo of the LLM."
+ *
+ * The name on a row is a word somebody typed, and "Work" is a legal name on
+ * every agent here — so once the list holds accounts of more than one, the name
+ * stops being enough to tell them apart. `ProviderBadge` draws the mark; this
+ * puts it on the button and on every row, which is the only place in the window
+ * where the running session's account is named at all.
+ *
+ * The mark is not decoration in the menu either: picking a row starts a session
+ * *on that account's own agent*, so it is also what the row is promising. That
+ * is why `onPick` carries the provider — see below.
+ *
  * ## …including the login it cannot give you
  *
- * An account is a `CLAUDE_CONFIG_DIR` handed to the agent at spawn, so it only
+ * An account is a config directory handed to the agent at spawn, so it only
  * means anything for an agent that reads one. `supportsProfiles` in
- * `main/profiles.ts` is the authority and it answers true for Claude alone —
- * a plain shell has no login to isolate, and Codex and Gemini sign in their own
- * way under whatever login the machine already has.
+ * `main/profiles.ts` is the authority: Claude and Codex each have a variable
+ * that has been watched to move a login, a plain shell has no login to isolate,
+ * and Gemini's variable moves its settings but not its token — two Gemini
+ * accounts would address one keychain entry, so the second sign-in would
+ * overwrite the first rather than sit beside it. `provider-accounts.ts` records
+ * how each of those was measured.
  *
  * This menu used to offer the rows regardless. With the default coding tool set
  * to Plain shell — which is a setting, not an edge case — picking an account
@@ -118,8 +138,14 @@ interface Props {
    * profile it actually resolved. Null for a session with no account — a plain
    * shell, or an agent whose config directory this app cannot redirect — and
    * for those the chip shows what a *new* session here would use instead.
+   *
+   * `provider` is what this session was launched as, and it is the only source
+   * for the mark on the button that is available while the menu is shut: the
+   * account list is not read until the menu opens, deliberately, because
+   * reading it spawns a process per account and this chip is on screen for the
+   * whole life of every session.
    */
-  current: { id: string; name: string } | null
+  current: { id: string; name: string; provider?: ProviderId } | null
   /** The folder a session started from this menu will run in. */
   projectPath: string | null
   /**
@@ -146,8 +172,20 @@ interface Props {
    * terminal view would do with the same keystrokes.
    */
   onRunAgent?(sessionId: string): void
-  /** Start a session in `projectPath` under this account. */
-  onPick(accountId: string): void
+  /**
+   * Start a session in `projectPath` under this account, on that account's own
+   * agent.
+   *
+   * The second argument is what makes the row do anything at all now that the
+   * list holds accounts of more than one agent. Started on the *default* agent
+   * instead, a Codex account reaches `resolveProfileId`, which rightly refuses
+   * to run one agent's login under another's session and falls back to the
+   * machine's own — so the click opened a session under the wrong account and
+   * the chip snapped back, saying nothing. Undefined for an account whose agent
+   * the main process did not name, which means "use the default" and is the
+   * only honest request this window can make about it.
+   */
+  onPick(accountId: string, provider?: ProviderId): void
   /** Open the Accounts screen — add one, rename one, sign one in. */
   onManage(): void
 }
@@ -172,6 +210,17 @@ export const RUN_AGENT_COMMAND = 'claude\r'
 interface Editing {
   id: string
   draft: string
+}
+
+/**
+ * The agent's name for a screen reader, or undefined when there is no mark.
+ *
+ * Undefined is what puts `ProviderBadge` into its decorative mode, which is
+ * right in both cases that produce it: no agent known, so nothing is drawn, so
+ * there is nothing to announce.
+ */
+function agentLabel(provider: ProviderId | null | undefined): string | undefined {
+  return provider == null ? undefined : providerOption(provider)?.label
 }
 
 export function AccountChip({
@@ -243,6 +292,24 @@ export function AccountChip({
   const currentId = current?.id ?? fallback?.id ?? null
   const listed = currentId === null ? null : rows.find((row) => row.id === currentId) ?? null
   const label = current?.name ?? fallback?.name ?? null
+
+  /**
+   * Which agent's mark goes on the button, in three fallbacks that are three
+   * different facts rather than three guesses at one.
+   *
+   * The running session's own agent first: that is what was actually launched,
+   * and it stays true even for an account that has since been removed from the
+   * list. Then the listed account's, which is only available once the menu has
+   * been opened at least once and the list has been read. Then — for a chip
+   * that is describing what a *new* session here would use — the agent that new
+   * session would run, because the account is resolved against it.
+   *
+   * Undefined while `blocked`, and that is the case worth spelling out: the
+   * agent named there is one that cannot take an account at all, so its mark
+   * beside an account name would be claiming a pairing that is exactly what the
+   * notice underneath says is impossible.
+   */
+  const mark = current?.provider ?? listed?.provider ?? (blocked ? undefined : provider)
 
   /**
    * Start Claude in this session.
@@ -351,6 +418,11 @@ export function AccountChip({
           aria-hidden="true"
           style={listed ? { background: `var(${listed.color})` } : undefined}
         />
+        {/* The dot says which account; this says which agent. Both are needed:
+            the dot is a colour assigned round-robin and means nothing on its
+            own, and the name is a word somebody typed. Announced, because
+            nothing else in the chip names the agent. */}
+        <ProviderBadge provider={mark} size={13} label={agentLabel(mark)} />
         <span className="account-chip-name">{label ?? 'Account'}</span>
         <svg
           width="14"
@@ -435,6 +507,12 @@ export function AccountChip({
                       aria-hidden="true"
                       style={{ background: `var(${account.color})` }}
                     />
+                    {/* Which agent this row would start. Two accounts can
+                        legitimately share a name across agents — the main
+                        process only refuses a duplicate *within* one — so
+                        without this the list can hold two rows reading "Work"
+                        that start different CLIs. */}
+                    <ProviderBadge provider={account.provider} label={agentLabel(account.provider)} />
                     <span className="folder-menu-name">{account.name}</span>
                   </span>
                   {/* Read, not assumed. An account the agent has not answered
@@ -467,7 +545,9 @@ export function AccountChip({
                       role="menuitem"
                       className="folder-menu-item account-menu-item"
                       data-current={account.id === currentId || undefined}
-                      onClick={() => menu.choose(() => onPick(account.id))}
+                      onClick={() =>
+                        menu.choose(() => onPick(account.id, account.provider ?? undefined))
+                      }
                     >
                       {line}
                     </button>

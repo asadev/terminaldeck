@@ -1,7 +1,16 @@
-import { useCallback, useState, type FormEvent } from 'react'
+import { useCallback, useId, useState, type FormEvent } from 'react'
+import type { ProviderId } from '@shared/types'
 import { Button, Explain, Group, Notice, SectionHead } from '../controls'
 import { sectionMeta } from '../settings-schema'
 import type { SectionProps } from '../settings-bridge'
+import { ProviderBadge } from '../../components/ProviderBadge'
+import {
+  AccountProviderList,
+  chosenAccountProvider,
+  providerOption,
+  useAccountProviderRows,
+  type AccountProviderRow,
+} from '../../components/ProviderPicker'
 import {
   accountsBridge,
   normalizeAccountName,
@@ -35,14 +44,23 @@ import {
  * be read says so; it does not get a tick and it does not get a cross.
  *
  * **Signing in happens in the terminal, and the screen says so.** This app never
- * touches a credential. The Sign in button opens a session under that account
- * and the agent's own login flow takes over inside it.
+ * touches a credential. The Sign in button opens a session *on that account's
+ * own agent* and the agent's own login flow takes over inside it. That session
+ * used to be started on whatever the default coding tool was, which meant a
+ * Codex account was signed in by a Claude session — Claude's login screen, for
+ * an account Claude has no business writing to. It is the whole of the report
+ * this pass came from:
  *
- * **Only Claude.** `CLAUDE_CONFIG_DIR` is the one variable verified to move a
- * login. Naming a wrong one for another agent would not fail loudly — it would
- * silently *share* one login between two accounts, which is the exact failure
- * this feature exists to prevent. The note at the foot says that plainly rather
- * than leaving a person to discover it.
+ *   > "If I add any new account it just redirects me to claude only, not to the
+ *   > other ones I want to connect."
+ *
+ * **The agent is chosen before the name.** An account is a login of one specific
+ * CLI, so "add an account" has no meaning until it is known which one. The list
+ * above the name field is the question, and it lists every agent — including the
+ * one that is refused, with the reason on the row, because a missing row is
+ * indistinguishable from an oversight. Which agents can hold a second login, and
+ * how each answer was measured, is in `main/provider-accounts.ts`; nothing on
+ * this screen decides it.
  */
 
 /**
@@ -52,6 +70,19 @@ import {
  * for is worse than one of them not existing.
  */
 const MAX_NAME_LENGTH = MAX_ACCOUNT_NAME_LENGTH
+
+/**
+ * The agent's name for a screen reader, or undefined when there is no mark to
+ * announce.
+ *
+ * `undefined` is what puts `ProviderBadge` into its decorative mode, and that
+ * is the right mode for an account whose agent the main process did not name:
+ * the badge draws nothing, so announcing something would describe a shape that
+ * is not on screen.
+ */
+function agentName(provider: ProviderId | null): string | undefined {
+  return provider === null ? undefined : providerOption(provider)?.label
+}
 
 /* ----------------------------------------------------------------- view -- */
 
@@ -63,10 +94,19 @@ export interface AccountsViewProps {
   /** False when this window has no accounts bridge at all. */
   available: boolean
   busy: boolean
+  /**
+   * The agents an account can be added for, refused ones included.
+   *
+   * Passed in rather than fetched here for the same reason everything else on
+   * this view is: the interesting states — every agent uninstalled, the refused
+   * row, an answer that never arrived — are states, and a view that takes them
+   * can be rendered in a test with no bridge and no DOM.
+   */
+  providerRows: readonly AccountProviderRow[]
   /** Null when nothing in this window can start a session — no Sign in button. */
   onSignIn: ((account: AccountView) => void) | null
   onCheck(): void
-  onCreate(name: string): void
+  onCreate(name: string, provider: ProviderId): void
   onRename(account: AccountView, name: string): void
   onRemove(account: AccountView): void
   onMakeDefault(account: AccountView): void
@@ -88,6 +128,7 @@ export function AccountsView({
   error,
   available,
   busy,
+  providerRows,
   onSignIn,
   onCheck,
   onCreate,
@@ -99,13 +140,25 @@ export function AccountsView({
   const [draft, setDraft] = useState('')
   const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null)
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null)
+  /**
+   * The agent row that was clicked, which is not the same as the agent that
+   * will be used — see `chosenAccountProvider`. Held as "what was clicked" so
+   * an agent going missing corrects the answer instead of freezing it.
+   */
+  const [clicked, setClicked] = useState<ProviderId | null>(null)
+  const formId = useId()
+
+  const chosen = chosenAccountProvider(providerRows, clicked)
 
   const create = (event: FormEvent) => {
     event.preventDefault()
     const name = draft.trim()
-    if (name === '') return
+    // No agent means no account: a login has to be a login *of* something, and
+    // `createProfile` in the main process refuses a provider it cannot isolate
+    // with its own sentence rather than quietly making a Claude account.
+    if (name === '' || !chosen) return
     setDraft('')
-    onCreate(name)
+    onCreate(name, chosen.id)
   }
 
   if (!available) {
@@ -125,12 +178,20 @@ export function AccountsView({
     <>
       <SectionHead title={meta.label} blurb={meta.blurb} />
 
+      {/*
+        The scope sentence in the middle is what replaced a headed block called
+        "Claude only, and why" at the foot of this pane. That block was written
+        when Claude was the only agent that could hold a second login; it is now
+        wrong about Codex, and it was never the right place for the Gemini
+        answer — which belongs on the Gemini row, next to the control it
+        explains, and is there. One line, not a paragraph, and it says what you
+        get rather than how it works: nobody needs to know what a config
+        directory is to decide which account to sign in as.
+      */}
       <Explain title="One app, several logins">
-        An account is a separate login for the agent. Claude Code keeps everything about who you
-        are in one config directory, and each account here points it at a different one — so two
-        accounts are two logins, with their own history and their own transcripts, and they can be
-        running side by side in two tabs. Pick which one a session uses from the account button
-        beside the folder, before you type anything.
+        An account is a separate login for one agent — its own history, its own transcripts, and
+        two can run side by side. Claude and Codex can hold several; Gemini keeps one per machine.
+        Pick which one a session uses from the account button beside the folder.
       </Explain>
 
       {error && <Notice tone="error">{error}</Notice>}
@@ -179,6 +240,15 @@ export function AccountsView({
                 ) : (
                   <>
                     <span className="settings-profile-name">
+                      {/* Which agent this is a login of, in the one list that
+                          now holds accounts of more than one. The name cannot
+                          answer it — "Work" is a word somebody typed, and the
+                          same word is a legal name on every agent here. Labelled
+                          rather than `aria-hidden`, unlike the copy of this mark
+                          in the Add list: there the agent's name is the next
+                          thing on the row, and here nothing else on the row says
+                          it. */}
+                      <ProviderBadge provider={account.provider} label={agentName(account.provider)} />
                       {account.name}
                       {/* A badge is a comparison, so it needs something to
                           compare with: on a fresh install there is one account
@@ -278,45 +348,115 @@ export function AccountsView({
       </div>
 
       <Group title="Add an account">
-        <form className="settings-inline-form" onSubmit={create}>
+        {/* The question the app never asked. Before this list, every account
+            made here was a Claude account whatever the person adding it had in
+            mind — see the module note. */}
+        <p className="settings-prose">Which agent is this a login for?</p>
+        <AccountProviderList
+          group={`${formId}-agent`}
+          rows={providerRows}
+          selected={chosen?.id ?? null}
+          onSelect={setClicked}
+        />
+
+        <form className="settings-inline-form settings-add-account" onSubmit={create}>
           <input
             className="settings-input wide"
             value={draft}
             // Not a plausible word like "Work": a single word sitting in an
             // empty field reads as a value somebody already typed, and a person
             // who leaves it alone expecting an account called Work gets nothing.
-            placeholder="Name this account"
+            // It does name the chosen agent, which is the cheapest possible
+            // confirmation that the row above was actually taken.
+            placeholder={chosen ? `Name this ${chosen.label} account` : 'Name this account'}
             maxLength={MAX_NAME_LENGTH}
             aria-label="Name for the new account"
             onChange={(event) => setDraft(event.target.value)}
           />
-          <Button type="submit" tone="primary" disabled={busy || draft.trim() === ''}>
+          <Button type="submit" tone="primary" disabled={busy || draft.trim() === '' || !chosen}>
             Add
           </Button>
         </form>
+
+        {/* Every agent listed, none of them able to take one — which on this
+            machine means none of them is installed. Said once, here, rather
+            than left for somebody to infer from an Add button that never
+            enables. */}
+        {providerRows.length > 0 && !chosen && (
+          <Notice tone="warn">
+            No agent on this machine can hold a second login. Install Claude Code or the Codex CLI
+            and this list will offer them.
+          </Notice>
+        )}
+
         <Explain title="Signing in happens in the terminal">
-          A new account starts signed out. Press Sign in and a session opens under it, where the
-          agent asks you to log in exactly as it would in your own terminal — this app never sees
-          or stores a password or a token. Come back here afterwards and the line under the name
-          will name the account you signed in as.
-        </Explain>
-        <Explain title="Claude only, and why">
-          Separate accounts work by pointing the agent at a different config directory, and
-          Claude’s is the only one that has been verified to do that here. Codex and Gemini sign in
-          their own way; a session on either of them uses whichever login this machine already has,
-          and nothing on this screen changes that. Naming the wrong variable for an agent would not
-          fail loudly — it would quietly share one login between two accounts, which is the mistake
-          this feature exists to prevent.
+          A new account starts signed out. Press Sign in and a session opens on that agent, where
+          it asks you to log in as it would in your own terminal — this app never sees a password
+          or a token.
         </Explain>
       </Group>
     </>
   )
 }
 
+/* ------------------------------------------------------------ requests -- */
+
+/**
+ * Add an account of a named agent.
+ *
+ * A function rather than a closure inside the section for one reason: it is the
+ * line the whole report turns on, and there is no DOM in this project to press
+ * the button with. Written here it can be handed a spy and asked what it sent —
+ * and it fails loudly if the options object is ever dropped again, which is
+ * precisely the shape of the original defect. `preload/index.ts` had exactly
+ * this signature with the second argument missing, so `profiles:create` fell
+ * back to Claude for every account ever made through this screen.
+ *
+ * Returns undefined when the window has no create method, which the caller
+ * treats as "nothing happened" — the same way every other action here does.
+ */
+export function createAccount(
+  bridge: Partial<AccountsBridge> | null,
+  name: string,
+  provider: ProviderId,
+): Promise<unknown> | undefined {
+  return bridge?.createProfile?.(name, { provider })
+}
+
+/**
+ * What Sign in asks the window to start.
+ *
+ * The agent goes with the account because an account is a login of one specific
+ * CLI. Without it the session opened on whatever the default coding tool was,
+ * so signing a Codex account in showed Claude's login screen — and
+ * `resolveProfileId`, correctly, declined to run a Codex account under a Claude
+ * session, so the account was dropped on the way past as well.
+ *
+ * The field is omitted rather than set to null for an account whose agent is
+ * unknown: absent means "resolve it", which is the only honest request this
+ * window can make about an account it cannot name an agent for.
+ */
+export function signInRequest(account: AccountView): {
+  profileId: string
+  provider?: ProviderId
+} {
+  return {
+    profileId: account.id,
+    ...(account.provider === null ? {} : { provider: account.provider }),
+  }
+}
+
 /* -------------------------------------------------------------- section -- */
 
 export function AccountsSection({ startSession }: SectionProps) {
   const accounts = useAccounts()
+  /*
+   * Always on, because this pane is only mounted while it is the one on screen
+   * — `SettingsPanel` renders the selected section and nothing else — so
+   * "mounted" and "being looked at" are the same thing here. The dialogs that
+   * share this hook pass their own `open` instead.
+   */
+  const providerRows = useAccountProviderRows(true)
   const [busy, setBusy] = useState(false)
   const [failure, setFailure] = useState<string | null>(null)
 
@@ -356,12 +496,25 @@ export function AccountsSection({ startSession }: SectionProps) {
       error={failure ?? accounts.error}
       available={accounts.available}
       busy={busy}
+      providerRows={providerRows}
       /* No callback, no button: this window cannot start a session from a
          settings pane rendered on its own, and a Sign in button that did
-         nothing would be worse than not offering one. */
-      onSignIn={startSession ? (account) => startSession({ profileId: account.id }) : null}
+         nothing would be worse than not offering one.
+
+         The account's own agent goes with it, and that is the fix rather than
+         a refinement: the session used to be started on the default coding
+         tool, so pressing Sign in beside a Codex account opened Claude, and
+         `resolveProfileId` — correctly — declined to run a Codex account under
+         a Claude session and fell back to the machine's own Claude login. The
+         login screen that appeared was the wrong agent's, for an account it
+         could not have written to anyway. `signInRequest` builds the request,
+         so what is sent can be asserted in a test — there is no DOM here to
+         press the button in. */
+      onSignIn={startSession ? (account) => startSession(signInRequest(account)) : null}
       onCheck={() => accounts.check(true)}
-      onCreate={(name) => run(bridge?.createProfile?.(name), 'Could not add that account.')}
+      onCreate={(name, provider) =>
+        run(createAccount(bridge, name, provider), 'Could not add that account.')
+      }
       /* Through `renameAccount` rather than straight at the bridge, so this
          screen and the account chip inside a session are the same rename. */
       onRename={(account, name) => {

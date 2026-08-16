@@ -1,12 +1,18 @@
 import { renderToStaticMarkup } from 'react-dom/server'
-import { describe, expect, it } from 'vitest'
-import { AccountsView, type AccountsViewProps } from './AccountsSection'
+import { describe, expect, it, vi } from 'vitest'
+import {
+  AccountsView,
+  createAccount,
+  signInRequest,
+  type AccountsViewProps,
+} from './AccountsSection'
+import { buildAccountProviderRows } from '../../components/ProviderPicker'
 import type { AccountsSnapshot, SignInView } from '../../accounts'
 
 /**
  * The screen a person opens to answer "which of my accounts can I use".
  *
- * Two things it must never do, and they are what most of this file is about:
+ * Three things it must never do, and they are what most of this file is about:
  *
  *  1. **Claim a login it did not verify.** The mark beside a name is coloured
  *     only for a state the agent reported. An account whose state could not be
@@ -14,16 +20,27 @@ import type { AccountsSnapshot, SignInView } from '../../accounts'
  *  2. **Offer a control that does nothing.** Signing in means opening a session,
  *     which only the window can do — so with no way to start one, the Sign in
  *     button is absent rather than inert.
+ *  3. **Assume which agent an account is for.** It asks, above the name field,
+ *     and it hands the answer to whoever creates the account. Before it asked,
+ *     every account made here was a Claude one whatever the person adding it
+ *     had in mind — reported as *"if I add any new account it just redirects me
+ *     to claude only"* — and the pane still carried a block headed "Claude only,
+ *     and why" saying that was the only thing possible.
  *
  * `renderToStaticMarkup`, like every render test in this window: it runs no
- * effects, which is exactly why the view takes everything it draws.
+ * effects, which is exactly why the view takes everything it draws — and why
+ * the chosen agent has to be computed rather than settled by one.
  */
+
+/** The agent list as it is on first paint, before any detection has answered. */
+const PROVIDERS = buildAccountProviderRows(null)
 
 const ACCOUNTS: AccountsSnapshot = {
   accounts: [
     {
       id: 'system',
       name: 'Default',
+      provider: 'claude',
       configDir: '/Users/me/.claude',
       system: true,
       color: '--accent',
@@ -32,6 +49,7 @@ const ACCOUNTS: AccountsSnapshot = {
     {
       id: 'work',
       name: 'Work',
+      provider: 'codex',
       configDir: '/Users/me/Library/Application Support/deck/profiles/work',
       system: false,
       color: '--status-completed',
@@ -69,6 +87,7 @@ function render(over: Partial<AccountsViewProps> = {}): string {
       error={null}
       available
       busy={false}
+      providerRows={PROVIDERS}
       onSignIn={noop}
       onCheck={noop}
       onCreate={noop}
@@ -149,12 +168,126 @@ describe('AccountsView', () => {
     expect(html).toContain('Signing in happens in the terminal')
   })
 
-  it('says plainly that other agents are not covered', () => {
-    // Only `CLAUDE_CONFIG_DIR` has been verified to move a login. Silence here
-    // would read as "all your agents have separate accounts", which is the one
-    // wrong belief this feature must not create.
+  it('asks which agent an account is for, before asking its name', () => {
+    /*
+     * The question the app never asked. The engine has taken a provider since
+     * accounts existed; there was simply nowhere on screen to give it one, so
+     * every account made here was a Claude account.
+     */
     const html = render()
-    expect(html).toContain('Codex and Gemini')
+    expect(html).toContain('Which agent is this a login for?')
+    expect(html).toMatch(/<input[^>]*value="claude"/)
+    expect(html).toMatch(/<input[^>]*value="codex"/)
+  })
+
+  it('lists Gemini, disabled, with the reason on the row', () => {
+    /*
+     * The row that matters most is the one that cannot be clicked. Gemini has a
+     * config-directory variable, so a missing row would read as an oversight —
+     * what it does not have is a way to keep two logins apart, and signing into
+     * a second one would overwrite the first. Leaving it out would also make
+     * this pane silently disagree with the request, which named Gemini.
+     */
+    const html = render()
+    expect(html).toContain('Gemini CLI')
+    expect(html).toContain('one login per machine')
+    expect(html).toMatch(/<input[^>]*disabled[^>]*value="gemini"/)
+  })
+
+  it('no longer claims that separate accounts are Claude-only', () => {
+    // `CODEX_HOME` was measured to move a Codex login, so the old block headed
+    // "Claude only, and why" is now false — and it was never the right place
+    // for the Gemini answer, which belongs on the Gemini row.
+    const html = render()
+    expect(html).not.toContain('Claude only')
+    expect(html).not.toContain('Codex and Gemini sign in')
+  })
+
+  it('says which agent each account is a login of', () => {
+    /*
+     * The name cannot: "Work" is a word somebody typed, and the main process
+     * only refuses a duplicate name *within* one agent — so two rows reading
+     * "Work" for two different CLIs is a legal state of this list.
+     */
+    const html = render()
+    expect(html).toContain('data-provider="claude"')
+    expect(html).toContain('data-provider="codex"')
+  })
+
+  it('says so, and refuses Add, on a machine with no agent installed', () => {
+    /*
+     * Every row present and none of them selectable. Without the sentence this
+     * is a form that ignores you: a name can be typed into it and Add never
+     * lights, with nothing on screen saying why. `install` lines are already on
+     * each row; what was missing was the one that names the situation.
+     */
+    const none = buildAccountProviderRows({ claude: false, codex: false, gemini: false, shell: true })
+    const html = render({ providerRows: none })
+    expect(html).toContain('No agent on this machine can hold a second login')
+    expect(html).toContain('<button type="submit" class="settings-btn" data-tone="primary" disabled')
+  })
+
+  it('binds the name field to the agent that was chosen', () => {
+    /*
+     * The one visible proof, in a project with no DOM to click in, that the
+     * list above the field is wired to the form below it rather than sitting
+     * beside it. A choice that changes nothing on screen is how somebody types
+     * a name, presses Add and gets a Claude account anyway — which is the
+     * report this pass came from.
+     */
+    expect(render()).toContain('Name this Claude Code account')
+  })
+
+  it('picks the agent up from the rows, not from an effect', () => {
+    /*
+     * There is no DOM here and effects do not run under SSR — which is the
+     * point rather than a limitation, because it is also true of the very first
+     * paint in a real window. A selection settled by an effect would leave that
+     * paint with no row chosen, Add disabled, and a form that looks ready.
+     */
+    const codexOnly = buildAccountProviderRows({ claude: false, codex: true, gemini: true, shell: true })
+    const html = render({ providerRows: codexOnly })
+    expect(html).toMatch(/<input[^>]*checked[^>]*value="codex"/)
+    expect(html).toContain('Name this Codex CLI account')
+  })
+})
+
+describe('what the Accounts pane asks the rest of the app for', () => {
+  it('creates the account against the agent that was chosen', async () => {
+    /*
+     * The line the whole report turns on. `preload/index.ts` declared this same
+     * call with the second argument missing, so `profiles:create` never saw a
+     * provider and defaulted to Claude — every account made on this screen was
+     * a Claude account whatever had been picked.
+     */
+    const createProfile = vi.fn().mockResolvedValue({ id: 'work' })
+    await createAccount({ createProfile }, 'Work', 'codex')
+    expect(createProfile).toHaveBeenCalledWith('Work', { provider: 'codex' })
+  })
+
+  it('does nothing, rather than throwing, in a window with no create method', () => {
+    expect(createAccount({}, 'Work', 'claude')).toBeUndefined()
+    expect(createAccount(null, 'Work', 'claude')).toBeUndefined()
+  })
+
+  it('signs an account in on its own agent, not on the default one', () => {
+    // Signing a Codex account in used to open a Claude session: the wrong
+    // login screen, for an account that session could not have written to.
+    expect(signInRequest({ ...ACCOUNTS.accounts[1] })).toEqual({
+      profileId: 'work',
+      provider: 'codex',
+    })
+  })
+
+  it('asks for no agent at all when the account does not name one', () => {
+    /*
+     * Absent means "resolve it". Naming a guess here would start the wrong CLI
+     * for a login that predates accounts having agents, and the person would be
+     * looking at Claude's login screen for something else entirely.
+     */
+    const request = signInRequest({ ...ACCOUNTS.accounts[1], provider: null })
+    expect(request).toEqual({ profileId: 'work' })
+    expect('provider' in request).toBe(false)
   })
 
   it('does not badge the only account as the default', () => {

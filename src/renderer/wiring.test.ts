@@ -114,6 +114,20 @@ const SEAMS: Array<{ file: string; child: string; props: string[]; why: string }
     why: 'the only place in the window where the account for a session can be seen or chosen',
   },
   {
+    file: 'renderer/settings/sections/AccountsSection.tsx',
+    child: 'AccountProviderList',
+    props: ['rows', 'selected', 'onSelect'],
+    // This exact failure, twice over. The main process has answered
+    // `profiles:account-providers` since accounts grew providers and no window
+    // ever called it, because the preload had no method to call it with; and an
+    // Add-account dialog was written, tested, and rendered by nothing. Both were
+    // correct code that a user could not reach, so the app went on making every
+    // account a Claude account — "if I add any new account it just redirects me
+    // to claude only". `onSelect` is in the list because without it the rows are
+    // a picture of a choice.
+    why: 'the only place in the app where an account can be made for an agent other than Claude',
+  },
+  {
     file: 'renderer/App.tsx',
     child: 'UpdateBanner',
     props: [],

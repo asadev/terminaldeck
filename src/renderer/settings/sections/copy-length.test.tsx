@@ -30,8 +30,14 @@ import type { SettingsBridge } from '../settings-bridge'
  * fail on somebody else's edit.
  *
  * Only the sections whose copy was actually rewritten, for the same reason.
- * General, Features, Power, Accounts, Setup and Remote are owned elsewhere and
- * are left out on purpose rather than by oversight.
+ * General, Features, Power, Setup and Remote are owned elsewhere and are left
+ * out on purpose rather than by oversight.
+ *
+ * Accounts joined the list when its copy was rewritten. It is the pane that
+ * shows why the budget is not pedantry: it carried three headed blocks, one of
+ * them ("Claude only, and why") a paragraph of mechanism that had also become
+ * *untrue* — separate Codex logins work now — and the reason it survived that
+ * long is that every clause in it was defensible on its own.
  *
  * Static markup, like every other test in this window — there is no DOM here.
  */
@@ -46,6 +52,7 @@ const BUDGETED: readonly SectionId[] = [
   'advanced',
   'about',
   'shortcuts',
+  'profiles',
 ]
 
 /**
@@ -70,11 +77,27 @@ const MAX_WORDS_PER_SECTION = 130
 /**
  * Rendered as Windows so `linux` has a pane at all — `sectionsFor` drops it
  * everywhere else, and under vitest the real platform answer is `other`.
+ *
+ * Accounts is the one pane that needs something on `globalThis.deck` before it
+ * will draw its copy at all: with no accounts bridge it renders a single
+ * warning and stops, so a budget measured against that would pass by measuring
+ * nothing — which is the shape of a guard that quietly stops guarding. The stub
+ * is the smallest object `accountsBridge()` accepts, and it is put back
+ * afterwards so no other pane in this file renders against it.
  */
 function render(section: SectionId, bridge: SettingsBridge = {}): string {
-  return renderToStaticMarkup(
-    <SettingsPanel bridge={bridge} platform="windows" initialSection={section} />,
-  )
+  const host = globalThis as { deck?: unknown }
+  const had = 'deck' in host
+  const previous = host.deck
+  if (section === 'profiles') host.deck = { listProfiles: () => Promise.resolve({ profiles: [] }) }
+  try {
+    return renderToStaticMarkup(
+      <SettingsPanel bridge={bridge} platform="windows" initialSection={section} />,
+    )
+  } finally {
+    if (had) host.deck = previous
+    else delete host.deck
+  }
 }
 
 const PROSE = /<p class="(?:settings-prose|settings-explain-body)"[^>]*>(.*?)<\/p>/gs

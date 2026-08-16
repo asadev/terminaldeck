@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { WorkspaceTabStrip } from './browser/WorkspaceTabStrip'
-import type { SessionStatus } from '@shared/types'
+import type { ProviderId, SessionStatus } from '@shared/types'
 import { StoreProvider, useStore } from './state/store'
 import { TerminalView } from './components/TerminalView'
 import { EmptyState } from './components/EmptyState'
@@ -230,8 +230,16 @@ function Workspace() {
       // only when there is more than one in play; two sessions in one folder
       // under two accounts have to be tellable apart, and one account on every
       // row is noise.
+      // `provider` goes with it so the account chip can draw the agent's mark
+      // without opening the account list — see `WorkspaceTab.account`.
       ...(session.profileId && session.profileName
-        ? { account: { id: session.profileId, name: session.profileName } }
+        ? {
+            account: {
+              id: session.profileId,
+              name: session.profileName,
+              provider: session.provider,
+            },
+          }
         : {}),
       closable: true,
     })),
@@ -517,7 +525,7 @@ function Workspace() {
   )
 
   const newSessionIn = useCallback(
-    async (path: string, resume = false, profileId?: string) => {
+    async (path: string, resume = false, profileId?: string, runAs?: ProviderId) => {
       /*
        * The default agent is *sent*, not assumed.
        *
@@ -526,8 +534,18 @@ function Workspace() {
        * default was Plain shell got Claude from the sidebar button while the
        * new-session dialog, which does read the setting, pre-selected Shell.
        * The app disagreed with itself about its own preference.
+       *
+       * `runAs` overrides it, and only the two callers that are starting a
+       * session *for an account* pass one. An account is a login of one
+       * specific CLI, so those two have already decided which agent this is —
+       * pressing Sign in beside a Codex account, or picking a Codex account
+       * from the chip, means Codex whatever General says. Without it the
+       * request went out on the default agent, `resolveProfileId` refused to
+       * run one agent's account under another's session, and the account was
+       * silently dropped: reported as *"if I add any new account it just
+       * redirects me to claude only"*.
        */
-      const provider = stringSetting(settings, 'general.defaultProvider')
+      const provider = runAs ?? stringSetting(settings, 'general.defaultProvider')
       const meta = await window.deck.createSession({
         cwd: path,
         cols: 100,
@@ -577,13 +595,13 @@ function Workspace() {
    * login and the sign-in lands on the wrong account.
    */
   const openProjectAs = useCallback(
-    async (profileId?: string) => {
+    async (profileId?: string, runAs?: ProviderId) => {
       const path = await window.deck.pickProjectFolder()
       if (!path) return
       // Through `newSessionIn`, so the first session in a project starts on the
       // same agent every other one does — and is registered the same way. This
       // call used to build its own request and left the provider off it.
-      await newSessionIn(path, false, profileId)
+      await newSessionIn(path, false, profileId, runAs)
       setOnboardingDone(true)
     },
     [newSessionIn],
@@ -614,13 +632,14 @@ function Workspace() {
    * New session put a folder chooser on screen instead of a session.
    */
   const newSession = useCallback(
-    (path?: string, resume = false, profileId?: string) => {
+    (path?: string, resume = false, profileId?: string, runAs?: ProviderId) => {
       const target = path ?? activeProjectPath ?? lastFolderRef.current
-      if (target) void newSessionIn(target, resume, profileId)
+      if (target) void newSessionIn(target, resume, profileId, runAs)
       // No folder anywhere — a first launch. The chooser is not "a dialog in
       // the way" at that point, it is the only question left, and the account
-      // travels through it.
-      else void openProjectAs(profileId)
+      // travels through it — with the agent it is a login of, which has to
+      // survive the detour for the same reason the account does.
+      else void openProjectAs(profileId, runAs)
     },
     [activeProjectPath, newSessionIn, openProjectAs],
   )
@@ -1642,7 +1661,14 @@ function Workspace() {
                    * was written to watch.
                    */
                   provider={isProviderId(defaultProvider) ? defaultProvider : undefined}
-                  onPick={(accountId) => newSession(headingFolder, false, accountId)}
+                  /* The account *and* the agent it is a login of. The menu
+                     lists accounts of every agent now, so picking a Codex one
+                     and starting the default agent would hand a Codex config
+                     directory to Claude — which `resolveProfileId` declines,
+                     leaving the click with nothing to show for itself. */
+                  onPick={(accountId, runAs) =>
+                    newSession(headingFolder, false, accountId, runAs)
+                  }
                   onManage={() => openSettings('profiles')}
                 />
               </div>
@@ -1722,9 +1748,11 @@ function Workspace() {
          * session store lives here — so Accounts asks, and this closes the
          * window and starts the session the user is about to log in with.
          */
-        onStartSession={({ profileId }) => {
+        onStartSession={({ profileId, provider }) => {
           setPrefsOpen(false)
-          newSession(undefined, false, profileId)
+          // The agent the account is a login of, not the default coding tool.
+          // Signing a Codex account in used to open Claude — see `newSessionIn`.
+          newSession(undefined, false, profileId, provider)
         }}
         // Every behavioural setting is read from one copy up here, so a change
         // made in the dialog has to land in it — otherwise the next ⌘W, the

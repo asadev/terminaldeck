@@ -3,6 +3,7 @@ import {
   accountProviderIds,
   buildAccountProviderRows,
   buildProviderRows,
+  chosenAccountProvider,
   firstAccountProvider,
   firstAvailable,
   parseAccountProviders,
@@ -195,6 +196,42 @@ describe('which agents the Add-account dialog offers', () => {
   it('has nothing to preselect when nothing can take an account', () => {
     const rows = buildAccountProviderRows({ claude: false, codex: false, gemini: true, shell: true })
     expect(firstAccountProvider(rows)).toBeNull()
+  })
+})
+
+describe('which agent a new account actually gets', () => {
+  /**
+   * The selection is computed from the rows rather than stored beside them, and
+   * these are the three cases that decides.
+   */
+  const installed = { claude: true, codex: true, gemini: true, shell: true }
+
+  it('is an addable agent before anything has been clicked', () => {
+    // The first paint. Nothing has been chosen and the form still has to say
+    // which agent Add would use — a state a `useEffect` cannot reach in time.
+    expect(chosenAccountProvider(buildAccountProviderRows(installed), null)?.id).toBe('claude')
+  })
+
+  it('is what was clicked, once something has been', () => {
+    expect(chosenAccountProvider(buildAccountProviderRows(installed), 'codex')?.id).toBe('codex')
+  })
+
+  it('moves off an agent that has just stopped being addable', () => {
+    /*
+     * Detection and the main process both answer *after* the list is drawn, and
+     * either can withdraw a row. Held in state, the selection would stay on the
+     * withdrawn one and Add would stay lit over a radio that refuses.
+     */
+    const rows = buildAccountProviderRows({ claude: true, codex: false, gemini: true, shell: true })
+    expect(chosenAccountProvider(rows, 'codex')?.id).toBe('claude')
+  })
+
+  it('never resolves to an agent that cannot hold a second login', () => {
+    // Gemini is selectable by no route at all — not by clicking, and not by
+    // being the only row left.
+    const rows = buildAccountProviderRows({ claude: false, codex: false, gemini: true, shell: true })
+    expect(chosenAccountProvider(rows, 'gemini')).toBeNull()
+    expect(chosenAccountProvider(rows, null)).toBeNull()
   })
 })
 

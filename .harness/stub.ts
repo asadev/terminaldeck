@@ -235,7 +235,18 @@ const api: Record<string, unknown> = new Proxy(
     watchPlanLimits: async () => null,
     refreshPlanLimits: async () => ({ ok: false, reason: 'unwired', snapshot: null }),
     unwatchPlanLimits: () => {},
-    listProfiles: async () => ({ profiles: [{ id: 'default', name: 'Default', system: true }], defaultId: 'default' }),
+    // `provider` and `configDir` are what the main process actually sends, and
+    // both are drawn: the account chip and the Accounts list put that agent's
+    // mark beside the name, and the settings row shows the directory that makes
+    // an account a separate login. Without them the harness shows an account
+    // with no agent and no path — which is a real state (a record from an older
+    // build) but not the ordinary one, so it would make the badge look broken.
+    listProfiles: async () => ({
+      profiles: [
+        { id: 'default', name: 'Default', provider: 'claude', configDir: '/Users/you/.claude', system: true },
+      ],
+      defaultId: 'default',
+    }),
     gitStatus: async () => ({ ok: false, kind: 'not-a-repo', message: 'Not a git repository.' }),
     githubOverview: async () => ({ ok: false, kind: 'no-remote', message: 'This repository has no remotes yet.' }),
     scanReadiness: async () => ({ score: 93, checks: [] }),
@@ -368,6 +379,43 @@ const api: Record<string, unknown> = new Proxy(
       },
     ],
     searchSessions: async () => ({ hits: [] }),
+    /*
+     * Artifacts. Same reason as `loadChat` below, and the same failure without
+     * it: `ArtifactsPanel` decides what to draw from `response.ok`, the Proxy
+     * fallback answers `null`, and `null.ok` throws inside the promise. The
+     * panel catches it, so the harness would show the Artifacts page reporting
+     * a TypeError as if the feature were broken — which is precisely the
+     * invented bug this file's contract exists to avoid. `resolveBridge` cannot
+     * save it either: the fallback *is* a function, so the panel's "not wired
+     * yet" guard is satisfied and it goes ahead and calls it.
+     *
+     * The answer is an honest empty scan rather than fabricated files: the
+     * harness has no transcripts, so nothing was written or edited, and the page
+     * shows the empty state a real project with no recorded sessions shows.
+     * `sessionsScanned: 0` is what makes it say so in those words.
+     */
+    listArtifacts: async () => ({
+      ok: true,
+      root: '/Users/apple/Projects/terminaldeck',
+      scope: 'project',
+      artifacts: [],
+      sessions: [],
+      sessionsScanned: 0,
+      outsideProject: 0,
+      truncated: false,
+      cancelled: false,
+      tookMs: 0,
+    }),
+    artifactChanges: async () => ({
+      ok: true,
+      root: '/Users/apple/Projects/terminaldeck',
+      relPath: '',
+      changes: [],
+      totalChanges: 0,
+      truncated: false,
+      cancelled: false,
+      tookMs: 0,
+    }),
     // Chat view. The Proxy's fallback resolves an unknown method to `null`, and
     // `null.found` throws inside a promise — the pane would go down through the
     // error boundary and look broken rather than empty. A complete `ChatUpdate`

@@ -8,6 +8,7 @@ import {
   type ComponentType,
   type KeyboardEvent,
 } from 'react'
+import type { ProviderId } from '@shared/types'
 import { Modal } from '../components/Modal'
 import { applyStoredTheme, applyTheme, isThemePreference } from '../theme'
 import {
@@ -166,7 +167,7 @@ export interface SettingsPanelProps {
    * rather than the pane calling `session:create` behind its back and leaving a
    * running process with no tab.
    */
-  onStartSession?(request: { profileId: string }): void
+  onStartSession?(request: { profileId: string; provider?: ProviderId }): void
   /** Fired after every accepted write, so the app can react to a changed value. */
   onChange?(values: SettingValues): void
   /** Rendered in the footer by the window; exposed so the panel can drive it. */
