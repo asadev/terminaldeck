@@ -26,7 +26,39 @@ import { describe, expect, it } from 'vitest'
  */
 
 const HERE = __dirname
-const read = (name: string): string => readFileSync(join(HERE, name), 'utf8')
+
+/**
+ * Every line ending collapsed to `\n`, whatever the checkout happened to write.
+ *
+ * Worth writing down at length, because as a bare `.replace` it reads like
+ * tidiness and it is not: it is the whole of a bug that cost a CI run.
+ *
+ * Git decides line endings at *checkout*, not in the repository, and it decides
+ * them with whatever the installer configured. Git for Windows ships
+ * `core.autocrlf=true` and the `windows-latest` runner inherits it, so from one
+ * identical commit this file reads `\r\n` there and `\n` on every machine the
+ * tests were written on. Everything below parses CSS by hand — a Node test has
+ * no CSS parser and does not want one for this — and hand-written parsing is
+ * exactly where that difference stops being invisible. `\n${selector} {\n` is a
+ * needle that a CRLF sheet does not contain *anywhere*, so `ruleBody` answered
+ * `null` for every rule in the file at once and seven assertions failed with
+ * `undefined` against values that are plainly there in the sheet.
+ *
+ * The part worth knowing before writing the next parser of this kind: `^` and
+ * `$` are *not* the hazard. JavaScript counts a bare `\r` as a line terminator,
+ * so a `/m` anchor already lands in the right place on a CRLF file. Only a
+ * *literal* `\n` is the trap — as an `indexOf` needle, or spelled out inside a
+ * pattern. Both shapes appear below, which is why this is applied at the top of
+ * each parser rather than trusted to the one call that reads the disk.
+ *
+ * `\r\n?` rather than `\r\n` so that a lone `\r` collapses as well. Nothing
+ * produces classic-Mac endings any more, but a parser that quietly mangles them
+ * is a worse answer than one that costs a single character to make total.
+ */
+const lf = (text: string): string => text.replace(/\r\n?/g, '\n')
+
+/** A sheet or a component, in the line endings the rest of this file assumes. */
+const read = (name: string): string => lf(readFileSync(join(HERE, name), 'utf8'))
 
 const SHELL = read('shell.css')
 const MODE_SWITCH = read('ModeSwitch.css')
@@ -50,7 +82,13 @@ const stripComments = (css: string): string => css.replace(/\/\*[\s\S]*?\*\//g, 
  * from matching an indented copy inside a `@media` block, which is a different
  * rule with a different job.
  */
-function ruleBody(css: string, selector: string): string | null {
+function ruleBody(sheet: string, selector: string): string | null {
+  // Normalised here rather than only where the file is read, so the function is
+  // correct for any string handed to it. That is not defensiveness for its own
+  // sake — it is what lets the CRLF block at the bottom of this file exercise
+  // *this* parser with Windows input instead of a second copy of it that could
+  // drift, and so what makes the Windows failure reproducible on a Mac.
+  const css = lf(sheet)
   const opening = `\n${selector} {\n`
   const start = css.indexOf(opening)
   if (start === -1) return null
@@ -77,6 +115,68 @@ function appRegion(css: string, selector: string): string | undefined {
   return /-webkit-app-region:\s*([\w-]+)/.exec(ruleBody(css, selector) ?? '')?.[1]
 }
 
+/**
+ * Every selector on the bar that has to subtract itself from the drag region,
+ * and the sheet each one is written in.
+ *
+ * At module scope because two describes below consume it: the one that checks
+ * the declaration is present, and the one that checks it is still *findable*
+ * when the sheet arrives with Windows line endings. Anything added here is
+ * covered by both without anyone having to remember to add it in two places —
+ * which matters, because the second list is the one a reader would forget.
+ */
+const NO_DRAG = [
+  // The two slots `WindowToolbar` renders other people's components into.
+  // Opting the slot out rather than each child is what makes it impossible
+  // for a caller to add a control that moves the window.
+  [SHELL, '.toolbar-actions'],
+  [SHELL, '.toolbar-chips'],
+  // The reveal button, which is positioned out of the flow inside the lead.
+  [SHELL, '.toolbar-btn'],
+  // And the control that sits directly beside the OS's close button.
+  [MODE_SWITCH, '.mode-switch'],
+] as const
+
+/**
+ * Every top-level rule in a sheet, as `[selector, body]`.
+ *
+ * The same column-zero reading `ruleBody` makes, done in bulk: a rule's
+ * selector starts the line and its `}` closes one, and nothing in these sheets
+ * nests, so an indented copy inside a `@media` block is correctly skipped.
+ *
+ * Split out of the sweep it serves so that it can be run against CRLF input
+ * directly. That is not decoration either — under `\r\n` this pattern matched
+ * *zero* rules out of a hundred and forty-seven, and a sweep over an empty list
+ * finds no offenders and passes. So on Windows this check was not failing, it
+ * was reporting success while looking at nothing, which is the more expensive
+ * of the two outcomes and the one nobody goes looking for.
+ */
+function topLevelRules(sheet: string): Array<readonly [string, string]> {
+  return [...lf(sheet).matchAll(/^([^\s@}][^\n]*) \{\n([\s\S]*?)\n\}/gm)].map(
+    (match) => [match[1], match[2]] as const,
+  )
+}
+
+/** The pixel gutters that exist only because macOS puts three lights there. */
+const LIGHTS_RESERVE = /\b(82px|118px)\b/
+
+/**
+ * Rules that hold room for the traffic lights with no Windows counterpart.
+ *
+ * Takes the sheet as an argument for the same reason as everything else here:
+ * the CRLF block has to be able to ask it the question with Windows input.
+ */
+function lightsReserveOffenders(sheet: string): string[] {
+  const css = stripComments(lf(sheet))
+  const offenders: string[] = []
+  for (const [selector, body] of topLevelRules(css)) {
+    if (!LIGHTS_RESERVE.test(body)) continue
+    if (selector.startsWith(':root[data-window-controls]')) continue
+    if (!css.includes(`:root[data-window-controls] ${selector} {`)) offenders.push(selector)
+  }
+  return offenders
+}
+
 describe('the bar moves the window, and every control on it does not', () => {
   it('makes the whole toolbar a drag region', () => {
     /*
@@ -90,17 +190,7 @@ describe('the bar moves the window, and every control on it does not', () => {
     expect(appRegion(SHELL, '.toolbar')).toBe('drag')
   })
 
-  for (const [sheet, selector] of [
-    // The two slots `WindowToolbar` renders other people's components into.
-    // Opting the slot out rather than each child is what makes it impossible
-    // for a caller to add a control that moves the window.
-    [SHELL, '.toolbar-actions'],
-    [SHELL, '.toolbar-chips'],
-    // The reveal button, which is positioned out of the flow inside the lead.
-    [SHELL, '.toolbar-btn'],
-    // And the control that sits directly beside the OS's close button.
-    [MODE_SWITCH, '.mode-switch'],
-  ] as const) {
+  for (const [sheet, selector] of NO_DRAG) {
     it(`${selector} opts out of it`, () => {
       expect(
         appRegion(sheet, selector),
@@ -170,23 +260,110 @@ describe('the Windows window buttons get their room', () => {
      * places that spell 118px, and the second one was added months after the
      * first.
      */
-    const css = stripComments(SHELL)
-    const lightsReserve = /\b(82px|118px)\b/
-    const offenders: string[] = []
-    for (const match of css.matchAll(/^([^\s@}][^\n]*) \{\n([\s\S]*?)\n\}/gm)) {
-      const [, selector, body] = match
-      if (!lightsReserve.test(body)) continue
-      if (selector.startsWith(':root[data-window-controls]')) continue
-      if (!css.includes(`:root[data-window-controls] ${selector} {`)) offenders.push(selector)
-    }
     expect(
-      offenders,
+      lightsReserveOffenders(SHELL),
       'these rules hold room for the macOS traffic lights and say nothing about the platform ' +
         'that has no traffic lights. On Windows that is an empty gap at the top-left of the ' +
         'window with a control adrift in the middle of it.',
     ).toEqual([])
     // And the sweep is looking at something: a sheet that stopped spelling the
-    // reserve would pass this vacuously.
-    expect(lightsReserve.test(css)).toBe(true)
+    // reserve would pass this vacuously. So would a sheet the sweep could not
+    // read at all, which is precisely what CRLF did to it — hence the second
+    // check, that rules were found, and the CRLF block at the end of the file.
+    expect(LIGHTS_RESERVE.test(stripComments(SHELL))).toBe(true)
+    expect(topLevelRules(SHELL).length).toBeGreaterThan(0)
+  })
+})
+
+describe('the sheet reads the same however git checked it out', () => {
+  /*
+   * The guard for the class of bug that took this whole file down, run on the
+   * machine the file is written on.
+   *
+   * Everything above reads CSS off disk and parses it by hand, and on a Windows
+   * checkout that CSS arrives with `\r\n` line endings — `core.autocrlf=true` is
+   * what Git for Windows installs and what the `windows-latest` runner inherits.
+   * The parsers were written against `\n`, so on that machine `ruleBody` found
+   * no rule at all and seven assertions failed with `undefined` against
+   * declarations that are sitting right there in the sheet. The sweep over
+   * top-level rules did something worse than fail: it matched zero rules and
+   * reported no offenders, passing green while checking nothing.
+   *
+   * The important thing about this block is *where it runs*. Making the parsers
+   * tolerate `\r` fixes the bug; a guard that can only fail on a Windows runner
+   * would not be a guard, it would be a notification an hour later, on a red
+   * release build, for a developer who has no Windows machine to reproduce it
+   * on. So the CRLF sheet is manufactured here from the real one and fed to the
+   * real parsers, and this fails on a Mac the moment somebody writes a literal
+   * `\n` into one of them again.
+   *
+   * Each check is written as "CRLF answers what LF answers" rather than against
+   * a hardcoded expectation, so it keeps testing line endings and never turns
+   * into a second, staler copy of the assertions above it.
+   */
+  const asWindows = (text: string): string => text.replace(/\n/g, '\r\n')
+
+  it('finds the drag region on a CRLF checkout', () => {
+    expect(appRegion(asWindows(SHELL), '.toolbar')).toBe(appRegion(SHELL, '.toolbar'))
+    // Not vacuous: the sheet really does say something here, on both readings.
+    expect(appRegion(SHELL, '.toolbar')).toBe('drag')
+  })
+
+  for (const [sheet, selector] of NO_DRAG) {
+    it(`finds ${selector}'s opt-out on a CRLF checkout`, () => {
+      expect(appRegion(asWindows(sheet), selector)).toBe(appRegion(sheet, selector))
+      expect(appRegion(asWindows(sheet), selector)).toBe('no-drag')
+    })
+  }
+
+  it('reads a rule body without dragging a carriage return into it', () => {
+    /*
+     * The second failure mode of the same cause, and the quieter one: a parser
+     * can find the rule and still hand back `drag\r`, or a declaration whose
+     * trailing token no longer equals the string it is compared against. The
+     * `.toolbar` padding assertion is a `toContain` over a body, so a stray
+     * `\r` at the end of a line inside it is exactly the shape that would slip
+     * through the check above and fail the one that matters.
+     */
+    const body = requireRule(asWindows(SHELL), '.toolbar')
+    expect(body).not.toContain('\r')
+    expect(body).toContain('padding-right: calc(var(--sp-3) + var(--window-controls-inset, 0px))')
+  })
+
+  it('sweeps the same rules on a CRLF checkout', () => {
+    // The one that was passing vacuously. 147 rules against 0 was the real
+    // measurement; asserting equality keeps it honest as the sheet grows.
+    expect(topLevelRules(asWindows(SHELL))).toEqual(topLevelRules(SHELL))
+    expect(lightsReserveOffenders(asWindows(SHELL))).toEqual([])
+    expect(topLevelRules(asWindows(SHELL)).length).toBeGreaterThan(0)
+  })
+
+  it('parses a hand-written CRLF sheet, independently of the real one', () => {
+    /*
+     * Deliberately not derived from `shell.css`. Every check above compares the
+     * real sheet with itself, which proves the parsers agree — but if the sheet
+     * were restructured into a shape neither reading could parse, they would
+     * agree on nothing and still pass. Six literal lines with `\r\n` spelled out
+     * is the fixed point that cannot rot with the stylesheet.
+     */
+    const sheet = [
+      '/* a sheet, exactly as a Windows checkout hands it over */',
+      '.toolbar {',
+      '  -webkit-app-region: drag;',
+      '}',
+      '',
+      '.toolbar-btn {',
+      '  -webkit-app-region: no-drag;',
+      '}',
+      '',
+    ].join('\r\n')
+
+    expect(appRegion(sheet, '.toolbar')).toBe('drag')
+    expect(appRegion(sheet, '.toolbar-btn')).toBe('no-drag')
+    expect(appRegion(sheet, '.nothing-here')).toBeUndefined()
+    expect(topLevelRules(sheet).map(([selector]) => selector)).toEqual(['.toolbar', '.toolbar-btn'])
+    // And a lone `\r`, which `lf` also collapses, so that the total claim the
+    // helper makes is the claim that is actually tested.
+    expect(appRegion(sheet.replace(/\r\n/g, '\r'), '.toolbar')).toBe('drag')
   })
 })

@@ -12,6 +12,7 @@ import {
   unconfinedReason,
   type ProofRunner,
 } from './index'
+import type { ProbeFiles } from './appcontainer'
 import type { ConfinementPlan } from './plan'
 import { SANDBOX_EXEC } from './seatbelt'
 import { capabilitySid, installWindowsTools, resetWindowsTools, writeGrantRecord } from './tools'
@@ -388,26 +389,85 @@ describe('confineSpawn', () => {
       return dir
     }
 
-    /** A launcher that behaves the way the real one did on the real machine. */
-    const launcherThatWorks: ProofRunner = async (_command, args) => {
-      const script = args[args.length - 1] ?? ''
-      const canary = /type ([^ ]+)/.exec(script)?.[1] ?? ''
-      const token = /echo ([0-9a-f]{24})/.exec(script)?.[1] ?? ''
-      // The inside canary comes back; the outside one never does; the tool runs.
-      return { stdout: `${readFileSync(canary, 'utf8')}\n${token}\n`, stderr: '' }
+    /**
+     * The proof's two canaries, held in memory instead of on this machine's disk.
+     *
+     * This is the whole of the cross-platform fix, and it is worth saying what it
+     * replaced because the old version looked perfectly innocent. The proof plants
+     * a canary inside the boundary and one outside it, at paths derived from the
+     * plan — and every path in a Windows plan starts with a drive letter. This
+     * block used to let the real `fs` write them. On macOS a backslash is an
+     * ordinary filename character, so
+     * `C:\Users\Imza\AppData\Roaming\td\device-home\abc\.terminaldeck-confine-probe-…`
+     * is not a path at all, it is one very long filename in the working directory,
+     * and the write succeeds. On a Windows runner it is a real absolute path to a
+     * directory that has never existed there, the write is `ENOENT`, the proof
+     * correctly refuses, and `confineSpawn` throws — so the one test asserting
+     * that Windows spawns the launcher failed on the one platform where Windows
+     * confinement is not hypothetical, and passed everywhere else.
+     *
+     * `appcontainer.ts` had already built the {@link ProbeFiles} seam for exactly
+     * this and said so in its comment; it simply was not threaded through
+     * `proveConfinement` and `confineSpawn`, so the test could not reach it from
+     * the real entry point. It is now, and the run below touches no filesystem on
+     * either platform.
+     *
+     * `remove` keeps the entry rather than dropping it, so the assertions after
+     * the run can see both what was planted and what was swept.
+     */
+    function probeFiles(): ProbeFiles & { written: Map<string, string>; removed: string[] } {
+      const written = new Map<string, string>()
+      const removed: string[] = []
+      return {
+        written,
+        removed,
+        write(path, contents) {
+          written.set(path, contents)
+        },
+        remove(path) {
+          removed.push(path)
+        },
+      }
     }
+
+    /**
+     * A launcher that behaves the way the real one did on the real machine: the
+     * canary inside the boundary comes back, the one outside it never does, and
+     * the tool check answers.
+     *
+     * The token is echoed back out of the script rather than invented, because
+     * whether the script has a tool check at all depends on `toolProbe` finding a
+     * real `node.exe` — which a Windows runner has and this Mac does not. Both
+     * shapes are pinned deliberately in `appcontainer.test.ts`; here the launcher
+     * simply answers whichever one it was handed, so this case is about the
+     * launcher being spawned and not about the probe's contents.
+     */
+    const launcherThatWorks =
+      (files: { written: Map<string, string> }): ProofRunner =>
+      async (_command, args) => {
+        const script = args[args.length - 1] ?? ''
+        const canary = /type ([^ ]+)/.exec(script)?.[1] ?? ''
+        const token = /echo ([0-9a-f]{24})/.exec(script)?.[1] ?? ''
+        return { stdout: `${files.written.get(canary) ?? ''}\n${token}\n`, stderr: '' }
+      }
 
     it('spawns the launcher rather than the command itself', async () => {
       // The whole reason this platform needs an .exe of its own: an AppContainer
       // is applied inside the CreateProcess call, so the thing being spawned has
       // to be the program that makes that call.
       const dir = setUp()
+      const files = probeFiles()
       const wrapped = await confineSpawn(
         windowsPlan,
         'C:\\Windows\\System32\\cmd.exe',
         ['/c', 'claude'],
         'win32',
-        launcherThatWorks,
+        launcherThatWorks(files),
+        // The Linux machine seam, which a Windows plan never reaches. Spelled as
+        // `undefined` rather than filled in so that the real default stays the
+        // real default, and the argument after it is the one this case is about.
+        undefined,
+        files,
       )
       expect(wrapped.command).toBe(join(dir, 'tdconfine.exe'))
       expect(wrapped.args.slice(wrapped.args.indexOf('--') + 1)).toEqual([
@@ -417,12 +477,59 @@ describe('confineSpawn', () => {
       ])
     })
 
+    it('plants its canaries through the injected filesystem, not this one', async () => {
+      /*
+       * The guard that stops the bug above coming back, and it fails on a Mac
+       * rather than only on a Windows runner — which is the point of it. If
+       * `confineSpawn` ever stops passing the seam down to `proveAppContainer`,
+       * the proof falls back to the real `fs`, nothing reaches this map, and the
+       * count below is zero here, today, in this run. A guard that could only
+       * fail on Windows CI is a guard nobody sees until the release.
+       *
+       * Drive-rooted is asserted for the same reason: these are the paths the
+       * launcher is handed, and a canary that had been quietly rewritten into a
+       * POSIX path would be testing a boundary the real machine never sees.
+       */
+      setUp()
+      const files = probeFiles()
+      await confineSpawn(
+        windowsPlan,
+        'C:\\Windows\\System32\\cmd.exe',
+        [],
+        'win32',
+        launcherThatWorks(files),
+        undefined,
+        files,
+      )
+
+      const planted = [...files.written.keys()]
+      expect(planted).toHaveLength(2)
+      for (const path of planted) expect(path).toMatch(/^[A-Za-z]:\\/)
+      // One inside the boundary and one outside it, and both swept afterwards —
+      // a canary left behind is a file of random hex in somebody's home.
+      expect(planted.some((path) => path.startsWith(windowsPlan.home))).toBe(true)
+      expect(planted.some((path) => path.startsWith(`${windowsPlan.accountHome}\\.`))).toBe(true)
+      expect([...files.removed].sort()).toEqual([...planted].sort())
+      // And none of it happened here. On a Mac these are legal filenames in the
+      // working directory, which is exactly how the old version passed.
+      for (const path of planted) expect(existsSync(path)).toBe(false)
+    })
+
     it('refuses when the machine has not been set up, rather than running anyway', async () => {
       // Reached when the grant is withdrawn between the gate and the spawn — a
       // repair install, or somebody undoing it by hand. The session refuses.
       resetWindowsTools()
+      const files = probeFiles()
       await expect(
-        confineSpawn(windowsPlan, 'cmd.exe', [], 'win32', launcherThatWorks),
+        confineSpawn(
+          windowsPlan,
+          'cmd.exe',
+          [],
+          'win32',
+          launcherThatWorks(files),
+          undefined,
+          files,
+        ),
       ).rejects.toBeInstanceOf(ConfinementUnavailableError)
     })
   })

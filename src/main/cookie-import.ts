@@ -15,6 +15,7 @@ import {
   type PrivacyPane,
   type ReadonlyDatabase,
 } from './chrome-import'
+import { currentPlatform, type Platform } from './platform/host'
 
 /**
  * Cookie import — carry the sign-ins already in an installed Chromium browser
@@ -804,8 +805,8 @@ function pickSource(request: ImportRequest, sources: readonly CookieSource[]): C
  * `browserDataAccess` already knows which it is, because `detectBrowsers` keeps
  * a blocked browser in its list precisely so this question can be answered.
  */
-function noSourceMessage(): { message: string; pane: PrivacyPane | null } {
-  const access = browserDataAccess()
+function noSourceMessage(platform: Platform): { message: string; pane: PrivacyPane | null } {
+  const access = browserDataAccess(detectBrowsers(), platform)
   if (access.problem) return { message: access.problem.message, pane: access.problem.pane }
   return {
     message: 'No installed Chromium browser was found on this machine, so there is nothing to import from.',
@@ -862,6 +863,34 @@ export interface ImportDeps {
   keychain?: (browserId: BrowserId, browserName: string) => Promise<KeychainResult>
   /** Whether the cookie database can be opened. See {@link canRead}. */
   readable?: (path: string) => boolean
+  /**
+   * Which operating system this run should answer as. Defaults to the real one.
+   *
+   * Here for the reason `platform/host.ts` gives at length, and it was added
+   * after a real Windows CI run failed on it. A blocked import does not say the
+   * same thing on every platform and must not: on macOS the refusal is a TCC
+   * grant the user can give, so the sentence names Full Disk Access and carries
+   * the System Settings pane that has the ＋ button in it. On Windows and Linux
+   * there is no such gate — a profile directory this app cannot open there is
+   * locked or owned by somebody else — so `describeAccessFailure` deliberately
+   * says only that the machine refused, with no pane, because sending a Windows
+   * user to a macOS security pane is an instruction for an operating system
+   * they are not running.
+   *
+   * Without this seam the platform was read inside `describeAccessFailure` from
+   * `process.platform`, so a test could only ever see the branch belonging to
+   * the machine it ran on: the macOS sentence was asserted unconditionally, it
+   * passed here forever, and it failed the first time the suite ran on Windows.
+   * With the platform passed in, both sentences are pinned side by side on this
+   * Mac and neither is a fact only a Windows runner ever checks.
+   *
+   * It is threaded all the way through rather than used for the message alone.
+   * The keychain lives in the macOS login keychain and the key derivation uses a
+   * different iteration count off macOS, so a run pinned to `win32` that still
+   * asked the *real* `security` binary would be answering as two machines at
+   * once.
+   */
+  platform?: Platform
 }
 
 export async function importCookies(
@@ -870,11 +899,15 @@ export async function importCookies(
   now: number = Date.now(),
   deps: ImportDeps = {},
 ): Promise<CookieImportReport> {
+  const platform = deps.platform ?? currentPlatform()
   const readable = deps.readable ?? canRead
-  const keychainOf = deps.keychain ?? readSafeStorageKey
+  const keychainOf =
+    deps.keychain ??
+    ((browserId: BrowserId, browserName: string) =>
+      readSafeStorageKey(browserId, browserName, platform))
   const source = pickSource(request, deps.sources ?? listCookieSources())
   if (!source) {
-    const reason = noSourceMessage()
+    const reason = noSourceMessage(platform)
     return failure(
       null,
       null,
@@ -912,14 +945,14 @@ export async function importCookies(
    * operation actually requires, when it requires it, and never for more.
    */
   if (!readable(source.path)) {
-    const denied = describeAccessFailure({ code: 'EPERM' }, `${label}’s cookies`)
+    const denied = describeAccessFailure({ code: 'EPERM' }, `${label}’s cookies`, platform)
     return failure(source, null, denied.message, denied.pane)
   }
 
   const keychain = await keychainOf(source.browserId, source.browserName)
   if (!keychain.ok) return failure(source, keychain.reason, keychain.detail)
 
-  const key = deriveCookieKey(keychain.secret)
+  const key = deriveCookieKey(keychain.secret, platform)
 
   let rows: CookieRow[]
   try {
@@ -928,7 +961,7 @@ export async function importCookies(
     // Still handled, because `canRead` above proves the file could be opened a
     // moment ago and not that it can be read through to the end — a lock, a
     // revoked grant or a disk error can all land here.
-    const denied = describeAccessFailure(err, `${label}’s cookie database`)
+    const denied = describeAccessFailure(err, `${label}’s cookie database`, platform)
     return failure(source, 'ok', denied.message, denied.pane)
   }
 
@@ -975,7 +1008,10 @@ export async function importCookies(
 
 /* ---------------------------------------------------------------- status -- */
 
-async function statusOf(target: Session): Promise<CookieImportStatus> {
+async function statusOf(
+  target: Session,
+  platform: Platform = currentPlatform(),
+): Promise<CookieImportStatus> {
   const ledger = loadLedger()
   const live = new Set<string>()
   try {
@@ -997,7 +1033,10 @@ async function statusOf(target: Session): Promise<CookieImportStatus> {
     recorded: ledger.entries.length,
     importedAt: ledger.importedAt,
     source: ledger.source,
-    supported: process.platform === 'darwin',
+    // Through the seam, not through `process.platform` inline. Same reason as
+    // everywhere else in this file: a branch written inline is a branch only
+    // the machine it was written on can ever exercise.
+    supported: platform === 'darwin',
   }
 }
 

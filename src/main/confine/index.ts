@@ -161,10 +161,12 @@ import {
   appContainerArgs,
   containerName,
   proveAppContainer,
+  realFiles,
   WINDOWS_SETUP_NEEDED,
   WINDOWS_UNCONFINED_REASON,
   type AppContainerLaunch,
   type LauncherRunner,
+  type ProbeFiles,
 } from './appcontainer'
 import {
   readGrantRecord,
@@ -492,16 +494,37 @@ const realRunner: ProofRunner = async (command, args) => {
  * as a pass. It would be readable by design, so the check could not tell a
  * working boundary from a broken one, and answering "confined" on the strength
  * of a test that cannot fail is worse than answering "unknown".
+ *
+ * ## Why `files` is a parameter, and what it cost not to have one
+ *
+ * `appcontainer.ts` grew a {@link ProbeFiles} seam for its canaries, and gave
+ * the reason in its own comment: every path in a Windows plan begins with a
+ * drive letter, no macOS filesystem will accept one, so a proof that writes its
+ * canaries through `fs` directly is a proof no test on this machine can drive.
+ * That seam stopped one level short — it existed on `proveAppContainer` and was
+ * unreachable from here — which made the whole Windows branch of this function,
+ * and of {@link confineSpawn}, untestable through its real entry point.
+ *
+ * The workaround the test settled on is the reason this is now threaded through.
+ * It let the *real* `fs` write `C:\Users\Imza\AppData\…\.terminaldeck-confine-probe`,
+ * which on macOS is not a path at all: backslashes are ordinary characters here,
+ * so it is one long filename in the working directory, and the write succeeds.
+ * On Windows it is a real absolute path to a directory that has never existed on
+ * the runner, the write is `ENOENT`, and the proof correctly reports that it
+ * could not plant a canary — so the one test asserting that Windows spawns the
+ * launcher failed on the one platform where it is not hypothetical. Passing the
+ * files in makes both machines run the identical code path.
  */
 export async function proveConfinement(
   plan: ConfinementPlan,
   platform: Platform = currentPlatform(),
   runner: ProofRunner = realRunner,
   machine: LinuxMachine = realMachine,
+  files: ProbeFiles = realFiles,
 ): Promise<ConfinementProof> {
   const kind = confinementKind(platform)
   if (kind === 'namespace') return proveNamespace(plan, runner, machine)
-  if (kind === 'appcontainer') return proveWindows(plan, runner)
+  if (kind === 'appcontainer') return proveWindows(plan, runner, files)
   if (kind !== 'seatbelt') return { ok: false, detail: unconfinedReason(platform) }
 
   const profile = seatbeltProfile(plan)
@@ -696,7 +719,11 @@ function windowsLaunch(
  * that rejection back into data, and it is the same function the Linux proof
  * leans on for the same reason.
  */
-async function proveWindows(plan: ConfinementPlan, runner: ProofRunner): Promise<ConfinementProof> {
+async function proveWindows(
+  plan: ConfinementPlan,
+  runner: ProofRunner,
+  files: ProbeFiles,
+): Promise<ConfinementProof> {
   const built = windowsLaunch(plan)
   if ('detail' in built) return { ok: false, detail: built.detail }
   const launcherRunner: LauncherRunner = async (command, args) => {
@@ -704,7 +731,7 @@ async function proveWindows(plan: ConfinementPlan, runner: ProofRunner): Promise
     const code = (ran.error as { code?: unknown } | null)?.code
     return { stdout: ran.stdout, stderr: ran.stderr, code: typeof code === 'number' ? code : null }
   }
-  return proveAppContainer(built.launch, built.launcher, plan.home, launcherRunner)
+  return proveAppContainer(built.launch, built.launcher, plan.home, launcherRunner, files)
 }
 
 /**
@@ -779,6 +806,10 @@ function why(ran: { stderr: string; error: unknown }): string {
  * must not be handed something that runs anyway — see the header. The only
  * caller is the remote spawn path, and it turns this into a refusal the phone
  * can read.
+ *
+ * `files` is here only so that the Windows branch can be exercised from a Mac;
+ * {@link proveConfinement} carries the argument for why it has to be. Nothing in
+ * the app passes it, and the default is the real filesystem.
  */
 export async function confineSpawn(
   plan: ConfinementPlan,
@@ -787,8 +818,9 @@ export async function confineSpawn(
   platform: Platform = currentPlatform(),
   runner: ProofRunner = realRunner,
   machine: LinuxMachine = realMachine,
+  files: ProbeFiles = realFiles,
 ): Promise<{ command: string; args: string[] }> {
-  const proof = await proveConfinement(plan, platform, runner, machine)
+  const proof = await proveConfinement(plan, platform, runner, machine, files)
   if (!proof.ok) throw new ConfinementUnavailableError(proof.detail)
   if (confinementKind(platform) === 'appcontainer') {
     const built = windowsLaunch(plan)

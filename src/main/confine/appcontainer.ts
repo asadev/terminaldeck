@@ -506,7 +506,13 @@ export interface ProbeFiles {
   remove(path: string): void
 }
 
-const realFiles: ProbeFiles = {
+/**
+ * The real one. Exported so that {@link proveAppContainer}'s callers can carry
+ * the seam rather than re-implementing the default: `index.ts` has to be able to
+ * hand this down its own chain, and a second literal spelling the same two
+ * `fs` calls is a second thing to keep in step.
+ */
+export const realFiles: ProbeFiles = {
   write(path, contents) {
     writeFileSync(path, contents)
   },

@@ -615,24 +615,78 @@ describe('importCookies asks for the permission that decides the outcome first',
     keychainItem: true,
   }
 
-  it('never reaches the keychain when the cookie file cannot be opened', async () => {
+  /**
+   * One blocked import, answered as `platform` would answer it.
+   *
+   * The platform is passed in rather than read off the machine, because the
+   * three platforms this ships on do not give the same answer and must not: the
+   * refusal is a grant the user can make only on macOS. This helper exists so
+   * that every one of those answers is checked here, on whatever machine "here"
+   * happens to be — the alternative is what this file used to do, which was to
+   * assert the macOS sentence unconditionally, pass on every Mac it ever ran on,
+   * and fail the first time the suite met a Windows runner.
+   */
+  const blockedOn = async (
+    platform: NodeJS.Platform,
+  ): Promise<{ asked: number; report: Awaited<ReturnType<typeof importCookies>> }> => {
     let asked = 0
     const report = await importCookies({}, fakeSession as never, Date.now(), {
       sources: [source],
       readable: () => false,
+      platform,
       keychain: async () => {
         asked += 1
         return { ok: false as const, reason: 'denied' as const, detail: 'should never happen' }
       },
     })
+    return { asked, report }
+  }
 
-    expect(asked).toBe(0)
-    expect(report.ok).toBe(false)
-    // `null`, not `'ok'`: the keychain was never reached, and a report that
-    // said `'ok'` would be claiming a step that did not run.
-    expect(report.keychain).toBeNull()
+  it('never reaches the keychain when the cookie file cannot be opened', async () => {
+    // The ordering is the fix, and it is not a macOS fact — a Windows machine
+    // that cannot open the file has just as little to gain from a key it was
+    // going to ask for first. So every platform is checked, not the host's.
+    for (const platform of ['darwin', 'win32', 'linux'] as const) {
+      const { asked, report } = await blockedOn(platform)
+      expect(asked, `${platform} asked the keychain anyway`).toBe(0)
+      expect(report.ok).toBe(false)
+      // `null`, not `'ok'`: the keychain was never reached, and a report that
+      // said `'ok'` would be claiming a step that did not run.
+      expect(report.keychain).toBeNull()
+    }
+  })
+
+  it('names Full Disk Access, and the pane that grants it, on macOS', async () => {
+    const { report } = await blockedOn('darwin')
     expect(report.message).toMatch(/full disk access/i)
+    // The pane with the ＋ button in it, so the panel can put a button beside
+    // the sentence rather than leaving somebody to find it through four levels
+    // of System Settings. `Privacy_AllFiles` is the reveal key read off the
+    // privacy pane's own TCCServiceList.plist; see `chrome-import.ts`.
     expect(report.settings?.url).toContain('Privacy_AllFiles')
+  })
+
+  it('says only that the machine refused, off macOS, and sends nobody anywhere', async () => {
+    /*
+     * Full Disk Access is a macOS concept and there is no equivalent gate on
+     * Windows or Linux: a profile directory this app cannot open there is
+     * locked, or owned by another account, and no settings pane changes that.
+     *
+     * So the wording genuinely differs by platform, and the assertion that it
+     * *must not* mention Full Disk Access is the point of this case rather than
+     * padding. The message and the pane are what the user is handed; telling a
+     * Windows user to open a macOS security pane is an instruction for an
+     * operating system they are not running, and a `settings` value would put a
+     * button on screen that opens nothing.
+     */
+    for (const platform of ['win32', 'linux'] as const) {
+      const { report } = await blockedOn(platform)
+      expect(report.message, platform).toMatch(/refused access/i)
+      expect(report.message, `${platform} was told to open a macOS pane`).not.toMatch(
+        /full disk access/i,
+      )
+      expect(report.settings, platform).toBeNull()
+    }
   })
 
   it('still asks the keychain when the file is readable', async () => {
@@ -642,6 +696,7 @@ describe('importCookies asks for the permission that decides the outcome first',
     const report = await importCookies({}, fakeSession as never, Date.now(), {
       sources: [source],
       readable: () => true,
+      platform: 'darwin',
       keychain: async () => {
         asked += 1
         return { ok: false as const, reason: 'denied' as const, detail: 'You clicked Deny.' }
@@ -652,6 +707,30 @@ describe('importCookies asks for the permission that decides the outcome first',
     expect(report.keychain).toBe('denied')
     // A denied keychain is re-asked by running the import again. Sending
     // somebody into a security pane for it would be the wrong door.
+    expect(report.settings).toBeNull()
+  })
+
+  it('does not go looking for a login keychain on a platform that has none', async () => {
+    /*
+     * The platform is threaded into the keychain reader as well as into the
+     * sentence, and this is what proves it: with no `keychain` injected, the
+     * real {@link readSafeStorageKey} runs, and pinned to `win32` it answers
+     * `unsupported` without executing anything at all.
+     *
+     * Worth its own case because the seam could very easily have been added for
+     * the message alone, and a run that showed the Windows sentence while
+     * shelling out to `/usr/bin/security` would be answering as two machines at
+     * once. This also runs the real function rather than a stand-in, on a Mac,
+     * which is the only way that branch is ever reached from here.
+     */
+    const report = await importCookies({}, fakeSession as never, Date.now(), {
+      sources: [source],
+      readable: () => true,
+      platform: 'win32',
+    })
+
+    expect(report.keychain).toBe('unsupported')
+    expect(report.ok).toBe(false)
     expect(report.settings).toBeNull()
   })
 })

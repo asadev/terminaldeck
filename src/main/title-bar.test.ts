@@ -35,7 +35,38 @@ import {
  */
 
 const ROOT = resolve(__dirname, '..', '..')
-const TOKENS = readFileSync(join(ROOT, 'src', 'renderer', 'styles', 'tokens.css'), 'utf8')
+
+/**
+ * Every line ending collapsed to `\n`, whatever the checkout happened to write.
+ *
+ * This one line is why the whole file failed to run on Windows, so it gets the
+ * explanation rather than a shrug.
+ *
+ * Git decides line endings at *checkout*, not in the repository. Git for
+ * Windows ships `core.autocrlf=true` and the `windows-latest` runner inherits
+ * it, so from one identical commit `tokens.css` arrives here with `\r\n` on
+ * that machine and `\n` on every machine this test was written on. The rule
+ * patterns below spell out a literal `\n` between the two selectors of the
+ * light theme, that `\n` cannot match a `\r`, `declarations` threw — and
+ * because it is called at module scope to build `THEME`, the throw happened
+ * during collection and took all fifteen tests in the file with it. A parse
+ * error two lines from the top reads in CI as "the file failed to run", which
+ * says nothing about title bars and sends the reader to the wrong place.
+ *
+ * The part worth carrying to the next parser: `^` and `$` are *not* the hazard.
+ * JavaScript counts a bare `\r` as a line terminator, so a `/m` anchor already
+ * lands correctly on a CRLF file — `/^\[data-theme='dark'\] \{$/m` matches
+ * either way, which is exactly why only *one* of the three rules below broke
+ * and the cause looked like something about the light theme. Only a literal
+ * `\n`, in a pattern or in an `indexOf` needle, is the trap. Both shapes are
+ * used below.
+ *
+ * `\r\n?` rather than `\r\n` so a lone `\r` collapses too — a character's cost
+ * for a helper that is then total rather than nearly total.
+ */
+const lf = (text: string): string => text.replace(/\r\n?/g, '\n')
+
+const TOKENS = lf(readFileSync(join(ROOT, 'src', 'renderer', 'styles', 'tokens.css'), 'utf8'))
 
 /**
  * The declarations of one rule in `tokens.css`, by custom-property name.
@@ -44,13 +75,21 @@ const TOKENS = readFileSync(join(ROOT, 'src', 'renderer', 'styles', 'tokens.css'
  * rule in that sheet nests — the same reading `styles/tokens.test.ts` makes,
  * for the same reason: this file is compiled by the *main* project, which does
  * not include `src/renderer`, so the sheet can only be read as text.
+ *
+ * Takes the sheet as an argument rather than closing over `TOKENS`, which it
+ * used to do. That is what lets the CRLF block at the end of this file hand
+ * Windows input to *this* parser, on this Mac, instead of to a second copy of
+ * it that would drift — and a guard that can only fail on a Windows runner is
+ * not a guard, it is a red release build an hour later. Patterns passed in may
+ * assume `\n`, because the first thing done here is to make that true.
  */
-function declarations(selector: RegExp): Map<string, string> {
-  const start = selector.exec(TOKENS)
+function declarations(sheet: string, selector: RegExp): Map<string, string> {
+  const tokens = lf(sheet)
+  const start = selector.exec(tokens)
   if (!start) throw new Error(`tokens.css has no ${selector} rule — has it been rewritten?`)
   const from = start.index + start[0].length
-  const end = TOKENS.indexOf('\n}', from)
-  const body = TOKENS.slice(from, end === -1 ? undefined : end)
+  const end = tokens.indexOf('\n}', from)
+  const body = tokens.slice(from, end === -1 ? undefined : end)
   const out = new Map<string, string>()
   for (const match of body.matchAll(/(--[\w-]+):\s*([^;]+);/g)) {
     out.set(match[1], match[2].trim().replace(/\s+/g, ' '))
@@ -58,11 +97,25 @@ function declarations(selector: RegExp): Map<string, string> {
   return out
 }
 
+/**
+ * The three rules read out of the sheet, named once.
+ *
+ * At module scope so the CRLF block can ask for the same three by the same
+ * patterns. A fourth added here is covered there without anybody remembering.
+ * Safe to share: none carries `/g` or `/y`, so `exec` keeps no `lastIndex`
+ * between callers.
+ */
+const RULES = {
+  light: /^:root,\n\[data-theme='light'\] \{$/m,
+  dark: /^\[data-theme='dark'\] \{$/m,
+  shared: /^:root \{$/m,
+} as const
+
 const THEME: Record<Appearance, Map<string, string>> = {
-  light: declarations(/^:root,\n\[data-theme='light'\] \{$/m),
-  dark: declarations(/^\[data-theme='dark'\] \{$/m),
+  light: declarations(TOKENS, RULES.light),
+  dark: declarations(TOKENS, RULES.dark),
 }
-const SHARED = declarations(/^:root \{$/m)
+const SHARED = declarations(TOKENS, RULES.shared)
 
 type Rgb = [number, number, number]
 
@@ -228,7 +281,11 @@ describe('the window is actually built from this', () => {
    * be read on the machine that takes it. Everything above is a claim about a
    * function; this is the claim that the function is what the window wears.
    */
-  const INDEX = readFileSync(join(ROOT, 'src', 'main', 'index.ts'), 'utf8')
+  // Normalised like every other file read here. The three checks below are
+  // single-line substrings, so CRLF could not break them today — but "today"
+  // is doing all the work in that sentence, and the next assertion somebody
+  // adds will be the one that spans a line break.
+  const INDEX = lf(readFileSync(join(ROOT, 'src', 'main', 'index.ts'), 'utf8'))
 
   it('spreads the chrome into the BrowserWindow options', () => {
     expect(INDEX).toContain('...titleBarChrome(')
@@ -249,5 +306,103 @@ describe('the window is actually built from this', () => {
     // a dark rectangle in its top-right corner until the app is restarted.
     expect(INDEX).toContain('setTitleBarOverlay')
     expect(INDEX).toContain('nativeTheme')
+  })
+})
+
+describe('tokens.css reads the same however git checked it out', () => {
+  /*
+   * The guard for the thing that took this file off the board entirely, run on
+   * the machine the file is written on.
+   *
+   * Everything above depends on `tokens.css` being parsed at import time, and
+   * on a Windows checkout that sheet arrives with `\r\n`. The light-theme
+   * pattern spells a literal `\n` between its two selectors, so it matched
+   * nothing, `declarations` threw during collection, and CI reported the whole
+   * file as failing to run — a message that names no test and no colour and
+   * points nowhere near the cause.
+   *
+   * Where this runs is the point. Making the parser tolerate `\r` is the fix;
+   * this is what stops the fix quietly coming undone. Without it the next
+   * literal `\n` written into a pattern here is green on every developer
+   * machine and red only on a Windows runner an hour later, for a developer who
+   * has no Windows machine to reproduce it on. So the CRLF sheet is made here
+   * out of the real one and fed to the real parser.
+   *
+   * Each check asks "does CRLF answer what LF answers" rather than restating an
+   * expected value, so it keeps testing line endings instead of slowly becoming
+   * a staler duplicate of the assertions above.
+   */
+  const asWindows = (text: string): string => text.replace(/\n/g, '\r\n')
+  const CRLF_TOKENS = asWindows(TOKENS)
+
+  for (const name of ['light', 'dark', 'shared'] as const) {
+    it(`finds the ${name} rule on a CRLF checkout`, () => {
+      expect(declarations(CRLF_TOKENS, RULES[name])).toEqual(declarations(TOKENS, RULES[name]))
+      // Not vacuous: two empty maps would also be equal, and a sheet this
+      // parser could not read at all would produce exactly that.
+      expect(declarations(CRLF_TOKENS, RULES[name]).size).toBeGreaterThan(0)
+    })
+  }
+
+  it('carries no carriage return into a value', () => {
+    /*
+     * The second failure mode of the same cause, and the one that would survive
+     * the checks above: a parser can find the rule and still hand back
+     * `#1c1b19\r`. That is not a crash, it is a colour that no longer equals the
+     * string it is compared with — `parseColour` would reject it and the overlay
+     * assertions would fail talking about hex digits rather than line endings.
+     */
+    for (const name of ['light', 'dark', 'shared'] as const) {
+      for (const [property, value] of declarations(CRLF_TOKENS, RULES[name])) {
+        expect(value, `${property} came back with a carriage return in it`).not.toContain('\r')
+      }
+    }
+  })
+
+  it('computes the same overlay colours from a CRLF sheet', () => {
+    /*
+     * End to end, because the arithmetic is where a stray `\r` would actually
+     * be spent: `meanSheenAlpha` integrates a multi-line gradient value and
+     * `parseColour` anchors on `$`, which without `/m` means end-of-input and
+     * not "before the line ending". Both are downstream of the map, so this
+     * asserts the map is usable and not merely present.
+     */
+    const fromCrlf = (appearance: Appearance): string => {
+      const theme = declarations(CRLF_TOKENS, RULES[appearance])
+      const canvas = parseColour(theme.get('--bg-primary') ?? '').rgb
+      const glass = composite(parseColour(theme.get('--material-bg') ?? ''), canvas)
+      const alpha = meanSheenAlpha(theme.get('--material-sheen') ?? '')
+      return hex(composite({ rgb: [255, 255, 255] as Rgb, alpha }, glass))
+    }
+    for (const appearance of ['dark', 'light'] as const) {
+      expect(fromCrlf(appearance)).toBe(toolbarColour(appearance))
+      expect(overlayFor('win32', appearance)?.color).toBe(fromCrlf(appearance))
+    }
+  })
+
+  it('parses a hand-written CRLF rule, independently of the real sheet', () => {
+    /*
+     * Deliberately not derived from `tokens.css`. Every check above compares the
+     * real sheet with itself, which proves the two readings agree — but a sheet
+     * restructured into a shape neither reading could parse would make them
+     * agree on nothing and pass. Five literal lines with `\r\n` spelled out is
+     * the fixed point that cannot rot with the palette.
+     */
+    const sheet = [
+      '/* as a Windows checkout hands it over */',
+      ':root,',
+      "[data-theme='light'] {",
+      '  --bg-primary: #ffffff;',
+      '  --material-sheen: linear-gradient(rgba(255, 255, 255, 0.5) 0%, rgba(255, 255, 255, 0) 100%);',
+      '}',
+      '',
+    ].join('\r\n')
+
+    const parsed = declarations(sheet, RULES.light)
+    expect(parsed.get('--bg-primary')).toBe('#ffffff')
+    expect(meanSheenAlpha(parsed.get('--material-sheen') ?? '')).toBeCloseTo(0.25)
+    // And a lone `\r`, which `lf` also collapses, so the helper's whole claim
+    // is the claim that is actually tested.
+    expect(declarations(sheet.replace(/\r\n/g, '\r'), RULES.light).get('--bg-primary')).toBe('#ffffff')
   })
 })
