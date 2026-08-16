@@ -38,9 +38,41 @@
  * `credential`. This one advertises `create` and nothing else. `localhost` is a
  * byte pipe to whatever is listening on the box's loopback, `upload` is a way to
  * fill a disk, and `credential` is a proxy for credentials the demo must not
- * hold. The demo host is also built with no uploads directory and no credential
- * proxy at all, so the narrowing is true twice: once in the advertisement and
- * once in there being nothing behind it.
+ * hold.
+ *
+ * ## Two of those three are enforced. The third is only unadvertised.
+ *
+ * Said exactly, because an earlier version of this paragraph claimed "the
+ * narrowing is true twice: once in the advertisement and once in there being
+ * nothing behind it" for all three, and that is true of two of them:
+ *
+ *  - **`upload`** — the demo host is built with no uploads directory, so
+ *    `upload.begin` is refused by `server.ts` with *"Files cannot be sent from a
+ *    phone here."* Enforced.
+ *  - **`credential`** — built with no credential proxy at all (`host.ts` passes
+ *    `credentials` only when this mode is *off*), so the verbs answer nothing.
+ *    Enforced.
+ *  - **`localhost`** — **not** enforced. `server.ts` routes `ports`,
+ *    `tunnel.open`, `tunnel.close` and `net.*` straight to the tunnel hub
+ *    without consulting the offer, so a client that simply sends the verb it was
+ *    never offered is served. `PUBLIC_HOST_OFFER` keeps the capability out of
+ *    the `welcome`, and that is all it does — an ordinary phone draws no button,
+ *    and a hostile one does not need the button.
+ *
+ * That gap is worth nothing *on this box*, and the reason is worth writing down
+ * so nobody relaxes anything on the strength of it. A visitor already has a
+ * shell inside the container, and `demo-shell` unshares the mount and pid
+ * namespaces but **not** the network one — measured: their shell reads the same
+ * `/proc/net/tcp` the host process does. So a tunnel to `127.0.0.1` reaches
+ * exactly what `exec 3<>/dev/tcp/127.0.0.1/…` already reaches from their own
+ * prompt, and `tunnel.ts` will only dial a port something is already serving.
+ * The fence that matters here is the container and the egress rules, neither of
+ * which the tunnel hub can cross.
+ *
+ * It is still an enforcement gap rather than a design, and the fix belongs in
+ * `server.ts` beside the `create` and `upload` refusals — not here, because a
+ * host that narrows its offer should be narrowing what it *serves*, on every
+ * host, not only on this one.
  *
  * ## What it does not pretend to be
  *
@@ -280,17 +312,40 @@ export function createPublicHost(deps: PublicHostDeps): PublicHost {
        * DNS and the relay, so `git clone`, `npm install`, `curl` and `ping` all
        * fail — and a reviewer who reads a firewall as a broken app is a
        * rejection we wrote ourselves.
+       *
+       * ## Every line is short, and that is a measurement rather than a taste
+       *
+       * The first version of this was written at a desk, in lines of up to 74
+       * characters. The reviewer is not at a desk. Driven on a clean simulator
+       * against the live box, an iPhone 17 in portrait reported `stty size` as
+       * **26 54** — fifty-four columns — so every long line here hard-wrapped
+       * mid-word, and the first thing a reviewer saw was a greeting that read
+       * `running the r` / `eal Terminal Deck host.` and `so gi` / `t, npm`. It
+       * is not a bug in anything; it is us writing a paragraph for the wrong
+       * screen, on the one screen that decides whether this app ships.
+       *
+       * Fifty-four is the widest phone in the range, not the narrowest — a
+       * smaller handset, larger text or a split view all take columns away — so
+       * the lines below are held to **44**, which leaves ten columns of margin
+       * and still reads as prose rather than as a column of fragments. The
+       * ceiling is asserted in `public-host.test.ts` next to the phrases the
+       * text must keep, because the natural way to edit this file is to improve
+       * a sentence without ever seeing it on a phone.
        */
       return [
-        'This is a real Linux machine in Germany, running the real Terminal Deck host.',
-        'Everything you type runs here. Nothing runs on your phone.',
+        'This is a real Linux machine in Germany,',
+        'running the real Terminal Deck host.',
+        'Everything you type runs here. Nothing',
+        'runs on your phone.',
         '',
-        `It is yours alone for up to ${Math.round(config.lifetimeMs / 60_000)} minutes, and it is`,
-        'destroyed when you disconnect — break anything you like.',
+        `It is yours alone for up to ${Math.round(config.lifetimeMs / 60_000)} minutes,`,
+        'and it is destroyed when you disconnect.',
+        'Break anything you like.',
         '',
-        'Outbound network is firewalled off deliberately, so git, npm, curl and ping',
-        'will not reach the internet from here. That is the demo being careful, not',
-        'the app failing.',
+        'Outbound internet is firewalled off here',
+        'on purpose, so git, npm, curl and ping',
+        'will not reach it. That is the demo',
+        'being careful, not the app failing.',
         '',
       ].join('\n')
     },

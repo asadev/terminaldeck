@@ -358,9 +358,22 @@ export function createHostCore(options: HostCoreOptions): HostCore {
      * names the ones it has not. And the session must not be running inside WSL,
      * where the process is a Linux one launched through `wsl.exe` and a
      * Windows-side sandbox could not reach it even if one existed here.
+     *
+     * `!== 'none'` rather than naming a mechanism, and the change is deliberate.
+     * It used to read `=== 'seatbelt'`, which was correct while macOS was the
+     * only platform with a measured boundary — and became the reason Linux
+     * confinement sat built, tested and switched off: the mechanism existed,
+     * `confinementKind` returned it, and this line quietly declined to use it.
+     * A gate that names one implementation has to be edited every time another
+     * is proved, and it is edited in a file nobody thinks to look in.
+     *
+     * `confinementKind` is the single place that decides whether a platform has
+     * a boundary this repository has actually measured; anything it does not
+     * name answers `'none'` and is refused here. So this asks the question that
+     * matters — is there a real boundary — instead of asking which one.
      */
     const confined =
-      confine !== undefined && confinementKind(platform) === 'seatbelt' && target === null
+      confine !== undefined && confinementKind(platform) !== 'none' && target === null
 
     /*
      * `HOME` and `TMPDIR` are part of the environment rather than an afterthought

@@ -287,6 +287,40 @@ describe('what the demo host tells people about itself', () => {
     expect(motd).toMatch(/git.*npm.*curl/)
     expect(motd).toContain('destroyed when you disconnect')
   })
+
+  it('fits on a phone, which is the only screen that will ever read it', () => {
+    /*
+     * Measured, not chosen. On a clean simulator paired to the live demo box, an
+     * iPhone 17 in portrait answered `stty size` with **26 54**. The motd was
+     * written in lines of up to 74 characters, so the reviewer's first screen
+     * broke every long line mid-word — `running the r` / `eal Terminal Deck
+     * host.` — which reads as a broken app rather than as a greeting.
+     *
+     * Fifty-four is the *widest* phone in the range: a smaller handset, larger
+     * dynamic type or a split view all take columns away. Forty-four leaves ten
+     * columns of margin.
+     *
+     * This assertion exists because the natural way to edit a motd is to improve
+     * a sentence in an editor eighty columns wide and never see it on a phone.
+     * The three `toContain` checks above guard the *meaning*; this one guards the
+     * shape, and the shape is the half that was actually wrong.
+     */
+    const PHONE_COLUMNS = 44
+    const tooWide = harness()
+      .host.motd()
+      .split('\n')
+      .filter((line) => line.length > PHONE_COLUMNS)
+    expect(tooWide).toEqual([])
+  })
+
+  it('still fits when the lifetime is a three-digit number of minutes', () => {
+    // The one interpolated value in the text. A demo box started with a longer
+    // cap must not push its own line past the ceiling above — which is the sort
+    // of thing that is only ever noticed on the reviewer's screen.
+    const { host } = harness({ ...CONFIG, lifetimeMs: 999 * 60_000 })
+    const widest = Math.max(...host.motd().split('\n').map((line) => line.length))
+    expect(widest).toBeLessThanOrEqual(44)
+  })
 })
 
 /* ------------------------------------------------------------- the narrowing -- */

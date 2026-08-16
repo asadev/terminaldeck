@@ -74,6 +74,28 @@ say "staging"
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 mkdir -p "$STAGE/context"
+
+# `COPYFILE_DISABLE=1`, and it is not a tidiness flag.
+#
+# bsdtar on macOS writes an AppleDouble sidecar — `._name` — for any file
+# carrying an extended attribute, and copies them into the archive as ordinary
+# members. The tree here is clean and stayed clean; it is the *archive* that
+# grew them. So deploying from this Mac put `._README.md` and `._hello.sh` in the
+# build context on the box, `docker build` baked them into `/opt/demo-seed`, and
+# the *first thing an App Review engineer saw* on "a real Linux machine in
+# Germany" was two files of macOS resource-fork metadata sitting in their
+# playground — `ls -a ~/playground` on the live box, 2026-08-16. Every one of the
+# twenty-two escape tests passed the whole time, because nothing about it is a
+# security question.
+#
+# It is also the exact shape of failure this project keeps re-finding: it cannot
+# reproduce on the machine that causes it. The archive is correct on any Linux
+# CI, and whether a given checkout triggers it depends on which files happen to
+# have picked up `com.apple.quarantine` or `com.apple.provenance` — so a deploy
+# that was clean yesterday can ship junk today with nothing in the tree changed.
+# Belt and braces on purpose: the variable stops them being written, the exclude
+# stops any that a future tool creates anyway, and neither costs anything.
+export COPYFILE_DISABLE=1
 cp -R out/headless "$STAGE/context/headless"
 cp -R demo/image "$STAGE/context/image"
 cp demo/Dockerfile "$STAGE/context/Dockerfile"
@@ -121,8 +143,35 @@ sleep 3
 # The network every visitor's container joins, with a fixed subnet so the egress
 # rules can name it. Docker assigns from a pool otherwise, and a firewall rule
 # written against yesterday's pool is a firewall rule that stopped working.
+#
+# `enable_icc=false` is the second visitor.
+#
+# The egress rules in DOCKER-USER do not see container-to-container traffic on
+# one bridge: that is bridged, not routed, and this kernel has no `br_netfilter`
+# loaded at all (`/proc/sys/net/bridge/bridge-nf-call-iptables` does not exist),
+# so it never reaches an iptables chain. Measured on the live box with four
+# visitors up: one container could open a TCP connection to another's address.
+# Nothing answered — every listener a demo container has is bound to 127.0.0.1,
+# so the scan came back refused on every port — but "there is nothing to reach"
+# is a fact about today's process list, and the fence should not depend on one.
+# With icc off the packet does not arrive in the first place.
+#
+# Recreated rather than left alone when the flag is missing, and that matters:
+# `docker network create` cannot change an existing network, so the plain
+# `inspect || create` below would have quietly kept a box provisioned before this
+# comment on the old settings forever — the deploy would report success and
+# change nothing. It is safe here because `systemctl restart docker` a few lines
+# up has already taken every `--rm` visitor container with it, so nothing is
+# attached at this point in the script.
+if docker network inspect $NETWORK >/dev/null 2>&1; then
+  if [ "\$(docker network inspect $NETWORK -f '{{index .Options "com.docker.network.bridge.enable_icc"}}')" != "false" ]; then
+    echo "the demo network predates enable_icc=false; recreating it"
+    docker network rm $NETWORK >/dev/null
+  fi
+fi
 docker network inspect $NETWORK >/dev/null 2>&1 || \
-  docker network create --subnet $SUBNET $NETWORK >/dev/null
+  docker network create --subnet $SUBNET \
+    -o com.docker.network.bridge.enable_icc=false $NETWORK >/dev/null
 
 mkdir -p $REMOTE_DIR
 PROVISION
@@ -192,7 +241,12 @@ ssh_ "systemctl daemon-reload && systemctl enable --now td-demo-firewall >/dev/n
 # ------------------------------------------------------------------- ship --
 
 say "shipping"
-tar -C "$STAGE" -czf - . | ssh_ "tar -C $REMOTE_DIR -xzf -"
+# The `find -delete` is for a box that was deployed *before* the export above
+# existed. `tar -x` does not remove what it does not carry, so a machine that
+# already has `._README.md` in its build context keeps it forever and rebuilds
+# the same contaminated image on every deploy — the fix has to reach backwards
+# or it only helps machines nobody has deployed to yet.
+tar -C "$STAGE" --exclude '._*' -czf - . | ssh_ "find $REMOTE_DIR -name '._*' -delete 2>/dev/null; tar -C $REMOTE_DIR -xzf -"
 
 say "building the image"
 ssh_ "cd $REMOTE_DIR/context && docker build -q -t $IMAGE . && docker images $IMAGE --format '{{.Size}}'"

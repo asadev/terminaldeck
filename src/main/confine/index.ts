@@ -34,53 +34,38 @@
  * Windows sessions run exactly as they did, and the grant screen says so in its
  * own sentence rather than sharing one with the Mac.
  *
- * **Linux, including WSL: not confined — but no longer unmeasured.** The
- * mechanism was run, on a real Ubuntu 24.04 under WSL2 (kernel
- * `6.18.33.2-microsoft-standard-WSL2`), reached over ssh from the Mac this is
- * written on. What it found, in order:
+ * **Linux, including WSL: confined.** A user namespace, a mount namespace, a
+ * PID namespace, and every capability dropped before the shell starts.
+ * `linux.ts` lists what was attempted and what happened, all of it run on a
+ * real Ubuntu 24.04 under WSL2 (kernel `6.18.33.2-microsoft-standard-WSL2`)
+ * rather than read. The two doors `CONFINEMENT.md` said were unmeasured are
+ * measured and both are shut:
  *
- *  - Unprivileged user namespaces are **enabled**:
- *    `/proc/sys/user/max_user_namespaces` is 79947 and
- *    `unshare --user --map-root-user id` reports uid 0. The AppArmor restriction
- *    that blocks this on a stock Ubuntu 24.04 desktop —
- *    `kernel.apparmor_restrict_unprivileged_userns` — **does not exist in the
- *    WSL kernel at all**, so the usual reason this fails on Ubuntu does not
- *    apply here.
- *  - `bwrap` is **not installed** (it is in the archive as 0.9.0-1ubuntu0.1, but
- *    installing it needs sudo, which this app must not assume). `unshare`,
- *    `nsenter`, `setpriv` and `capsh` all are.
- *  - A mount namespace plus bind mounts **does hold**: a `tmpfs` over `/home`
- *    with the granted folder bound back in leaves the folder readable and
- *    writable, `ls $HOME` showing only the granted folder, and a canary file in
- *    the owner's home unreadable. `git` and `node` (v22.23.1) still run.
- *  - `/mnt/c` binds away cleanly. It is a 9p `drvfs` mount, and an empty bind
- *    over `/mnt` removes the whole Windows filesystem from the session —
- *    including, as a side effect, every reachable path to a Windows `.exe`, so
- *    WSL interop by path stops working. Note that the `WSLInterop` binfmt
- *    handler is still registered; it is the *paths* that are gone.
- *  - **The load-bearing step is dropping capabilities, and without it the whole
- *    thing is decoration.** Measured: a shell inside the namespace simply ran
- *    `umount /home` and read the canary. With
- *    `setpriv --bounding-set=-all --inh-caps=-all` before the exec, `umount`
- *    answers "must be superuser to unmount", the canary stays unreadable, and
- *    the obvious next move — a *nested* user namespace to get the capability
- *    back — fails with `write failed /proc/self/uid_map: Operation not
- *    permitted`. `/proc/1/root/home` is Permission denied.
+ *  - **The `wsl.exe --cd` launch path** — the one the Windows build uses, which
+ *    none of the earlier probing went through — was run. A session started that
+ *    way through {@link linuxShellLine} refuses the owner's home, keeps its own
+ *    folder, and runs `git`, `node` and the agent CLI.
+ *  - **`WSL_INTEROP`** turned out to be worse than advertised and is now
+ *    understood. Unsetting the variable is *not* enough: with the variable gone
+ *    and `/run/WSL` left alone, a Windows `.exe` sitting inside the granted
+ *    folder still executed — the interop handler finds its socket without it.
+ *    Covering `/run/WSL` is the half that closes it. Both are done.
  *
- * So the answer is no longer "nobody has looked". It is: **the mechanism works
- * and is not built**, for two reasons that are about the app rather than the
- * kernel. First, a session inside WSL is launched through `wsl.exe --cd`, and
- * nothing in that chain has been run — this repository has no Windows machine,
- * and a boundary whose *launch path* is unmeasured is exactly the kind this
- * module refuses to claim. Second, under a real `wsl.exe` launch the session
- * inherits `WSL_INTEROP`, a socket that asks the Windows side to start
- * processes; the probe above ran over ssh, where that variable is unset, so it
- * has never been tested and it is a door straight back out. Both are closable
- * and neither is closed. One box's kernel is also not "Linux": the same script
- * on a distribution with the AppArmor restriction switched on would fail at the
- * first step, which is why anything built here would have to prove itself per
- * session the way {@link proveConfinement} already does rather than trust a
- * platform name.
+ * Two escapes that the earlier probing did not look for were found here and
+ * closed, and one of them is the reason this module does not trust a mechanism
+ * until it has watched it: the working directory a launcher sets *before* the
+ * namespace exists belongs to the tree that is about to be covered, so every
+ * **relative** path in the session walked straight out of the boundary while
+ * `pwd`, `/proc/self/cwd` and `cd .. && ls` all looked perfect. The other was
+ * signals: without a PID namespace a confined session killed a process of the
+ * account's outside the boundary, and `kill -TERM -1` from inside took down the
+ * login session that had launched it.
+ *
+ * One box's kernel is also not "Linux". A distribution with AppArmor's
+ * unprivileged-userns restriction switched on fails at the first step, which is
+ * why {@link proveConfinement} asks the machine rather than the platform name —
+ * and why, on this side, it reads its canary from *outside* the boundary first:
+ * a canary that is unreadable everywhere would pass a test it could never fail.
  *
  * ## What it costs, stated where somebody will find it
  *
@@ -148,11 +133,28 @@
 
 import { execFile } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, posix } from 'node:path'
 import { promisify } from 'node:util'
 import { currentPlatform, type Platform } from '../platform/host'
+import {
+  LINUX_SHELL,
+  linuxCommand,
+  linuxProofArgs,
+  linuxShellLine,
+  readProofReport,
+  realMachine,
+  stagePath,
+  type LinuxMachine,
+} from './linux'
 import {
   confinedEnv,
   deviceHomeDir,
@@ -174,10 +176,18 @@ const run = promisify(execFile)
  * *why*, and because a second mechanism arriving later — a Linux one — should
  * be a new value here rather than a second boolean somewhere else.
  */
-export type ConfinementKind = 'seatbelt' | 'none'
+export type ConfinementKind = 'seatbelt' | 'namespace' | 'none'
 
 export function confinementKind(platform: Platform = currentPlatform()): ConfinementKind {
-  return platform === 'darwin' ? 'seatbelt' : 'none'
+  if (platform === 'darwin') return 'seatbelt'
+  // `linux` covers a Linux desktop, the headless host on a server, and a
+  // session inside WSL — the last of which reports `win32` here, because the
+  // *app* is a Windows process. Whoever launches into WSL has to ask for the
+  // Linux answer explicitly; see {@link linuxShellLine} for the launch line
+  // that path needs and `wsl.ts` for why it is a shell line rather than an
+  // argument vector.
+  if (platform === 'linux') return 'namespace'
+  return 'none'
 }
 
 /**
@@ -191,17 +201,12 @@ export function confinementKind(platform: Platform = currentPlatform()): Confine
  */
 export function unconfinedReason(platform: Platform): string {
   if (platform === 'win32') {
+    // Windows only, now that Linux has a mechanism. The finding behind this
+    // sentence is in `CONFINEMENT.md`: AppContainer has to be applied at
+    // process creation through `UpdateProcThreadAttribute`, there are no
+    // PowerShell cmdlets for it, and neither Node nor node-pty can reach it —
+    // so this is "ship a native launcher", not "wire up an API".
     return 'Windows confinement (AppContainer, restricted tokens, job objects) has not been built or measured.'
-  }
-  if (platform === 'linux') {
-    // Deliberately no longer says "not measured", because it has been. The
-    // mechanism held on a real Ubuntu 24.04 under WSL2 — user namespaces, bind
-    // mounts, and capabilities dropped before the shell starts. What has not
-    // been run is the `wsl.exe --cd` launch this app actually uses, and the
-    // interop socket a session inherits through it. The module header records
-    // every measurement; this sentence has to fit on a settings panel and so
-    // says the one thing a person can act on: it is not switched on here.
-    return 'Linux confinement is not switched on: user namespaces and bind mounts hold here, but the launch path this app uses has not been measured.'
   }
   return 'No confinement mechanism has been measured on this platform.'
 }
@@ -299,6 +304,23 @@ export function prepareDeviceHome(root: string, deviceKey: string): string {
    * that was measured as reliable — appears while anybody is watching.
    */
   mkdirSync(join(home, '.claude', 'projects'), { recursive: true, mode: 0o700 })
+  /*
+   * The file that stops a login shell greeting a session that nobody is reading
+   * a greeting in.
+   *
+   * Measured on Ubuntu 24.04 under WSL, in a confined session started through
+   * the real `wsl.exe --cd` launch: the first session of the day opened with
+   * the distribution's whole message of the day, and one of its scripts failed
+   * while printing it — `ERROR: Permission denied, try: sudo
+   * /usr/sbin/update-motd` — and then told the person to create exactly this
+   * file, naming a directory only this app knows about. A device connecting to
+   * a folder does not need Canonical's Kubernetes advertisement, and it
+   * certainly does not need a permission error at the top of its first tab.
+   *
+   * `bash` and `zsh` both honour it, so this is also what stops the "Last
+   * login:" line on macOS. Empty, because its existence is the whole signal.
+   */
+  writeFileSync(join(home, '.hushlogin'), '', { mode: 0o600 })
   return home
 }
 
@@ -397,10 +419,11 @@ export async function proveConfinement(
   plan: ConfinementPlan,
   platform: Platform = currentPlatform(),
   runner: ProofRunner = realRunner,
+  machine: LinuxMachine = realMachine,
 ): Promise<ConfinementProof> {
-  if (confinementKind(platform) !== 'seatbelt') {
-    return { ok: false, detail: unconfinedReason(platform) }
-  }
+  const kind = confinementKind(platform)
+  if (kind === 'namespace') return proveNamespace(plan, runner, machine)
+  if (kind !== 'seatbelt') return { ok: false, detail: unconfinedReason(platform) }
 
   const profile = seatbeltProfile(plan)
   const token = randomBytes(16).toString('hex')
@@ -449,13 +472,135 @@ export async function proveConfinement(
 }
 
 /**
+ * Ask the machine, not the kernel version, whether these namespaces confine
+ * anything.
+ *
+ * Three runs, and the first is the one that makes the other two mean something.
+ *
+ *  1. **Outside the boundary**, a canary with random contents is written into
+ *     the account's home and another into `/tmp`, and both are read straight
+ *     back. If they do not come back, this test cannot fail and is therefore
+ *     worth nothing — which is not a hypothetical: on a Windows machine
+ *     launching into WSL, a canary path computed on the Windows side names a
+ *     file the Linux session could never have read, and every check below would
+ *     have "passed".
+ *  2. **Inside it**, the same script. The token has to come back (a namespace
+ *     that will not start anything would otherwise pass by failing at
+ *     everything, exactly as `seatbelt.ts` guards against), neither secret may,
+ *     and the two WSL doors have to be shut — an inherited `WSL_INTEROP` and a
+ *     reachable `/run/WSL` are each a way to ask Windows to run a process with
+ *     the account's full privileges, measured, from inside a confined session.
+ *  3. The canaries are removed. Through the runner rather than through `fs`,
+ *     because on the WSL path they are not on this filesystem.
+ *
+ * Run per session rather than cached, for the reason the Seatbelt half gives:
+ * caching would answer a question about *this* plan with a measurement of a
+ * different one. On this side it also matters that the machine can change its
+ * mind — `/proc/sys/kernel/apparmor_restrict_unprivileged_userns` is a sysctl,
+ * and a box that confined a session this morning can refuse this afternoon.
+ */
+async function proveNamespace(
+  plan: ConfinementPlan,
+  runner: ProofRunner,
+  machine: LinuxMachine,
+): Promise<ConfinementProof> {
+  const token = randomBytes(16).toString('hex')
+  const homeSecret = randomBytes(24).toString('hex')
+  const tmpSecret = randomBytes(24).toString('hex')
+  const stamp = randomBytes(9).toString('hex')
+
+  const homeCanary = posix.join(plan.accountHome, `.terminaldeck-confine-probe-${stamp}`)
+  const tmpCanary = `/tmp/.terminaldeck-confine-probe-${stamp}`
+  const args = (mode: 'plant' | 'read' | 'clean'): string[] =>
+    linuxProofArgs({ mode, token, homeCanary, tmpCanary, homeSecret, tmpSecret })
+
+  for (const canary of [homeCanary, tmpCanary]) {
+    const inside = [...plan.writable, ...plan.readable].some((root) =>
+      within(canary, root, 'linux'),
+    )
+    if (!inside) continue
+    // Reached when the grant covers the account's home directory, and refusing
+    // is the honest answer rather than a smaller boundary: there would be
+    // nothing left for the session to be held inside, and the test that was
+    // supposed to notice cannot.
+    return {
+      ok: false,
+      detail: `the file used to test the boundary (${canary}) is inside it, so the test could not fail`,
+    }
+  }
+
+  try {
+    const outside = await capture(runner, LINUX_SHELL, args('plant'))
+    const before = readProofReport(outside.stdout)
+    if (before.token !== token) {
+      return { ok: false, detail: `could not run a command to test this machine${why(outside)}` }
+    }
+    if (before.home !== homeSecret || before.tmp !== tmpSecret) {
+      return {
+        ok: false,
+        detail:
+          'the file used to test the boundary could not be read from outside it either, so the test could not fail',
+      }
+    }
+
+    const launch = linuxCommand(plan, LINUX_SHELL, args('read'), machine, stagePath(stamp))
+    const inside = await capture(runner, launch.command, launch.args)
+    const after = readProofReport(inside.stdout)
+    if (after.token !== token) {
+      return { ok: false, detail: `this machine would not start the namespace${why(inside)}` }
+    }
+    if (after.home === homeSecret || after.tmp === tmpSecret) {
+      return { ok: false, detail: 'a file outside the folder was readable from inside the namespace' }
+    }
+    if (after.interop !== 'none') {
+      return {
+        ok: false,
+        detail: 'the session still had WSL_INTEROP, which starts Windows processes as the owner',
+      }
+    }
+    if (after.runwsl !== '') {
+      return { ok: false, detail: 'the WSL interop sockets under /run/WSL were still reachable' }
+    }
+    return { ok: true, detail: '' }
+  } catch (error) {
+    return { ok: false, detail: describe(error) }
+  } finally {
+    // Best effort on purpose. A canary left behind is two files of random hex
+    // in a home directory; a throw here would turn a boundary that held into a
+    // session that would not start.
+    await capture(runner, LINUX_SHELL, args('clean'))
+  }
+}
+
+/**
  * Run one probe, treating a non-zero exit as data rather than as an exception.
  *
  * `cat` of a refused file exits 1, which is `execFile` rejecting — and that
  * rejection *is* the result the proof wants. Its `stdout` still has to be read,
  * because "it failed" and "it failed after printing the secret" are different
- * answers and only one of them is a boundary.
+ * answers and only one of them is a boundary. `stderr` is kept for the other
+ * half of the job: when the answer is "this machine will not do it", the
+ * kernel's own sentence is the only useful thing anybody will have.
  */
+async function capture(
+  runner: ProofRunner,
+  command: string,
+  args: readonly string[],
+): Promise<{ stdout: string; stderr: string; error: unknown }> {
+  try {
+    const result = await runner(command, [...args])
+    return { stdout: result.stdout, stderr: result.stderr, error: null }
+  } catch (error) {
+    return { stdout: streamOf(error, 'stdout'), stderr: streamOf(error, 'stderr'), error }
+  }
+}
+
+/** One of the two streams off a rejected `execFile`, when it carried them. */
+function streamOf(error: unknown, name: 'stdout' | 'stderr'): string {
+  const value = (error as Record<string, unknown>)[name]
+  return typeof value === 'string' ? value : ''
+}
+
 async function attempt(
   runner: ProofRunner,
   profile: string,
@@ -463,15 +608,8 @@ async function attempt(
 ): Promise<{ stdout: string; error: unknown }> {
   const [program, ...rest] = command
   if (program === undefined) return { stdout: '', error: null }
-  try {
-    const result = await runner(SANDBOX_EXEC, ['-p', profile, program, ...rest])
-    return { stdout: result.stdout, error: null }
-  } catch (error) {
-    const stdout = typeof (error as { stdout?: unknown }).stdout === 'string'
-      ? (error as { stdout: string }).stdout
-      : ''
-    return { stdout, error }
-  }
+  const ran = await capture(runner, SANDBOX_EXEC, ['-p', profile, program, ...rest])
+  return { stdout: ran.stdout, error: ran.error }
 }
 
 function describe(error: unknown): string {
@@ -481,6 +619,20 @@ function describe(error: unknown): string {
 function tail(error: unknown): string {
   const text = describe(error).trim()
   return text === '' || text === 'null' ? '' : `: ${text}`
+}
+
+/**
+ * Why a probe did not answer, in the machine's own words where there are any.
+ *
+ * `stderr` first and the exception second. `unshare` writing "Operation not
+ * permitted" is the whole diagnosis on a box with the AppArmor restriction
+ * switched on; the `Command failed with exit code 1` that Node wraps it in is
+ * not.
+ */
+function why(ran: { stderr: string; error: unknown }): string {
+  const printed = ran.stderr.trim()
+  if (printed !== '') return `: ${printed.split('\n')[0]}`
+  return tail(ran.error)
 }
 
 /* --------------------------------------------------------------- the spawn -- */
@@ -499,8 +651,47 @@ export async function confineSpawn(
   args: readonly string[],
   platform: Platform = currentPlatform(),
   runner: ProofRunner = realRunner,
+  machine: LinuxMachine = realMachine,
 ): Promise<{ command: string; args: string[] }> {
-  const proof = await proveConfinement(plan, platform, runner)
+  const proof = await proveConfinement(plan, platform, runner, machine)
   if (!proof.ok) throw new ConfinementUnavailableError(proof.detail)
+  if (confinementKind(platform) === 'namespace') {
+    // A staging directory of its own, not the proof's: that one was made and
+    // taken apart inside a namespace that has already exited, and reusing the
+    // name would mean a session refusing to start because a directory it is
+    // about to make is somehow still there.
+    return linuxCommand(plan, command, args, machine, stagePath(randomBytes(9).toString('hex')))
+  }
   return seatbeltCommand(seatbeltProfile(plan), command, args)
+}
+
+/**
+ * The same boundary, as a line for the login shell inside a WSL distribution.
+ *
+ * Separate from {@link confineSpawn} because the Windows build does not spawn
+ * the session at all: it spawns `wsl.exe`, which carries a *command line* to a
+ * login shell on the other side (`wsl.ts` explains why it has to be a login
+ * shell). So there is no argument vector to wrap — there is text to prefix, and
+ * this is where it is built, from the same script and the same plan as every
+ * other Linux session so the two cannot drift.
+ *
+ * The proof is the caller's to run, with a runner that goes through `wsl.exe`,
+ * because only the caller knows which distribution. That is not an oversight
+ * being waved past: until it is wired, this function is how a WSL session gets
+ * confined and nothing checks the machine first, which is exactly what
+ * `confineSpawn` refuses to allow on the paths it owns.
+ *
+ * **The plan handed here must be built from Linux paths.** The folder already
+ * is one — that is how `wsl.ts` decides to launch this way at all — but the
+ * device's home, its guest git directory and any profile config directory are
+ * app storage on the *Windows* side today, and a plan carrying those confines a
+ * session to directories that do not exist where it is running.
+ */
+export function confineWslLine(
+  plan: ConfinementPlan,
+  command: string,
+  args: readonly string[],
+  machine: LinuxMachine = realMachine,
+): string {
+  return linuxShellLine(plan, command, args, machine, stagePath(randomBytes(9).toString('hex')))
 }

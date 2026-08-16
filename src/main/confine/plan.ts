@@ -73,6 +73,30 @@ function rules(platform: Platform): typeof posix {
  * git identity.
  */
 export interface ConfinementPlan {
+  /**
+   * The granted folder, resolved. Already in {@link writable}, and named
+   * separately because two things need to know *which* of the writable
+   * directories it is, and neither can work it out from the list: `collapse`
+   * sorts, so position says nothing.
+   *
+   * The Linux side has to `cd` here after it has rearranged the mounts — a
+   * working directory inherited from before them walks straight out through
+   * relative paths, which is measured in `linux.ts` and is the escape that
+   * would otherwise have shipped. The proof needs it to check that the canary
+   * it is about to write is not inside the boundary it is testing.
+   */
+  folder: string
+  /**
+   * The account's home directory, resolved. Never in any of the lists below —
+   * it is the thing being protected — and carried so that the proof can write
+   * its canary where a leak would actually matter, and so the Linux side can
+   * work out which tree to cover.
+   *
+   * Note whose home this is. On a Windows machine running a session inside WSL
+   * it is the *Linux* home, because that is the account the session runs as;
+   * the plan is built from paths on the side the shell will be on.
+   */
+  accountHome: string
   /** Read and write. Realpaths, no duplicates, no ancestors of each other. */
   writable: readonly string[]
   /** Read only. Realpaths. */
@@ -325,13 +349,16 @@ export interface SessionPlanInput {
 export function sessionPlan(input: SessionPlanInput): ConfinementPlan {
   const { platform, resolver } = input
 
+  const folder = resolver.real(input.folder)
+  const accountHome = resolver.real(input.accountHome)
+
   const writable = collapse(
-    [input.folder, input.home, ...(input.writable ?? [])].map((path) => resolver.real(path)),
+    [folder, input.home, ...(input.writable ?? [])].map((path) => resolver.real(path)),
     platform,
   )
 
   const guards: PlanGuards = {
-    home: resolver.real(input.accountHome),
+    home: accountHome,
     protect: writable,
   }
 
@@ -350,7 +377,7 @@ export function sessionPlan(input: SessionPlanInput): ConfinementPlan {
         !writable.some((root) => within(file, root, platform)),
     )
 
-  return { writable, readable, readableFiles: [...new Set(files)] }
+  return { folder, accountHome, writable, readable, readableFiles: [...new Set(files)] }
 }
 
 /**

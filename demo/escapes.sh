@@ -219,6 +219,50 @@ check "the broker on the demo box is not reachable from inside" \
   'timeout 6 bash -c "exec 3<>/dev/tcp/172.31.240.1/8787" && echo OPENED || echo shut' \
   'OPENED' absent
 
+# The other visitors, which every row above this one is blind to.
+#
+# DOCKER-USER never sees this traffic. Container-to-container on one bridge is
+# bridged rather than routed, and this kernel carries no `br_netfilter` at all —
+# `/proc/sys/net/bridge/bridge-nf-call-iptables` does not exist — so those rules
+# are not consulted and cannot be. Measured on the live box with four visitors
+# up: one container opened a TCP connection to another's address. Nothing
+# answered, because every listener a demo container has is bound to 127.0.0.1,
+# and "nothing was listening" is a fact about that day's process list rather
+# than a boundary. `enable_icc=false` on the network is the boundary, and this
+# is the row that proves it is still switched on.
+#
+# It needs a second container to aim at, so it brings its own and gives it
+# something to answer with — a real listener on a real port, because probing a
+# closed port proves nothing about whether the packet would have arrived.
+say_neighbour() {
+  local peer="td-escapes-peer-$$" peer_ip=""
+  mapfile -t PFLAGS < <(DEMO_IMAGE="$IMAGE" node "$HERE/broker/broker.mjs" --print-run-flags)
+  local pargs=()
+  for flag in "${PFLAGS[@]}"; do
+    if [ "$flag" = "NAME" ]; then pargs+=("$peer"); else pargs+=("$flag"); fi
+  done
+  docker "${pargs[@]}" >/dev/null 2>&1 &
+  for _ in $(seq 1 60); do
+    docker exec "$peer" true >/dev/null 2>&1 && break
+    sleep 1
+  done
+  if ! docker exec "$peer" true >/dev/null 2>&1; then
+    FAIL=$((FAIL + 1))
+    printf '  \033[31mNO PEER\033[0m another visitor cannot be reached across the demo network\n'
+    return
+  fi
+  # Bound to 0.0.0.0 on purpose: the question is whether the packet arrives, so
+  # the peer must be willing to answer if it does.
+  docker exec -d "$peer" node -e "require('net').createServer((s)=>s.end('REACHED')).listen(9999,'0.0.0.0')"
+  sleep 2
+  peer_ip="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$peer" 2>/dev/null)"
+  check "another visitor's machine cannot be reached across the demo network" \
+    "timeout 6 bash -c 'exec 3<>/dev/tcp/$peer_ip/9999' && echo OPENED || echo shut" \
+    'OPENED' absent
+  docker kill "$peer" >/dev/null 2>&1 || true
+}
+say_neighbour
+
 echo
 echo "Breaking it, which is the case the container shape exists for"
 

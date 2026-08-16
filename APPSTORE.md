@@ -629,7 +629,10 @@ true, and nothing else in §6 has been contradicted.
 ### 7.1 The demo machine
 
 `terminaldeck-server`, Hetzner **CX23**, `178.105.239.176`, Ubuntu 24.04,
-Falkenstein. Labelled `project=terminaldeck, role=demo-host`. It is not the relay
+**Nuremberg** — `nbg1-dc3`, read from the instance's own metadata service rather
+than from the order page, because an earlier draft of this line said Falkenstein
+and the demo's motd tells a reviewer which country they are in.
+Labelled `project=terminaldeck, role=demo-host`. It is not the relay
 box. It carries no tailnet, no ssh key of ours but the one that reaches it, no
 cloud token, no git credential and no repository. Its entire contents are a
 Docker image, a broker and the two scripts in `demo/`.
@@ -685,8 +688,8 @@ superuser to unmount"*.
 `demo/escapes.sh` runs the escape table against a live container, through the
 same `demo-shell` a real session runs through, with the flags the broker actually
 uses (read out of `broker.mjs --print-run-flags`, so the suite cannot drift into
-measuring a container nobody runs). Latest run, after a reboot of the box: **22
-held, 0 escaped.**
+measuring a container nobody runs). Latest run, 2026-08-16, after the network was
+rebuilt with `enable_icc=false`: **23 held, 0 escaped.**
 
 It refuses to score a run whose shell did not start, and that rule was earned:
 the first version of `demo-shell` could not build its mount namespace on a
@@ -711,6 +714,7 @@ silence as safety is worse than no suite.
 | the demo host's own program | not writable |
 | relay reachable | yes — the session depends on it |
 | 1.1.1.1, github.com, the relay box's ssh, the broker | all unreachable |
+| **another visitor's machine, on a port it really is listening on** | unreachable — see below |
 | filling the disk | bounded by the tmpfs cap |
 | fork bomb | container and box both still standing |
 
@@ -788,11 +792,13 @@ mints a real one at the moment it is tapped.
 > machine for you.**
 >
 > On the iPhone or iPad, open https://terminaldeck.dev/review in Safari and tap
-> "Start a demo machine", then "Open in Terminal Deck". The app opens, pairs
-> itself, and a live Linux shell is one tap away. Tap the folder to start a
-> session and type `uname -a` — that output is a real server in Germany. The
-> machine is yours alone, it is destroyed when you disconnect, and the page works
-> as many times as you like.
+> "Start a demo machine", then "Open in Terminal Deck". The app opens and pairs
+> itself — nothing to type, no account to make. When the badge under the title
+> says Connected, tap "New session", then type `uname -a`. That output is a real
+> server in Nuremberg, Germany. The machine is yours alone, it is destroyed when
+> you disconnect, and the page works as many times as you like.
+>
+> Start to finish this takes about twenty seconds.
 >
 > If you would rather see it before installing anything, the same machine is
 > reachable from a browser: the page shows an eight-character code to type into
@@ -823,13 +829,13 @@ mints a real one at the moment it is tapped.
 ### 7.6 Still to do before submitting
 
 1. `terminaldeck.dev/privacy` and `terminaldeck.dev/support` are **still 404**
-   and are mandatory. So is deploying `review.html` — the page exists in the site
-   repository and has not been published.
-2. **Pair a real iPhone.** The chain has been proved as far as a real container
-   handing back a real `terminaldeck://pair?…` link over the public endpoint; the
-   tap itself has not been done on a phone, because this session had no device.
-   It is the definition of done in §6.8 and it is not finished until somebody
-   reads `uname -a` on a phone.
+   and are mandatory. Re-checked 2026-08-16 and both still answer 404.
+   `terminaldeck.dev/review` **is** published now and answers 200.
+2. **Pair a real iPhone.** Largely answered — see §7.8, which ran the whole chain
+   twice on a freshly erased iOS 26.5 simulator against the live box. What is
+   still outstanding is narrower than it was: physical hardware, and the one tap
+   in Safari that turns the page's button into the `terminaldeck://` open. Both
+   halves either side of that tap are now proved.
 3. **Measure the relay from a US and an Asian egress.** Still an assumption, and
    still the one rejection nobody here can reproduce.
 4. Screenshots, description, age rating, privacy label.
@@ -868,5 +874,158 @@ has not, because this session had no device and no working headless browser to
 drive the web client with. Until somebody reads `uname -a` on a phone, §6.8's
 definition of done is not met.
 
+*(Answered on 2026-08-16 — see §7.8. Kept above as written, because the shape of
+what was missing is the point.)*
+
 **Not run in this session:** no `electron-builder`, no git commit, no deploy of
 the marketing site, and nothing on the relay box was changed.
+
+---
+
+## 8. Walked through as the reviewer — 2026-08-16
+
+§7 built it and could not try it. This section is the try: a **freshly erased iOS
+26.5 simulator**, so no stored pairing and no keychain entry, driven twice
+through the instructions in §7.5 exactly as they are written, against the live
+box. Everything below is timed or screenshotted; nothing is inferred.
+
+### 8.1 The walk, and the clock
+
+The harness is `ios/UITests/RealDesktopUITests` unchanged — it stands at the
+pairing screen and waits for a `terminaldeck://` link to appear in a file, which
+is the same shape as a reviewer standing at the pairing screen waiting for the
+page. Nothing in the app, the host or the image was modified to make it pass.
+
+| Step | Clock |
+|---|---|
+| Reviewer asks the page for a machine (`POST /allocate`) | 0.0 s |
+| Container up, on the relay, real pairing link in hand | **2.4 s** |
+| Link opened in the app, code submitted | 7 s |
+| **Connected — with nobody anywhere to approve it** | **10 s** |
+| Session started, live shell drawn | **18 s** |
+
+**Eighteen seconds from tap to a working terminal**, and 18 s again on the second
+run after a second erase. The two-minute bar is not close.
+
+What was on the screen, in a session the phone started itself:
+
+    ~/playground $ hostname
+    terminaldeck-demo
+    ~/playground $ stty size
+    26 54
+    ~/playground $ sleep 300
+    ^C
+    ~/playground $
+
+Nothing echoes locally — `TerminalBridge` draws only what arrives through the
+sealed channel — so that output was produced by a shell in Nuremberg. `sleep 300`
+was a real process and Ctrl-C really killed it.
+
+**The one substitution, said plainly.** The reviewer's *tap in Safari* was not
+performed. `idb` on this Mac is broken under Python 3.14 and `osascript` has no
+assistive access here, so nothing in this session could tap a button inside the
+simulator. What was done instead is the exact call the page's button makes
+(`POST /allocate` with the page's `Origin`) and the exact URL open that tapping
+"Open in Terminal Deck" produces. Both halves either side of the tap are proved;
+the tap is one `<a href>` and it is the only thing left. **This is also a
+this-machine limitation rather than a product one** — on a Mac with accessibility
+granted, or on hardware, it is a finger.
+
+### 8.2 What the walk found, which is why it was worth doing
+
+Three defects, none of which any test or escape row could have caught, and two of
+which a reviewer would have seen in their first ten seconds.
+
+**1. The demo's greeting was unreadable on a phone.** `stty size` above is the
+evidence: the phone is **54 columns**, and `motd()` was written in lines of up to
+74. So the reviewer's first screen read `running the r` / `eal Terminal Deck
+host.` and `so gi` / `t, npm`. Fixed — the lines are held to 44 columns now, with
+`public-host.test.ts` asserting the ceiling and asserting it again with a
+three-digit lifetime, because the natural way to edit a motd is in an editor
+eighty columns wide.
+
+**2. macOS resource-fork files were shipped into the demo and baked into the
+image.** `ls -a ~/playground` on "a real Linux machine in Germany" showed
+`._README.md` and `._hello.sh`. `tar` on macOS writes an AppleDouble sidecar for
+any file carrying an extended attribute, `deploy.sh` tarred the staging directory
+from this Mac, and `docker build` baked the result into `/opt/demo-seed`. All 22
+escape rows passed the entire time, because nothing about it is a security
+question. Fixed in `deploy.sh` with `COPYFILE_DISABLE=1`, a `--exclude '._*'`,
+and a `find -delete` on the box so that a machine already contaminated is
+cleaned rather than rebuilt from its own junk.
+
+**3. Visitors could reach each other at the IP layer.** Measured with four
+containers up: one could open a connection to another's address. Nothing
+answered — every listener in a demo container is bound to `127.0.0.1` — but
+"nothing was listening" is a fact about that day's process list, not a boundary.
+The egress rules could not have stopped it either: container-to-container on one
+bridge is bridged rather than routed, and this kernel has no `br_netfilter`, so
+`DOCKER-USER` is never consulted. The demo network is now created with
+`enable_icc=false`, `deploy.sh` recreates a network that predates the flag rather
+than silently leaving it, and `escapes.sh` has a row that stands up a second
+container with a **real listener on 0.0.0.0** and proves it cannot be reached.
+
+### 8.3 Attacked again, after all of that
+
+`./demo/deploy.sh --escapes` — **23 held, 0 escaped**, including the new
+neighbour row, and with `the relay is reachable` still passing, which is the row
+that would break if the network had been cut too far.
+
+Beyond the table:
+
+- **`rm -rf ~`** — the playground is a mount point, so it answers *"Device or
+  resource busy"* and survives; everything else in the home goes, and the next
+  session the app starts comes up normally in the same container. The host
+  process, its control socket and the broker are all untouched.
+- **Rate limiter, attacked rather than assumed.** `broker.mjs` keys its limit on
+  `x-forwarded-for`'s *first* value, which is spoofable in general. It is not
+  spoofable here: Caddy ≥2.7 replaces the header for an untrusted client, and a
+  request carrying `X-Forwarded-For: 203.0.113.7` was still refused against the
+  real address's bucket. **This holds because of Caddy's default, not because of
+  the broker** — adding `trusted_proxies` to the Caddyfile would silently make
+  the limiter bypassable.
+- **Four at once.** Four simultaneous visitors, four separate containers, four
+  separate pairing links; a file written in one is absent in another; the fifth
+  caller gets the honest `busy` refusal rather than a queue or a hang.
+
+### 8.4 One thing that is not what its comment claims
+
+`PUBLIC_HOST_OFFER` narrows what the demo advertises to `create`. For `upload`
+and `credential` that narrowing is enforced twice — the demo host is built with
+no uploads directory and no credential proxy, so the verbs are refused by
+`server.ts` even if sent. **For `localhost` it is not enforced at all.**
+`server.ts` routes `ports`, `tunnel.open`, `tunnel.close` and `net.*` straight to
+the tunnel hub without consulting the offer, so a client that sends the verb it
+was never offered is served.
+
+It is worth nothing on this box, and the reason is measured rather than argued:
+`demo-shell` unshares the mount and pid namespaces but **not** the network one,
+so a visitor's shell already reads the same `/proc/net/tcp` the host process does
+and can already reach the container's loopback with `exec 3<>/dev/tcp/...`. The
+tunnel hub will also only dial a port something is already serving. So it grants
+no reach a visitor does not have, and the container and the egress rules bound
+both.
+
+It is still an enforcement gap rather than a design, and the fix belongs in
+`server.ts` beside the `create` and `upload` refusals — a host that narrows its
+offer should narrow what it *serves*, on every host, not only this one. Left
+alone here deliberately: `server.ts` is not this workstream's file, and the
+comment in `public-host.ts` that overstated it has been corrected to say exactly
+which two of the three are enforced.
+
+### 8.5 Still not done
+
+- **Physical hardware, and the Safari tap** (§7.6 item 2, narrowed).
+- **`/privacy` and `/support` are still 404** and are mandatory.
+- **`review.html` tells the reviewer the wrong gesture.** Its "Once you are in"
+  list says *"Tap the folder to start a session"*, and a reviewer arriving on a
+  brand-new machine has no folder to tap — the screen says "No sessions" with a
+  **New session** button, which is what §7.5 now says. One word on a page in the
+  site repository, which is not this workstream's tree.
+- The UI harness fails on a step *after* everything above — the app's Copy Screen
+  path, where the software keyboard does not come back up after the key grid has
+  been used for Ctrl-C. Reproduced identically on both runs. It is in `ios/` and
+  is nothing to do with the demo, but it is a real failing assertion and should
+  not be discovered by someone assuming this suite is green.
+- **Not run:** no `electron-builder`, no git commit, nothing on the relay box,
+  and no change to the marketing site.

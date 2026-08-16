@@ -16,6 +16,8 @@ import type { ConfinementPlan } from './plan'
 import { SANDBOX_EXEC } from './seatbelt'
 
 const plan: ConfinementPlan = {
+  folder: '/work/app',
+  accountHome: '/home/asad',
   writable: ['/work/app'],
   readable: ['/usr'],
   readableFiles: [],
@@ -52,46 +54,33 @@ function probe(args: readonly string[]): { program: string; target: string } {
 }
 
 describe('which platforms are confined', () => {
-  it('confines macOS and nothing else', () => {
+  it('confines macOS and Linux, by two different mechanisms', () => {
     expect(confinementKind('darwin')).toBe('seatbelt')
     expect(confinementKind('win32')).toBe('none')
-    expect(confinementKind('linux')).toBe('none')
+    /*
+     * This used to be `'none'`, with a sentence saying the mechanism held but
+     * the launch path had never been run. Both of the reasons that sentence
+     * gave are now measured, on the same Ubuntu 24.04 under WSL2:
+     *
+     *  - a session started through the real `wsl.exe --cd` login-shell path is
+     *    held inside its folder, and the same session started that way *without*
+     *    the boundary reads the account's `.ssh`, its git credentials, its
+     *    stored tokens and the whole of `/mnt/c`;
+     *  - `WSL_INTEROP` is shut, and shut by covering `/run/WSL` rather than by
+     *    unsetting the variable — with the variable unset and that directory
+     *    left alone, a Windows `.exe` inside the granted folder still ran.
+     *
+     * `linux.ts` carries the whole table. Note that a session inside WSL still
+     * reports `win32` here, because the app is a Windows process; that path asks
+     * for the Linux answer explicitly through `confineWslLine`.
+     */
+    expect(confinementKind('linux')).toBe('namespace')
   })
 
   it('names the mechanism it has not measured, rather than being vague', () => {
     // The grant screen tells a person which of the two they are getting. It can
     // only do that honestly if the reason is specific enough to act on.
     expect(unconfinedReason('win32')).toMatch(/AppContainer/)
-  })
-
-  it('does not tell Linux it is unmeasured, because it is not any more', () => {
-    /*
-     * This assertion used to be `toMatch(/bubblewrap/)`, and the sentence used
-     * to end "has not been built or measured". Half of that is no longer true:
-     * the mechanism was run on a real Ubuntu 24.04 under WSL2 and it held —
-     * unprivileged user namespaces are enabled there, a bind-mount boundary
-     * hides the owner's home and `/mnt/c`, and dropping the capability bounding
-     * set is what stops the confined shell simply unmounting its way out. The
-     * module header records the whole run.
-     *
-     * `bwrap` is specifically *not* named any more, because it is not installed
-     * on that machine and installing it needs sudo — pointing a person at a tool
-     * they cannot get is not a reason they can act on. What is still honestly
-     * unmeasured is the `wsl.exe --cd` launch this app uses, so that is what the
-     * sentence names, and the mechanism is described as holding rather than as
-     * unknown.
-     */
-    const reason = unconfinedReason('linux')
-    expect(reason).toMatch(/user namespaces/)
-    expect(reason).toMatch(/launch path/)
-    // It has to say the mechanism *holds*, which is the half that changed. The
-    // sentence still contains "has not been measured" and that is correct — it
-    // is now said about the launch path rather than about the whole idea.
-    expect(reason).toMatch(/hold/)
-    // And it must not point at `bwrap`. It is not installed on the machine this
-    // was measured on and installing it needs sudo, so naming it sends a person
-    // after a tool they cannot get for a boundary that would not use it.
-    expect(reason).not.toMatch(/bubblewrap/)
   })
 })
 
@@ -129,6 +118,139 @@ describe('the proof', () => {
   it('passes when the token comes back and the canary does not', async () => {
     const proof = await proveConfinement(plan, 'darwin', workingSandbox())
     expect(proof).toEqual({ ok: true, detail: '' })
+  })
+})
+
+/* --------------------------------------------------------------- the linux -- */
+
+/**
+ * A machine that answers the Linux proof, with the knobs that matter.
+ *
+ * The proof runs the same script three times — plant, read-from-inside, clean —
+ * and every failure it exists to catch is a different answer to one of those.
+ * None of them can be produced on a machine where the real thing works, which
+ * is the whole reason the runner is injectable.
+ *
+ * The arguments are read from the end because that is the only stable place:
+ * the confined run has a whole `unshare` invocation and a shell script in front
+ * of them, and matching on that would be a test of the argument builder wearing
+ * a test of the proof as a disguise.
+ */
+function linuxMachine(options: {
+  leaks?: boolean
+  plantable?: boolean
+  starts?: boolean
+  interop?: string
+  runwsl?: string
+  modes?: string[]
+}): ProofRunner {
+  return async (command, args) => {
+    const [mode, token, , , homeSecret, tmpSecret] = args.slice(-6)
+    options.modes?.push(mode ?? '')
+    if (mode === 'clean') return { stdout: '', stderr: '' }
+
+    const confined = command !== '/bin/sh'
+    if (confined && options.starts === false) {
+      return { stdout: '', stderr: 'unshare: Operation not permitted' }
+    }
+    const readable = confined ? options.leaks === true : options.plantable !== false
+    return {
+      stdout: [
+        `td-token ${token ?? ''}`,
+        `td-home ${readable ? (homeSecret ?? '') : ''}`,
+        `td-tmp ${readable ? (tmpSecret ?? '') : ''}`,
+        `td-interop ${confined ? (options.interop ?? 'none') : '/run/WSL/7_interop'}`,
+        `td-runwsl ${confined ? (options.runwsl ?? '') : '7_interop'}`,
+        'td-uid 0',
+      ].join('\n'),
+      stderr: '',
+    }
+  }
+}
+
+describe('the Linux proof', () => {
+  const linuxPlan: ConfinementPlan = {
+    folder: '/home/asad/work/app',
+    accountHome: '/home/asad',
+    writable: ['/home/asad/work/app'],
+    readable: ['/usr'],
+    readableFiles: [],
+  }
+
+  it('passes when the canary is readable outside and refused inside', async () => {
+    const proof = await proveConfinement(linuxPlan, 'linux', linuxMachine({}))
+    expect(proof).toEqual({ ok: true, detail: '' })
+  })
+
+  it('fails when the canary comes back from inside', async () => {
+    const proof = await proveConfinement(linuxPlan, 'linux', linuxMachine({ leaks: true }))
+    expect(proof.ok).toBe(false)
+    expect(proof.detail).toMatch(/outside the folder was readable/)
+  })
+
+  it('fails when the machine will not start the namespace, in its own words', async () => {
+    // What a distribution with AppArmor's userns restriction switched on looks
+    // like. The kernel's sentence is the only useful thing anybody will have,
+    // so it has to survive into the detail.
+    const proof = await proveConfinement(linuxPlan, 'linux', linuxMachine({ starts: false }))
+    expect(proof.ok).toBe(false)
+    expect(proof.detail).toMatch(/would not start the namespace/)
+    expect(proof.detail).toMatch(/Operation not permitted/)
+  })
+
+  it('fails when the canary could not be read from outside either', async () => {
+    // The failure a naive check scores as a pass, and not a hypothetical: on a
+    // Windows machine launching into WSL, a canary path computed on the Windows
+    // side names a file the Linux session could never have read, and every
+    // check would have "passed".
+    const proof = await proveConfinement(linuxPlan, 'linux', linuxMachine({ plantable: false }))
+    expect(proof.ok).toBe(false)
+    expect(proof.detail).toMatch(/could not fail/)
+  })
+
+  it('fails when the session still has the interop socket', async () => {
+    const proof = await proveConfinement(
+      linuxPlan,
+      'linux',
+      linuxMachine({ interop: '/run/WSL/7_interop' }),
+    )
+    expect(proof.ok).toBe(false)
+    expect(proof.detail).toMatch(/WSL_INTEROP/)
+  })
+
+  it('fails when the interop sockets are still reachable, variable or not', async () => {
+    // Measured, and the half that does the work: with the variable unset and
+    // this directory left alone, a Windows binary inside the granted folder
+    // still ran.
+    const proof = await proveConfinement(linuxPlan, 'linux', linuxMachine({ runwsl: '7_interop' }))
+    expect(proof.ok).toBe(false)
+    expect(proof.detail).toMatch(/\/run\/WSL/)
+  })
+
+  it('refuses a plan that contains the account home, rather than testing nothing', async () => {
+    const wide: ConfinementPlan = { ...linuxPlan, writable: ['/home/asad'] }
+    const proof = await proveConfinement(wide, 'linux', linuxMachine({}))
+    expect(proof.ok).toBe(false)
+    expect(proof.detail).toMatch(/could not fail/)
+  })
+
+  it('takes its canaries away again, even when the boundary failed', async () => {
+    const modes: string[] = []
+    await proveConfinement(linuxPlan, 'linux', linuxMachine({ leaks: true, modes }))
+    expect(modes).toEqual(['plant', 'read', 'clean'])
+  })
+
+  it('wraps the session in a namespace once it has proven one', async () => {
+    const launch = await confineSpawn(linuxPlan, '/bin/bash', ['-l'], 'linux', linuxMachine({}))
+    expect(launch.command).toMatch(/unshare$/)
+    expect(launch.args).toContain('--map-root-user')
+    expect(launch.args.slice(launch.args.indexOf('--'))).toEqual(['--', '/bin/bash', '-l'])
+  })
+
+  it('throws rather than handing back an unconfined command', async () => {
+    await expect(
+      confineSpawn(linuxPlan, '/bin/bash', ['-l'], 'linux', linuxMachine({ leaks: true })),
+    ).rejects.toBeInstanceOf(ConfinementUnavailableError)
   })
 })
 
