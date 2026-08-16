@@ -342,15 +342,56 @@ function notRepo(cwd: string, reason: GitUnavailableReason, message: string): Gi
   return { repo: false, cwd, reason, message }
 }
 
+/**
+ * A folder with no repository in it, said in words.
+ *
+ * `message` is rendered verbatim by anything that shows a `repo: false` result,
+ * so it has to be a sentence somebody wrote, not whatever the tool printed.
+ * This one used to be git's own stderr, and the Overview's git tile printed it
+ * exactly as git said it — *"fatal: not a git repository (or any of the parent
+ * directories): .git"* — which Asad caught on screen. The GitHub page one
+ * column over already had it right, and this is that sentence, so the two
+ * surfaces say the same thing about the same folder.
+ *
+ * The `git init` half is what makes it a sentence rather than a label: it names
+ * the one action that changes the situation, and names where to run it, because
+ * nothing in this app runs it for you.
+ */
+export const NOT_A_REPO_MESSAGE =
+  'This folder is not a git repository. Run `git init` in a terminal, then refresh.'
+
+/**
+ * A repository git can see but refuses to read.
+ *
+ * `detected dubious ownership` means the folder is owned by another user —
+ * routinely a repo cloned as root, or one on a mounted volume — and git stops
+ * rather than run hooks it does not trust. It is emphatically *not* "there is
+ * no repository here", but it is classified as `not-a-repo` all the same,
+ * because that is the discriminant every renderer already branches on and
+ * widening the union is a change to four files this one does not own. What it
+ * gets instead is its own sentence: the reason and the command that fixes it,
+ * rather than a sentence about `git init` that would be simply untrue.
+ */
+export function dubiousOwnershipMessage(cwd: string): string {
+  return `git will not read this repository because the folder belongs to another user. Run \`git config --global --add safe.directory ${cwd}\` in a terminal, then refresh.`
+}
+
 function classifyFailure(cwd: string, error: unknown): GitNotRepo {
   const failure = error as ExecFailure
   const text = (failure?.stderr || failure?.message || '').trim()
   if (failure?.code === 'ENOENT') {
     return notRepo(cwd, 'git-missing', 'git is not installed, or not on the login PATH')
   }
-  if (/not a git repository|detected dubious ownership/i.test(text)) {
-    return notRepo(cwd, 'not-a-repo', text)
+  if (/detected dubious ownership/i.test(text)) {
+    return notRepo(cwd, 'not-a-repo', dubiousOwnershipMessage(cwd))
   }
+  if (/not a git repository/i.test(text)) {
+    return notRepo(cwd, 'not-a-repo', NOT_A_REPO_MESSAGE)
+  }
+  // No sentence for this one on purpose. `error` is the bucket for a failure
+  // nobody anticipated, and there git's own words are the only information
+  // there is — inventing a friendlier line here would replace the one clue a
+  // person has with a paraphrase of "something went wrong".
   return notRepo(cwd, 'error', text || 'git failed')
 }
 

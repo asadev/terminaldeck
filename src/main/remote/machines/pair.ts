@@ -144,7 +144,7 @@ export async function pairWithCode(options: PairOptions): Promise<PairResult> {
     return {
       ok: false,
       reason: 'bad-code',
-      message: 'That is not a pairing code. It is eight characters, like H4K9-2FQT.',
+      message: 'That is not a pairing code. It is six digits, like 123456.',
     }
   }
 
@@ -154,7 +154,7 @@ export async function pairWithCode(options: PairOptions): Promise<PairResult> {
       ok: false,
       reason: 'not-found',
       message:
-        'No machine is showing that code. Check the characters, and that the code on the other ' +
+        'No machine is showing that code. Check the digits, and that the code on the other ' +
         'machine has not run out — they last a minute.',
     }
   }

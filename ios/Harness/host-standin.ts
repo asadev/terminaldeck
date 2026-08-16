@@ -87,6 +87,8 @@ import {
     readSealedHandshake,
     withSealedVersion,
 } from '../../src/shared/relay-wire'
+import { CODE_ENTROPY_BYTES, codeFromBytes } from '../../src/shared/short-code'
+import { startBeacon, type Beacon } from '../../src/main/remote/machines/rendezvous'
 import {
     CAPABILITIES,
     PROTOCOL_VERSION,
@@ -297,9 +299,38 @@ interface Device {
 
 const devices = new Map<string, Device>(state.devices.map((device) => [device.id, device]))
 let pairingToken: string | null = null
+/** The rendezvous slot the code on screen names, while it names one. */
+let beacon: Beacon | null = null
 
+/**
+ * Mint a code, and sit in the slot it names.
+ *
+ * Six digits from the product's own `codeFromBytes`, not 32 random bytes: a
+ * phone has no way to be handed an address any more — no QR, no link — so a
+ * token it cannot look up is a token it can never present. The beacon is the
+ * product's own `startBeacon`, pointed at this stand-in's local relay, which is
+ * the whole reason it can be reused here rather than reimplemented: a second
+ * implementation of the rendezvous is how a code that is typed correctly starts
+ * finding nothing on one client and not another.
+ *
+ * The previous slot goes down first. A beacon that outlived its code would
+ * answer for a token this stand-in no longer honours.
+ */
 function mintPairingToken(): string {
-    pairingToken = randomBytes(32).toString('base64url')
+    beacon?.stop()
+    beacon = null
+    pairingToken = codeFromBytes(randomBytes(CODE_ENTROPY_BYTES))
+    beacon = startBeacon({
+        code: pairingToken,
+        relayUrl: `ws://127.0.0.1:${PORT}`,
+        offer: {
+            relayUrl: `ws://127.0.0.1:${PORT}`,
+            hostId: HOST_ID,
+            publicKey: macStatic.publicKey.toString('base64'),
+            name: 'Stand-in',
+            platform: process.platform,
+        },
+    })
     return pairingToken
 }
 
@@ -1068,17 +1099,6 @@ function log(line: string): void {
     process.stdout.write(`[host] ${new Date().toISOString().slice(11, 19)} ${line}\n`)
 }
 
-function pairingUri(token: string): string {
-    const params = new URLSearchParams({
-        v: '1',
-        r: `ws://127.0.0.1:${PORT}`,
-        h: HOST_ID,
-        k: macStatic.publicKey.toString('base64url'),
-        t: token,
-    })
-    return `terminaldeck://pair?${params.toString()}`
-}
-
 /* -------------------------------------------------------------------------- */
 /* Self test: a phone written in Node                                          */
 /* -------------------------------------------------------------------------- */
@@ -1312,15 +1332,16 @@ relay.server.listen(PORT, '0.0.0.0', async () => {
     }
 
     const token = mintPairingToken()
-    const uri = pairingUri(token)
     mkdirSync(dirname(STATE_FILE), { recursive: true })
-    writeFileSync(resolve(dirname(STATE_FILE), 'pairing.txt'), `${uri}\n`)
+    // No trailing newline: this file is read whole and typed into a numeric
+    // field, and a newline is a character the parser refuses.
+    writeFileSync(resolve(dirname(STATE_FILE), 'pairing.txt'), token)
 
     log(`host id      ${HOST_ID}`)
     log(`key          ${fingerprint(macStatic.publicKey)}`)
     log(`devices      ${devices.size} known, ${[...devices.values()].filter((d) => d.approved).length} approved`)
     log(`control      http://127.0.0.1:${CONTROL_PORT}/state | /approve | /pair | /folders | /quit`)
-    log(`pairing uri  ${uri}`)
+    log(`pairing code ${token}`)
 })
 
 /**
@@ -1341,8 +1362,10 @@ createHttpServer((req, res) => {
         case '/approve':
             return reply({ approved: approveAll() })
         case '/pair': {
+            // `code`, not `uri`. There is no pairing link any more; what a
+            // caller does with this is type it into the phone's pairing field.
             const token = mintPairingToken()
-            return reply({ uri: pairingUri(token) })
+            return reply({ code: token })
         }
         /**
          * Change the folder list and **push** it, the way the desktop does when
@@ -1457,5 +1480,5 @@ createHttpServer((req, res) => {
 process.stdin.on('data', (chunk) => {
     const line = chunk.toString().trim()
     if (line === 'a') log(`approved ${approveAll().join(', ') || 'nothing'}`)
-    if (line === 'p') log(`pairing uri  ${pairingUri(mintPairingToken())}`)
+    if (line === 'p') log(`pairing code ${mintPairingToken()}`)
 })

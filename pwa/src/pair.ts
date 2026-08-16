@@ -1,36 +1,32 @@
 /**
- * Pairing: getting the token off the QR code, and keeping what it bought.
+ * Pairing: what this browser keeps once six digits have bought a credential.
  *
- * The desktop shows a QR encoding `https://<machine>.<tailnet>.ts.net/#t=<token>`.
- * The token lives in the **fragment**, and that placement is the whole security
- * argument for this file: a fragment is never sent to the server in a request,
- * so it cannot land in an access log, a proxy log or a `Referer` header on the
- * way to becoming a bearer secret in somebody's log aggregator.
+ * ## What used to be here, and why none of it is
  *
- * It is still visible in the address bar, in the back-forward list and in any
- * screenshot of the phone, so `takePairToken` is a *take*: it reads the token
- * and rewrites the URL in the same breath. The token is worth 60 seconds
- * (`PAIRING_TTL_MS`) and one redemption, and this narrows even that.
+ * This file used to open with a paragraph about reading a pairing token out of
+ * a URL fragment — `https://<machine>.<tailnet>.ts.net/#t=<token>` — because the
+ * desktop drew that address as a QR code and a phone's camera walked it in. The
+ * QR is gone (it did not work), and so is the `terminaldeck://pair?…` link this
+ * client also parsed, because a link is a bearer secret with a route through a
+ * messaging app attached to it.
+ *
+ * So there is exactly one way in now: six digits from `shared/short-code.ts`,
+ * typed. `main.ts` normalises them and hands them to `rendezvous.ts` to find the
+ * machine; nothing arrives in the URL any more, which is why `takePairToken` and
+ * the fragment readers are not below. Removing them is not tidying — a reader
+ * that accepts a token nobody mints is a second, unexercised way into the one
+ * function that writes a credential to disk.
  *
  * No `localStorage` and no `location` are touched at module scope — everything
  * comes in as an argument, which is what lets this be tested with no DOM.
  */
 
-import {
-  isHostId,
-  isHostKey,
-  isPairingToken,
-  isRelayUrl,
-  PAIRING_LINK_PREFIX,
-} from '../../src/shared/pairing-link'
-import { isCode, normaliseCode } from '../../src/shared/short-code'
 import type { StaticKeyPair } from '../../src/shared/sealed'
 import {
   asEndpoint,
   clearDeviceKeys,
   saveDeviceKeys,
   type DeckEndpoint,
-  type RelayEndpoint,
   type StorageLike,
 } from './endpoint'
 import { asHostPlatform, type HostPlatform } from './host-platform'
@@ -131,145 +127,6 @@ export interface StoredCredential {
    * See {@link REMEMBERED_TTL_MS} for why there is one at all and why it slides.
    */
   expiresAt: number
-}
-
-/**
- * The pairing token in a URL fragment, or null.
- *
- * The shape of the token itself is not checked beyond its bounds. Its format
- * belongs to `auth.ts`, which mints it, and a regex here would be this client
- * refusing a token the desktop had just issued because someone changed the
- * alphabet. What is checked is what the protocol itself requires — non-empty,
- * at most 200 characters — plus the absence of whitespace and control
- * characters, which no encoding of a token produces and which is the shape of
- * something pasted in by hand or mangled by a messaging app.
- */
-export function readPairToken(hash: string): string | null {
-  const body = hash.startsWith('#') ? hash.slice(1) : hash
-  if (body === '') return null
-  const params = new URLSearchParams(body)
-  const raw = params.get('t') ?? params.get('token')
-  if (raw === null) return null
-  const token = raw.trim()
-  if (token === '' || token.length > 200) return null
-  // Escaped rather than literal: a raw control byte in a character class is
-  // invisible in an editor and survives a careless copy as a plain space.
-  if (/[\s\u0000-\u001f\u007f]/.test(token)) return null
-  return token
-}
-
-/**
- * A token pasted in by hand, as either the whole link or the token alone.
- *
- * Not every device this runs on has a camera pointed at the desktop — the same
- * client is meant to work from a Windows machine on the tailnet, where the QR
- * code is on a screen three feet away and the practical move is to copy the
- * link. Accepting both shapes costs one function and removes the only step of
- * pairing that needs a phone.
- */
-export function readPairInput(text: string): string | null {
-  const trimmed = text.trim()
-  if (trimmed === '') return null
-  const hash = trimmed.indexOf('#')
-  if (hash !== -1) return readPairToken(trimmed.slice(hash))
-  return readPairToken(`t=${encodeURIComponent(trimmed)}`)
-}
-
-/* -------------------------------------------------------- pairing input -- */
-
-/**
- * What somebody just pasted or typed, as the thing it is.
- *
- * Three shapes reach this client and they are not interchangeable:
- *
- *   - a **relay link** — `terminaldeck://pair?v=1&r=…&h=…&k=…&t=…` — which
- *     carries the address as well as the token, and is what the desktop's QR
- *     code holds;
- *   - a **direct link** — `https://machine.tailnet.ts.net/#t=…` — which carries
- *     only a token, because the address is the page it opens;
- *   - a **code** — eight characters somebody read off another screen, which
- *     carries neither and has to be looked up. See `rendezvous.ts`.
- *
- * The order matters. A short code is a legal pairing token on the direct route
- * as well — the desktop mints one shape of token for every device now — so the
- * code branch has to come before the generic one, or eight characters typed into
- * a browser that is not on a tailnet would be sent to an address that is not
- * there and fail with a sentence about the network.
- */
-export type PairingInput =
-  | { kind: 'relay'; endpoint: RelayEndpoint; token: string }
-  | { kind: 'direct'; token: string }
-  | { kind: 'code'; code: string }
-
-export function readPairing(text: string): PairingInput | null {
-  const trimmed = text.trim()
-  if (trimmed === '') return null
-
-  if (trimmed.toLowerCase().startsWith(PAIRING_LINK_PREFIX)) return readRelayLink(trimmed)
-
-  const code = normaliseCode(trimmed)
-  if (code !== null && isCode(code)) return { kind: 'code', code }
-
-  const token = readPairInput(trimmed)
-  return token === null ? null : { kind: 'direct', token }
-}
-
-/**
- * `terminaldeck://pair?v=1&r=<relay>&h=<host id>&k=<key>&t=<token>`.
- *
- * Every field is checked with the validators from `shared/pairing-link.ts` — the
- * same module the desktop *writes* the link with — rather than with regexes
- * restated here. Two implementations of one format is how a QR code that scans
- * starts failing on one client and not another, and this is the client that
- * would be blamed for it.
- *
- * The version is compared rather than ignored: `v` exists precisely so a shape a
- * current build would misread can be refused instead of half-parsed.
- */
-function readRelayLink(link: string): PairingInput | null {
-  let url: URL
-  try {
-    url = new URL(link)
-  } catch {
-    return null
-  }
-  const query = url.searchParams
-  if (query.get('v') !== '1') return null
-
-  const relayUrl = query.get('r') ?? ''
-  const hostId = query.get('h') ?? ''
-  const hostKey = query.get('k') ?? ''
-  const token = query.get('t') ?? ''
-  if (!isRelayUrl(relayUrl) || !isHostId(hostId) || !isHostKey(hostKey) || !isPairingToken(token)) {
-    return null
-  }
-  return {
-    kind: 'relay',
-    endpoint: { kind: 'relay', url: relayUrl, hostId, hostKey },
-    token,
-  }
-}
-
-export interface LocationLike {
-  readonly hash: string
-  readonly pathname: string
-  readonly search: string
-}
-
-export interface HistoryLike {
-  replaceState(data: unknown, unused: string, url: string): void
-}
-
-/**
- * Read the pairing token and remove it from the URL in one step.
- *
- * `replaceState` rather than `pushState`: pushing would leave the token one
- * back-button press away, which is exactly the history entry this is removing.
- */
-export function takePairToken(location: LocationLike, history: HistoryLike): string | null {
-  const token = readPairToken(location.hash)
-  if (location.hash !== '') history.replaceState(null, '', `${location.pathname}${location.search}`)
-  return token
 }
 
 /* ------------------------------------------------------------- storage --- */

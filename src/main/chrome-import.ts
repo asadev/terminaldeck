@@ -34,7 +34,16 @@
  * would take down every test that so much as imported this file.
  */
 
-import { copyFileSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
+import {
+  closeSync,
+  copyFileSync,
+  mkdtempSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+} from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join, posix, win32 } from 'node:path'
 import { currentPlatform, type Env, type Platform } from './platform/host'
@@ -413,8 +422,7 @@ export function detectBrowsers(): DetectedBrowser[] {
     // reports the file as simply absent — so hanging the explanation off
     // either one alone leaves a browser marked blocked with nothing said.
     if (access === 'blocked') {
-      note =
-        'macOS is blocking access to this browser’s data. Grant Full Disk Access to import from it.'
+      note = describeAccessFailure({ code: 'EPERM' }, `${def.name}’s data`).message
     }
 
     const profiles: BrowserProfile[] = []
@@ -742,8 +750,12 @@ function problem(
   err: unknown,
 ): ScanProblem {
   const code = errorCode(err)
+  // Routed through the one describer so the "grant it here" wording is written
+  // once. It used to say "Grant Full Disk Access to import from this browser"
+  // and stop there, which named a permission without naming where it lives or
+  // offering any way to get to it.
   const message = isBlocked(err)
-    ? 'macOS is blocking access. Grant Full Disk Access to import from this browser.'
+    ? describeAccessFailure(err, 'this browser’s data').message
     : code === 'ENOENT'
       ? 'Nothing to read here.'
       : `${code}: ${err instanceof Error ? err.message : String(err)}`
@@ -936,15 +948,250 @@ export async function scanForDevUrls(
   return { urls: dedupeUrls(urls).slice(0, limit), problems }
 }
 
+/* ------------------------------------------------------ the permission gate -- */
+
+/**
+ * Where macOS keeps the permission this needs, and what the pane is called.
+ *
+ * ## Why a URL and not a sentence
+ *
+ * Both modules already printed *"Grant Full Disk Access to import from it"* and
+ * that is where it ended: a sentence with no way to act on it, in a list of
+ * per-profile problems, after an import had already failed. Asad's note is
+ * about exactly that gap — *"it is not asking if it needs full access; let it
+ * ask full access in that case rather than asking only this much, so it can
+ * successfully import."* An instruction a person has to carry out by hand,
+ * through four levels of System Settings, is not asking.
+ *
+ * ## The anchor was read off this machine, not remembered
+ *
+ * `x-apple.systempreferences:` takes a pane bundle id and a "reveal element"
+ * key, and the key is not documented anywhere Apple publishes. It is in the
+ * privacy pane's own table, and on macOS 27 (26A5388g) that table says:
+ *
+ *     /System/Library/ExtensionKit/Extensions/SecurityPrivacyExtension.appex
+ *       /Contents/Resources/TCCServiceList.plist
+ *     …
+ *     Dict {
+ *         requiresAdmin = true
+ *         supportsAddDeleteAction = true
+ *         tcc = kTCCServiceSystemPolicyAllFiles
+ *         revealElementKeyName = Privacy_AllFiles
+ *         serviceName = ALL_FILES
+ *     }
+ *
+ * So `Privacy_AllFiles` is the live name of the Full Disk Access row, and
+ * `supportsAddDeleteAction` is why sending someone there is useful rather than
+ * merely informative: that pane is the one with the ＋ button.
+ *
+ * The same binary shows `setSystemPolicyAppDataAccess` and
+ * `TCCServiceSystemPolicyAllFilesView` in one file, which is macOS 27 keeping
+ * the narrower *"access to data from other apps"* grants inside this same pane
+ * — so this is the right destination whichever of the two the user ends up
+ * granting.
+ *
+ * Null off macOS, and that is the honest answer rather than a gap. Windows and
+ * Linux have no equivalent gate on another program's profile directory: a file
+ * this app cannot read there is locked or owned by somebody else, and no
+ * settings pane changes that.
+ */
+export interface PrivacyPane {
+  url: string
+  /** The pane's name, spelled the way System Settings spells it. */
+  label: string
+}
+
+export function fullDiskAccessPane(platform: Platform = currentPlatform()): PrivacyPane | null {
+  if (platform !== 'darwin') return null
+  return {
+    url: 'x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles',
+    label: 'Privacy & Security → Full Disk Access',
+  }
+}
+
+/**
+ * Can this app actually open that file right now?
+ *
+ * `openSync` and nothing else. It is the exact syscall every read below starts
+ * with, so it fails in exactly the cases they fail in, and it reads no bytes —
+ * which matters because the file it is usually asked about is a cookie database
+ * holding somebody's live session tokens.
+ *
+ * It is deliberately not `statSync`. On a protected path `stat` *succeeds*
+ * while every read raises EPERM — measured on this machine, and the reason
+ * `detectBrowsers` probes with `stat` in the first place — so a check built on
+ * `stat` would report "fine" for precisely the machine that is about to fail.
+ */
+export function canRead(path: string): boolean {
+  try {
+    closeSync(openSync(path, 'r'))
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Why an operation on another browser's data cannot go ahead. */
+export type AccessBlock =
+  /** The OS refused: EPERM/EACCES. A permission, and one the user can grant. */
+  | 'permission'
+  /** There is nothing there. Not a permission problem and must not be dressed as one. */
+  | 'missing'
+  /** Something else — a lock, a corrupt file, a disk error. */
+  | 'other'
+
+export interface AccessProblem {
+  block: AccessBlock
+  /** One sentence for a person, naming the pane when there is one to name. */
+  message: string
+  /** Where to send them, or null when nothing can be opened. */
+  pane: PrivacyPane | null
+}
+
+/**
+ * Turn a failed read into something a screen can act on.
+ *
+ * The distinction that earns this function is `permission` against `missing`.
+ * They look the same from the outside — no data came back — and they want
+ * opposite words: one is "let me at it and it will work", the other is "there
+ * is nothing here and no permission will conjure any". Saying "grant Full Disk
+ * Access" for a browser that is simply not installed sends someone into a
+ * security pane to fix a problem that does not exist, which is worse than
+ * saying nothing.
+ */
+export function describeAccessFailure(
+  err: unknown,
+  what: string,
+  platform: Platform = currentPlatform(),
+): AccessProblem {
+  const code = errorCode(err)
+  if (code === 'ENOENT') {
+    return { block: 'missing', message: `${what} is not on this machine.`, pane: null }
+  }
+  if (!isBlocked(err)) {
+    return {
+      block: 'other',
+      message: `${what} could not be opened (${code}).`,
+      pane: null,
+    }
+  }
+
+  const pane = fullDiskAccessPane(platform)
+  if (!pane) {
+    // No pane to offer, so no pane is named. On Windows this is an ACL or a
+    // lock, and telling somebody to grant Full Disk Access there would be an
+    // instruction for an operating system they are not using.
+    return {
+      block: 'permission',
+      message: `${what} could not be read — this machine refused access to it.`,
+      pane: null,
+    }
+  }
+  return {
+    block: 'permission',
+    message:
+      `macOS will not let this app read ${what} until it is given full disk access. ` +
+      `Open ${pane.label}, add this app, then run the import again.`,
+    pane,
+  }
+}
+
+/**
+ * The one question worth asking before an import starts.
+ *
+ * Answered per browser rather than as one boolean, because macOS 27 grants
+ * access to another app's data one app at a time: being able to read Chrome
+ * says nothing about Edge. A caller that only wanted a yes/no can read
+ * `blocked.length`, and the ones that name a browser to the user have the list
+ * they need.
+ */
+export interface BrowserDataAccess {
+  /** Installed browsers whose profile data this app can read right now. */
+  readable: BrowserId[]
+  /** Installed browsers that are refusing. */
+  blocked: BrowserId[]
+  /** Set when at least one installed browser is refusing. */
+  problem: AccessProblem | null
+}
+
+export function browserDataAccess(
+  browsers: readonly DetectedBrowser[] = detectBrowsers(),
+  platform: Platform = currentPlatform(),
+): BrowserDataAccess {
+  const readable: BrowserId[] = []
+  const blocked: BrowserId[] = []
+  for (const browser of browsers) {
+    if (browser.access === 'blocked') blocked.push(browser.id)
+    else if (browser.access === 'ok') readable.push(browser.id)
+  }
+  if (blocked.length === 0) return { readable, blocked, problem: null }
+
+  const names = browsers
+    .filter((browser) => browser.access === 'blocked')
+    .map((browser) => browser.name)
+  return {
+    readable,
+    blocked,
+    // Built through the same describer as every other failure so the wording
+    // cannot drift between "before you started" and "this is why it stopped".
+    problem: describeAccessFailure(
+      { code: 'EPERM' },
+      names.length === 1 ? `${names[0]}’s data` : `${names.join(', ')} data`,
+      platform,
+    ),
+  }
+}
+
 /* -------------------------------------------------------------------- ipc -- */
+
+/**
+ * Opens a System Settings pane. Injected so a test never opens one.
+ *
+ * A function rather than a direct `shell.openExternal` because this module has
+ * no Electron import and must keep it that way: its native-module comment at
+ * the top is about being loadable under plain Node, and a static
+ * `import { shell } from 'electron'` would take that away from every test in
+ * this file.
+ */
+export type PaneOpener = (url: string) => Promise<void>
+
+const openWithElectron: PaneOpener = async (url) => {
+  const { shell } = await import('electron')
+  await shell.openExternal(url)
+}
+
+export interface ChromeImportIpcOptions {
+  openPane?: PaneOpener
+  platform?: Platform
+}
 
 /**
  * Wire the channels into the main process: `registerChromeImportIpc(ipcMain)`.
  *
- * Both handlers are reads. There is deliberately no channel that writes
- * anywhere near another browser's profile.
+ * Every handler but one is a read, and the exception opens a settings pane —
+ * there is deliberately still no channel that writes anywhere near another
+ * browser's profile.
  */
-export function registerChromeImportIpc(ipcMain: Electron.IpcMain): void {
+export function registerChromeImportIpc(
+  ipcMain: Electron.IpcMain,
+  options: ChromeImportIpcOptions = {},
+): void {
+  const openPane = options.openPane ?? openWithElectron
   ipcMain.handle('chrome-import:browsers', () => detectBrowsers())
   ipcMain.handle('chrome-import:scan', (_e, request: ScanRequest = {}) => scanForDevUrls(request))
+  ipcMain.handle('chrome-import:access', () => browserDataAccess(detectBrowsers(), options.platform))
+  /*
+   * The button that makes the sentence actionable.
+   *
+   * It answers with what it did rather than with nothing, because the one way
+   * this can fail is the one worth telling the user about: a build on a
+   * platform with no such pane. Silently doing nothing when a button is pressed
+   * is the dead control the design brief forbids.
+   */
+  ipcMain.handle('chrome-import:open-privacy-settings', async (): Promise<{ opened: boolean }> => {
+    const pane = fullDiskAccessPane(options.platform)
+    if (!pane) return { opened: false }
+    await openPane(pane.url)
+    return { opened: true }
+  })
 }

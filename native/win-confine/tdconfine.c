@@ -47,8 +47,11 @@
  *      implementation quietly hands a confined process the user's desktop.
  *   5. Creates the process with the container attribute, inheriting whatever
  *      console or pipes this launcher was given, so ConPTY keeps working.
- *   6. Waits, and exits with the child's exit code.
- *   7. Removes every ACE it added, on every path, on every exit route it
+ *   6. Puts the child in a job that ends with this process. It is created
+ *      suspended and resumed once it is in — see the comment at that call for
+ *      why a job is here at all, and why it is not part of the boundary.
+ *   7. Waits, and exits with the child's exit code.
+ *   8. Removes every ACE it added, on every path, on every exit route it
  *      controls.
  *
  * ## What it does not do, so that nobody reads a claim into it
@@ -61,7 +64,7 @@
  * cannot detect.
  *
  * It does not decide policy. Which directories are writable, which are readable
- * and which ancestors get a traverse ACE is the plan's business, computed in
+ * and which ancestors get an ancestor ACE is the plan's business, computed in
  * TypeScript and passed in. This program has no defaults and no fallbacks: a
  * flag it does not understand is a refusal, not a warning.
  *
@@ -76,6 +79,7 @@
 
 #include <windows.h>
 #include <aclapi.h>
+#include <sddl.h>
 #include <strsafe.h>
 #include <stdio.h>
 
@@ -142,11 +146,21 @@ typedef HRESULT(WINAPI *fnDeriveAppContainerSid)(PCWSTR, PSID *);
  */
 #define MAX_PATHS 64
 
+/*
+ * How many capability SIDs one token may carry.
+ *
+ * Two are named (`internet-client`, `private-network`) and the rest are the
+ * tool capability the one-time grant writes onto the tool directories. Four is
+ * far past what any caller sends and keeps the array a fixed size, for the same
+ * reason `MAX_PATHS` is one.
+ */
+#define MAX_CAPABILITIES 4
+
 typedef enum {
   GRANT_WRITE,   /* the granted folder, the device's home: read, write, delete  */
   GRANT_READ,    /* a directory of tools: read and execute, inherited downwards */
   GRANT_FILE,    /* one file, read and execute, and nothing around it           */
-  GRANT_TRAVERSE /* an ancestor: pass through it, do not list it                */
+  GRANT_ANCESTOR /* on the path to the folder: pass through and list, not read  */
 } GrantKind;
 
 typedef struct {
@@ -159,6 +173,38 @@ typedef struct {
 static void fail(const wchar_t *what, unsigned long code) {
   fwprintf(stderr, L"tdconfine: %ls (0x%08lX)\n", what, code);
   fflush(stderr);
+}
+
+/* ----------------------------------------------------------- capabilities -- */
+
+/*
+ * Is this SID a capability, and nothing else?
+ *
+ * This is a security check rather than input validation, and the difference
+ * matters enough to spell out. Every SID in `SECURITY_CAPABILITIES.Capabilities`
+ * lands in the child's token as an enabled group, and an access check against an
+ * AppContainer token grants on any of them. So a caller who could pass
+ * `--capability-sid S-1-5-32-544` would hand the confined session every ACE on
+ * the machine that names the Administrators group — the boundary would still be
+ * an AppContainer, and it would be an AppContainer that can read the disk.
+ *
+ * A capability SID is `S-1-15-3-…`: identifier authority 15
+ * (`SECURITY_APP_PACKAGE_AUTHORITY`) and first sub-authority 3
+ * (`SECURITY_CAPABILITY_BASE_RID`). Anything else is refused, and refused rather
+ * than dropped, because a caller that believed it had asked for something and
+ * got a session without it is the failure shape this program exists to avoid.
+ */
+static BOOL isCapabilitySid(PSID sid) {
+  SID_IDENTIFIER_AUTHORITY app = {{0, 0, 0, 0, 0, 15}};
+  PSID_IDENTIFIER_AUTHORITY authority;
+  PUCHAR count;
+
+  if (sid == NULL || !IsValidSid(sid)) return FALSE;
+  authority = GetSidIdentifierAuthority(sid);
+  if (memcmp(authority, &app, sizeof(app)) != 0) return FALSE;
+  count = GetSidSubAuthorityCount(sid);
+  if (count == NULL || *count < 1) return FALSE;
+  return *GetSidSubAuthority(sid, 0) == 3;
 }
 
 /* ------------------------------------------------------------------- ACLs -- */
@@ -175,22 +221,44 @@ static void fail(const wchar_t *what, unsigned long code) {
  * `GRANT_READ` and `GRANT_FILE` are "RX". Execute matters: without it a granted
  * tool directory is a directory of files the session can read and cannot run.
  *
- * `GRANT_TRAVERSE` is the interesting one and the narrowest thing that was
- * found to work. An ancestor of the granted folder has to be *passable* — every
- * open of `C:\Users\Imza\Projects\thing\file` walks `C:\`, `C:\Users`,
- * `C:\Users\Imza` and `C:\Users\Imza\Projects` — but it must not become
- * *listable*, or a grant on one project would hand over the names of every
- * other. `FILE_TRAVERSE` is the walk; `FILE_READ_ATTRIBUTES` is what `git`
- * needs on top of it, because git-for-windows resolves its own working
- * directory by opening each component and asking for its real name, and without
- * it `git init` fails with `fatal: unable to get current working directory:
- * Permission denied`. `READ_CONTROL` lets a tool read the ACL it is being
- * refused by, which is how an `access()`-shaped check answers without an
- * exception.
+ * `GRANT_ANCESTOR` is the one that costs something, and the cost was measured
+ * rather than assumed, so it is written down here in full.
  *
- * Note what is absent from it: `FILE_LIST_DIRECTORY`. `icacls`'s "RX" includes
- * that, which is why "just grant RX on the ancestors" is the wrong answer and
- * this mask is spelled out bit by bit instead.
+ * An ancestor of the granted folder is `C:\`, `C:\Users`, `C:\Users\<user>`
+ * and each directory below that down to the folder itself. The container needs
+ * *something* on them, and the first version of this mask was the narrow thing
+ * anyone would reach for — `FILE_TRAVERSE | FILE_READ_ATTRIBUTES`, pass through
+ * but do not list. With that, a shell works, `node` works, the agent CLI works,
+ * `cd ..` shows nothing and the owner's files are refused. **`git` does not.**
+ * Every git command dies at `fatal: unable to get current working directory:
+ * Permission denied`, and a boundary that breaks git is a boundary nobody keeps
+ * switched on.
+ *
+ * The reason is exact. git-for-windows resolves its own working directory with
+ * `GetLongPathNameW`, which walks the path component by component with
+ * `FindFirstFileW` — enumeration, not traversal, so `FILE_LIST_DIRECTORY` on
+ * every ancestor is what it wants. Its fallback for exactly this case,
+ * `CreateFileW(cwd) + GetFinalPathNameByHandleW`, opens the folder fine and
+ * then fails too: `VOLUME_NAME_DOS` has to map `\Device\HarddiskVolume3` back
+ * to `C:`, and an AppContainer cannot enumerate the DOS device namespace to do
+ * it. That is not a file permission and no ACL fixes it — measured with a probe
+ * run inside the container, where `VOLUME_NAME_NT` answered and
+ * `VOLUME_NAME_DOS` returned `ERROR_ACCESS_DENIED`.
+ *
+ * So the choice was: git works and the ancestors are listable, or the ancestors
+ * are not listable and git does not work. `FILE_LIST_DIRECTORY` is in the mask,
+ * and **this is the one place a Windows session is weaker than a macOS one**: a
+ * confined Windows session can see the *names* of the entries in each ancestor
+ * — the way `dir` shows them, so also their sizes and dates — including the
+ * owner's home directory. It cannot open any of them. `CONFINEMENT.md` says so,
+ * and the grant screen says it in the user's words, because it is a real
+ * difference and not a footnote.
+ *
+ * `READ_CONTROL` lets a tool read the ACL it is being refused by, which is how
+ * an `access()`-shaped check answers without an exception. What stays absent is
+ * every write bit and `FILE_GENERIC_READ`: an ancestor is listable and is not
+ * readable, and the ACE does not inherit, so nothing *inside* an ancestor is
+ * reachable through it.
  */
 static DWORD rightsFor(GrantKind kind) {
   switch (kind) {
@@ -199,9 +267,10 @@ static DWORD rightsFor(GrantKind kind) {
     case GRANT_READ:
     case GRANT_FILE:
       return FILE_GENERIC_READ | FILE_GENERIC_EXECUTE;
-    case GRANT_TRAVERSE:
+    case GRANT_ANCESTOR:
     default:
-      return FILE_TRAVERSE | FILE_READ_ATTRIBUTES | READ_CONTROL | SYNCHRONIZE;
+      return FILE_TRAVERSE | FILE_READ_ATTRIBUTES | FILE_LIST_DIRECTORY | READ_CONTROL |
+             SYNCHRONIZE;
   }
 }
 
@@ -213,7 +282,9 @@ static DWORD rightsFor(GrantKind kind) {
  * a file it cannot read back. An ancestor wants `NO_INHERITANCE`, and that is
  * the whole point of the traverse kind: an inheriting ACE on `C:\Users\Imza`
  * would grant the container everything under it, which is precisely what the
- * boundary exists to prevent. A single file has nothing to inherit.
+ * boundary exists to prevent — it is the difference between "you may walk
+ * through my home directory" and "you may read my home directory". A single
+ * file has nothing to inherit.
  */
 static DWORD inheritanceFor(GrantKind kind) {
   if (kind == GRANT_WRITE || kind == GRANT_READ) {
@@ -239,31 +310,53 @@ static DWORD inheritanceFor(GrantKind kind) {
  * from a name this program was given, so the only ACEs for it on this path are
  * the ones this program put there.
  */
-static DWORD editPath(LPWSTR path, PSID sid, GrantKind kind, ACCESS_MODE mode) {
+/*
+ * The ACE this run wants on this path, merged into whatever is already there.
+ *
+ * Split out so that the two write APIs below share one definition of what is
+ * being written. `BuildTrusteeWithSidW` rather than assigning the SID into
+ * `ptstrName`: the documented way to name a trustee by SID is to store a `PSID`
+ * in a field declared `LPWSTR`, and writing that assignment would put a pointer
+ * cast in the middle of security-critical code where a reader has to squint at
+ * it. This helper does the same thing with the types the API should have had.
+ */
+static DWORD mergeAce(PACL current, PSID sid, GrantKind kind, ACCESS_MODE mode,
+                      PACL *updated) {
+  EXPLICIT_ACCESS_W entry;
+  ZeroMemory(&entry, sizeof(entry));
+  entry.grfAccessPermissions = rightsFor(kind);
+  entry.grfAccessMode = mode;
+  entry.grfInheritance = inheritanceFor(kind);
+  BuildTrusteeWithSidW(&entry.Trustee, sid);
+  return SetEntriesInAclW(1, &entry, current, updated);
+}
+
+/*
+ * The inheritable case: `SetNamedSecurityInfoW`, and it walks the tree.
+ *
+ * Used for the granted folder, the device's home and any tool directory —
+ * everything whose ACE carries `(OI)(CI)`. The walk is not a side effect to be
+ * avoided; it is the point. NTFS materialises inherited ACEs on each child, so
+ * an inheritable ACE placed on a folder reaches the files that already exist
+ * only because this call goes and writes it on them. Without it the session
+ * could create new files in its folder and could not open the ones that were
+ * there when it started.
+ *
+ * The cost is real and worth stating: it is O(files under the folder), and it
+ * happens at session start. A project with a large `node_modules` pays for it
+ * once per session.
+ */
+static DWORD editPathInheritable(LPWSTR path, PSID sid, GrantKind kind, ACCESS_MODE mode) {
   PACL current = NULL;
   PACL updated = NULL;
   PSECURITY_DESCRIPTOR descriptor = NULL;
-  EXPLICIT_ACCESS_W entry;
   DWORD rc;
 
   rc = GetNamedSecurityInfoW(path, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, NULL, NULL,
                              &current, NULL, &descriptor);
   if (rc != ERROR_SUCCESS) return rc;
 
-  ZeroMemory(&entry, sizeof(entry));
-  entry.grfAccessPermissions = rightsFor(kind);
-  entry.grfAccessMode = mode;
-  entry.grfInheritance = inheritanceFor(kind);
-  /*
-   * `BuildTrusteeWithSidW` rather than assigning the SID into `ptstrName`. The
-   * documented way to name a trustee by SID is to store a `PSID` in a field
-   * declared `LPWSTR`, and writing that assignment would put a pointer cast in
-   * the middle of security-critical code where a reader has to squint at it.
-   * This helper does the same thing with the types the API should have had.
-   */
-  BuildTrusteeWithSidW(&entry.Trustee, sid);
-
-  rc = SetEntriesInAclW(1, &entry, current, &updated);
+  rc = mergeAce(current, sid, kind, mode, &updated);
   if (rc == ERROR_SUCCESS) {
     rc = SetNamedSecurityInfoW(path, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, NULL, NULL,
                                updated, NULL);
@@ -272,6 +365,93 @@ static DWORD editPath(LPWSTR path, PSID sid, GrantKind kind, ACCESS_MODE mode) {
   if (updated != NULL) LocalFree(updated);
   if (descriptor != NULL) LocalFree(descriptor);
   return rc;
+}
+
+/*
+ * The ancestor case: `SetFileSecurityW`, and it walks nothing.
+ *
+ * This exists because of a measurement that would otherwise have shipped as a
+ * hang. `C:\Users\Imza\tdwin\granted` cannot be resolved to a real path by
+ * `git` or by `fs.realpathSync` without the container being able to stat its
+ * ancestors — including the volume root — so the plan carries a
+ * `GRANT_ANCESTOR` entry for each of them. Writing those with
+ * `SetNamedSecurityInfoW` re-runs the auto-inheritance algorithm over
+ * everything underneath, and on `C:\` that is the whole disk: the first
+ * version of this program spent **fifteen minutes at a hundred percent of one
+ * core** granting and revoking three ancestors, and had to be killed, which
+ * left its ACEs on the user's home directory. Nothing about the boundary was
+ * wrong. The API was.
+ *
+ * `SetFileSecurityW` is the older, blunter call that writes the DACL and stops.
+ * It is exactly right here and would be exactly wrong above, and the difference
+ * is the same fact from both sides: an ancestor ACE is `NO_INHERITANCE`, so
+ * there is nothing under the folder that needs to hear about it.
+ *
+ * The two control bits are carried across by hand because `SetFileSecurityW`
+ * takes the descriptor literally. `SE_DACL_AUTO_INHERITED` is what tells
+ * Windows this folder's DACL is maintained by inheritance, and
+ * `SE_DACL_PROTECTED` is the "block inherited permissions" checkbox. A
+ * descriptor built from scratch has neither, and writing one to `C:\Users`
+ * would silently change how that directory inherits from then on — a change to
+ * the user's machine that has nothing to do with confining a session, and one
+ * nobody would connect to this program a month later.
+ */
+static DWORD editPathDirect(LPWSTR path, PSID sid, GrantKind kind, ACCESS_MODE mode) {
+  const SECURITY_DESCRIPTOR_CONTROL carried = SE_DACL_AUTO_INHERITED | SE_DACL_PROTECTED;
+  PSECURITY_DESCRIPTOR existing = NULL;
+  SECURITY_DESCRIPTOR fresh;
+  SECURITY_DESCRIPTOR_CONTROL control = 0;
+  DWORD revision = 0;
+  PACL current = NULL;
+  PACL updated = NULL;
+  BOOL present = FALSE;
+  BOOL defaulted = FALSE;
+  DWORD needed = 0;
+  DWORD rc;
+
+  GetFileSecurityW(path, DACL_SECURITY_INFORMATION, NULL, 0, &needed);
+  if (needed == 0) return GetLastError();
+
+  existing = LocalAlloc(LPTR, needed);
+  if (existing == NULL) return ERROR_NOT_ENOUGH_MEMORY;
+
+  if (!GetFileSecurityW(path, DACL_SECURITY_INFORMATION, existing, needed, &needed) ||
+      !GetSecurityDescriptorControl(existing, &control, &revision) ||
+      !GetSecurityDescriptorDacl(existing, &present, &current, &defaulted)) {
+    rc = GetLastError();
+    LocalFree(existing);
+    return rc;
+  }
+
+  rc = mergeAce(present ? current : NULL, sid, kind, mode, &updated);
+  if (rc != ERROR_SUCCESS) {
+    LocalFree(existing);
+    return rc;
+  }
+
+  if (!InitializeSecurityDescriptor(&fresh, SECURITY_DESCRIPTOR_REVISION) ||
+      !SetSecurityDescriptorDacl(&fresh, TRUE, updated, defaulted) ||
+      !SetSecurityDescriptorControl(&fresh, carried, control & carried) ||
+      !SetFileSecurityW(path, DACL_SECURITY_INFORMATION, &fresh)) {
+    rc = GetLastError();
+  }
+
+  LocalFree(updated);
+  LocalFree(existing);
+  return rc;
+}
+
+/*
+ * Which of the two, decided by the ACE rather than by the caller.
+ *
+ * The rule is one line and it is the whole of the policy: an ACE that children
+ * inherit has to be propagated to the children that already exist; an ACE that
+ * children do not inherit must not be, because propagating it means rewriting
+ * security descriptors on files that this session has nothing to do with.
+ */
+static DWORD editPath(LPWSTR path, PSID sid, GrantKind kind, ACCESS_MODE mode) {
+  if (inheritanceFor(kind) == NO_INHERITANCE) return editPathDirect(path, sid, kind, mode);
+  return editPathInheritable(path, sid, kind, mode);
 }
 
 /*
@@ -340,8 +520,9 @@ typedef struct {
   WCHAR name[128]; /* "<station>\\Default", for STARTUPINFO.lpDesktop */
 } Station;
 
-static DWORD editUserObject(HANDLE object, PSID sid, DWORD rights, DWORD inheritance) {
-  SECURITY_INFORMATION what = DACL_SECURITY_INFORMATION;
+static DWORD editUserObject(HANDLE object, PSID sid, DWORD rights, DWORD inheritance,
+                            const wchar_t *what) {
+  SECURITY_INFORMATION info = DACL_SECURITY_INFORMATION;
   SECURITY_DESCRIPTOR fresh;
   PSECURITY_DESCRIPTOR existing = NULL;
   PACL current = NULL;
@@ -353,20 +534,29 @@ static DWORD editUserObject(HANDLE object, PSID sid, DWORD rights, DWORD inherit
   DWORD rc = ERROR_SUCCESS;
 
   /* Two calls: the first only to learn the size. The API has no other shape. */
-  GetUserObjectSecurity(object, &what, NULL, 0, &needed);
-  if (needed == 0) return GetLastError();
+  GetUserObjectSecurity(object, &info, NULL, 0, &needed);
+  if (needed == 0) {
+    rc = GetLastError();
+    fail(what, rc);
+    fail(L"  ^ sizing GetUserObjectSecurity", rc);
+    return rc;
+  }
 
   existing = LocalAlloc(LPTR, needed);
   if (existing == NULL) return ERROR_NOT_ENOUGH_MEMORY;
 
-  if (!GetUserObjectSecurity(object, &what, existing, needed, &needed)) {
+  if (!GetUserObjectSecurity(object, &info, existing, needed, &needed)) {
     rc = GetLastError();
+    fail(what, rc);
+    fail(L"  ^ reading GetUserObjectSecurity", rc);
     LocalFree(existing);
     return rc;
   }
 
   if (!GetSecurityDescriptorDacl(existing, &present, &current, &defaulted)) {
     rc = GetLastError();
+    fail(what, rc);
+    fail(L"  ^ GetSecurityDescriptorDacl", rc);
     LocalFree(existing);
     return rc;
   }
@@ -379,6 +569,8 @@ static DWORD editUserObject(HANDLE object, PSID sid, DWORD rights, DWORD inherit
 
   rc = SetEntriesInAclW(1, &entry, present ? current : NULL, &updated);
   if (rc != ERROR_SUCCESS) {
+    fail(what, rc);
+    fail(L"  ^ SetEntriesInAcl", rc);
     LocalFree(existing);
     return rc;
   }
@@ -393,15 +585,101 @@ static DWORD editUserObject(HANDLE object, PSID sid, DWORD rights, DWORD inherit
    */
   if (!InitializeSecurityDescriptor(&fresh, SECURITY_DESCRIPTOR_REVISION)) {
     rc = GetLastError();
+    fail(L"  ^ InitializeSecurityDescriptor", rc);
   } else if (!SetSecurityDescriptorDacl(&fresh, TRUE, updated, FALSE)) {
     rc = GetLastError();
-  } else if (!SetUserObjectSecurity(object, &what, &fresh)) {
+    fail(L"  ^ SetSecurityDescriptorDacl", rc);
+  } else if (!SetUserObjectSecurity(object, &info, &fresh)) {
     rc = GetLastError();
+    fail(what, rc);
+    fail(L"  ^ SetUserObjectSecurity", rc);
   }
 
   LocalFree(updated);
   LocalFree(existing);
   return rc;
+}
+
+/*
+ * A private desktop on the window station this process is already on.
+ *
+ * This exists because {@link makeStation} cannot be used by the program that
+ * actually ships. Creating a *window station* needs an administrator:
+ * `CreateWindowStationW` answered `ERROR_ACCESS_DENIED` for a genuinely
+ * non-elevated token — medium integrity, Administrators deny-only — running in
+ * the interactive session on `DESKTOP-DDGMNCV`, while the same call from an
+ * elevated shell on the same machine succeeded. Terminal Deck is a desktop app
+ * that nobody elevates, so the station half of the previous design was never
+ * reachable in production; it was measured from an elevated shell and the
+ * difference did not show.
+ *
+ * A *desktop* is different: the caller creates it on a station it already has,
+ * and a normal user can. So the child gets a desktop of its own — no window of
+ * the user's is on it, and `SendMessage` cannot cross a desktop boundary — on
+ * the station the user is already using.
+ *
+ * **What that costs, stated because it is a real difference and not a
+ * footnote.** A window station owns the clipboard and the global atom table, so
+ * a confined session sharing `WinSta0` can read whatever the user last copied.
+ * It cannot see or touch their windows; it can see their clipboard. That is the
+ * price of not needing an administrator at every session start, it is written
+ * down in `CONFINEMENT.md`, and it is why the choice is a flag the caller has
+ * to make rather than a fallback this program takes on its own — a program that
+ * quietly picked the weaker option when the stronger one failed would be
+ * deciding a security question in a place nobody reads.
+ */
+static DWORD makeDesktopOnCurrentStation(Station *out, PSID sid, DWORD pid) {
+  WCHAR desktopName[64];
+  WCHAR stationName[64];
+  DWORD needed = 0;
+  HWINSTA current;
+  DWORD rc;
+
+  ZeroMemory(out, sizeof(*out));
+  StringCchPrintfW(desktopName, 64, L"tdconfine-%lu", pid);
+
+  current = GetProcessWindowStation();
+  if (current == NULL) {
+    fail(L"this process has no window station to start from", GetLastError());
+    return GetLastError();
+  }
+  /*
+   * The station's own name, asked of the object rather than assumed to be
+   * `WinSta0`. A service, a scheduled task and a remote-desktop session are all
+   * on stations with other names, and `STARTUPINFO.lpDesktop` takes
+   * `<station>\<desktop>` — a hardcoded `WinSta0` would start the child on a
+   * desktop belonging to a station this process is not on, which fails as
+   * `STATUS_DLL_INIT_FAILED` long after the useful error is gone.
+   */
+  if (!GetUserObjectInformationW(current, UOI_NAME, stationName, sizeof(stationName), &needed)) {
+    rc = GetLastError();
+    fail(L"could not read the name of this window station", rc);
+    return rc;
+  }
+
+  out->desktop =
+      CreateDesktopW(desktopName, NULL, NULL, 0, GENERIC_ALL | READ_CONTROL | WRITE_DAC, NULL);
+  if (out->desktop == NULL) {
+    rc = GetLastError();
+    fail(L"could not create a desktop of its own", rc);
+    return rc;
+  }
+
+  /*
+   * Only the desktop is granted. The station is not touched at all — no ACE is
+   * added to `WinSta0` and none is taken away, because an AppContainer already
+   * reaches the interactive station through the `ALL APPLICATION PACKAGES` ACE
+   * Windows itself puts there for store apps. Measured: with this desktop
+   * granted and the station untouched, a confined `cmd.exe` starts and runs.
+   */
+  rc = editUserObject(out->desktop, sid, GENERIC_ALL, NO_INHERITANCE, L"desktop");
+  if (rc != ERROR_SUCCESS) {
+    fail(L"could not grant the container its desktop", rc);
+    return rc;
+  }
+
+  StringCchPrintfW(out->name, 128, L"%ls\\%ls", stationName, desktopName);
+  return ERROR_SUCCESS;
 }
 
 static DWORD makeStation(Station *out, PSID sid, DWORD pid) {
@@ -426,7 +704,19 @@ static DWORD makeStation(Station *out, PSID sid, DWORD pid) {
     return GetLastError();
   }
 
-  out->station = CreateWindowStationW(stationName, 0, WINSTA_ALL_ACCESS, NULL);
+  /*
+   * `READ_CONTROL | WRITE_DAC` on top of `WINSTA_ALL_ACCESS`, and the reason is
+   * a trap worth naming: `WINSTA_ALL_ACCESS` is **not** all access. Unlike
+   * `FILE_ALL_ACCESS` it is a bare `OR` of the window-station-specific rights
+   * with no `STANDARD_RIGHTS_REQUIRED` in it, so a handle opened with it cannot
+   * read or write the object's own security descriptor. Creating the station
+   * succeeded and then granting the container access to it failed with
+   * `ERROR_ACCESS_DENIED` on the station this very process had just created —
+   * measured, and the sort of thing that reads as "AppContainer is not allowed
+   * to do this" when it is really "ask for the right on the handle".
+   */
+  out->station =
+      CreateWindowStationW(stationName, 0, WINSTA_ALL_ACCESS | READ_CONTROL | WRITE_DAC, NULL);
   if (out->station == NULL) {
     rc = GetLastError();
     fail(L"could not create a window station", rc);
@@ -441,7 +731,8 @@ static DWORD makeStation(Station *out, PSID sid, DWORD pid) {
     return rc;
   }
 
-  out->desktop = CreateDesktopW(L"Default", NULL, NULL, 0, GENERIC_ALL, NULL);
+  out->desktop = CreateDesktopW(L"Default", NULL, NULL, 0,
+                                GENERIC_ALL | READ_CONTROL | WRITE_DAC, NULL);
   rc = (out->desktop == NULL) ? GetLastError() : ERROR_SUCCESS;
   if (rc != ERROR_SUCCESS) fail(L"could not create a desktop on it", rc);
 
@@ -458,14 +749,15 @@ static DWORD makeStation(Station *out, PSID sid, DWORD pid) {
    * further than one level down, which for a window station means the desktops
    * directly on it and nothing beyond.
    */
-  rc = editUserObject(out->station, sid, WINSTA_ALL_ACCESS,
-                      OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE | NO_PROPAGATE_INHERIT_ACE);
+  rc = editUserObject(out->station, sid, WINSTA_ALL_ACCESS | READ_CONTROL,
+                      OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE | NO_PROPAGATE_INHERIT_ACE,
+                      L"window station");
   if (rc != ERROR_SUCCESS) {
     fail(L"could not grant the container its window station", rc);
     return rc;
   }
 
-  rc = editUserObject(out->desktop, sid, GENERIC_ALL, NO_INHERITANCE);
+  rc = editUserObject(out->desktop, sid, GENERIC_ALL, NO_INHERITANCE, L"desktop");
   if (rc != ERROR_SUCCESS) {
     fail(L"could not grant the container its desktop", rc);
     return rc;
@@ -576,11 +868,17 @@ static BOOL WINAPI ignoreConsoleEvent(DWORD type) {
 static void usage(void) {
   fwprintf(stderr,
            L"tdconfine: usage:\n"
-           L"  tdconfine --container <name> [--capability internet-client|private-network]...\n"
-           L"            [--write <dir>] [--read <dir>] [--file <path>] [--traverse <dir>]\n"
+           L"  tdconfine --container <name> --station own|shared\n"
+           L"            [--capability internet-client|private-network]...\n"
+           L"            [--capability-sid <S-1-15-3-...>]...\n"
+           L"            [--write <dir>] [--read <dir>] [--file <path>] [--ancestor <dir>]\n"
            L"            --cwd <dir> -- <program> [args...]\n"
            L"  tdconfine --container <name> --release [--write <dir>|--read <dir>|"
-           L"--file <path>|--traverse <dir>]...\n");
+           L"--file <path>|--ancestor <dir>]...\n"
+           L"  tdconfine --establish --capability-sid <S-1-15-3-...> "
+           L"[--read <dir>|--file <path>|--ancestor <dir>]...\n"
+           L"  tdconfine --withdraw  --capability-sid <S-1-15-3-...> "
+           L"[--read <dir>|--file <path>|--ancestor <dir>]...\n");
   fflush(stderr);
 }
 
@@ -592,6 +890,27 @@ int wmain(int argc, wchar_t **argv) {
   LPWSTR cwd = NULL;
   int childAt = -1;
   BOOL release = FALSE;
+  /*
+   * The one-time grant, and its undo.
+   *
+   * Separate flags rather than a mode enum because they are separate answers to
+   * separate questions, and because the argument parser below is a flat loop
+   * that a mode variable would have to be threaded through. What makes them a
+   * mode is the block after the parse, which refuses every combination that is
+   * not one of the four this program does.
+   */
+  BOOL establish = FALSE;
+  BOOL withdraw = FALSE;
+  /*
+   * Which desktop the child gets, and it has no default on purpose.
+   *
+   * `own` creates a whole window station and needs an administrator; `shared`
+   * creates a private desktop on the station this process is already on and
+   * needs nothing. They differ in what the confined session can reach — see
+   * {@link makeDesktopOnCurrentStation} — so the caller states which one it is
+   * asking for and this program refuses to guess.
+   */
+  LPWSTR stationMode = NULL;
   BOOL wantsInternet = FALSE;
   BOOL wantsPrivateNetwork = FALSE;
 
@@ -601,11 +920,23 @@ int wmain(int argc, wchar_t **argv) {
 
   PSID containerSid = NULL;
   SID_IDENTIFIER_AUTHORITY appAuthority = {{0, 0, 0, 0, 0, 15}};
-  SID_AND_ATTRIBUTES capabilities[2];
+  SID_AND_ATTRIBUTES capabilities[MAX_CAPABILITIES];
+  /*
+   * Which allocator each capability SID came from, because they do not all come
+   * from the same one and the two are not interchangeable. The well-known pair
+   * are built with `AllocateAndInitializeSid` and freed with `FreeSid`; a SID
+   * parsed from a string comes out of `ConvertStringSidToSidW`, which documents
+   * `LocalFree`. Passing one to the other's free is the kind of thing that works
+   * on every machine it is tried on and is still wrong.
+   */
+  BOOL capabilityLocal[MAX_CAPABILITIES];
   DWORD capabilityCount = 0;
   DWORD capability;
+  LPWSTR capabilitySids[MAX_CAPABILITIES];
+  int capabilitySidCount = 0;
 
   Station station;
+  HANDLE job = NULL;
   SECURITY_CAPABILITIES security;
   STARTUPINFOEXW startup;
   PROCESS_INFORMATION child;
@@ -623,6 +954,8 @@ int wmain(int argc, wchar_t **argv) {
   ZeroMemory(&child, sizeof(child));
   ZeroMemory(&startup, sizeof(startup));
   ZeroMemory(capabilities, sizeof(capabilities));
+  ZeroMemory(capabilityLocal, sizeof(capabilityLocal));
+  ZeroMemory(capabilitySids, sizeof(capabilitySids));
 
   for (i = 1; i < argc; i++) {
     if (wcscmp(argv[i], L"--") == 0) {
@@ -633,14 +966,44 @@ int wmain(int argc, wchar_t **argv) {
       release = TRUE;
       continue;
     }
+    if (wcscmp(argv[i], L"--establish") == 0) {
+      establish = TRUE;
+      continue;
+    }
+    if (wcscmp(argv[i], L"--withdraw") == 0) {
+      withdraw = TRUE;
+      continue;
+    }
     if (i + 1 >= argc) {
       usage();
       return EXIT_USAGE;
     }
     if (wcscmp(argv[i], L"--container") == 0) {
       container = argv[++i];
+    } else if (wcscmp(argv[i], L"--station") == 0) {
+      stationMode = argv[++i];
+      if (wcscmp(stationMode, L"own") != 0 && wcscmp(stationMode, L"shared") != 0) {
+        fwprintf(stderr, L"tdconfine: --station takes own or shared, not %ls\n", stationMode);
+        return EXIT_USAGE;
+      }
     } else if (wcscmp(argv[i], L"--cwd") == 0) {
       cwd = argv[++i];
+    } else if (wcscmp(argv[i], L"--capability-sid") == 0) {
+      /*
+       * The tool capability, as a SID rather than a name.
+       *
+       * A SID string rather than a name this program derives, because the same
+       * value has to be written into an ACL by an elevated run of this program
+       * at install time and put into a token by an unprivileged run of it at
+       * every session, and the two must be the same value. Deriving it twice
+       * from a name would be two sources of truth; `confine/tools.ts` computes
+       * it once and both runs are handed the answer.
+       */
+      if (capabilitySidCount >= MAX_CAPABILITIES) {
+        fwprintf(stderr, L"tdconfine: more than %d capabilities\n", MAX_CAPABILITIES);
+        return EXIT_USAGE;
+      }
+      capabilitySids[capabilitySidCount++] = argv[++i];
     } else if (wcscmp(argv[i], L"--capability") == 0) {
       i++;
       if (wcscmp(argv[i], L"internet-client") == 0) {
@@ -658,7 +1021,7 @@ int wmain(int argc, wchar_t **argv) {
         return EXIT_USAGE;
       }
     } else if (wcscmp(argv[i], L"--write") == 0 || wcscmp(argv[i], L"--read") == 0 ||
-               wcscmp(argv[i], L"--file") == 0 || wcscmp(argv[i], L"--traverse") == 0) {
+               wcscmp(argv[i], L"--file") == 0 || wcscmp(argv[i], L"--ancestor") == 0) {
       if (grantCount >= MAX_PATHS) {
         fwprintf(stderr, L"tdconfine: more than %d paths in one plan\n", MAX_PATHS);
         return EXIT_USAGE;
@@ -666,7 +1029,7 @@ int wmain(int argc, wchar_t **argv) {
       grants[grantCount].kind = (argv[i][2] == L'w')   ? GRANT_WRITE
                                 : (argv[i][2] == L'r') ? GRANT_READ
                                 : (argv[i][2] == L'f') ? GRANT_FILE
-                                                       : GRANT_TRAVERSE;
+                                                       : GRANT_ANCESTOR;
       grants[grantCount].path = argv[++i];
       grantCount++;
     } else {
@@ -676,7 +1039,90 @@ int wmain(int argc, wchar_t **argv) {
     }
   }
 
-  if (container == NULL || (!release && (childAt < 0 || childAt >= argc || cwd == NULL))) {
+  /*
+   * The one-time grant: the half of Windows confinement that needs an
+   * administrator, done once instead of once per session.
+   *
+   * Two things a confined session needs are on directories the person running
+   * Terminal Deck cannot rewrite the permissions of, and measured on
+   * `DESKTOP-DDGMNCV` with a real non-elevated token (`AccessCheck` for
+   * `WRITE_DAC`, Administrators deny-only, medium integrity):
+   *
+   *     C:\                     NO        C:\Users\<user>        YES
+   *     C:\Users                NO        C:\Program Files       NO
+   *
+   * `C:\` and `C:\Users` are on the path to every granted folder under a user
+   * profile, and a confined session that cannot list them cannot resolve an
+   * absolute path at all — `cmd` answers `Access is denied` for a command given
+   * by full path, and git dies at `unable to get current working directory`.
+   * `C:\Program Files` is where `node` and `git` are. So a session that ACL'd
+   * its own way in would need an administrator **every time it started**, which
+   * is not something anybody would keep switched on.
+   *
+   * The trustee here is therefore not the per-device container SID that the
+   * session grants use — those come and go with the session — but a **capability
+   * SID**, which is stable across devices and across reinstalls because it is
+   * derived from a fixed name. The session's token carries that capability
+   * (`--capability-sid`), so an ACE written once by this mode is what makes
+   * every later session work with no privilege at all.
+   *
+   * `--write` is refused in this mode, and the refusal is the point: a permanent
+   * ACE that lets a container *write* somewhere is not a thing this program will
+   * create. The one-time grant is read, execute and list, and nothing else.
+   */
+  if (establish || withdraw) {
+    PSID toolSid = NULL;
+    int failures = 0;
+    if (establish && withdraw) {
+      fwprintf(stderr, L"tdconfine: --establish and --withdraw are opposites\n");
+      usage();
+      return EXIT_USAGE;
+    }
+    if (capabilitySidCount != 1 || childAt >= 0 || grantCount == 0) {
+      usage();
+      return EXIT_USAGE;
+    }
+    for (i = 0; i < grantCount; i++) {
+      if (grants[i].kind != GRANT_WRITE) continue;
+      fwprintf(stderr, L"tdconfine: a one-time grant is never writable (%ls)\n", grants[i].path);
+      return EXIT_USAGE;
+    }
+    if (!ConvertStringSidToSidW(capabilitySids[0], &toolSid)) {
+      fwprintf(stderr, L"tdconfine: %ls is not a SID\n", capabilitySids[0]);
+      return EXIT_USAGE;
+    }
+    if (!isCapabilitySid(toolSid)) {
+      fwprintf(stderr, L"tdconfine: %ls is not a capability SID (S-1-15-3-...)\n",
+               capabilitySids[0]);
+      LocalFree(toolSid);
+      return EXIT_USAGE;
+    }
+    for (i = 0; i < grantCount; i++) {
+      rc = editPath(grants[i].path, toolSid, grants[i].kind,
+                    establish ? GRANT_ACCESS : REVOKE_ACCESS);
+      if (rc != ERROR_SUCCESS) {
+        fwprintf(stderr, L"tdconfine: could not %ls %ls (0x%08lX)\n",
+                 establish ? L"grant" : L"withdraw", grants[i].path, rc);
+        fflush(stderr);
+        failures++;
+      }
+    }
+    LocalFree(toolSid);
+    /*
+     * A partial establish is left in place rather than unwound, which is the
+     * opposite of what the session path does, and deliberately so: the ACEs
+     * this mode writes are *meant* to outlive the process, so unwinding the
+     * ones that worked would turn "one directory could not be reached" into
+     * "nothing was granted", and the caller would have no way to tell those
+     * apart from the exit code. The record on the TypeScript side is written
+     * only when this exits zero, so a partial run is repeated rather than
+     * trusted, and repeating it is harmless — `SetEntriesInAclW` merges.
+     */
+    return failures == 0 ? 0 : EXIT_ACL;
+  }
+
+  if (container == NULL ||
+      (!release && (childAt < 0 || childAt >= argc || cwd == NULL || stationMode == NULL))) {
     usage();
     return EXIT_USAGE;
   }
@@ -744,9 +1190,11 @@ int wmain(int argc, wchar_t **argv) {
     }
   }
 
-  rc = makeStation(&station, containerSid, GetCurrentProcessId());
+  rc = (wcscmp(stationMode, L"own") == 0)
+           ? makeStation(&station, containerSid, GetCurrentProcessId())
+           : makeDesktopOnCurrentStation(&station, containerSid, GetCurrentProcessId());
   if (rc != ERROR_SUCCESS) {
-    fail(L"could not give the container a window station of its own", rc);
+    fail(L"could not give the container a desktop", rc);
     exitCode = EXIT_STATION;
     goto teardown;
   }
@@ -783,6 +1231,46 @@ int wmain(int argc, wchar_t **argv) {
       goto teardown;
     }
     capabilities[capabilityCount].Attributes = SE_GROUP_ENABLED;
+    capabilityCount++;
+  }
+
+  /*
+   * The named capabilities the caller passed as SIDs — in practice exactly one,
+   * the tool capability.
+   *
+   * This is the half of the one-time grant that lives in the token. The other
+   * half is an ACE for the same SID on `C:\Program Files\nodejs` and the rest of
+   * the tool trees, written once by an elevated run of this program, and the two
+   * halves are what let a confined *shell* start `node` without any per-session
+   * permission change and without administrator rights. Measured: with the ACE
+   * present and this SID absent from the token, `node -v` inside the container
+   * is `Access is denied`; with both, it prints the version.
+   *
+   * `isCapabilitySid` is not a formality. See its comment: a SID that is not a
+   * capability would arrive in the child's token as an enabled group and grant
+   * every ACE on the machine that names it.
+   */
+  for (i = 0; i < capabilitySidCount; i++) {
+    PSID parsed = NULL;
+    if (capabilityCount >= MAX_CAPABILITIES) {
+      fail(L"more capabilities than this program will carry", ERROR_INSUFFICIENT_BUFFER);
+      goto teardown;
+    }
+    if (!ConvertStringSidToSidW(capabilitySids[i], &parsed)) {
+      fwprintf(stderr, L"tdconfine: %ls is not a SID\n", capabilitySids[i]);
+      fflush(stderr);
+      goto teardown;
+    }
+    if (!isCapabilitySid(parsed)) {
+      fwprintf(stderr, L"tdconfine: %ls is not a capability SID (S-1-15-3-...)\n",
+               capabilitySids[i]);
+      fflush(stderr);
+      LocalFree(parsed);
+      goto teardown;
+    }
+    capabilities[capabilityCount].Sid = parsed;
+    capabilities[capabilityCount].Attributes = SE_GROUP_ENABLED;
+    capabilityLocal[capabilityCount] = TRUE;
     capabilityCount++;
   }
 
@@ -840,6 +1328,50 @@ int wmain(int argc, wchar_t **argv) {
   SetConsoleCtrlHandler(ignoreConsoleEvent, TRUE);
 
   /*
+   * A job object, and it is **not** part of the boundary.
+   *
+   * Saying that first because a job object is the thing everyone reaches for on
+   * Windows and it does not confine anything here: a job that this process
+   * cannot break out of was measured surviving in the one way that matters —
+   * `wsl.exe -e /usr/bin/setsid /bin/sleep 511` outlived `TerminateJobObject`
+   * with its pid and session id intact while the shell died. A job must never
+   * be described as containing a WSL session.
+   *
+   * What it does is fix a real defect that was measured on this launcher.
+   * Killing the launcher outright leaves the confined child **running** — a
+   * node process still alive inside the container, still holding the ACEs on
+   * the user's folders, with nothing left that knows to take them off. That is
+   * exactly what `node-pty` does when a tab is closed hard. With
+   * `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, the last handle to the job closing is
+   * what ends the whole tree, and the launcher's handle is the last one.
+   *
+   * The child is created suspended so there is no window between it starting
+   * and it being in the job. A process that ran for a millisecond outside the
+   * job and spawned something in that millisecond would leave that grandchild
+   * outside it.
+   *
+   * Failure here is printed and continued past rather than fatal. It is not a
+   * security property, and refusing a session that is properly confined because
+   * a cleanup mechanism was unavailable would trade a real feature for a tidy
+   * one. The child is resumed either way — a suspended child that nobody
+   * resumes is a session that hangs with no message at all.
+   */
+  job = CreateJobObjectW(NULL, NULL);
+  if (job != NULL) {
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits;
+    ZeroMemory(&limits, sizeof(limits));
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    if (!SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits,
+                                 sizeof(limits))) {
+      fail(L"could not set the job to end with this process", GetLastError());
+      CloseHandle(job);
+      job = NULL;
+    }
+  } else {
+    fail(L"could not create a job object", GetLastError());
+  }
+
+  /*
    * `bInheritHandles = TRUE` is what keeps ConPTY working.
    *
    * This launcher is started by `node-pty`, which has already attached it to a
@@ -850,10 +1382,20 @@ int wmain(int argc, wchar_t **argv) {
    * part of the terminal that works is the part nobody had to reimplement.
    */
   if (!CreateProcessW(NULL, commandLine, NULL, NULL, TRUE,
-                      EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT, NULL, cwd,
-                      &startup.StartupInfo, &child)) {
+                      EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT |
+                          CREATE_SUSPENDED,
+                      NULL, cwd, &startup.StartupInfo, &child)) {
     fail(L"could not start the confined process", GetLastError());
     goto teardown;
+  }
+
+  if (job != NULL && !AssignProcessToJobObject(job, child.hProcess)) {
+    fail(L"could not put the confined process in a job; it will outlive a hard kill",
+         GetLastError());
+  }
+  if (ResumeThread(child.hThread) == (DWORD)-1) {
+    fail(L"could not start the confined process running", GetLastError());
+    TerminateProcess(child.hProcess, EXIT_SPAWN);
   }
 
   WaitForSingleObject(child.hProcess, INFINITE);
@@ -868,8 +1410,19 @@ teardown:
   }
   if (commandLine != NULL) LocalFree(commandLine);
   for (capability = 0; capability < capabilityCount; capability++) {
-    FreeSid(capabilities[capability].Sid);
+    if (capabilityLocal[capability]) {
+      LocalFree(capabilities[capability].Sid);
+    } else {
+      FreeSid(capabilities[capability].Sid);
+    }
   }
+  /*
+   * Closing the job before the ACEs come off, not after. If anything in the
+   * container is somehow still running at this point, this is what ends it, and
+   * revoking a permission from a process that is still using it is the wrong
+   * order to do those two things in.
+   */
+  if (job != NULL) CloseHandle(job);
   closeStation(&station);
   revokeAll(grants, grantCount, containerSid);
   FreeSid(containerSid);

@@ -20,7 +20,9 @@ import {
   readModelConfirmation,
   readModelFromScreen,
   readModelFromTranscript,
+  readAgentFromScreen,
   readPermissionMode,
+  NO_AGENT,
   type SessionAccess,
 } from './agent-controls'
 
@@ -546,5 +548,87 @@ describe('reading the model from a confined session transcript', () => {
   it('answers null when no store holds anything for the project', async () => {
     resetDeviceHomes()
     expect(await readModelFromTranscript('/nowhere/at/all')).toBeNull()
+  })
+})
+
+/**
+ * Item 1 of NEXT-UPDATE.md: a session with no Claude in it must not wear
+ * Claude's controls.
+ *
+ * The fixtures are transcriptions of screens this app's own headless terminal
+ * produced while a real `claude 2.1.233` was driven inside a `/bin/zsh -l` pty
+ * on this machine — the same route the app's session emulator takes. The one
+ * that matters most is the last: the CLI had exited and the shell was back, and
+ * *that* is the case a "did the user type claude?" test would get wrong.
+ */
+describe('is an agent in front of this session', () => {
+  const SHELL_IDLE = 'apple@Asads-MacBook-Pro-21 tdprobe % '
+
+  /** Straight off the capture, wrapping and all. */
+  const CLAUDE_IDLE = [
+    'apple@Asads-MacBook-Pro-21 tdprobe % claude',
+    '╭─── Claude Code v2.1.233 ─────────────────────────────────────────────╮',
+    '│                 Welcome back Asad!                                   │',
+    '╰──────────────────────────────────────────────────────────────────────╯',
+    '❯ ',
+    '  ⏵⏵ bypass permissions on (shift+tab to cycle)',
+  ].join('\n')
+
+  it('says nothing about a plain shell sitting at its prompt', () => {
+    expect(readAgentFromScreen(SHELL_IDLE)).toBeNull()
+  })
+
+  it('sees the CLI on a screen it has drawn', () => {
+    expect(readAgentFromScreen(CLAUDE_IDLE)).toContain('Claude Code v2.1.233')
+  })
+
+  it('still sees it once the banner has scrolled away', () => {
+    // The banner is drawn once; the footer is redrawn continuously. A signal
+    // that only knew the banner would answer "no agent" for every session more
+    // than a screenful old.
+    const footerOnly = ['❯ ', '  ⏵⏵ bypass permissions on (shift+tab to cycle)'].join('\n')
+    expect(readAgentFromScreen(footerOnly)).toContain('bypass permissions on')
+  })
+
+  it('sees it while it is working, when the footer says so instead', () => {
+    const working = ['⏺ Reading agent-controls.ts…', '  ⎿  (esc to interrupt · 12s)'].join('\n')
+    expect(readAgentFromScreen(working)).toContain('esc to interrupt')
+  })
+
+  it('stops seeing it the moment the CLI exits and leaves the shell behind', () => {
+    /*
+     * The whole point. Claude Code clears the screen on a clean `/exit` —
+     * captured, not assumed: the dump immediately after typing it held these
+     * two lines and nothing else, with the session still very much alive. A
+     * control row keyed off "the user typed claude" would still be showing an
+     * account picker here.
+     */
+    const after = ['apple@Asads-MacBook-Pro-21 tdprobe % claude', 'apple@Asads-MacBook-Pro-21 tdprobe % '].join('\n')
+    expect(readAgentFromScreen(after)).toBeNull()
+  })
+
+  it('is not fooled by the word claude in a shell prompt or a command', () => {
+    // A pattern loose enough to match this would put an agent's controls on
+    // every terminal that has ever mentioned one.
+    const talking = [
+      'apple@host ~/Projects/claude % git commit -m "run claude in plan mode"',
+      '❯ claude --help | head',
+    ].join('\n')
+    expect(readAgentFromScreen(talking)).toBeNull()
+  })
+
+  it('needs the whole footer, not just the mode phrase', () => {
+    // `readPermissionMode` matches `plan mode on` alone, which is right for
+    // reading a mode off a screen already known to be the CLI's and far too
+    // loose for deciding whether it is the CLI's at all.
+    expect(readPermissionMode('plan mode on')).toBe('plan')
+    expect(readAgentFromScreen('plan mode on')).toBeNull()
+  })
+
+  it('reports no evidence rather than "no agent" when there is no session', () => {
+    // Null and false are different answers and the caller has to be able to
+    // tell them apart — one is "there is no agent", the other is "nothing was
+    // read", and only the second is fixed by looking again.
+    expect(NO_AGENT).toEqual({ running: false, evidence: null, saw: null })
   })
 })

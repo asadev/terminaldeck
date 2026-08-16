@@ -137,7 +137,6 @@ dependencies {
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.okhttp)
     implementation(libs.bouncycastle)
-    implementation(libs.zxing.android.embedded)
 
     testImplementation(libs.junit)
     // The upload pump is a coroutine driven by acknowledgements, so its tests need a scheduler they

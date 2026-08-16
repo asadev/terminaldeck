@@ -6,6 +6,7 @@ import { installPaths, resetPaths } from './platform/paths'
 import {
   canonicalProjectKey,
   createProfile,
+  listProfilesForProvider,
   deleteProfile,
   findProfile,
   getState,
@@ -79,6 +80,7 @@ function profile(id: string, overrides: Partial<Profile> = {}): Profile {
   return {
     id,
     name: id,
+    provider: 'claude',
     configDir: join(USER_DATA, 'profiles', id),
     system: false,
     color: PROFILE_COLORS[0],
@@ -242,10 +244,43 @@ describe('sessionEnv', () => {
     expect(sessionEnv(p, 'shell')).toEqual({})
   })
 
+  /*
+   * Codex flipped to `true` when its mechanism was finally measured rather than
+   * inferred from a broken install — `CODEX_HOME=<fresh dir> codex login
+   * status` says "Not logged in" while the bare command says "Logged in using
+   * ChatGPT". Gemini stays `false` on purpose and is the assertion worth
+   * keeping: it *has* a config variable, and it is refused anyway because the
+   * variable does not move the login. `provider-accounts.ts` carries the
+   * measurement; this pins that the refusal survives.
+   */
   it('reports which providers can be isolated at all', () => {
     expect(supportsProfiles('claude')).toBe(true)
-    expect(supportsProfiles('codex')).toBe(false)
+    expect(supportsProfiles('codex')).toBe(true)
+    expect(supportsProfiles('gemini')).toBe(false)
     expect(supportsProfiles('shell')).toBe(false)
+  })
+
+  it('never exports one agent’s directory under another agent’s variable', () => {
+    // The failure this guards is not a crash: it is Claude Code being handed a
+    // directory full of Codex's auth.json and reporting itself signed out, or
+    // worse, writing its own files into it.
+    const codexAccount = profile('work', { provider: 'codex' })
+    expect(sessionEnv(codexAccount, 'codex')).toEqual({ CODEX_HOME: codexAccount.configDir })
+    expect(sessionEnv(codexAccount, 'claude')).toEqual({})
+
+    const claudeAccount = profile('personal', { provider: 'claude' })
+    expect(sessionEnv(claudeAccount, 'claude')).toEqual({
+      CLAUDE_CONFIG_DIR: claudeAccount.configDir,
+    })
+    expect(sessionEnv(claudeAccount, 'codex')).toEqual({})
+  })
+
+  it('exports nothing for an agent whose login it cannot move', () => {
+    // Gemini's variable exists. Emitting it would move the settings and leave
+    // the OAuth token in one shared keychain slot, so the app would show two
+    // accounts that are one login — and signing into the second would overwrite
+    // the first. Nothing is exported instead.
+    expect(sessionEnv(profile('g', { provider: 'claude' }), 'gemini')).toEqual({})
   })
 })
 
@@ -396,11 +431,44 @@ describe('crud', () => {
     expect(created.system).toBe(false)
   })
 
-  it('lists the system profile first', () => {
+  /*
+   * Every agent's own install is listed, not only Claude's, and the names are
+   * distinct.
+   *
+   * Both halves matter. Without the Codex row, `resolveProfileId` can answer
+   * `system:codex` and the screen built from this list has no account by that
+   * id to name — an account chip with nothing in it. And two rows both called
+   * "Default" would defeat the one thing this list exists to do.
+   */
+  it('lists every agent’s own install first, under distinguishable names', () => {
     createProfile('Work')
     const listed = listProfiles()
     expect(listed[0].system).toBe(true)
-    expect(listed.map((p) => p.name)).toEqual(['Default', 'Work'])
+    expect(listed.map((p) => p.name)).toEqual(['Default', 'Default (Codex CLI)', 'Work'])
+    expect(listed.map((p) => p.provider)).toEqual(['claude', 'codex', 'claude'])
+  })
+
+  it('scopes an account to one agent, and lists only that agent’s', () => {
+    createProfile('Work')
+    createProfile('Work', { provider: 'codex' })
+
+    expect(listProfilesForProvider('claude').map((p) => p.name)).toEqual(['Default', 'Work'])
+    expect(listProfilesForProvider('codex').map((p) => p.name)).toEqual([
+      'Default (Codex CLI)',
+      'Work',
+    ])
+    // Same name, two agents, two directories — which is the whole reason the
+    // clash check is per provider rather than global.
+    const [claudeWork] = listProfilesForProvider('claude').filter((p) => !p.system)
+    const [codexWork] = listProfilesForProvider('codex').filter((p) => !p.system)
+    expect(claudeWork.configDir).not.toBe(codexWork.configDir)
+  })
+
+  it('refuses to create an account for an agent whose login it cannot move', () => {
+    // Not silently downgraded to Claude, and not created and left inert: a row
+    // that exists is a promise the app cannot keep for Gemini.
+    expect(() => createProfile('Google', { provider: 'gemini' })).toThrow(/keychain/)
+    expect(listProfiles().some((p) => p.name === 'Google')).toBe(false)
   })
 
   it('refuses a duplicate name, whatever its case', () => {
@@ -503,10 +571,19 @@ describe('adopted config directories', () => {
     // ~/.claude/.claude.json while a default install keeps it at ~/.claude.json.
     // Adopting it does not share the login, it breaks it.
     expect(() => createProfile('Mine', { configDir: join(homedir(), '.claude') })).toThrow(
-      /your own Claude install/,
+      /your own Claude Code install/,
     )
-    expect(() => createProfile('Home', { configDir: homedir() })).toThrow(/your own Claude install/)
-    expect(() => createProfile('Root', { configDir: '/' })).toThrow(/your own Claude install/)
+    expect(() => createProfile('Home', { configDir: homedir() })).toThrow(/your own .* install/)
+    expect(() => createProfile('Root', { configDir: '/' })).toThrow(/your own .* install/)
+  })
+
+  it('refuses the user’s own Codex install, and says which agent', () => {
+    // `~/.codex` holds a live `auth.json`. Adopting it would export
+    // `CODEX_HOME=~/.codex` for an account the app also believes it may delete
+    // the files of — which would sign the user out of ChatGPT for real.
+    expect(() =>
+      createProfile('Mine', { provider: 'codex', configDir: join(homedir(), '.codex') }),
+    ).toThrow(/your own Codex CLI install/)
   })
 
   it('refuses a directory another profile already uses', () => {

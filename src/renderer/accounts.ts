@@ -197,6 +197,70 @@ export function parseSignIn(value: unknown): SignInView {
   }
 }
 
+/* --------------------------------------------------------------- renaming -- */
+
+/**
+ * How long an account's name may be.
+ *
+ * Lives here rather than in the settings screen because the settings screen is
+ * no longer the only place a name can be typed — the account chip inside a
+ * session renames too, and a second copy of this number is a second answer to
+ * "why did it stop at 60 characters" that only one of the two surfaces gives.
+ */
+export const MAX_ACCOUNT_NAME_LENGTH = 60
+
+/**
+ * What a typed name means, or null when it means "do nothing".
+ *
+ * Both callers had the same three-line dance — trim, drop if empty, drop if
+ * unchanged — and both had to get all three right for a rename to be safe. The
+ * empty case matters most: the main process would happily store an account
+ * called `''`, and an account with no name is one the chip cannot show and the
+ * settings list cannot tell apart from its neighbour.
+ *
+ * The length cap is applied here as well as on the input's `maxLength`, because
+ * `maxLength` is a property of a DOM element and this is also reachable by
+ * pasting into a field that was rendered before the cap was raised.
+ */
+export function normalizeAccountName(typed: string, current: string): string | null {
+  const name = typed.trim().slice(0, MAX_ACCOUNT_NAME_LENGTH)
+  if (name === '' || name === current.trim()) return null
+  return name
+}
+
+/**
+ * Rename an account, wherever the rename was asked for.
+ *
+ * The single call both surfaces make. It exists because the alternative — the
+ * chip growing its own copy — is how the two would come to disagree about the
+ * length cap, about whether a blank name is a rename, and about whether the
+ * account list is re-read afterwards. The last one is not cosmetic: ids,
+ * colours and config directories are assigned in the main process, so a caller
+ * that patches the name into its local copy is drawing an account that does not
+ * match the one on disk.
+ *
+ * Resolves to null on success, or to the sentence to show when it failed.
+ * Never throws: every caller here is a form submit handler, and an unhandled
+ * rejection in one of those loses the message with the failure in it.
+ */
+export async function renameAccount(
+  bridge: Partial<AccountsBridge> | null,
+  account: { id: string; name: string },
+  typed: string,
+): Promise<string | null> {
+  const name = normalizeAccountName(typed, account.name)
+  if (name === null) return null
+  if (typeof bridge?.renameProfile !== 'function') {
+    return 'Renaming accounts is not wired into this window.'
+  }
+  try {
+    await bridge.renameProfile(account.id, name)
+    return null
+  } catch (cause) {
+    return errorMessage(cause, 'Could not rename that account.')
+  }
+}
+
 /* ---------------------------------------------------------------- labels -- */
 
 /**

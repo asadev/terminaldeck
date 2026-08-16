@@ -614,8 +614,20 @@ export const KEYMAP: readonly KeyBinding[] = [
   { id: 'view.git', keys: ['mod+shift+g'], label: 'Source control', scope: 'global', group: 'Panels' },
   {
     id: 'view.search',
+    // Keeps ⌘⇧F, and no longer opens a panel. Searching past sessions is the
+    // command palette's `?` sigil now — the page it used to open is gone,
+    // because a sidebar row called Search sitting between Files and Source
+    // control promised to search files and did not. The chord is unchanged so
+    // the muscle memory still lands on the thing it always meant.
     keys: ['mod+shift+f'],
     label: 'Search past sessions',
+    scope: 'global',
+    group: 'Panels',
+  },
+  {
+    id: 'view.artifacts',
+    keys: ['mod+shift+a'],
+    label: 'Artifacts',
     scope: 'global',
     group: 'Panels',
   },

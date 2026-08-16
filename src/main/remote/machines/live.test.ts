@@ -296,7 +296,7 @@ describe('the code the Remote panel shows a phone', () => {
   /*
    * The defect, as three assertions.
    *
-   * An eight-character code only works if the machine showing it is sitting in
+   * A six-digit code only works if the machine showing it is sitting in
    * the rendezvous slot `hostIdFor(scrypt(code))` names, answering with its real
    * address. Only `machines:code` ever started that beacon; `remote:pair` — the
    * phone pairing — minted the same-looking code and published nothing, so
@@ -309,7 +309,7 @@ describe('the code the Remote panel shows a phone', () => {
     const minted = (await deck.invoke('remote:pair')) as { token: string; expiresAt: number }
 
     // The lookup is given the code and a relay, and nothing else — no host id,
-    // no key, no link. That is exactly what a person typing eight characters
+    // no key, no link. That is exactly what a person typing six digits
     // into another machine has.
     const found = await lookupMachine({ code: minted.token, relayUrl: deck.relayUrl })
     expect(found?.hostId).toBe(deck.hostId)
@@ -319,7 +319,7 @@ describe('the code the Remote panel shows a phone', () => {
     expect(Buffer.from(found?.publicKey ?? '', 'base64').equals(deck.publicKey)).toBe(true)
   }, 30_000)
 
-  it('pairs from those eight characters, and stops being findable once they are spent', async () => {
+  it('pairs from those six digits, and stops being findable once they are spent', async () => {
     const deck = await thisDesktop()
     const minted = (await deck.invoke('remote:pair')) as { token: string }
 
@@ -390,7 +390,7 @@ describe('finding a machine from a typed code', () => {
     // host in it, and the relay says nothing either way — answering would make
     // the endpoint an oracle for which machines are online.
     const found = await lookupMachine({
-      code: 'H4K9-2FQT',
+      code: '482913',
       relayUrl: far.relayUrl,
       lookupTimeoutMs: 1200,
     })
@@ -531,7 +531,7 @@ describe('the rendezvous is not something the relay can answer', () => {
     const far = await farMachine()
     const code = far.desk.create()
     const imposter = startBeacon({
-      code: 'ZZZZ-ZZZZ',
+      code: '999999',
       offer: { ...far.offer, name: 'Not the right machine' },
       relayUrl: far.relayUrl,
     })

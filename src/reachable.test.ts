@@ -125,6 +125,20 @@ const KNOWN_UNREACHABLE: Record<string, string> = {
     'unreachable from the app on purpose: it is the body of the Electron-runtime crypto check, ' +
     'bundled and run under ELECTRON_RUN_AS_NODE by scripts/check-electron-crypto.mjs during ' +
     '`npm test`. It lives in src/ so that tsc typechecks it against the modules it exercises.',
+  // `src/main/confine/appcontainer.ts` was listed here and is not any more: it
+  // is imported by `confine/index.ts`, and `confinementKind('win32')` now
+  // answers 'appcontainer' whenever `windowsConfinementReady()` is true. The
+  // entry described a build where it was not wired, and leaving it would have
+  // been documentation asserting the opposite of the code.
+  'src/shared/pairing-link.ts':
+    'reachable, but not from the desktop app: `pwa/src/endpoint.ts` and `pwa/src/rendezvous.ts` ' +
+    'import it, and this walk starts at the Electron entry points. What is left in the file is ' +
+    '`isHostId` + `isRelayUrl` — the browser-safe restatement of the relay address alphabet — ' +
+    'after the pairing LINK it was named for was deleted along with the QR code. The filename ' +
+    'is now a leftover and is kept deliberately: `/.vercelignore` allowlists it by path and ' +
+    '`pwa/tests/upload.test.ts` asserts that exact path, and a stale allowlist is a red Vercel ' +
+    'deploy rather than a failing test here. Renaming it is a three-file change to make on a ' +
+    'day when nothing is shipping.',
 }
 
 /** Mirrors the tsconfig path aliases; anything bare is a package, not ours. */

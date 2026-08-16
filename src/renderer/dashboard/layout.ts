@@ -254,21 +254,42 @@ export function createLayout(projectPath: string, columns = DASHBOARD_COLUMNS): 
 }
 
 /**
- * What a project shows before anyone has arranged anything: the three widgets
- * backed by data that exists today. Readiness and GitHub are left to the picker
- * deliberately — a default dashboard where half the tiles say "not available"
- * reads as a broken app rather than an empty one.
+ * Widgets the picker no longer offers, and the default layout no longer seeds.
  *
- * This used to be a 2×2, with a board widget in the fourth slot. The board went
- * with the feature, and the hole it left is not filled with Readiness or GitHub
- * for the reason above: a tidy grid is not worth a tile that says nothing.
+ * `sessions` is here because the Overview page now opens with a live board of
+ * every running session — folder, agent, account, what state it is in, how long
+ * it has been in it, and its spend — and the tile was a count of the same thing
+ * three inches below it. Two answers to one question on one screen is the
+ * complaint that produced this page's rewrite, and the tile is the weaker of
+ * the two answers by a distance.
+ *
+ * The *type* stays: `parseLayout` must keep rendering a tile that is already in
+ * somebody's saved arrangement rather than silently deleting it on the next
+ * open, and `features/registry.ts` names it. Only the offer goes.
+ */
+export const RETIRED_WIDGETS: readonly WidgetType[] = ['sessions']
+
+export function isRetiredWidget(type: WidgetType): boolean {
+  return RETIRED_WIDGETS.includes(type)
+}
+
+/**
+ * What a project shows before anyone has arranged anything: the two widgets
+ * backed by data that exists today and not already answered above them.
+ * Readiness and GitHub are left to the picker deliberately — a default
+ * dashboard where half the tiles say "not available" reads as a broken app
+ * rather than an empty one.
+ *
+ * This used to be three, led by Sessions. The session board took that job and
+ * does it properly, so the seed starts at Cost. The hole is not filled with
+ * Readiness or GitHub for the reason above: a tidy grid is not worth a tile
+ * that says nothing.
  */
 export function defaultLayout(projectPath: string): DashboardLayout {
   const base = createLayout(projectPath)
   const seed: Array<[WidgetType, number, number]> = [
-    ['sessions', 0, 0],
-    ['cost', 6, 0],
-    ['git', 0, 6],
+    ['cost', 0, 0],
+    ['git', 6, 0],
   ]
   return seed.reduce(
     (layout, [type, x, y]) => addWidget(layout, { type, id: `${type}-default`, x, y }),

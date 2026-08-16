@@ -22,6 +22,7 @@ import {
   pickRepo,
   pullBadge,
   pullListArgs,
+  readBranch,
   redact,
   registerGitHubIpc,
   resolveRepo,
@@ -1057,6 +1058,86 @@ describe('resolveRepo', () => {
       await rm(dir, { recursive: true, force: true })
     }
   }, 20_000)
+})
+
+/* ------------------------------------------------------- the branch, cheaply -- */
+
+/**
+ * Driven against the real `git` binary, because the whole point of the
+ * implementation is the two states where `git symbolic-ref` and `git rev-parse`
+ * disagree — a repository with no commits yet, and a detached HEAD. A mocked
+ * git could be made to say anything about either.
+ */
+describe('readBranch', () => {
+  async function fresh(): Promise<string> {
+    const dir = await mkdtemp(join(tmpdir(), 'terminaldeck-branch-'))
+    await run('git', ['init', '-q', '-b', 'main'], { cwd: dir })
+    return dir
+  }
+
+  async function commit(dir: string): Promise<string> {
+    await run('git', ['-c', 'user.email=t@t', '-c', 'user.name=T', 'commit', '-q', '--allow-empty', '-m', 'one'], { cwd: dir })
+    return (await run('git', ['rev-parse', '--short', 'HEAD'], { cwd: dir })).stdout.trim()
+  }
+
+  it('names the branch of an ordinary checkout', async () => {
+    const dir = await fresh()
+    try {
+      await commit(dir)
+      expect(await readBranch(dir)).toEqual({ name: 'main', detached: false, head: null })
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  }, 20_000)
+
+  /**
+   * `git rev-parse --abbrev-ref HEAD` fails outright here with "ambiguous
+   * argument 'HEAD'", so the obvious implementation reports a brand new
+   * repository as having no branch. It has one; it just has nothing on it.
+   */
+  it('names the branch of a repository with no commits yet', async () => {
+    const dir = await fresh()
+    try {
+      expect(await readBranch(dir)).toEqual({ name: 'main', detached: false, head: null })
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  }, 20_000)
+
+  /**
+   * The other half of the same argument: `rev-parse` prints the literal string
+   * `HEAD` when detached, which is indistinguishable from a branch somebody
+   * named `HEAD`. `symbolic-ref` exits 1 with nothing, which is unambiguous.
+   */
+  it('reports a detached HEAD as detached, with the commit it is on', async () => {
+    const dir = await fresh()
+    try {
+      const oid = await commit(dir)
+      await run('git', ['checkout', '-q', '--detach'], { cwd: dir })
+      expect(await readBranch(dir)).toEqual({ name: null, detached: true, head: oid })
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  }, 20_000)
+
+  /**
+   * `resolveRepo` is the call that reports "this folder is not a repository",
+   * with a sentence and a fix. Saying it again here in a second voice is how a
+   * panel starts contradicting itself, so this answers null — and it does so
+   * without spawning git a second time, because this runs on every panel open.
+   */
+  it('answers null for a folder that is not a repository', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'terminaldeck-plain-branch-'))
+    try {
+      expect(await readBranch(dir)).toBeNull()
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  }, 20_000)
+
+  it('answers null for a path that is not absolute', async () => {
+    expect(await readBranch('relative/path')).toBeNull()
+  })
 })
 
 /* ------------------------------------------------------------------- ipc -- */

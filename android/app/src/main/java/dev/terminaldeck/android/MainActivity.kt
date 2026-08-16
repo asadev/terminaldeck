@@ -1,8 +1,5 @@
 package dev.terminaldeck.android
 
-import android.Manifest
-import android.content.Intent
-import android.content.pm.PackageManager
 import android.graphics.Color
 import android.os.Bundle
 import android.provider.OpenableColumns
@@ -27,7 +24,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
@@ -35,8 +31,6 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
-import com.journeyapps.barcodescanner.ScanContract
-import com.journeyapps.barcodescanner.ScanOptions
 import dev.terminaldeck.android.protocol.HostPlatform
 import dev.terminaldeck.android.transfer.PickedFile
 import dev.terminaldeck.android.ui.CredentialPromptSheet
@@ -45,30 +39,23 @@ import dev.terminaldeck.android.ui.PairingScreen
 import dev.terminaldeck.android.ui.SessionListScreen
 import dev.terminaldeck.android.ui.TerminalScreen
 import dev.terminaldeck.android.ui.theme.TerminalDeckTheme
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
 
 class MainActivity : ComponentActivity() {
 
     private var onResumed: (() -> Unit)? = null
 
-    /**
-     * A pairing link that has arrived and not yet been acted on.
+    /*
+     * There is no pairing-link intent any more, and its absence is the change.
      *
-     * A flow rather than a direct call into the view model, because the view model does not exist
-     * when `onCreate` reads the intent — it is created by `viewModel()` inside the composition. The
-     * link therefore waits here until something is collecting, which also makes the cold-start and
-     * `onNewIntent` paths identical instead of two orderings to get right.
-     *
-     * Cleared by the collector once it has been handled, so a configuration change does not re-pair
-     * with a token that has already been spent.
+     * `terminaldeck://pair#h=…&k=…&t=…` used to arrive here — from a QR code, from a tap in a
+     * message — and be handed to `DeckViewModel.pair`. The QR did not work, and the link was a live
+     * bearer token in a string that any app registered for the scheme could have been handed. Both
+     * are gone, along with the `<intent-filter>` in AndroidManifest.xml: pairing is six digits
+     * somebody reads off the machine and types, and there is no second door.
      */
-    private val pairingLink = MutableStateFlow<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // Cold start: the app was launched *by* the link.
-        pairingLink.value = pairingLinkIn(intent)
         // Both bars declared dark with a transparent scrim. The default asks the system to pick,
         // and the system picks from the *system* light/dark setting — which on a light phone puts
         // a white navigation bar under a black terminal.
@@ -82,11 +69,7 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background,
                 ) {
-                    TerminalDeckApp(
-                        onRegisterResume = { onResumed = it },
-                        pairingLinks = pairingLink,
-                        onPairingLinkHandled = { pairingLink.value = null },
-                    )
+                    TerminalDeckApp(onRegisterResume = { onResumed = it })
                 }
             }
         }
@@ -107,39 +90,6 @@ class MainActivity : ComponentActivity() {
         onResumed?.invoke()
     }
 
-    /**
-     * A pairing link that arrived while the app was already running.
-     *
-     * `launchMode="singleTask"` means the existing instance is reused rather than a second one
-     * created, so this — not `onCreate` — is where every link after the first lands. `setIntent` is
-     * not decoration: without it `getIntent()` keeps answering with the launch intent, so anything
-     * that reads it later (a rotation, a restore) would replay the *old* link.
-     */
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        setIntent(intent)
-        pairingLinkIn(intent)?.let { pairingLink.value = it }
-    }
-
-    /**
-     * The link out of an intent, or null.
-     *
-     * Only `VIEW` intents with data, and only the scheme this app declares. Nothing is validated
-     * beyond that here — `PairingCodes.parse` is the one place a code is believed — but a launcher
-     * intent must not be mistaken for a pairing attempt, and an intent from some other filter is
-     * not this app's business.
-     */
-    private fun pairingLinkIn(intent: Intent?): String? {
-        if (intent?.action != Intent.ACTION_VIEW) return null
-        val data = intent.data ?: return null
-        if (!data.scheme.equals(PAIRING_SCHEME, ignoreCase = true)) return null
-        return data.toString()
-    }
-
-    private companion object {
-        /** Matches the `<data android:scheme>` in AndroidManifest.xml. */
-        const val PAIRING_SCHEME = "terminaldeck"
-    }
 }
 
 private const val ROUTE_SESSIONS = "sessions"
@@ -159,15 +109,11 @@ private const val ARG_SESSION_ID = "sessionId"
 @Composable
 fun TerminalDeckApp(
     onRegisterResume: (() -> Unit) -> Unit = {},
-    /** Pairing links from `terminaldeck://pair…`, cold start and `onNewIntent` alike. */
-    pairingLinks: StateFlow<String?> = MutableStateFlow(null),
-    onPairingLinkHandled: () -> Unit = {},
     viewModel: DeckViewModel = viewModel(factory = DeckViewModel.factory(LocalContext.current)),
 ) {
     val navController = rememberNavController()
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val screenTick by viewModel.screenTick.collectAsStateWithLifecycle()
-    val link by pairingLinks.collectAsStateWithLifecycle()
     val context = LocalContext.current
     /**
      * Whether the GitHub sheet is up.
@@ -179,20 +125,6 @@ fun TerminalDeckApp(
     var github by remember { mutableStateOf(false) }
 
     onRegisterResume { viewModel.resume() }
-
-    /*
-     * Pair from a link.
-     *
-     * In an effect rather than inline: `pair` writes state the composition is reading, and calling
-     * it during composition is a mutation in the middle of the frame that produced it. Keyed on the
-     * link so the same one is not spent twice, and cleared afterwards so a rotation does not replay
-     * a token that is already gone.
-     */
-    LaunchedEffect(link) {
-        val raw = link ?: return@LaunchedEffect
-        viewModel.pair(raw)
-        onPairingLinkHandled()
-    }
 
     /*
      * Open a session the machine has just started for this phone.
@@ -207,43 +139,6 @@ fun TerminalDeckApp(
         val request = created ?: return@LaunchedEffect
         navController.navigate("terminal/${request.hostId}/${request.sessionId}")
         viewModel.createdHandled()
-    }
-
-    /*
-     * The camera, and the two-step dance Android requires for it.
-     *
-     * ZXing's `ScanContract` launches its own capture activity, which needs the permission already
-     * granted — so the permission request comes first and the scanner is launched from its result.
-     * Asking at startup instead would be a camera prompt in front of someone who may never pair by
-     * QR at all, and the typed path exists precisely so the camera stays optional.
-     */
-    val scanner = rememberLauncherForActivityResult(ScanContract()) { result ->
-        result.contents?.let(viewModel::pair)
-    }
-    val scanOptions = remember {
-        ScanOptions()
-            .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
-            /*
-             * The neutral noun, and here it is the *only* correct one.
-             *
-             * Not `state.machineNoun`, for two reasons that both point the same way. Nothing has
-             * answered yet — a QR code is scanned before any handshake, so no machine has said what
-             * it is. And this launcher is also how a *second* machine is added, at which point the
-             * selected machine's noun would be a confident word about the wrong computer: "point
-             * the camera at the code on your Mac", held up to a Windows PC, by an app that had been
-             * told about a Mac somewhere else entirely.
-             *
-             * Taken from the enum rather than typed out, so that if the neutral word is ever
-             * reworded this follows instead of quietly becoming the one string that still says the
-             * old one. Constant by construction, which is also what makes the keyless `remember`
-             * above safe: there is nothing here that can go stale.
-             */
-            .setPrompt("Point the camera at the code on your ${HostPlatform.UNKNOWN.noun}")
-            .setBeepEnabled(false)
-            .setOrientationLocked(false)
-    }
-    val cameraPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) scanner.launch(scanOptions)
     }
 
     /*
@@ -282,14 +177,6 @@ fun TerminalDeckApp(
     }
     val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia(), send)
     val documentPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument(), send)
-    val startScan = {
-        if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
-            scanner.launch(scanOptions)
-        } else {
-            cameraPermission.launch(Manifest.permission.CAMERA)
-        }
-    }
-
     /*
      * The credential prompt and the GitHub sheet sit *above* everything else, including the pair
      * screen.
@@ -315,7 +202,6 @@ fun TerminalDeckApp(
         PairingScreen(
             state = state,
             onPair = viewModel::pair,
-            onScan = startScan,
             onForget = viewModel::forgetSelected,
             onRetry = viewModel::reconnect,
             onCancel = if (state.canLeavePairing) viewModel::cancelAddingHost else null,

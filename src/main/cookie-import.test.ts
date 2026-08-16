@@ -46,6 +46,7 @@ const {
   decryptCookieValue,
   deriveCookieKey,
   emptyLedger,
+  importCookies,
   importMessage,
   listCookieSources,
   mergeLedger,
@@ -582,6 +583,76 @@ describe('the ledger', () => {
     const one = refKey({ name: 'b', domain: 'a', path: '/', secure: false })
     const two = refKey({ name: '', domain: 'a', path: '/ b', secure: false })
     expect(one).not.toBe(two)
+  })
+})
+
+/* ------------------------------------------------- the order of the asking -- */
+
+/**
+ * Asad: *"it is not asking if it needs full access — let it ask full access in
+ * that case rather than asking only this much, so it can successfully import."*
+ *
+ * An import needs two unrelated permissions: the keychain, for the key that
+ * decrypts the values, and full disk access, for the file the values are in.
+ * The keychain one is the one with a dialog, and it used to be asked **first**.
+ * So on a machine without full disk access the user was shown a security prompt
+ * naming this app and their browser's stored passwords, granted it, and watched
+ * the import die on a file it had not yet tried to open. They answered a prompt
+ * that could not have made it work.
+ *
+ * `listCookieSources` cannot catch this earlier and is not the place to try: it
+ * finds the database with `existsSync`, which is a `stat`, and on a protected
+ * path `stat` succeeds while every read is EPERM. Seeing the file is not
+ * reading it.
+ */
+describe('importCookies asks for the permission that decides the outcome first', () => {
+  const source = {
+    browserId: 'chrome' as const,
+    browserName: 'Chrome',
+    profileId: 'Default',
+    profileName: 'Person 1',
+    path: '/Users/asad/Library/Application Support/Google/Chrome/Default/Cookies',
+    keychainItem: true,
+  }
+
+  it('never reaches the keychain when the cookie file cannot be opened', async () => {
+    let asked = 0
+    const report = await importCookies({}, fakeSession as never, Date.now(), {
+      sources: [source],
+      readable: () => false,
+      keychain: async () => {
+        asked += 1
+        return { ok: false as const, reason: 'denied' as const, detail: 'should never happen' }
+      },
+    })
+
+    expect(asked).toBe(0)
+    expect(report.ok).toBe(false)
+    // `null`, not `'ok'`: the keychain was never reached, and a report that
+    // said `'ok'` would be claiming a step that did not run.
+    expect(report.keychain).toBeNull()
+    expect(report.message).toMatch(/full disk access/i)
+    expect(report.settings?.url).toContain('Privacy_AllFiles')
+  })
+
+  it('still asks the keychain when the file is readable', async () => {
+    // The other half. Moving the check must not turn into never asking at all,
+    // and the keychain is still not asked one moment before it is needed.
+    let asked = 0
+    const report = await importCookies({}, fakeSession as never, Date.now(), {
+      sources: [source],
+      readable: () => true,
+      keychain: async () => {
+        asked += 1
+        return { ok: false as const, reason: 'denied' as const, detail: 'You clicked Deny.' }
+      },
+    })
+
+    expect(asked).toBe(1)
+    expect(report.keychain).toBe('denied')
+    // A denied keychain is re-asked by running the import again. Sending
+    // somebody into a security pane for it would be the wrong door.
+    expect(report.settings).toBeNull()
   })
 })
 

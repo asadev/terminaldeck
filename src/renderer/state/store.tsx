@@ -17,6 +17,24 @@ export interface Project {
 export interface Session extends SessionMeta {
   projectPath: string
   status: SessionStatus
+  /**
+   * Epoch ms this window first saw the session in its current status.
+   *
+   * Added for the Overview board, which has to answer "how long has this one
+   * been waiting on you?" — the question the whole page exists for. Nothing
+   * else in the app can answer it: the main process broadcasts `session:status`
+   * on *change* and carries no timestamp, so the moment a status began is only
+   * ever observable at the instant it arrives, and it has to be written down
+   * then or it is gone.
+   *
+   * It is honest about what it is: the moment *this window* observed the state,
+   * not the moment the agent entered it. For a session that changed status
+   * while the app was running those are the same. For one restored at launch,
+   * or one a phone started before this window opened, this is the launch or
+   * arrival time and the board says "started" rather than claiming a duration
+   * it cannot know. See `statusObserved` in `dashboard/board.ts`.
+   */
+  statusSince: number
 }
 
 interface StoreValue {
@@ -76,7 +94,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const addSession = useCallback((meta: SessionMeta, options?: { focus?: boolean }) => {
-    const session: Session = { ...meta, projectPath: meta.cwd, status: 'idle' }
+    // `statusSince` starts now rather than at `meta.createdAt`: the status is
+    // this window's own assumption of `idle`, not something the session
+    // reported, and dating an assumption back to a process that may have
+    // started hours ago on another device would invent a duration.
+    const session: Session = { ...meta, projectPath: meta.cwd, status: 'idle', statusSince: Date.now() }
     // Idempotent: `session:created` and this window's own `createSession` can
     // both name the same session if the main process ever broadcasts more
     // widely, and two rows for one pty is worse than a missed one.
@@ -97,8 +119,25 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     })
   }, [])
 
+  /**
+   * Record a status, and when it started.
+   *
+   * Guarded on a real change, the way `setSessionTitle` below already is, for
+   * two reasons rather than one. The cheap reason is renders: the main process
+   * re-broadcasts a status whenever a tracker settles on the same answer twice,
+   * and mapping unconditionally rebuilt the array — and every consumer's memo —
+   * for a no-op. The load-bearing reason is `statusSince`: a re-broadcast of
+   * the state a session is *already* in must not restart its clock, or a
+   * session that has been blocked on you for forty minutes reads as one that
+   * has been blocked for four seconds, which is the exact number the Overview
+   * board is there to show.
+   */
   const setSessionStatus = useCallback((id: string, status: SessionStatus) => {
-    setSessions((prev) => prev.map((s) => (s.id === id ? { ...s, status } : s)))
+    setSessions((prev) =>
+      prev.some((s) => s.id === id && s.status !== status)
+        ? prev.map((s) => (s.id === id ? { ...s, status, statusSince: Date.now() } : s))
+        : prev,
+    )
   }, [])
 
   const setSessionTitle = useCallback((id: string, title: string) => {
@@ -149,4 +188,22 @@ export function useStore(): StoreValue {
   const ctx = useContext(StoreContext)
   if (!ctx) throw new Error('useStore must be used inside <StoreProvider>')
   return ctx
+}
+
+/**
+ * The store when there is one, `null` when there is not.
+ *
+ * `useStore` throws, which is right for the shell: a tab bar outside the
+ * provider is a wiring bug and should fail loudly. It is wrong for a component
+ * that is *also* mounted on its own — the Overview board renders in
+ * `renderToStaticMarkup` tests and in `.harness/`, where there is no provider
+ * and no window, and a throw there is a page that will not render rather than
+ * a page with less on it.
+ *
+ * Deliberately not `useStore()` wrapped in a try: hooks cannot be called
+ * conditionally and a caught throw from a hook leaves React's hook cursor out
+ * of step for the rest of the render.
+ */
+export function useOptionalStore(): StoreValue | null {
+  return useContext(StoreContext)
 }

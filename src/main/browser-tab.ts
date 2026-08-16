@@ -10,6 +10,8 @@ import {
   type Session,
   type WebContents,
 } from 'electron'
+import { backgroundFor, safeBackground } from './browser-background'
+import { isAbortCode, loadFailureSentence } from './browser-error'
 import { BLANK_URL, isNavigationAllowed, normalizeUrl, shortLabel } from './browser-url'
 import {
   GUEST_CANCEL_CHANNEL,
@@ -74,6 +76,18 @@ export interface BrowserTabState {
    * the next successful navigation.
    */
   error: string | null
+  /**
+   * True while the *document in the view* is Chromium's own error page.
+   *
+   * Separate from {@link error}, and the distinction is the whole point. A
+   * refused pop-up sets `error` and leaves a perfectly good page on screen; a
+   * connection that was refused sets `error` AND replaces the document with a
+   * red exclamation mark and `ERR_CONNECTION_REFUSED`. Only the second one must
+   * make the renderer hide the native view and put its own written page there
+   * instead, and a boolean is the only way it can tell them apart — the error
+   * *text* is a sentence in both cases by design.
+   */
+  failed: boolean
 }
 
 /** What the renderer receives for a captured element. */
@@ -91,6 +105,21 @@ interface BrowserTab {
   visible: boolean
   inspecting: boolean
   error: string | null
+  /**
+   * The address whose load failed, while that failure is still what the view
+   * holds. Null the rest of the time.
+   *
+   * A URL rather than a flag, because of the order Chromium reports things in.
+   * A failed main-frame load fires `did-fail-load` and *then* commits its error
+   * document — which is a navigation, so `did-navigate` fires too, with the
+   * failed URL. A boolean cleared on `did-navigate` would therefore be switched
+   * off by the very error page it exists to describe, and the user would be back
+   * looking at `ERR_CONNECTION_REFUSED` with no message anywhere. Comparing the
+   * URL survives that ordering whichever way round Electron emits the two.
+   */
+  failedUrl: string | null
+  /** The app's own canvas colour, for a view with nothing loaded in it. */
+  emptyBackground: string | null
 }
 
 /**
@@ -150,6 +179,7 @@ function stateOf(tab: BrowserTab): BrowserTabState {
     canGoForward: wc ? wc.navigationHistory.canGoForward() : false,
     inspecting: tab.inspecting,
     error: tab.error,
+    failed: tab.failedUrl !== null,
   }
 }
 
@@ -158,9 +188,42 @@ function push(tab: BrowserTab): void {
   tab.host.send('browser:state-changed', stateOf(tab))
 }
 
+/**
+ * Something went wrong, but the page in the view is still the user's page.
+ *
+ * A refused pop-up, a blocked `file:` link, an unresponsive renderer: the
+ * message belongs in the banner and the document stays. Contrast {@link crash},
+ * which is for the cases where Chromium has replaced the document.
+ */
 function fail(tab: BrowserTab, message: string): void {
   tab.error = message
   push(tab)
+}
+
+/** The document itself is gone — Chromium's error page is what is on screen. */
+function crash(tab: BrowserTab, message: string, url: string): void {
+  tab.error = message
+  tab.failedUrl = url
+  push(tab)
+}
+
+/** Starting a fresh attempt: whatever was on screen stops being the story. */
+function clearFailure(tab: BrowserTab): void {
+  tab.error = null
+  tab.failedUrl = null
+}
+
+/**
+ * Keep the view's backdrop matching what is about to be in it.
+ *
+ * Called on the way *into* a navigation rather than out of one: `did-navigate`
+ * arrives after the document has committed, so switching there shows a frame of
+ * the previous colour first. See `browser-background.ts` for why this is not
+ * simply "always the app's colour".
+ */
+function paintBackdrop(tab: BrowserTab, url: string): void {
+  if (!liveContents(tab)) return
+  tab.view.setBackgroundColor(backgroundFor(url, tab.emptyBackground))
 }
 
 /** Bounds are laid out in CSS pixels by the renderer, which is what setBounds wants. */
@@ -227,14 +290,22 @@ function navigate(tab: BrowserTab, input: unknown): BrowserTabState {
   const wc = liveContents(tab)
   if (!wc) return stateOf(tab)
 
-  tab.error = null
+  clearFailure(tab)
+  paintBackdrop(tab, result.url)
   void wc.loadURL(result.url).catch((error: unknown) => {
     // A load rejection is routine — an aborted navigation rejects too, and so
     // does every load still in flight when the tab closes. Only worth
     // surfacing when the tab is still around with nothing on it.
+    //
+    // `did-fail-load` has usually already written a better sentence by the time
+    // this runs, and it also knows the numeric code, so this only speaks when
+    // nothing else did. The message is the rejection's, which is Chromium's own
+    // `ERR_… (-n)` string — machine text, but the alternative here is silence.
     const message = error instanceof Error ? error.message : String(error)
     const still = liveContents(tab)
-    if (still && still.getURL() === '') fail(tab, `Could not load that page: ${message}`)
+    if (still && still.getURL() === '' && tab.failedUrl === null) {
+      crash(tab, `Could not open ${shortLabel(result.url)}: ${message}`, result.url)
+    }
   })
   return stateOf(tab)
 }
@@ -273,11 +344,28 @@ function wireGuestEvents(tab: BrowserTab): void {
     return { action: 'deny' }
   })
 
+  // The backdrop follows the destination, one event before it paints. A
+  // same-document navigation swaps no document, so it swaps no colour either.
+  wc.on('did-start-navigation', (details: { url: string; isMainFrame: boolean; isSameDocument: boolean }) => {
+    if (!details.isMainFrame || details.isSameDocument) return
+    paintBackdrop(tab, details.url)
+  })
+
   wc.on('did-start-loading', () => push(tab))
   wc.on('did-stop-loading', () => push(tab))
   wc.on('page-title-updated', () => push(tab))
-  wc.on('did-navigate', () => {
-    tab.error = null
+  wc.on('did-navigate', (_event: unknown, url: string) => {
+    // Only a navigation that landed somewhere ELSE clears the failure. The
+    // error page Chromium commits after a failed load is itself a navigation,
+    // and it arrives carrying the URL that just failed — so `tab.error = null`
+    // here used to wipe the message a heartbeat after `did-fail-load` wrote it,
+    // leaving the raw Chromium page on screen with nothing explaining it. See
+    // `BrowserTab.failedUrl`.
+    if (tab.failedUrl !== null && url === tab.failedUrl) {
+      push(tab)
+      return
+    }
+    clearFailure(tab)
     push(tab)
   })
   wc.on('did-navigate-in-page', (_event, _url, isMainFrame) => {
@@ -291,14 +379,20 @@ function wireGuestEvents(tab: BrowserTab): void {
     push(tab)
   })
 
-  wc.on('did-fail-load', (_event, errorCode, errorDescription, _url, isMainFrame) => {
-    // -3 is ABORTED, which is what a normal interrupted navigation reports.
-    if (!isMainFrame || errorCode === -3) return
-    fail(tab, `${errorDescription || 'The page failed to load'} (${errorCode})`)
+  wc.on('did-fail-load', (_event, errorCode, errorDescription, url, isMainFrame) => {
+    if (!isMainFrame || isAbortCode(errorCode)) return
+    // A written sentence, not `ERR_CONNECTION_REFUSED (-102)` — see
+    // `browser-error.ts`. `failedUrl` is what makes the renderer put that
+    // sentence on screen INSTEAD of Chromium's error document rather than
+    // underneath it, which is what the recording caught.
+    crash(tab, loadFailureSentence(errorCode, errorDescription, url), url)
   })
 
   wc.on('render-process-gone', (_event, details) => {
-    fail(tab, `The page crashed (${details.reason}).`)
+    // The document is gone with the process, so this is a `crash` rather than a
+    // `fail`: there is no page left for a banner to sit on top of.
+    const wc = liveContents(tab)
+    crash(tab, `The page crashed (${details.reason}).`, wc ? wc.getURL() : '')
   })
 
   wc.on('unresponsive', () => fail(tab, 'The page stopped responding.'))
@@ -352,7 +446,7 @@ function tabForSender(event: IpcMainEvent): BrowserTab | null {
  *     registerBrowserIpc(ipcMain)
  *
  * Channels (all take the tab id returned by `browser:create`):
- * - `browser:create`   (invoke, {url?, bounds?, visible?, isolationKey?}) → {@link BrowserTabState}
+ * - `browser:create`   (invoke, {url?, bounds?, visible?, isolationKey?, background?}) → {@link BrowserTabState}
  * - `browser:navigate` (invoke, id, url)                   → {@link BrowserTabState}
  * - `browser:back` / `browser:forward` / `browser:reload` / `browser:stop`
  * - `browser:inspect`  (invoke, id, enabled)               → {@link BrowserTabState}
@@ -396,8 +490,11 @@ export function registerBrowserIpc(ipcMain: IpcMain): void {
         autoplayPolicy: 'user-gesture-required',
       },
     })
-    // Pages assume an opaque backdrop; without this the app shows through.
-    view.setBackgroundColor('#ffffff')
+    // The app's content canvas, read out of `tokens.css` by the renderer and
+    // sent across — the main process cannot see a stylesheet, and a hex literal
+    // here is what made an empty tab a white rectangle in dark mode. Null when
+    // the renderer sent nothing usable, which `backgroundFor` handles.
+    const emptyBackground = safeBackground(opts.background)
 
     const tab: BrowserTab = {
       id: randomUUID(),
@@ -408,8 +505,18 @@ export function registerBrowserIpc(ipcMain: IpcMain): void {
       visible: opts.visible !== false,
       inspecting: false,
       error: null,
+      failedUrl: null,
+      emptyBackground,
     }
     tabs.set(tab.id, tab)
+
+    // Pages assume an opaque backdrop; without one the app shows through. Which
+    // opaque backdrop depends on what is about to be in the view — see
+    // `browser-background.ts`, which explains at length why this is not simply
+    // the theme colour in every case.
+    view.setBackgroundColor(
+      backgroundFor(typeof opts.url === 'string' ? opts.url : '', emptyBackground),
+    )
 
     window.contentView.addChildView(view)
     applyLayout(tab)
@@ -434,7 +541,11 @@ export function registerBrowserIpc(ipcMain: IpcMain): void {
 
   ipcMain.handle('browser:reload', (_event, id: unknown) => {
     const tab = requireTab(id)
-    tab.error = null
+    // Both halves, not just the message. Reload is the one control whose entire
+    // purpose is "try that same address again", so it is also the one place
+    // where the *same* URL succeeding has to be able to clear a failure that
+    // `did-navigate` deliberately refuses to clear on a URL match.
+    clearFailure(tab)
     liveContents(tab)?.reload()
     return stateOf(tab)
   })
@@ -448,14 +559,22 @@ export function registerBrowserIpc(ipcMain: IpcMain): void {
   ipcMain.handle('browser:back', (_event, id: unknown) => {
     const tab = requireTab(id)
     const history = liveContents(tab)?.navigationHistory
-    if (history?.canGoBack()) history.goBack()
+    // Only when it actually moves. Clearing on a `canGoBack()` of false would
+    // wipe the failure message while leaving the error page it describes.
+    if (history?.canGoBack()) {
+      clearFailure(tab)
+      history.goBack()
+    }
     return stateOf(tab)
   })
 
   ipcMain.handle('browser:forward', (_event, id: unknown) => {
     const tab = requireTab(id)
     const history = liveContents(tab)?.navigationHistory
-    if (history?.canGoForward()) history.goForward()
+    if (history?.canGoForward()) {
+      clearFailure(tab)
+      history.goForward()
+    }
     return stateOf(tab)
   })
 

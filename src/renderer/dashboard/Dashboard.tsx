@@ -20,19 +20,37 @@ import {
   type WidgetType,
 } from './layout'
 import { getWidgetDefinition, listWidgetDefinitions, type WidgetContext } from './widgets'
-import { PageEmpty } from '../components/PageEmpty'
+import { SessionBoard } from './SessionBoard'
+import { PageNote } from '../components/PageEmpty'
 import { useFeatures } from '../features/FeaturesProvider'
-import { panelSpec } from '../shell/panels'
 import './Dashboard.css'
 
 /**
- * The project dashboard: a gridstack grid of widgets, arranged by dragging and
- * resizing, persisted per project.
+ * Overview: the live board of running sessions, and under it the project's
+ * widget grid.
  *
- * Division of labour, and the reason this file is thin: `layout.ts` owns the
- * grid maths and is fully tested without a DOM; gridstack owns pixels and
- * pointer events; this component only keeps the two in agreement. Anything
- * here that looks like layout logic belongs in the model instead.
+ * ## Why the board is first, and why the grid is still here
+ *
+ * Asad, on the page as it was: *"I don't know if we need an overview page at
+ * all or not. We don't see that much of important stuff here"* — followed
+ * immediately by what it should be: a list of every running session, what each
+ * is doing, and which one is waiting on him. That is `SessionBoard`, and it now
+ * leads the page, because it is the thing somebody running several agents would
+ * leave open.
+ *
+ * The widget grid keeps the second half of the page rather than being deleted:
+ * Cost, Git, AI readiness and GitHub are about the *folder*, not about a
+ * session, and none of them is answered by the board. What did go is the
+ * Sessions tile — a count of the very thing the board now lists in full, three
+ * inches below it (see `layout.ts`).
+ *
+ * ## Division of labour
+ *
+ * `board.ts` owns the ranking and the wording and is pure; `useBoard.ts` owns
+ * the subscriptions; `layout.ts` owns the grid maths and is fully tested
+ * without a DOM; gridstack owns pixels and pointer events; this component only
+ * keeps them in agreement. Anything here that looks like layout logic belongs
+ * in the model instead.
  */
 
 /** Row height in pixels. Widget default sizes in `layout.ts` are tuned to it. */
@@ -362,16 +380,30 @@ export function Dashboard({ projectPath, context, bridge }: DashboardProps) {
   const empty = countWidgets(layout) === 0
 
   return (
-    <section className="dashboard" aria-label="Project dashboard">
-      {/* The bar is about the widgets: how to move them, how to add another,
-          how to put the arrangement back. With none on the page it was telling
-          the reader to drag something that is not there, offering a Reset with
-          nothing to reset, and putting a second Add widget one line above the
-          one in the middle of the window. So the empty page has exactly one of
-          each thing, and the bar comes back with the first widget. */}
-      {!empty && (
+    <section className="dashboard" aria-label="Overview">
+      <div className="dashboard-scroll">
+        {/* The page's headline, and the reason it exists. It gathers its own
+            sessions — across every open project, not just this one, because
+            "which agent needs me" is not a per-folder question — and it is
+            mounted unconditionally, so an empty board still explains itself. */}
+        <SessionBoard
+          projectPath={projectPath}
+          onOpenSession={context?.onOpenSession}
+        />
+
+        {/* The folder's own widgets, under a heading that says whose they are.
+
+            The bar carries the widget controls and no longer sits above the
+            page: it belongs to this section, and floating it at the top made it
+            look like chrome for the board. `PageEmpty`'s full block is not used
+            for "no widgets" any more either — the page is not empty, the second
+            half of it is, and a centred illustration for that is a page telling
+            you something is wrong when nothing is. */}
         <header className="dashboard-bar">
-          <span className="dashboard-hint">Drag a widget by its header · Alt+arrows to move</span>
+          <h2 className="dashboard-heading">This project</h2>
+          {!empty && (
+            <span className="dashboard-hint">Drag a widget by its header · Alt+arrows to move</span>
+          )}
           <button type="button" className="dashboard-btn" onClick={() => setPicking(true)}>
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
               <path d="M12 5v14M5 12h14" strokeWidth="2" strokeLinecap="round" />
@@ -385,27 +417,18 @@ export function Dashboard({ projectPath, context, bridge }: DashboardProps) {
               than as a control, so the affordance ran backwards. And "Reset" on
               its own does not say what it resets; on a page with widgets, a
               project and a layout, that is three plausible answers. */}
-          <button type="button" className="dashboard-btn" onClick={handleReset}>
-            Reset the layout
-          </button>
+          {!empty && (
+            <button type="button" className="dashboard-btn" onClick={handleReset}>
+              Reset the layout
+            </button>
+          )}
         </header>
-      )}
 
-      <div className="dashboard-scroll">
-        {/* The app's one empty-page block, not a third arrangement of a title,
-            a sentence and a button — and, with the bar above withdrawn, the one
-            place on this page to press. */}
         {empty && (
-          <PageEmpty
-            icon={panelSpec('overview').icon}
-            title="Nothing on this dashboard"
-            /* Not `primary`: the accent is reserved for a page that cannot do
-               anything at all until it is pressed, which is Open a project.
-               This one is the only button on the page already. */
-            action={{ label: 'Add widget', onClick: () => setPicking(true) }}
-          >
-            Add a widget to see sessions, spend, git state and the board at a glance.
-          </PageEmpty>
+          <PageNote>
+            Nothing here yet. Add a widget for this folder&apos;s spend, git state, GitHub or AI
+            readiness.
+          </PageNote>
         )}
 
         {/* Rendered even when empty: gridstack initialises against this node

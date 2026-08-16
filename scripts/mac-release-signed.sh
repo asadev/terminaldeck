@@ -84,6 +84,54 @@ cd "$REPO"
 # Iqbal` that shares this Mac.
 IDENTITY="${TD_MAC_IDENTITY:-Asad Iqbal (6U4VNX5W87)}"
 
+# ## Signing without notarizing, and why that mode has to exist
+#
+# Notarization is Apple's service, and on 2026-08-16 it stopped answering for
+# this team. Four submissions sat `In Progress` — one of them a 330-byte probe
+# submitted through a different auth path, one of them thirty-one hours old — so
+# the hold is on the account, not on any artifact this script produces. Nothing
+# in this repository can clear it.
+#
+# The question that leaves is what a release does in the meantime, and the three
+# answers are not equal:
+#
+#   * **Unsigned**, which is what 0.1.9 did. Gatekeeper tells the user the app
+#     "is damaged and can't be opened". That wording means *quarantined and
+#     unsigned*, but it reads as a corrupt download, so the user deletes it and
+#     never learns otherwise. This is the worst outcome and it is the one that
+#     happens by default.
+#   * **Signed but not notarized**, this mode. Gatekeeper says the developer
+#     cannot be verified and offers no button — but right-click → Open does
+#     work, permanently, per app. That is a real instruction that can be written
+#     in the release notes and followed once.
+#   * **Signed, notarized, stapled**, which is what this script does whenever
+#     Apple is answering, and remains the default.
+#
+# So this is a deliberate degradation with an explicit switch, never a silent
+# fallback: `--signed-only` has to be typed. A build that *tried* to notarize
+# and failed is still a hard error, because a notarization that fails for a
+# reason other than an account hold is usually the certificate being wrong, and
+# that must never be papered over.
+SIGNED_ONLY=0
+
+# A ceiling on the wait, because there was not one.
+#
+# `notarytool submit --wait` has no default timeout: when the service stopped
+# answering, an electron-builder run sat waiting for twenty-three hours and had
+# to be killed by hand. It was not obviously hung — it was doing exactly what it
+# was told. Two hours is far longer than a healthy submission (minutes) and far
+# shorter than a night.
+NOTARIZE_TIMEOUT="${TD_NOTARIZE_TIMEOUT:-2h}"
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --signed-only) SIGNED_ONLY=1 ;;
+        --notarize-timeout) NOTARIZE_TIMEOUT="${2:?--notarize-timeout needs a value}"; shift ;;
+        *) printf 'unknown argument: %s\n' "$1" >&2; exit 2 ;;
+    esac
+    shift
+done
+
 step() { printf '\n\033[1m▸ %s\033[0m\n' "$1"; }
 die()  { printf '\n\033[31merror:\033[0m %s\n' "$1" >&2; shift; for l in "$@"; do printf '  %s\n' "$l" >&2; done; exit 1; }
 
@@ -241,7 +289,7 @@ export CSC_KEYCHAIN="$KEYCHAIN"
 
 npx electron-builder --mac --publish never \
     -c.mac.identity="$IDENTITY" \
-    -c.mac.notarize=true \
+    -c.mac.notarize=$([[ "$SIGNED_ONLY" -eq 1 ]] && echo false || echo true) \
     -c.dmg.sign=true
 
 # Both names come out of package.json rather than being typed here. The bundle
@@ -261,11 +309,30 @@ ZIP="release/$SLUG-$VERSION-arm64.zip"
 
 # --------------------------------------------------------------- notarize dmg
 
-step "Notarize the disk image"
-xcrun notarytool submit "$DMG" \
-    --key "$ASC_KEY_PATH" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER" \
-    --wait
-xcrun stapler staple "$DMG"
+if [[ "$SIGNED_ONLY" -eq 1 ]]; then
+    step "Notarization skipped (--signed-only)"
+    printf '  The bundle is Developer ID signed and NOT notarized.\n'
+    printf '  Gatekeeper will say the developer cannot be verified;\n'
+    printf '  right-click > Open gets past it, once, per app.\n'
+    printf '  The release notes must say so.\n'
+else
+    step "Notarize the disk image"
+    # `--timeout` is notarytool's own flag, so the wait ends inside the tool with
+    # a non-zero exit and a readable message, rather than being killed from
+    # outside and leaving a half-described failure.
+    xcrun notarytool submit "$DMG" \
+        --key "$ASC_KEY_PATH" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER" \
+        --wait --timeout "$NOTARIZE_TIMEOUT" \
+        || die "notarization did not complete within $NOTARIZE_TIMEOUT." \
+            "" \
+            "If submissions are sitting 'In Progress' for hours, the hold is on the" \
+            "Apple account and nothing here will clear it — check with:" \
+            "  xcrun notarytool history --key <p8> --key-id <id> --issuer <uuid>" \
+            "" \
+            "To ship signed-but-not-notarized in the meantime:" \
+            "  scripts/mac-release-signed.sh --signed-only"
+    xcrun stapler staple "$DMG"
+fi
 
 # The staple rewrote the file. Repair everything that described the old bytes.
 step "Rebuild the disk image blockmap and its manifest entry"
@@ -319,10 +386,29 @@ check() { if eval "$2" >/dev/null 2>&1; then printf '  \033[32m✓\033[0m %s\n' 
 # that will not launch. That has already happened once in this repository.
 check "codesign --verify --strict (app)"   "codesign --verify --strict --verbose=2 '$APP'"
 check "codesign --verify --deep (app)"     "codesign --verify --deep --strict '$APP'"
-check "spctl accepts the app"              "spctl -a -vv -t exec '$APP'"
-check "spctl accepts the disk image"       "spctl -a -vv -t install '$DMG'"
-check "stapler validate (app)"             "xcrun stapler validate '$APP'"
-check "stapler validate (dmg)"             "xcrun stapler validate '$DMG'"
+
+if [[ "$SIGNED_ONLY" -eq 1 ]]; then
+    # spctl and stapler both fail here *correctly* — there is no notarization
+    # ticket to accept or to staple — so asserting them would fail every
+    # signed-only build for the one reason we already know about.
+    #
+    # What replaces them is the check that actually matters in this mode, and
+    # that nothing else makes: that the bundle really is Developer ID signed.
+    # Without it, "signed-only" degrades silently into "unsigned", which is the
+    # exact failure this whole file exists to prevent — and the two are
+    # indistinguishable from the outside until a stranger downloads one and is
+    # told the app is damaged.
+    check "Developer ID authority on the app" \
+        "codesign -dv --verbose=2 '$APP' 2>&1 | grep -q 'Authority=Developer ID Application'"
+    check "the signature is not ad-hoc" \
+        "! codesign -dv --verbose=2 '$APP' 2>&1 | grep -q 'Signature=adhoc'"
+    printf '  \033[33m—\033[0m spctl and stapler not checked: this build is not notarized\n'
+else
+    check "spctl accepts the app"              "spctl -a -vv -t exec '$APP'"
+    check "spctl accepts the disk image"       "spctl -a -vv -t install '$DMG'"
+    check "stapler validate (app)"             "xcrun stapler validate '$APP'"
+    check "stapler validate (dmg)"             "xcrun stapler validate '$DMG'"
+fi
 
 # The app inside the ZIP is the one electron-updater installs, and it is a
 # different copy of the bundle from the one verified above — electron-builder
@@ -339,8 +425,18 @@ CLEANUP+=("rm -rf '$ZIP_CHECK'")
 ditto -x -k "$ZIP" "$ZIP_CHECK" 2>/dev/null || unzip -qq -o "$ZIP" -d "$ZIP_CHECK" 2>/dev/null || true
 ZIP_APP="$(find "$ZIP_CHECK" -maxdepth 1 -name '*.app' -print -quit)"
 if [[ -n "$ZIP_APP" ]]; then
-    check "stapler validate (app inside the zip)" "xcrun stapler validate '$ZIP_APP'"
-    check "spctl accepts the app inside the zip"  "spctl -a -vv -t exec '$ZIP_APP'"
+    if [[ "$SIGNED_ONLY" -eq 1 ]]; then
+        # Same substitution as above: the ticket does not exist, so check that
+        # the separately-archived copy carries the same certificate as the one
+        # verified above. electron-builder signs it in its own pass, and a
+        # release where the dmg is signed and the update zip is not would hand
+        # every self-updating user an app that cannot open.
+        check "Developer ID authority on the app inside the zip" \
+            "codesign -dv --verbose=2 '$ZIP_APP' 2>&1 | grep -q 'Authority=Developer ID Application'"
+    else
+        check "stapler validate (app inside the zip)" "xcrun stapler validate '$ZIP_APP'"
+        check "spctl accepts the app inside the zip"  "spctl -a -vv -t exec '$ZIP_APP'"
+    fi
 else
     printf '  \033[31m✗\033[0m no .app came out of %s\n' "$ZIP"; fail=1
 fi
@@ -361,4 +457,10 @@ if [[ "$fail" -ne 0 ]]; then
     die "at least one verification failed — do not publish this build."
 fi
 
-printf '\n\033[32mSigned, notarized and stapled.\033[0m A stranger can open this.\n'
+if [[ "$SIGNED_ONLY" -eq 1 ]]; then
+    printf '\n\033[33mSigned, NOT notarized.\033[0m\n'
+    printf 'A stranger can open this, but only via right-click > Open the first time.\n'
+    printf 'Say that in the release notes, or they will think the download is broken.\n'
+else
+    printf '\n\033[32mSigned, notarized and stapled.\033[0m A stranger can open this.\n'
+fi

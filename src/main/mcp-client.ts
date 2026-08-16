@@ -341,10 +341,13 @@ export function parseServerEntry(
     source,
     enabled: true,
     disabledReason: null,
+    // "this inspector speaks stdio only" is our architecture stated at
+    // somebody who wants to know whether their server works. It does; this
+    // window just cannot look inside it.
     unsupported:
       transport === 'stdio'
         ? null
-        : `${transport.toUpperCase()} servers are configured here but dialled by Claude Code itself — this inspector speaks stdio only.`,
+        : `Claude Code dials ${transport.toUpperCase()} servers itself, so this panel cannot inspect it.`,
   }
 }
 

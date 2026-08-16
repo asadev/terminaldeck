@@ -50,7 +50,7 @@ vi.mock('electron', () => ({
   shell: { openExternal: async () => {} },
 }))
 
-const { buildMenu, MENU_HIDDEN_COMMANDS, menuTemplate } = await import('./menu')
+const { buildMenu, hidesMenuBar, MENU_HIDDEN_COMMANDS, menuTemplate } = await import('./menu')
 
 /**
  * A `send` whose handlers carry the command they would send.
@@ -190,6 +190,61 @@ describe('each platform gets the layout its users expect', () => {
       expect(items.some(({ item }) => commandOf(item) === command), command).toBe(true)
     }
     expect(items.some(({ item }) => item.role === 'quit')).toBe(true)
+  })
+})
+
+describe('the Windows menu bar is hidden without being thrown away', () => {
+  /**
+   * The strip, and the fourteen chords that would have gone with it.
+   *
+   * The Windows window now hides its title bar and has the OS draw its window
+   * buttons into our own toolbar, which left the menu bar as the last of three
+   * stacked strips at the top of the window. Hiding it is the point of the
+   * change. Deleting it is what must not happen, and it is one plausible line
+   * away: `Menu.setApplicationMenu(null)` looks like "hide the menu bar" and is
+   * actually "unregister every accelerator in the app", because Electron binds
+   * them through the menu. In a terminal that means no Ctrl+C and no Ctrl+V.
+   */
+  it('hides the in-window strip off macOS', () => {
+    expect(hidesMenuBar('win32')).toBe(true)
+    expect(hidesMenuBar('linux')).toBe(true)
+  })
+
+  it('leaves macOS alone, where the menu bar is the OS\'s and lives on the screen', () => {
+    // Not merely "the option is a no-op there". A true here would read as a
+    // claim that macOS hides its menu bar too, and that misreading is how the
+    // Apple-standard app menu got deleted the first time.
+    expect(hidesMenuBar('darwin')).toBe(false)
+  })
+
+  it('still builds the whole menu on Windows, chords and all', () => {
+    /*
+     * The assertion that makes hiding safe. Every accelerator this app has off
+     * macOS is registered by an item in this template — the roles carry the
+     * editing and window chords, the explicit items carry the app's own — so a
+     * template that came back short on Windows would be a chord that silently
+     * stopped working on the platform nobody here develops on.
+     */
+    const items = allItems(menuTemplate('win32', send))
+    const chords = items
+      .map(({ item }) => item.accelerator)
+      .filter((chord): chord is string => chord !== undefined)
+    expect(chords.length, 'the Windows menu registers no accelerators at all').toBeGreaterThan(10)
+
+    // The roles are where copy, paste, select-all, reload, devtools and zoom
+    // come from; none of them is written out as an item, so losing the role
+    // menus loses the chords without removing a single visible line of code.
+    const roles = new Set(items.map(({ item }) => item.role))
+    for (const role of ['reload', 'toggleDevTools', 'resetZoom', 'zoomIn', 'zoomOut', 'quit']) {
+      expect(roles.has(role as never), `${role} is not in the Windows menu`).toBe(true)
+    }
+    const top = menuTemplate('win32', send).map((menu) => menu.role)
+    // `editMenu` is the whole undo/redo/cut/copy/paste/select-all block, and
+    // `windowMenu` is minimise/close. Spelled as roles rather than as items so
+    // each platform gets its own conventional contents — which also means they
+    // are invisible to a check that only looks at labels.
+    expect(top).toContain('editMenu')
+    expect(top).toContain('windowMenu')
   })
 })
 

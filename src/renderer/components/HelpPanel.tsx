@@ -81,14 +81,17 @@ export const SECTIONS: ReadonlyArray<{ id: HelpSectionId; label: string; hint: s
 export const PANEL_HELP: Record<PanelId, string> = {
   overview: 'A dashboard for the open project: sessions, spend, git state and readiness in one place. Widgets can be rearranged.',
   files: 'The project tree, with anything your ignore rules exclude hidden. Open a file to read it beside the session.',
-  search: 'Full-text search across past session transcripts, so you can find the conversation where something was decided.',
+  artifacts: 'Every file your agents wrote or changed here, with the diff of each change. Searching past transcripts moved to the command palette — type ? in it.',
   git: 'Working-tree status and diffs for the project, refreshed as the agent edits files.',
   github: 'Pull requests, issues and checks. Needs the GitHub CLI installed, signed in, and a GitHub remote on the repo.',
   readiness: 'How ready this repo is for an agent to work in — instructions, tests, structure — with a fix offered where one is safe.',
   alerts: 'Things worth knowing without watching: a session filling its context window, a tool failing repeatedly, work that has stalled.',
   mcp: 'Connect to MCP servers, browse the tools, resources and prompts they expose, and call one by hand to see what it returns.',
   hooks: 'Installs callbacks into each agent CLI’s own settings file, so the app knows what the agent is doing without scraping the terminal.',
-  machines: 'Your other computers. Pair one by reading an eight-character code off its screen and typing it into this one, then open its sessions here as if they were running locally.',
+  // No `machines` line, because there is no Machines view: your other computers
+  // live in Settings → Remote now, beside the phones that can reach this one.
+  // `PANEL_HELP` is keyed by `PanelId`, so a line for a view that no longer
+  // exists would not compile — which is the check working.
 }
 
 const GETTING_STARTED: HelpTopic[] = [

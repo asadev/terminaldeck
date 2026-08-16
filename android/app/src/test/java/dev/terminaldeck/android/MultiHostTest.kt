@@ -2,6 +2,7 @@ package dev.terminaldeck.android
 
 import dev.terminaldeck.android.github.InMemoryGitHubStore
 import dev.terminaldeck.android.protocol.ClientMessage
+import dev.terminaldeck.android.pairing.Rendezvous
 import dev.terminaldeck.android.protocol.HostPlatform
 import dev.terminaldeck.android.protocol.RemoteSession
 import dev.terminaldeck.android.protocol.ServerMessage
@@ -171,13 +172,35 @@ class MultiHostTest {
         // Its own, not the app-wide one: a test that joined the shared tick would leave a timer
         // running in whatever process ran it.
         heartbeat = Heartbeat(scope = CoroutineScope(Dispatchers.Unconfined)),
+        lookup = { typed, _ -> rendezvous[typed] },
     ) { _, hostId, store ->
         transports.getOrPut(hostId) { ScriptedTransport(hostId, store) }
     }
 
-    private fun code(hostId: String, token: String = "pair-$hostId"): String {
-        val key = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(ByteArray(32) { 5 })
-        return "terminaldeck://pair#v=1&r=wss://relay.example&h=$hostId&k=$key&t=$token"
+    /**
+     * The fake rendezvous: which machine is sitting behind which six digits.
+     *
+     * A code carries no address any more — the QR and the link that used to carry one are gone —
+     * so pairing is two steps, and the first is a lookup at a relay. Stubbing that here is what
+     * keeps these tests off the network; `RendezvousTest` is where the derivation itself is checked.
+     *
+     * Shared across a `build()`, because a relaunch has to find the same machines behind the same
+     * codes.
+     */
+    private val rendezvous = mutableMapOf<String, Rendezvous.Offer>()
+    private var nextCode = 482_910
+
+    /**
+     * A fresh six-digit code for a machine, registered with the fake rendezvous.
+     *
+     * Fresh every call on purpose: a code is single-use, so two pairings of the same machine are two
+     * codes, and a helper that returned the same digits twice would be testing something the product
+     * refuses.
+     */
+    private fun code(hostId: String): String {
+        val digits = (nextCode++).toString().padStart(6, '0')
+        rendezvous[digits] = Rendezvous.Offer("wss://relay.example", hostId, ByteArray(32) { 5 })
+        return digits
     }
 
     private fun session(id: String, title: String, status: String = "running") =
@@ -256,10 +279,13 @@ class MultiHostTest {
         deck.pair(code(PC))
         transport(PC).goLive(listOf(session("pc-1", "installer")))
 
-        deck.pair(code(MAC, token = "fresh"))
+        val fresh = code(MAC)
+        deck.pair(fresh)
 
         assertEquals(listOf(MAC, PC), state.hosts.map { it.hostId })
-        assertEquals("fresh", vault.pairing(MAC)?.token)
+        // The token stored is the code itself: it is what the far end hashed when it minted one,
+        // and what this phone will present on the `hello` that redeems it.
+        assertEquals(fresh, vault.pairing(MAC)?.token)
         assertEquals(MAC, state.selectedHostId)
         // The machine being re-paired is taken down and brought back up so its transport reads the
         // token that was just written. The other one is not.
@@ -427,7 +453,7 @@ class MultiHostTest {
         assertEquals("Studio", vault.pairing(MAC)?.nickname)
 
         // The moment the user is least pleased to lose a name is the moment they have to pair again.
-        deck.pair(code(MAC, token = "fresh"))
+        deck.pair(code(MAC))
         assertEquals("Studio", host(MAC).label)
 
         deck.rename(MAC, null)

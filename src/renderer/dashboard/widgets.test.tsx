@@ -8,7 +8,7 @@ import {
   readSection,
   visibleGitFiles,
 } from './widgets'
-import { WIDGET_TYPES } from './layout'
+import { isRetiredWidget, WIDGET_TYPES } from './layout'
 
 describe('formatTokens', () => {
   it('rolls past a million into billions', () => {
@@ -174,7 +174,19 @@ describe('readSection', () => {
 
 describe('registry', () => {
   it('has a definition for every type the picker offers', () => {
-    expect(listWidgetDefinitions().map((d) => d.type)).toEqual([...WIDGET_TYPES])
+    expect(listWidgetDefinitions().map((d) => d.type)).toEqual(
+      WIDGET_TYPES.filter((type) => !isRetiredWidget(type)),
+    )
+  })
+
+  /**
+   * A retired type keeps its definition so a saved layout that already holds
+   * the tile goes on rendering it — only the *offer* goes. Dropping the
+   * definition instead would blank out somebody's arrangement on the next open.
+   */
+  it('keeps a definition for the type it stopped offering', () => {
+    expect(listWidgetDefinitions().map((d) => d.type)).not.toContain('sessions')
+    expect(getWidgetDefinition('sessions')).toBeDefined()
   })
 
   it('does not resolve inherited object properties as widgets', () => {

@@ -547,10 +547,16 @@ export function DebugPanel({ enabled, bridge, live = true }: DebugPanelProps) {
           </div>
         </div>
 
-        <p className="debug-hint">
-          Versions, detected CLIs, registered IPC modules, config paths and the recent log. Tokens,
-          API keys, authorization headers and your home directory are stripped out before it leaves
-          the main process — check it before you paste it anyway.
+        {/* The list of exactly which secrets are stripped moves to the hover.
+            The clause that must stay on screen is the last one: this text is
+            about to be pasted into a public issue, and "check it anyway" is
+            the only line here that changes what somebody does. */}
+        <p
+          className="debug-hint"
+          title="Tokens, API keys, authorization headers and your home directory are stripped before the bundle leaves the main process."
+        >
+          Versions, CLIs, IPC modules, config paths and the recent log. Secrets are stripped —
+          check it before you paste it anyway.
         </p>
 
         {bundle && <pre className="debug-pre">{bundle}</pre>}

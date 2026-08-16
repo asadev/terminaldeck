@@ -442,8 +442,7 @@ export function McpInspector({ projectPath = null, bridge }: McpInspectorProps) 
     return (
       <div className="mcp">
         <PageEmpty icon={panelSpec('mcp').icon} title="MCP is not available here">
-          This window was opened without the MCP bridge, so there is nothing for this page to
-          read.
+          This window was opened without the MCP bridge.
         </PageEmpty>
       </div>
     )
@@ -477,14 +476,14 @@ export function McpInspector({ projectPath = null, bridge }: McpInspectorProps) 
       {!blank && (
       <header className="mcp-head">
         <div>
-          {/* Both halves of this are load-bearing. Adding works from here now,
-              so it says so; removing still does not, and a panel that stays
-              quiet about the thing it cannot do reads as broken rather than as
-              limited — which is the whole reason the Add button exists. */}
+          {/* Three sentences down to one and a half. The middle one explained
+              that adding here writes the file Claude Code reads — which is the
+              plumbing, and is exactly what a reader would assume anyway. The
+              last one stays: removing genuinely cannot be done from this
+              window, and a panel that says nothing about what it cannot do
+              reads as broken rather than as limited. */}
           <p className="mcp-subheading">
-            These come from your Claude Code configuration. Adding one here writes to that same
-            configuration, so Claude Code picks it up too. To remove one, run{' '}
-            <code>claude mcp remove</code>.
+            From your Claude Code configuration. To remove one, run <code>claude mcp remove</code>.
           </p>
         </div>
         <div className="mcp-head-actions">

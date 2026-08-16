@@ -1,13 +1,12 @@
 import { FileTree } from '../components/FileTree'
 import { FileViewer } from '../components/FileViewer'
-import { SearchPanel } from '../components/SearchPanel'
+import { ArtifactsPanel } from '../components/ArtifactsPanel'
 import { GitPanel, type GitFileGroup } from '../components/GitPanel'
 import { GitHubPanel } from '../components/GitHubPanel'
 import { ReadinessPanel } from '../components/ReadinessPanel'
 import { AlertsPanel, type AlertAction } from '../components/AlertsPanel'
 import { McpInspector } from '../components/McpInspector'
 import { HooksPanel } from '../components/HooksPanel'
-import { MachinesPanel } from '../machines/MachinesPanel'
 import { PageEmpty } from '../components/PageEmpty'
 import { FeatureOffer } from '../features/FeatureOffer'
 import { useFeatures } from '../features/FeaturesProvider'
@@ -146,12 +145,10 @@ export function PanelView({
         return <HooksPanel />
       case 'mcp':
         return <McpInspector projectPath={projectPath} />
-      case 'machines':
-        // Above the project check, with Hooks and MCP. The machines this
-        // desktop is paired to have nothing to do with which folder is open —
-        // asking somebody to open a project before they can reach their other
-        // computer would be a rule invented by this switch statement.
-        return <MachinesPanel />
+      // There was a `machines` case here, above the project check, and it is
+      // gone with the panel: the machines this desktop is paired to are now part
+      // of Settings → Remote, beside the phones, because they are the same
+      // subject. See `panels.ts`.
       default:
         break
     }
@@ -161,8 +158,14 @@ export function PanelView({
         return <Dashboard projectPath={projectPath} context={dashboard} />
       case 'files':
         return <FilesPage root={projectPath} selected={openFile} onSelect={onOpenFile} />
-      case 'search':
-        return <SearchPanel projectPath={projectPath} />
+      case 'artifacts':
+        // `onOpenFile` is passed, and that is the whole lesson of the page this
+        // replaces: Search rendered without its `onOpenHit`, so every row in it
+        // highlighted on hover and did nothing on click. A row that looks
+        // clickable and is not is the one thing this window is not allowed to
+        // have. The panel itself omits the button entirely when the callback is
+        // absent, rather than drawing a dead one.
+        return <ArtifactsPanel projectPath={projectPath} onOpenFile={onOpenFile} />
       case 'git':
         // A changed file opens on the Files page, which is the page that can
         // actually show it — a row that highlights and does nothing is worse

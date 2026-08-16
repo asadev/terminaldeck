@@ -8,6 +8,8 @@ import { describe, expect, it } from 'vitest'
 import {
   activeGitWatchCount,
   applyStats,
+  dubiousOwnershipMessage,
+  NOT_A_REPO_MESSAGE,
   parseNumstat,
   parsePorcelainV2,
   readFileDiff,
@@ -269,6 +271,57 @@ describe('readGitStatus', () => {
     const result = await readGitStatus('src')
     expect(result.repo).toBe(false)
     if (!result.repo) expect(result.reason).toBe('no-such-folder')
+  })
+
+  /**
+   * The defect this pins: the Overview's git tile printed `fatal: not a git
+   * repository (or any of the parent directories): .git` — a command's error
+   * text, shown to a person — because `message` was git's own stderr. Every
+   * surface renders `message` verbatim, so the sentence has to be written here.
+   */
+  it('says it in a sentence rather than handing back git stderr', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'terminaldeck-git-words-'))
+    try {
+      const result = await readGitStatus(dir)
+      expect(result.repo).toBe(false)
+      if (result.repo) return
+      // A machine without git reaches a different branch, and that branch has
+      // its own sentence; this test is about the not-a-repo one.
+      if (result.reason !== 'not-a-repo') return
+
+      expect(result.message).toBe(NOT_A_REPO_MESSAGE)
+      expect(result.message).not.toContain('fatal:')
+      expect(result.message).not.toContain('.git')
+      // A sentence, and one that names the way out — that is what makes it
+      // different from a label.
+      expect(result.message).toContain('git init')
+      expect(result.message.endsWith('.')).toBe(true)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  }, 20000)
+})
+
+/**
+ * Dubious ownership is reported as `not-a-repo` because that is the discriminant
+ * every renderer branches on, but it is not the same situation and must not
+ * borrow the same words: the repository is there, git simply will not touch it.
+ * Telling someone to run `git init` in a repository they already have is advice
+ * that does nothing, in a place where it looks authoritative.
+ */
+describe('dubiousOwnershipMessage', () => {
+  it('does not tell you to initialise a repository you already have', () => {
+    const message = dubiousOwnershipMessage('/Volumes/work/api')
+    expect(message).not.toContain('git init')
+    expect(message).not.toBe(NOT_A_REPO_MESSAGE)
+  })
+
+  it('names the folder in the command that fixes it', () => {
+    // `safe.directory` takes the path, so a sentence without it is one the
+    // reader has to finish themselves.
+    expect(dubiousOwnershipMessage('/Volumes/work/api')).toContain(
+      'safe.directory /Volumes/work/api',
+    )
   })
 })
 

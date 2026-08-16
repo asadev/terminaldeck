@@ -10,6 +10,7 @@ import {
   defaultLayout,
   findFreeSlot,
   hasWidgetType,
+  isRetiredWidget,
   layoutRows,
   MAX_ROW,
   MAX_WIDGET_ROWS,
@@ -176,12 +177,33 @@ describe('defaultLayout', () => {
   it('is a sound arrangement of the widgets that have a live data source', () => {
     const layout = defaultLayout(PROJECT)
     expectSound(layout)
-    expect(layout.widgets.map((w) => w.type)).toEqual(['sessions', 'cost', 'git'])
+    expect(layout.widgets.map((w) => w.type)).toEqual(['cost', 'git'])
     expect(rects(layout)).toEqual({
-      'sessions-default': '0,0 6x6',
-      'cost-default': '6,0 6x6',
-      'git-default': '0,6 6x6',
+      'cost-default': '0,0 6x6',
+      'git-default': '6,0 6x6',
     })
+  })
+
+  /**
+   * The Overview page opens with a live board of every running session, so a
+   * Sessions tile in the starter layout is a count of the thing listed in full
+   * three inches above it. It is retired rather than deleted — a tile already
+   * in somebody's saved arrangement keeps rendering — but nothing seeds it and
+   * the picker no longer offers it.
+   */
+  it('does not seed the tile the session board replaced', () => {
+    expect(defaultLayout(PROJECT).widgets.map((w) => w.type)).not.toContain('sessions')
+    expect(isRetiredWidget('sessions')).toBe(true)
+    expect(isRetiredWidget('cost')).toBe(false)
+  })
+
+  it('still places a retired widget a saved layout already holds', () => {
+    // Dropping it on read would be data loss on someone's arrangement.
+    const restored = parseLayout(
+      { widgets: [{ id: 'kept', type: 'sessions', x: 0, y: 0, w: 6, h: 6 }] },
+      PROJECT,
+    )
+    expect(restored.widgets.map((w) => w.id)).toEqual(['kept'])
   })
 
   it('carries the caller-supplied project path', () => {
@@ -270,7 +292,7 @@ describe('addWidget', () => {
 describe('removeWidget', () => {
   it('drops the widget and leaves the rest untouched', () => {
     const layout = removeWidget(defaultLayout(PROJECT), 'cost-default')
-    expect(layout.widgets.map((w) => w.id)).toEqual(['sessions-default', 'git-default'])
+    expect(layout.widgets.map((w) => w.id)).toEqual(['git-default'])
   })
 
   it('returns the same object for an unknown id', () => {
@@ -584,7 +606,8 @@ describe('parseLayout', () => {
 describe('selectors', () => {
   it('reports the first row below every widget', () => {
     expect(layoutRows(createLayout(PROJECT))).toBe(0)
-    expect(layoutRows(defaultLayout(PROJECT))).toBe(12)
+    // The starter layout is one row of two half-width tiles, six rows deep.
+    expect(layoutRows(defaultLayout(PROJECT))).toBe(6)
   })
 
   it('orders widgets the way they are read, not the way they were added', () => {

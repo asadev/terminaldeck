@@ -114,11 +114,16 @@ describe('withProject', () => {
 describe('toStartProviders', () => {
   const rows = buildProviderRows({ claude: true, codex: true, gemini: false, shell: true })
 
-  it('marks only Claude as isolatable, matching the profiles rule', () => {
+  it('marks the isolatable agents, matching the profiles rule', () => {
+    // Codex joined the list when `CODEX_HOME` was measured moving a login;
+    // Gemini stays off it because its variable moves the settings and leaves
+    // the token in one shared keychain entry. `provider-accounts.ts` holds both
+    // measurements, and `isolationNotice` reads the same catalogue this does,
+    // so there is one answer rather than two that agree by coincidence.
     const isolatable = toStartProviders(rows)
       .filter((provider) => provider.supportsProfiles)
       .map((provider) => provider.id)
-    expect(isolatable).toEqual(['claude'])
+    expect(isolatable).toEqual(['claude', 'codex'])
   })
 
   it('carries availability through from detection', () => {

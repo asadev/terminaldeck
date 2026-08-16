@@ -279,6 +279,19 @@ describe('providerAlerts', () => {
     expect(alerts.map((alert) => alert.id)).toEqual(['provider-missing:codex', 'provider-missing:gemini'])
   })
 
+  /**
+   * The detail lost its opening clause in the copy pass — the title already
+   * says the tool is not installed — but kept the two things that make this
+   * critical rather than informational: the binary somebody can go and check
+   * for, and the fact that sessions do not degrade, they fail outright.
+   */
+  it('names the binary and the consequence, and repeats neither the title nor itself', () => {
+    const [alert] = providerAlerts(emptyInput({ providersInUse: ['codex'] }))
+    expect(alert.detail).toContain('PATH')
+    expect(alert.detail).toContain('fail immediately')
+    expect(alert.detail).not.toContain('This project is set up to run')
+  })
+
   it('ignores a provider id that is not in the table instead of throwing', () => {
     // Hardening rather than a reported crash: today `providersInstalled` is
     // only ever built by `detectProviders()`, whose keys all come from
@@ -424,6 +437,21 @@ describe('dirtyTreeAlerts', () => {
   it('escalates once the pile has been sitting there far longer', () => {
     const alerts = dirtyTreeAlerts(emptyInput({ git: dirty, sessions: sessionsStartedAfter(9) }))
     expect(alerts[0].severity).toBe('warning')
+  })
+
+  /**
+   * Shortened in the app-wide copy pass, and the risk had to come through it
+   * intact. "Commit or stash" on its own is advice with no reason behind it;
+   * the reason is that several sessions have now rewritten on top of a state
+   * nothing can return to. Both halves are asserted so neither can be trimmed
+   * away as the redundant one.
+   */
+  it('keeps both halves of the dirty-tree warning — the risk and the action', () => {
+    const alerts = dirtyTreeAlerts(
+      emptyInput({ git: dirty, sessions: sessionsStartedAfter(DIRTY_TREE_SESSION_STREAK) }),
+    )
+    expect(alerts[0].detail).toContain('no clean state to roll back to')
+    expect(alerts[0].detail).toContain('Commit or stash')
   })
 })
 

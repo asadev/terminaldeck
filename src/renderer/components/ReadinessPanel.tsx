@@ -324,8 +324,7 @@ export function ReadinessPanel({ projectPath, bridge }: ReadinessPanelProps) {
     return (
       <section className="readiness">
         <PageEmpty icon={panelSpec('readiness').icon} title="AI readiness is not available here">
-          This window was opened without the readiness bridge, so there is nothing for this page
-          to scan with.
+          This window was opened without the readiness bridge.
         </PageEmpty>
       </section>
     )
@@ -345,10 +344,14 @@ export function ReadinessPanel({ projectPath, bridge }: ReadinessPanelProps) {
                   `scoreChecks` gives every check a share of it — so "87" and
                   "7 of 10" are both true and do not follow from one another.
                   Printing the count alone left the 87 unexplained and looking
-                  like arithmetic that had gone wrong. */}
-              <p className="readiness-summary">
-                {report.score} out of 100 — {passing} of {applicable} checks passing, weighted by
-                how much each one matters.
+                  like arithmetic that had gone wrong; the word "weighted" is
+                  the whole of what the trailing clause was doing, and the rest
+                  of it moves to the hover. */}
+              <p
+                className="readiness-summary"
+                title="Each check carries a share of the score, sized by how much it matters."
+              >
+                {report.score} out of 100 — {passing} of {applicable} checks passing, weighted.
               </p>
             </>
           ) : (
@@ -364,8 +367,7 @@ export function ReadinessPanel({ projectPath, bridge }: ReadinessPanelProps) {
 
       {report?.cappedBy ? (
         <p className="readiness-cap" role="status">
-          Score held at {report.score} by <strong>{report.cappedBy}</strong>. A project that exposes
-          credentials cannot score well here, however complete the rest of it is.
+          Score held at {report.score} by <strong>{report.cappedBy}</strong> — fix that first.
         </p>
       ) : null}
 

@@ -45,7 +45,6 @@ import { randomBytes } from 'node:crypto'
 import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { BRAND } from '../shared/brand'
-import { relayPairingLink } from '../shared/pairing-link'
 import { logger } from '../main/app-log'
 import { currentPlatform } from '../main/platform/host'
 import { installPaths, nodePaths, userDataDir } from '../main/platform/paths'
@@ -212,18 +211,23 @@ export async function main(argv: readonly string[]): Promise<number> {
   }
 
   /*
-   * `demo:link` — a real pairing code, in the shape the phones parse.
+   * `demo:link` — the six digits a reviewer types into a phone.
    *
-   * It exists so that the broker does not build the link itself. The format is a
-   * contract between four programs and `src/shared/pairing-link.ts` is the one
-   * place it is written down, with its own header explaining that a second
-   * implementation "is how a QR code that scans starts failing on the phone".
-   * The broker's helper (`demo/image/demo-code.mjs`) would have been that second
-   * implementation; now it prints what this returned.
+   * It used to answer with a `terminaldeck://pair?…` link as well, built by
+   * `relayPairingLink` so that the broker did not have to spell the format out a
+   * second time. There is no link any more, and no QR: pairing everywhere is now
+   * six digits from `shared/short-code.ts` typed into a numeric keypad, and the
+   * address behind them is looked up at the rendezvous slot the code names.
+   *
+   * The command keeps its name. It is a control-socket verb the deployed broker
+   * image already calls by that string, and renaming it would break a running
+   * demo box to fix a word. The `link` field is simply gone; `code` was always
+   * there beside it and is what the broker prints.
    *
    * Nothing is minted here that `terminaldeck pair` does not mint. `machines:code`
    * is the same channel, on the same desk, publishing the same rendezvous beacon
-   * for the same sixty seconds.
+   * for the same sixty seconds — which matters more than it used to, because the
+   * beacon is now the only way a typed code finds this container at all.
    */
   host.desk.handle('demo:link', async () => {
     const relay = (await host?.status())?.remote.relay ?? null
@@ -235,19 +239,8 @@ export async function main(argv: readonly string[]): Promise<number> {
       | { ok: false; message: string }
     if (!offer.ok) return { ok: false, message: offer.message }
 
-    const link = relayPairingLink(
-      { url: relay.url, hostId: relay.hostId, publicKey: relay.publicKey },
-      offer.code.token,
-    )
-    if (link === null) {
-      // Refused rather than returned. A link this function will not build is a
-      // link a phone would scan, parse and fail on with a sentence nobody can
-      // act on — and the reviewer would be the one holding it.
-      return { ok: false, message: 'this host could not produce a pairing link the app can read' }
-    }
     return {
       ok: true,
-      link,
       code: offer.code.token,
       expiresAt: offer.code.expiresAt,
       relay: relay.url,

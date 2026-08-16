@@ -119,6 +119,43 @@
   font: inherit;
 }
 
+/* ============================================================================
+   Syntax colour.
+
+   Four hues and one weight, all of them tokens the palette already proves are
+   readable on every surface of both themes (`tokens.test.ts` measures each of
+   these against the full set of backgrounds). No new colours are invented for
+   code: a reading pane that needed its own palette would be the one surface in
+   the app whose contrast nobody was checking.
+
+   Nothing here is bold or italic except a heading. Italic comments at 13px on
+   a hinted monospace face are measurably harder to read, and a file where four
+   things shout is a file where nothing does.
+   ============================================================================ */
+
+.tok-comment {
+  color: var(--text-muted);
+}
+
+.tok-string {
+  color: var(--color-positive);
+}
+
+.tok-number {
+  color: var(--color-warning);
+}
+
+.tok-keyword {
+  color: var(--color-info);
+}
+
+/* A Markdown heading, a YAML key, a CSS at-rule: the line's own structure
+   rather than a value inside it. */
+.tok-meta {
+  color: var(--text-primary);
+  font-weight: var(--w-semibold);
+}
+
 /* Two jobs, one class. Above a truncated file it is a note over the code, so
    it stays a left-aligned line at the top of the pane. */
 .file-viewer-notice {

@@ -195,11 +195,15 @@ export function registerMachinesIpc(ipcMain: InvokeRegistrar, deps: MachinesIpcD
    * is showing it, which is a lie about the one thing this screen is for.
    *
    * Refused, here, when there is no address to publish or the slot will not
-   * come up. Eight typed characters are the *only* input this screen has — no
-   * QR, no link — so a code that cannot be looked up is a code that fails after
-   * somebody has typed it, three metres from the machine that could have said
-   * so. The Remote panel's phone pairing makes the opposite call for the
-   * opposite reason: its QR carries the address inside the link.
+   * come up. Six typed digits are the *only* input this screen has — there is no
+   * QR and no link anywhere in the product now — so a code that cannot be looked
+   * up is a code that fails after somebody has typed it, three metres from the
+   * machine that could have said so.
+   *
+   * `remote:pair` on the Remote panel still answers with a code either way, and
+   * that is now a narrow exception rather than a second path: the only client a
+   * code with no rendezvous behind it can reach is the browser client this
+   * machine serves on its own tailnet, where the page's origin is the address.
    */
   ipcMain.handle(
     'machines:code',

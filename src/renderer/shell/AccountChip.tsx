@@ -1,8 +1,19 @@
+import { useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { ProviderId } from '@shared/types'
 import { useChipMenu } from './chip-menu'
 import { isolationNotice } from '../components/ProfilePicker'
-import { accountForFolder, signInLabel, useAccounts, type AccountView } from '../accounts'
+import { chipMode, useAgentPresence, type ChromeSession } from './agent-presence'
+import {
+  accountForFolder,
+  accountsBridge,
+  renameAccount,
+  signInLabel,
+  useAccounts,
+  MAX_ACCOUNT_NAME_LENGTH,
+  type AccountView,
+} from '../accounts'
+import './AccountChip.css'
 
 /**
  * Which account a session runs as, beside the folder it runs in.
@@ -55,6 +66,48 @@ import { accountForFolder, signInLabel, useAccounts, type AccountView } from '..
  * agent has no account to give, says so and stops offering the choice.
  * `isolationNotice` is the same sentence the new-session dialog already prints,
  * imported rather than reworded so the two surfaces cannot drift apart.
+ *
+ * ## Renaming happens where the name is
+ *
+ *   > "The account dropdown inside a session shows the name an account was
+ *   > given and offers no way to change it."
+ *
+ * The name on a row here is the only place most people ever *see* an account,
+ * and it was the one place they could not correct it — the rename lived three
+ * screens away in Settings. Each row now carries a Rename button that turns it
+ * into a field in place.
+ *
+ * It is not a second implementation. `renameAccount` in `accounts.ts` is the
+ * one that both this and the Accounts screen call: it owns the trim, the length
+ * cap, the "same name is not a rename" rule and the re-read of the list
+ * afterwards. Growing a copy here is exactly how the two would come to disagree
+ * about whether a blank name means "clear it" — and the main process will
+ * happily store an account called `''`, which neither surface can then show.
+ *
+ * ## A shell has no account, so it is offered an agent instead
+ *
+ *   > "Starting a session gives you a plain shell. Today that shell still shows
+ *   > the chat/terminal switch and the account dropdown — both of which mean
+ *   > nothing until an agent is running in it. … Put a Run Claude button there
+ *   > instead."
+ *
+ * An account is a `CLAUDE_CONFIG_DIR` handed to an agent, so with no agent in
+ * the session there is nothing for this control to be about — the chip was
+ * showing the account a *future* session would use, on a terminal that is not
+ * going to use one. In that state the same slot is a Run Claude button, and it
+ * does the thing the command does rather than telling you the command:
+ * `claude`, typed into the session's own pty, exactly as if it had been typed
+ * in the terminal view.
+ *
+ * The moment an agent is running the button gives way to the account chip. That
+ * swap is driven by {@link useAgentPresence}, never by what was typed: `claude`
+ * exits and leaves the shell behind, and a control keyed off the keystroke
+ * would stay switched for the rest of the tab's life.
+ *
+ * While presence is *unknown* — the first few hundred milliseconds, or a build
+ * with no controls channel — neither is drawn. Guessing wrong in that direction
+ * is not free: pressing Run Claude at a session that already has Claude in it
+ * does not start anything, it submits the word "claude" as a prompt.
  */
 
 interface Props {
@@ -77,6 +130,22 @@ interface Props {
    * nobody can act on is worse than no notice.
    */
   provider?: ProviderId
+  /**
+   * The session this chip is sitting under, when the toolbar is showing one.
+   *
+   * Only used to answer "is there an agent in it" — see the module note.
+   * Omitted, the chip behaves exactly as it did before that question existed:
+   * it is the account picker, always. That is deliberate rather than lazy; the
+   * two callers that render this without a session in play are asking about a
+   * folder, and a folder cannot have an agent running in it.
+   */
+  session?: ChromeSession | null
+  /**
+   * Start Claude in `session`. Optional: without it the button types the
+   * command into the session's own pty itself, which is the same thing the
+   * terminal view would do with the same keystrokes.
+   */
+  onRunAgent?(sessionId: string): void
   /** Start a session in `projectPath` under this account. */
   onPick(accountId: string): void
   /** Open the Accounts screen — add one, rename one, sign one in. */
@@ -85,8 +154,43 @@ interface Props {
 
 const CHEVRON = 'M6.5 9.5 10 13l3.5-3.5'
 
-export function AccountChip({ current, projectPath, provider, onPick, onManage }: Props) {
-  const menu = useChipMenu(null)
+/**
+ * What Run Claude types.
+ *
+ * The bare command, with no flags. Not `--continue`: that silently resumes
+ * whichever conversation was last written in the folder, which is a different
+ * thing from what the button says and — as `session-transcript.ts` records at
+ * length — is frequently not this session's conversation at all.
+ *
+ * `\r`, not `\n`: a pty carries what a keyboard sends, and Return is carriage
+ * return. The rest of this app types into sessions the same way — see
+ * `sendCommand` in `main/agent-controls.ts`.
+ */
+export const RUN_AGENT_COMMAND = 'claude\r'
+
+/** The row being renamed, and what has been typed into it so far. */
+interface Editing {
+  id: string
+  draft: string
+}
+
+export function AccountChip({
+  current,
+  projectPath,
+  provider,
+  session = null,
+  onRunAgent,
+  onPick,
+  onManage,
+}: Props) {
+  const agent = useAgentPresence(session)
+  /** Whether the previous render drew the Run Claude button. See `revealing`. */
+  const wasRun = useRef(false)
+  const [editing, setEditing] = useState<Editing | null>(null)
+  const [failure, setFailure] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+  // Escape belongs to the field while one is open — see `useChipMenu`.
+  const menu = useChipMenu(null, editing !== null)
   /*
    * Non-null exactly when a new session here would run an agent that has no
    * account to be given. The rows below stop being buttons when it is set.
@@ -98,6 +202,30 @@ export function AccountChip({ current, projectPath, provider, onPick, onManage }
   const accounts = useAccounts(menu.open)
 
   const rows: readonly AccountView[] = accounts.snapshot.accounts
+
+  /**
+   * Save the name being edited, then re-read the list.
+   *
+   * The re-read is the reason this does not just patch the row: ids, colours
+   * and config directories are the main process's to assign, and a name written
+   * only into local state is a row that no longer matches the account on disk.
+   */
+  const save = (account: AccountView): void => {
+    const typed = editing?.draft ?? ''
+    setSaving(true)
+    setFailure(null)
+    void renameAccount(accountsBridge(), account, typed).then((problem) => {
+      setSaving(false)
+      setFailure(problem)
+      // A failed rename keeps the field open with what was typed still in it —
+      // closing it would throw the name away along with the message explaining
+      // why it did not take.
+      if (!problem) {
+        setEditing(null)
+        accounts.reload()
+      }
+    })
+  }
 
   /*
    * What the button says, and which row is marked as the one in use.
@@ -116,8 +244,94 @@ export function AccountChip({ current, projectPath, provider, onPick, onManage }
   const listed = currentId === null ? null : rows.find((row) => row.id === currentId) ?? null
   const label = current?.name ?? fallback?.name ?? null
 
+  /**
+   * Start Claude in this session.
+   *
+   * Re-checked at the moment of the press, not only at the moment the button
+   * was drawn. The presence reading is a screen reading and a screen can change
+   * between those two instants — an agent started from the terminal a second
+   * ago, say — and the cost of being late is not a no-op: `claude` typed at a
+   * running Claude is submitted as a prompt.
+   */
+  const runAgent = (): void => {
+    if (!session || agent.running !== false) return
+    if (onRunAgent) {
+      onRunAgent(session.id)
+      return
+    }
+    const deck = (globalThis as { deck?: { writeToSession?: (id: string, data: string) => void } }).deck
+    deck?.writeToSession?.(session.id, RUN_AGENT_COMMAND)
+  }
+
+  /*
+   * A session with no agent in it wears no agent's controls.
+   *
+   * Three states, not two, because `running` has three values:
+   *
+   *   false → the screen was read and there is no agent. Offer to start one.
+   *   true  → there is one. The account picker, exactly as before.
+   *   null  → nothing has been read yet. Neither, and this is the interesting
+   *           one: guessing "no agent" here would put a Run Claude button in
+   *           front of a running Claude, and pressing it submits the word
+   *           "claude" as a prompt. Guessing "agent" would put the account
+   *           picker back on a plain shell, which is the complaint itself.
+   *
+   * `null` resolves within a few hundred milliseconds of the session printing
+   * anything, and stays for good in a build with no controls channel — where
+   * showing no control at all is the honest answer, and the folder chip beside
+   * it still is one.
+   */
+  const mode = chipMode(session, agent)
+  const showRun = mode === 'run'
+  const showAccount = mode === 'account'
+  /*
+   * Was the account picker away a moment ago?
+   *
+   * The swap is between two different elements, so there is nothing for a CSS
+   * transition to interpolate — the picker would simply appear. He asked for
+   * the pill to *expand* to reveal it, so it is animated in, and only on the
+   * render where it takes the other state's place. Animating it on every mount
+   * would replay the same flourish on every tab switch, which is the difference
+   * between a transition and a tic.
+   */
+  const revealing = wasRun.current && showAccount
+  wasRun.current = !showAccount
+
+  if (!showAccount && !showRun) return null
+
+  // `session &&` as well as `showRun`, so the branch narrows. `chipMode` only
+  // answers `run` for a session, but that is a fact about another module and
+  // the compiler is right not to take it on trust.
+  if (showRun && session) {
+    return (
+      <div className="account-chip account-chip-run">
+        <button
+          type="button"
+          className="folder-chip-button run-agent-button"
+          title={
+            session.exited
+              ? 'This session has ended — nothing can be started in it'
+              : 'Start Claude in this session. Types the command for you, in this terminal.'
+          }
+          disabled={session.exited}
+          onClick={runAgent}
+        >
+          {/* The same glyph the terminal draws for a prompt — this button is
+              standing in for typing at one. */}
+          <span className="run-agent-glyph" aria-hidden="true">
+            ❯
+          </span>
+          <span>Run Claude</span>
+        </button>
+      </div>
+    )
+  }
+
   return (
-    <div className="account-chip" ref={menu.hostRef}>
+    <div
+      className={revealing ? 'account-chip is-revealing' : 'account-chip'}
+      ref={menu.hostRef}
+    >
       <button
         type="button"
         className="folder-chip-button account-chip-button"
@@ -170,6 +384,49 @@ export function AccountChip({ current, projectPath, provider, onPick, onManage }
 
             {rows.map((account) => {
               const state = accounts.signIn[account.id]
+
+              /*
+               * Renaming in place, in the row the name is already on.
+               *
+               * A form, so Return submits without a button of its own — the
+               * whole row is 300px wide and a Save button beside a field that
+               * accepts Return would be the third control on one line.
+               */
+              if (editing?.id === account.id) {
+                return (
+                  <form
+                    key={account.id}
+                    className="folder-menu-item account-menu-item account-menu-rename"
+                    onSubmit={(event) => {
+                      event.preventDefault()
+                      save(account)
+                    }}
+                  >
+                    <span
+                      className="account-chip-dot"
+                      aria-hidden="true"
+                      style={{ background: `var(${account.color})` }}
+                    />
+                    <input
+                      className="account-menu-input"
+                      value={editing.draft}
+                      maxLength={MAX_ACCOUNT_NAME_LENGTH}
+                      autoFocus
+                      disabled={saving}
+                      aria-label={`New name for ${account.name}`}
+                      onChange={(event) => setEditing({ id: account.id, draft: event.target.value })}
+                      onKeyDown={(event) => {
+                        // The menu is holding Escape open for exactly this.
+                        if (event.key !== 'Escape') return
+                        event.preventDefault()
+                        setEditing(null)
+                        setFailure(null)
+                      }}
+                    />
+                  </form>
+                )
+              }
+
               const line = (
                 <>
                   <span className="account-menu-line">
@@ -195,24 +452,46 @@ export function AccountChip({ current, projectPath, provider, onPick, onManage }
                * in to — but nothing here can act on them while this agent has no
                * config directory to redirect, and a button that cannot be
                * pressed still looks like the app's answer to the question.
+               *
+               * Rename stays available even then. Whether this agent can be
+               * given a config directory has nothing to do with whether the
+               * account's *name* is right, and the name is what is on screen.
                */
-              return blocked ? (
-                <p key={account.id} className="folder-menu-item account-menu-item is-inert">
-                  {line}
-                </p>
-              ) : (
-                <button
-                  key={account.id}
-                  type="button"
-                  role="menuitem"
-                  className="folder-menu-item account-menu-item"
-                  data-current={account.id === currentId || undefined}
-                  onClick={() => menu.choose(() => onPick(account.id))}
-                >
-                  {line}
-                </button>
+              return (
+                <div key={account.id} className="account-menu-row">
+                  {blocked ? (
+                    <p className="folder-menu-item account-menu-item is-inert">{line}</p>
+                  ) : (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="folder-menu-item account-menu-item"
+                      data-current={account.id === currentId || undefined}
+                      onClick={() => menu.choose(() => onPick(account.id))}
+                    >
+                      {line}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="account-menu-rename-button"
+                    title={`Rename ${account.name}`}
+                    aria-label={`Rename ${account.name}`}
+                    onClick={() => {
+                      setFailure(null)
+                      setEditing({ id: account.id, draft: account.name })
+                    }}
+                  >
+                    Rename
+                  </button>
+                </div>
               )
             })}
+
+            {/* Why a rename did not take. Held next to the field rather than
+                announced and dismissed, because the field is still open with
+                the typed name in it. */}
+            {failure && <p className="account-menu-empty">{failure}</p>}
 
             {rows.length === 0 && (
               <p className="account-menu-empty">

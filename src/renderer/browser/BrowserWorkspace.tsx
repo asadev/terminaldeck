@@ -5,6 +5,7 @@ import { RecorderPanel } from './RecorderPanel'
 import { SessionModal } from './SessionModal'
 import { Toolbar } from './Toolbar'
 import {
+  appCanvasColor,
   missingBridgeMethods,
   recordingAccent,
   resolveBrowserBridge,
@@ -34,6 +35,7 @@ import {
   type IsolationApi,
 } from './isolation-bridge'
 import { resolveOmnibox, securityOf } from './omnibox'
+import { browserOverlayDom, isCovered, watchOverlays, type Rect as OverlayRect } from './overlay-watch'
 import { StartPage } from './StartPage'
 import {
   closeTab as closeInList,
@@ -128,7 +130,66 @@ function patchFrom(state: BrowserTabState): Partial<WorkspaceTab> {
     canGoForward: state.canGoForward,
     inspecting: state.inspecting,
     error: state.error,
+    // Older main processes did not send this. `=== true` rather than a truthy
+    // read, so an absent field means "no error page" instead of `undefined`
+    // leaking into a boolean prop.
+    failed: state.failed === true,
   }
+}
+
+/**
+ * Is this tab showing Terminal Deck's own page rather than a website?
+ *
+ * Two cases, one answer, because the native view has to be hidden for both: a
+ * tab that has not been anywhere yet, and a tab whose load failed — where the
+ * document in the view is Chromium's red error page and the whole point of the
+ * change is that nobody should ever see it.
+ */
+export function onStartPage(tab: WorkspaceTab): boolean {
+  return !tab.url || tab.url === 'about:blank' || tab.failed
+}
+
+/** Everything that decides whether a native page is composited right now. */
+export interface PageVisibility {
+  /** This tab is the one the panel is showing. */
+  isActive: boolean
+  /** The panel's own tab is the one the window is showing. */
+  visible: boolean
+  /** An app-level dialog is up. */
+  parkPage: boolean
+  /** The panel's cookies dialog is up. */
+  sessionOpen: boolean
+  /** Some HTML surface is over the page's rectangle — see `overlay-watch.ts`. */
+  covered: boolean
+}
+
+/**
+ * Should this tab's native view be composited?
+ *
+ * Pulled out of the effect and exported because it is the whole of both bugs
+ * this file was changed for, and because an effect is the one place a rule
+ * cannot be tested — this project's test run has no DOM, so effects never fire.
+ *
+ * Every one of these is a hide, and each is a different reason:
+ *
+ *  - not the active tab, or not the visible panel: an ordinary tab switch;
+ *  - `parkPage` / `sessionOpen`: a dialog, which is HTML and would otherwise
+ *    open *behind* the website;
+ *  - `covered`: a menu, a tooltip or the peeked rail landing on the page —
+ *    the same fault as a dialog, but transient, so it is decided by geometry
+ *    rather than by a flag;
+ *  - `onStartPage`: there is no page to show, or the only thing in the view is
+ *    Chromium's error document.
+ */
+export function pageVisible(tab: WorkspaceTab, state: PageVisibility): boolean {
+  return (
+    state.isActive &&
+    state.visible &&
+    !state.parkPage &&
+    !state.sessionOpen &&
+    !state.covered &&
+    !onStartPage(tab)
+  )
 }
 
 function rectOf(node: HTMLElement | null): Rect {
@@ -313,6 +374,30 @@ export function BrowserWorkspace({
     }
   }, [tabs.length, deviceOpen, bottom, capture, recording.steps.length, shot, notice])
 
+  /*
+   * Every HTML surface currently floating over the app.
+   *
+   * The one lever that exists for "a popup is hiding behind the page". Read
+   * `overlay-watch.ts` before touching this — the summary is that a browser page
+   * is a NATIVE view composited above the entire renderer, so no z-index, no
+   * portal and no stacking context can put HTML on top of it, and hiding the
+   * view for as long as something is over it is the only thing Electron offers.
+   *
+   * Rectangles rather than a boolean, because parking the page for every
+   * tooltip would blank a website whenever the pointer rested on a sidebar row.
+   * The intersection test below is what keeps it to the ones that actually land
+   * on the page.
+   */
+  const [overlays, setOverlays] = useState<OverlayRect[]>([])
+  useEffect(() => {
+    const dom = browserOverlayDom()
+    if (!dom) return
+    return watchOverlays(dom, setOverlays)
+  }, [])
+  // `fit.rect`, not `stage`: framed to a phone size the view is a 390px column
+  // inside the stage, and an overlay in the empty desk beside it covers nothing.
+  const covered = isCovered(fit.rect, overlays)
+
   /* -- push bounds and visibility. The dialog parks the view: it is a native
         layer, so it would otherwise open behind the website. */
   useEffect(() => {
@@ -322,15 +407,12 @@ export function BrowserWorkspace({
       if (!tab.id) continue
       const isActive = tab.key === activeKey
       if (isActive) api.browserBounds(tab.id, bounds)
-      // A tab still on the start page keeps its native view hidden, so the
-      // React start page underneath is what the user sees.
-      const onStartPage = !tab.url || tab.url === 'about:blank'
       api.browserVisible(
         tab.id,
-        isActive && visible && !parkPage && !sessionOpen && !onStartPage,
+        pageVisible(tab, { isActive, visible, parkPage, sessionOpen, covered }),
       )
     }
-  }, [api, tabs, activeKey, fit, visible, parkPage, sessionOpen])
+  }, [api, tabs, activeKey, fit, visible, parkPage, sessionOpen, covered])
 
   /* -- events from the main process, matched to tabs by id. */
   useEffect(() => {
@@ -396,6 +478,12 @@ export function BrowserWorkspace({
         const state = await api.browserCreate({
           url,
           visible: false,
+          // The app's own canvas, so an empty view is not a white rectangle in
+          // a dark app. Read from `tokens.css` at the moment it is needed — the
+          // main process has no stylesheet — and validated there before it
+          // reaches a native call. See `browser-background.ts` for why a
+          // *loaded* page still gets white.
+          background: appCanvasColor(),
           ...(isolationKey ? { isolationKey } : {}),
         })
         if (generation.current !== mine) {
@@ -726,7 +814,11 @@ export function BrowserWorkspace({
         />
       )}
 
-      {active?.error && (
+      {/* Only for a failure the page survived — a blocked pop-up, a refused
+          scheme. A failed *load* is written across the start page instead, and
+          printing it in both places would say the same sentence twice, a
+          centimetre apart. */}
+      {active?.error && !active.failed && (
         <p className="bw-error" role="status">
           {active.error}
         </p>
@@ -772,11 +864,24 @@ export function BrowserWorkspace({
         {tabs.length === 0 && (
           <p className="bw-empty">No page open. Use New browser tab in the sidebar to open one.</p>
         )}
-        {(() => {
-          const active = tabs.find((t) => t.key === activeKey)
-          if (!active || (active.url && active.url !== 'about:blank')) return null
-          return <StartPage onOpen={(url) => navigate(url)} />
-        })()}
+        {/*
+          Terminal Deck's own page, on the rectangle the native view would
+          otherwise hold. Two occasions, and the second one is the fix for the
+          first thing he saw on Windows: a new tab, and a tab whose load failed
+          — where without this the user is looking at Chromium's red
+          "connection refused" document with no way out of it but the toolbar.
+        */}
+        {active && onStartPage(active) && (
+          <StartPage
+            onOpen={(url) => navigate(url)}
+            failure={
+              active.failed && active.error
+                ? { message: active.error, url: active.url || active.draft }
+                : null
+            }
+            onRetry={active.failed ? () => act((a, id) => a.browserReload(id)) : undefined}
+          />
+        )}
         {deviceSize !== null && tabs.length > 0 && (
           <span
             className="bw-frame"

@@ -9,6 +9,12 @@
    The list never invents a row. If nothing is listening the page says so in a
    sentence — guessing `localhost:3000` is how this panel used to open on
    Chrome's error page.
+
+   The same page also stands in for that error page. A failed load hides the
+   native view and shows this with the failure's sentence at the top, which is
+   why there is an address field here as well as in the toolbar: the moment
+   somebody needs one most is the moment the page in front of them is a dead
+   end.
    ============================================================================ */
 
 .bw-start {
@@ -43,6 +49,83 @@
   color: var(--text-secondary);
   text-align: center;
   text-wrap: pretty;
+}
+
+/* The sentence that replaces Chromium's error page.
+
+   A tint and a radius, not a red border and an icon. It is already the first
+   thing under a heading that says the page did not open, so shouting a second
+   time would be the third statement of the same fact — and the text is a
+   written sentence, which is the whole point of the change. */
+.bw-start-failure {
+  margin-bottom: var(--sp-4);
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--radius-lg);
+  background: var(--fill-quaternary);
+  color: var(--text-primary);
+}
+
+/* ---------------------------------------------------------- the address -- */
+
+/*
+  An address bar ON the page, as well as the one in the toolbar above it.
+
+  Not a duplicate control: the toolbar's omnibox is chrome you have to know is
+  there, and this page exists precisely for the moment somebody does not know
+  what to do next. Both submit through the same `resolveOmnibox`, so they cannot
+  disagree about what `localhost:5173` means.
+*/
+.bw-start-form {
+  display: flex;
+  gap: var(--sp-2);
+  margin: 0 0 var(--sp-6);
+}
+
+.bw-start-address {
+  flex: 1;
+  min-width: 0;
+  height: var(--control-h);
+  padding: 0 var(--sp-3);
+  border-radius: var(--radius-md);
+  background: var(--fill-quaternary);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--t-callout);
+}
+
+.bw-start-address::placeholder {
+  color: var(--text-muted);
+  font-family: var(--font-ui);
+}
+
+.bw-start-address:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.bw-start-go {
+  flex-shrink: 0;
+  height: var(--control-h);
+  padding: 0 var(--sp-4);
+  border-radius: var(--radius-md);
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: var(--t-callout);
+  font-weight: var(--w-medium);
+}
+
+.bw-start-go:disabled {
+  background: var(--fill-tertiary);
+  color: var(--text-muted);
+}
+
+.bw-start-retry {
+  color: var(--accent);
+  font-size: var(--t-callout);
+}
+
+.bw-start-retry:hover {
+  text-decoration: underline;
 }
 
 .bw-start-list {

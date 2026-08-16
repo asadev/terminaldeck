@@ -48,8 +48,11 @@ import {
   confinedEnv,
   confinementKind,
   deviceHomesRoot,
+  installWindowsTools,
   planFor,
   prepareDeviceHome,
+  windowsConfinedEnv,
+  windowsToolsFor,
   type DeviceConfinement,
 } from './confine'
 import { installDeviceHomes } from './transcript'
@@ -287,6 +290,24 @@ export function createHostCore(options: HostCoreOptions): HostCore {
    */
   installDeviceHomes(deviceHomesRoot(options.storageDir))
 
+  /*
+   * Tell the confinement layer where the Windows launcher and the one-time
+   * grant are.
+   *
+   * Here, at assembly, and for the same two reasons the line above it is: the
+   * headless build calls this function and its sessions are confined the same
+   * way, and `confine/` has no way to learn either path for itself — one is
+   * wherever Electron unpacked its resources, the other is inside this install's
+   * storage directory.
+   *
+   * It runs on every platform on purpose. `confinementKind` is what decides
+   * whether any of it matters, and a call site that only ran this on Windows
+   * would be a second place that has to know which platforms have which
+   * mechanism — which is exactly the split that left Linux confinement built,
+   * tested and switched off.
+   */
+  installWindowsTools(windowsToolsFor(options.storageDir))
+
   /**
    * Start a session. The one place that does, for the window and for a phone.
    *
@@ -384,10 +405,28 @@ export function createHostCore(options: HostCoreOptions): HostCore {
      * broken session rather than as a boundary. `confine/plan.ts` says why the
      * `PATH` is deliberately not touched in the same breath.
      */
+    /*
+     * `confinedEnv` on macOS and Linux, `windowsConfinedEnv` on Windows, and the
+     * difference is not the path separator.
+     *
+     * `confinedEnv` sets `HOME` and `TMPDIR`, which is the POSIX spelling of
+     * this idea and is read by almost nothing on Windows: `node`'s
+     * `os.homedir()` reads `USERPROFILE`, git-for-windows tries `HOME` then
+     * `HOMEDRIVE`+`HOMEPATH` then `USERPROFILE`, and `TEMP`/`TMP` are what
+     * everything uses for scratch space. Measured inside a real confined session
+     * on the Windows machine: with only `HOME` set, git printed `warning: unable
+     * to access 'C:/Users/<user>/.gitconfig': Permission denied` three times and
+     * then `fatal: unknown error occurred while reading the configuration
+     * files`. The boundary was working perfectly and the session was unusable.
+     * With `windowsConfinedEnv`, the same session ran `git status`, `git log`
+     * and `git commit`.
+     */
+    const confinedHomeEnv = (home: string): Record<string, string> =>
+      confinementKind(platform) === 'appcontainer' ? windowsConfinedEnv(home) : confinedEnv(home)
     const profileEnv = {
       ...sessionEnv(profile, provider),
       ...(guest?.set ?? {}),
-      ...(confined && confine ? confinedEnv(confine.home) : {}),
+      ...(confined && confine ? confinedHomeEnv(confine.home) : {}),
     }
     /*
      * The guest's git variables have to cross the WSL boundary too, and they are

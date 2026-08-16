@@ -250,7 +250,15 @@ disown "$SAMPLER_PID" 2>/dev/null || true
 # ---------------------------------------------------------------- the run ----
 
 READY="$PROOF/ready.txt"
-rm -f "$READY"
+# The other half of the same handshake, in the other direction: the phone says
+# it is at the pairing screen by writing READY, and the harness answers with six
+# digits in CODE_FILE. It has to be a file rather than an environment variable
+# because the code is minted *after* the phone gets there — a code is good for
+# sixty seconds and a Simulator takes longer than that to build, install and
+# launch, so minting one before `xcodebuild` starts would hand the test something
+# that had already expired.
+CODE_FILE="$PROOF/pair-code.txt"
+rm -f "$READY" "$CODE_FILE"
 rm -rf "$PROOF/result.xcresult"
 
 say "test: xcodebuild against $DEVICE_NAME"
@@ -275,6 +283,7 @@ say "test: xcodebuild against $DEVICE_NAME"
 # the door marked "how to run the tests" — both files have been corrected.
 (
     TEST_RUNNER_TD_READY_FILE="$READY" \
+    TEST_RUNNER_TD_CODE_FILE="$CODE_FILE" \
     TEST_RUNNER_TD_UPLOADS_DIR="$UPLOADS" \
     TEST_RUNNER_TD_SOURCE_MEDIA="$SOURCE_MEDIA" \
     TEST_RUNNER_TD_SHOTS="$SHOTS" \
@@ -304,13 +313,15 @@ for _ in $(seq 1 900); do
 done
 
 if [[ -f "$READY" ]]; then
-    LINK="$("$HARNESS" live pair --state "$STATE" --out "$PROOF/pair-uri.txt" | tail -1)"
-    echo "  $LINK"
-    # `openurl` is the door a scanned QR code comes through: the OS hands the URL
-    # to the app that claims the scheme and `TerminalDeckApp` answers it in
-    # `onOpenURL`. Typing 130 characters of percent-encoding through the software
-    # keyboard is the same journey with more ways to go wrong.
-    xcrun simctl openurl "$UDID" "$LINK"
+    # Six digits, written where the test is watching for them. This used to be
+    # `simctl openurl` with a `terminaldeck://pair?…` link, which was the door a
+    # scanned QR came through — and which also raised a SpringBoard alert
+    # ("Open in Terminal Deck?") that the test had to find and tap, because as far
+    # as iOS was concerned another program was handing this app a link. None of
+    # that exists now: the product's only way in is a typed code, so the proof
+    # types one.
+    CODE="$("$HARNESS" live pair --state "$STATE" --out "$CODE_FILE" | tail -1)"
+    echo "  $CODE"
     say "pairing: approving the device the way pressing Approve does"
     # Not fatal. If nothing pairs, the run has still produced screenshots, a host
     # log and a test result, and the evidence section at the bottom is where that

@@ -1,6 +1,15 @@
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { app, BrowserWindow, dialog, ipcMain, powerMonitor, session, shell } from 'electron'
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  nativeTheme,
+  powerMonitor,
+  session,
+  shell,
+} from 'electron'
 import { BRAND } from '../shared/brand'
 import type { CreateSessionInput } from '../shared/types'
 import { createHostCore } from './host-core'
@@ -39,6 +48,7 @@ import {
 import { registerGitHubIpc } from './github'
 import { registerReadinessIpc } from './readiness'
 import { registerDashboardIpc } from './dashboard-store'
+import { registerArtifactsIpc } from './artifacts'
 import { registerSessionSearchIpc } from './session-search'
 import { registerAlertsIpc } from './alerts'
 import { registerProfilesIpc, getState as profilesState, resolveProfile } from './profiles'
@@ -65,7 +75,8 @@ import { registerLidAwakeIpc } from './lid-awake'
 import { logger } from './app-log'
 import { registerLogIpc } from './app-log-ipc'
 import { traceIpc, TRACE_SETTING } from './ipc-trace'
-import { buildMenu } from './menu'
+import { buildMenu, hidesMenuBar } from './menu'
+import { overlayFor, resolveAppearance, titleBarChrome, type Appearance } from './title-bar'
 import { registerSetupIpc } from './setup'
 import { registerCookieImportIpc } from './cookie-import'
 import { registerBrowserIsolationIpc } from './browser-isolation'
@@ -309,6 +320,39 @@ const core = createHostCore({
  */
 const { ptys, wsl, sessions: remoteSessions, ledger, startSession, statablePath } = core
 
+/**
+ * The appearance the window's own chrome has to be painted in.
+ *
+ * The renderer resolves this same rule for itself — it owns the `data-theme`
+ * attribute — and the two are deliberately not one call: they are in different
+ * processes, and this side needs the answer as a *colour* because the window
+ * buttons on Windows are drawn by the OS outside the page, where no CSS
+ * variable can reach. `nativeTheme.shouldUseDarkColors` is the same OS
+ * preference the renderer's `prefers-color-scheme` media query reads.
+ */
+function appearance(): Appearance {
+  return resolveAppearance(store().getPreferences().theme, nativeTheme.shouldUseDarkColors)
+}
+
+/** True once `nativeTheme` is being watched, so re-creating the window adds no second listener. */
+let watchingAppearance = false
+
+/**
+ * Repaint the Windows window-controls overlay for the theme that is on now.
+ *
+ * Without this the strip keeps whatever colour it was given at launch: switch
+ * to the light theme and the top-right corner of a white window stays a dark
+ * grey rectangle with the buttons in it, which is a more obvious defect than
+ * the stacked title bars this replaced. It is a no-op on every platform that
+ * has no overlay — `overlayFor` returns null there, and `setTitleBarOverlay` is
+ * not a method that exists on macOS, so the guard has to come first.
+ */
+function syncTitleBarOverlay(): void {
+  const overlay = overlayFor(process.platform, appearance())
+  if (!overlay || !mainWindow || mainWindow.isDestroyed()) return
+  mainWindow.setTitleBarOverlay(overlay)
+}
+
 function createWindow(): void {
   const saved = store().getState().windowBounds
   mainWindow = new BrowserWindow({
@@ -332,8 +376,26 @@ function createWindow(): void {
      * --bg-primary in the dark theme changes, change this with it.
      */
     backgroundColor: '#191919',
-    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
-    trafficLightPosition: { x: 14, y: 12 },
+    /*
+     * The whole top edge of the window, per platform — see `title-bar.ts`.
+     *
+     * This used to be a `process.platform === 'darwin'` ternary written out
+     * here, with `trafficLightPosition` passed on every platform whether it
+     * meant anything or not, and the result was that Windows sat on the default
+     * frame: an OS title bar, then a menu bar, then our own toolbar. Three
+     * strips saying what one bar says. A branch written inline in a constructor
+     * can only ever be read on the machine that takes it, which is why it lives
+     * in a function that takes the platform as a value and has both answers
+     * pinned side by side in `title-bar.test.ts`.
+     */
+    ...titleBarChrome(process.platform, appearance()),
+    /*
+     * Off macOS the application menu is a strip *inside* the window, and it was
+     * the third of those bars. Hidden, not removed: Electron registers every
+     * accelerator through the menu, so a null menu is an app with no Ctrl+C.
+     * `menu.ts` makes that argument at length.
+     */
+    autoHideMenuBar: hidesMenuBar(process.platform),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -341,6 +403,21 @@ function createWindow(): void {
       sandbox: false,
     },
   })
+
+  /*
+   * The other half of the theme, which arrives without anybody asking.
+   *
+   * `prefs:set` covers the user changing the theme in Settings. This covers the
+   * *system* changing underneath a window whose preference is 'system' — macOS
+   * and Windows both flip appearance on a schedule by default, so this is not
+   * an edge case, it is most evenings. Attached once for the life of the
+   * process rather than per window: macOS re-creates the window on `activate`,
+   * and a second listener would be a second repaint of the same strip.
+   */
+  if (!watchingAppearance) {
+    watchingAppearance = true
+    nativeTheme.on('updated', syncTitleBarOverlay)
+  }
 
   // Liveness, from the events rather than by asking. `render-process-gone` is
   // the one that matters when the renderer dies under the app; `close` is the
@@ -631,7 +708,23 @@ function registerIpc(): void {
   ipcMain.handle('projects:add', (_e, path: string) => store().addProject(path))
   ipcMain.handle('projects:remove', (_e, path: string) => store().removeProject(path))
   ipcMain.handle('prefs:get', () => store().getPreferences())
-  ipcMain.handle('prefs:set', (_e, patch: Partial<Preferences>) => store().setPreferences(patch))
+  ipcMain.handle('prefs:set', (_e, patch: Partial<Preferences>) => {
+    const preferences = store().setPreferences(patch)
+    /*
+     * The theme switch cannot reach the window buttons on its own.
+     *
+     * On Windows they are painted by the OS in a colour handed to it once, in a
+     * strip that is outside the page — so the renderer flipping `data-theme`
+     * repaints every pixel of the app except the three in the top-right corner.
+     * Called for every preference change rather than only for `theme`, because
+     * the patch is a partial and "did the theme change" is a question with a
+     * wrong answer available (`'theme' in patch` is false when the renderer
+     * writes the whole object back); repainting the strip in the colour it is
+     * already wearing costs nothing.
+     */
+    syncTitleBarOverlay()
+    return preferences
+  })
 
   // Feature modules own their own channels; each registers in one line.
   registerCostIpc(ipcMain)
@@ -764,6 +857,7 @@ function registerIpc(): void {
   registerReadinessIpc(ipcMain)
   registerDashboardIpc(ipcMain)
   registerSessionSearchIpc(ipcMain)
+  registerArtifactsIpc(ipcMain)
   registerProfilesIpc(ipcMain)
   // The one profile question that cannot be answered by reading a directory:
   // whether an account is signed in. See `profiles-signin.ts`.

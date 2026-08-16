@@ -1,33 +1,16 @@
 /* ============================================================================
-   Remote access.
+   Remote — every device paired with this machine.
 
-   Only what the shared settings controls do not already cover: the QR figure,
-   the pairing layout, and the device, connection and tunnel rows. Everything
-   else on this panel is a `settings-*` class, so it keeps matching the rest of
-   the window when that changes.
+   Only what the shared settings controls do not already cover: the ways in, the
+   pairing code and the layout around it, and the device, connection and tunnel
+   rows. Everything else in this section is a `settings-*` class, so it keeps
+   matching the rest of the window when that changes. The machines this desktop
+   can reach are the same section and their own file, `machines/machines.css`.
 
    Nothing here is boxed. A group of rows is one soft fill with space between
    the rows; a status is a word in a meaningful colour rather than an outline
-   around one. The one place this file deliberately ignores the theme is the QR
-   code — see below.
+   around one.
    ============================================================================ */
-
-/* ------------------------------------------------------------- addresses -- */
-
-.remote-url {
-  margin: var(--sp-2) 0;
-  overflow-wrap: anywhere;
-}
-
-/* Monospace and selectable: this is read aloud, typed on a phone keyboard, and
-   occasionally copied. A proportional font makes rn/m and l/1 arguments. */
-.remote-url code {
-  font-family: var(--font-mono);
-  font-size: var(--t-callout);
-  line-height: var(--lh-loose);
-  color: var(--text-primary);
-  user-select: text;
-}
 
 /* ---------------------------------------------------------------- paths -- */
 
@@ -145,61 +128,72 @@
   overflow-wrap: anywhere;
 }
 
-/* ------------------------------------------------------------------- QR -- */
+/* ----------------------------------------------------------- the pairing -- */
 
-.remote-pairing {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
+/* Two halves, in the order somebody does them: show a code here, type one from
+   there. They sit on one row because a person pairing is standing between two
+   keyboards and needs both instructions in one glance — and they wrap onto two
+   rows in a narrow window rather than shrinking, because the six boxes on the
+   right have a floor.
+
+   There was a QR code here, 260 square, with a copyable `terminaldeck://pair`
+   link beside it. Both are gone: the QR could only be read by a phone, which
+   left a second desktop with nothing to do, and the link was a live bearer token
+   in a string whose only route between two machines was a chat app. The rules
+   for both went with them — a stylesheet that keeps the class for something the
+   markup no longer has is where a deleted feature comes back. */
+.remote-pair {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(19rem, 1fr));
   gap: var(--sp-5);
   margin: var(--sp-3) 0 var(--sp-1);
 }
 
-.remote-pairing-side {
-  flex: 1;
-  min-width: 220px;
+.remote-pair-half {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-2);
 }
 
-/* The note explaining the chosen path is a caption for the buttons above it,
-   not for the countdown below — without this they read as one paragraph. */
-.remote-pairing-side .remote-path-note {
-  margin: 0 0 var(--sp-3);
+/* Brighter title, dimmer body: the treatment the brief asks for wherever an
+   option needs a paragraph, and the same one `Explain` uses. */
+.remote-pair-title {
+  margin: 0;
+  font-size: var(--t-body);
+  font-weight: var(--w-semibold);
+  color: var(--text-primary);
 }
 
-/* Black on white in both themes, on purpose.
-
-   A scanner needs the quiet zone lighter than the modules. Some cope with an
-   inverted code and some do not, and this is the one surface in the app whose
-   entire job is to be photographed — so it does not participate in dark mode.
-   `crispEdges` in the markup stops the browser antialiasing module edges into
-   grey, which is what turns a code that reads at arm's length into one that
-   needs three tries.
-
-   260px is not decoration, and it grew when the relay arrived. A direct link is
-   about ninety bytes and draws a 41×41 symbol; a relay link carries a host id, a
-   32-byte key and the token as well, which measures 181 bytes and draws a 57×57
-   one — 65 modules across with the quiet zone. At 260px that is four screen
-   pixels per module, which is what the old size gave the smaller code. The relay
-   link is the one nearly every scan will be of, so it is the one sized for.
-
-   A soft shadow rather than a hairline: on paper the white plate needs an edge,
-   and depth is how the rest of this app draws one. */
-.remote-qr {
-  width: 260px;
-  height: 260px;
-  max-width: 100%;
-  flex-shrink: 0;
-  border: none;
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-sm);
+.remote-pair-half .settings-prose {
+  margin: 0;
+  max-width: 42ch;
 }
 
-.remote-qr-paper {
-  fill: #ffffff;
-}
+/* ------------------------------------------------------------- the code -- */
 
-.remote-qr-ink {
-  fill: #000000;
+/* The six digits, and the largest thing in the section.
+
+   It is read off this screen from a step back and typed into a device held in
+   the other hand, so it is set the way a terminal sets things: mono, tracked
+   out, tabular, full contrast. `--font-mono` puts JetBrains Mono in front of
+   Menlo, which is the reason the digits are unmistakable — a zero with a dot in
+   it, a one with a base, a seven that cannot be read as a one.
+
+   Selectable, because the code is occasionally copied by hand; there is a Copy
+   button beside it as well. */
+.remote-code {
+  margin: var(--sp-1) 0 0;
+  font-family: var(--font-mono);
+  font-size: var(--t-title1);
+  font-weight: var(--w-medium);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.18em;
+  /* The tracking above adds space after the last digit too, which reads as a
+     code that is off-centre in its own block. */
+  text-indent: 0.18em;
+  color: var(--text-primary);
+  user-select: text;
 }
 
 .remote-countdown {
@@ -213,60 +207,6 @@
 /* Muted rather than red: an expired code is the system working, not a fault. */
 .remote-countdown-done {
   color: var(--text-muted);
-}
-
-/* --------------------------------------------------------- the choice --- */
-
-/* Which way the code points. A segmented control rather than a dropdown: there
-   are two options, both are one word long, and the current one has to be
-   readable without opening anything. Same recessed track and raised pill as
-   the terminal/chat toggle — this is a mode, not a selection, so no colour is
-   involved. */
-.remote-choice {
-  display: inline-flex;
-  gap: 1px;
-  margin: 0 0 var(--sp-2);
-  padding: var(--sp-05);
-  border: none;
-  border-radius: var(--radius-md);
-  background: var(--fill-tertiary);
-}
-
-.remote-choice-btn {
-  appearance: none;
-  height: 24px;
-  padding: 0 var(--sp-3);
-  border: none;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  font-family: var(--font-ui);
-  font-size: var(--t-callout);
-  font-weight: var(--w-medium);
-  color: var(--text-secondary);
-  white-space: nowrap;
-  cursor: pointer;
-  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
-}
-
-.remote-choice-btn:hover {
-  color: var(--text-primary);
-}
-
-.remote-choice-btn[aria-pressed='true'],
-.remote-choice-btn[aria-pressed='true']:hover {
-  background: var(--bg-primary);
-  color: var(--text-primary);
-  box-shadow: var(--shadow-sm);
-}
-
-[data-theme='dark'] .remote-choice-btn[aria-pressed='true'],
-[data-theme='dark'] .remote-choice-btn[aria-pressed='true']:hover {
-  background: var(--bg-tertiary);
-}
-
-.remote-choice-btn:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
 }
 
 /* --------------------------------------------------- the fingerprint ---- */

@@ -294,6 +294,26 @@ const api = {
     maxHits?: number
   }): Promise<unknown> => ipcRenderer.invoke('session-search:run', request),
   cancelSessionSearch: (): Promise<void> => ipcRenderer.invoke('session-search:cancel'),
+
+  /* ------------------------------------------------------- artifacts -- */
+  //
+  // What the agents in a project actually wrote, read back out of the
+  // transcripts' own `Write`/`Edit`/`NotebookEdit` tool calls.
+  //
+  // `scope` is not a convenience. A project's own transcripts can contain zero
+  // file writes while hundreds of real writes *into that folder* sit under a
+  // parent workspace's transcripts, because the agents were launched from the
+  // parent and reached in — measured here as 0 artifacts under `scope: 'project'`
+  // against 75 under `scope: 'all'` for this very repository. So the wider scope
+  // has to be reachable, and the narrow one stays the default because it is the
+  // cheap one (8ms against ~1.1s).
+  listArtifacts: (request: { cwd: string; scope?: 'project' | 'all' }): Promise<unknown> =>
+    ipcRenderer.invoke('artifacts:list', request),
+  artifactChanges: (request: {
+    cwd: string
+    relPath: string
+    scope?: 'project' | 'all'
+  }): Promise<unknown> => ipcRenderer.invoke('artifacts:changes', request),
   projectAlerts: (projectPath: string): Promise<unknown> =>
     ipcRenderer.invoke('alerts:project', projectPath),
 

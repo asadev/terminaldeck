@@ -32,17 +32,31 @@
 
 /* ------------------------------------------------------------------- bar -- */
 
-/* No rule under it: the gap to the first tile is what separates them. */
+/*
+  The widget section's own heading row.
+
+  It used to float above the whole page, which read as chrome for the Overview
+  rather than as the head of one section of it — and with the session board
+  above it now, chrome for the board is exactly what it would have been
+  mistaken for. `--sp-8` of air above it is the only thing separating the two
+  halves of this page: no rule, no card, no tinted band.
+*/
 .dashboard-bar {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   gap: var(--sp-3);
   flex-shrink: 0;
-  padding: 0 var(--widget-gutter) var(--sp-4);
+  padding: var(--sp-8) var(--widget-gutter) var(--sp-4);
 }
 
-.dashboard-title {
-  margin: 0;
+/* `margin-inline-end: auto` so the buttons stay on the right when the hint
+   beside it is withdrawn — an empty grid hides the hint, and without this the
+   Add widget button slides across and sits against the heading. It costs
+   nothing when the hint is there: `flex: 1` on the hint leaves no free space
+   for an auto margin to take. */
+.dashboard-heading {
+  margin: 0 auto 0 0;
+  flex-shrink: 0;
   font-size: var(--t-title3);
   font-weight: var(--w-semibold);
   letter-spacing: var(--t-title3-ls);
@@ -113,18 +127,30 @@
   overflow-x: hidden;
 }
 
+/* No `min-height` any more, and its absence is load-bearing: the grid used to
+   claim the full height of the scroller because it was the only thing in it,
+   and with the session board above it that claim pushes a viewport of empty
+   paper under two widgets. gridstack sizes this box from its own rows. */
 .dashboard-grid {
-  /* gridstack positions children absolutely against this box; it must not
-     collapse or the first widget lands outside the scroll area. */
-  min-height: 100%;
+  min-height: 0;
 }
 
-/* `.dashboard-empty` and its own title and detail were here — a fourth
-   arrangement of the same three parts. The Overview uses the app's `PageEmpty`
-   now; the only thing left to say is where it sits, because this scroller has
-   a grid in it that stays mounted underneath. */
-.dashboard-scroll > .page-blank {
-  margin-top: 9vh;
+/* The board's empty state, which is now the empty state of the *page* — the
+   grid below it is a second section rather than the only content, so this sits
+   where a reader's eye lands rather than in the exact middle of the window.
+
+   `auto` on the sides, not `0`: `.page-blank` is a 30rem column centred by its
+   own `margin: 0 auto`, and a shorthand here that sets the sides to zero
+   silently un-centres every empty state on this page. */
+.board > .page-blank {
+  margin: 6vh auto var(--sp-4);
+}
+
+/* The widget section's "nothing here yet" line, indented to where the first
+   tile's own text starts. Only the inline padding — the block padding is what
+   holds it off the bar above. */
+.dashboard-scroll > .page-blank-line {
+  padding-inline: var(--widget-gutter);
 }
 
 /* --------------------------------------------------------------- widgets -- */

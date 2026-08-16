@@ -11,7 +11,7 @@
  * Same harness and the same skip rule as `LiveSessionUITests`:
  *
  *     TD_FORCE_SHELL=1 scripts/remote-host.sh --relay-port 8791 &
- *     xcrun simctl openurl booted "$(cat .harness/.remote-host/pairing.txt)"
+ *     # then type the six digits in .harness/.remote-host/pairing.txt into the field
  *     xcodebuild test … -only-testing:TerminalDeckUITests/ClipboardAndTransferUITests
  *
  * ## Screenshots
@@ -44,7 +44,7 @@ final class ClipboardAndTransferUITests: XCTestCase {
 
     private static let notRunning =
         "This phone is not connected to a running harness. Start scripts/remote-host.sh, "
-        + "then: xcrun simctl openurl booted \"$(cat .harness/.remote-host/pairing.txt)\""
+        + "then type the six digits in .harness/.remote-host/pairing.txt into the pairing field"
 
     // MARK: - Copying out of the terminal
 

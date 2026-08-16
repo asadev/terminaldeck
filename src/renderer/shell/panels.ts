@@ -1,16 +1,32 @@
 /** Single source of truth for the sidebar's views — icons, labels, blurbs. */
 
+/**
+ * There is no `machines` here any more, and that is the point of the entry
+ * missing rather than an oversight.
+ *
+ * The rail listed **Machines** — the desktops this one can open a session on —
+ * while Settings listed **Remote** — the phones and desktops that can reach
+ * this one. Two rows, two screens, one subject: devices paired with this
+ * machine. Asad, on finding both: they "should be one". They are one now, under
+ * the name Remote, in `renderer/remote/RemoteSection.tsx`, which carries every
+ * capability the page had — pairing by code, the machine list, sessions on
+ * another machine and the terminal that opens them.
+ *
+ * Putting a row back here is not a small change: it re-creates the second
+ * screen, and the two would drift the way they did before, because the one live
+ * pairing code is minted by one desk in the main process and only one screen can
+ * honestly be showing it.
+ */
 export type PanelId =
   | 'overview'
   | 'files'
-  | 'search'
+  | 'artifacts'
   | 'git'
   | 'github'
   | 'alerts'
   | 'readiness'
   | 'mcp'
   | 'hooks'
-  | 'machines'
 
 /**
  * Where a view sits in the sidebar.
@@ -52,7 +68,7 @@ export const PANEL_GROUPS: ReadonlyArray<{ id: PanelGroupId; label: string }> = 
 ]
 
 /**
- * Nine views, ordered by how often they are wanted.
+ * The views, ordered by how often they are wanted.
  *
  * These used to be an icon rail plus a 300px drawer — two vertical bars before
  * the content even started, with a dashboard squeezed into the narrower of
@@ -75,13 +91,28 @@ export const PANELS: PanelSpec[] = [
     icon: 'M13 3.5H6.5A1.5 1.5 0 0 0 5 5v14a1.5 1.5 0 0 0 1.5 1.5h11A1.5 1.5 0 0 0 19 19V9.5zM13 3.5V9.5H19',
     blurb: 'Browse the project and read any file in it.',
   },
+  // Search was a page here, and it is not any more.
+  //
+  // The engine behind it was good — streaming, ReDoS-guarded, snippet-anchored —
+  // and it worked: 40 hits across 67 sessions in 1.6s, measured. Three things
+  // made it read as "I don't know what I can search here". A row called Search
+  // sitting between Files and Source control promises to search *files*, while
+  // it actually searched conversation transcripts; finding a file was already on
+  // ⌘P. Its role filter defaulted to user+assistant, so anything an agent merely
+  // *did* — a tool call, a path, a command — returned nothing. And every hit was
+  // a dead click, because `PanelView` rendered the panel without `onOpenHit`.
+  //
+  // So the capability moved into the command palette on a `?` sigil, beside `>`
+  // for commands, where "search my past sessions" is what you already went
+  // looking for. The page is replaced rather than kept, because two doorways to
+  // one search is how it got confusing in the first place.
   {
-    id: 'search',
-    label: 'Search',
+    id: 'artifacts',
+    label: 'Artifacts',
     group: 'project',
-    command: 'view.search',
-    icon: 'M11 4.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zM19.5 19.5l-3.9-3.9',
-    blurb: 'Everything your past sessions said and did.',
+    command: 'view.artifacts',
+    icon: 'M5 4.5h9L19 9v10.5H5zM14 4.5V9h5M8.5 13h7M8.5 16.5h4.5',
+    blurb: 'Every file your agents wrote or changed here.',
   },
   {
     id: 'git',
@@ -130,20 +161,6 @@ export const PANELS: PanelSpec[] = [
     group: 'integrations',
     icon: 'M9.2 5.2a2.8 2.8 0 1 1 5.6 0v8.6a4 4 0 1 1-8 0v-1.1',
     blurb: 'Commands this project runs around every agent action.',
-  },
-  {
-    id: 'machines',
-    label: 'Machines',
-    // The foot, with Alerts and Settings, rather than Integrations. Another
-    // machine is not something this project integrates with — it is the app
-    // talking about itself, the same category as an alert or an update notice,
-    // and it is deliberately not part of "what am I doing in this project": the
-    // machines you can reach do not change when you open a different folder.
-    group: 'foot',
-    // Two rectangles, one behind the other, joined by a line. Screens, not
-    // servers: the thing on the other end of this page is somebody's desk.
-    icon: 'M3.5 5.5h11v8h-11zM9 17.5h11v-8h-5.5M6.5 17.5h2.5M9 13.5v4',
-    blurb: 'Other machines you can open a session on.',
   },
 ]
 

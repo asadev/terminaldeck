@@ -37,13 +37,13 @@ import {
   clearPairing,
   describeDevice,
   loadPairing,
-  readPairing,
   REMEMBERED_TTL_MS,
   renewed,
   savePairing,
-  takePairToken,
   type StoredCredential,
 } from './pair'
+import { normaliseCode } from '../../src/shared/short-code'
+import { asCodeField } from './code-field'
 import { browserStores, type Remember } from './remember'
 import { relaySocket } from './relay-socket'
 import { lookupMachine } from './rendezvous'
@@ -173,24 +173,6 @@ class Deck {
   private deviceKeys = loadDeviceIdentity(this.stores)
   /** Set while a typed code is being looked up at the relay. */
   private looking = false
-  /**
-   * A token that arrived in the URL, held until the person has answered where
-   * the pairing it buys should be kept.
-   *
-   * A scanned link used to connect straight from `start()`, which meant one of
-   * the two ways into this client wrote a durable credential onto a computer
-   * without ever asking whose computer it was. It is one tap on a flow that
-   * already involves walking to the desktop to approve — and it makes the rule
-   * absolute rather than usual: **nothing is stored until somebody has said
-   * where.**
-   *
-   * Taken out of the address bar the instant it arrives, whether or not it is
-   * used — see `takePairToken`. So a reload before the tap loses it and the code
-   * has to be scanned again, which is the right way round: the alternative is
-   * writing a live pairing token into storage on a computer nobody has yet said
-   * is theirs, to save sixty seconds.
-   */
-  private scanned: string | null = null
   private screen: Screen = 'pair'
   private sessions: RemoteSession[] = []
   private activity = new Map<string, number>()
@@ -267,28 +249,24 @@ class Deck {
   /* ------------------------------------------------------------- startup -- */
 
   start(): void {
-    // Taken, not read: the fragment is rewritten in the same breath, so the
-    // one-time token is not left in the address bar or the back-forward list.
-    // Taken *before* anything is decided, so it is out of the URL even on the
-    // paths that go on to ignore it.
-    this.scanned = takePairToken(window.location, window.history)
-
     const found = loadPairing(this.stores, Date.now())
     this.credential = found?.credential ?? null
     this.remember = found?.remember ?? 'this-tab'
     this.hostPlatform = this.credential?.hostPlatform ?? 'unknown'
     this.endpoint = this.credential?.endpoint ?? DIRECT
 
-    // A freshly scanned code wins over a stored credential. Someone standing at
-    // the desktop scanning a new QR is re-pairing, most likely because the old
-    // device row was revoked, and using the stale credential would fail in a
-    // way that looks like the QR not working. It does not connect on its own,
-    // though — see `scanned`.
-    if (this.scanned !== null) {
-      this.credential = null
-      this.screen = 'pair'
-      this.render()
-    } else if (this.credential !== null) {
+    /*
+     * Nothing is read out of the URL here any more, and that is a deletion
+     * rather than an omission.
+     *
+     * A pairing token used to arrive in the fragment of a link the desktop drew
+     * as a QR code, and `start` took it out of the address bar before deciding
+     * anything. There is no link and no QR, so nothing writes that fragment —
+     * and a reader for a token nobody mints is a second, unexercised route into
+     * the one function that puts a credential on a computer somebody may not
+     * own.
+     */
+    if (this.credential !== null) {
       this.screen = 'sessions'
       this.render()
       this.connect(this.credential.token, this.endpoint)
@@ -708,29 +686,29 @@ class Deck {
   }
 
   /**
-   * Pair, by the only two things a person can be holding — and the one question
-   * this client has to ask that the phones do not.
+   * Pair, from the one thing a person can be holding: six digits.
    *
-   * A **link**, which the desktop shows as a QR code and which carries the relay,
-   * the machine's id, its public key and the token — everything needed to reach
-   * it from anywhere. Or a **code**, eight characters read off the other screen,
-   * which carries none of that and has to be looked up at the relay first; see
-   * `rendezvous.ts` for why that lookup is safe against a relay that would like
-   * to answer in the machine's place.
+   * There used to be three shapes in this field — a `terminaldeck://pair?…`
+   * link, a tailnet link with the token in its fragment, and a code — and a
+   * function whose job was to tell them apart. Two of the three are gone, and
+   * what is left is not a paste target at all: it is six digits read off the
+   * other screen. `rendezvous.ts` explains why looking them up at a relay is
+   * safe against a relay that would like to answer in the machine's place.
    *
-   * One field for both, deliberately. Two fields would mean a person has to know
-   * which of two things they are holding before they can paste it, and telling
-   * them apart is a job for `readPairing` rather than for the reader — the design
-   * brief's bar is that a screen is readable by somebody who has never used it.
+   * ## The field is `inputmode="numeric"` and it is the point
    *
-   * A scanned link lands here too, with the field gone and the token already in
-   * hand. See `scanned`: every route into a pairing passes the question below,
-   * which is what makes "nothing is stored until somebody said where" a property
-   * of this client rather than a description of one of its paths.
+   * Half the argument for digits is what a phone puts under them. `type="text"`
+   * with a numeric inputmode rather than `type="number"`: a number input strips
+   * leading zeros, offers a spinner, and on some browsers refuses a paste that
+   * is not a valid number — and `000042` is a perfectly good pairing code that
+   * all three of those would destroy.
+   *
+   * It submits itself on the sixth digit. There is nothing to decide after it —
+   * a code is exactly six long, so a button press at that point is a tap that
+   * asks a question with one possible answer.
    */
   private pairScreen(): HTMLElement {
     const screen = element('div', 'screen')
-    const held = this.scanned !== null
 
     screen.append(
       // Neutral on a fresh install and neutral by design: nothing has answered
@@ -741,76 +719,72 @@ class Deck {
       element(
         'p',
         'screen__lead',
-        held
-          ? `That code is ready. Before this browser uses it, say how long it should stay paired — then approve it on the ${this.noun}.`
-          : `${BRAND.name} on the ${this.noun} shows a pairing code and a link that holds it. Either one pairs this browser; the ${this.noun} does not need to be on the same network.`,
+        `${BRAND.name} on the ${this.noun} shows a six-digit code. Type it here — the ${this.noun} does not ` +
+          'need to be on the same network.',
       ),
     )
 
-    if (!held) {
-      const steps = element('ol', 'steps')
-      for (const step of [
-        `Open ${BRAND.name} on the ${this.noun} and show the pairing code.`,
-        'Scan the QR code, or type the eight characters below.',
-        `Approve this browser on the ${this.noun} when it appears — pairing alone does not grant access.`,
-      ]) {
-        steps.append(element('li', undefined, step))
-      }
-      screen.append(steps)
+    const steps = element('ol', 'steps')
+    for (const step of [
+      `Open ${BRAND.name} on the ${this.noun} and show the pairing code.`,
+      'Type the six digits below.',
+      `Approve this browser on the ${this.noun} when it appears — pairing alone does not grant access.`,
+    ]) {
+      steps.append(element('li', undefined, step))
     }
+    screen.append(steps)
 
-    const input = element('input')
-    if (!held) {
-      const label = element('p', 'screen__lead', 'Paste the link, or type the code:')
-      input.type = 'text'
-      input.placeholder = 'H4K9-2FQT'
-      input.autocapitalize = 'characters'
-      input.autocomplete = 'off'
-      input.spellcheck = false
-      input.className = 'button button--quiet'
-      input.style.textAlign = 'left'
-      screen.append(label, input)
-    }
+    const label = element('p', 'screen__lead', 'The six digits on the other screen:')
+    // Every attribute, and the reasoning for each, is in `code-field.ts` — where
+    // a test can reach it. Nothing in this file can be rendered by the suite, so
+    // a keypad decision written here is one that nothing checks.
+    const input = asCodeField(element('input'))
+    input.className = 'button button--quiet'
+    input.style.textAlign = 'center'
+    input.style.letterSpacing = '0.35em'
+    input.style.fontVariantNumeric = 'tabular-nums'
+    screen.append(label, input)
 
     screen.append(this.rememberChoice())
 
-    const submit = element(
-      'button',
-      'button',
-      this.looking ? 'Looking…' : held ? 'Pair this browser' : 'Pair',
-    )
+    const submit = element('button', 'button', this.looking ? 'Looking…' : 'Pair')
     submit.type = 'button'
     submit.disabled = this.looking
-    submit.addEventListener('click', () => {
-      // The held token goes straight through: it has already been read and
-      // taken out of the URL, and there is nothing for `readPairing` to parse.
-      if (held) {
-        const token = this.scanned as string
-        this.scanned = null
-        this.connect(token, DIRECT)
-        this.screen = 'sessions'
-        this.render()
-        return
-      }
-      void this.startPairing(input.value)
-    })
+    submit.addEventListener('click', () => void this.startPairing(input.value))
     screen.append(submit)
+
+    /*
+     * Auto-submit, and the guard that makes it safe to have.
+     *
+     * `input` fires for a paste as well as for a keystroke, so pasting six
+     * digits pairs without a tap — which is the common case on a laptop, where
+     * the code came through a message. `startPairing` returns immediately while
+     * `this.looking` is set, so a seventh `input` event (a character typed into
+     * a full field, an autocomplete replacement) cannot start a second lookup.
+     */
+    input.addEventListener('input', () => {
+      const typed = normaliseCode(input.value)
+      if (typed === null || this.looking) return
+      void this.startPairing(typed)
+    })
+    // Enter still works, for somebody who typed five digits and a sixth that
+    // was rejected — the field is not the only way to ask.
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') void this.startPairing(input.value)
+    })
 
     screen.append(
       element(
         'p',
         'note',
-        held
-          ? // A token off the fragment arrived in the address of a page the
-            // machine itself served, so there is no relay in this one and the
-            // sentence about one would be a fiction about the connection the
-            // reader is about to make.
-            'A code is good for one minute and one use. This one came from the ' +
-            `${this.noun} itself, so nothing sits between this browser and it.`
-          : 'A code is good for one minute and one use. Everything between this browser and the ' +
-            `${this.noun} is sealed end to end — the relay that carries it holds no key and cannot read a session.`,
+        'A code is good for one minute and one use. Everything between this browser and the ' +
+          `${this.noun} is sealed end to end — the relay that carries it holds no key and cannot read a session.`,
       ),
     )
+    // Focused after the tree is built, by the caller that puts it on screen —
+    // see `renderContent`. Focusing an element that is not in the document does
+    // nothing, and doing nothing quietly is how the keypad stopped appearing.
+    queueMicrotask(() => input.focus())
     return screen
   }
 
@@ -885,24 +859,23 @@ class Deck {
   }
 
   /**
-   * Turn what somebody typed into a connection, or say why not.
+   * Turn six typed digits into a connection, or say why not.
    *
-   * The two link shapes are immediate: they carry an address, so there is
-   * nothing to look up and the connection starts on the next line. A code is
-   * not, and the wait is the whole reason this function is asynchronous — a
-   * memory-hard derivation and a round trip to the relay take about a second
-   * between them, which is a second with nothing on screen unless the button
-   * says so.
+   * The wait is the whole reason this is asynchronous — a memory-hard derivation
+   * and a round trip to the relay take about a second between them, which is a
+   * second with nothing on screen unless the button says so.
    *
-   * ## Why a code that is not found still tries the direct route
+   * ## Why a code that is not found still tries this page's own origin
    *
-   * Because it used to be the only route. Every pairing token this desktop mints
-   * is now a short code, so the eight characters somebody types into a browser
-   * served *by the machine itself* — the tailnet page, no camera, the case this
-   * field was built for — are a legitimate direct token as well as a possible
-   * rendezvous. Trying the relay first and the origin second means the new route
-   * is the default and the old one keeps working, which is the order the product
-   * wants; doing it the other way round would send every code to whatever
+   * Because when this page was served *by the machine itself*, over the tailnet,
+   * the address is the origin and there is nothing to look up. That is the one
+   * case a rendezvous cannot help with and does not need to: the desktop mints
+   * one shape of token for every client, so the same six digits are a legitimate
+   * direct token as well as a possible rendezvous.
+   *
+   * Relay first and origin second, because the relay is the route that works
+   * from anywhere and the origin only works when this page came from the
+   * machine. Doing it the other way round would send every code to whatever
    * happens to be serving this page.
    *
    * It is two attempts and one sentence. The fallback is invisible unless it
@@ -911,18 +884,9 @@ class Deck {
    */
   private async startPairing(typed: string): Promise<void> {
     if (this.looking) return
-    const input = readPairing(typed)
-    if (input === null) {
-      this.pairNotice('That is not a pairing link or a code. A code is eight characters, like H4K9-2FQT.')
-      return
-    }
-
-    if (input.kind === 'relay') {
-      this.connect(input.token, input.endpoint)
-      return
-    }
-    if (input.kind === 'direct') {
-      this.connect(input.token, DIRECT)
+    const code = normaliseCode(typed)
+    if (code === null) {
+      this.pairNotice('That is not a pairing code. It is six digits, like 123456.')
       return
     }
 
@@ -931,7 +895,7 @@ class Deck {
     this.renderContent()
     let found: Awaited<ReturnType<typeof lookupMachine>> = null
     try {
-      found = await lookupMachine({ code: input.code })
+      found = await lookupMachine({ code })
     } catch {
       // `lookupMachine` answers null for every ordinary failure, so reaching
       // here means the derivation itself could not run — a browser with no
@@ -949,7 +913,7 @@ class Deck {
     // The code is the pairing token as well as the address, which is the whole
     // shape of this scheme: `device-auth.ts` hashes what was typed and never
     // learns where it was looked up.
-    this.connect(input.code, found ?? DIRECT)
+    this.connect(code, found ?? DIRECT)
   }
 
   /** One sentence on the pair screen, in the banner that is already there. */

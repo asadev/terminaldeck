@@ -1,10 +1,20 @@
 /**
- * Multiple agent profiles — separate Claude logins running side by side.
+ * Multiple agent profiles — separate agent logins running side by side.
  *
- * Claude Code keeps everything about "who you are" inside one config
- * directory, and `CLAUDE_CONFIG_DIR` moves that directory. Point two sessions
- * at two directories and they are two different logins: separate accounts,
- * separate history, separate transcripts.
+ * An agent CLI keeps everything about "who you are" inside one config
+ * directory, and each of them has a variable that moves that directory. Point
+ * two sessions at two directories and they are two different logins: separate
+ * accounts, separate history, separate transcripts.
+ *
+ * **An account belongs to one agent.** That is newer than the rest of this file
+ * and it is the reason `Profile` carries a `provider`: `CLAUDE_CONFIG_DIR` and
+ * `CODEX_HOME` are two different directories holding two different file
+ * layouts, and a directory full of Codex's `auth.json` handed to Claude Code is
+ * not a login, it is a broken session. Which agents have a mechanism at all,
+ * which of those move the *login* rather than only the configuration, and how
+ * each one was measured is in `provider-accounts.ts` — this module owns the
+ * list, the directories and the precedence, and asks that one for the rest.
+ * Gemini is deliberately refused there; the reason is written out in full.
  *
  * Verified on this machine against the real CLI (2.1.206), because every part
  * of this is the kind of thing that is easy to assume and wrong:
@@ -49,6 +59,13 @@ import type { ProviderId } from '../shared/types'
 import { profileIsolation, type ProfileIsolation } from './platform/credential-store'
 import { currentPlatform, type Platform } from './platform/host'
 import { userDataDir } from './platform/paths'
+import {
+  ACCOUNT_PROVIDERS,
+  ACCOUNT_STRATEGIES,
+  accountEnv,
+  supportsAccounts,
+  unsupportedAccountReason,
+} from './provider-accounts'
 import { claudeConfigDir, transcriptDir } from './transcript'
 
 /* ---------------------------------------------------------------- model -- */
@@ -56,7 +73,17 @@ import { claudeConfigDir, transcriptDir } from './transcript'
 export interface Profile {
   id: string
   name: string
-  /** Absolute path handed to the CLI as `CLAUDE_CONFIG_DIR`. */
+  /**
+   * Which agent this account is a login of.
+   *
+   * Not decoration and not a label: it decides which environment variable the
+   * directory is exported as, and therefore whether the directory is handed to
+   * the CLI that wrote it. Absent in every record written before accounts had
+   * providers, and those were all Claude — see `sanitizeProfile`, which fills
+   * it in rather than dropping the profile.
+   */
+  provider: ProviderId
+  /** Absolute path handed to the CLI as its config-directory variable. */
   configDir: string
   /** The user's own install. Synthesised on read, never written to disk. */
   system: boolean
@@ -84,11 +111,56 @@ export interface ResolveInput {
   sessionProfileId?: string | null
   /** Folder the session will run in, used to find a per-project default. */
   projectPath?: string | null
+  /**
+   * The agent the session will run, when the caller knows it.
+   *
+   * Every level of the chain is then checked against it, so a Codex account
+   * remembered as a folder's default does not win a Claude session — it falls
+   * through to the next level exactly as a *deleted* account does, which is the
+   * behaviour this chain already had for the other way of being unusable.
+   *
+   * Optional, and omitting it means "do not filter". That is deliberate rather
+   * than lazy: `sessionEnv` refuses a mismatch on its own at the last moment
+   * before the spawn, so a caller that has not been taught about providers
+   * yet degrades to a session running under the machine's own login rather than
+   * one pointed at another agent's directory.
+   */
+  provider?: ProviderId | null
 }
 
 export const SYSTEM_PROFILE_ID = 'system'
 export const STATE_VERSION = 1
 export const MAX_NAME_LENGTH = 60
+
+/**
+ * The id of the user's own install of an agent, per agent.
+ *
+ * Claude's keeps the bare `system` it has always had, because that string is
+ * already written into `profiles.json` as a global or per-project default on
+ * every machine this app has ever run on, and renaming it would silently reset
+ * those. The others are suffixed.
+ */
+export function systemProfileId(provider: ProviderId): string {
+  return provider === 'claude' ? SYSTEM_PROFILE_ID : `${SYSTEM_PROFILE_ID}:${provider}`
+}
+
+/**
+ * Which agent's own install an id names, or null when it names a real account.
+ *
+ * Matched against the providers that actually have accounts rather than by
+ * splitting on the colon, so `system:gemini` — a string a hand-edited file or a
+ * build that offered more agents could contain — is *not* a system profile
+ * here. It resolves to nothing and falls through the chain, which is the same
+ * treatment a deleted account gets.
+ */
+export function systemProfileProvider(id: string): ProviderId | null {
+  return ACCOUNT_PROVIDERS.find((provider) => systemProfileId(provider) === id) ?? null
+}
+
+/** True for any agent's own install. */
+export function isSystemProfileId(id: string): boolean {
+  return systemProfileProvider(id) !== null
+}
 
 /**
  * Assigned round-robin so two profiles are never the same colour until there
@@ -225,27 +297,57 @@ export function isProtectedDir(configDir: string): boolean {
   const target = resolve(configDir)
   return (
     target === resolve(homedir()) ||
-    target === resolve(claudeConfigDir()) ||
-    target === resolve(join(homedir(), '.claude')) ||
-    target === dirname(target) // filesystem root
+    target === dirname(target) || // filesystem root
+    // Every agent's own install, not just Claude's. `systemConfigDir` is the
+    // single list, so admitting a fourth agent to `ACCOUNT_PROVIDERS` protects
+    // its home directory in the same edit rather than in a file nobody thinks
+    // to open — and `~/.codex` holds a live `auth.json`, so a recursive delete
+    // reaching it would sign the user out of ChatGPT for real.
+    ACCOUNT_PROVIDERS.some((provider) => target === resolve(systemConfigDir(provider))) ||
+    target === resolve(join(homedir(), '.claude'))
   )
 }
 
 /* ------------------------------------------------------------ the system -- */
 
 /**
- * The user's own Claude install, presented as a profile so the picker has
- * something to select and the resolution chain always terminates.
+ * Where an agent keeps the user's own login, when nothing has been redirected.
  *
- * Its `configDir` comes from `claudeConfigDir()` rather than a hardcoded
- * `~/.claude`: if Deck itself was launched with `CLAUDE_CONFIG_DIR` set, that
- * *is* the user's install, and sessions inherit the same variable.
+ * Claude's comes from `claudeConfigDir()` rather than a hardcoded `~/.claude`:
+ * if Deck itself was launched with `CLAUDE_CONFIG_DIR` set, that *is* the
+ * user's install, and sessions inherit the same variable. Codex's follows the
+ * same rule through `CODEX_HOME`, and falls back to `~/.codex`, which is where
+ * the CLI puts `auth.json`, `config.toml` and `sessions/` — observed on this
+ * machine rather than assumed.
  */
-export function systemProfile(): Profile {
+export function systemConfigDir(provider: ProviderId, env = process.env): string {
+  if (provider === 'claude') return claudeConfigDir()
+  const key = ACCOUNT_STRATEGIES[provider]?.configEnv
+  const inherited = key ? env[key] : undefined
+  if (typeof inherited === 'string' && inherited.trim() !== '') return inherited
+  return join(homedir(), `.${provider}`)
+}
+
+/**
+ * The user's own install of an agent, presented as a profile so the picker has
+ * something to select and the resolution chain always terminates.
+ */
+export function systemProfileFor(provider: ProviderId): Profile {
   return {
-    id: SYSTEM_PROFILE_ID,
-    name: 'Default',
-    configDir: claudeConfigDir(),
+    id: systemProfileId(provider),
+    /*
+     * Claude's keeps the bare "Default" it has always had, and the others carry
+     * the agent's name.
+     *
+     * Not decoration. Once there is more than one agent there is more than one
+     * "your own install", and a list showing two rows both called "Default" is
+     * a list where the whole point — telling two logins apart — has been lost.
+     * Claude's is left alone because that string is already on screen in a
+     * shipped build and in `profiles.json` name-collision checks.
+     */
+    name: provider === 'claude' ? 'Default' : `Default (${ACCOUNT_STRATEGIES[provider].label})`,
+    provider,
+    configDir: systemConfigDir(provider),
     system: true,
     color: PROFILE_COLORS[0],
     createdAt: 0,
@@ -253,7 +355,41 @@ export function systemProfile(): Profile {
   }
 }
 
+/**
+ * Claude's own install.
+ *
+ * Kept as its own name because it is the terminator of the resolution chain —
+ * `resolveProfile` falls back to it when nothing else resolves — and because
+ * every existing caller means exactly this one.
+ */
+export function systemProfile(): Profile {
+  return systemProfileFor('claude')
+}
+
 /* ------------------------------------------------------------ persistence -- */
+
+/**
+ * Which agent a stored record is an account of.
+ *
+ * Missing means the record predates accounts having providers, and every one of
+ * those was a Claude account — that was the only kind the app could make. So the
+ * absent case is filled in rather than treated as corrupt: dropping the record
+ * would delete a working account on upgrade, and refusing to default it would
+ * leave a login with no variable to be exported as.
+ *
+ * A *present* value is still checked against the strategy table. A file that
+ * has been hand-edited to say `gemini`, or written by a future build that
+ * offered an agent this one refuses, must not resurrect that agent's accounts
+ * here — `accountEnv` would decline the mismatch anyway, but an account listed
+ * under an agent this build will not isolate is a row that promises something
+ * the app cannot do.
+ */
+function sanitizeProvider(raw: unknown): ProviderId | null {
+  if (raw === undefined || raw === null) return 'claude'
+  if (typeof raw !== 'string') return null
+  const provider = raw as ProviderId
+  return supportsAccounts(provider) ? provider : null
+}
 
 function sanitizeProfile(raw: unknown): Profile | null {
   if (typeof raw !== 'object' || raw === null) return null
@@ -261,9 +397,12 @@ function sanitizeProfile(raw: unknown): Profile | null {
   if (typeof value.id !== 'string' || value.id === '' || value.id === SYSTEM_PROFILE_ID) return null
   if (typeof value.name !== 'string' || value.name.trim() === '') return null
   if (typeof value.configDir !== 'string' || !isAbsolute(value.configDir)) return null
+  const provider = sanitizeProvider(value.provider)
+  if (provider === null) return null
   return {
     id: value.id,
     name: value.name,
+    provider,
     configDir: value.configDir,
     // Never trusted from disk: a persisted record claiming to be the system
     // profile would inherit the protections meant for the real one.
@@ -295,14 +434,14 @@ export function sanitizeState(raw: unknown): ProfilesState {
       // A default pointing at a profile that no longer exists is dropped on
       // load rather than resolved around forever.
       if (typeof id !== 'string') continue
-      if (id !== SYSTEM_PROFILE_ID && !seen.has(id)) continue
+      if (!isSystemProfileId(id) && !seen.has(id)) continue
       projectDefaults[canonicalProjectKey(path)] = id
     }
   }
 
   const defaultId = value.defaultProfileId
   const defaultProfileId =
-    typeof defaultId === 'string' && (defaultId === SYSTEM_PROFILE_ID || seen.has(defaultId))
+    typeof defaultId === 'string' && (isSystemProfileId(defaultId) || seen.has(defaultId))
       ? defaultId
       : null
 
@@ -431,9 +570,24 @@ function persist(state: ProfilesState): void {
 
 /* ------------------------------------------------------------ resolution -- */
 
-/** Ids that can actually be selected right now, system always among them. */
+/** Ids that can actually be selected right now, every system id among them. */
 export function knownProfileIds(state: ProfilesState): Set<string> {
-  return new Set([SYSTEM_PROFILE_ID, ...state.profiles.map((profile) => profile.id)])
+  return new Set([
+    ...ACCOUNT_PROVIDERS.map(systemProfileId),
+    ...state.profiles.map((profile) => profile.id),
+  ])
+}
+
+/**
+ * Which agent an id is an account of, or null when the id names nothing.
+ *
+ * Answered without building a `Profile`, because the resolution chain asks it
+ * once per candidate and most candidates are rejected.
+ */
+function providerOfId(state: ProfilesState, id: string): ProviderId | null {
+  const system = systemProfileProvider(id)
+  if (system !== null) return system
+  return state.profiles.find((profile) => profile.id === id)?.provider ?? null
 }
 
 /**
@@ -446,22 +600,36 @@ export function knownProfileIds(state: ProfilesState): Set<string> {
  * that has since been deleted falls through to the next level instead of
  * throwing. A stale per-project default is the common case — the user deletes
  * a profile and would otherwise be unable to start a session in that folder.
+ *
+ * With `input.provider` set, "currently exists" also means "is an account of
+ * the agent about to run". A folder whose remembered account is a Codex one
+ * cannot decide a Claude session, and the fallback is that agent's own install
+ * rather than Claude's — otherwise asking for Codex in a folder with no Codex
+ * account would resolve to `~/.claude`, and `sessionEnv` would then have to
+ * throw the answer away, leaving nothing on screen to explain the discrepancy.
  */
 export function resolveProfileId(state: ProfilesState, input: ResolveInput = {}): string {
   const known = knownProfileIds(state)
+  const wanted = input.provider ?? null
   const projectDefault =
     typeof input.projectPath === 'string' && input.projectPath !== ''
       ? state.projectDefaults[canonicalProjectKey(input.projectPath)]
       : undefined
 
   for (const candidate of [input.sessionProfileId, projectDefault, state.defaultProfileId]) {
-    if (typeof candidate === 'string' && known.has(candidate)) return candidate
+    if (typeof candidate !== 'string' || !known.has(candidate)) continue
+    if (wanted !== null && providerOfId(state, candidate) !== wanted) continue
+    return candidate
   }
-  return SYSTEM_PROFILE_ID
+  // An agent with no account mechanism has no system id of its own, so it
+  // terminates on Claude's exactly as it did before providers existed —
+  // `sessionEnv` then exports nothing for it, which is the honest answer.
+  return wanted !== null && supportsAccounts(wanted) ? systemProfileId(wanted) : SYSTEM_PROFILE_ID
 }
 
 export function findProfile(state: ProfilesState, id: string): Profile | null {
-  if (id === SYSTEM_PROFILE_ID) return systemProfile()
+  const system = systemProfileProvider(id)
+  if (system !== null) return systemProfileFor(system)
   return state.profiles.find((profile) => profile.id === id) ?? null
 }
 
@@ -469,25 +637,31 @@ export function resolveProfile(state: ProfilesState, input: ResolveInput = {}): 
   return findProfile(state, resolveProfileId(state, input)) ?? systemProfile()
 }
 
+/** Every account of one agent, its own install first. */
+export function listProfilesForProvider(
+  provider: ProviderId,
+  state = getState(),
+): Profile[] {
+  if (!supportsAccounts(provider)) return []
+  return [
+    systemProfileFor(provider),
+    ...state.profiles.filter((profile) => profile.provider === provider),
+  ]
+}
+
 /* ------------------------------------------------------------------ env -- */
 
 /**
- * Which environment variable isolates each agent's config.
+ * True when this provider can be isolated at all — the picker greys out the
+ * rest, and the Add-account dialog refuses to offer it.
  *
- * Only Claude's is listed because only Claude's was verified here. Codex ships
- * as a shim around a native binary that is not present on this machine and
- * Gemini's bundle yielded nothing, so `CODEX_HOME` and any Gemini equivalent
- * stay out: a wrong variable name fails silently and *shares* the login, which
- * is the exact failure profiles exist to prevent. `providers.ts` documents its
- * unverified flags the same way.
+ * The table and the evidence behind it live in `provider-accounts.ts`. This
+ * name is kept because it is what the rest of the app already calls, and
+ * because "profiles" and "accounts" are the same thing under two names that the
+ * codebase has not finished merging.
  */
-const CONFIG_DIR_ENV: Partial<Record<ProviderId, string>> = {
-  claude: 'CLAUDE_CONFIG_DIR',
-}
-
-/** True when this provider can be isolated at all — the picker greys out the rest. */
 export function supportsProfiles(provider: ProviderId): boolean {
-  return CONFIG_DIR_ENV[provider] !== undefined
+  return supportsAccounts(provider)
 }
 
 /**
@@ -498,12 +672,17 @@ export function supportsProfiles(provider: ProviderId): boolean {
  * is not equivalent to leaving it unset. A default install reads
  * `~/.claude.json`, one level above the config directory, and setting the
  * variable makes the CLI look inside `~/.claude/` instead and find nothing.
- * Verified — see the module header.
+ * Verified — see the module header. The same reasoning applies to `CODEX_HOME`,
+ * and `accountEnv` applies it the same way.
+ *
+ * Also empty when the account belongs to a different agent than the one being
+ * spawned. That check is in `accountEnv`, at the last point before the spawn,
+ * rather than only in whatever resolved the account: it is the one place no
+ * caller can route around.
  */
 export function sessionEnv(profile: Profile, provider: ProviderId): Record<string, string> {
-  const key = CONFIG_DIR_ENV[provider]
-  if (!key || profile.system) return {}
-  return { [key]: profile.configDir }
+  if (profile.system) return {}
+  return accountEnv(provider, profile)
 }
 
 /**
@@ -517,6 +696,15 @@ export function profileTranscriptDir(profile: Profile, cwd: string): string {
 /* ------------------------------------------------------------------ crud -- */
 
 export interface CreateProfileOptions {
+  /**
+   * Which agent this is an account of. Defaults to Claude.
+   *
+   * Defaulted rather than required so every existing caller keeps working and
+   * keeps meaning what it meant — an account created before the Add-account
+   * dialog asked the question was always a Claude one. A provider this build
+   * will not isolate is refused with a sentence rather than silently downgraded.
+   */
+  provider?: ProviderId
   /** Adopt a config directory the user already has instead of making one. */
   configDir?: string
 }
@@ -538,7 +726,7 @@ export interface CreateProfileOptions {
  *    account, so the picker would offer two names for one login — the exact
  *    confusion this feature exists to remove.
  */
-function adoptableConfigDir(state: ProfilesState, raw: string): string {
+function adoptableConfigDir(state: ProfilesState, raw: string, provider: ProviderId): string {
   if (typeof raw !== 'string' || !isAbsolute(raw)) {
     throw new ProfileError('a config directory must be an absolute path')
   }
@@ -546,7 +734,7 @@ function adoptableConfigDir(state: ProfilesState, raw: string): string {
 
   if (isProtectedDir(resolved)) {
     throw new ProfileError(
-      'that is your own Claude install — the default profile already uses it, and pointing a second profile at it would break the login',
+      `that is your own ${ACCOUNT_STRATEGIES[provider].label} install — the default account already uses it, and pointing a second account at it would break the login`,
     )
   }
 
@@ -557,27 +745,52 @@ function adoptableConfigDir(state: ProfilesState, raw: string): string {
   return resolved
 }
 
+/**
+ * Every account there is: each agent's own install, then the ones this app made.
+ *
+ * The system rows come first — they are the fallback every other level
+ * collapses to, so they should read as the top of the list rather than as
+ * entries among equals — and they come in `ACCOUNT_PROVIDERS` order, which puts
+ * Claude's first, where it has always been.
+ *
+ * This used to answer with Claude's install and nothing else, which was right
+ * while Claude was the only agent that could hold an account. It is not right
+ * now: `resolveProfileId` can answer `system:codex`, and a screen built from a
+ * list that has never heard of that id shows an account chip with nothing in it.
+ */
 export function listProfiles(state = getState()): Profile[] {
-  // System first: it is the fallback every other level collapses to, so it
-  // should read as the top of the list rather than an entry among equals.
-  return [systemProfile(), ...state.profiles]
+  return [...ACCOUNT_PROVIDERS.map(systemProfileFor), ...state.profiles]
 }
 
 export function createProfile(name: string, options: CreateProfileOptions = {}): Profile {
   const state = getState()
+  const provider = options.provider ?? 'claude'
+  if (!supportsAccounts(provider)) {
+    // The refusal is a sentence rather than a silently-dropped field, because
+    // the only way to get here is a caller that offered the agent — and a
+    // created-but-shared account is the failure the whole strategy exists to
+    // stop. `unsupportedAccountReason` says which agent and why.
+    throw new ProfileError(unsupportedAccountReason(provider))
+  }
   const clean = normalizeProfileName(name)
   if (
-    listProfiles(state).some((profile) => profile.name.toLowerCase() === clean.toLowerCase())
+    listProfilesForProvider(provider, state).some(
+      (profile) => profile.name.toLowerCase() === clean.toLowerCase(),
+    )
   ) {
-    // Two identically named profiles are indistinguishable in the picker, and
-    // picking the wrong login is the mistake this whole feature prevents.
-    throw new ProfileError(`a profile called "${clean}" already exists`)
+    // Scoped to the agent, not global. Two identically named accounts of the
+    // *same* agent are indistinguishable in the picker and picking the wrong
+    // login is the mistake this feature prevents — but "Work" on Claude and
+    // "Work" on Codex are two different logins that the provider badge tells
+    // apart on sight, and refusing that pair would force people to type the
+    // agent's name into every account name.
+    throw new ProfileError(`a ${provider} account called "${clean}" already exists`)
   }
 
   const id = uniqueProfileId(slugifyProfileId(clean), knownProfileIds(state))
   const configDir =
     options.configDir !== undefined
-      ? adoptableConfigDir(state, options.configDir)
+      ? adoptableConfigDir(state, options.configDir, provider)
       : join(profilesRoot(), id)
 
   // Created eagerly: the CLI would make it anyway, and a directory that exists
@@ -587,6 +800,7 @@ export function createProfile(name: string, options: CreateProfileOptions = {}):
   const profile: Profile = {
     id,
     name: clean,
+    provider,
     configDir,
     system: false,
     /*
@@ -610,15 +824,18 @@ export function createProfile(name: string, options: CreateProfileOptions = {}):
 
 export function renameProfile(id: string, name: string): Profile {
   const state = getState()
-  if (id === SYSTEM_PROFILE_ID) throw new ProfileError('the default profile cannot be renamed')
+  if (isSystemProfileId(id)) throw new ProfileError('the default profile cannot be renamed')
   const profile = state.profiles.find((entry) => entry.id === id)
   if (!profile) throw new ProfileError(`no profile with id ${id}`)
 
   const clean = normalizeProfileName(name)
-  const clash = listProfiles(state).some(
+  // Scoped to this account's own agent, matching `createProfile`. A rename that
+  // enforced a stricter rule than creation would refuse a name the Add-account
+  // dialog had just accepted.
+  const clash = listProfilesForProvider(profile.provider, state).some(
     (entry) => entry.id !== id && entry.name.toLowerCase() === clean.toLowerCase(),
   )
-  if (clash) throw new ProfileError(`a profile called "${clean}" already exists`)
+  if (clash) throw new ProfileError(`a ${profile.provider} account called "${clean}" already exists`)
 
   profile.name = clean
   persist(state)
@@ -655,8 +872,11 @@ export function deleteProfile(
   platform: Platform = currentPlatform(),
 ): DeleteProfileResult {
   const state = getState()
-  if (id === SYSTEM_PROFILE_ID) {
-    throw new ProfileError('the default profile is your own Claude install and cannot be deleted')
+  const system = systemProfileProvider(id)
+  if (system !== null) {
+    throw new ProfileError(
+      `the default account is your own ${ACCOUNT_STRATEGIES[system].label} install and cannot be deleted`,
+    )
   }
 
   const index = state.profiles.findIndex((entry) => entry.id === id)
@@ -665,10 +885,11 @@ export function deleteProfile(
 
   // Read before the directory goes, because that is the only moment the
   // question "where does this profile's login live?" can still be answered.
-  const isolation = profileIsolation(
-    platform,
-    existsSync(join(profile.configDir, '.credentials.json')),
-  )
+  // The filename is the agent's, not Claude's: Codex writes `auth.json` and
+  // asking it for `.credentials.json` would answer "no credential here" about a
+  // directory that holds one, which flips `credentialsRetained` to a promise
+  // that the login survives a delete when it does not.
+  const isolation = profileIsolation(platform, hasCredentialFile(profile))
 
   // Every reference goes with it, so nothing resolves to a profile that is gone.
   if (state.defaultProfileId === id) state.defaultProfileId = null
@@ -699,6 +920,11 @@ export function deleteProfile(
 export function setGlobalDefault(id: string | null): ProfilesState {
   const state = getState()
   if (id !== null && !knownProfileIds(state).has(id)) throw new ProfileError(`no profile with id ${id}`)
+  // Only *Claude's* system id collapses to null, because null has always meant
+  // "the user's own Claude install" in this file and on disk. Choosing another
+  // agent's own install is a real choice and is stored as the id it is —
+  // collapsing it would make "run Codex as my own Codex login" indistinguishable
+  // from "no global default", which resolves to Claude's directory.
   state.defaultProfileId = id === SYSTEM_PROFILE_ID ? null : id
   persist(state)
   return state
@@ -755,6 +981,8 @@ export interface ProfileStatus {
    * is signed in without prompting for keychain access on every render.
    */
   configDir: string
+  /** Which agent this account is a login of, so a row can badge it. */
+  provider: ProviderId
   /**
    * Whether this profile's *login* is actually separate from the others, and on
    * what basis. Not decoration: on a platform where that has not been
@@ -769,15 +997,50 @@ export interface ProfileStatus {
   isolation: ProfileIsolation
 }
 
+/**
+ * Whether the credential this account's agent writes is inside this account's
+ * own directory.
+ *
+ * The filename is per agent — Claude writes `.credentials.json` and Codex
+ * writes `auth.json` — so the question has to be asked of the strategy rather
+ * than of a constant. A `stat`, never a keychain read: it costs nothing and
+ * prompts for nothing, which is what lets it be asked on every render.
+ */
+function hasCredentialFile(profile: Profile): boolean {
+  const name = ACCOUNT_STRATEGIES[profile.provider]?.credentialFile
+  if (!name) return false
+  return existsSync(join(profile.configDir, name))
+}
+
+/**
+ * What each agent leaves behind once it has actually run in a directory.
+ *
+ * `initialized` means "the CLI has been here", and each CLI leaves a different
+ * calling card. Asking Codex for `.claude.json` would answer "never used" about
+ * a directory holding a full `sessions/` folder, and that row then wears a
+ * "Never used" badge it does not deserve.
+ *
+ * Codex's list is what a real `$CODEX_HOME` on this machine contains and what a
+ * fresh one does not. `tmp/` is deliberately **not** in it: a bare
+ * `CODEX_HOME=<empty dir> codex login status` creates exactly that and nothing
+ * else, so counting it would flip every listed account to "used" the first time
+ * the Accounts screen asked whether they were signed in — which is the flaw the
+ * comment on `initialized` already records for Claude.
+ */
+function initializedMarkers(provider: ProviderId): readonly string[] {
+  return provider === 'claude' ? ['.claude.json'] : ['config.toml', 'auth.json', 'sessions']
+}
+
 export function profileStatus(profile: Profile, platform: Platform = currentPlatform()): ProfileStatus {
   return {
     id: profile.id,
     exists: existsSync(profile.configDir),
-    initialized: existsSync(join(profile.configDir, '.claude.json')),
+    initialized: initializedMarkers(profile.provider).some((name) =>
+      existsSync(join(profile.configDir, name)),
+    ),
     configDir: profile.configDir,
-    // A `stat`, not a keychain read: it costs nothing and prompts for nothing,
-    // which is what keeps the paragraph above true.
-    isolation: profileIsolation(platform, existsSync(join(profile.configDir, '.credentials.json'))),
+    provider: profile.provider,
+    isolation: profileIsolation(platform, hasCredentialFile(profile)),
   }
 }
 
@@ -798,12 +1061,69 @@ export interface ProfilesSnapshot {
   projectDefaults: Record<string, string>
 }
 
-function snapshot(): ProfilesSnapshot {
+/**
+ * @param provider narrows the list to one agent's accounts. The Accounts screen
+ *   wants everything, badged; a new-session dialog wants only the accounts the
+ *   agent it is about to start could actually run as, and offering it the rest
+ *   is offering a choice `sessionEnv` will decline.
+ */
+function snapshot(provider: ProviderId | null = null): ProfilesSnapshot {
   const state = getState()
   return {
-    profiles: listProfiles(state),
+    profiles: provider === null ? listProfiles(state) : listProfilesForProvider(provider, state),
     defaultProfileId: state.defaultProfileId,
     projectDefaults: { ...state.projectDefaults },
+  }
+}
+
+/**
+ * A provider id off the wire, or null.
+ *
+ * Null for anything unrecognised rather than a throw: this is a filter, and the
+ * safe failure is showing every account rather than refusing to list any.
+ */
+function optionalProvider(value: unknown): ProviderId | null {
+  if (typeof value !== 'string') return null
+  const provider = value as ProviderId
+  return supportsAccounts(provider) ? provider : null
+}
+
+export interface AccountProviderView {
+  id: ProviderId
+  label: string
+  /** Whether adding an account of this agent is offered at all. */
+  supported: boolean
+  /** The variable that would carry the account directory. Shown as evidence. */
+  configEnv: string | null
+  /** Why not, when `supported` is false. Rendered verbatim; never generic. */
+  reason: string | null
+}
+
+export interface AccountProvidersView {
+  providers: AccountProviderView[]
+}
+
+/**
+ * The answer to "which agents can I add an account for", as a screen needs it.
+ *
+ * Every provider is listed, including the refused ones, because a missing row
+ * is indistinguishable from a bug. `reason` is what the refused rows say, and
+ * it is the agent's own sentence — see `provider-accounts.ts`, where each one is
+ * written next to the measurement it came from.
+ */
+export function accountProvidersView(): AccountProvidersView {
+  return {
+    providers: (Object.values(ACCOUNT_STRATEGIES) as Array<(typeof ACCOUNT_STRATEGIES)[ProviderId]>)
+      .filter((strategy) => strategy.provider !== 'shell')
+      .map((strategy) => ({
+        id: strategy.provider,
+        label: strategy.label,
+        supported: supportsAccounts(strategy.provider),
+        configEnv: strategy.configEnv,
+        reason: supportsAccounts(strategy.provider)
+          ? null
+          : unsupportedAccountReason(strategy.provider),
+      })),
   }
 }
 
@@ -812,28 +1132,50 @@ function snapshot(): ProfilesSnapshot {
  * `registerProfilesIpc(ipcMain)`.
  *
  * Channels:
- * - `profiles:list` → {@link ProfilesSnapshot}
+ * - `profiles:list` (provider?) → {@link ProfilesSnapshot}
  * - `profiles:create` (name, options?) → {@link Profile}
  * - `profiles:rename` (id, name) → {@link Profile}
  * - `profiles:delete` (id, options?) → {@link DeleteProfileResult}
  * - `profiles:set-default` (id | null) → {@link ProfilesSnapshot}
  * - `profiles:set-project-default` (projectPath, id | null) → {@link ProfilesSnapshot}
- * - `profiles:resolve` ({ sessionProfileId?, projectPath? }) → {@link Profile}
+ * - `profiles:resolve` ({ sessionProfileId?, projectPath?, provider? }) → {@link Profile}
  * - `profiles:status` (id) → {@link ProfileStatus}
+ * - `profiles:account-providers` → {@link AccountProvidersView}
  *
  * Errors reject with the `ProfileError` message, which the picker shows as-is —
  * "a profile called Work already exists" is the whole explanation the user needs.
  */
 export function registerProfilesIpc(ipcMain: IpcMain): void {
-  ipcMain.handle('profiles:list', () => snapshot())
+  ipcMain.handle('profiles:list', (_e: IpcMainInvokeEvent, provider: unknown) =>
+    snapshot(optionalProvider(provider)),
+  )
+
+  /**
+   * Which agents can hold an account, and the sentence for each one that
+   * cannot.
+   *
+   * The renderer has its own copy of this in `ProviderPicker.tsx`, because a
+   * dialog has to draw before any IPC answers and a picker that cannot say what
+   * it offers until a round trip completes flickers. This channel is what makes
+   * the two provable: the renderer's copy is a rendering of an answer that lives
+   * here, and `provider-accounts.test.ts` fails if they disagree.
+   */
+  ipcMain.handle('profiles:account-providers', () => accountProvidersView())
 
   ipcMain.handle('profiles:create', (_e: IpcMainInvokeEvent, name: unknown, options: unknown) => {
-    const configDir =
+    const raw =
       typeof options === 'object' && options !== null
-        ? (options as CreateProfileOptions).configDir
-        : undefined
+        ? (options as { configDir?: unknown; provider?: unknown })
+        : {}
     return createProfile(requireString(name, 'name'), {
-      configDir: typeof configDir === 'string' ? configDir : undefined,
+      configDir: typeof raw.configDir === 'string' ? raw.configDir : undefined,
+      // Narrowed rather than passed through: this value crosses from the
+      // renderer and decides which environment variable a config directory is
+      // exported as. An unrecognised name falls back to Claude, which is what a
+      // caller that names nothing has always meant; a *recognised but refused*
+      // one — Gemini — reaches `createProfile` and is rejected with its own
+      // sentence, because silently making it a Claude account would be worse.
+      ...(typeof raw.provider === 'string' ? { provider: raw.provider as ProviderId } : {}),
     })
   })
 
@@ -866,6 +1208,7 @@ export function registerProfilesIpc(ipcMain: IpcMain): void {
     return resolveProfile(getState(), {
       sessionProfileId: optionalId(request.sessionProfileId),
       projectPath: typeof request.projectPath === 'string' ? request.projectPath : null,
+      provider: optionalProvider(request.provider),
     })
   })
 

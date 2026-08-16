@@ -276,7 +276,12 @@ describe('parseServerEntry', () => {
     expect(parsed?.transport).toBe('http')
     expect(parsed?.url).toBe('https://mcp.example.ai/mcp')
     expect(parsed?.command).toBeNull()
-    expect(parsed?.unsupported).toContain('stdio only')
+    // The note used to end "this inspector speaks stdio only", which answers a
+    // question about our architecture rather than about their server. What the
+    // reader needs is that the server is fine and this panel cannot look inside
+    // it — so the assertion follows the meaning rather than the old wording.
+    expect(parsed?.unsupported).toContain('cannot inspect')
+    expect(parsed?.unsupported).toContain('HTTP')
   })
 
   it('infers sse from the declared type even when a command is also present', () => {

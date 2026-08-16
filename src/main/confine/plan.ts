@@ -40,7 +40,7 @@
  * be pinned from a Mac.
  */
 
-import { join, posix, win32 } from 'node:path'
+import { basename, join, posix, win32 } from 'node:path'
 import { isWindows, type Platform } from '../platform/host'
 
 /**
@@ -97,6 +97,19 @@ export interface ConfinementPlan {
    * the plan is built from paths on the side the shell will be on.
    */
   accountHome: string
+  /**
+   * The device's own home directory, resolved. Already in {@link writable}, and
+   * named separately for the same reason {@link folder} is: something has to be
+   * able to say *which* of the writable directories it is, and the list cannot
+   * answer because `collapse` sorts it.
+   *
+   * Two things on Windows need it and neither can be handed it another way. The
+   * AppContainer is named per device, and this path is where the device key
+   * lives — see {@link deviceKeyOf}. And the proof writes the canary that has to
+   * be readable *somewhere inside the boundary*: the device's home rather than
+   * the granted folder, so a proof never leaves a file in somebody's project.
+   */
+  home: string
   /** Read and write. Realpaths, no duplicates, no ancestors of each other. */
   writable: readonly string[]
   /** Read only. Realpaths. */
@@ -377,7 +390,14 @@ export function sessionPlan(input: SessionPlanInput): ConfinementPlan {
         !writable.some((root) => within(file, root, platform)),
     )
 
-  return { folder, accountHome, writable, readable, readableFiles: [...new Set(files)] }
+  return {
+    folder,
+    accountHome,
+    home: resolver.real(input.home),
+    writable,
+    readable,
+    readableFiles: [...new Set(files)],
+  }
 }
 
 /**
@@ -406,6 +426,20 @@ export function deviceHomesRoot(storageDir: string): string {
  */
 export function deviceHomeDir(root: string, deviceKey: string): string {
   return join(root, deviceKey)
+}
+
+/**
+ * The device key back out of the home directory {@link deviceHomeDir} made.
+ *
+ * The pair exists so that the coupling is written down in one place and pinned
+ * by one test. The Windows mechanism names its AppContainer per device, and the
+ * only per-device identifier that reaches `confine/` is the home directory —
+ * so something has to turn one into the other, and doing it with `basename` at
+ * the call site would be an assumption about this function's layout made in a
+ * file that does not import it.
+ */
+export function deviceKeyOf(home: string): string {
+  return basename(home)
 }
 
 /**

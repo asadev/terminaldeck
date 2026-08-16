@@ -1,8 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import {
+  accountProviderIds,
+  buildAccountProviderRows,
   buildProviderRows,
+  firstAccountProvider,
   firstAvailable,
+  parseAccountProviders,
   PROVIDER_OPTIONS,
+  providerOption,
   resumeAvailability,
 } from './ProviderPicker'
 
@@ -119,5 +124,150 @@ describe('firstAvailable', () => {
 
   it('returns null for an empty list', () => {
     expect(firstAvailable([])).toBeNull()
+  })
+})
+
+/* ------------------------------------------------- adding an account -- */
+
+/**
+ * The Add-account list, which is where Asad's request lands:
+ *
+ *   > "If I add any new account it just redirects me to claude only … I should
+ *   > be able to choose which LLM I want to connect."
+ *
+ * The important assertions here are the *refusals*. Offering an agent whose
+ * login this app cannot actually keep separate is worse than not offering it —
+ * the user would believe they had switched account and they would not have —
+ * and for Gemini it is worse still, because its two "accounts" would address
+ * one keychain entry and the second sign-in would overwrite the first.
+ */
+
+describe('which agents the Add-account dialog offers', () => {
+  const installed = { claude: true, codex: true, gemini: true, shell: true }
+
+  it('offers exactly the agents whose login this app can keep separate', () => {
+    /*
+     * The renderer keeps its own copy of this so the dialog can draw before any
+     * IPC answers — a list whose rows flip from selectable to disabled a beat
+     * after it opens is a list somebody clicks the wrong row in.
+     *
+     * The copy is held to the main process's answer by
+     * `provider-accounts.test.ts`, which reads this file's source and compares
+     * the literals. It has to be done from that side: `tsconfig.web.json` does
+     * not include `src/main`, so a renderer test cannot import the table, and
+     * `src/preload/contract.test.ts` already established reading sources as the
+     * way this codebase guards a seam a compiler cannot see.
+     */
+    expect(accountProviderIds()).toEqual(['claude', 'codex'])
+  })
+
+  it('offers Claude and Codex when both are installed', () => {
+    const rows = buildAccountProviderRows(installed)
+    expect(rows.filter((row) => row.canAdd).map((row) => row.id)).toEqual(['claude', 'codex'])
+    expect(firstAccountProvider(rows)).toBe('claude')
+  })
+
+  it('lists Gemini, disabled, with the reason on the row', () => {
+    // Listed rather than omitted: a missing row is indistinguishable from a
+    // bug, and Gemini is the row that most needs explaining — it *has* a
+    // config-directory variable, so its absence would look like an oversight.
+    const gemini = buildAccountProviderRows(installed).find((row) => row.id === 'gemini')
+    expect(gemini?.canAdd).toBe(false)
+    expect(gemini?.note).toMatch(/one login per machine/)
+  })
+
+  it('leaves the shell out entirely', () => {
+    // Unlike Gemini there is nothing to explain, so a row would carry one
+    // sentence saying "this is not an agent".
+    expect(buildAccountProviderRows(installed).some((row) => row.id === 'shell')).toBe(false)
+  })
+
+  it('refuses an agent that is not installed, keeping its install line', () => {
+    const rows = buildAccountProviderRows({ claude: false, codex: true, gemini: true, shell: true })
+    const claude = rows.find((row) => row.id === 'claude')
+    expect(claude?.canAdd).toBe(false)
+    expect(claude?.reason).toMatch(/not found on your PATH/)
+    expect(claude?.install).toBe('npm install -g @anthropic-ai/claude-code')
+    // The first *usable* agent is preselected, not the first listed one.
+    expect(firstAccountProvider(rows)).toBe('codex')
+  })
+
+  it('has nothing to preselect when nothing can take an account', () => {
+    const rows = buildAccountProviderRows({ claude: false, codex: false, gemini: true, shell: true })
+    expect(firstAccountProvider(rows)).toBeNull()
+  })
+})
+
+describe('the main process’s answer, once it arrives', () => {
+  const installed = { claude: true, codex: true, gemini: true, shell: true }
+
+  it('replaces the catalogue’s short sentence with the measured one', () => {
+    const rows = buildAccountProviderRows(
+      installed,
+      parseAccountProviders({
+        providers: [
+          { id: 'gemini', label: 'Gemini CLI', supported: false, reason: 'Measured: keychain.' },
+        ],
+      }),
+    )
+    expect(rows.find((row) => row.id === 'gemini')?.note).toBe('Measured: keychain.')
+  })
+
+  it('lets the main process withdraw an agent the catalogue offers', () => {
+    /*
+     * The direction that matters. If a future build of an agent stops honouring
+     * its config variable, the main process is where that is discovered, and a
+     * renderer that ignored the answer would keep offering a switcher that
+     * silently shares one login.
+     */
+    const rows = buildAccountProviderRows(
+      installed,
+      parseAccountProviders({
+        providers: [{ id: 'codex', label: 'Codex CLI', supported: false, reason: 'Not any more.' }],
+      }),
+    )
+    expect(rows.find((row) => row.id === 'codex')?.canAdd).toBe(false)
+    expect(rows.find((row) => row.id === 'codex')?.note).toBe('Not any more.')
+  })
+
+  it('treats anything but an explicit yes as no', () => {
+    // An answer this build cannot read must not become an offer to isolate a
+    // login it cannot isolate.
+    const parsed = parseAccountProviders({
+      providers: [
+        { id: 'claude', supported: 'yes' },
+        { id: 'codex', supported: true },
+        'nonsense',
+        { label: 'no id' },
+      ],
+    })
+    expect(parsed.map((entry) => [entry.id, entry.supported])).toEqual([
+      ['claude', false],
+      ['codex', true],
+    ])
+    // A label is never invented — it falls back to the id rather than to a
+    // blank row.
+    expect(parsed[0].label).toBe('claude')
+  })
+
+  it('falls back to the catalogue when the answer is unusable', () => {
+    for (const answer of [null, undefined, 'nope', {}, { providers: 'no' }]) {
+      expect(parseAccountProviders(answer)).toEqual([])
+    }
+    const rows = buildAccountProviderRows(installed, parseAccountProviders(null))
+    expect(rows.filter((row) => row.canAdd).map((row) => row.id)).toEqual(['claude', 'codex'])
+  })
+})
+
+describe('the catalogue’s account facts', () => {
+  it('gives a reason for every agent it refuses, and none for the rest', () => {
+    for (const option of PROVIDER_OPTIONS) {
+      if (option.canHaveAccounts) expect(option.accountsNote).toBeNull()
+      else expect(option.accountsNote).toBeTruthy()
+    }
+  })
+
+  it('looks up by id and answers nothing for an unknown one', () => {
+    expect(providerOption('codex')?.label).toBe('Codex CLI')
   })
 })

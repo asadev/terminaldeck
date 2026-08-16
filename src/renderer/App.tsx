@@ -1,4 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { WorkspaceTabStrip } from './browser/WorkspaceTabStrip'
 import type { SessionStatus } from '@shared/types'
 import { StoreProvider, useStore } from './state/store'
 import { TerminalView } from './components/TerminalView'
@@ -173,7 +174,7 @@ function Workspace() {
   const [helpOpen, setHelpOpen] = useState(false)
   const [joinOpen, setJoinOpen] = useState(false)
   const [inspectorOpen, setInspectorOpen] = useState(false)
-  const [paletteMode, setPaletteMode] = useState<'files' | 'commands' | null>(null)
+  const [paletteMode, setPaletteMode] = useState<'files' | 'commands' | 'sessions' | null>(null)
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
   const [onboardingDone, setOnboardingDone] = useState(false)
   const [needsOnboarding, setNeedsOnboarding] = useState<boolean | null>(null)
@@ -978,7 +979,13 @@ function Workspace() {
       // palette was printing a shortcut for a command it was not the entry for.
       { id: 'view.dashboard', title: 'Overview', group: 'View', run: () => showPanel('overview') },
       { id: 'view.files', title: 'Files', group: 'View', run: () => showPanel('files') },
-      { id: 'view.search', title: 'Search past sessions', group: 'View', run: () => showPanel('search') },
+      // `view.search` keeps its id, and therefore its ⌘⇧F chord, while what it
+      // opens has moved. Searching past sessions is no longer a page — it is the
+      // command palette's `?` sigil, beside `>` for commands. Renaming the id
+      // would silently drop the chord out of `keymap.ts`, so the entry stays and
+      // its `run` changes.
+      { id: 'view.search', title: 'Search past sessions', group: 'View', run: () => setPaletteMode('sessions') },
+      { id: 'view.artifacts', title: 'Artifacts', group: 'View', run: () => showPanel('artifacts') },
       { id: 'view.git', title: 'Source control', group: 'View', run: () => showPanel('git') },
       { id: 'view.github', title: 'GitHub', group: 'View', run: () => showPanel('github') },
       { id: 'view.alerts', title: 'Alerts', group: 'View', run: () => showPanel('alerts') },
@@ -1098,7 +1105,7 @@ function Workspace() {
           setPaletteMode('files')
           return true
         case 'panel.search':
-          showPanel('search')
+          setPaletteMode('sessions')
           return true
         case 'app.inspector':
           setInspectorOpen(true)
@@ -1672,6 +1679,32 @@ function Workspace() {
             <ModeSwitch mode={mode} onChange={setMode} splitOffer={!features.on('split')} />
           ) : null}
         </WindowToolbar>
+
+        {/*
+          The promoted windows, as a strip, the way a browser does it.
+          Asad: "we should be able to just drag and drop in the top whatever we
+          want to see in the top, and the rest we can fold inside the side
+          panel." So the sidebar keeps everything and this shows the subset you
+          promoted — sessions and browser windows alike, since both are just
+          windows you are working in.
+
+          It renders between the toolbar and the panes because that is where a
+          tab strip belongs: under the window's own chrome, above the content it
+          switches. It draws nothing at all until something has been promoted,
+          so a user who never drags anything never gains a bar.
+
+          `closeTab` rather than `closeTabNow`: the strip's close button is a
+          real close, and closing a session with unsaved work has to go through
+          the same confirmation the sidebar's does. Handing it the unguarded one
+          would make the same button mean two different things depending on
+          which copy of it you clicked.
+        */}
+        <WorkspaceTabStrip
+          tabs={tabs}
+          activeTabId={activeTab?.id ?? null}
+          onSelect={selectTab}
+          onClose={closeTab}
+        />
 
         <div className="panes">
           <ErrorBoundary label={heading.title}>{mainView()}</ErrorBoundary>

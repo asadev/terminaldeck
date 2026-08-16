@@ -107,7 +107,7 @@ export function AgentsSection({ bridge, goTo }: SectionProps) {
         is the same button and still goes to General.
       */}
       <Explain title="Which agent runs by default">
-        That choice is in General, with the other day-to-day settings.{' '}
+        That choice is in General.{' '}
         <button type="button" className="settings-inline-btn" onClick={() => goTo('general')}>
           Choose the default coding tool
         </button>
@@ -193,7 +193,7 @@ export function AgentsSection({ bridge, goTo }: SectionProps) {
           <>
             <Row
               label="Run new sessions as"
-              help="An account is a separate login. Sessions use this one unless a folder or the account button beside it says otherwise."
+              help="Unless a folder or the session itself says otherwise."
               htmlFor="settings-default-profile"
               control={
                 <span className="settings-select-wrap">
@@ -214,9 +214,17 @@ export function AgentsSection({ bridge, goTo }: SectionProps) {
                 </span>
               }
             />
-            <Explain title="Only Claude Code is kept separate">
-              An account points Claude Code at a different config directory. The other agents do
-              not support that yet, so they ignore this and use their normal login.{' '}
+            {/*
+              An account is two logins, not a config directory.
+
+              This used to open with "An account points Claude Code at a
+              different config directory" — the implementation, narrated at
+              somebody who wants to know whether their second login will work.
+              What they need is which agents honour the choice, and the answer
+              fits in a clause.
+            */}
+            <Explain title="Claude Code only">
+              Other agents ignore this and use their own login.{' '}
               <button type="button" className="settings-inline-btn" onClick={() => goTo('profiles')}>
                 Manage accounts
               </button>

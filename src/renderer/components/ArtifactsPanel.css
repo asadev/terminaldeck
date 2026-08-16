@@ -1,0 +1,435 @@
+/* ============================================================================
+   Artifacts — the files an agent produced, and the text of every change.
+
+   Two panes: a column of files on the left, the change history of the selected
+   one on the right. The diff is the interface here in the way the snippet was
+   the interface on the search page, so everything else is kept quiet — chips
+   with no borders, a list with no rules between rows, and no card around the
+   file list, because the space between the two panes is the separation.
+
+   Colours from tokens.css only. The diff is the one place a meaningful colour
+   is spent: added and removed are data, and neutralising them would leave two
+   identical grey blocks in the one place on the page where the difference is
+   the whole point.
+   ============================================================================ */
+
+.artifacts {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  color: var(--text-secondary);
+  font-family: var(--font-ui);
+  font-size: var(--t-callout);
+}
+
+/* ------------------------------------------------------------------ head -- */
+
+.artifacts-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-shrink: 0;
+  padding-bottom: var(--sp-2);
+}
+
+.artifacts-filter {
+  flex: 1;
+  min-width: 0;
+  height: var(--control-h-lg);
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: var(--t-body);
+  outline: none;
+  transition: border-color var(--dur-fast) var(--ease);
+}
+
+.artifacts-filter::placeholder {
+  color: var(--text-muted);
+}
+
+.artifacts-filter:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+/* Safari draws its own clear button; it collides with the border radius. */
+.artifacts-filter::-webkit-search-cancel-button {
+  appearance: none;
+}
+
+.artifacts-scope,
+.artifacts-sessions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex-shrink: 0;
+}
+
+.artifacts-sessions {
+  flex-wrap: wrap;
+  padding-bottom: var(--sp-1);
+}
+
+/* A fill, not an outline — a row of bordered chips draws a line per chip
+   across the top of the page. */
+.artifacts-chip {
+  height: var(--control-h);
+  padding: 0 var(--sp-3);
+  border: none;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: var(--t-callout);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.artifacts-chip:hover {
+  background: var(--fill-tertiary);
+  color: var(--text-primary);
+}
+
+.artifacts-chip[data-on='true'] {
+  background: var(--fill-secondary);
+  color: var(--text-primary);
+  font-weight: var(--w-medium);
+}
+
+.artifacts-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.artifacts-status {
+  flex-shrink: 0;
+  margin: 0;
+  padding: var(--sp-2) 0 var(--sp-3);
+  color: var(--text-muted);
+  font-size: var(--t-footnote);
+  /* Reserves the line so the panes do not jump when the count changes. */
+  min-height: 22px;
+}
+
+/* ------------------------------------------------------------------ body -- */
+
+.artifacts-body {
+  display: flex;
+  gap: var(--sp-5);
+  flex: 1;
+  min-height: 0;
+}
+
+/* ------------------------------------------------------------------ list -- */
+
+.artifacts-list {
+  flex: none;
+  width: 300px;
+  min-height: 0;
+  margin: 0;
+  padding: 0 var(--sp-1) var(--sp-8) 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.artifact-row + .artifact-row {
+  /* Space between rows, never a rule. */
+  margin-top: 1px;
+}
+
+.artifact-row-button {
+  display: block;
+  width: 100%;
+  padding: var(--sp-15) var(--sp-2);
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.artifact-row-button:hover {
+  background: var(--bg-hover);
+}
+
+.artifact-row[data-selected='true'] .artifact-row-button {
+  background: var(--bg-active);
+}
+
+.artifact-row-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.artifact-row-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+}
+
+.artifact-row-name {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+  font-weight: var(--w-medium);
+}
+
+.artifact-row-when {
+  flex: none;
+  color: var(--text-muted);
+  font-size: var(--t-caption);
+  font-variant-numeric: tabular-nums;
+}
+
+.artifact-row-meta {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-15);
+  margin-top: 1px;
+  color: var(--text-muted);
+  font-size: var(--t-caption);
+}
+
+/* A long path loses its head, not its tail: `…/renderer/components` is what
+   tells two files of the same name apart, so the ellipsis belongs at the
+   front, and `direction: rtl` is what moves it there. */
+.artifact-row-dir {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+
+/* Exactly one element, forced back to left-to-right. A bare text node is no
+   good: rtl reorders its trailing slash, and the palette learned the same
+   lesson the same way — see `.palette-dir-text`. */
+.artifact-row-dir-text {
+  direction: ltr;
+  unicode-bidi: embed;
+}
+
+.artifact-row-counts {
+  flex: none;
+}
+
+.artifact-tag {
+  flex: none;
+  padding: 0 var(--sp-1);
+  border-radius: var(--radius-sm);
+  background: var(--fill-tertiary);
+  color: var(--text-muted);
+  font-size: var(--t-caption);
+  white-space: nowrap;
+}
+
+.artifacts-none {
+  list-style: none;
+}
+
+/* ---------------------------------------------------------------- detail -- */
+
+.artifacts-detail {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  padding-bottom: var(--sp-8);
+  overflow-y: auto;
+}
+
+.artifacts-detail-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  padding-bottom: var(--sp-3);
+}
+
+.artifacts-detail-path {
+  min-width: 0;
+  flex: 1;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--t-subhead);
+  font-weight: var(--w-semibold);
+}
+
+.artifacts-detail-meta {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--t-footnote);
+}
+
+.artifacts-open {
+  flex: none;
+  height: var(--control-h);
+  padding: 0 var(--sp-3);
+  border: none;
+  border-radius: var(--radius-pill);
+  background: var(--fill-secondary);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: var(--t-callout);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.artifacts-open:hover {
+  background: var(--fill-tertiary);
+}
+
+.artifacts-open:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* --------------------------------------------------------------- changes -- */
+
+.artifacts-changes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+/* A card is a fill with a radius, not an outline. */
+.artifact-change {
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+  overflow: hidden;
+}
+
+.artifact-change-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  color: var(--text-muted);
+  font-size: var(--t-caption);
+}
+
+.artifact-change-action {
+  color: var(--text-primary);
+  font-weight: var(--w-semibold);
+}
+
+.artifact-change-tool {
+  font-family: var(--font-mono);
+}
+
+.artifact-change-when {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ------------------------------------------------------------------ diff -- */
+
+.artifact-diff {
+  padding-bottom: var(--sp-2);
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: var(--t-caption);
+  line-height: var(--lh-body);
+  tab-size: 2;
+}
+
+/* `width: max-content` with `min-width: 100%` is what keeps a short removed
+   line tinted all the way across a hunk that scrolls sideways. Without it the
+   fill stops where that line's own text stops, and a diff scrolled right shows
+   ragged stripes of colour instead of rows. */
+.artifact-diff-line {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-1);
+  width: max-content;
+  min-width: 100%;
+  padding: 0 var(--sp-3);
+  white-space: pre;
+}
+
+/* The tints are low because a hunk is mostly context: strong enough to sort
+   the three kinds of line apart at a glance, weak enough that a fifty-line
+   diff is not two solid slabs of colour. The ink carries the meaning. */
+.artifact-diff-line[data-kind='add'] {
+  background: color-mix(in srgb, var(--color-positive) 12%, transparent);
+}
+
+.artifact-diff-line[data-kind='del'] {
+  background: color-mix(in srgb, var(--color-critical) 12%, transparent);
+}
+
+.artifact-diff-mark {
+  flex: none;
+  width: 1ch;
+  color: var(--text-muted);
+  user-select: none;
+}
+
+.artifact-diff-line[data-kind='add'] .artifact-diff-mark {
+  color: var(--color-positive);
+}
+
+.artifact-diff-line[data-kind='del'] .artifact-diff-mark {
+  color: var(--color-critical);
+}
+
+.artifact-diff-text {
+  color: var(--text-primary);
+}
+
+.artifact-diff-line[data-kind='same'] .artifact-diff-text {
+  color: var(--text-secondary);
+}
+
+/* A write has no "before" to line up against, so it is shown as the file's
+   own text rather than as three hundred added lines. */
+.artifact-diff-body {
+  margin: 0;
+  padding: 0 var(--sp-3);
+  color: var(--text-primary);
+  font: inherit;
+  white-space: pre;
+}
+
+.artifact-diff-more {
+  margin: 0;
+  padding: var(--sp-1) var(--sp-3) 0;
+  color: var(--text-muted);
+  font-family: var(--font-ui);
+  font-size: var(--t-caption);
+}
+
+/* ---------------------------------------------------------------- narrow -- */
+
+/* Under this the two panes are each too narrow to be worth having, so the
+   list becomes a short strip above the diff rather than a column beside it. */
+@media (max-width: 760px) {
+  .artifacts-body {
+    flex-direction: column;
+    gap: var(--sp-3);
+  }
+
+  .artifacts-list {
+    width: auto;
+    max-height: 34%;
+    padding-bottom: 0;
+  }
+}

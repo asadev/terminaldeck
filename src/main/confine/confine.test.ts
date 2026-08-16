@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
@@ -14,10 +14,12 @@ import {
 } from './index'
 import type { ConfinementPlan } from './plan'
 import { SANDBOX_EXEC } from './seatbelt'
+import { capabilitySid, installWindowsTools, resetWindowsTools, writeGrantRecord } from './tools'
 
 const plan: ConfinementPlan = {
   folder: '/work/app',
   accountHome: '/home/asad',
+  home: '/app-storage/device-home/abc',
   writable: ['/work/app'],
   readable: ['/usr'],
   readableFiles: [],
@@ -77,10 +79,81 @@ describe('which platforms are confined', () => {
     expect(confinementKind('linux')).toBe('namespace')
   })
 
-  it('names the mechanism it has not measured, rather than being vague', () => {
+  it('names the mechanism, rather than being vague', () => {
     // The grant screen tells a person which of the two they are getting. It can
     // only do that honestly if the reason is specific enough to act on.
     expect(unconfinedReason('win32')).toMatch(/AppContainer/)
+  })
+
+  it('no longer says the Windows mechanisms are unmeasured, because they are not', () => {
+    // The sentence this used to carry ended "has not been built or measured".
+    // Every mechanism named in it has since been run on a real Windows 11
+    // machine: AppContainer holds, restricted tokens and job objects were
+    // measured and written off. A UI sentence that outlives its measurement is
+    // the same kind of lie as a boundary that outlives its proof.
+    expect(unconfinedReason('win32')).not.toMatch(/has not been (built or )?measured/)
+    expect(unconfinedReason('win32')).toMatch(/restricted tokens and job objects were measured|one-time permission/)
+  })
+
+  it('keeps WSL in a sentence of its own, on whichever reason is showing', () => {
+    // A session in a WSL folder is a Linux process that no Windows mechanism can
+    // cover. One sentence covering two platforms is what rule 1 of
+    // CONFINEMENT.md exists to stop.
+    const sentences = unconfinedReason('win32').split('. ')
+    expect(sentences.filter((line) => line.includes('WSL'))).toHaveLength(1)
+    expect(sentences.find((line) => line.includes('WSL'))).not.toMatch(/AppContainer/)
+  })
+})
+
+describe('the Windows gate', () => {
+  const dirs: string[] = []
+  afterAll(() => {
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
+    resetWindowsTools()
+  })
+  const machineWith = (options: { launcher: boolean; record: boolean }): void => {
+    const dir = mkdtempSync(join(tmpdir(), 'confine-gate-'))
+    dirs.push(dir)
+    if (options.launcher) writeFileSync(join(dir, 'tdconfine.exe'), 'not really an exe')
+    if (options.record) {
+      writeGrantRecord(join(dir, 'windows-confinement.json'), {
+        capability: capabilitySid(),
+        read: ['C:\\Program Files\\nodejs'],
+        ancestors: ['C:\\', 'C:\\Users', 'C:\\Users\\Imza'],
+        established: '2026-08-16T05:00:00.000Z',
+      })
+    }
+    installWindowsTools({
+      launcher: join(dir, 'tdconfine.exe'),
+      recordFile: join(dir, 'windows-confinement.json'),
+    })
+  }
+
+  it('is off on a build that ships no launcher, and says why', () => {
+    machineWith({ launcher: false, record: true })
+    expect(confinementKind('win32')).toBe('none')
+    expect(unconfinedReason('win32')).toMatch(/does not ship/)
+  })
+
+  it('is off on a machine that has not been set up, and says something else', () => {
+    // Two reasons with two remedies. Running them together would tell somebody a
+    // feature is missing from their copy of the app when it is one prompt away.
+    machineWith({ launcher: true, record: false })
+    expect(confinementKind('win32')).toBe('none')
+    expect(unconfinedReason('win32')).toMatch(/one-time permission/)
+  })
+
+  it('is on only when the launcher is there and the grant has been made', () => {
+    machineWith({ launcher: true, record: true })
+    expect(confinementKind('win32')).toBe('appcontainer')
+  })
+
+  it('does not answer for Windows on a machine nothing has been installed on', () => {
+    // The headless build on a server, and every test that never called
+    // `installWindowsTools`. Answering anything but 'none' here would be a claim
+    // made out of a default.
+    resetWindowsTools()
+    expect(confinementKind('win32')).toBe('none')
   })
 })
 
@@ -172,6 +245,7 @@ describe('the Linux proof', () => {
   const linuxPlan: ConfinementPlan = {
     folder: '/home/asad/work/app',
     accountHome: '/home/asad',
+    home: '/app-storage/device-home/abc',
     writable: ['/home/asad/work/app'],
     readable: ['/usr'],
     readableFiles: [],
@@ -278,6 +352,79 @@ describe('confineSpawn', () => {
     )
     expect(error).toBeInstanceOf(ConfinementUnavailableError)
     expect((error as ConfinementUnavailableError).detail).toMatch(/would not run a command/)
+  })
+
+  describe('on Windows', () => {
+    const dirs: string[] = []
+    const windowsPlan: ConfinementPlan = {
+      folder: 'C:\\Users\\Imza\\Projects\\app',
+      accountHome: 'C:\\Users\\Imza',
+      home: 'C:\\Users\\Imza\\AppData\\Roaming\\td\\device-home\\abc',
+      writable: [
+        'C:\\Users\\Imza\\Projects\\app',
+        'C:\\Users\\Imza\\AppData\\Roaming\\td\\device-home\\abc',
+      ],
+      readable: ['C:\\Program Files\\nodejs'],
+      readableFiles: [],
+    }
+    afterAll(() => {
+      for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
+      resetWindowsTools()
+    })
+    const setUp = (): string => {
+      const dir = mkdtempSync(join(tmpdir(), 'confine-spawn-'))
+      dirs.push(dir)
+      writeFileSync(join(dir, 'tdconfine.exe'), 'not really an exe')
+      writeGrantRecord(join(dir, 'windows-confinement.json'), {
+        capability: capabilitySid(),
+        read: ['C:\\Program Files\\nodejs'],
+        ancestors: ['C:\\', 'C:\\Users', 'C:\\Users\\Imza'],
+        established: '2026-08-16T05:00:00.000Z',
+      })
+      installWindowsTools({
+        launcher: join(dir, 'tdconfine.exe'),
+        recordFile: join(dir, 'windows-confinement.json'),
+      })
+      return dir
+    }
+
+    /** A launcher that behaves the way the real one did on the real machine. */
+    const launcherThatWorks: ProofRunner = async (_command, args) => {
+      const script = args[args.length - 1] ?? ''
+      const canary = /type ([^ ]+)/.exec(script)?.[1] ?? ''
+      const token = /echo ([0-9a-f]{24})/.exec(script)?.[1] ?? ''
+      // The inside canary comes back; the outside one never does; the tool runs.
+      return { stdout: `${readFileSync(canary, 'utf8')}\n${token}\n`, stderr: '' }
+    }
+
+    it('spawns the launcher rather than the command itself', async () => {
+      // The whole reason this platform needs an .exe of its own: an AppContainer
+      // is applied inside the CreateProcess call, so the thing being spawned has
+      // to be the program that makes that call.
+      const dir = setUp()
+      const wrapped = await confineSpawn(
+        windowsPlan,
+        'C:\\Windows\\System32\\cmd.exe',
+        ['/c', 'claude'],
+        'win32',
+        launcherThatWorks,
+      )
+      expect(wrapped.command).toBe(join(dir, 'tdconfine.exe'))
+      expect(wrapped.args.slice(wrapped.args.indexOf('--') + 1)).toEqual([
+        'C:\\Windows\\System32\\cmd.exe',
+        '/c',
+        'claude',
+      ])
+    })
+
+    it('refuses when the machine has not been set up, rather than running anyway', async () => {
+      // Reached when the grant is withdrawn between the gate and the spawn — a
+      // repair install, or somebody undoing it by hand. The session refuses.
+      resetWindowsTools()
+      await expect(
+        confineSpawn(windowsPlan, 'cmd.exe', [], 'win32', launcherThatWorks),
+      ).rejects.toBeInstanceOf(ConfinementUnavailableError)
+    })
   })
 })
 

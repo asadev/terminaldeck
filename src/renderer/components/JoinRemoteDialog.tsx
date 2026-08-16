@@ -199,10 +199,13 @@ export function JoinRemoteDialog({ open, onClose }: Props) {
       <div className="join">
         {/* First, above the fields: the answer to "will this work" belongs
             before the effort, not after it. */}
+        {/* "This screen is the part that has been built" is a status report on
+            our own work. What the reader needs is the first clause and the
+            last: it does not work yet, and the fields still check what you
+            type. */}
         <p className="join-unavailable" id={unavailableId} role="status">
-          <strong>Remote sessions are not available yet.</strong> The connection between two
-          machines has not been built — this screen is the part that has. Your code is checked
-          below, but there is nothing to connect to.
+          <strong>Remote sessions are not available yet.</strong> Your code is checked below, but
+          there is nothing to connect to.
         </p>
 
         <div className="join-field">
@@ -266,9 +269,7 @@ export function JoinRemoteDialog({ open, onClose }: Props) {
           Join session
         </button>
         <p className="join-status">
-          {wellFormed
-            ? 'That code and PIN are well formed — there is still nothing to connect to.'
-            : 'Joining will be enabled when session sharing ships.'}
+          {wellFormed ? 'Well formed — but there is still nothing to connect to.' : 'Enabled when session sharing ships.'}
         </p>
       </div>
     </Modal>

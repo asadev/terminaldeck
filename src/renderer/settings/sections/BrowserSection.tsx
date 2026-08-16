@@ -122,7 +122,7 @@ export function importedCountText(status: CookieImportStatus): string {
   if (status.present === status.recorded) {
     return `${status.present} imported cookie${status.present === 1 ? '' : 's'}${where}.`
   }
-  return `${status.present} of ${status.recorded} imported cookies${where} are still here — the rest have expired or been cleared by the sites themselves.`
+  return `${status.present} of ${status.recorded} imported cookies${where} are still here — the rest have expired.`
 }
 
 /**
@@ -244,7 +244,7 @@ export function BrowserSection({ values, save, bridge, loading }: SectionProps) 
         const removed = typeof raw === 'object' && raw !== null ? (raw as { removed?: unknown }).removed : 0
         const count = typeof removed === 'number' ? removed : 0
         setImportNote({
-          text: `Removed ${count} imported cookie${count === 1 ? '' : 's'}. Anything you signed into inside the browser tab itself is untouched.`,
+          text: `Removed ${count} imported cookie${count === 1 ? '' : 's'}. Sign-ins made inside the browser tab are untouched.`,
           ok: true,
         })
         refreshImports()
@@ -276,10 +276,16 @@ export function BrowserSection({ values, save, bridge, loading }: SectionProps) 
       <SettingList section="browser" values={values} save={save} disabled={loading} />
 
       <Group title="Import addresses from a browser you already use">
+        {/*
+          One line, not three.
+
+          What was here explained the mechanism (a read-only look at those
+          files), then explained what it was *not* (signing in is separate —
+          which the next heading already says). The reader needs one fact
+          before pressing a button named after a browser: this only reads.
+        */}
         <p className="settings-prose">
-          Finds the local addresses in another browser’s bookmarks, history and open tabs so you can
-          pick one as the start page. It is a read-only look at those files, and it asks for nothing.
-          Signing in is separate — that is the next block.
+          Local addresses from another browser’s bookmarks, history and open tabs. Read-only.
         </p>
 
         {!bridge.listBrowsers || !bridge.scanBrowserTabs ? (
@@ -351,26 +357,32 @@ export function BrowserSection({ values, save, bridge, loading }: SectionProps) 
       </Group>
 
       <Group title="Sign-ins: cookies from Chrome">
+        {/*
+          Two paragraphs down to one, and the sentences that survived are the
+          ones with a cost behind them.
+
+          Cut: that Chromium encrypts its store with a keychain key (mechanism —
+          the user meets the consequence as a system dialog either way), that
+          saying no imports nothing (what "no" means needs no explanation), and
+          the isolated-tab clause, which the "Per-tab isolation" block below
+          says again in full.
+
+          Kept, deliberately: the permission dialog and what a cookie *is*.
+          This button hands another application's live credentials to this one,
+          and a person who presses it without knowing that has been misled by
+          the shortening rather than helped by it.
+        */}
         <p className="settings-prose">
-          Copies the cookies out of an installed Chromium browser into the browser tab, so a dev
-          server behind a login opens signed in instead of at a sign-in page. Chromium keeps those
-          cookies encrypted with a key in your login keychain, so <strong>macOS will ask your
-          permission</strong> the first time — a dialog naming this app. Nothing is read until you
-          press one of these, and if you say no, nothing is imported and this panel says so.
-        </p>
-        <p className="settings-prose">
-          Cookies are the credentials that keep you signed in. They go into the browser tab’s own
-          store and are never shown, logged or sent anywhere. A tab you set to{' '}
-          <strong>Isolated</strong> in the browser toolbar cannot see them at all.
+          Copies cookies from another Chromium browser so a dev server behind a login opens signed
+          in. They are the credentials that keep you signed in, kept in the tab’s own store and
+          never sent anywhere. <strong>macOS will ask your permission</strong> the first time —
+          nothing is read until you press one of these.
         </p>
 
         {!bridge.importBrowserCookies || !bridge.browserCookieSources ? (
           <Notice tone="warn">{missingChannelNote('Importing cookies')}</Notice>
         ) : imports !== null && !imports.supported ? (
-          <Notice tone="info">
-            Importing cookies is implemented for macOS, where the key lives in the login keychain.
-            On this system there is nothing to read it from.
-          </Notice>
+          <Notice tone="info">Importing cookies works on macOS only.</Notice>
         ) : (
           <>
             {groupSources(sources ?? []).map((group) => {
@@ -418,15 +430,15 @@ export function BrowserSection({ values, save, bridge, loading }: SectionProps) 
 
             {sources?.length === 0 && (
               <Notice tone="info">
-                No installed browser with a readable cookie database was found. macOS protects those
-                files until this app has Full Disk Access.
+                No browser with a readable cookie database. macOS protects those files until this
+                app has Full Disk Access.
               </Notice>
             )}
 
             {sources?.some((source) => !source.keychainItem) && (
               <Notice tone="info">
-                Some browsers are listed without an import button: this machine has no “Safe
-                Storage” keychain item for them, so there is no key to decrypt their cookies with.
+                Some browsers have no import button — this machine holds no key to decrypt their
+                cookies with.
               </Notice>
             )}
 
@@ -444,7 +456,7 @@ export function BrowserSection({ values, save, bridge, loading }: SectionProps) 
               // Inline, for the same reason the clear below is: two modals both
               // listen for Escape, so the inner one closes the settings window.
               <div className="settings-confirm">
-                <span>Remove the cookies that were imported? You stay signed into anything you signed into inside the browser tab.</span>
+                <span>Remove the imported cookies? Sign-ins made inside the browser tab stay.</span>
                 <Button tone="danger" onClick={forgetImported}>
                   Remove them
                 </Button>
@@ -464,25 +476,26 @@ export function BrowserSection({ values, save, bridge, loading }: SectionProps) 
       </Group>
 
       <Group title="Per-tab isolation">
+        {/*
+          The second paragraph was a use-case essay and the reason a switch
+          behaves the way it does. Both are for whoever built it. What a reader
+          of this pane needs is where the switch is and what it costs them —
+          the reopen, and the fact that an isolated tab is genuinely blind to
+          everything else.
+        */}
         <p className="settings-prose">
-          Every browser tab shares one session by default, which is what keeps you signed in between
-          runs. Each tab’s toolbar has a <strong>Shared / Isolated</strong> switch that opts out of
-          it: an isolated tab gets a cookie jar of its own, held in memory and thrown away when the
-          app quits. It cannot see imported cookies, and it cannot see what the other tabs are
-          signed into.
-        </p>
-        <p className="settings-prose">
-          Use it to open the same app as a second user, or to check what a signed-out visitor
-          actually sees. Switching a tab reopens its page, because a tab’s session is fixed the
-          moment the page is created — the address is kept, the sign-in is not.
+          Every tab shares one session, which is what keeps you signed in. A tab’s{' '}
+          <strong>Shared / Isolated</strong> switch gives it a cookie jar of its own — in memory,
+          thrown away when the app quits, and blind to imported cookies and the other tabs.
+          Switching reopens the page.
         </p>
       </Group>
 
       <Group title="Stored browsing data">
+        {/* The first sentence described where a folder lives. The one that
+            survived is the one with a consequence in it. */}
         <p className="settings-prose">
-          The browser tab keeps its cookies, storage and cache in its own place, separate from
-          anything else on this machine. Clearing it signs you out of whatever you were signed into
-          in that tab and cannot be undone.
+          Clearing signs you out of everything in the browser tab, and cannot be undone.
         </p>
         {!bridge.clearBrowserData ? (
           <Notice tone="warn">{missingChannelNote('Clearing browsing data')}</Notice>

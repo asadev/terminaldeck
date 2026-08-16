@@ -168,22 +168,24 @@ describe('renderPairCode', () => {
     expect(text).toContain('60 seconds')
   })
 
-  it('tells a phone the truth: the code alone is not enough for it', () => {
+  it('tells a phone the same thing it tells a desktop: type the code', () => {
     /*
-     * A phone needs the relay, the host id and the public key as well — the
-     * desktop hands those over inside a QR code and this build cannot draw one.
-     * Saying so, and printing the three values, is the honest version. A code
-     * that a phone would accept and then fail on is the failure this whole
-     * screen exists to avoid.
+     * It used to say the opposite — that a phone needed the relay, the host id
+     * and the public key as well, because the desktop handed those over inside a
+     * QR code this build cannot draw. The QR is gone from the product and every
+     * client looks a code up at the rendezvous now, so a sentence sending
+     * somebody to find a desktop with a camera would be describing a route that
+     * no longer exists.
      */
-    const text = renderPairCode('4K7M-92QX', 60_000, 0, relay)
-    expect(text).toContain('QR code')
+    const text = renderPairCode('482913', 60_000, 0, relay)
+    expect(text).not.toContain('QR')
+    expect(text).toContain('type the code')
     expect(text).toContain('host id      host-abc')
     expect(text).toContain('fingerprint  AAAA-BBBB')
   })
 
   it('says a code cannot be looked up at all when the relay is down', () => {
-    const text = renderPairCode('4K7M-92QX', 60_000, 0, null)
+    const text = renderPairCode('482913', 60_000, 0, null)
     expect(text).toContain('not on the relay')
     expect(text).not.toContain('host id')
   })

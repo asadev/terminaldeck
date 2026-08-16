@@ -17,6 +17,19 @@
   padding: 2px;
   border-radius: var(--radius-md);
   background: var(--fill-tertiary);
+  /*
+    It sits on a bar that drags the window, and on Windows it sits directly
+    beside the OS's own close button.
+
+    `.toolbar-actions` in shell.css already opts its slot out, and this says the
+    same thing again on purpose: this control is passed into the toolbar as
+    `children`, so it does not own where it is mounted, and a drag region covers
+    every pixel inside it until something subtracts itself back out — so a
+    caller that dropped this anywhere else on the chrome would get a segmented
+    control that moves the window instead of switching mode. The rule belongs
+    with the control, not with one of its homes.
+  */
+  -webkit-app-region: no-drag;
 }
 
 .ms-option {

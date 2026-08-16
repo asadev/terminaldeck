@@ -1,5 +1,6 @@
-import type { ReactNode } from 'react'
+import { useEffect, type ReactNode } from 'react'
 import { tip } from '../keymap'
+import { browserWindowControls, installWindowControls } from './window-controls'
 
 interface Props {
   title: string
@@ -48,6 +49,11 @@ const CHEVRON_RIGHT = 'M9.5 6.5 15 12l-5.5 5.5'
  * than the four unrelated buttons it had collected: a toolbar with a palette
  * button, a details button, a swarm button and a segmented control on it is not
  * a toolbar, it is a shelf.
+ *
+ * On Windows this bar has the OS's own window buttons drawn into its top-right
+ * corner, over the page rather than in it — so the one thing this component has
+ * to do beyond rendering is publish how much room they are taking, which is the
+ * effect below. Everything that moves out of their way moves in `shell.css`.
  */
 export function WindowToolbar({
   title,
@@ -59,6 +65,21 @@ export function WindowToolbar({
   onEdgeEnter,
   children,
 }: Props) {
+  /*
+   * The window buttons' geometry, published for the stylesheet.
+   *
+   * Empty deps: this is a property of the window, not of any prop, and the
+   * measurement keeps itself current from Chromium's own `geometrychange`
+   * event — which fires on maximise, on a DPI change and on entering full
+   * screen, none of which re-render this component. On every platform without
+   * an overlay `browserWindowControls` hands back a host with none and the
+   * whole thing is one comparison against null.
+   */
+  useEffect(() => {
+    const host = browserWindowControls()
+    return host ? installWindowControls(host) : undefined
+  }, [])
+
   return (
     <header
       className="toolbar"

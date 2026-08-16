@@ -8,14 +8,11 @@ import {
   describeDevice,
   loadCredential,
   loadPairing,
-  readPairToken,
   renewed,
   saveCredential,
   savePairing,
-  takePairToken,
   type StorageLike,
   type StoredCredential,
-  readPairing,
 } from './pair'
 import { generateStatic } from '../../src/shared/sealed'
 import type { Stores } from './remember'
@@ -39,71 +36,6 @@ function memoryStorage(initial: Record<string, string> = {}): StorageLike & { da
 function memoryStores(): Stores & { browser: ReturnType<typeof memoryStorage>; tab: ReturnType<typeof memoryStorage> } {
   return { browser: memoryStorage(), tab: memoryStorage() }
 }
-
-describe('reading the token off the QR URL', () => {
-  it('accepts the fragment the desktop encodes', () => {
-    expect(readPairToken('#t=Kf3-9_aZ')).toBe('Kf3-9_aZ')
-    expect(readPairToken('#token=Kf3-9_aZ')).toBe('Kf3-9_aZ')
-    expect(readPairToken('t=Kf3-9_aZ')).toBe('Kf3-9_aZ')
-  })
-
-  it('keeps the characters base64url actually uses', () => {
-    // A stricter pattern here would reject a token the desktop had just minted,
-    // which is a client refusing a change it does not get a vote on.
-    expect(readPairToken('#t=abc-DEF_123.xyz')).toBe('abc-DEF_123.xyz')
-  })
-
-  it('answers null when there is no token', () => {
-    expect(readPairToken('')).toBeNull()
-    expect(readPairToken('#')).toBeNull()
-    expect(readPairToken('#session=abc')).toBeNull()
-    expect(readPairToken('#t=')).toBeNull()
-  })
-
-  it('rejects whitespace and control characters', () => {
-    // The shape of something retyped by hand or mangled by a chat app, not of
-    // anything `auth.ts` mints.
-    expect(readPairToken('#t=abc def')).toBeNull()
-    expect(readPairToken('#t=abc\u0000def')).toBeNull()
-    expect(readPairToken('#t=abc\tdef')).toBeNull()
-    expect(readPairToken('#t=abc\ndef')).toBeNull()
-  })
-
-  it('rejects a token longer than the protocol accepts', () => {
-    expect(readPairToken(`#t=${'a'.repeat(200)}`)).toHaveLength(200)
-    expect(readPairToken(`#t=${'a'.repeat(201)}`)).toBeNull()
-  })
-})
-
-describe('taking the token out of the URL', () => {
-  it('reads it and removes it in the same step', () => {
-    const replaced: string[] = []
-    const token = takePairToken(
-      { hash: '#t=secret-token', pathname: '/', search: '' },
-      { replaceState: (_data, _unused, url) => replaced.push(url) },
-    )
-    expect(token).toBe('secret-token')
-    // Not one back-button press away, not in a screenshot of the address bar.
-    expect(replaced).toEqual(['/'])
-  })
-
-  it('keeps the rest of the URL intact', () => {
-    const replaced: string[] = []
-    takePairToken(
-      { hash: '#t=x', pathname: '/deck', search: '?theme=dark' },
-      { replaceState: (_data, _unused, url) => replaced.push(url) },
-    )
-    expect(replaced).toEqual(['/deck?theme=dark'])
-  })
-
-  it('leaves the URL alone when there was no fragment', () => {
-    const replaced: string[] = []
-    expect(
-      takePairToken({ hash: '', pathname: '/', search: '' }, { replaceState: (_d, _u, url) => replaced.push(url) }),
-    ).toBeNull()
-    expect(replaced).toEqual([])
-  })
-})
 
 describe('the stored credential', () => {
   const credential: StoredCredential = {
@@ -416,70 +348,5 @@ describe('naming this browser for the desktop’s device list', () => {
     // Half an answer is still better than none: "Browser on Windows" is a row
     // somebody can act on, and it never claims to be the app.
     expect(describeDevice('Mozilla/5.0 (Windows NT 10.0)').name).toBe('Browser on Windows')
-  })
-})
-
-describe('reading what somebody pasted or typed', () => {
-  const HOST_ID = 'ZWG39KXXW8GKVHZP6UF2SGUARD'
-  const HOST_KEY = 'aQPhyoFeCJkVcrnoSvne9Eft2vkXQrmYitfzy2JowX8'
-  const RELAY = 'wss://relay.terminaldeck.dev'
-  const link = (extra: Partial<Record<string, string>> = {}): string => {
-    const params = new URLSearchParams({ v: '1', r: RELAY, h: HOST_ID, k: HOST_KEY, t: 'H4K9-2FQT', ...extra })
-    return `terminaldeck://pair?${params.toString()}`
-  }
-
-  it('reads a relay link as an address and a token together', () => {
-    expect(readPairing(link())).toEqual({
-      kind: 'relay',
-      endpoint: { kind: 'relay', url: RELAY, hostId: HOST_ID, hostKey: HOST_KEY },
-      token: 'H4K9-2FQT',
-    })
-  })
-
-  it('refuses a relay link with a part missing rather than half-reading it', () => {
-    // A link missing its key is a link that pairs against whoever answers, and a
-    // link with a truncated host id is a QR code that scans and then fails on
-    // the phone with an error about a machine that does not exist.
-    expect(readPairing(link({ k: 'AAAA' }))).toBeNull()
-    expect(readPairing(link({ h: 'short' }))).toBeNull()
-    expect(readPairing(link({ r: 'https://relay.terminaldeck.dev' }))).toBeNull()
-    expect(readPairing(link({ t: '' }))).toBeNull()
-    // The version exists precisely so a shape a current build would misread is
-    // refused instead of half-parsed.
-    expect(readPairing(link({ v: '2' }))).toBeNull()
-  })
-
-  it('reads eight characters as a code to look up, not as a token to send', () => {
-    // Every pairing token this desktop mints is a short code now, so the two
-    // shapes are indistinguishable by content. A code has to be tried at the
-    // relay first, or a browser that is not on a tailnet sends it to an address
-    // that is not there.
-    expect(readPairing('H4K9-2FQT')).toEqual({ kind: 'code', code: 'H4K9-2FQT' })
-    expect(readPairing(' h4k92fqt ')).toEqual({ kind: 'code', code: 'H4K9-2FQT' })
-  })
-
-  it('reads the tailnet link as a token for this origin', () => {
-    expect(readPairing('https://mac.tailnet.ts.net/#t=abc123')).toEqual({ kind: 'direct', token: 'abc123' })
-  })
-
-  it('refuses what is neither', () => {
-    expect(readPairing('')).toBeNull()
-    expect(readPairing('   ')).toBeNull()
-    // Whitespace inside it means something was mangled on the way here — a QR
-    // read off a screenshot, a link through a messaging app — and no encoding of
-    // a token produces it. `normaliseCode` drops separators, so a string only
-    // reaches this branch once it is not eight symbols either.
-    expect(readPairing('two whole words')).toBeNull()
-    expect(readPairing('#t=')).toBeNull()
-  })
-
-  it('still reads a bare token as one, which is what the tailnet route sends', () => {
-    // Deliberately unchanged: `readPairInput` has always accepted the token on
-    // its own, because the same client is opened from a Windows box on the
-    // tailnet where the QR is on a screen three feet away.
-    expect(readPairing('sometokenthatisnotacode')).toEqual({
-      kind: 'direct',
-      token: 'sometokenthatisnotacode',
-    })
   })
 })

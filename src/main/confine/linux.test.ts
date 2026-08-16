@@ -52,6 +52,7 @@ function planOf(over: Partial<ConfinementPlan> = {}): ConfinementPlan {
   return {
     folder: '/home/asad/work/app',
     accountHome: '/home/asad',
+    home: '/home/asad/.config/deck/device-home/abc',
     writable: ['/home/asad/work/app', '/home/asad/.config/deck/device-home/abc'],
     readable: ['/usr', '/bin'],
     readableFiles: [],

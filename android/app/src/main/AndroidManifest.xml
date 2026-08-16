@@ -9,12 +9,12 @@
     <uses-permission android:name="android.permission.INTERNET" />
 
     <!--
-      The camera, for the pairing QR code and nothing else. Requested at the moment the scan button
-      is tapped rather than at startup, and never required: the same code can be typed or pasted, so
-      a phone that refuses the permission can still pair.
+      There is deliberately no CAMERA permission. This app carried one for the pairing QR code, and
+      the QR did not work; pairing is now six digits somebody reads off the machine and types, and
+      `QRScanner` and the ZXing dependency went with it. A permission for a capability the binary
+      does not exercise is something Play asks about on every release and something a user is right
+      to be suspicious of, so it goes with the code that needed it.
     -->
-    <uses-permission android:name="android.permission.CAMERA" />
-    <uses-feature android:name="android.hardware.camera" android:required="false" />
 
     <application
         android:allowBackup="false"
@@ -38,37 +38,18 @@
             </intent-filter>
 
             <!--
-              The pairing link.
+              There is deliberately no `terminaldeck://pair` filter.
 
-              The desktop and both stand-in hosts hand out `terminaldeck://pair#h=…&k=…&t=…`, and
-              until this filter existed the phone had no way to receive one: `am start -a VIEW -d
-              "terminaldeck://pair?…"` answered "unable to resolve Intent", and tapping the link in
-              a message did nothing. The only route into the app was retyping a 200-character code
-              or pointing the camera at a QR — which is why the QR path was the only one anybody
-              had exercised.
+              One used to be here, so that a link out of a QR code or a message could open this app
+              already holding a pairing token. The QR did not work and the link was the problem
+              rather than the delivery: it is a live single-use bearer secret in a string, whose only
+              route to a phone is a messaging app that keeps a copy — and any app on the device may
+              claim a custom scheme, so it was a secret handed to whoever answered first.
 
-              `singleTask` above is what makes the two arrival paths two paths: a cold start reads
-              `intent.data` in `onCreate`, and a link that arrives while the app is already up comes
-              through `onNewIntent`. Both are handled; an app that only handled the first would
-              swallow every link after the first launch.
-
-              A custom scheme, not an App Link. Verified `https://` links need a
-              `assetlinks.json` served from a domain this project does not yet control, and an
-              unverified `https://` filter is a disambiguation dialog rather than a deep link. The
-              scheme carries no trust of its own — any app may claim it — but nothing here is
-              trusted on arrival either: `PairingCodes.parse` validates the shape, the token is
-              single-use, and the Mac still requires a human to approve the device. The worst a
-              hostile link can do is point this phone at a relay that refuses it.
-
-              `android:host` is pinned to `pair` so the filter claims exactly the one URL shape the
-              product emits, rather than every `terminaldeck://` address that could ever exist.
+              Pairing is six digits typed into this app now. There is no second door and nothing
+              arrives from outside the process, which is a smaller surface than any amount of
+              validation on the way in.
             -->
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="terminaldeck" android:host="pair" />
-            </intent-filter>
         </activity>
     </application>
 

@@ -37,7 +37,7 @@ const OFFER: MachineOffer = {
  * scrypt parameters in its own file, and two restatements of one derivation
  * drift silently: nothing throws, nothing logs, and two machines simply stop
  * being able to find each other because they are deriving different slots from
- * the same eight characters.
+ * the same six digits.
  *
  * Pinning the *output* rather than only the salt is deliberate. It catches a
  * changed salt, a changed cost parameter, a changed seed length and a changed
@@ -46,14 +46,24 @@ const OFFER: MachineOffer = {
  */
 const VECTORS = [
   {
-    code: 'H4K9-2FQT',
-    hostId: 'ZWG39KXXW8GKVHZP6UF2SGUARD',
-    publicKey: 'aQPhyoFeCJkVcrnoSvne9Eft2vkXQrmYitfzy2JowX8=',
+    code: '482913',
+    hostId: 'PNN7FEFPVPEPG8J6JD5LTK22CW',
+    publicKey: 'PluJUUCYOIi9dWOnMK0Sq8NrO635DqyD0yTLIyeLlAU=',
   },
   {
-    code: 'ABCD-EFGH',
-    hostId: 'BBZFGL6PYFH6W23H5LGX4KERVZ',
-    publicKey: 'NinFdauDs0+5UobA6Txvq2rhXZiyD1c4676VktxUN0A=',
+    // The leading-zero case, pinned on purpose. A code is six *digits*, not a
+    // number: anything that parses `000000` as an integer on the way to the
+    // derivation lands on `0` and derives a different slot from every other
+    // client, which reads on screen as a code that was typed correctly and
+    // found nothing.
+    code: '000000',
+    hostId: 'ESVP7D6GDHN28MLNU5AEGRGGC7',
+    publicKey: 'AFF3srTJviOR9zEbStt+iPZuTjl1Gp595oLklTIfLgc=',
+  },
+  {
+    code: '999999',
+    hostId: 'UAFTGU2WS5MN5GYUKF48KJG5SK',
+    publicKey: 'bleS0Mpc5kqiW5FJ7wNs6uardUbhJgcrjUN583t7Zx4=',
   },
 ] as const
 
@@ -75,8 +85,8 @@ describe('the derivation every client has to agree on', () => {
 
 describe('deriving a rendezvous from a code', () => {
   it('lands two machines on the same slot and the same key', () => {
-    const first = rendezvousIdentity('H4K9-2FQT')
-    const second = rendezvousIdentity('H4K9-2FQT')
+    const first = rendezvousIdentity('482913')
+    const second = rendezvousIdentity('482913')
     expect(first).not.toBeNull()
     expect(second).not.toBeNull()
     expect(first?.hostId).toBe(second?.hostId)
@@ -87,17 +97,17 @@ describe('deriving a rendezvous from a code', () => {
   it('does not care how the code was typed', () => {
     // The person reading it off the other screen types what their keyboard
     // gives them. All of these are the same code.
-    const canonical = rendezvousIdentity('H4K9-2FQT')?.hostId
-    expect(rendezvousIdentity('h4k92fqt')?.hostId).toBe(canonical)
-    expect(rendezvousIdentity('  H4K9 2FQT  ')?.hostId).toBe(canonical)
+    const canonical = rendezvousIdentity('482913')?.hostId
+    expect(rendezvousIdentity('482-913')?.hostId).toBe(canonical)
+    expect(rendezvousIdentity('  482 913  ')?.hostId).toBe(canonical)
   })
 
   it('lands two different codes somewhere else entirely', () => {
-    expect(rendezvousIdentity('H4K9-2FQT')?.hostId).not.toBe(rendezvousIdentity('H4K9-2FQV')?.hostId)
+    expect(rendezvousIdentity('482913')?.hostId).not.toBe(rendezvousIdentity('482914')?.hostId)
   })
 
   it('produces a slot the relay will route on, and a real key pair', () => {
-    const identity = rendezvousIdentity('ZZZZ-ZZZZ')
+    const identity = rendezvousIdentity('999999')
     expect(identity).not.toBeNull()
     expect(isHostId(identity?.hostId ?? '')).toBe(true)
     expect(identity?.hostSecret).toHaveLength(32)
@@ -108,7 +118,11 @@ describe('deriving a rendezvous from a code', () => {
   it('refuses anything that is not a code', () => {
     expect(rendezvousIdentity('nope')).toBeNull()
     expect(rendezvousIdentity('')).toBeNull()
-    expect(rendezvousIdentity('UUUU-UUUU')).toBeNull()
+    // Five digits, seven digits, and the old eight-character shape — all of
+    // them refused rather than hashed into a slot nobody else derives.
+    expect(rendezvousIdentity('48291')).toBeNull()
+    expect(rendezvousIdentity('4829131')).toBeNull()
+    expect(rendezvousIdentity('H4K9-2FQT')).toBeNull()
   })
 
   it('is the whole gate: a handshake against the wrong code fails to authenticate', () => {
@@ -119,8 +133,8 @@ describe('deriving a rendezvous from a code', () => {
      * With the wrong code it holds the wrong private half and the initiator's
      * static never opens.
      */
-    const right = rendezvousIdentity('H4K9-2FQT')
-    const wrong = rendezvousIdentity('H4K9-2FQV')
+    const right = rendezvousIdentity('482913')
+    const wrong = rendezvousIdentity('482914')
     expect(right).not.toBeNull()
     expect(wrong).not.toBeNull()
     if (right === null || wrong === null) return

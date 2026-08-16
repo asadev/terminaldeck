@@ -16,6 +16,17 @@ export interface FsEntry {
    * back into its own ancestry, a broken link, or a pipe/socket/device.
    */
   blocked: boolean
+  /**
+   * Modification time and size, present only when the caller asked for
+   * {@link ListOptions.withStats}.
+   *
+   * Optional rather than always-there because filling them costs one `stat` per
+   * entry, and a generated directory can hold two thousand. The tree asks for
+   * them on the *root* level only — where it needs them once, to decide which
+   * file to open — and never on an expand.
+   */
+  modifiedAt?: number
+  bytes?: number
 }
 
 export interface DirListing {
@@ -23,11 +34,27 @@ export interface DirListing {
   entries: FsEntry[]
   /** More than MAX_ENTRIES children exist; the rest were dropped. */
   truncated: boolean
+  /**
+   * The file this listing would open first — see {@link pickDefaultFile}.
+   *
+   * Present only when {@link ListOptions.withStats} was asked for, because the
+   * choice depends on the dates that option fetches. Answered here rather than
+   * in the renderer so that "which file does a project open on" has exactly one
+   * implementation: a second copy on the other side of the bridge is a rule
+   * that drifts silently, and nobody would ever see the two disagree.
+   */
+  defaultFile?: string | null
 }
 
 export interface ListOptions {
   /** Include entries an ignore file would hide. node_modules/.git stay hidden. */
   showIgnored?: boolean
+  /**
+   * Fill in `modifiedAt` and `bytes` on every entry — one `stat` each.
+   *
+   * Off by default and asked for on one level only. See {@link FsEntry}.
+   */
+  withStats?: boolean
 }
 
 export type FileRead =
@@ -372,7 +399,84 @@ export async function listDirectory(
   const truncated = entries.length > MAX_ENTRIES
   if (truncated) entries.length = MAX_ENTRIES
 
-  return { relPath: relDir, entries, truncated }
+  // After the truncation, deliberately: the cap is what bounds this to at most
+  // MAX_ENTRIES stats, and statting rows that were about to be thrown away
+  // would pay the whole cost of a generated directory for nothing.
+  if (!options.withStats) return { relPath: relDir, entries, truncated }
+
+  await Promise.all(
+    entries.map(async (entry) => {
+      if (entry.blocked) return
+      try {
+        const info = await stat(join(dirReal, entry.name))
+        entry.modifiedAt = info.mtimeMs
+        entry.bytes = info.size
+      } catch {
+        // Raced with a delete, or unreadable. The row still lists; it just has
+        // no date, which every caller of this option treats as "unknown"
+        // rather than as zero.
+      }
+    }),
+  )
+
+  return {
+    relPath: relDir,
+    entries,
+    truncated,
+    defaultFile: pickDefaultFile(entries)?.relPath ?? null,
+  }
+}
+
+/* --------------------------------------------------- the file to open first -- */
+
+/**
+ * Files whose *name* is enough to make them the right thing to open.
+ *
+ * A README is what a project puts at its front door, so it wins outright. The
+ * rest are the files a repository with no README leads with, in the order a
+ * person would look for them.
+ */
+const LEAD_FILES: readonly RegExp[] = [
+  /^readme(\.|$)/i,
+  /^index\.[a-z]+$/i,
+  /^main\.[a-z]+$/i,
+  /^(claude|agents|contributing|changelog)\.md$/i,
+  /^package\.json$/i,
+]
+
+/**
+ * Which file a freshly-opened project should show.
+ *
+ * The Files page used to open on the sentence "pick something from the tree and
+ * it opens here", which is a whole pane spent asking the reader to do the one
+ * thing the page could have done for them. It now opens on this.
+ *
+ * Name first, then recency. Recency alone is wrong on a repository somebody has
+ * just built in — the newest file at the root of this one is a lockfile — and a
+ * name alone is wrong on a project that has no README at all, so it is both,
+ * in that order. Directories are never chosen: a folder is not a thing the
+ * viewer can show.
+ *
+ * Returns null when the root holds no file at all, which is a real state (a
+ * repository of nothing but directories) and not an error.
+ */
+export function pickDefaultFile(entries: readonly FsEntry[]): FsEntry | null {
+  const files = entries.filter((entry) => entry.kind === 'file' && !entry.blocked)
+  if (files.length === 0) return null
+
+  for (const pattern of LEAD_FILES) {
+    const named = files.filter((entry) => pattern.test(entry.name))
+    if (named.length === 0) continue
+    // Two READMEs (`README.md` and `README`) is rare but real; the newest of
+    // them is the one being kept up to date.
+    return named.reduce((best, entry) => ((entry.modifiedAt ?? 0) > (best.modifiedAt ?? 0) ? entry : best))
+  }
+
+  // No stats means the caller did not ask for them, and guessing at recency
+  // without them would silently return whatever sorted first.
+  const dated = files.filter((entry) => typeof entry.modifiedAt === 'number')
+  if (dated.length === 0) return null
+  return dated.reduce((best, entry) => ((entry.modifiedAt ?? 0) > (best.modifiedAt ?? 0) ? entry : best))
 }
 
 /* ---------------------------------------------------------------- files -- */
@@ -442,12 +546,10 @@ export function registerFsIpc(ipcMain: IpcMain): void {
   ipcMain.handle(
     'fs:list',
     (_e: IpcMainInvokeEvent, root: unknown, relDir: unknown, options: unknown) => {
-      const showIgnored =
-        typeof options === 'object' &&
-        options !== null &&
-        (options as ListOptions).showIgnored === true
+      const asked = typeof options === 'object' && options !== null ? (options as ListOptions) : {}
       return listDirectory(requireString(root, 'root'), requireString(relDir ?? '', 'relDir'), {
-        showIgnored,
+        showIgnored: asked.showIgnored === true,
+        withStats: asked.withStats === true,
       })
     },
   )

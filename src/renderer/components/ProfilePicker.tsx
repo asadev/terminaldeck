@@ -2,6 +2,8 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState, type FormEven
 import type { ProviderId } from '@shared/types'
 import { folderName } from '../session-title'
 import { Modal } from './Modal'
+import { ProviderBadge } from './ProviderBadge'
+import { providerOption } from './ProviderPicker'
 import './ProfilePicker.css'
 
 /**
@@ -15,10 +17,13 @@ import './ProfilePicker.css'
  * profile, where its config lives, and whether it has ever been signed into
  * are all on screen before the session starts.
  *
- * Only Claude is isolated. `profiles.ts` explains why the other agents are
- * left alone: their config variables could not be verified on this machine,
- * and a wrong variable name silently *shares* a login instead of splitting it,
- * which is worse than not offering the feature.
+ * Not every agent can be isolated, and the ones that cannot say so on the row
+ * rather than being left out. `provider-accounts.ts` holds the measurement for
+ * each: Claude's `CLAUDE_CONFIG_DIR` and Codex's `CODEX_HOME` were both watched
+ * move a login; Gemini's `GEMINI_CLI_HOME` moves the settings and leaves the
+ * token in one shared keychain entry, so it is refused. A wrong variable name
+ * silently *shares* a login instead of splitting it, which is worse than not
+ * offering the feature.
  */
 
 /* -------------------------------------------------------------- bridging -- */
@@ -51,6 +56,14 @@ export function profileBridge(): Partial<ProfileBridge> | null {
 export interface ProfileView {
   id: string
   name: string
+  /**
+   * Which agent this account is a login of.
+   *
+   * Absent on a snapshot from a build that predates accounts having providers,
+   * and every account in one of those was a Claude account — so it defaults
+   * rather than being dropped, matching `sanitizeProfile` in `profiles.ts`.
+   */
+  provider: ProviderId
   configDir: string
   system: boolean
   /** A custom property name from tokens.css; wrapped in var() at render time. */
@@ -85,6 +98,7 @@ export function parseProfile(value: unknown): ProfileView | null {
   return {
     id,
     name,
+    provider: providerOption(raw.provider as ProviderId) ? (raw.provider as ProviderId) : 'claude',
     configDir,
     system: raw.system === true,
     color: typeof raw.color === 'string' && raw.color.startsWith('--') ? raw.color : '--accent',
@@ -194,14 +208,31 @@ export function profileBadges(
 }
 
 /**
- * Only Claude reads a config directory we can redirect. Anything else runs
- * under whatever the machine is already logged into, and saying so is better
- * than showing a control that quietly does nothing.
+ * Whether an account applies to this agent at all, and one line saying why not.
+ *
+ * Read out of the provider catalogue rather than written here, so there is one
+ * list of which agents can hold a login and this dialog cannot come to disagree
+ * with the Add-account dialog about it. `PROVIDER_OPTIONS` explains where that
+ * list comes from and what pins it to the main process's measurements.
+ *
+ * The sentence this replaced — "Profiles only apply to Claude sessions" — was
+ * true when it was written and is now wrong about Codex, whose `CODEX_HOME` was
+ * measured moving a login. It was also never an explanation for Gemini: Gemini's
+ * problem is not that nothing was checked, it is that the variable moves the
+ * settings and leaves the token in a single shared keychain entry.
+ *
+ * `undefined` means the caller does not know which agent yet, and gets no
+ * notice — an empty dialog explaining a restriction that may not apply is worse
+ * than saying nothing until the agent is chosen.
  */
 export function isolationNotice(provider: ProviderId | undefined): string | null {
-  if (provider === undefined || provider === 'claude') return null
-  if (provider === 'shell') return 'A shell session has no login to isolate.'
-  return 'Profiles only apply to Claude sessions — this agent uses its own login.'
+  if (provider === undefined) return null
+  const option = providerOption(provider)
+  // A provider this build has never heard of: no claim either way, because the
+  // alternative is telling somebody their agent has no accounts when the truth
+  // is that this build does not know the agent.
+  if (!option) return null
+  return option.canHaveAccounts ? null : option.accountsNote
 }
 
 /* ------------------------------------------------------------- component -- */
@@ -450,6 +481,11 @@ export function ProfilePicker({ open, projectPath, provider, onClose, onPick }: 
                   />
                   <span className="profiles-text">
                     <span className="profiles-name">
+                      {/* Which agent this login belongs to, beside the name.
+                          Two accounts can share a name across two agents — the
+                          clash check is per agent for exactly that reason — so
+                          the mark is what tells the rows apart at a glance. */}
+                      <ProviderBadge provider={profile.provider} />
                       {profile.name}
                       {badges.map((badge) => (
                         <span key={badge} className="profiles-badge">

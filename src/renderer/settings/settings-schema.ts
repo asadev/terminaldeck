@@ -107,7 +107,13 @@ export const SECTIONS = [
   {
     id: 'remote',
     label: 'Remote',
-    blurb: 'Reach these sessions from a phone, over your own tailnet.',
+    // Not "over your own tailnet". This section is reached by people who have
+    // never heard of Tailscale, and naming it here made an optional extra look
+    // like the requirement — which is the third time that framing has been
+    // objected to. The relay is the network: it needs no account, no install and
+    // no configuration, and it is what the row below actually dials. It also
+    // covers another computer now, not just a phone, since Machines merged in.
+    blurb: 'Reach these sessions from a phone or another computer.',
   },
   /*
    * Power sits beside Remote because the two answer the same question from
@@ -473,9 +479,21 @@ export const SETTINGS: readonly Setting[] = [
     help: 'Where a new browser tab opens.',
     store: 'extra',
     kind: 'text',
-    default: 'http://localhost:3000',
+    // Empty, because a default address is a guess about somebody else's machine.
+    //
+    // This defaulted to `http://localhost:3000`, so the first browser tab anyone
+    // opened navigated there whether or not anything was listening. On a fresh
+    // Windows install nothing is, and the tab landed on Chromium's red
+    // ERR_CONNECTION_REFUSED page — which is what Asad screenshotted. The start
+    // page that exists for precisely this moment only rendered when the URL was
+    // empty, so on a default install it was unreachable.
+    //
+    // 3000 is also just one framework's convention. `dev-ports.ts` already
+    // detects what is actually listening on this machine, and the start page
+    // offers those — which is a true answer rather than a guess.
+    default: '',
     placeholder: 'http://localhost:3000',
-    emptyMeans: 'Leave empty to open a blank tab.',
+    emptyMeans: 'Leave empty to open the start page.',
   },
   {
     id: 'browser.persistSession',

@@ -293,7 +293,7 @@ describe('conversationOnDisk', () => {
     const dir = transcriptDir(session.cwd, configDir)
     mkdirSync(dir, { recursive: true })
     writeFileSync(join(dir, 'a1b2c3d4.jsonl'), '{"type":"user"}\n', 'utf8')
-    await expect(conversationOnDisk(session, configDir)).resolves.toBe('found')
+    await expect(conversationOnDisk(session, configDir, 'darwin')).resolves.toBe('found')
   })
 
   it('does not count a transcript the CLI created and never wrote to', async () => {
@@ -304,19 +304,19 @@ describe('conversationOnDisk', () => {
     const dir = transcriptDir(session.cwd, configDir)
     mkdirSync(dir, { recursive: true })
     writeFileSync(join(dir, 'a1b2c3d4.jsonl'), '', 'utf8')
-    await expect(conversationOnDisk(session, configDir)).resolves.toBe('none')
+    await expect(conversationOnDisk(session, configDir, 'darwin')).resolves.toBe('none')
   })
 
   it('answers none for a folder Claude Code has never run in', async () => {
     const configDir = join(TMP, 'claude-config-missing')
     const session = saved({ cwd: join(TMP, 'never-used') })
-    await expect(conversationOnDisk(session, configDir)).resolves.toBe('none')
+    await expect(conversationOnDisk(session, configDir, 'darwin')).resolves.toBe('none')
   })
 
   it('refuses to guess for an agent whose history it cannot read', async () => {
     const configDir = join(TMP, 'claude-config')
-    await expect(conversationOnDisk(saved({ provider: 'codex' }), configDir)).resolves.toBe('unknown')
-    await expect(conversationOnDisk(saved({ provider: 'shell' }), configDir)).resolves.toBe('unknown')
+    await expect(conversationOnDisk(saved({ provider: 'codex' }), configDir, 'darwin')).resolves.toBe('unknown')
+    await expect(conversationOnDisk(saved({ provider: 'shell' }), configDir, 'darwin')).resolves.toBe('unknown')
   })
 
   it('reads the profile it is given rather than the default install', async () => {
@@ -334,8 +334,70 @@ describe('conversationOnDisk', () => {
     writeFileSync(join(transcriptDir(cwd, profileDir), 'a1.jsonl'), '{"type":"user"}\n', 'utf8')
     mkdirSync(transcriptDir(cwd, defaultDir), { recursive: true })
 
-    await expect(conversationOnDisk(saved({ cwd }), profileDir)).resolves.toBe('found')
-    await expect(conversationOnDisk(saved({ cwd }), defaultDir)).resolves.toBe('none')
+    await expect(conversationOnDisk(saved({ cwd }), profileDir, 'darwin')).resolves.toBe('found')
+    await expect(conversationOnDisk(saved({ cwd }), defaultDir, 'darwin')).resolves.toBe('none')
+  })
+
+  /*
+   * "Pick up where you left off" worked on the Mac and not on Windows.
+   *
+   * Reproduced on his own PC rather than reasoned about. `DESKTOP-DDGMNCV` runs
+   * every session inside WSL, so `state.json` there holds
+   * `{"cwd":"/home/asad/ClaudeImza",…}`, and the app log for that launch reads:
+   *
+   *     [restore] started clean: no earlier conversation was found on disk for
+   *     this folder {"folder":"/home/asad/ClaudeImza","agent":"claude"}
+   *
+   * while the distribution held `/home/asad/.claude/projects/-home-asad-ClaudeImza`
+   * with that morning's conversation in it, and the Windows side's
+   * `C:\Users\Imza\.claude\projects\` held no such directory at all — only
+   * `--wsl-localhost-ubuntu-24-04-home-asad-ClaudeImza`, written by a Claude
+   * that had been launched from Windows against the UNC path.
+   *
+   * The lookup was asking a directory that cannot hold the answer, about a
+   * folder name the agent never wrote, and reporting `none` — a confident claim
+   * that there is nothing to continue.
+   */
+  it('does not claim a WSL session has no conversation just because Windows cannot see one', async () => {
+    const configDir = join(TMP, 'windows-side-claude')
+    const session = saved({ cwd: '/home/asad/ClaudeImza' })
+
+    // On Windows this folder is a Linux folder and its agent ran inside the
+    // distribution: unknown, so `--continue` is passed and the CLI finds its
+    // own transcript.
+    await expect(conversationOnDisk(session, configDir, 'win32')).resolves.toBe('unknown')
+
+    // The very same session on a Mac is an ordinary host path with an ordinary
+    // host store, and there the answer really is "nothing here".
+    await expect(conversationOnDisk(session, configDir, 'darwin')).resolves.toBe('none')
+  })
+
+  it('still reads the host store for a Windows session that is not in WSL', async () => {
+    // The narrowing has to be the Linux path, not the platform. A project on
+    // `C:\` is a Windows process writing a Windows store, and answering
+    // `unknown` for it would hand `--continue` to a folder that has genuinely
+    // never been used.
+    const configDir = join(TMP, 'claude-config-windows-native')
+    const session = saved({ cwd: 'C:\\Users\\Imza\\Projects\\app' })
+    await expect(conversationOnDisk(session, configDir, 'win32')).resolves.toBe('none')
+  })
+
+  it('continues a restored WSL tab instead of starting it clean', async () => {
+    /*
+     * The same fault one level up, where a person meets it: the plan, not the
+     * probe. Without the fix both tabs come back as `fresh` — which is what
+     * his log recorded — and the morning's conversation is left on disk.
+     */
+    const sessions = [saved({ cwd: '/home/asad/ClaudeImza' })]
+    const plan = await planRestore(
+      sessions,
+      probes({
+        configDir: () => 'C:\\Users\\Imza\\.claude',
+        conversation: (session, configDir) => conversationOnDisk(session, configDir, 'win32'),
+      }),
+    )
+    expect(outcomes(plan)).toEqual(['resume'])
+    expect(plan[0].reason).toMatch(/cannot read it/i)
   })
 })
 

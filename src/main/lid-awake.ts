@@ -20,6 +20,54 @@
  * is a second, real way to lose a running agent — but it is never what the
  * switch reports on. See `readLidAwake`.
  *
+ * ## The two locks, and why binding one to the other was the bug
+ *
+ * There are two entirely different mechanisms in this file and they protect
+ * against two different events:
+ *
+ *   - **The system lid setting** (`disablesleep` on macOS, the lid-close action
+ *     on Windows). Privileged, system-wide, survives the app. It is the only
+ *     thing that stops a *closed lid* sleeping the machine.
+ *   - **This app's own wake lock** (`powerSaveBlocker`). Unprivileged, free, no
+ *     prompt, dies with the process. It stops **idle** system sleep and nothing
+ *     else: the display still goes off, a lid close still sleeps, choosing Sleep
+ *     from the menu still sleeps.
+ *
+ * Until this was fixed, the second was taken **only while the first was on** —
+ * `refresh()` held the blocker when the OS said `SleepDisabled 1` and released
+ * it otherwise. That is exactly backwards, and it is what Asad hit: *"I felt
+ * that it's not working the way it should work — after a few seconds I can get
+ * disconnected."* Turning on the strong protection needs an administrator
+ * password, so on every machine where that has not been done — which is every
+ * machine on first run, and every machine where the password sheet was
+ * dismissed — the app held **nothing at all**, and an idle timer was free to
+ * sleep a Mac with a phone attached to a running agent. The free protection was
+ * being handed out only to the people who already had the expensive one.
+ *
+ * It had a second, quieter half. `refresh()` re-derives that decision on every
+ * read, and a read can fail: `pmset` gets five seconds, and five seconds is not
+ * a lot on a machine running several agents, which is the machine this app is
+ * for. A single slow `pmset` came back `known: false`, the `else` branch
+ * released a wake lock that was correctly held, and `watchBattery` cancelled the
+ * only timer that would ever have re-read — so the lock was gone for the rest of
+ * the run with nothing on screen and nothing in the log.
+ *
+ * So the blocker no longer has anything to do with the system setting. It is
+ * taken in {@link LidAwakeController.start} and released in
+ * {@link LidAwakeController.stop}, and nothing in between can drop it. The app
+ * is a runner for agent sessions that outlast a person's attention; idle sleep
+ * is the failure mode that takes those down; blocking it costs one IOKit
+ * assertion and no permission. Claude Desktop — the closest comparable product,
+ * measured on this machine with `pmset -g assertions` — holds the same
+ * `NoIdleSleepAssertion` for its entire run, and a plain Electron app (Wispr
+ * Flow, checked in the same output) holds none, so this is a deliberate choice
+ * that product makes rather than something Electron does by itself.
+ *
+ * What that costs is stated rather than hidden: a machine with this app open
+ * will not fall asleep **on its own**. It will still sleep when the lid is
+ * closed, when the user asks it to, and when the battery gets critical. The
+ * Power pane says so in a line of its own.
+ *
  * ## Reading the truth instead of remembering it
  *
  * `disablesleep` is a **system** setting. It is not ours, it outlives this
@@ -199,6 +247,21 @@ export interface LidAwakeState {
   detail: string | null
   /** A live risk worth putting in front of the user, or null. */
   warning: string | null
+  /**
+   * Is this app holding the machine's idle sleep off right now?
+   *
+   * A separate field from `on` because it is a separate fact about a separate
+   * mechanism — see the two-locks section at the top of this file. It exists so
+   * the Power pane can say the true thing on a machine where the switch is off:
+   * something *is* already happening, it is just the weaker half. A screen that
+   * only knew about `on` had to imply that nothing was, which is how the
+   * feature came to look broken while it was working.
+   *
+   * It is the app's own bookkeeping rather than a reading of the OS, and it is
+   * only ever true once `powerSaveBlocker.isStarted` has confirmed the
+   * assertion was actually taken.
+   */
+  idleBlocked: boolean
 }
 
 export type LidAwakeOutcome =
@@ -436,11 +499,13 @@ const UNSUPPORTED_DETAIL =
   'Holding a machine awake through a lid close is only wired up for macOS and Windows.'
 
 /**
- * Everything a read can answer. `preexisting` and `warning` are the two fields
- * only the controller can fill in, so they are named once here rather than being
- * re-listed by every function that produces one.
+ * Everything a read can answer. `preexisting`, `warning` and `idleBlocked` are
+ * the three fields only the controller can fill in — the first two because they
+ * need to know when the app launched, the third because it is a fact about this
+ * process rather than about the machine — so they are named once here rather
+ * than being re-listed by every function that produces one.
  */
-export type LidAwakeReading = Omit<LidAwakeState, 'preexisting' | 'warning'>
+export type LidAwakeReading = Omit<LidAwakeState, 'preexisting' | 'warning' | 'idleBlocked'>
 
 function unsupportedReading(platform: NodeJS.Platform): LidAwakeReading {
   return {
@@ -646,11 +711,19 @@ export async function setLidAwake(on: boolean, options: WriteOptions = {}): Prom
   const writePrevious =
     options.writePrevious ?? ((patch: Record<string, number>) => void patchStoredSettings(patch))
 
+  /*
+   * `idleBlocked: false` here is a placeholder rather than a claim, and it is
+   * safe for one structural reason: this is a free function with no controller
+   * and therefore no blocker, and the only caller that reaches a renderer is
+   * `LidAwakeController.set`, which throws this state away and substitutes its
+   * own `refresh()`. Guessing `true` would be the lie; `false` is the honest
+   * "this function does not hold one".
+   */
   const finish = async (outcome: LidAwakeOutcome, message: string): Promise<LidAwakeResult> => {
     const state = await readLidAwake({ run, platform })
     return {
       outcome,
-      state: { ...state, preexisting: false, warning: null },
+      state: { ...state, preexisting: false, warning: null, idleBlocked: false },
       message,
     }
   }
@@ -722,7 +795,7 @@ export async function setLidAwake(on: boolean, options: WriteOptions = {}): Prom
   if (after.known && after.on === on) {
     return {
       outcome: 'changed',
-      state: { ...after, preexisting: false, warning: null },
+      state: { ...after, preexisting: false, warning: null, idleBlocked: false },
       message: on
         ? 'On. This machine will keep running with the lid closed.'
         : 'Off. The lid puts this machine to sleep again.',
@@ -731,7 +804,7 @@ export async function setLidAwake(on: boolean, options: WriteOptions = {}): Prom
 
   return {
     outcome: 'failed',
-    state: { ...after, preexisting: false, warning: null },
+    state: { ...after, preexisting: false, warning: null, idleBlocked: false },
     message: after.known
       ? 'The command ran and the setting did not change.'
       : (after.detail ?? 'The setting could not be read back afterwards.'),
@@ -747,6 +820,18 @@ export async function setLidAwake(on: boolean, options: WriteOptions = {}): Prom
 export interface PowerApi {
   startBlocker(): number
   stopBlocker(id: number): void
+  /**
+   * Did the assertion actually get taken?
+   *
+   * `powerSaveBlocker.start` hands back an integer whether or not the platform
+   * granted anything — on macOS it is a Chromium-side handle created before
+   * `IOPMAssertionCreateWithName` is asked, so a refusal comes back as a
+   * perfectly ordinary-looking id. The controller recorded that id and its
+   * `hold()` guard then early-returned forever, which is "started but never
+   * acquired": every layer reporting success while nothing was held. This is
+   * the only question that can tell the two apart, so `hold()` asks it.
+   */
+  isBlockerStarted(id: number): boolean
   onBatteryPower(): boolean
   /** Subscribe to mains/battery transitions. Returns an unsubscribe. */
   onPowerSourceChange(callback: (onBattery: boolean) => void): () => void
@@ -754,13 +839,34 @@ export interface PowerApi {
 }
 
 export const electronPowerApi: PowerApi = {
-  // 'prevent-app-suspension', not 'prevent-display-sleep': the user asked for the
-  // screen to go *off* while the work carries on. Blocking the display would
-  // leave a lit screen inside a closed laptop, which is both wrong and hot.
+  /*
+   * 'prevent-app-suspension', not 'prevent-display-sleep', and this was
+   * re-checked against the running machine rather than re-argued.
+   *
+   * The reason it is not the display one is unchanged: the user asked for the
+   * screen to go *off* while the work carries on, and blocking the display
+   * would leave a lit panel inside a closed laptop, which is both wrong and
+   * hot.
+   *
+   * The reason it was worth re-checking is that "prevent-app-suspension does
+   * not really stop the machine sleeping" is a plausible-sounding claim, and
+   * this whole module exists because plausible-sounding claims about power
+   * management are usually wrong. So it was measured. With this app running,
+   * `pmset -g assertions` on macOS 27 lists
+   *
+   *     pid 45133(Terminal Deck): NoIdleSleepAssertion named: "Electron"
+   *
+   * and `pmset -g` names "Terminal Deck" in `sleep 0 (sleep prevented by …)`.
+   * That is the kernel agreeing that this process is holding idle system sleep
+   * off, so the type is right and the fault was never here — it was that the
+   * assertion was only ever taken on a machine that had already been given the
+   * privileged setting. See the two-locks section at the top of this file.
+   */
   startBlocker: () => powerSaveBlocker.start('prevent-app-suspension'),
   stopBlocker: (id) => {
     if (powerSaveBlocker.isStarted(id)) powerSaveBlocker.stop(id)
   },
+  isBlockerStarted: (id) => powerSaveBlocker.isStarted(id),
   onBatteryPower: () => powerMonitor.onBatteryPower === true,
   onPowerSourceChange: (callback) => {
     const onBattery = () => callback(true)
@@ -853,6 +959,20 @@ export class LidAwakeController {
   private warned = false
   private last: LidAwakeState | null = null
 
+  /**
+   * The last time the OS gave a straight answer about the lid setting.
+   *
+   * Kept because an *unreadable* read must not be allowed to act like a "no".
+   * `pmset` is given five seconds and this app's own machine is one running
+   * several agents at once, so a read that times out is an ordinary event
+   * rather than a broken machine — and treating it as "off" cancelled the
+   * battery watch and left a laptop being held awake on battery with nothing
+   * watching it. `known: false` now means "keep believing the last thing the
+   * machine actually said", which is the only reading that cannot turn a slow
+   * command into a silent loss of a safety mechanism.
+   */
+  private lastKnownOn = false
+
   constructor(options: ControllerOptions = {}) {
     this.run = options.run ?? runCommand
     this.platform = options.platform ?? process.platform
@@ -875,26 +995,48 @@ export class LidAwakeController {
   }
 
   /**
-   * Read the truth, and make the app's own runtime agree with it.
+   * Read the truth, and tell everybody what it says.
    *
-   * Called at launch and after every change. It never *sets* anything on the
-   * system — the only thing it changes is what this process holds, which is why
-   * it is safe to run unprompted.
+   * Called at launch, on a mains/battery transition, on the battery watch, when
+   * the settings pane asks, and after every change. It never *sets* anything on
+   * the system, and — since the wake lock moved to `start`/`stop` — it no longer
+   * changes what this process holds either. It reads, it decides what is worth
+   * warning about, and it broadcasts.
+   *
+   * That it cannot drop the wake lock is the point rather than a side effect.
+   * The previous version re-derived `hold()`/`release()` here from the read it
+   * had just taken, which meant a single unreadable read released a correctly
+   * held lock and cancelled the timer that would have re-read — a wake lock lost
+   * for the rest of the run, silently, because a command was slow.
    */
   async refresh(options: { initial?: boolean } = {}): Promise<LidAwakeState> {
     const read = await readLidAwake({ run: this.run, platform: this.platform })
     if (options.initial) this.preexisting = read.known && read.on
+    if (read.known) this.lastKnownOn = read.on
+
+    // Before the state is built, not after: `idleBlocked` below is read off
+    // `blockerId`, so a hold taken here has to have happened first or the very
+    // read that acquires the lock reports that it did not.
+    //
+    // Re-taken here as well as in `start()`, because `hold()` is a no-op when it
+    // already holds one and is the only way back from an acquisition that the
+    // platform refused. Without this, a refusal at launch — a Mac under an MDM
+    // policy, a Windows box where the call failed — would be permanent for the
+    // life of the process.
+    this.hold()
 
     const hasLid = read.battery?.present !== false
-    const held = read.known && read.on
+    // The last straight answer, not this read's. See `lastKnownOn`: a read that
+    // failed says nothing about the machine, and the one thing it must not do is
+    // quietly retire the low-battery warning on a laptop that is being held
+    // awake with its lid shut.
+    const held = this.lastKnownOn
     const state: LidAwakeState = {
       ...read,
       preexisting: this.preexisting,
       warning: held ? lowBatteryWarning(read.battery, hasLid) : null,
+      idleBlocked: this.blockerId !== null,
     }
-
-    if (held) this.hold()
-    else this.release()
 
     this.watchBattery(held && read.battery?.discharging === true)
     this.maybeWarn(state)
@@ -905,17 +1047,25 @@ export class LidAwakeController {
   }
 
   /**
-   * Take the idle-sleep blocker alongside the system setting.
+   * Take the idle-sleep blocker, and only record it if the platform gave it.
    *
-   * Belt and braces, and *not* what makes the lid work — that is the system
-   * setting, and nothing in this method could substitute for it. It closes the
-   * second door: a machine whose lid is held open can still be sent to sleep by
-   * an idle timer, and a user who asked to keep working through a closed lid did
-   * not mean "unless you go to lunch".
+   * This is the app's own half of the feature and it is deliberately not
+   * conditional on anything: no privileged setting, no read of the machine, no
+   * question about whether the lid switch is on. See the two-locks section at
+   * the top of this file for why binding it to `disablesleep` was the bug.
+   *
+   * The `isBlockerStarted` check is the other half of that fault. `start()`
+   * returns an id even when the underlying assertion was refused, so recording
+   * it unconditionally meant the early return below fired forever against a
+   * lock that was never taken — success reported by the side that was not doing
+   * the work, which is this project's most expensive recurring bug. An id that
+   * did not take is dropped, so the next `refresh` tries again.
    */
   private hold(): void {
     if (this.blockerId !== null) return
-    this.blockerId = this.power.startBlocker()
+    const id = this.power.startBlocker()
+    if (!this.power.isBlockerStarted(id)) return
+    this.blockerId = id
   }
 
   private release(): void {
@@ -960,9 +1110,22 @@ export class LidAwakeController {
     this.power.notify('This machine is being kept awake', state.warning ?? '')
   }
 
-  /** Attach at launch. Safe to call once; a second call is ignored. */
+  /**
+   * Attach at launch. Safe to call once; a second call is ignored.
+   *
+   * The wake lock is taken **here**, before the first read and without waiting
+   * for one. That ordering is deliberate and it is the fix for the fault Asad
+   * reported: the machine cannot be asked about its power settings without
+   * spawning `pmset` or `powercfg`, those take a moment, and until this moved
+   * out of `refresh()` there was a window at launch — and a permanent state on
+   * any machine whose privileged switch was off — in which the app held nothing
+   * and an idle timer was free to take a running session down. Nothing about
+   * blocking idle sleep needs the machine's answer, so nothing about it waits
+   * for one.
+   */
   start(): void {
     if (this.unsubscribePower !== null) return
+    this.hold()
     // A real event, and the only one either platform offers for free: the
     // moment the plug comes out is exactly when a held-open lid starts costing
     // something, so it is worth a re-read rather than waiting for a tick.
@@ -982,6 +1145,12 @@ export class LidAwakeController {
    * the app on purpose, the settings pane says so in as many words, and the
    * state is read back from the OS at the next launch so it can never become
    * invisible.
+   *
+   * It **is** the only thing that lets the wake lock go, and that is the other
+   * half of the same decision. Anything else releasing it — a read that failed,
+   * a settings pane closing, a battery tick — is a teardown path running when
+   * the app is still very much alive, which is precisely how the lock came to
+   * be dropped mid-session.
    */
   stop(): void {
     this.release()

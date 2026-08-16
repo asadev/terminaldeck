@@ -1,0 +1,163 @@
+/*
+  The account chip's own additions to the chip menu.
+
+  `shell.css` owns `.folder-menu*` and `.account-menu-item` — the shapes the
+  folder chip and this one share. What is here is only what renaming an account
+  in place needed, and it lives beside the component rather than at the end of a
+  1400-line stylesheet because it is this component's and nothing else's.
+
+  Every value is a token. `tokens.css` is the system; a raw pixel or hex here
+  would be a second opinion about the same thing.
+*/
+
+/* ------------------------------------------------- a shell with no agent in it */
+
+/*
+  Run Claude, in the slot the account picker occupies once there is an account
+  to pick. Built on `.folder-chip-button` — the same 18px pill the folder chip
+  and the account chip are, because it is the same row and a control that sized
+  itself would step out of the line the other two hold.
+
+  The one difference is the colour. This is the only thing on the row that
+  *does* something rather than opening a menu, and on a plain shell it is the
+  only offer on screen; `--text-secondary` over `--text-muted` is one step
+  brighter, which is enough to read as a suggestion without becoming a second
+  primary button in a window that has one.
+*/
+.run-agent-button {
+  color: var(--text-secondary);
+}
+
+.run-agent-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.run-agent-button:disabled:hover {
+  background: none;
+  color: var(--text-secondary);
+}
+
+/* The prompt glyph is `❯` (U+276F), not `>`. Verified against real captured
+   output — it is the same character Claude Code draws its own prompt with, and
+   the reason this button reads as "typing at the terminal for you". */
+.run-agent-glyph {
+  font-family: var(--font-mono);
+  opacity: 0.7;
+}
+
+/*
+  The pill expanding to reveal the account picker.
+
+  Played only on the render where the picker takes the button's place — see
+  `revealing` in AccountChip.tsx — because the two are different elements and
+  there is nothing for a transition to interpolate between them. Width is
+  animated from zero rather than opacity alone: what he described was the pill
+  *expanding*, and a control that fades in over a gap it was already holding
+  open has not expanded, it has appeared.
+
+  `--dur` on `--ease-emphasis`: the flat-then-settle curve the rest of the app's
+  surfaces arrive on. Under `prefers-reduced-motion` every duration token
+  collapses to 0.01ms, so this becomes an instant swap without a media query of
+  its own.
+*/
+@keyframes account-chip-reveal {
+  from {
+    max-width: 0;
+    opacity: 0;
+    transform: translateX(-4px);
+  }
+  to {
+    max-width: 30ch;
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.account-chip.is-revealing {
+  overflow: hidden;
+  animation: account-chip-reveal var(--dur) var(--ease-emphasis);
+}
+
+/* ------------------------------------------------------------------ renaming */
+
+/*
+  A row is now the account plus a Rename button, so the button needs somewhere
+  to sit that is not inside the account's own hit area — a click on Rename must
+  not also start a session under that account.
+
+  The button is drawn only on hover and focus. Six accounts each carrying a
+  permanently visible "Rename" would make the list read as a settings screen,
+  and picking an account is what this menu is for; renaming is the thing you
+  occasionally also want while you are here.
+*/
+.account-menu-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.account-menu-row > .account-menu-item {
+  flex: 1;
+  min-width: 0;
+}
+
+.account-menu-rename-button {
+  flex-shrink: 0;
+  padding: var(--sp-1) var(--sp-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--t-caption);
+  color: var(--text-muted);
+  opacity: 0;
+  transition:
+    opacity var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease);
+}
+
+.account-menu-row:hover .account-menu-rename-button,
+.account-menu-rename-button:focus-visible {
+  opacity: 1;
+}
+
+.account-menu-rename-button:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+/*
+  Keyboard reachability, not decoration: the button is invisible until hover, so
+  without this it would be a control a keyboard can focus and cannot see.
+*/
+.account-menu-rename-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* The row while it is a field. Same padding as the row it replaces, so the list
+   does not shift under the pointer when the field opens. */
+.account-menu-rename {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.account-menu-input {
+  flex: 1;
+  min-width: 0;
+  padding: var(--sp-1) var(--sp-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--fill-secondary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--t-body);
+}
+
+.account-menu-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.account-menu-input:disabled {
+  opacity: 0.6;
+}

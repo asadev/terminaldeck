@@ -231,6 +231,22 @@ describe('ToolsTab', () => {
   it('has an empty state for a session that called nothing', () => {
     expect(renderToStaticMarkup(<ToolsTab insights={insightsFor()} />)).toContain('si-empty')
   })
+
+  /**
+   * The footnote under the table is a caveat, and it survived the app-wide
+   * shortening as a caveat rather than as a paragraph. It has to: a tool that
+   * "took" four minutes because it sat on a permission prompt is a number
+   * somebody will otherwise act on. What went was the list of examples.
+   */
+  it('still warns that tool timings include time spent waiting on you', () => {
+    const html = renderToStaticMarkup(
+      <ToolsTab insights={insightsFor({ tools: [tool({ name: 'Bash' })], toolCalls: 1 })} />,
+    )
+    const note = /<p class="si-note"[^>]*>([^<]*)<\/p>/.exec(html)?.[1] ?? ''
+    expect(note).toContain('Wall clock')
+    expect(note).toContain('waiting on you')
+    expect(note.split('.').filter((part) => part.trim() !== '')).toHaveLength(1)
+  })
 })
 
 /* ----------------------------------------------------------------- context */

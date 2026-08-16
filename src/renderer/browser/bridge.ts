@@ -22,6 +22,16 @@ export interface BrowserTabState {
   canGoForward: boolean
   inspecting: boolean
   error: string | null
+  /**
+   * True while Chromium's own error document is what the view holds.
+   *
+   * Not the same question as `error !== null`, and the panel reads this one
+   * rather than that one: a blocked pop-up sets a message over a page that is
+   * still perfectly readable, while a refused connection sets a message over a
+   * red exclamation mark. Only the second may hide the native view and put the
+   * start page there instead.
+   */
+  failed: boolean
 }
 
 /** Mirrors `LabelSource` in `src/main/selector.ts`. */
@@ -126,6 +136,16 @@ export interface BrowserBridge {
      * session every other tab uses.
      */
     isolationKey?: string
+    /**
+     * The app's content canvas, as a hex colour, for a view with no page in it.
+     *
+     * Sent rather than decided in the main process for the same reason
+     * `recordingAccent()` is: `tokens.css` is the only place a colour is
+     * allowed to be written, and the main process cannot read a stylesheet.
+     * `browser-background.ts` validates it and explains why a *loaded* page
+     * still gets white.
+     */
+    background?: string
   }): Promise<BrowserTabState>
   browserNavigate(id: string, url: string): Promise<BrowserTabState>
   browserBack(id: string): Promise<BrowserTabState>
@@ -235,4 +255,23 @@ export function resolveBrowserBridge(): BrowserBridge | null {
 export function recordingAccent(): string {
   if (typeof window === 'undefined' || typeof getComputedStyle !== 'function') return ''
   return getComputedStyle(document.documentElement).getPropertyValue('--color-critical').trim()
+}
+
+/**
+ * The app's content canvas, for a browser view that has nothing in it.
+ *
+ * Same mechanism as {@link recordingAccent} and for the same reason: a native
+ * view is painted by the main process, which has no stylesheet, so a colour that
+ * must match the app has to travel across the bridge. `--bg-primary` because
+ * that is the token `.bw-stage` itself wears — the native rectangle and the
+ * React rectangle underneath it are the same surface as far as the user is
+ * concerned, and reading the same token is what keeps them from disagreeing when
+ * the palette is edited.
+ *
+ * Empty when there is no window, which is every test that renders to markup;
+ * `browser-background.ts` treats that as "nothing usable was sent".
+ */
+export function appCanvasColor(): string {
+  if (typeof window === 'undefined' || typeof getComputedStyle !== 'function') return ''
+  return getComputedStyle(document.documentElement).getPropertyValue('--bg-primary').trim()
 }

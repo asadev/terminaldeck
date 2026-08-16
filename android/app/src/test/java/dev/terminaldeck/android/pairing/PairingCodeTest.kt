@@ -1,6 +1,5 @@
 package dev.terminaldeck.android.pairing
 
-import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -8,100 +7,90 @@ import org.junit.Test
 /**
  * What the pair screen is allowed to believe.
  *
- * The interesting cases are the refusals. A code arrives from a camera pointed at whatever was in
- * front of it, or from a paste that picked up half a chat message, and a parser that shrugs and
- * fills in a default is one that sends a single-use token to an address someone else chose.
+ * The interesting cases are the refusals. A code arrives from a paste that picked up half a chat
+ * message, or from a thumb on a keypad, and a parser that shrugs and fills in a default is one that
+ * sends a single-use token somewhere else.
+ *
+ * This file used to be about URLs — `terminaldeck://pair#h=…&k=…&t=…`, read off a QR code or pasted.
+ * Both are gone from the product: the QR did not work, and the link was a live bearer token in a
+ * string. What arrives now is six digits somebody read off the machine's screen.
  */
 class PairingCodeTest {
 
-    private val hostId = "AXGK7VAEYZHKTTVUKZ4U9HZQ7J"
-    private val key = ByteArray(32) { it.toByte() }
-    private val keyText = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(key)
-    private val token = "CoMPf6VplfGUZlG-3zFJ3zFWufYzi-U1AYlqBiKsUUk"
+    @Test
+    fun `reads six digits`() {
+        assertEquals("482913", PairingCodes.parse("482913"))
+        assertEquals(6, PairingCodes.CODE_LENGTH)
+    }
 
-    private fun link(prefix: String = "terminaldeck://pair#", relay: String? = null): String =
-        buildString {
-            append(prefix)
-            append("h=$hostId&k=$keyText&t=$token")
-            if (relay != null) append("&r=$relay")
+    @Test
+    fun `keeps a leading zero`() {
+        /*
+         * A code is six *digits*, not a number. `000042` is one the desktop mints about one time in
+         * ten thousand, and anything on the path that treats it as an integer turns it into `42` —
+         * which derives a different rendezvous slot from every other client and reads on screen as a
+         * code that was typed correctly and found nothing.
+         */
+        assertEquals("000042", PairingCodes.parse("000042"))
+        assertEquals("000000", PairingCodes.parse("000000"))
+    }
+
+    @Test
+    fun `drops every separator something might have inserted`() {
+        // The string makes a journey: read off a screen, sometimes retyped into a message, and
+        // messages insert things. Refusing these would mean refusing the exact text somebody pasted.
+        for (typed in listOf(" 482913 ", "482-913", "482 913", "482–913", "4 8 2 9 1 3")) {
+            assertEquals("the separators in \"$typed\" should be dropped", "482913", PairingCodes.parse(typed))
         }
-
-    @Test
-    fun `reads the shape the desktop prints`() {
-        val code = PairingCodes.parse(link(relay = "ws%3A%2F%2F10.0.2.2%3A8787"))
-        checkNotNull(code)
-        assertEquals(hostId, code.hostId)
-        assertArrayEquals(key, code.hostStaticPublicKey)
-        assertEquals(token, code.token)
-        assertEquals("ws://10.0.2.2:8787", code.relayUrl)
     }
 
     @Test
-    fun `takes an https link, a query string and a bare blob`() {
-        val expected = PairingCodes.parse(link())
-        assertEquals(expected, PairingCodes.parse(link(prefix = "https://terminaldeck.dev/pair#")))
-        assertEquals(expected, PairingCodes.parse(link(prefix = "terminaldeck://pair?")))
-        assertEquals(expected, PairingCodes.parse(link(prefix = "")))
-        assertEquals(expected, PairingCodes.parse("  ${link()}\n"))
+    fun `refuses a letter rather than folding it onto a digit`() {
+        /*
+         * The eight-character format this replaced folded `O` onto `0` and `I`/`L` onto `1`, because
+         * the screen was showing letters and three of them are misread. The screen shows digits now,
+         * so a letter is a typo — and folding a typo produces a *different valid code*, six
+         * characters that read cleanly and belong to somebody else's pairing.
+         */
+        assertNull(PairingCodes.parse("O82913"))
+        assertNull(PairingCodes.parse("48291I"))
+        assertNull(PairingCodes.parse("H4K9-2FQT"))
+        assertNull(PairingCodes.parse("terminaldeck://pair#h=AXGK7VAEYZHKTTVUKZ4U9HZQ7J"))
     }
 
     @Test
-    fun `a code with no relay leaves the choice to the app`() {
-        assertNull(PairingCodes.parse(link())?.relayUrl)
-    }
-
-    @Test
-    fun `refuses anything that is not a code`() {
+    fun `refuses anything that is not six digits`() {
         assertNull(PairingCodes.parse(""))
-        assertNull(PairingCodes.parse("hello"))
-        assertNull(PairingCodes.parse("https://terminaldeck.dev/"))
-        // Missing each field in turn.
-        assertNull(PairingCodes.parse("k=$keyText&t=$token"))
-        assertNull(PairingCodes.parse("h=$hostId&t=$token"))
-        assertNull(PairingCodes.parse("h=$hostId&k=$keyText"))
+        assertNull(PairingCodes.parse("48291"))
+        assertNull(PairingCodes.parse("4829131"))
+        assertNull(PairingCodes.parse("------"))
     }
 
     @Test
-    fun `refuses a host id in the wrong alphabet or the wrong length`() {
-        // `I`, `O`, `0` and `1` are not in the relay's base32 alphabet, so a code containing one
-        // was mistyped or is not a host id at all.
-        assertNull(PairingCodes.parse("h=IXGK7VAEYZHKTTVUKZ4U9HZQ7J&k=$keyText&t=$token"))
-        assertNull(PairingCodes.parse("h=AXGK7VAEYZHKTTVUKZ4U9HZQ7&k=$keyText&t=$token"))
-        assertNull(PairingCodes.parse("h=${hostId}A&k=$keyText&t=$token"))
+    fun `does not walk a hostile paste`() {
+        // Bounded before the scan, and it stops the moment there are too many digits. Neither is a
+        // security boundary; both are what keeps a pasted megabyte off the main thread.
+        assertNull(PairingCodes.parse("1".repeat(1_000_000)))
+        assertEquals("482913", PairingCodes.parse("482913" + " ".repeat(1_000)))
     }
 
     @Test
-    fun `refuses a key that is not 32 bytes`() {
-        val short = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(ByteArray(31))
-        assertNull(PairingCodes.parse("h=$hostId&k=$short&t=$token"))
-        assertNull(PairingCodes.parse("h=$hostId&k=not-base64!!&t=$token"))
-    }
-
-    @Test
-    fun `refuses a token with whitespace or control characters in it`() {
-        assertNull(PairingCodes.parse("h=$hostId&k=$keyText&t="))
-        assertNull(PairingCodes.parse("h=$hostId&k=$keyText&t=one two"))
-        assertNull(PairingCodes.parse("h=$hostId&k=$keyText&t=${"x".repeat(201)}"))
+    fun `knows a host id from the relay's alphabet`() {
+        assertEquals(true, PairingCodes.isHostId("AXGK7VAEYZHKTTVUKZ4U9HZQ7J"))
+        // `I`, `O`, `0` and `1` are not in the relay's base32, so anything carrying one is not a
+        // host id — it was mistyped, or it came from somewhere else.
+        assertEquals(false, PairingCodes.isHostId("IXGK7VAEYZHKTTVUKZ4U9HZQ7J"))
+        assertEquals(false, PairingCodes.isHostId("AXGK7VAEYZHKTTVUKZ4U9HZQ7"))
     }
 
     @Test
     fun `refuses a relay that is not a websocket address`() {
-        assertNull(PairingCodes.parse(link(relay = "http%3A%2F%2Fexample.com")))
-        assertNull(PairingCodes.parse(link(relay = "javascript%3Aalert(1)")))
-    }
-
-    /**
-     * A code carrying two of the same parameter is not one this project produced, and picking
-     * either value would be picking one an attacker appended.
-     */
-    @Test
-    fun `refuses a repeated parameter rather than choosing a winner`() {
-        assertNull(PairingCodes.parse("h=$hostId&k=$keyText&t=$token&t=other"))
-    }
-
-    @Test
-    fun `the fingerprint shown next to the code is the Mac's`() {
-        val code = checkNotNull(PairingCodes.parse(link()))
-        assertEquals(dev.terminaldeck.android.crypto.Sealed.fingerprint(key), code.hostFingerprint)
+        assertEquals(true, PairingCodes.isRelayUrl("wss://relay.terminaldeck.dev"))
+        // `ws://` is allowed on purpose — the development relay has no certificate — and everything
+        // inside the channel is sealed before it reaches the socket either way.
+        assertEquals(true, PairingCodes.isRelayUrl("ws://10.0.2.2:8787"))
+        assertEquals(false, PairingCodes.isRelayUrl("http://example.com"))
+        assertEquals(false, PairingCodes.isRelayUrl("javascript:alert(1)"))
+        assertEquals(false, PairingCodes.isRelayUrl("wss://relay with a space"))
     }
 }

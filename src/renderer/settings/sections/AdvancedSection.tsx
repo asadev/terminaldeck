@@ -61,7 +61,7 @@ export function AdvancedSection({ values, save, bridge, loading, reload }: Secti
     // nothing at all, silently, rather than saying it could not.
     const clipboard = typeof navigator === 'undefined' ? undefined : navigator.clipboard
     if (!clipboard?.writeText) {
-      setStatus('This build cannot reach the clipboard — the path is shown above to copy by hand.')
+      setStatus('This build cannot reach the clipboard. Copy the path above by hand.')
       return
     }
     void clipboard.writeText(path).then(
@@ -100,7 +100,7 @@ export function AdvancedSection({ values, save, bridge, loading, reload }: Secti
         setStatus(
           canResetPrefs
             ? 'Everything is back to its default.'
-            : 'The settings in this file are back to their defaults. This build cannot write preferences, so the theme and the default agent were left as they were.',
+            : 'Reset, except the theme and the default agent — this build cannot write those.',
         )
         reload()
       },
@@ -152,9 +152,12 @@ export function AdvancedSection({ values, save, bridge, loading, reload }: Secti
 
       {debug && (
         <Group title="Stored values">
-          <p className="settings-prose">
-            Exactly what is on disk, including anything written by a version of the app that knows
-            about more settings than this one.
+          {/* The caveat about keys written by a newer build is true and is of
+              interest to about one reader in a thousand, all of whom are
+              looking at raw JSON behind a switch called Debug mode. It moves to
+              the hover, which is what the tooltip layer is for. */}
+          <p className="settings-prose" title="Includes keys written by other versions of the app.">
+            Exactly what is on disk.
           </p>
           <pre className="settings-code">{JSON.stringify(values, null, 2)}</pre>
         </Group>
@@ -206,9 +209,13 @@ export function AdvancedSection({ values, save, bridge, loading, reload }: Secti
       </Group>
 
       <Group title="Start over">
+        {/* Held at two clauses rather than one. "Settings only" is the whole
+            point of the control and "your projects are safe" is the question
+            anybody hovers a red button asking — cutting either would leave a
+            destructive action less clear than it is dangerous. */}
         <p className="settings-prose">
-          Puts every setting in this window back to its default, including the theme and the default
-          agent. Your projects, sessions and profiles are untouched.
+          Every setting in this window goes back to its default. Projects, sessions and accounts are
+          untouched.
         </p>
         {!bridge.resetSettings ? (
           <Notice tone="warn">{missingChannelNote('Resetting settings')}</Notice>

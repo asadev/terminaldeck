@@ -237,7 +237,7 @@ describe('scrypt, which the pairing rendezvous derives its identity with', () =>
    * stops matching, instead of a typed pairing code finding nothing at the relay.
    */
   const SCRYPT = { N: 16384, r: 8, p: 1 } as const
-  const CODE = 'H4K9-2FQT'
+  const CODE = '482913'
   /**
    * The literal, not the constant, and deliberately so.
    *

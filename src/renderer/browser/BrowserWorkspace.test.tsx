@@ -2,7 +2,8 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it } from 'vitest'
-import { BrowserWorkspace } from './BrowserWorkspace'
+import { BrowserWorkspace, onStartPage, pageVisible } from './BrowserWorkspace'
+import { newTab, type WorkspaceTab } from './tabs'
 import { composeSend, describeLabelSource, oneLine } from './CapturePanel'
 import { formatBytes } from './SessionModal'
 import {
@@ -31,6 +32,7 @@ const IDLE: BrowserTabState = {
   canGoForward: false,
   inspecting: false,
   error: null,
+  failed: false,
 }
 
 const NO_RECORDING: RecordingState = {
@@ -257,5 +259,76 @@ describe('formatBytes', () => {
   it('does not go strange on a missing or negative size', () => {
     expect(formatBytes(-1)).toBe('0 B')
     expect(formatBytes(Number.NaN)).toBe('0 B')
+  })
+})
+
+/**
+ * The two faults from the screen recording of 2026-08-16 that this panel
+ * decides, both of which live in an effect — which is exactly where this
+ * project cannot test them, because its test run has no DOM and effects never
+ * fire. So the rule itself is a pure function and this is where it is pinned.
+ */
+describe('when a native page is composited', () => {
+  const showing: WorkspaceTab = {
+    ...newTab('tab-1'),
+    id: 'main-1',
+    url: 'http://localhost:5173/',
+  }
+  const everythingOpen = {
+    isActive: true,
+    visible: true,
+    parkPage: false,
+    sessionOpen: false,
+    covered: false,
+  }
+
+  it('shows a real page on the active tab of the visible panel', () => {
+    expect(pageVisible(showing, everythingOpen)).toBe(true)
+  })
+
+  it('hides the page while any HTML surface is over it', () => {
+    /*
+     * The fault: "whatever the message popup is coming, it's hiding behind. I
+     * cannot even see what it shows." A browser page is a native view
+     * composited above the whole renderer, so no z-index can put a tooltip or a
+     * menu on top of it. Hiding the view is the only lever Electron offers —
+     * see `overlay-watch.ts`, which decides `covered` by geometry so an overlay
+     * beside the page does not blank it.
+     */
+    expect(pageVisible(showing, { ...everythingOpen, covered: true })).toBe(false)
+  })
+
+  it('hides the page for a dialog, which is the same fault with a flag', () => {
+    expect(pageVisible(showing, { ...everythingOpen, parkPage: true })).toBe(false)
+    expect(pageVisible(showing, { ...everythingOpen, sessionOpen: true })).toBe(false)
+  })
+
+  it('hides the page on a tab that is not the one on screen', () => {
+    expect(pageVisible(showing, { ...everythingOpen, isActive: false })).toBe(false)
+    expect(pageVisible(showing, { ...everythingOpen, visible: false })).toBe(false)
+  })
+
+  it('never composites a view whose load failed', () => {
+    // The Windows fault, and the reason `failed` exists as its own field: the
+    // document in the view is Chromium's red error page, and the whole change
+    // is that nobody should ever see it.
+    const failed: WorkspaceTab = { ...showing, failed: true, error: 'Nothing is listening.' }
+    expect(pageVisible(failed, everythingOpen)).toBe(false)
+    expect(onStartPage(failed)).toBe(true)
+  })
+
+  it('never composites a view that has not been anywhere', () => {
+    expect(onStartPage(newTab('tab-2'))).toBe(true)
+    expect(onStartPage({ ...showing, url: 'about:blank' })).toBe(true)
+    expect(pageVisible(newTab('tab-2'), everythingOpen)).toBe(false)
+  })
+
+  it('keeps showing a page whose *error* is only a refusal', () => {
+    // A blocked pop-up sets `error` over a page that is still perfectly
+    // readable. Reading `error !== null` as "hide the page" would blank a
+    // working site because something on it tried to open a window.
+    const refused: WorkspaceTab = { ...showing, error: 'Blocked a pop-up to ads.example.' }
+    expect(onStartPage(refused)).toBe(false)
+    expect(pageVisible(refused, everythingOpen)).toBe(true)
   })
 })

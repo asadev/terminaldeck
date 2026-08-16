@@ -5,6 +5,7 @@ import { SANDBOX_EXEC, seatbeltCommand, seatbeltProfile, seatbeltString } from '
 const plan: ConfinementPlan = {
   folder: '/Users/asad/Projects/app',
   accountHome: '/Users/asad',
+  home: '/app-storage/device-home/abc',
   writable: ['/Users/asad/Projects/app', '/app-storage/device-home/abc'],
   readable: ['/usr', '/System'],
   readableFiles: ['/app-storage/guest-git/askpass.sh'],

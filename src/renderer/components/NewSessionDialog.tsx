@@ -445,7 +445,7 @@ export function NewSessionDialog({ open, projectPath, onClose, onStart }: Props)
     <Modal
       open={open}
       title="New session"
-      description="Pick what runs, where, and as whom — before anything starts."
+      description="Pick what runs, where, and as whom."
       onClose={onClose}
       size="lg"
       footer={
@@ -608,8 +608,7 @@ export function NewSessionDialog({ open, projectPath, onClose, onStart }: Props)
               this app has never seen is the case people get stuck on. */}
           {profileNotice === null && profiles.length > 0 && (
             <p className="ns-caveat">
-              Each login keeps its own history and transcripts. One that has not been signed into
-              yet will ask you to log in inside the session.
+              Each login keeps its own history. A new one asks you to sign in inside the session.
             </p>
           )}
         </section>
@@ -674,10 +673,10 @@ export function NewSessionDialog({ open, projectPath, onClose, onStart }: Props)
             onChange={(event) => setPrompt(event.target.value)}
             onKeyDown={promptKeys}
           />
-          <p className="ns-hint">
-            Sent once the agent is ready. Line breaks become spaces — Enter is submit in an agent
-            prompt.
-          </p>
+          {/* Why Enter is submit in an agent prompt is the agent's business,
+              not this dialog's. That a multi-line paste will arrive flattened
+              is the part that changes what somebody types. */}
+          <p className="ns-hint">Sent once the agent is ready. Line breaks become spaces.</p>
           {decided?.title && (
             <p className="ns-preview">
               Tab will be titled <strong>{decided.title}</strong>

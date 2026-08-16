@@ -1,0 +1,25 @@
+/* ============================================================================
+   Provider badge — the mark beside an account name.
+
+   There is almost nothing here on purpose. The mark takes its colour from
+   `currentColor`, so it is correct in both themes with no colour defined at
+   all, and it takes its size from the `size` prop, so a toolbar chip and a
+   settings row can differ without a second class.
+
+   What it does need is to sit on the text baseline rather than on the line box.
+   An inline `<svg>` defaults to `vertical-align: baseline`, which puts the
+   bottom edge of the *box* on the baseline and leaves the mark floating a
+   couple of pixels high next to 13px type — visible immediately in a row of
+   name-plus-badge, and the sort of thing that reads as "slightly wrong" without
+   anyone being able to say why.
+   ============================================================================ */
+
+.provider-badge {
+  display: inline-block;
+  flex-shrink: 0;
+  vertical-align: -0.14em;
+  /* Slightly under full strength: at 14px a pure `--text-primary` mark next to
+     a `--w-medium` name out-weighs the name it is labelling. This keeps it a
+     mark rather than a second heading. */
+  opacity: 0.82;
+}

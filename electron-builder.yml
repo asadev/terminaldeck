@@ -224,6 +224,24 @@ win:
       arch: [x64]
   icon: build/icon.ico
 
+  # The confinement launcher, beside the asar rather than inside it.
+  #
+  # Not a packaging preference: `tdconfine.exe` is an executable and
+  # `CreateProcess` cannot run a file that only exists inside an archive. It is
+  # what applies the AppContainer to a session started from a device — see
+  # `src/main/confine/appcontainer.ts` — and `confine/tools.ts` looks for it at
+  # `process.resourcesPath`, which is exactly where `extraResources` puts it.
+  #
+  # `native/win-confine/build.ps1` compiles it, and the release workflow has to
+  # run that step **before** electron-builder. If the file is not there this
+  # entry matches nothing, the installer builds anyway, and Windows sessions
+  # report themselves unconfined with the sentence that says the build ships no
+  # launcher — which is the honest failure, but it is a silent one, so the CI
+  # step is not optional.
+  extraResources:
+    - from: native/win-confine/tdconfine.exe
+      to: tdconfine.exe
+
 nsis:
   # Both targets emit .exe, so each needs its own name. The inherited pattern
   # would name them identically and whichever finished second would overwrite

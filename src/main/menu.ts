@@ -51,6 +51,38 @@ import { currentPlatform, type Platform } from './platform/host'
  * about: it looks like the feature is still there, and choosing it lands you in
  * a settings page offering to install the thing you thought you were using.
  *
+ * ## Why Windows still builds a whole menu it never shows
+ *
+ * On Windows the menu bar is drawn *inside the window*, as a strip under the
+ * title bar. With the title bar now hidden and the window buttons drawn into
+ * our own toolbar (see `title-bar.ts`), that strip was the last of the three
+ * stacked bars the top of this window used to be, and it is not what a modern
+ * Windows app looks like — none of them draw one.
+ *
+ * The tempting fix is `Menu.setApplicationMenu(null)`. It is the wrong one, and
+ * catastrophically so in this app: **Electron registers accelerators through
+ * the menu**, so a null menu is not a hidden menu bar, it is an app with no
+ * Ctrl+C, no Ctrl+V, no Ctrl+X, no Ctrl+A, no Ctrl+Z, no Ctrl+R, no zoom keys,
+ * no full screen — and none of the thirteen chords the items below spell out
+ * for themselves. Losing copy and paste in a terminal is not a cosmetic
+ * regression, it is the app. The same fact is already written
+ * down twice in this file and once in `menu.test.ts`, each time as the reason
+ * an item's chord dies with the item — it is exactly as true of the whole menu.
+ *
+ * So the menu stays built, complete, and is merely not drawn: `hidesMenuBar`
+ * below is passed to the window as `autoHideMenuBar`, which hides the strip
+ * while leaving the menu installed. Every accelerator keeps working, and Alt
+ * still brings the bar down over the content for the one person who goes
+ * looking for File → Exit, which is where Windows has trained them to look.
+ *
+ * Nothing is orphaned by hiding it, and that was checked rather than assumed:
+ * `app.preferences` is the Settings row at the foot of the sidebar and a
+ * palette entry, `app.shortcuts` and `app.help` are palette entries,
+ * `app.about` and `app.setup` open pages of Settings, and every `view.*` and
+ * `session.*` id here is a palette command or a sidebar row. `reachable.test.ts`
+ * is what keeps that true — it fails if the menu sends a command the window has
+ * no case for.
+ *
  * The registry lives in the renderer, because everything that consults it does.
  * So the renderer sends the ids of the commands whose feature is switched off,
  * the same way it sends every other piece of state that has to cross — an
@@ -80,6 +112,27 @@ export type Send = (command: string) => () => void
 export type HiddenCommands = ReadonlySet<string>
 
 const NOTHING_HIDDEN: HiddenCommands = new Set<string>()
+
+/**
+ * Whether this platform draws the menu bar inside the window, where it would be
+ * a strip of its own under our toolbar.
+ *
+ * True off macOS, and the value is passed to the BrowserWindow as
+ * `autoHideMenuBar` — so the menu is built and installed exactly as before and
+ * simply is not painted. See the header of this file for why the menu may never
+ * be thrown away to achieve that: Electron binds every accelerator through it,
+ * and this is a terminal app that would be left with no Ctrl+C.
+ *
+ * macOS is false because there is nothing to hide: its menu bar belongs to the
+ * OS and lives at the top of the *screen*, not in the window. `autoHideMenuBar`
+ * is a no-op there, but returning true would read as "macOS hides its menu bar
+ * too", which is the misunderstanding that would eventually get somebody to
+ * delete the Apple-standard app menu again — the exact regression the first
+ * half of `menu.test.ts` exists to prevent.
+ */
+export function hidesMenuBar(platform: Platform): boolean {
+  return platform !== 'darwin'
+}
 
 export function menuTemplate(
   platform: Platform,

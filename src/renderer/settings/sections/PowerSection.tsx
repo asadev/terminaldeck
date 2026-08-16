@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { BRAND } from '../../../shared/brand'
 import { Explain, Notice, Row, SectionHead, Switch } from '../controls'
 import { sectionMeta } from '../settings-schema'
 import { errorText } from '../settings-bridge'
@@ -108,6 +109,17 @@ export interface LidAwakeState {
   battery: BatteryReading | null
   detail: string | null
   warning: string | null
+  /**
+   * Is the app holding this machine's idle sleep off right now?
+   *
+   * A different fact from `on`, and the reason this pane stopped looking broken.
+   * The switch is the *privileged* lid setting; this is the app's own free wake
+   * lock, which is held for as long as the app is open whatever the switch says.
+   * With only `on` to draw from, the screen had to imply that an off switch
+   * meant nothing at all was protecting a running session — which was true of
+   * the old behaviour and is the fault Asad reported.
+   */
+  idleBlocked: boolean
 }
 
 /** Mirrors `LidAwakeResult`. `outcome` is the half that decides the tone. */
@@ -153,6 +165,9 @@ export function toLidAwakeState(raw: unknown): LidAwakeState | null {
       : null,
     detail: typeof record.detail === 'string' && record.detail !== '' ? record.detail : null,
     warning: typeof record.warning === 'string' && record.warning !== '' ? record.warning : null,
+    // Pessimistic like the rest: a build whose main process does not send this
+    // field draws no claim about a lock, rather than promising one.
+    idleBlocked: asBoolean(record.idleBlocked),
   }
 }
 
@@ -252,6 +267,30 @@ export function lidAwakeCaution(platform: UiPlatform, { hasLid = true }: Machine
     `A closed lid means no airflow, so ${thisMachine(platform)} will run hotter than usual. ` +
     'On battery it will keep draining until it is flat — nothing here will stop it, and the app will say so rather than turning itself off behind your back.'
   )
+}
+
+/**
+ * The one line about what the app is already doing on its own.
+ *
+ * Short on purpose — Asad's broadest note on the whole recording was *"we don't
+ * need this much of big descriptions under each"* — but it earns its place,
+ * because without it this screen has only the switch to speak with and a switch
+ * that is off reads as "nothing is protecting my session". That was true until
+ * the wake lock was decoupled from the privileged setting, and the sentence is
+ * what makes the change visible instead of merely correct.
+ *
+ * Both halves are load-bearing and both are literally true of
+ * `powerSaveBlocker.start('prevent-app-suspension')`: it stops the machine
+ * dropping off by itself, and it stops nothing else — a closed lid, the Sleep
+ * menu item and a critical battery all still sleep it. Promising more than that
+ * is the failure this module's own header spends four paragraphs on.
+ */
+export function idleBlockedNote(platform: UiPlatform, { hasLid = true }: MachineShape = {}): string {
+  // Lid-aware for the same reason `lidAwakeHelp` is: a Mac mini has no lid, and
+  // a sentence naming one on a machine that has none is the kind of thing that
+  // is invisible in the source and obvious on screen.
+  const still = hasLid ? 'Closing the lid or choosing Sleep still does.' : 'Choosing Sleep still does.'
+  return `While ${BRAND.name} is open, ${thisMachine(platform)} will not fall asleep on its own. ${still}`
 }
 
 /** What the switch is allowed to say when the machine could not be read. */
@@ -368,6 +407,22 @@ export function PowerView({
         in the reading order, directly under the control it is about. What it
         gains is a title to scan and space around it.
       */}
+      {/*
+        Said whenever it is true, including on a platform where the switch
+        itself is not offered.
+
+        It sits *outside* the `unavailable` guard on purpose: the wake lock is
+        this app's own and needs no platform support, so a Linux box or a
+        Windows desktop with no lid-close action still gets it — and those are
+        exactly the machines where the rest of this screen has nothing to say.
+        Answering "the app cannot hold this machine awake through a lid close"
+        and then staying silent about the thing it *is* doing was the shape of
+        the original complaint.
+      */}
+      {state?.idleBlocked === true && (
+        <Notice tone="info">{idleBlockedNote(platform, { hasLid })}</Notice>
+      )}
+
       {!unavailable && caution && <Explain title="Heat and battery">{caution}</Explain>}
 
       {changing && (

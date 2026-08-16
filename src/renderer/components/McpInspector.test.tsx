@@ -192,4 +192,19 @@ describe('<McpInspector>', () => {
     // hunting for a control that was never built.
     expect(html).toContain('claude mcp remove')
   })
+
+  /**
+   * The subheading was three sentences, and the middle one explained that
+   * adding here writes the same file Claude Code reads — the plumbing, and
+   * exactly what anybody would assume anyway. Held to two now, which is what
+   * the two surviving facts need: where these come from, and the one operation
+   * this window genuinely cannot perform.
+   */
+  it('keeps the subheading to the two facts that survived the cut', () => {
+    const html = renderToStaticMarkup(<McpInspector bridge={bridge} projectPath="/work/app" />)
+    const sub = /<p class="mcp-subheading">(.*?)<\/p>/s.exec(html)?.[1] ?? ''
+    expect(sub).not.toBe('')
+    expect(sub.replace(/<[^>]*>/g, '').split('.').filter((part) => part.trim() !== '')).toHaveLength(2)
+    expect(sub).not.toMatch(/picks it up too/)
+  })
 })

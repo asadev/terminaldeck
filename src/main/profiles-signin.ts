@@ -1,6 +1,16 @@
 /**
  * Whether an account is actually signed in — asked of the CLI, never assumed.
  *
+ * ## One probe per agent, because they do not answer the same way
+ *
+ * Claude Code has `claude auth status --json` and prints JSON. Codex has
+ * `codex login status` and prints one English sentence — there is no `--json`
+ * on it (`error: unexpected argument '--json' found`, checked against
+ * `codex-cli 0.146.0-alpha.3.1`). So the arguments and the parser both come out
+ * of `provider-accounts.ts`, per provider, and neither is guessed: an agent with
+ * no entry there is reported `unsupported` rather than probed with somebody
+ * else's flags.
+ *
  * `profiles.ts` can say a profile exists and that its config directory has been
  * written to. It deliberately says nothing about being logged in, because on
  * macOS the credential is in the login Keychain rather than in the directory, so
@@ -49,9 +59,16 @@ import { promisify } from 'node:util'
 import type { IpcMain, IpcMainInvokeEvent } from 'electron'
 import type { ProviderId } from '../shared/types'
 import { currentPlatform, withPath, type Platform } from './platform/host'
+import {
+  ACCOUNT_STRATEGIES,
+  signInCommandLine,
+  supportsAccounts,
+  unsupportedAccountReason,
+  type AccountStatusFormat,
+} from './provider-accounts'
 import { loginPath, PROVIDERS } from './providers'
 import { launchSpec } from './tool-probe'
-import { findProfile, getState, sessionEnv, supportsProfiles, type Profile } from './profiles'
+import { findProfile, getState, sessionEnv, type Profile } from './profiles'
 
 const run = promisify(execFile)
 
@@ -130,28 +147,82 @@ export function parseAuthStatus(raw: string): AuthAnswer | null {
   }
 }
 
-/** The sentence for an account that answered. */
-export function describeAnswer(answer: AuthAnswer): string {
-  if (!answer.loggedIn) return 'Not signed in. Open a session with this account to log in.'
+/**
+ * What `codex login status` said, or null when it said something else.
+ *
+ * Read from the real binary rather than guessed. `codex-cli 0.146.0-alpha.3.1`
+ * on this machine answers `Not logged in` for a fresh `CODEX_HOME` and
+ * `Logged in using ChatGPT` for the real one; the other three phrasings it can
+ * emit are in its own strings and are matched by the same prefix:
+ *
+ *     Logged in using ChatGPT
+ *     Logged in using an API key - <name>
+ *     Logged in using personal access token
+ *     Logged in using Amazon Bedrock API key
+ *
+ * The prefix is what is matched, and the remainder becomes `plan` — which is
+ * the honest thing to show, because "using an API key" and "using ChatGPT" are
+ * two different accounts to a person and the CLI is the only thing that knows
+ * which. No email: `login status` does not print one, and the only place an
+ * address exists is inside `auth.json`'s id token. Reading a user's credential
+ * file to decorate a row is not a trade this app makes — `profiles.ts` never
+ * holds a credential, and that is the property that keeps it uninteresting to
+ * an attacker.
+ *
+ * Anything else is `null`, i.e. `unknown`. A CLI that has been renamed, is not
+ * installed, or answered a localised string must not be read as "signed out".
+ */
+export function parseCodexLoginStatus(raw: string): AuthAnswer | null {
+  for (const line of raw.split('\n')) {
+    const text = line.trim()
+    if (text === '') continue
+    if (text.startsWith('Not logged in')) return { loggedIn: false, account: null, plan: null }
+    if (text.startsWith('Logged in using')) {
+      // "Logged in using an API key - openai-work" → plan "an API key - openai-work".
+      const plan = text.slice('Logged in using'.length).trim()
+      return { loggedIn: true, account: null, plan: plan === '' ? null : plan }
+    }
+  }
+  return null
+}
+
+/** Route the probe's output to the parser its agent needs. */
+export function parseAuthOutput(format: AccountStatusFormat, raw: string): AuthAnswer | null {
+  return format === 'claude-json' ? parseAuthStatus(raw) : parseCodexLoginStatus(raw)
+}
+
+/**
+ * The sentence for an account that answered.
+ *
+ * The signed-out half names the agent's own login command, because "open a
+ * session with this account to log in" is true but slow, and a person who is
+ * already in a terminal would rather be told the four words to type. The
+ * command comes from the strategy table, so a Codex account is never told to
+ * run `claude auth login`.
+ */
+export function describeAnswer(answer: AuthAnswer, signInCommand: string | null = null): string {
+  if (!answer.loggedIn) {
+    return signInCommand === null
+      ? 'Not signed in. Open a session with this account to log in.'
+      : `Not signed in. Open a session with this account to log in, or run \`${signInCommand}\`.`
+  }
   if (answer.account && answer.plan) return `Signed in as ${answer.account} · ${answer.plan}`
   if (answer.account) return `Signed in as ${answer.account}`
+  if (answer.plan) return `Signed in using ${answer.plan}`
   return 'Signed in.'
 }
 
 /**
- * Why an agent other than Claude gets no account of its own.
+ * Why this agent gets no account of its own.
  *
- * Only `CLAUDE_CONFIG_DIR` has been verified to move a login on this machine.
- * Codex ships as a shim around a native binary that is not installed here — the
- * shim throws ENOENT before it reads any environment — and nothing in this
- * repository has ever watched a Gemini login move. Naming a variable that turns
- * out to be wrong does not fail loudly: it *shares* one login between two
- * accounts, silently, which is the exact failure separate accounts exist to
- * prevent. So this says so on screen instead.
+ * A thin forward to `provider-accounts.ts`, kept because callers already import
+ * it from here. The sentence it used to hold — "Separate accounts are
+ * Claude-only for now" — is now wrong about Codex, and was never an explanation
+ * for Gemini: a person reading a reason that does not match their agent has no
+ * way to tell whether the app looked or gave up.
  */
 export function unsupportedReason(provider: ProviderId): string {
-  if (provider === 'shell') return 'A plain shell has no account to sign in to.'
-  return 'Separate accounts are Claude-only for now. This agent signs in its own way, and nothing here has verified a way to keep two of its logins apart — so a session on it uses whichever login this machine already has.'
+  return unsupportedAccountReason(provider)
 }
 
 /* --------------------------------------------------------------- probing -- */
@@ -202,7 +273,15 @@ export function toSignInReport(
   now = Date.now(),
 ): SignInReport {
   const base = { profileId, provider, command, checkedAt: now }
-  const answer = parseAuthStatus(`${probe.stdout}\n${probe.stderr}`)
+  const strategy = ACCOUNT_STRATEGIES[provider]
+  // Falls back to Claude's reader rather than refusing, because `readSignIn`
+  // has already turned an agent with no strategy into `unsupported` and never
+  // reaches here — and a defensive `null` would silently downgrade a real
+  // answer to "unknown" if that ever stopped being true.
+  const answer = parseAuthOutput(
+    strategy?.statusFormat ?? 'claude-json',
+    `${probe.stdout}\n${probe.stderr}`,
+  )
 
   if (answer) {
     return {
@@ -210,7 +289,12 @@ export function toSignInReport(
       state: answer.loggedIn ? 'signed-in' : 'signed-out',
       account: answer.account,
       plan: answer.plan,
-      detail: describeAnswer(answer),
+      detail: describeAnswer(
+        answer,
+        // The bin, not the whole launch line: what a person types is `codex
+        // login`, not the `cmd /c` wrapper the app happens to spawn through.
+        signInCommandLine(provider, PROVIDERS[provider]?.bin ?? provider),
+      ),
     }
   }
 
@@ -310,10 +394,22 @@ export async function readSignIn(
   profile: Profile,
   options: SignInOptions = {},
 ): Promise<SignInReport> {
-  const provider = options.provider ?? 'claude'
+  /*
+   * The account's own agent, not the caller's guess.
+   *
+   * `options.provider` used to default to `'claude'`, which was right while an
+   * account could only be a Claude one. Now it would probe a Codex account with
+   * `claude auth status --json` under `CLAUDE_CONFIG_DIR=<a codex home>` — a
+   * command that answers "not signed in" about a perfectly good ChatGPT login,
+   * and creates a `.claude.json` inside the Codex directory on its way past.
+   * The profile knows what it is; the option is only still honoured so a caller
+   * that genuinely means "check this directory as Claude" can say so.
+   */
+  const provider = options.provider ?? profile.provider
   const platform = options.platform ?? currentPlatform()
+  const strategy = ACCOUNT_STRATEGIES[provider]
 
-  if (!supportsProfiles(provider)) {
+  if (!supportsAccounts(provider) || !strategy?.statusArgs) {
     return {
       profileId: profile.id,
       provider,
@@ -337,7 +433,7 @@ export async function readSignIn(
 
   const bin = PROVIDERS[provider].bin
   const launch = launchSpec(bin, null, platform)
-  const args = ['auth', 'status', '--json']
+  const args = [...strategy.statusArgs]
   const command = `${bin} ${args.join(' ')}`
 
   const PATH = options.path ?? (await loginPath(platform))

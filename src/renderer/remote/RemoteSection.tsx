@@ -2,14 +2,54 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNod
 import { Button, Explain, Group, Notice, Row, SectionHead, Switch } from '../settings/controls'
 import { useAt, useEvery, useWhenActive } from '../schedule'
 import { errorText } from '../settings/settings-bridge'
-import { chooseRoute, pairingPaths, pairingRoutes, type PairPath } from './pairing-link'
 import { detectPlatform, machineNoun, thisMachine, type UiPlatform } from '../platform'
-import { encodeQr, qrPath, qrViewBox, QR_QUIET_ZONE } from './qr'
+import { CODE_LENGTH, normaliseCode } from '../../shared/short-code'
+import { CodeEntry } from '../machines/CodeEntry'
+import {
+  MachineLinks,
+  MachineSessionPane,
+  machineActions,
+  type MachinesHalf,
+} from '../machines/MachineLinks'
+import { asView, resolveBridge, type MachinesBridge, type MachinesView } from '../machines/types'
 import { DeviceFolders, type FolderDevice } from './DeviceFolders'
 import './RemoteSection.css'
 
 /**
- * Remote access — the settings section that opens this machine to a phone.
+ * Remote — every device paired with this machine, and the machines it can reach.
+ *
+ * ## One section, because it was one subject drawn twice
+ *
+ * There were two: a **Machines** page in the sidebar and this **Remote**
+ * section in Settings. Both listed paired devices. Both showed a pairing code —
+ * the *same* code, minted by one desk in the main process, so only one of them
+ * could ever honestly be showing it. Both decided for themselves when pairing
+ * was possible, and disagreed. Asad, looking at the two rows: they "should be
+ * one".
+ *
+ * The organising idea that made them one is that a phone and a second laptop
+ * are the same thing: a device somebody paired with this machine. So there is
+ * one roster, one code, one countdown, and one place that says what a paired
+ * device may do here. What the machines page had that this did not is the
+ * *other* direction — reaching out to a machine and opening a session on it —
+ * and that is kept whole, at the bottom, in `machines/MachineLinks.tsx`. It is
+ * a different capability rather than a different screen.
+ *
+ * ## The code is six digits, and nothing else
+ *
+ * There was a QR code here, and a `terminaldeck://pair?…` link beside it to
+ * copy. Both are gone. The QR could only be photographed by a phone, which left
+ * a second desktop with nothing, and the link was two hundred characters with a
+ * live bearer token in it whose only route between two machines was a messaging
+ * app — a pairing token somebody else's server keeps. What replaced them is what
+ * `shared/short-code.ts` mints: six digits a person reads off one screen and
+ * types into another, findable by any device because the code names a slot at
+ * the rendezvous rather than carrying an address.
+ *
+ * This file never states the format. `CODE_LENGTH` and `normaliseCode` come
+ * from that module, because the format has already changed once — eight
+ * Crockford characters with a hyphen — and every screen that had written its own
+ * copy of it was wrong for a release.
  *
  * What is behind the switch is a shell. A device that gets in can type into any
  * running session, which is the same as sitting at this keyboard: the files, the
@@ -36,9 +76,11 @@ import './RemoteSection.css'
  *
  * ## The relay is the network. The direct path is an optimisation.
  *
- * A phone reaches this machine through a rendezvous relay this machine dials
+ * A device reaches this machine through a rendezvous relay this machine dials
  * out to — no install, no account, works from a hotel wifi. That is the product's
- * network and it is what this panel leads with.
+ * network and it is what this panel leads with, and it is also what makes a
+ * six-digit code enough: the code names a slot at the relay, and whatever types
+ * it finds this machine there.
  *
  * There is a second, faster route for the small number of people who already run
  * a mesh VPN: one hop, no third party. It is drawn **only when it genuinely
@@ -70,6 +112,12 @@ import './RemoteSection.css'
  * `renderToStaticMarkup` never runs an effect, so a panel that fetched its own
  * status inside the component that renders it would be testable in exactly one
  * state — the empty one — and the states that matter here are the other five.
+ *
+ * That now covers the machines half as well: it arrives as {@link MachinesHalf},
+ * so one static render holds the whole merged section and a test can ask
+ * whether every capability the two old screens had is still reachable. The only
+ * thing that cannot come through that door is the terminal, which builds an
+ * xterm against a real DOM — so it is passed in as a node.
  */
 
 /* -------------------------------------------------------------------------- */
@@ -719,49 +767,99 @@ export function unsettled(state: RemoteState | null, pairing: RemotePairing | nu
 }
 
 /* -------------------------------------------------------------------------- */
-/* The QR code                                                                 */
+/* The code on screen                                                          */
 /* -------------------------------------------------------------------------- */
 
 /**
- * The pairing URL as a QR code.
+ * Whole seconds left on a code, floored at zero.
  *
- * Black on white whatever the app's theme is. A camera needs the quiet zone
- * lighter than the modules, and while some scanners cope with an inverted code,
- * "some" is not good enough for the one surface in this app whose entire job is
- * to be photographed. The URL is printed beside it as well, because a phone with
- * a locked-down camera still has a keyboard.
+ * Floored because a timer showing a negative number has outlived the thing it
+ * was counting: the code is dead on the main process at that instant
+ * (`PAIRING_TTL_MS` in `device-auth.ts`) and the screen is only catching up.
+ * Rounded *up*, so a code with 59.4 seconds left says 60 rather than starting a
+ * second short of the truth.
+ *
+ * Pure and exported so the countdown is checkable without a clock — and so that
+ * one function answers it. The machines page had a second copy of this beside
+ * a second countdown, which is exactly the kind of duplication the merge was
+ * for.
  */
-function QrFigure({ url }: { url: string }) {
-  const drawn = useMemo(() => {
-    try {
-      return { matrix: encodeQr(url), failure: null as string | null }
-    } catch (error) {
-      return {
-        matrix: null,
-        failure:
-          error instanceof Error ? error.message : 'That address could not be drawn as a QR code.',
-      }
-    }
-  }, [url])
+export function codeSecondsLeft(expiresAt: number, now: number): number {
+  return Math.max(0, Math.ceil((expiresAt - now) / 1000))
+}
 
-  if (!drawn.matrix) {
-    // Never a truncated code: a QR carrying half a token is a URL that goes
-    // somewhere else, silently.
-    return <Notice tone="warn">{drawn.failure}</Notice>
-  }
+/**
+ * The code as a person should read it off the screen.
+ *
+ * `normaliseCode` is the canonical form — it is what the machine on the other
+ * end will compare against — and it is idempotent, so putting the minted token
+ * through it costs nothing and guarantees the digits on screen are the digits
+ * that work.
+ *
+ * A token this module cannot recognise as a code is printed exactly as it
+ * arrived. That is the honest answer to a main process older or newer than this
+ * window: the code it minted is the code that will be accepted, and reformatting
+ * something we do not understand would put a string on screen that nothing would
+ * take.
+ */
+export function codeShown(token: string): string {
+  return normaliseCode(token) ?? token
+}
 
-  const side = drawn.matrix.size + QR_QUIET_ZONE * 2
+/**
+ * Whether a code minted right now would reach anything.
+ *
+ * The relay carries every device that is not on this machine's own tailnet, and
+ * the direct route carries the ones that are — so either is enough, and neither
+ * is a code worth handing out. This used to be `pairingPaths(state).length > 0`
+ * in a module that also built `terminaldeck://` links; the links are gone and
+ * the question is not, so it is asked here in the two facts it was ever about.
+ *
+ * Null state — nothing read yet — is false. A button that mints before this
+ * screen knows whether anything is listening is a code somebody photographs and
+ * then cannot use.
+ */
+export function canMintCode(state: RemoteState | null): boolean {
+  if (state === null || !state.running) return false
+  return state.relay?.connected === true || state.url !== null
+}
+
+/**
+ * Copy the code, and say so for a moment.
+ *
+ * The clipboard is not the point of a six-digit code — it is read aloud across a
+ * desk far more often than it is pasted — but it is the whole point when the
+ * other device is a phone in the same room as a Mac, where the system clipboard
+ * is shared. It costs one button and it was on the machines page, so it stays.
+ *
+ * Its own component because "Copied" is about the *press*, not about the code:
+ * it clears itself after a moment rather than waiting for the next thing to
+ * happen. That is one piece of state and one timer, and putting either in
+ * `RemoteView` would make the whole view stateful for a label.
+ */
+function CopyCode({ code, disabled }: { code: string; disabled: boolean }) {
+  const [copied, setCopied] = useState(false)
+
+  useEffect(() => {
+    if (!copied) return
+    const timer = setTimeout(() => setCopied(false), 2000)
+    return () => clearTimeout(timer)
+  }, [copied])
+
   return (
-    <svg
-      className="remote-qr"
-      viewBox={qrViewBox(drawn.matrix)}
-      role="img"
-      aria-label="QR code for the pairing address"
-      shapeRendering="crispEdges"
+    <Button
+      disabled={disabled}
+      onClick={() => {
+        void navigator.clipboard
+          ?.writeText(code)
+          .then(() => setCopied(true))
+          // Nothing is lost — the code is still on screen to be read, which is
+          // what it was there for.
+          .catch(() => setCopied(false))
+      }}
     >
-      <rect className="remote-qr-paper" x="0" y="0" width={side} height={side} />
-      <path className="remote-qr-ink" d={qrPath(drawn.matrix)} />
-    </svg>
+      {copied ? 'Copied' : 'Copy'}
+    </Button>
   )
 }
 
@@ -778,8 +876,6 @@ export interface RemoteActions {
   dismissEnable(): void
   pair(): void
   closePairing(): void
-  /** Which way the code on screen should send the phone. Nothing is re-minted. */
-  choosePath(path: PairPath): void
   approve(device: RemoteDevice): void
   deny(device: RemoteDevice): void
   revoke(device: RemoteDevice): void
@@ -815,11 +911,19 @@ export interface RemoteViewProps {
   busy: RemoteBusy
   confirmEnable: boolean
   /**
-   * Which way the person chose to send the phone, or null for "whichever is
-   * best". Never the last word: a path that has gone away falls back rather than
-   * leaving a dead link on screen — see `chooseRoute`.
+   * The outward half: the machines this desktop can reach, and the field a code
+   * from one of them is typed into.
+   *
+   * Required rather than optional. It is not an add-on to this screen, it is the
+   * other half of it — and an optional prop is how a merged section quietly goes
+   * back to being one panel with a gap where the other used to be.
    */
-  pairPath: PairPath | null
+  machines: MachinesHalf
+  /**
+   * The per-device folder chooser, which reads its own grants and so cannot be
+   * built here. Null before anything has been read — see where it is passed.
+   */
+  folders?: ReactNode
   actions: RemoteActions
   now: number
   /**
@@ -898,7 +1002,8 @@ export function RemoteView({
   secondsLeft,
   busy,
   confirmEnable,
-  pairPath,
+  machines,
+  folders = null,
   actions,
   now,
   platform = detectPlatform(),
@@ -910,13 +1015,18 @@ export function RemoteView({
   const machine = thisMachine(platform)
   const head = (
     <SectionHead
-      title="Remote access"
+      title="Remote"
+      // "a phone" was the whole sentence when this section only knew about
+      // phones. It knows about the laptop on the other desk now, and a person
+      // who has come here to pair one must not have to guess whether the
+      // sentence about phones covers them.
+      //
       // The relay, and only the relay. This used to read "…across your tailnet,
       // or through the relay from anywhere", which put a product most readers
       // have never installed in the first sentence of the section — and named it
       // first, as though it were the main way in. It is the optional faster one
       // and it has its own row further down, on the machines that have it.
-      blurb={`Drive ${machine} from a phone, from any network. Nothing to install and no account.`}
+      blurb={`Drive ${machine} from a phone or another computer, from any network. Nothing to install and no account.`}
     />
   )
 
@@ -928,6 +1038,14 @@ export function RemoteView({
           Remote access is not wired into this build. Nothing is listening, and nothing on this
           screen would turn anything on.
         </Notice>
+        {/*
+          Still drawn, because it is a different feature of the main process.
+          `registerRemoteIpc` is what lets a device *in*; `registerMachinesIpc`
+          is what dials *out*, and a build missing the first can perfectly well
+          have the second. Hiding the machines here would take a working half of
+          the section away on the strength of the other half being absent.
+        */}
+        <MachineLinks half={machines} platform={platform} />
       </>
     )
   }
@@ -942,13 +1060,15 @@ export function RemoteView({
   const relayLive = relay?.connected === true
   const direct = state?.url ?? null
 
-  // Every route that would work this second, and the one on screen. Both are
-  // derived rather than remembered: a path that goes away while a code is up has
-  // to stop being offered, not stay drawn until something re-renders.
-  const routes = state && pairing ? pairingRoutes(state, pairing.token, platform) : []
-  const route = chooseRoute(routes, pairPath)
-  // Asked without a token, because the button exists before the code does.
-  const canPair = state ? pairingPaths(state).length > 0 : false
+  // Whether a code minted this second would reach anything, derived rather than
+  // remembered: a path that goes away while a code is on screen has to stop
+  // being offered, not stay drawn until something re-renders.
+  const canPair = canMintCode(state)
+  // A code on a machine whose relay is down but which has a direct route is not
+  // useless — it is narrower, and saying which is the difference between a
+  // person walking to the other computer and a person typing six digits into a
+  // machine that cannot look them up.
+  const tailnetOnly = !relayLive && direct !== null
 
   return (
     <>
@@ -1054,7 +1174,11 @@ export function RemoteView({
       )}
 
       {running && (
-        <Group title="How a phone gets here">
+        // "a phone" until this section also held the machines page. Both rows
+        // carry a laptop exactly as they carry a phone, and a heading that named
+        // only one of them left somebody pairing a second desktop reading a
+        // section that appeared to be about something else.
+        <Group title="How a device gets here">
           <ul className="remote-paths">
             {/*
               The relay first, because for nearly everybody it is the only row
@@ -1074,7 +1198,7 @@ export function RemoteView({
               name="Through the relay"
               tone={relay === null ? 'off' : relayLive ? 'ok' : 'down'}
               pill={relay === null ? 'Off' : relayLive ? 'Connected' : 'Not connected'}
-              blurb={`A rendezvous service ${machine} dials out to. It staples two sockets together and carries sealed bytes it cannot read, so a phone on any network can reach this one.`}
+              blurb={`A rendezvous service ${machine} dials out to. It staples two sockets together and carries sealed bytes it cannot read, so a device on any network can reach this one — and it is what a pairing code is looked up through.`}
             >
               {relay === null ? (
                 <p className="remote-path-note">
@@ -1131,7 +1255,7 @@ export function RemoteView({
                 name="Direct on your tailnet"
                 tone="ok"
                 pill="Ready"
-                blurb={`One hop over WireGuard with nothing in the middle — no relay involved. A phone can use it only from the same tailnet as ${machine}.`}
+                blurb={`One hop over WireGuard with nothing in the middle — no relay involved. A device can use it only from the same tailnet as ${machine}.`}
               >
                 <Fact label="Address" value={direct} />
                 {state?.address && <Fact label="Tailnet IP" value={state.address} />}
@@ -1143,126 +1267,170 @@ export function RemoteView({
 
       {running && (
         <Group title="Pair a device">
-          {!pairing && (
-            <>
-              <p className="settings-prose">
-                A code is good for one device and expires in {PAIRING_WINDOW_SECONDS} seconds.
-                Scanning it asks to be let in; it does not let anything in — you still approve the
-                device below.
-              </p>
-              <Button tone="primary" onClick={actions.pair} disabled={busy !== null || !canPair}>
-                {busy === 'pair' ? 'Asking…' : 'Pair a device'}
-              </Button>
-              {!canPair && (
-                // The button is dead on purpose, and a dead button with no
-                // sentence beside it is the panel refusing to say why.
-                //
-                // It no longer says "neither way in is up". On a machine with no
-                // direct route there is only ever one row above this, and
-                // "neither" told the reader to go looking for a second one that
-                // was never drawn.
-                <Notice tone="warn">
-                  Nothing above is up, so a code would point at nothing. The rows above say what is
-                  wrong; fix that and this will mint.
-                </Notice>
-              )}
-            </>
-          )}
+          {/*
+            Both halves of pairing, side by side, in the order somebody does
+            them — and that arrangement is inherited from the machines page
+            rather than invented here. Pairing has two ends and the person doing
+            it is standing at both: one screen shows a code, the other is typed
+            into. Splitting them across two screens means explaining which screen
+            to open on which machine before anything can happen, inside a code
+            that lasts a minute.
+          */}
+          <p className="settings-prose">
+            A code is good for one device and expires in {PAIRING_WINDOW_SECONDS} seconds. Typing it
+            asks to be let in; it lets nothing in on its own — you still approve the device below.
+          </p>
 
-          {pairing && (
-            <div className="remote-pairing">
-              {route === null ? (
+          <div className="remote-pair">
+            <div className="remote-pair-half">
+              <h5 className="remote-pair-title">Let a device in</h5>
+              <p className="settings-prose">
+                Show a code here, then type it into the phone or computer you are adding.
+              </p>
+
+              {!pairing && (
+                <>
+                  <Button tone="primary" onClick={actions.pair} disabled={busy !== null || !canPair}>
+                    {busy === 'pair' ? 'Asking…' : 'Show a code'}
+                  </Button>
+                  {!canPair && (
+                    // The button is dead on purpose, and a dead button with no
+                    // sentence beside it is the panel refusing to say why.
+                    //
+                    // It no longer says "neither way in is up". On a machine with
+                    // no direct route there is only ever one row above this, and
+                    // "neither" told the reader to go looking for a second one
+                    // that was never drawn.
+                    <Notice tone="warn">
+                      Nothing above is up, so a code would reach nothing. The rows above say what is
+                      wrong; fix that and this will mint.
+                    </Notice>
+                  )}
+                </>
+              )}
+
+              {pairing && !canPair && (
                 // Reachable: the tailnet can go away and the relay can drop
                 // while a code is on screen. Saying "expired" here would be the
                 // wrong reason, and the right one tells you what to do.
                 <Notice tone="warn">
-                  There is nowhere to point this code any more — every way in went away while it
-                  was on screen. Cancel it and make another once one of them is back.
+                  There is nowhere to point this code any more — every way in went away while it was
+                  on screen. Cancel it and show another once one of them is back.
                 </Notice>
-              ) : expired ? (
-                <Notice tone="warn">
-                  That code has expired. Nothing was let in, and it no longer works.
-                </Notice>
-              ) : (
-                <QrFigure url={route.link} />
               )}
 
-              <div className="remote-pairing-side">
-                {routes.length > 1 && !expired && (
-                  // Both paths carry the same one-shot token, so this re-points
-                  // the code rather than minting another. What it decides is the
-                  // endpoint the phone keeps, which is why it is a choice and
-                  // not a silent preference.
-                  <div
-                    className="remote-choice"
-                    role="group"
-                    aria-label={`How this phone should reach ${machine}`}
-                  >
-                    {routes.map((option) => (
-                      <button
-                        key={option.kind}
-                        type="button"
-                        className="remote-choice-btn"
-                        aria-pressed={option.kind === route?.kind}
-                        onClick={() => actions.choosePath(option.kind)}
-                      >
-                        {option.label}
-                      </button>
-                    ))}
-                  </div>
-                )}
+              {pairing && canPair && expired && (
+                // His words, from the screenshot, kept exactly: it says what
+                // happened and what to do about it in one line. The button under
+                // it is the "another one", and it mints — see `actions.pair`.
+                <Notice tone="warn">That code has expired. Show another one.</Notice>
+              )}
 
-                {route !== null && !expired && <p className="remote-path-note">{route.note}</p>}
+              {pairing && canPair && !expired && (
+                <>
+                  {/*
+                    The code itself, and the largest thing in the section.
 
-                {secondsLeft !== null ? (
-                  <p
-                    className={expired ? 'remote-countdown remote-countdown-done' : 'remote-countdown'}
-                  >
-                    {expired ? 'Expired' : `Expires in ${secondsLeft}s`}
+                    It is read off this screen by somebody looking at it from a
+                    step back and typed into a device held in the other hand, so
+                    it is set the way a terminal sets things: mono, tracked out,
+                    tabular. `aria-label` because a screen reader saying the six
+                    digits as one number — "four hundred and eighty-two thousand"
+                    — is not a code anybody can type.
+                  */}
+                  <p className="remote-code" aria-label="Pairing code">
+                    {codeShown(pairing.token)}
                   </p>
-                ) : (
-                  <p className="remote-countdown remote-countdown-done">
-                    The main process did not say when this expires.
-                  </p>
-                )}
 
-                {route?.kind === 'relay' && relay !== null && relay.fingerprint !== '' && !expired && (
-                  // The one check a person can actually make. The phone shows
-                  // these same six groups before it sends anything, because it
-                  // learned the key from this code — so a mismatch means the
-                  // code being scanned is not the one on this screen.
-                  <div className="remote-check">
-                    <span className="remote-check-label">{`This ${machineNoun(platform)}’s fingerprint`}</span>
-                    <code className="remote-fingerprint">{relay.fingerprint}</code>
-                    <span className="remote-check-note">
-                      The phone shows the same six groups before it connects. If they do not match,
-                      something else answered to {machine}’s name — cancel, do not approve.
-                    </span>
-                  </div>
-                )}
-
-                {!expired && route !== null && (
-                  <>
-                    <p className="settings-prose">Can’t scan it? Type this into the phone instead:</p>
-                    <p className="remote-url">
-                      <code>{route.link}</code>
-                    </p>
-                  </>
-                )}
-
-                <div className="settings-chips">
-                  <Button onClick={actions.closePairing} disabled={busy !== null}>
-                    {expired ? 'Done' : 'Cancel this code'}
-                  </Button>
-                  {expired && (
-                    <Button tone="primary" onClick={actions.pair} disabled={busy !== null}>
-                      New code
-                    </Button>
+                  {tailnetOnly && (
+                    // True and narrow: with the relay down, nothing can look this
+                    // code up — but a device already on the tailnet can still
+                    // reach the address above and redeem it there.
+                    <Notice tone="warn">
+                      The relay is not connected, so only a device already on your tailnet can use
+                      this code — at the address above.
+                    </Notice>
                   )}
-                </div>
-              </div>
+                </>
+              )}
+
+              {pairing && (
+                <>
+                  {secondsLeft !== null ? (
+                    <p
+                      className={
+                        expired ? 'remote-countdown remote-countdown-done' : 'remote-countdown'
+                      }
+                      // A screen reader announcing every second of a minute is
+                      // worse than the silence it replaces.
+                      aria-live="off"
+                    >
+                      {expired ? 'Expired' : `Expires in ${secondsLeft}s`}
+                    </p>
+                  ) : (
+                    <p className="remote-countdown remote-countdown-done">
+                      The main process did not say when this expires.
+                    </p>
+                  )}
+
+                  {relay !== null && relay.fingerprint !== '' && !expired && canPair && (
+                    // The one check a person can actually make. The device shows
+                    // these same six groups before it sends anything, because it
+                    // learned the key from the offer this code names — so a
+                    // mismatch means something else answered to the code.
+                    <div className="remote-check">
+                      <span className="remote-check-label">{`This ${machineNoun(platform)}’s fingerprint`}</span>
+                      <code className="remote-fingerprint">{relay.fingerprint}</code>
+                      <span className="remote-check-note">
+                        The device shows the same six groups before it connects. If they do not
+                        match, something else answered to {machine}’s name — cancel, do not approve.
+                      </span>
+                    </div>
+                  )}
+
+                  <div className="settings-chips">
+                    {expired ? (
+                      // Enabled on the same condition the first press was, and
+                      // that is the fix for the dead end he hit: an expired code
+                      // beside a button that could not mint another one is a
+                      // screen telling you to do something it will not let you
+                      // do. When nothing can mint, the notice above says so
+                      // instead.
+                      <Button
+                        tone="primary"
+                        onClick={actions.pair}
+                        disabled={busy !== null || !canPair}
+                      >
+                        {busy === 'pair' ? 'Asking…' : 'Show another one'}
+                      </Button>
+                    ) : (
+                      <CopyCode code={codeShown(pairing.token)} disabled={busy !== null} />
+                    )}
+                    {/* "Done" read as "the pairing is finished", which is the one
+                        thing it does not mean: it takes the code off screen and
+                        cancels it. */}
+                    <Button onClick={actions.closePairing} disabled={busy !== null}>
+                      {expired ? 'Done' : 'Hide the code'}
+                    </Button>
+                  </div>
+                </>
+              )}
             </div>
-          )}
+
+            <div className="remote-pair-half">
+              <h5 className="remote-pair-title">Add another computer</h5>
+              <p className="settings-prose">
+                Type the {CODE_LENGTH} digits the other machine is showing. You will then approve
+                this one over there, once.
+              </p>
+              <CodeEntry
+                state={machines.entry}
+                wired={machines.wired}
+                onDigits={machines.actions.type}
+                onSubmit={machines.actions.pair}
+              />
+            </div>
+          </div>
         </Group>
       )}
 
@@ -1419,6 +1587,21 @@ export function RemoteView({
           </p>
         </Group>
       )}
+
+      {folders}
+
+      {/*
+        The outward half, last.
+
+        The order is the argument the section makes, and it runs one way:
+        this machine, then what may reach it, then how to pair another, then
+        what it can reach. Everything above this line is about something
+        arriving here and is governed by the switch at the top; the machines
+        below are dialled out to and keep working with that switch off, which
+        is exactly why they come after rather than being mixed into the device
+        roster.
+      */}
+      <MachineLinks half={machines} platform={platform} />
     </>
   )
 }
@@ -1512,8 +1695,6 @@ export interface RemoteActionDeps {
   pairing: RemotePairing | null
   setPairing(next: RemotePairing | null): void
   setConfirmEnable(next: boolean): void
-  /** Which way the code on screen points. A view preference, not a call. */
-  setPairPath(next: PairPath): void
   /** Runs the work, reports it in the main process's words, then re-reads. */
   run(key: string, work: () => Promise<unknown>, done: string | null): void
   /** False once the panel has gone, so nothing writes to a dead component. */
@@ -1532,7 +1713,7 @@ export interface RemoteActionDeps {
  * that never happened is never reported as one that did.
  */
 export function remoteActions(deps: RemoteActionDeps): RemoteActions {
-  const { bridge, pairing, setPairing, setConfirmEnable, setPairPath, run, isAlive } = deps
+  const { bridge, pairing, setPairing, setConfirmEnable, run, isAlive } = deps
 
   /** Approve/Deny/Revoke: do it, then believe the list that comes back, not the ask. */
   const settle = (
@@ -1599,10 +1780,24 @@ export function remoteActions(deps: RemoteActionDeps): RemoteActions {
       )
     },
     dismissEnable: () => setConfirmEnable(false),
+    /**
+     * Mint the one code, and put it on screen.
+     *
+     * The same function behind "Show a code" and behind "Show another one" on
+     * an expired one, deliberately: an expired code is a code that is gone, and
+     * asking for another is asking for a first. Anything that remembered the old
+     * one — a retry that re-showed it, a guard that refused while `pairing` was
+     * set — is how that button came to dead-end.
+     *
+     * `setPairing` before anything else clears whatever was on screen, so a mint
+     * that fails leaves no stale code behind claiming to work; the failure
+     * arrives as a notice from `run`.
+     */
     pair: () =>
       void run(
         'pair',
         async () => {
+          setPairing(null)
           const minted = toRemotePairing(await invoke(bridge.startRemotePairing, 'pair'))
           if (!minted) throw new Error('The main process did not return a pairing code.')
           if (isAlive()) setPairing(minted)
@@ -1613,10 +1808,6 @@ export function remoteActions(deps: RemoteActionDeps): RemoteActions {
       setPairing(null)
       void run('pair', () => invoke(bridge.cancelRemotePairing, 'cancel pairing'), null)
     },
-    // The only control on this panel that calls nothing. Both paths carry the
-    // same one-shot token, so re-pointing the code is a local decision — and
-    // minting a second one here would burn the first without saying so.
-    choosePath: (path) => setPairPath(path),
     approve: (device) =>
       settle(
         `device:${device.id}`,
@@ -1671,15 +1862,29 @@ export function remoteActions(deps: RemoteActionDeps): RemoteActions {
 interface Props {
   /** Defaults to `window.deck`. Passed in by tests, and by nothing else. */
   bridge?: Partial<RemoteBridge>
+  /**
+   * The machine channels, likewise.
+   *
+   * A second bridge rather than one widened interface, because they are two
+   * features of the main process — `registerRemoteIpc` is the host and
+   * `registerMachinesIpc` is the guest — and either can be absent from a build
+   * without the other. `contract.test.ts` reads both interfaces by name; merging
+   * them would hide which half a missing channel belongs to.
+   */
+  machines?: MachinesBridge
 }
 
-export function RemoteSection({ bridge: provided }: Props) {
+export function RemoteSection({ bridge: provided, machines: providedMachines }: Props) {
   // Resolved once. `resolveRemoteBridge` builds a new object every call, and an
   // unstable bridge would restart the poll — and the unmount cleanup that kills
   // a live pairing code — on every render.
   const bridge = useMemo(() => provided ?? resolveRemoteBridge(), [provided])
   const wired = typeof bridge.remoteStatus === 'function'
   const missing = useMemo(() => (wired ? missingRemoteMethods(bridge) : []), [bridge, wired])
+  const machineBridge = useMemo(
+    () => resolveBridge(providedMachines) ?? null,
+    [providedMachines],
+  )
 
   const [state, setState] = useState<RemoteState | null>(null)
   const [problem, setProblem] = useState<string | null>(null)
@@ -1687,11 +1892,23 @@ export function RemoteSection({ bridge: provided }: Props) {
   const [pairing, setPairing] = useState<RemotePairing | null>(null)
   const [busy, setBusy] = useState<RemoteBusy>(null)
   const [confirmEnable, setConfirmEnable] = useState(false)
-  // Null means "whichever path is best", which is what somebody who has never
-  // touched this control wants. It outlives one code on purpose: a person who
-  // chose the tailnet for their first phone means it for the second.
-  const [pairPath, setPairPath] = useState<PairPath | null>(null)
   const [now, setNow] = useState(() => Date.now())
+
+  /* ------------------------------------------------- the machines half -- */
+
+  const [machineView, setMachineView] = useState<MachinesView>({
+    machines: [],
+    links: [],
+    blocked: null,
+  })
+  const [machinesReading, setMachinesReading] = useState(machineBridge !== null)
+  const [typed, setTyped] = useState('')
+  const [pairingMachine, setPairingMachine] = useState(false)
+  const [pairError, setPairError] = useState<string | null>(null)
+  const [openSession, setOpenSession] = useState<{
+    machineId: string
+    sessionId: string
+  } | null>(null)
 
   const alive = useRef(true)
   useEffect(() => {
@@ -1758,12 +1975,45 @@ export function RemoteSection({ bridge: provided }: Props) {
     return bridge.onRemoteConnections(() => void refresh())
   }, [bridge, refresh])
 
+  /**
+   * The machines this desktop can reach, read once and then pushed.
+   *
+   * `machines:state` is announced whenever a *link* changes — a machine coming
+   * up, going away, being paired — so there is no poll here either.
+   */
+  const rereadMachines = useCallback(async (): Promise<void> => {
+    if (machineBridge === null) return
+    const view = asView(await machineBridge.listMachines())
+    if (alive.current) setMachineView(view)
+  }, [machineBridge])
+
+  useEffect(() => {
+    if (machineBridge === null) {
+      setMachinesReading(false)
+      return
+    }
+    setMachinesReading(true)
+    void rereadMachines().finally(() => {
+      if (alive.current) setMachinesReading(false)
+    })
+    return machineBridge.onMachinesState((value) => {
+      if (alive.current) setMachineView(asView(value))
+    })
+  }, [machineBridge, rereadMachines])
+
   // Coming back to the window is the moment a stale answer starts to matter,
   // and it is also the moment the things nothing pushes are most likely to have
   // changed — a laptop that closed its lid in one place and opened it in
   // another has a different tailnet than the one this panel last read.
+  //
+  // Both halves, for the same reason and one of them for a second: `blocked` is
+  // not a link, it is this desktop's own relay, and nothing announces that
+  // connecting or dropping. Without this it was decided once, when the section
+  // was opened, and then stood there being wrong in whichever direction the
+  // relay moved next.
   useWhenActive(() => {
     if (wired) void refresh()
+    void rereadMachines()
   })
 
   /** Run one action, say what happened in the main process's words, then re-read. */
@@ -1822,52 +2072,86 @@ export function RemoteSection({ bridge: provided }: Props) {
     () => void refresh(),
   )
 
-  const secondsLeft =
-    pairing?.expiresAt == null ? null : Math.max(0, Math.ceil((pairing.expiresAt - now) / 1000))
+  const secondsLeft = pairing?.expiresAt == null ? null : codeSecondsLeft(pairing.expiresAt, now)
 
   const actions = remoteActions({
     bridge,
     pairing,
     setPairing,
     setConfirmEnable,
-    setPairPath,
     run: (key, work, done) => void run(key, work, done),
     isAlive: () => alive.current,
   })
 
-  return (
-    <>
-      <RemoteView
-        state={state}
-        wired={wired}
-        missing={missing}
-        problem={problem}
-        notice={notice}
-        pairing={pairing}
-        secondsLeft={secondsLeft}
-        busy={busy}
-        confirmEnable={confirmEnable}
-        pairPath={pairPath}
-        actions={actions}
-        now={now}
-      />
-      {/*
-        Rendered here, beside `RemoteView`, rather than inside it.
+  const machinesHalf: MachinesHalf = {
+    wired: machineBridge !== null,
+    view: machineView,
+    reading: machinesReading,
+    entry: {
+      digits: typed,
+      busy: pairingMachine,
+      error: pairError,
+      blocked: machineView.blocked,
+    },
+    open: openSession,
+    pane:
+      machineBridge !== null && openSession !== null ? (
+        <MachineSessionPane
+          // Keyed, so switching sessions builds a new terminal rather than
+          // writing the next session's bytes into the last one's scrollback.
+          key={`${openSession.machineId} ${openSession.sessionId}`}
+          machineId={openSession.machineId}
+          sessionId={openSession.sessionId}
+          bridge={machineBridge}
+        />
+      ) : undefined,
+    actions: machineActions({
+      bridge: machineBridge,
+      digits: typed,
+      setDigits: setTyped,
+      setView: setMachineView,
+      setPairing: setPairingMachine,
+      setError: setPairError,
+      setOpen: setOpenSession,
+      isAlive: () => alive.current,
+    }),
+  }
 
-        `RemoteView` is pure on purpose — every state this panel can be in is
+  return (
+    <RemoteView
+      state={state}
+      wired={wired}
+      missing={missing}
+      problem={problem}
+      notice={notice}
+      pairing={pairing}
+      secondsLeft={secondsLeft}
+      busy={busy}
+      confirmEnable={confirmEnable}
+      machines={machinesHalf}
+      actions={actions}
+      now={now}
+      /*
+        Passed in as a node rather than rendered by the view.
+
+        `RemoteView` is pure on purpose — every state this section can be in is
         pinned by handing it props and calling `renderToStaticMarkup`, which
         never runs an effect. `DeviceFolders` reads its own grants in an effect,
-        so nesting it would put a component that fetches inside the one thing
-        here that is provably a function of its arguments, and every existing
-        view test would start rendering a child that reports "not available in
-        this build" because there is no `window.deck` under the test renderer.
+        so building it inside the view would put a component that fetches inside
+        the one thing here that is provably a function of its arguments, and
+        every view test would start rendering a child that reports "not
+        available in this build" because there is no `window.deck` under the
+        test renderer.
 
-        Below the device roster, and that order is the argument the screen
-        makes: pair a device, approve it, then choose what it may open. Choosing
-        folders for a device nobody has approved is a setting with no subject.
-      */}
-      {wired && state !== null && <DeviceFolders devices={grantableDevices(state.devices)} />}
-    </>
+        It goes below the device roster and above the machines, and that order
+        is the argument the screen makes: pair a device, approve it, then choose
+        what it may open. Choosing folders for a device nobody has approved is a
+        setting with no subject.
+      */
+      folders={
+        wired && state !== null ? <DeviceFolders devices={grantableDevices(state.devices)} /> : null
+      }
+    />
   )
 }
 

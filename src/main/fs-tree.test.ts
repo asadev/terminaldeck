@@ -14,6 +14,7 @@ import {
   MAX_ENTRIES,
   MAX_FILE_BYTES,
   parseIgnoreFile,
+  pickDefaultFile,
   PathEscapeError,
   readTextFile,
   safeJoin,
@@ -397,5 +398,101 @@ describe('listDirectory and readTextFile edges', () => {
     await new Promise((r) => setTimeout(r, 15))
     await writeFile(join(cached, '.gitignore'), '# target is welcome again now\n')
     expect((await listDirectory(cached)).entries.map((e) => e.name)).toContain('target')
+  })
+})
+
+/* ------------------------------------------------- the file to open first -- */
+
+/**
+ * The Files page opened on the sentence "pick something from the tree and it
+ * opens here" — a whole pane spent asking the reader to do the one thing the
+ * page could do for them. These pin the choice it makes instead.
+ */
+describe('pickDefaultFile', () => {
+  function entry(name: string, modifiedAt?: number, kind: 'dir' | 'file' = 'file') {
+    return { name, relPath: name, kind, symlink: false, blocked: false, modifiedAt }
+  }
+
+  it('leads with a README whatever its extension', () => {
+    const picked = pickDefaultFile([
+      entry('zebra.ts', 9_000),
+      entry('README.md', 1_000),
+      entry('index.ts', 8_000),
+    ])
+    expect(picked?.name).toBe('README.md')
+  })
+
+  it('takes a README with no extension too', () => {
+    expect(pickDefaultFile([entry('src.ts', 9_000), entry('README', 1)])?.name).toBe('README')
+  })
+
+  it('does not mistake a file that merely starts with the word', () => {
+    // `READMExit.ts` is not a README, and neither is `readme-generator.js`.
+    const picked = pickDefaultFile([entry('readme-generator.js', 5_000), entry('index.ts', 1_000)])
+    expect(picked?.name).toBe('index.ts')
+  })
+
+  it('falls back to the most recently modified file when there is no README', () => {
+    const picked = pickDefaultFile([
+      entry('old.txt', 1_000),
+      entry('newest.txt', 9_000),
+      entry('middle.txt', 5_000),
+    ])
+    expect(picked?.name).toBe('newest.txt')
+  })
+
+  it('never opens a directory — the viewer cannot show one', () => {
+    const picked = pickDefaultFile([entry('src', 9_000, 'dir'), entry('a.txt', 1_000)])
+    expect(picked?.name).toBe('a.txt')
+  })
+
+  it('never opens a blocked entry', () => {
+    const broken = { ...entry('link.txt', 9_000), blocked: true }
+    expect(pickDefaultFile([broken, entry('real.txt', 1_000)])?.name).toBe('real.txt')
+  })
+
+  it('returns null rather than guessing when nothing has a date and nothing is named', () => {
+    expect(pickDefaultFile([entry('a.txt'), entry('b.txt')])).toBeNull()
+  })
+
+  it('returns null for a root of directories only', () => {
+    expect(pickDefaultFile([entry('src', 1, 'dir')])).toBeNull()
+  })
+})
+
+describe('listDirectory withStats', () => {
+  let root = ''
+
+  beforeAll(async () => {
+    root = await mkdtemp(join(tmpdir(), 'terminaldeck-fs-stats-'))
+    await writeFile(join(root, 'README.md'), '# hello\n')
+    await mkdir(join(root, 'src'))
+  })
+
+  afterAll(async () => {
+    if (root) await rm(root, { recursive: true, force: true })
+  })
+
+  it('leaves the dates off by default — one stat per entry is not free', async () => {
+    const listing = await listDirectory(root)
+    for (const found of listing.entries) {
+      expect(found.modifiedAt).toBeUndefined()
+      expect(found.bytes).toBeUndefined()
+    }
+  })
+
+  it('fills them in when asked, so a default file can be chosen', async () => {
+    const listing = await listDirectory(root, '', { withStats: true })
+    const readme = listing.entries.find((found) => found.name === 'README.md')
+    expect(readme?.bytes).toBe(8)
+    expect(readme?.modifiedAt).toBeGreaterThan(0)
+    // Directories get them too — the tree shows both kinds of row.
+    expect(listing.entries.find((found) => found.name === 'src')?.modifiedAt).toBeGreaterThan(0)
+  })
+
+  it('names the file to open first, so the renderer never re-decides it', async () => {
+    expect((await listDirectory(root, '', { withStats: true })).defaultFile).toBe('README.md')
+    // Absent, not null, when the dates it depends on were never fetched.
+    expect((await listDirectory(root)).defaultFile).toBeUndefined()
   })
 })

@@ -142,6 +142,12 @@ describe('JoinRemoteDialog', () => {
 
   it('says plainly that remote sessions do not work yet', () => {
     expect(html).toContain('Remote sessions are not available yet')
+    // …and stops there. It used to go on to say which half of the feature had
+    // been built, which is a progress report on our work rather than an answer
+    // to "will this work". The half that stayed is the one the reader can act
+    // on: the fields still check what you type.
+    expect(html).toContain('Your code is checked below')
+    expect(html).not.toContain('this screen is the part that has')
   })
 
   it('cannot be submitted', () => {

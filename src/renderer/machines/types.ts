@@ -56,13 +56,6 @@ export interface MachinesView {
   blocked: string | null
 }
 
-export interface PairingCode {
-  token: string
-  expiresAt: number
-}
-
-export type CodeResult = { ok: true; code: PairingCode } | { ok: false; message: string }
-
 export type PairResult =
   | { ok: true }
   | { ok: false; reason: string; message: string }
@@ -225,15 +218,22 @@ export function asView(value: unknown): MachinesView {
   }
 }
 
-export function asCodeResult(value: unknown): CodeResult {
-  if (!isRecord(value)) return { ok: false, message: 'This machine gave no answer.' }
-  if (value.ok === true && isRecord(value.code)) {
-    const token = text(value.code.token)
-    const expiresAt = whole(value.code.expiresAt)
-    if (token !== '' && expiresAt !== null) return { ok: true, code: { token, expiresAt } }
-  }
-  return { ok: false, message: text(value.message) || 'This machine could not show a code.' }
-}
+/*
+ * There is no `asCodeResult` here any more, and its absence is the merge.
+ *
+ * This module used to narrow `machines:code` — the channel the Machines page
+ * called to put a code on screen. The main process mints from **one pairing
+ * desk** shared by `registerRemoteIpc` and `registerMachinesIpc`, so there is
+ * one code at a time whatever asks for it, and the merged Remote section asks
+ * through `remote:pair` for every device. Two screens minting the same code was
+ * the thing that made them two screens; narrowing an answer nothing on this side
+ * asks for would keep the second one half-alive.
+ *
+ * `startMachineCode` and `cancelMachineCode` stay in {@link MachinesBridge}
+ * because that interface is a mirror of the preload — `contract.test.ts` reads
+ * it — and the channels are still registered and still tested in
+ * `src/main/remote/machines/ipc.test.ts`. Nothing in the renderer calls them.
+ */
 
 export function asPairResult(value: unknown): PairResult {
   if (!isRecord(value)) return { ok: false, reason: 'unreachable', message: 'This machine gave no answer.' }

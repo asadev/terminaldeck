@@ -5,8 +5,10 @@ import {
   HooksPanel,
   bridgeCalls,
   canRemove,
+  endpointLine,
   foreignNote,
   primaryAction,
+  removalPromise,
   type HookProviderStatus,
   type HookWriteResult,
   type HooksBridge,
@@ -174,5 +176,50 @@ describe('HooksPanel', () => {
   it('explains itself instead of crashing when the bridge is missing', () => {
     const html = renderToStaticMarkup(<HooksPanel />)
     expect(html).toContain('not available')
+  })
+})
+
+/**
+ * The page's standing copy, after the app-wide shortening pass.
+ *
+ * Two lines here used to narrate the implementation — that agent CLIs can call
+ * out on events, and that the endpoint's address and token rotate every launch
+ * so hooks are rewritten at startup. Both are true and neither changes what
+ * anybody does. The one line that had to stay is the confirmation before a
+ * removal: it writes into a settings file the user may have hand-edited, and
+ * "only our own entries" is what makes pressing the button reasonable.
+ */
+describe('what this page says about itself', () => {
+  it('leads with what hooks buy, not with what a hook is', () => {
+    const bridge: HooksBridge = {
+      hooksStatus: async () => [],
+      installHooks: async () => ({ ok: true, message: 'ok', status: status() }),
+      removeHooks: async () => ({ ok: true, message: 'ok', status: status() }),
+      hookServerInfo: async () => ({ port: 8123, running: true }),
+    }
+    const html = renderToStaticMarkup(<HooksPanel bridge={bridge} />)
+    const sub = /<p class="hooks-sub">([^<]*)<\/p>/.exec(html)?.[1] ?? ''
+    expect(sub).toContain('follow a session without reading its terminal output')
+    expect(sub.split('.').filter((part) => part.trim() !== '')).toHaveLength(1)
+  })
+
+  it('keeps the promise that a removal touches nothing else in the file', () => {
+    // Asserted at the source rather than in markup: the sentence only appears
+    // after the first press, and there is no DOM here to press with.
+    const said = removalPromise('/Users/a/.claude/settings.json')
+    expect(said).toContain('/Users/a/.claude/settings.json')
+    expect(said).toMatch(/only our own entries are removed/i)
+    expect(said).toMatch(/everything else stays/i)
+  })
+
+  it('states the endpoint address and stops there', () => {
+    // It used to go on to explain that the address and its token rotate every
+    // launch, which is a description of our own implementation.
+    expect(endpointLine({ port: 8123, running: true })).toBe('Listening on 127.0.0.1:8123.')
+  })
+
+  it('still says what a stopped endpoint costs, rather than only that it is stopped', () => {
+    expect(endpointLine({ port: null, running: false })).toContain('nowhere to report to')
+    expect(endpointLine(null)).toContain('nowhere to report to')
   })
 })

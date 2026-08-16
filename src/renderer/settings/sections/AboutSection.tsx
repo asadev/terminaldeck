@@ -103,11 +103,7 @@ export function AboutSection({ bridge }: SectionProps) {
         {about && <p className="settings-about-version">Version {about.version}</p>}
       </div>
 
-      {!about && (
-        <Notice tone="warn">
-          The build details are not readable in this build, so only the name is shown.
-        </Notice>
-      )}
+      {!about && <Notice tone="warn">The build details are not readable here.</Notice>}
 
       {about && (
         <Group title="Build">
@@ -131,18 +127,19 @@ export function AboutSection({ bridge }: SectionProps) {
             <LinkOut href={about.repository}>{about.repository}</LinkOut>
           </Fact>
         ) : (
-          <Fact label="Repository">
-            No repository is recorded in package.json, so there is no link to show.
-          </Fact>
+          <Fact label="Repository">Not recorded in package.json.</Fact>
         )}
         {about?.homepage && (
           <Fact label="Homepage">
             <LinkOut href={about.homepage}>{about.homepage}</LinkOut>
           </Fact>
         )}
+        {/* Kept, halved. It is a licensing statement rather than a description,
+            and "we do not bundle or modify them" is the half that answers the
+            question somebody reading a licence panel actually has. */}
         <p className="settings-prose">
-          The agent CLIs this app runs are separate programs with their own licences; nothing here
-          bundles or modifies them.
+          The agent CLIs are separate programs under their own licences — nothing here bundles or
+          modifies them.
         </p>
       </Group>
 
@@ -154,9 +151,7 @@ export function AboutSection({ bridge }: SectionProps) {
           {releases && <LinkOut href={releases}>Releases</LinkOut>}
         </div>
         <Notice tone="info">
-          {updateNote ??
-            about?.updates?.detail ??
-            'Whether this build can update itself is checked when you press the button.'}
+          {updateNote ?? about?.updates?.detail ?? 'Press the button to check.'}
         </Notice>
       </Group>
     </>

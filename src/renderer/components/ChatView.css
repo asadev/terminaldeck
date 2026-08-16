@@ -277,12 +277,12 @@
 
 /* --------------------------------------------------------------- furniture */
 
-.cv-source {
-  margin: var(--sp-6) 0 0;
-  font-size: var(--t-footnote);
-  color: var(--text-muted);
-  text-align: center;
-}
+/*
+  `.cv-source` used to live here: a footnote appended after the last message
+  saying the pane reads the session transcript. It is gone rather than restyled
+  — see `ChatColumn` in ChatView.tsx. The end of the conversation is the last
+  thing said in it, and a caption there rides along under every reply.
+*/
 
 /*
   Centred in the conversation, not parked at a fraction of the viewport.

@@ -864,8 +864,14 @@ function clamp(value: number | undefined, fallback: number, max: number): number
  *
  * Chunked with an `await` per chunk on purpose: the main process has the UI
  * hanging off it, and these files reach 154 MB here.
+ *
+ * Exported because `artifacts.ts` reads the same files for a different reason —
+ * which tool calls wrote which file — and a fourth hand-rolled copy of this
+ * loop is exactly what the note at the top of this module warned about. The
+ * consolidation it asks for starts here: one reader, two callers, and the
+ * chunk-boundary and torn-last-line handling proven once.
  */
-async function* streamLines(path: string, signal?: AbortSignal): AsyncGenerator<string, void, void> {
+export async function* streamLines(path: string, signal?: AbortSignal): AsyncGenerator<string, void, void> {
   let size: number
   try {
     const info = await stat(path)

@@ -49,6 +49,43 @@ export interface RepoRef {
   remote: string
 }
 
+/** Mirrors `BranchRef` in `src/main/github.ts`. */
+export interface BranchRef {
+  name: string | null
+  detached: boolean
+  head: string | null
+}
+
+/** Mirrors `RepoSummary` in `src/main/github-repos.ts`. */
+export interface RepoSummary {
+  owner: string
+  name: string
+  nameWithOwner: string
+  url: string
+  private: boolean
+  fork: boolean
+  archived: boolean
+  description: string | null
+  language: string | null
+  defaultBranch: string | null
+  pushedAt: string | null
+  canPush: boolean
+}
+
+/** Mirrors `RepoAccessList` in `src/main/github-repos.ts`. */
+export interface RepoAccessList {
+  ok: true
+  repos: RepoSummary[]
+  atLeast: number
+  truncated: boolean
+  source: 'account' | 'installation'
+  selection: 'all' | 'selected' | null
+  rateRemaining: number | null
+  fetchedAt: number
+}
+
+export type RepoAccess = RepoAccessList | GitHubFailure
+
 export interface GitHubLabel {
   name: string
   color: string
@@ -124,12 +161,18 @@ export interface GitHubIdentity {
   avatarUrl: string | null
 }
 
+/** Which registration the sign-in runs through. See `src/main/github-app.ts`. */
+export type ClientKind = 'oauth' | 'github-app'
+
 export interface DeviceFlowPrompt {
   userCode: string
   verificationUri: string
   expiresAt: number
+  /** Empty in `github-app` mode — permissions come from the registration. */
   scopes: string[]
   borrowedClient: boolean
+  clientKind: ClientKind
+  installUrl: string | null
 }
 
 export interface GitHubAuthState {
@@ -142,11 +185,16 @@ export interface GitHubAuthState {
   missingScopes: string[]
   ghInstalled: boolean
   borrowedClient: boolean
+  clientKind: ClientKind
+  appConfigured: boolean
+  installUrl: string | null
   disconnect: string | null
   pending: DeviceFlowPrompt | null
   failure: GitHubFailure | null
   expiredCredentialRemoved: boolean
   repo: RepoRef | GitHubFailure | null
+  branch: BranchRef | null
+  access: RepoAccess | null
 }
 
 /** The slice of the preload bridge this panel needs. */
@@ -171,7 +219,12 @@ export interface GitHubPanelProps {
   initialTab?: Tab
 }
 
-export type Tab = 'pulls' | 'issues'
+/**
+ * `repos` is the third tab, and the only one that has anything to show when the
+ * open folder is not a GitHub repository — which is the state that made a
+ * successful sign-in look like a failed one.
+ */
+export type Tab = 'pulls' | 'issues' | 'repos'
 
 /* ---------------------------------------------------------------- helpers -- */
 
@@ -443,16 +496,37 @@ export function sourceSentence(source: AuthSource | null, host: string): string 
 /**
  * What each requested permission is *for*.
  *
- * A consent screen that lists `repo, read:org, notifications` and nothing else
- * is how a person learns to click Authorize without reading. Every scope this
- * app asks for is named here in terms of something visible on this page, and a
- * scope with no entry is one we never asked for — a leftover from a `gh auth
- * login` that wanted more — so it is shown without a claim about what it does.
+ * A consent screen that lists `repo, notifications` and nothing else is how a
+ * person learns to click Authorize without reading. Every scope this app asks
+ * for is named here in terms of something visible on this page, and a scope
+ * with no entry is one we never asked for — a leftover from a `gh auth login`
+ * that wanted more — so it is shown without a claim about what it does.
+ *
+ * `read:org` was removed from the request on 2026-08-16 and so is gone from
+ * here too. A token that still carries it now lands under "Also granted",
+ * which is the truth: it was granted, and this app does not use it.
  */
 const SCOPE_BUYS: Record<string, string> = {
   repo: 'Pull requests and issues, private repositories included',
-  'read:org': 'Repositories owned by your organisations',
   notifications: 'The unread count on the bell',
+}
+
+/**
+ * GitHub's own wording for a scope, which is what the consent screen will say.
+ *
+ * This exists because of the screenshot that started this work: the page said
+ * **"Full control of private repositories"** and there was no way to pick which
+ * ones. Printing GitHub's phrase *here*, before the button is pressed, is the
+ * difference between a surprise and a decision. Softening it would be worse
+ * than saying nothing — the user is about to read the real thing.
+ */
+const SCOPE_CONSENT_WORDING: Record<string, string> = {
+  repo: 'Full control of private repositories',
+  notifications: 'Access notifications',
+}
+
+export function consentWording(scope: string): string | null {
+  return SCOPE_CONSENT_WORDING[scope] ?? null
 }
 
 export function scopeBuys(scope: string): string | null {
@@ -467,12 +541,97 @@ export function scopeBuys(scope: string): string | null {
  */
 const SCOPE_COST: Record<string, string> = {
   repo: 'Private repositories will not appear in either list.',
-  'read:org': 'Repositories owned by your organisations will not appear.',
   notifications: 'The unread count stays empty.',
 }
 
 export function missingScopeCost(scope: string): string {
   return SCOPE_COST[scope] ?? `Anything that needs the ${scope} permission will fail.`
+}
+
+/**
+ * Which repository and branch the open folder is, in one line.
+ *
+ * It is built from the *sign-in* payload rather than from the pull-request
+ * payload, and that is the whole reason it can be trusted to be on screen. The
+ * repository name used to come from the overview, so the moment GitHub was
+ * rate-limiting or the network was down — exactly when a user most wants to
+ * know what the app thinks it is looking at — the line vanished along with the
+ * lists. Both halves of this are local `git` reads that cannot fail for a
+ * network reason.
+ */
+export function folderLine(repo: RepoRef | GitHubFailure | null, branch: BranchRef | null): string | null {
+  if (repo === null) return null
+  if (repoFailed(repo)) return repo.message
+  if (!branch) return repo.nameWithOwner
+  if (branch.detached) {
+    return branch.head
+      ? `${repo.nameWithOwner} · detached at ${branch.head}`
+      : `${repo.nameWithOwner} · detached HEAD`
+  }
+  return branch.name ? `${repo.nameWithOwner} · ${branch.name}` : repo.nameWithOwner
+}
+
+/**
+ * What pressing Connect is about to ask GitHub for, said before it is pressed.
+ *
+ * This block exists because of a screenshot. GitHub's authorisation page said
+ * "Full control of private repositories" with no repository picker anywhere on
+ * it, and the app had given no warning that it was going to. The fix is not to
+ * soften the wording — the user is thirty seconds from reading GitHub's own —
+ * it is to say the same thing first, explain why it is the only option GitHub
+ * offers an OAuth app, and name the thing that would change it.
+ */
+export function AccessNotice({ state }: { state: GitHubAuthState }) {
+  if (state.clientKind === 'github-app') {
+    return (
+      <div className="gh-asks">
+        <p className="gh-asks-title">What this asks for</p>
+        <p className="gh-asks-body">
+          Signing in installs a GitHub App, so GitHub will ask you to choose{' '}
+          <strong>all repositories</strong> or <strong>only select repositories</strong>, and the app
+          gets read-only access to what you pick — repository metadata, pull requests and issues.
+        </p>
+        {state.installUrl && (
+          <button
+            type="button"
+            className="gh-asks-link"
+            onClick={() => state.installUrl && openExternal(state.installUrl)}
+          >
+            Choose repositories on GitHub
+          </button>
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <div className="gh-asks">
+      <p className="gh-asks-title">What this asks for</p>
+      <ul className="gh-asks-list">
+        {['repo', 'notifications'].map((scope) => (
+          <li key={scope}>
+            <code>{scope}</code>
+            {consentWording(scope) && <span className="gh-asks-wording">{consentWording(scope)}</span>}
+            <span className="gh-asks-why">{scopeBuys(scope)}</span>
+          </li>
+        ))}
+      </ul>
+      {/*
+        The sentence the screenshot deserved. GitHub has no read-only scope for
+        private repositories and no per-repository OAuth scope — `public_repo`
+        exists and excludes exactly the repositories this is for — so `repo` is
+        the only thing that can answer "show me pull requests on my private
+        repo". Saying so is not an excuse; it is the difference between an app
+        that is greedy and a platform that offers one lever.
+      */}
+      <p className="gh-asks-body">
+        GitHub has no narrower scope than <code>repo</code> for reading a private repository, and an
+        OAuth app cannot offer a repository picker. Per-repository choice needs this app to be
+        registered as a GitHub App
+        {state.appConfigured ? '' : ', which this build does not have yet'}.
+      </p>
+    </div>
+  )
 }
 
 /**
@@ -693,7 +852,13 @@ export function bridgeSilentState(): GitHubAuthState {
     scopesReported: false,
     missingScopes: [],
     ghInstalled: false,
+    // Every field here has to be a fact, and none of these has been probed.
+    // `oauth` is not a guess: it is what the app does when nothing is
+    // configured, so it is true of a build whose main process never answered.
     borrowedClient: false,
+    clientKind: 'oauth',
+    appConfigured: false,
+    installUrl: null,
     disconnect: null,
     pending: null,
     failure: {
@@ -705,6 +870,8 @@ export function bridgeSilentState(): GitHubAuthState {
     },
     expiredCredentialRemoved: false,
     repo: null,
+    branch: null,
+    access: null,
   }
 }
 
@@ -779,7 +946,12 @@ export function DeviceCodeCard({
       </p>
 
       <p className="gh-device-asks">
-        Asking for {prompt.scopes.join(', ')}.
+        {/* A GitHub App request carries no scopes at all, so an empty list is a
+            different sentence rather than a shorter one. Rendering "Asking for
+            ." would be the one place on this page that reads as a bug. */}
+        {prompt.clientKind === 'github-app'
+          ? 'GitHub will ask which repositories this app may see — all of them, or only the ones you pick.'
+          : `Asking for ${prompt.scopes.join(', ')}.`}
         {prompt.borrowedClient && (
           <>
             {' '}
@@ -858,12 +1030,20 @@ export function ConnectPage({
           </>
         }
         extra={
-          failure?.detail ? (
-            <details className="gh-failure-detail">
-              <summary>Details</summary>
-              <pre>{failure.detail}</pre>
-            </details>
-          ) : undefined
+          <>
+            {/* Before the button, not after it. The point of this block is that
+                nobody arrives at GitHub's consent screen surprised by what it
+                says — which is what happened, and is what this whole change is
+                about. It is withheld for a rate limit or a dead network, where
+                the next press is Retry and the permissions are not the story. */}
+            {!retryOnly && <AccessNotice state={state} />}
+            {failure?.detail && (
+              <details className="gh-failure-detail">
+                <summary>Details</summary>
+                <pre>{failure.detail}</pre>
+              </details>
+            )}
+          </>
         }
       >
         {failure?.message ?? 'Connect an account to see this project’s pull requests and issues.'}
@@ -893,12 +1073,203 @@ export function ConnectPage({
             <PageNote>
               {repoFailed(state.repo)
                 ? state.repo.message
-                : `This folder is ${state.repo.nameWithOwner}, and it will load as soon as you are signed in.`}
+                : `This folder is ${folderLine(state.repo, state.branch)}, and it will load as soon as you are signed in.`}
             </PageNote>
           )}
         </div>
       )}
     </>
+  )
+}
+
+/* ---------------------------------------------------------- repositories -- */
+
+/**
+ * Narrow the list as somebody types.
+ *
+ * Client-side, over the page already in memory, and the summary line above it
+ * says so — the alternative is a search box that quietly searches a hundred of
+ * five hundred repositories and returns "no matches" for one that exists. Owner
+ * and description are searched as well as the name because "the acme one" and
+ * "the deploy scripts" are how people actually remember repositories.
+ */
+export function filterRepos(repos: RepoSummary[], query: string): RepoSummary[] {
+  const needle = query.trim().toLowerCase()
+  if (!needle) return repos
+  return repos.filter(
+    (repo) =>
+      repo.nameWithOwner.toLowerCase().includes(needle) ||
+      (repo.description ?? '').toLowerCase().includes(needle),
+  )
+}
+
+/**
+ * How many repositories this credential can reach, in the most honest form the
+ * data supports.
+ *
+ * A truncated list must never render a bare count. "100 repositories" for an
+ * account with five hundred is a specific wrong number and looks exactly like a
+ * right one; `atLeast` is the bound GitHub's own pagination implies, so "500+"
+ * is a fact rather than an estimate.
+ */
+export function accessSummary(access: RepoAccessList): string {
+  const shown = access.repos.length
+  if (!access.truncated) {
+    return shown === 1 ? '1 repository' : `${shown} repositories`
+  }
+  return `${access.atLeast}+ repositories · showing the ${shown} most recently pushed`
+}
+
+/**
+ * Where a GitHub App grant came from, when that is a thing the user chose.
+ *
+ * Only said for an installation: an OAuth token's `repo` scope leaves no choice
+ * to make, so printing "all repositories" there would describe a decision
+ * nobody took.
+ */
+export function selectionSentence(access: RepoAccessList): string | null {
+  if (access.source !== 'installation') return null
+  return access.selection === 'all'
+    ? 'This GitHub App is installed on all your repositories.'
+    : 'These are the repositories you selected when installing the app. Change them on GitHub at any time.'
+}
+
+export function RepoRow({
+  repo,
+  now,
+  current,
+}: {
+  repo: RepoSummary
+  now: number
+  /** True for the repository of the folder currently open. */
+  current?: boolean
+}) {
+  return (
+    <li>
+      <button
+        type="button"
+        className="gh-row"
+        data-kind="repo"
+        data-current={current || undefined}
+        onClick={() => openExternal(repo.url)}
+        title={`${repo.nameWithOwner} — open on GitHub`}
+      >
+        {/*
+          `private`/`public` rather than one of the four pull-request states.
+          Reusing `data-badge="open"` for a public repository borrowed the green
+          that means "this pull request is open and waiting on somebody", which
+          is a status; visibility is not one. The CSS paints these two neutral.
+        */}
+        <span className="gh-badge" data-badge={repo.private ? 'private' : 'public'}>
+          {repo.private ? 'private' : 'public'}
+        </span>
+        <span className="gh-body">
+          <span className="gh-title">
+            {repo.nameWithOwner}
+            {current && <span className="gh-here">this folder</span>}
+          </span>
+          <span className="gh-meta">
+            {repo.description && <span className="gh-repo-desc">{repo.description}</span>}
+            {repo.language && <span className="gh-repo-lang">{repo.language}</span>}
+            {repo.fork && <span className="gh-fork">fork</span>}
+            {repo.archived && <span className="gh-fork">archived</span>}
+            {repo.pushedAt && (
+              <span className="gh-age" title={repo.pushedAt}>
+                {formatAge(repo.pushedAt, now)}
+              </span>
+            )}
+          </span>
+        </span>
+      </button>
+    </li>
+  )
+}
+
+/**
+ * The repositories this sign-in can reach.
+ *
+ * This tab is the answer to "I connected and I saw nothing". It depends on the
+ * credential and nothing else, so it has something to show from a folder that
+ * is not a repository, a folder with no GitHub remote, and a folder whose
+ * repository this account cannot see — every case where the rest of the page
+ * has, correctly, nothing.
+ */
+export function RepositoryList({
+  access,
+  query,
+  onQuery,
+  current,
+  installUrl,
+  onRetry,
+  now,
+}: {
+  access: RepoAccess | null
+  query: string
+  onQuery(value: string): void
+  /** `owner/name` of the open folder's repository, marked in the list. */
+  current: string | null
+  installUrl: string | null
+  onRetry(): void
+  now: number
+}) {
+  if (access === null) {
+    return <PageNote busy>Reading your repositories…</PageNote>
+  }
+
+  if (isFailure(access)) {
+    return <FailureBlock failure={access} onRetry={onRetry} />
+  }
+
+  const shown = filterRepos(access.repos, query)
+  const selection = selectionSentence(access)
+
+  return (
+    <div className="gh-repos">
+      <div className="gh-repos-head">
+        <p className="gh-repos-count">{accessSummary(access)}</p>
+        {access.repos.length > 5 && (
+          <input
+            type="search"
+            className="gh-repos-filter"
+            placeholder="Filter"
+            aria-label="Filter repositories"
+            value={query}
+            onChange={(event) => onQuery(event.target.value)}
+          />
+        )}
+      </div>
+
+      {selection && <p className="gh-note">{selection}</p>}
+
+      {access.repos.length === 0 ? (
+        <PageNote>
+          This sign-in cannot reach any repositories.
+          {installUrl ? ' Install the app on the repositories you want it to see.' : ''}
+        </PageNote>
+      ) : shown.length === 0 ? (
+        <PageNote>
+          Nothing matches “{query}”
+          {access.truncated ? ' in the page loaded here — the full list is on GitHub.' : '.'}
+        </PageNote>
+      ) : (
+        <ul className="gh-list">
+          {shown.map((repo) => (
+            <RepoRow
+              key={repo.nameWithOwner}
+              repo={repo}
+              now={now}
+              current={current !== null && repo.nameWithOwner === current}
+            />
+          ))}
+        </ul>
+      )}
+
+      {installUrl && (
+        <button type="button" className="gh-asks-link" onClick={() => openExternal(installUrl)}>
+          Change which repositories this app can see
+        </button>
+      )}
+    </div>
   )
 }
 
@@ -1004,6 +1375,13 @@ export function GitHubPanel({ cwd, bridge, now, initialTab = 'pulls' }: GitHubPa
   const [authBusy, setAuthBusy] = useState(false)
   const [confirmingDisconnect, setConfirmingDisconnect] = useState(false)
   const [copied, setCopied] = useState(false)
+  /**
+   * The repository filter. Renderer-side state rather than a query sent to
+   * GitHub, and the list says so — a search box that silently searches the
+   * hundred repositories loaded rather than all five hundred would answer "no
+   * matches" for a repository that exists.
+   */
+  const [repoQuery, setRepoQuery] = useState('')
   /** The folder on screen, so a slow reply for a previous one is discarded. */
   const shown = useRef<string | null>(null)
 
@@ -1075,6 +1453,8 @@ export function GitHubPanel({ cwd, bridge, now, initialTab = 'pulls' }: GitHubPa
     setAuth(null)
     setConfirmingDisconnect(false)
     setCopied(false)
+    setRepoQuery('')
+    setTab(initialTab)
     // A refresh that was still in flight for the previous folder will never
     // reach its own cleanup — the guard below discards it — so the button it
     // disabled has to be released here or it stays greyed out.
@@ -1086,12 +1466,24 @@ export function GitHubPanel({ cwd, bridge, now, initialTab = 'pulls' }: GitHubPa
       // so the "Reading GitHub…" line must be taken down or it sits under the
       // connect screen for ever.
       else if (shown.current === cwd) setLoading(false)
+
+      /*
+       * Land on the tab that has something in it.
+       *
+       * Pull requests is the right first tab for a project folder and the wrong
+       * one for a folder that is not a GitHub repository, where it can only ever
+       * show the same "not a repository" notice the header already carries.
+       * Done here — on mount and on a folder change — rather than on every
+       * status read, because the focus poll runs the same call and would drag
+       * the user off whichever tab they had chosen.
+       */
+      if (state?.connected && state.repo !== null && repoFailed(state.repo)) setTab('repos')
     })
 
     return () => {
       shown.current = null
     }
-  }, [api, cwd, load, loadAuth])
+  }, [api, cwd, initialTab, load, loadAuth])
 
   /**
    * Start a device-flow sign-in, and see it through.
@@ -1298,42 +1690,75 @@ export function GitHubPanel({ cwd, bridge, now, initialTab = 'pulls' }: GitHubPa
     />
   )
 
-  if (loading && !result) {
+  /**
+   * One page from here down, rather than three early returns.
+   *
+   * The old shape bailed out to a full-page error whenever the *overview*
+   * failed, which meant a signed-in user standing in a folder that is not a
+   * GitHub repository saw a connection bar over an error and nothing else — no
+   * evidence anywhere that signing in had bought them anything. The failure is
+   * still shown, in the tab it belongs to, with the repository list beside it.
+   */
+  const overview = result && !isFailure(result) ? result : null
+  const overviewFailure =
+    result && isFailure(result)
+      ? result
+      : !loading && !result
+        ? ({
+            ok: false,
+            kind: 'error',
+            message: 'No answer from the GitHub bridge.',
+            action: null,
+            detail: '',
+          } as GitHubFailure)
+        : null
+
+  const folderRepo = state.repo !== null && !repoFailed(state.repo) ? state.repo : null
+  const folder = folderLine(state.repo, state.branch)
+  const access = state.access
+  const pulls = overview?.pulls ?? null
+  const issues = overview?.issues ?? null
+  const notifications = overview?.notifications ?? null
+  const limit = overview?.limit ?? 0
+  const pullCount = countLabel(pulls?.ok ? pulls.value.length : null, limit)
+  const issueCount = countLabel(issues?.ok ? issues.value.length : null, limit)
+  const repoCount = access && access.ok ? (access.truncated ? `${access.atLeast}+` : String(access.repos.length)) : null
+  const unread = notifications?.ok ? notifications.value : null
+
+  /**
+   * What a list tab shows when the folder has no repository behind it.
+   *
+   * The sentence comes from the repository resolution — "this folder is not a
+   * git repository", "none of this repository's remotes point at GitHub" — so
+   * the three causes stay three different screens, which is what the whole
+   * failure vocabulary in `github.ts` exists for.
+   */
+  const listBody = (
+    kind: 'pulls' | 'issues',
+    section: Section<PullRequest[]> | Section<Issue[]> | null,
+  ) => {
+    if (state.repo !== null && repoFailed(state.repo)) {
+      return <FailureBlock failure={state.repo} onRetry={() => void loadAuth()} />
+    }
+    if (loading && !section) return <PageNote busy>Reading GitHub…</PageNote>
+    if (overviewFailure) return <FailureBlock failure={overviewFailure} onRetry={refresh} />
+    if (!section) return <PageNote busy>Reading GitHub…</PageNote>
+    if (isFailure(section)) return <FailureBlock failure={section} onRetry={refresh} />
+    if (section.value.length === 0) {
+      return <PageNote>{kind === 'pulls' ? 'No open pull requests.' : 'No open issues.'}</PageNote>
+    }
     return (
-      <section className="gh-panel" aria-label="GitHub" aria-busy="true">
-        {connection}
-        <PageNote page busy>
-          Reading GitHub…
-        </PageNote>
-      </section>
+      <ul className="gh-list">
+        {kind === 'pulls'
+          ? (section.value as PullRequest[]).map((pull) => (
+              <PullRow key={pull.number} pull={pull} now={clock} />
+            ))
+          : (section.value as Issue[]).map((issue) => (
+              <IssueRow key={issue.number} issue={issue} now={clock} />
+            ))}
+      </ul>
     )
   }
-
-  if (!result || isFailure(result)) {
-    return (
-      <section className="gh-panel" aria-label="GitHub">
-        {connection}
-        <FailureBlock
-          page
-          failure={
-            result ?? {
-              ok: false,
-              kind: 'error',
-              message: 'No answer from the GitHub bridge.',
-              action: null,
-              detail: '',
-            }
-          }
-          onRetry={refresh}
-        />
-      </section>
-    )
-  }
-
-  const { repo, pulls, issues, notifications } = result
-  const pullCount = countLabel(pulls.ok ? pulls.value.length : null, result.limit)
-  const issueCount = countLabel(issues.ok ? issues.value.length : null, result.limit)
-  const unread = notifications.ok ? notifications.value : null
 
   return (
     <section className="gh-panel" aria-label="GitHub">
@@ -1354,14 +1779,26 @@ export function GitHubPanel({ cwd, bridge, now, initialTab = 'pulls' }: GitHubPa
           <path d="M9 20.5c-4.6 1.4-4.6-2.4-6.4-2.9M21 20.5v-3.3a3 3 0 0 0-.8-2.2c2.7-.3 5-1.4 5-5.9a4.6 4.6 0 0 0-1.2-3.1 4.3 4.3 0 0 0-.1-3.1s-1-.3-3.3 1.2a11.4 11.4 0 0 0-6 0C12.3 2.6 11.3 2.9 11.3 2.9a4.3 4.3 0 0 0-.1 3.1A4.6 4.6 0 0 0 10 9.1c0 4.4 2.3 5.6 5 5.9a3 3 0 0 0-.8 2.1v3.4" />
         </svg>
 
-        <button
-          type="button"
-          className="gh-repo"
-          onClick={() => openExternal(repo.url)}
-          title={`${repo.nameWithOwner} — open on GitHub (remote: ${repo.remote})`}
-        >
-          {repo.nameWithOwner}
-        </button>
+        {/*
+          Built from the sign-in payload, not from the pull-request payload.
+          Both halves are local `git` reads, so the one line that says what the
+          app thinks it is looking at survives a rate limit, an outage and a
+          repository this account cannot see — which are exactly the moments
+          somebody needs it. When the folder has no repository at all, the
+          resolution's own sentence stands in for the name.
+        */}
+        {folderRepo ? (
+          <button
+            type="button"
+            className="gh-repo"
+            onClick={() => openExternal(folderRepo.url)}
+            title={`${folderRepo.nameWithOwner} — open on GitHub (remote: ${folderRepo.remote})`}
+          >
+            {folder}
+          </button>
+        ) : (
+          <p className="gh-repo-none">{folder ?? 'No folder open'}</p>
+        )}
 
         <span className="gh-head-spacer" />
 
@@ -1422,39 +1859,50 @@ export function GitHubPanel({ cwd, bridge, now, initialTab = 'pulls' }: GitHubPa
           Issues
           {issueCount !== null && <span className="gh-tab-count">{issueCount}</span>}
         </button>
+        {/*
+          The third tab, and the one that answers "I connected and saw nothing".
+          It reads the credential rather than the folder, so it has something to
+          show in every state where the two above them correctly have nothing.
+        */}
+        <button
+          type="button"
+          role="tab"
+          id="gh-tab-repos"
+          aria-selected={tab === 'repos'}
+          aria-controls="gh-panel-repos"
+          className="gh-tab"
+          onClick={() => setTab('repos')}
+        >
+          Repositories
+          {repoCount !== null && <span className="gh-tab-count">{repoCount}</span>}
+        </button>
       </div>
 
-      {tab === 'pulls' ? (
+      {tab === 'pulls' && (
         <div className="gh-list-wrap" role="tabpanel" id="gh-panel-pulls" aria-labelledby="gh-tab-pulls">
-          {isFailure(pulls) ? (
-            <FailureBlock failure={pulls} onRetry={refresh} />
-          ) : pulls.value.length === 0 ? (
-            <PageNote>No open pull requests.</PageNote>
-          ) : (
-            <ul className="gh-list">
-              {pulls.value.map((pull) => (
-                <PullRow key={pull.number} pull={pull} now={clock} />
-              ))}
-            </ul>
-          )}
+          {listBody('pulls', pulls)}
         </div>
-      ) : (
+      )}
+      {tab === 'issues' && (
         <div className="gh-list-wrap" role="tabpanel" id="gh-panel-issues" aria-labelledby="gh-tab-issues">
-          {isFailure(issues) ? (
-            <FailureBlock failure={issues} onRetry={refresh} />
-          ) : issues.value.length === 0 ? (
-            <PageNote>No open issues.</PageNote>
-          ) : (
-            <ul className="gh-list">
-              {issues.value.map((issue) => (
-                <IssueRow key={issue.number} issue={issue} now={clock} />
-              ))}
-            </ul>
-          )}
+          {listBody('issues', issues)}
+        </div>
+      )}
+      {tab === 'repos' && (
+        <div className="gh-list-wrap" role="tabpanel" id="gh-panel-repos" aria-labelledby="gh-tab-repos">
+          <RepositoryList
+            access={access}
+            query={repoQuery}
+            onQuery={setRepoQuery}
+            current={folderRepo?.nameWithOwner ?? null}
+            installUrl={state.clientKind === 'github-app' ? state.installUrl : null}
+            onRetry={() => void loadAuth()}
+            now={clock}
+          />
         </div>
       )}
 
-      {isFailure(notifications) && notifications.kind === 'missing-scope' && (
+      {notifications !== null && isFailure(notifications) && notifications.kind === 'missing-scope' && (
         // Worth one quiet line rather than a full failure block: the lists
         // above loaded fine, and the only thing missing is the bell.
         <p className="gh-note">Notifications need the <code>notifications</code> token scope.</p>

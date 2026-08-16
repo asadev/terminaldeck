@@ -25,6 +25,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -40,8 +41,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import dev.terminaldeck.android.DeckUiState
+import dev.terminaldeck.android.pairing.PairingCodes
 import dev.terminaldeck.android.transport.TransportState
 import dev.terminaldeck.android.transport.detail
 
@@ -50,7 +55,7 @@ import dev.terminaldeck.android.transport.detail
  *
  * ## Four states, not one screen with a spinner
  *
- * - **No pairing.** A field for the code and a button for the camera.
+ * - **No pairing.** A field for six digits, on a numeric keypad.
  * - **Paired, waiting for approval.** The pairing worked; a human has to press a button on the
  *   machine. This is not an error and is deliberately not drawn as one — it is the normal path, and
  *   the client polls it on the reconnect schedule rather than making the user retry.
@@ -59,8 +64,8 @@ import dev.terminaldeck.android.transport.detail
  * - **Refused.** The credential is gone and the only way forward is a new code.
  *
  * The waiting state is the one that matters. `device-auth.ts` will not admit a device until
- * someone approves it, so a client that treated the refusal as a failure would send people back to
- * scan the QR again — spending a second single-use token to reach the same wait.
+ * someone approves it, so a client that treated the refusal as a failure would send people back for
+ * another code — spending a second single-use token to reach the same wait.
  *
  * ## Why the third state had to be split out of the second
  *
@@ -87,7 +92,14 @@ import dev.terminaldeck.android.transport.detail
  * that word is threaded through every sentence below rather than any of them naming a machine.
  *
  * The alternative is what was here before: the literal word "Mac" in eleven sentences, shown to
- * whoever had scanned the code. A Windows user was told to go and approve a device on "the Mac".
+ * whoever had typed the code. A Windows user was told to go and approve a device on "the Mac".
+ *
+ * ## There is no camera button any more
+ *
+ * This screen used to offer "Scan QR" beside the field, and the field took a
+ * `terminaldeck://pair#…` link. The QR did not work, and the link was a live pairing token in a
+ * string whose route to a phone is a messaging app that keeps a copy. Both are gone; the whole of
+ * pairing is six digits, and the `CAMERA` permission went with the scanner.
  *
  * ## The fingerprints are shown, not hidden behind a details link
  *
@@ -100,7 +112,6 @@ import dev.terminaldeck.android.transport.detail
 fun PairingScreen(
     state: DeckUiState,
     onPair: (String) -> Unit,
-    onScan: () -> Unit,
     onForget: () -> Unit,
     onRetry: () -> Unit,
     /**
@@ -199,9 +210,9 @@ fun PairingScreen(
                 code = code,
                 noun = noun,
                 error = state.pairingError,
+                busy = state.pairingLookup,
                 onCode = { code = it },
                 onPair = { onPair(code) },
-                onScan = onScan,
             )
         }
 
@@ -218,6 +229,28 @@ fun PairingScreen(
     }
 }
 
+/**
+ * The six-digit field.
+ *
+ * ## Why `KeyboardType.NumberPassword` and not `Number`
+ *
+ * Both raise a numeric keypad. `Number` on several IMEs also offers a decimal separator and a
+ * minus sign, neither of which can appear in a pairing code, and both of which are ways to enter
+ * something this field will then refuse. `NumberPassword` is the digits-only keypad — the one every
+ * PIN entry on Android uses — and it is chosen for its *keyboard*, not for its masking, which is
+ * turned off by leaving the field an ordinary `OutlinedTextField`.
+ *
+ * ## Why it submits itself
+ *
+ * A code is exactly six digits, so the moment the sixth lands there is nothing left to decide.
+ * Tapping a button at that point is a tap that asks a question with one possible answer. The Pair
+ * button stays for the person who pasted something the field refused, and because a screen whose
+ * only action is implicit is a screen somebody can get stuck on.
+ *
+ * The filter in `onValueChange` is not validation — `PairingCodes.parse` is validation. It is what
+ * keeps a seventh digit out of a field that has already submitted, so a slow tap after the code has
+ * gone does not leave something the person has to clear before they can try again.
+ */
 @Composable
 private fun EnterCard(
     code: String,
@@ -230,28 +263,41 @@ private fun EnterCard(
      */
     noun: String,
     error: String?,
+    /** True while the rendezvous is being asked where this code's machine is. */
+    busy: Boolean,
     onCode: (String) -> Unit,
     onPair: () -> Unit,
-    onScan: () -> Unit,
 ) {
     Card {
         Text(
-            text = "On the $noun, open Terminal Deck → Remote → Pair a device. " +
-                "Scan the code, or paste the link it shows.",
+            text = "On the $noun, open Terminal Deck \u2192 Remote \u2192 Pair a device. " +
+                "Type the six digits it shows.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(Modifier.height(16.dp))
         OutlinedTextField(
             value = code,
-            onValueChange = onCode,
-            label = { Text("Pairing link") },
-            placeholder = { Text("terminaldeck://pair#…") },
-            singleLine = false,
-            maxLines = 3,
+            onValueChange = { typed ->
+                val digits = typed.filter { it in '0'..'9' }.take(PairingCodes.CODE_LENGTH)
+                onCode(digits)
+                if (digits.length == PairingCodes.CODE_LENGTH && !busy) onPair()
+            },
+            label = { Text("Pairing code") },
+            placeholder = { Text("000000") },
+            singleLine = true,
             isError = error != null,
             supportingText = error?.let { { Text(it, color = MaterialTheme.colorScheme.error) } },
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+            keyboardOptions = KeyboardOptions(
+                keyboardType = KeyboardType.NumberPassword,
+                imeAction = ImeAction.Done,
+            ),
+            textStyle = LocalTextStyle.current.copy(
+                fontFamily = FontFamily.Monospace,
+                fontSize = 28.sp,
+                letterSpacing = 8.sp,
+                textAlign = TextAlign.Center,
+            ),
             colors = OutlinedTextFieldDefaults.colors(
                 focusedTextColor = MaterialTheme.colorScheme.onSurface,
                 unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
@@ -261,15 +307,32 @@ private fun EnterCard(
             modifier = Modifier.fillMaxWidth(),
         )
         Spacer(Modifier.height(14.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Button(
-                onClick = onPair,
-                enabled = code.isNotBlank(),
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
-                modifier = Modifier.weight(1f),
-            ) { Text("Pair") }
-            TextButton(onClick = onScan, modifier = Modifier.weight(1f)) { Text("Scan QR") }
+        Button(
+            onClick = onPair,
+            enabled = code.isNotBlank() && !busy,
+            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            // A spinner rather than the word alone. Finding the machine is a memory-hard derivation
+            // and a round trip over a relay, and a button whose only sign of life is a changed
+            // caption reads as one that has stuck.
+            if (busy) {
+                CircularProgressIndicator(
+                    strokeWidth = 2.dp,
+                    color = MaterialTheme.colorScheme.onPrimary,
+                    modifier = Modifier.size(16.dp),
+                )
+                Spacer(Modifier.width(10.dp))
+            }
+            Text(if (busy) "Looking for that machine\u2026" else "Pair")
         }
+        Spacer(Modifier.height(10.dp))
+        Text(
+            text = "A code is good for one minute and one use. Pairing alone does not grant access " +
+                "\u2014 the $noun still asks somebody to approve this phone.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 

@@ -118,3 +118,66 @@ export function nextActiveId(tabs: WorkspaceTab[], closingId: string): string | 
   if (remaining.length === 0) return null
   return remaining[index]?.id ?? remaining[index - 1]?.id ?? remaining[0].id
 }
+
+/* ------------------------------------------------------------ dragging -- */
+
+/**
+ * The one thing a dragged tab carries, and the only format it is offered in.
+ *
+ * A private MIME type rather than `text/plain`, which matters more here than it
+ * usually would. This window is full of drop targets that are not ours: a
+ * terminal accepts dropped text and types it, the address bar accepts a dragged
+ * URL, and a chat composer accepts anything at all. A tab offered as plain text
+ * would be droppable into every one of them, and dropping a session onto a
+ * terminal would type its opaque id into whatever agent is running there.
+ * Offering only this format means every surface that did not ask for a tab
+ * simply refuses the drop, which is the correct behaviour and needs no code.
+ *
+ * The value is the tab's `id`, which is all a receiver needs — the tab itself is
+ * already in the list both ends are rendering from, and serialising a copy of it
+ * would let the two drift apart mid-drag.
+ */
+export const TAB_DRAG_MIME = 'application/x-terminaldeck-tab'
+
+/**
+ * The slice of `DataTransfer` the helpers below touch.
+ *
+ * Structural rather than the DOM type, because this project's tests run in Node
+ * with no DOM at all. A real `DataTransfer` satisfies it.
+ */
+export interface TabTransfer {
+  readonly types: ReadonlyArray<string>
+  setData(format: string, data: string): void
+  getData(format: string): string
+  effectAllowed: string
+}
+
+/** Begin dragging a tab. Call from the drag source's `onDragStart`. */
+export function startTabDrag(transfer: TabTransfer, tabId: string): void {
+  transfer.setData(TAB_DRAG_MIME, tabId)
+  // `move`, not `copy`: promoting a tab to the strip and folding it back into
+  // the rail are both moves, and the cursor is the only thing telling the user
+  // which of the two they are about to do.
+  transfer.effectAllowed = 'move'
+}
+
+/**
+ * Is the thing being dragged one of our tabs?
+ *
+ * The test a `dragover` handler has to use. During a drag the browser puts the
+ * data in *protected mode* — `types` is readable, `getData` returns the empty
+ * string — so a target that decided whether to accept a drop by reading the
+ * payload would refuse every drop it was written to accept. Verified behaviour,
+ * not a precaution: it is in the HTML drag-and-drop spec and every engine
+ * implements it.
+ */
+export function isTabDrag(transfer: TabTransfer | null | undefined): boolean {
+  return transfer ? Array.from(transfer.types).includes(TAB_DRAG_MIME) : false
+}
+
+/** The tab id being dropped, or null when the drop was something else. */
+export function readTabDrag(transfer: TabTransfer | null | undefined): string | null {
+  if (!isTabDrag(transfer)) return null
+  const id = transfer?.getData(TAB_DRAG_MIME) ?? ''
+  return id === '' ? null : id
+}

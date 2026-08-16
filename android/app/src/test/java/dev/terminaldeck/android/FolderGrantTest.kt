@@ -1,6 +1,7 @@
 package dev.terminaldeck.android
 
 import dev.terminaldeck.android.github.InMemoryGitHubStore
+import dev.terminaldeck.android.pairing.Rendezvous
 import dev.terminaldeck.android.protocol.ClientMessage
 import dev.terminaldeck.android.protocol.RemoteSession
 import dev.terminaldeck.android.protocol.ServerMessage
@@ -146,6 +147,7 @@ class FolderGrantTest {
             accounts = InMemoryGitHubStore(),
             network = NetworkWatch.none,
             heartbeat = Heartbeat(scope = CoroutineScope(Dispatchers.Unconfined)),
+            lookup = { typed, _ -> rendezvous[typed] },
         ) { _, hostId, store ->
             transports.getOrPut(hostId) { ScriptedTransport(hostId, store) }
         }
@@ -156,9 +158,21 @@ class FolderGrantTest {
         Dispatchers.resetMain()
     }
 
+    /**
+     * The fake rendezvous: which machine is sitting behind which six digits.
+     *
+     * A code carries no address any more — the QR and the link that used to carry one are gone — so
+     * pairing is two steps, and the first is a lookup at a relay. Stubbing it here is what keeps
+     * this test off the network; `RendezvousTest` is where the derivation itself is checked.
+     */
+    private val rendezvous = mutableMapOf<String, Rendezvous.Offer>()
+    private var nextCode = 482_910
+
+    /** A fresh six-digit code for a machine, registered with the fake rendezvous. */
     private fun code(hostId: String): String {
-        val key = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(ByteArray(32) { 5 })
-        return "terminaldeck://pair#v=1&r=wss://relay.example&h=$hostId&k=$key&t=pair-$hostId"
+        val digits = (nextCode++).toString().padStart(6, '0')
+        rendezvous[digits] = Rendezvous.Offer("wss://relay.example", hostId, ByteArray(32) { 5 })
+        return digits
     }
 
     private fun session(id: String, cwd: String) =

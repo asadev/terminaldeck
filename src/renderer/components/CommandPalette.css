@@ -225,6 +225,48 @@
   font-weight: var(--w-semibold);
 }
 
+/* -------------------------------------------------------- session hits -- */
+
+/*
+  A hit from a past session is a sentence, not a name, so it is set as one:
+  smaller than a filename, allowed the full width of the row, and clipped with
+  an ellipsis rather than wrapped — a palette row that grew to three lines
+  would push the rest of the list off the bottom of the sheet.
+
+  It keeps `.palette-name`'s ellipsis and shrinking behaviour and overrides
+  only the size and the flex basis, so the highlight, the truncation and the
+  active-row colour all keep working exactly as they do for a filename.
+*/
+.palette-snippet {
+  flex: 1 1 auto;
+  color: var(--text-secondary);
+  font-size: var(--t-callout);
+}
+
+.palette-row.is-active .palette-snippet {
+  color: var(--text-primary);
+}
+
+/* A sub-agent's chatter is real and worth finding, and worth marking as not
+   the main conversation. */
+.palette-sub {
+  flex: none;
+  padding: 0 var(--sp-1);
+  border-radius: var(--radius-sm);
+  background: var(--fill-tertiary);
+  color: var(--text-muted);
+  font-size: var(--t-caption);
+}
+
+.palette-when {
+  flex: none;
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: var(--t-caption);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 /* ---------------------------------------------------------------- states -- */
 
 .palette-empty {

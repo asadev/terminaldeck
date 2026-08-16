@@ -690,6 +690,35 @@
      which reads as a layout that overflowed rather than one that was set. */
   padding: 0 var(--sp-3) 0 var(--sp-4);
   /*
+    And on Windows, the room the OS takes for its own window buttons.
+
+    They are drawn *over* the page, in the top-right corner of this bar, so
+    nothing in the document knows they are there — the mode switch would sit
+    underneath the close button, three words that cannot be clicked. The number
+    is measured and published by `window-controls.ts`; it is deliberately a
+    custom property with a zero fallback so that every platform that has no
+    overlay resolves this to exactly the padding it had before.
+
+    Not a constant: the caption buttons are one width on Windows 10, another on
+    Windows 11, another again maximised, and they scale with the display.
+  */
+  padding-right: calc(var(--sp-3) + var(--window-controls-inset, 0px));
+  /*
+    The bar is what you drag the window by, which is the whole job the title bar
+    used to do. Every control on it opts back out — `.toolbar-btn`,
+    `.toolbar-chips` and `.toolbar-actions` below — and that is not politeness:
+    a drag region is a *rectangle*, and it covers every pixel inside it
+    including its children's, so a control has to subtract its own rectangle
+    back out with `no-drag` or a press on it moves the window instead of doing
+    its job. The rail already works this way — `.sidebar-gutter` drags and
+    `.sidebar-arrow` inside it opts out.
+
+    This matters more than it did: with the OS title bar gone on Windows there
+    is no other grab handle anywhere on the window, and a window that cannot be
+    moved is not a cosmetic problem.
+  */
+  -webkit-app-region: drag;
+  /*
     The chrome layer is above the content layer, and it has to say so out loud.
 
     `backdrop-filter` (below) makes this element a stacking context. A stacking
@@ -769,12 +798,58 @@
   padding-left: max(118px, calc((100% - var(--page-measure)) / 2));
 }
 
+/* ------------------------------------------- the window's own left edge -- */
+
+/*
+  Every number above with an 82 in it is reserving room for the macOS traffic
+  lights, and on Windows there are none: the window buttons are on the *right*,
+  drawn into this bar by the OS itself, and `window-controls.ts` sets
+  `data-window-controls` on the root element while they are.
+
+  Left as it was, a Windows window opens with an 82-pixel hole at the top-left
+  of a 220-pixel sidebar, with the collapse arrow floating in the middle of it —
+  which reads as a layout that failed rather than as a reserve for something. So
+  each rule that measures from the lights measures from the window's own edge
+  instead — `shell.test.ts` sweeps the sheet and fails if one of them is added
+  later without a counterpart here, which is the likelier mistake: two of the
+  four below were written months apart. The arithmetic is the same shape: the
+  gutter's arrow lines up with
+  the rail's own rows (`--sp-2`, the padding every `.sb-row` sits in), the
+  toolbar's reveal button lines up with the toolbar's own lead (`--sp-4`), and
+  the collapsed heading clears that button by its width plus a gap — 16 + 28 + 8.
+
+  Not a media query and not a user-agent sniff: this follows the *overlay*,
+  which is the thing that is actually different, and it therefore also switches
+  back on a platform that grew one later.
+*/
+:root[data-window-controls] .sidebar-gutter {
+  padding-left: var(--sp-2);
+}
+
+:root[data-window-controls] .toolbar-reveal {
+  left: var(--sp-4);
+}
+
+:root[data-window-controls] .toolbar[data-sidebar-collapsed] {
+  padding-left: 52px;
+}
+
+:root[data-window-controls] .toolbar[data-sidebar-collapsed][data-page]:not([data-page='files']) {
+  padding-left: max(52px, calc((100% - var(--page-measure)) / 2));
+}
+
+/* Deliberately *not* `no-drag`, which is what this used to be.
+
+   The heading is the one part of a title bar everybody grabs to move a window,
+   and on Windows there is no longer an OS strip above it to grab instead. What
+   this block holds beyond the heading is the reveal button and the chips, and
+   each of those subtracts its own rectangle — so opting the whole block out
+   only ever took the drag away from the title text. */
 .toolbar-lead {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
   min-width: 0;
-  -webkit-app-region: no-drag;
 }
 
 .toolbar-heading {
@@ -965,6 +1040,11 @@
   align-items: center;
   gap: var(--sp-1);
   min-width: 0;
+  /* The slot `WindowToolbar`'s `meta` lands in, so this is where the drag
+     region has to stop rather than on each chip: whatever App.tsx puts here is
+     a control by definition — the chips are the two decisions a session is
+     started with — and it must not be a thing that moves the window. */
+  -webkit-app-region: no-drag;
 }
 
 /* Space would do the separating on its own if the two chips were not both
@@ -1093,6 +1173,10 @@
   height: var(--control-h);
   border-radius: var(--radius-sm);
   color: var(--text-secondary);
+  /* On the bar, which drags. Declared on the button rather than relying on the
+     container, because the reveal button is positioned out of the flow and sits
+     in `.toolbar-lead`, which drags. */
+  -webkit-app-region: no-drag;
   transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
 

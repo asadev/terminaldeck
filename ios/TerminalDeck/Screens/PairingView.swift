@@ -2,8 +2,21 @@
  * Pairing, and the wait that follows it.
  *
  * Two screens in one file because they are two halves of one thing the user
- * experiences as a single step: point the phone at the Mac, then walk over and
- * say yes.
+ * experiences as a single step: type the six digits off the Mac, then say yes on
+ * the Mac.
+ *
+ * ## One field, and why the camera is gone
+ *
+ * This screen used to open with a live camera preview and a QR scanner, with a
+ * paste field underneath for the link. The QR did not work, and the link it
+ * carried was a live pairing token in a string whose route between two devices
+ * was a messaging app. Both are gone, and what is left is the thing that never
+ * needed either: six digits, on a numeric keypad.
+ *
+ * That is also why `NSCameraUsageDescription` is out of `Support/Info.plist`.
+ * Nothing in this app opens the camera any more, and a permission string for a
+ * capability the binary does not use is a thing App Review asks about and a user
+ * is right to be suspicious of.
  *
  * ## The waiting state is a screen, not an error
  *
@@ -51,14 +64,7 @@ struct PairingView: View {
                             .clipShape(RoundedRectangle(cornerRadius: 10))
                     }
 
-                    QRScanner { code in
-                        typed = code
-                        // Closing is the model's, not this view's: it is the only
-                        // place that knows whether the code parsed. See `pair`.
-                        model.pair(with: code)
-                    }
-
-                    manualEntry
+                    codeEntry
                     identity
                 }
                 .padding(20)
@@ -79,6 +85,9 @@ struct PairingView: View {
                 }
             }
         }
+        // The keypad is up before the person has to ask for it. This screen has
+        // exactly one thing to do and typing is it.
+        .onAppear { typing = true }
     }
 
     private var header: some View {
@@ -93,89 +102,121 @@ struct PairingView: View {
                  // wrong about its own capabilities.
                  ? "Open \(Brand.name) on the other Mac or Windows PC and show its pairing code. "
                     + "The machines you already have stay paired."
-                 : "Open \(Brand.name) on the Mac and show the pairing code. "
-                    + "Point the camera at it, or paste the link.")
+                 : "Open \(Brand.name) on the Mac and show the pairing code. Type the six digits below.")
                 .font(.system(size: 14))
                 .foregroundStyle(Theme.secondary)
         }
     }
 
-    private var manualEntry: some View {
+    /**
+     * The six-digit field.
+     *
+     * ## Why `.numberPad` and not `.default`
+     *
+     * Half the argument for digits is what a phone puts under them: ten large
+     * targets instead of a keyboard, no case to get wrong, and nothing to type by
+     * accident that the field will then refuse. `.numberPad` rather than
+     * `.numbersAndPunctuation` or `.phonePad` — the first is a full keyboard with
+     * digits on it, and the second carries `+`, `*`, `#` and a pause key, none of
+     * which can appear in a pairing code.
+     *
+     * ## Why it submits itself
+     *
+     * A code is exactly six digits long, so the moment the sixth lands there is
+     * nothing left to decide. Tapping a button at that point is a tap that asks a
+     * question with one possible answer. The Pair button stays — for the person
+     * who pasted something the field refused, and because a screen whose only
+     * action is implicit is a screen somebody can get stuck on.
+     *
+     * `onChange` rather than `onSubmit`, because a number pad has no return key.
+     */
+    private var codeEntry: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Or paste the link")
+            Text("Pairing code")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(Theme.faint)
                 .textCase(.uppercase)
 
-            TextField("terminaldeck://pair?…", text: $typed, axis: .vertical)
+            TextField("000000", text: $typed)
                 .textFieldStyle(.plain)
-                .font(.system(size: 13, design: .monospaced))
+                .keyboardType(.numberPad)
+                // Read by iOS's own SMS-code autofill and by password managers,
+                // which is exactly what this field is.
+                .textContentType(.oneTimeCode)
+                .font(.system(size: 34, weight: .semibold, design: .monospaced))
+                .kerning(8)
+                .multilineTextAlignment(.center)
                 .foregroundStyle(Theme.primary)
-                .lineLimit(1 ... 3)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .focused($typing)
                 .accessibilityIdentifier("pairing.field")
-                .padding(12)
+                .padding(.vertical, 14)
+                .frame(maxWidth: .infinity)
                 .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                 // The one border on this screen, and it earns it: a text field
                 // with no edge on a dark background is indistinguishable from a
                 // paragraph until it is tapped.
                 .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Theme.hairline))
-
-            HStack(spacing: 10) {
-                Button {
-                    // The pairing link most often arrives through a message or a
-                    // note, so the clipboard is the likeliest place it is.
-                    if let text = UIPasteboard.general.string { typed = text }
-                } label: {
-                    Label("Paste", systemImage: "doc.on.clipboard")
-                        .font(.system(size: 15, weight: .medium))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 11)
-                }
-                .foregroundStyle(Theme.primary)
-                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-
-                Button {
+                .onChange(of: typed) { _, value in
+                    /*
+                     * Trimmed to six, then submitted on six.
+                     *
+                     * The trim is not cosmetic: `.numberPad` has no length limit
+                     * of its own, and a seventh digit landing after the sixth has
+                     * already been submitted would leave a field the person has
+                     * to clear before they can try again. `PairingCodeParser`
+                     * still decides — an assignment is not a check.
+                     */
+                    let digits = String(value.filter { $0.isASCII && $0.isNumber }.prefix(PairingCodeParser.codeLength))
+                    if digits != value { typed = digits }
+                    guard digits.count == PairingCodeParser.codeLength, !model.isPairing else { return }
                     typing = false
-                    model.pair(with: typed)
-                } label: {
-                    HStack(spacing: 7) {
-                        // A spinner rather than the word alone. Redeeming a code
-                        // is a round trip to a machine over a relay, and a button
-                        // whose only sign of life is a changed caption reads as
-                        // one that has stuck.
-                        if model.isPairing {
-                            ProgressView()
-                                .controlSize(.small)
-                                .tint(Theme.onAccent)
-                        } else {
-                            Image(systemName: "link")
-                        }
-                        Text(model.isPairing ? "Pairing…" : "Pair")
-                    }
-                    .font(.system(size: 15, weight: .semibold))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 11)
+                    model.pair(with: digits)
                 }
-                // Dimmed rather than greyed: this is the primary action and it
-                // has to stay recognisable as the blue one while it is waiting
-                // for something to be typed.
-                //
-                // The ink changes with it, and that is not decoration. On the
-                // full-strength blue the label is near-black — see
-                // `Theme.onAccent` — but near-black on a blue at a third
-                // strength is a dark grey on a dark navy, which rendered as an
-                // unreadable button on the pairing screen. So the disabled state
-                // takes secondary ink instead, which is what a disabled control
-                // should read as anyway.
-                .background(Theme.accent.opacity(typed.isEmpty ? 0.28 : 1),
-                            in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .foregroundStyle(typed.isEmpty ? Theme.secondary : Theme.onAccent)
-                .accessibilityIdentifier("pairing.submit")
-                .disabled(typed.isEmpty || model.isPairing)
+
+            Button {
+                typing = false
+                model.pair(with: typed)
+            } label: {
+                HStack(spacing: 7) {
+                    // A spinner rather than the word alone. Finding the machine
+                    // is a memory-hard derivation and a round trip over a relay,
+                    // and a button whose only sign of life is a changed caption
+                    // reads as one that has stuck.
+                    if model.isPairing {
+                        ProgressView()
+                            .controlSize(.small)
+                            .tint(Theme.onAccent)
+                    } else {
+                        Image(systemName: "arrow.right")
+                    }
+                    Text(model.isPairing ? "Looking for that machine…" : "Pair")
+                }
+                .font(.system(size: 15, weight: .semibold))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 11)
             }
+            // Dimmed rather than greyed: this is the primary action and it has
+            // to stay recognisable as the blue one while it is waiting for
+            // something to be typed.
+            //
+            // The ink changes with it, and that is not decoration. On the
+            // full-strength blue the label is near-black — see `Theme.onAccent` —
+            // but near-black on a blue at a third strength is a dark grey on a
+            // dark navy, which rendered as an unreadable button on this screen.
+            // So the disabled state takes secondary ink instead, which is what a
+            // disabled control should read as anyway.
+            .background(Theme.accent.opacity(typed.isEmpty ? 0.28 : 1),
+                        in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .foregroundStyle(typed.isEmpty ? Theme.secondary : Theme.onAccent)
+            .accessibilityIdentifier("pairing.submit")
+            .disabled(typed.isEmpty || model.isPairing)
+
+            Text("A code is good for one minute and one use. Pairing alone does not grant access — "
+                 + "the machine still asks somebody to approve this device.")
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.faint)
         }
     }
 

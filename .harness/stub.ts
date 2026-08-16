@@ -392,6 +392,11 @@ const api: Record<string, unknown> = new Proxy(
       fast: { value: null, label: null, source: null },
       permission: { value: null, label: null, source: null },
       live: false,
+      // The shape the real handler answers with. `false` here means "none of
+      // the CLI's own markers are on this session's screen", which for the
+      // harness's plain-shell sessions is the truth — so the account chip
+      // shows a Run Claude button, which is the state item 1 is about.
+      agent: { running: false, evidence: null, saw: null },
     }),
     applyAgentControl: async () => ({
       ok: false,

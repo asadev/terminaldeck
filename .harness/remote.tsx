@@ -21,6 +21,11 @@ import {
   type RemoteRelay,
   type RemoteState,
 } from '../src/renderer/remote/RemoteSection'
+import type {
+  MachineActions,
+  MachinesHalf,
+} from '../src/renderer/machines/MachineLinks'
+import type { Machine, MachineLinkState } from '../src/renderer/machines/types'
 import '../src/renderer/styles/tokens.css'
 import '../src/renderer/styles/app.css'
 import '../src/renderer/settings/SettingsWindow.css'
@@ -33,7 +38,6 @@ const NOTHING: RemoteActions = {
   dismissEnable: () => {},
   pair: () => {},
   closePairing: () => {},
-  choosePath: () => {},
   approve: () => {},
   deny: () => {},
   revoke: () => {},
@@ -57,20 +61,15 @@ const BOTH: RemoteState = {
   url: 'https://asads-macbook-pro-1.taile59277.ts.net:8443',
   address: '100.86.107.119',
   reason: null,
-  directReason: null,
   relay: RELAY,
   devices: [],
   connections: [],
 }
 
-const TAILNET_GONE =
-  'Tailscale is installed but this Mac is logged out of the tailnet. Open the Tailscale menu bar icon and sign in, then turn this on again.'
-
 const RELAY_ONLY: RemoteState = {
   ...BOTH,
   url: null,
   address: null,
-  directReason: TAILNET_GONE,
 }
 
 const NOTHING_UP: RemoteState = {
@@ -138,7 +137,87 @@ const TUNNELLED: RemoteConnection = {
   ],
 }
 
-const PAIRING = { token: 'k7Qm3XtB9wHd2PvJ6rNy4cFg8LsA1uZe5xTi0oBn7dM', expiresAt: NOW + 45_000 }
+const PAIRING = { token: '482913', expiresAt: NOW + 45_000 }
+
+/* ------------------------------------------------- the machines half ----- */
+
+const NO_MACHINE_ACTIONS: MachineActions = {
+  type: () => {},
+  pair: () => {},
+  connect: () => {},
+  disconnect: () => {},
+  forget: () => {},
+  newSession: () => {},
+  open: () => {},
+  close: () => {},
+}
+
+const STUDIO: Machine = {
+  id: 'MACHINE1',
+  name: 'Studio PC',
+  hostId: 'MACHINE1',
+  fingerprint: 'ABCD-EFGH-JKLM-NPQR-STUV-WXYZ',
+  platform: 'win32',
+  pairedAt: NOW - 9 * 86_400_000,
+  lastConnectedAt: NOW - 60_000,
+}
+
+const STUDIO_LINK: MachineLinkState = {
+  id: 'MACHINE1',
+  state: 'online',
+  reason: null,
+  sessions: [
+    {
+      id: 's1',
+      title: 'agent',
+      cwd: '/Users/a/projects/terminaldeck',
+      provider: 'claude',
+      status: 'running',
+      exitCode: null,
+    },
+    {
+      id: 's2',
+      title: 'build',
+      cwd: '/Users/a/projects/terminaldeck/pwa',
+      provider: 'shell',
+      status: 'idle',
+      exitCode: null,
+    },
+  ],
+  folders: ['/Users/a/projects/terminaldeck'],
+  capabilities: ['create'],
+  hostPlatform: 'win32',
+  retryAt: null,
+}
+
+function machines(over: Partial<MachinesHalf> = {}): MachinesHalf {
+  return {
+    wired: true,
+    view: { machines: [], links: [], blocked: null },
+    reading: false,
+    entry: { digits: '', busy: false, error: null, blocked: null },
+    open: null,
+    actions: NO_MACHINE_ACTIONS,
+    ...over,
+  }
+}
+
+/** A stand-in for the terminal, which needs a real machine on the other end. */
+const PANE = (
+  <div
+    style={{
+      flex: 1,
+      minHeight: '12rem',
+      display: 'grid',
+      placeItems: 'center',
+      color: 'var(--text-muted)',
+      fontFamily: 'var(--font-mono)',
+      fontSize: 12,
+    }}
+  >
+    the remote terminal mounts here
+  </div>
+)
 
 interface Scene {
   title: string
@@ -168,24 +247,101 @@ const SCENES: Scene[] = [
     props: { state: { ...BOTH, relay: null } },
   },
   {
-    title: 'A code, on the relay path',
-    note: 'the fingerprint is the check a person can make',
+    title: 'A code on screen',
+    note: 'six digits, and the fingerprint is the check a person can make',
     props: { state: BOTH, pairing: PAIRING, secondsLeft: 45 },
   },
   {
-    title: 'A code, on the tailnet path',
-    note: 'same token, re-pointed — no key travels, so no fingerprint to compare',
-    props: { state: BOTH, pairing: PAIRING, secondsLeft: 45, pairPath: 'direct' },
-  },
-  {
-    title: 'A code with only one way to send it',
-    note: 'no choice offered, because there is no choice',
+    title: 'A code on a machine with no tailnet',
+    note: 'the ordinary case: the relay is the whole answer',
     props: { state: RELAY_ONLY, pairing: PAIRING, secondsLeft: 45 },
   },
   {
     title: 'The code ran out',
-    note: '',
-    props: { state: BOTH, pairing: PAIRING, secondsLeft: 0 },
+    note: 'his words, and the button under them mints another',
+    props: { state: BOTH, pairing: { ...PAIRING, expiresAt: NOW - 1000 }, secondsLeft: 0 },
+  },
+  {
+    title: 'Half a code typed in',
+    note: 'the entry side: auto-advancing boxes, and Pair stays dead until it is whole',
+    props: {
+      state: BOTH,
+      machines: machines({ entry: { digits: '482', busy: false, error: null, blocked: null } }),
+    },
+  },
+  {
+    title: 'A code the far machine refused',
+    note: 'its own sentence, printed verbatim — a wrong code and an expired one read the same',
+    props: {
+      state: BOTH,
+      machines: machines({
+        entry: {
+          digits: '482913',
+          busy: false,
+          error:
+            'No machine is showing that code. Check the digits, and that the code on the other machine has not run out — they last a minute.',
+          blocked: null,
+        },
+      }),
+    },
+  },
+  {
+    title: 'Machines you can reach',
+    note: 'the other half of the section: what this desktop dials out to',
+    props: {
+      state: BOTH,
+      machines: machines({
+        view: { machines: [STUDIO], links: [STUDIO_LINK], blocked: null },
+      }),
+    },
+  },
+  {
+    title: 'A session open on another machine',
+    note: 'the terminal lives inside the section, under the machine it belongs to',
+    props: {
+      state: BOTH,
+      machines: machines({
+        view: { machines: [STUDIO], links: [STUDIO_LINK], blocked: null },
+        open: { machineId: 'MACHINE1', sessionId: 's1' },
+        pane: PANE,
+      }),
+    },
+  },
+  {
+    title: 'A machine waiting to be approved over there',
+    note: 'the one sentence the far machine writes for the wrong reader, rewritten',
+    props: {
+      state: BOTH,
+      machines: machines({
+        view: {
+          machines: [STUDIO],
+          links: [{ ...STUDIO_LINK, state: 'awaiting-approval', sessions: [] }],
+          blocked: null,
+        },
+      }),
+    },
+  },
+  {
+    title: 'The relay is down, so no code can be looked up',
+    note: 'the entry side goes quiet with the main process’s own reason',
+    props: {
+      state: NOTHING_UP,
+      machines: machines({
+        view: {
+          machines: [],
+          links: [],
+          blocked:
+            'This machine is not connected to the relay yet, so it cannot show or read a pairing code. Turn remote access on and wait for it to connect.',
+        },
+        entry: {
+          digits: '',
+          busy: false,
+          error: null,
+          blocked:
+            'This machine is not connected to the relay yet, so it cannot show or read a pairing code. Turn remote access on and wait for it to connect.',
+        },
+      }),
+    },
   },
   {
     title: 'Devices',
@@ -247,7 +403,7 @@ function Panel({ scene }: { scene: Scene }) {
               secondsLeft={null}
               busy={null}
               confirmEnable={false}
-              pairPath={null}
+              machines={machines()}
               actions={NOTHING}
               now={NOW}
               {...scene.props}

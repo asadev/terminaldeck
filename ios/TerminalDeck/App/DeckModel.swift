@@ -92,6 +92,18 @@ final class DeckModel {
     private(set) var pairingNotice: String?
     /// Set while a pairing code is being redeemed, so the button can say so.
     private(set) var isPairing = false
+    /**
+     * Set only while the *lookup* is in flight, and it is not the same thing as
+     * `isPairing`.
+     *
+     * `isPairing` covers the whole ceremony and is cleared by the transport when
+     * the connection settles, which is right for a spinner and wrong for a
+     * re-entrancy guard: a machine that never settles would leave `isPairing`
+     * true forever and refuse every later attempt to pair anything. This one is
+     * cleared the moment the rendezvous answers, so double-tapping Pair cannot
+     * start two lookups and typing a second code after a failure always works.
+     */
+    private var lookingUp = false
     /// A sentence about the collection rather than about one machine — a pairing
     /// that was refused, a record that could not be read.
     private(set) var collectionError: String?
@@ -99,6 +111,18 @@ final class DeckModel {
     private let credentials: CredentialStore
     private let device: DeviceDescriptor
     private let makeTransport: ((String, CredentialStore, DeviceDescriptor) -> Transport)?
+
+    /**
+     * Where six typed digits turn into an address.
+     *
+     * A closure rather than a `RendezvousLookup` so that a test — and the live
+     * harness — can answer from a fixture instead of opening a WebSocket to the
+     * public relay from whatever machine the suite runs on. It is the only seam
+     * this model has for the network, and it is worth being a plain function
+     * type: a protocol for one method would be three declarations for the same
+     * substitution.
+     */
+    private let lookup: @MainActor (String) async -> MachineOffer?
 
     /* ------------------------------------------------------------------ */
     /* Alerts                                                             */
@@ -225,9 +249,19 @@ final class DeckModel {
          device: DeviceDescriptor,
          gitHubAccounts: GitHubAccountStore? = nil,
          alerts: AlertPresenting? = nil,
+         lookup: (@MainActor (String) async -> MachineOffer?)? = nil,
          makeTransport: ((String, CredentialStore, DeviceDescriptor) -> Transport)? = nil) {
         self.credentials = credentials
         self.device = device
+        // Defaulted here rather than in the signature for the same reason
+        // `alerts` is: the real one dials a relay, and a default argument would
+        // put that in every test that only wanted to construct a model.
+        //
+        // A fresh `RendezvousLookup` per call, deliberately. It holds one
+        // socket's worth of state and nothing that outlives a lookup, so keeping
+        // one around would only be a way for a cancelled attempt's carrier to
+        // still be attached when the next one starts.
+        self.lookup = lookup ?? { code in await RendezvousLookup().find(code: code) }
         // Defaulted here rather than in the signature so a test can hand in a
         // recorder and never touch `UNUserNotificationCenter` — which in a
         // simulator would put a permission prompt in front of a test run.
@@ -381,7 +415,19 @@ final class DeckModel {
     /**
      * Redeem a pairing code, **adding** a machine.
      *
-     * The code's token is stored as the credential straight away, marked
+     * ## Two steps, because six digits carry no address
+     *
+     *  1. **The rendezvous.** `Rendezvous.swift` explains it at length: the code
+     *     names a slot at the relay, the machine showing the code is sitting in
+     *     it, and the channel is Noise IK against a responder key both ends
+     *     derive from the code. What comes back is an *address* and nothing else.
+     *  2. **The pairing itself.** With the address in hand this is the path this
+     *     app has always taken: dial the machine, run IK against its real key,
+     *     and say `hello` with the code as the token. The far end redeems it,
+     *     mints a credential, sends it back inside `welcome`, and then refuses
+     *     the connection because a human still has to approve the device.
+     *
+     * The code's own text is stored as the credential straight away, marked
      * `.pairing`. That looks odd — it is a secret that is about to be spent — and
      * it is what makes the flow survive the app being killed halfway through: the
      * reconnect uses it, the host answers with the durable credential, and
@@ -391,54 +437,85 @@ final class DeckModel {
      * Pairing with a machine already in the list replaces *that machine's* record
      * and nothing else — a re-pair after a revoke is a normal thing to do, and it
      * must not cost the user their other machines.
+     *
+     * ## Why this is `async` and why `isPairing` is set before the first await
+     *
+     * The lookup is a memory-hard derivation and a round trip to a relay: about a
+     * second between them, and every millisecond of it is a second where the only
+     * thing on screen is a button. `isPairing` drives the spinner on that button,
+     * so it goes up before the first suspension point rather than after it.
      */
     func pair(with rawCode: String) {
+        Task { await pairAsync(with: rawCode) }
+    }
+
+    func pairAsync(with rawCode: String) async {
         pairingNotice = nil
         collectionError = nil
+        // The *lookup*, not the pairing. See `lookingUp` for why the two are not
+        // the same flag.
+        guard !lookingUp else { return }
+
+        let code: String
         switch PairingCodeParser.parse(rawCode) {
         case let .failure(error):
             pairingNotice = error.detail
-        case let .success(code):
-            isPairing = true
-            /*
-             * The sheet closes here, not at the call site.
-             *
-             * Both ways in — the camera and the pasted link — end up on this
-             * line, and only this line knows the code actually parsed. Closing
-             * from the QR callback alone left the sheet up forever after a
-             * paste, with the button stuck on "Pairing…" over an app that had in
-             * fact paired: the machine was added, connected and invisible,
-             * because a modal was covering the list it had been added to.
-             */
-            addingHost = false
-            let hostId = code.endpoint.hostId
-            let existing = credentials.load(hostId)
-            let stored = StoredCredential(endpoint: code.endpoint,
-                                          token: code.token,
-                                          kind: .pairing,
-                                          deviceId: "",
-                                          deviceName: device.name,
-                                          pairedAt: existing?.pairedAt ?? Date(),
-                                          // A machine the user has already named
-                                          // keeps its name through a re-pair.
-                                          nickname: existing?.nickname)
-            credentials.save(stored)
+            return
+        case let .success(parsed):
+            code = parsed
+        }
 
-            if let link = hosts.first(where: { $0.id == hostId }) {
-                // Same machine, new token. Torn down and brought back up so the
-                // transport reads the credential that was just written rather
-                // than retrying with the one that was refused.
-                link.stop()
-                link.start()
-                select(hostId)
-            } else {
-                let link = adopt(stored)
-                link.start()
-                // The machine that was just paired is the one the user is looking
-                // at. Anything else would be a pairing that appears to do nothing.
-                currentHostId = hostId
-                UserDefaults.standard.set(hostId, forKey: Self.selectionKey)
-            }
+        lookingUp = true
+        isPairing = true
+        /*
+         * The sheet closes here, not at the call site.
+         *
+         * Every way in ends up on this line, and only this line knows the code
+         * parsed. Closing from the caller left the sheet up forever after a
+         * failure, with the button stuck on "Pairing…" over an app that had in
+         * fact paired: the machine was added, connected and invisible, because a
+         * modal was covering the list it had been added to.
+         */
+        addingHost = false
+
+        let found = await lookup(code)
+        lookingUp = false
+        guard let offer = found else {
+            isPairing = false
+            pairingNotice =
+                "No machine is showing that code. Check the digits, and that the code on the other " +
+                "machine has not run out — they last a minute."
+            return
+        }
+
+        let endpoint = offer.endpoint
+        let hostId = endpoint.hostId
+        let existing = credentials.load(hostId)
+        let stored = StoredCredential(endpoint: endpoint,
+                                      token: code,
+                                      kind: .pairing,
+                                      deviceId: "",
+                                      deviceName: device.name,
+                                      pairedAt: existing?.pairedAt ?? Date(),
+                                      // A machine the user has already named
+                                      // keeps its name through a re-pair.
+                                      nickname: existing?.nickname)
+        credentials.save(stored)
+
+        if let link = hosts.first(where: { $0.id == hostId }) {
+            // Same machine, new token. Torn down and brought back up so the
+            // transport reads the credential that was just written rather than
+            // retrying with the one that was refused.
+            link.stop()
+            link.start()
+            select(hostId)
+        } else {
+            let link = adopt(stored)
+            link.start()
+            // The machine that was just paired is the one the user is looking
+            // at. Anything else would be a pairing that appears to do nothing.
+            currentHostId = hostId
+            UserDefaults.standard.set(hostId, forKey: Self.selectionKey)
         }
     }
 
@@ -545,23 +622,26 @@ final class DeckModel {
     }
 
     /**
-     * `terminaldeck://session/<id>` and `terminaldeck://pair?…`.
+     * `terminaldeck://session/<id>`.
      *
      * A session link carries no machine, because the desktop that writes one has
      * no idea the phone is paired with anything else. So the machine is worked
      * out from the id: whichever paired host is currently listing that session.
      * Falling back to "the current one" would open the wrong machine's session
      * list and attach to an id it has never heard of.
+     *
+     * `terminaldeck://pair?…` used to arrive here too, from a QR code the camera
+     * had just read. It is gone: a link is a live pairing token in a string that
+     * any app registered for the scheme could be handed, and pairing is now six
+     * digits somebody types. The scheme itself stays, because a session link is a
+     * different feature and carries no secret — an id the desktop already knows
+     * the phone can see.
      */
     func open(_ url: URL) {
         guard url.scheme?.lowercased() == Brand.id else { return }
         let parts = ([url.host].compactMap { $0 } + url.pathComponents.filter { $0 != "/" })
         guard let first = parts.first?.lowercased() else { return }
 
-        if first == "pair" {
-            pair(with: url.absoluteString)
-            return
-        }
         guard first == "session", parts.count >= 2 else { return }
         let id = parts[1]
         let owner = hosts.first { $0.session(id) != nil }?.id

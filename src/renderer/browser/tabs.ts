@@ -31,6 +31,14 @@ export interface WorkspaceTab {
   canGoForward: boolean
   inspecting: boolean
   error: string | null
+  /**
+   * True while Chromium's own error document is what the native view holds.
+   *
+   * Not `error !== null`, which is a different question with the same-looking
+   * answer: a blocked pop-up sets a message over a page that is still perfectly
+   * readable. Only this one may hide the view and put the start page there.
+   */
+  failed: boolean
   /** 0 to 1, from the main process's load milestones. */
   progress: number
   recording: boolean
@@ -62,6 +70,7 @@ export function newTab(key: string, url = '', isolated = false): WorkspaceTab {
     canGoForward: false,
     inspecting: false,
     error: null,
+    failed: false,
     progress: 0,
     recording: false,
     draft: url,

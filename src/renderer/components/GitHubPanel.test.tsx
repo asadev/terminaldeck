@@ -1,21 +1,28 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  AccessNotice,
+  accessSummary,
   bridgeSilentState,
   ConnectionBar,
   ConnectPage,
+  consentWording,
   countLabel,
   DeviceCodeCard,
   FailureBlock,
+  filterRepos,
+  folderLine,
   formatAge,
   IssueRow,
   minutesLeft,
   missingScopeCost,
   openExternal,
   PullRow,
+  RepositoryList,
   repoFailed,
   reviewLabel,
   scopeBuys,
+  selectionSentence,
   showsAction,
   sourceSentence,
   type DeviceFlowPrompt,
@@ -23,7 +30,9 @@ import {
   type GitHubFailure,
   type Issue,
   type PullRequest,
+  type RepoAccessList,
   type RepoRef,
+  type RepoSummary,
 } from './GitHubPanel'
 
 /**
@@ -319,16 +328,24 @@ const CONNECTED: GitHubAuthState = {
     htmlUrl: 'https://github.com/asadev',
     avatarUrl: 'https://avatars.githubusercontent.com/u/1?v=4',
   },
+  // A token from a `gh auth login`, which still carries `read:org` even though
+  // this app stopped asking for it — that is what puts a scope under "Also
+  // granted" rather than under "Used here".
   scopes: ['repo', 'read:org', 'notifications'],
   scopesReported: true,
   missingScopes: [],
   ghInstalled: true,
   borrowedClient: true,
+  clientKind: 'oauth',
+  appConfigured: false,
+  installUrl: null,
   disconnect: 'Deletes the sign-in this app stored.',
   pending: null,
   failure: null,
   expiredCredentialRemoved: false,
   repo: null,
+  branch: null,
+  access: null,
 }
 
 const DISCONNECTED: GitHubAuthState = {
@@ -352,8 +369,10 @@ const PROMPT: DeviceFlowPrompt = {
   userCode: 'E874-5342',
   verificationUri: 'https://github.com/login/device',
   expiresAt: NOW + 14 * 60_000,
-  scopes: ['repo', 'read:org', 'notifications'],
+  scopes: ['repo', 'notifications'],
   borrowedClient: true,
+  clientKind: 'oauth',
+  installUrl: null,
 }
 
 const noop = () => {}
@@ -500,7 +519,7 @@ describe('DeviceCodeCard', () => {
     const html = render()
     expect(html).toContain('E874-5342')
     expect(html).toContain('https://github.com/login/device')
-    expect(html).toContain('repo, read:org, notifications')
+    expect(html).toContain('repo, notifications')
     expect(html).toContain('Cancel')
   })
 
@@ -650,5 +669,255 @@ describe('repoFailed', () => {
     expect(
       repoFailed({ ok: false, kind: 'no-remote', message: 'x', action: null, detail: '' }),
     ).toBe(true)
+  })
+})
+
+/* ----------------------------------------------------------- the folder -- */
+
+const FOLDER_REPO: RepoRef = {
+  host: 'github.com',
+  owner: 'asadev',
+  name: 'terminaldeck',
+  nameWithOwner: 'asadev/terminaldeck',
+  url: 'https://github.com/asadev/terminaldeck',
+  remote: 'origin',
+}
+
+describe('folderLine', () => {
+  it('names the repository and the branch as one fact', () => {
+    expect(folderLine(FOLDER_REPO, { name: 'main', detached: false, head: null })).toBe(
+      'asadev/terminaldeck · main',
+    )
+  })
+
+  /** A detached HEAD is not a branch, and calling it one would be wrong. */
+  it('says detached rather than inventing a branch name', () => {
+    expect(folderLine(FOLDER_REPO, { name: null, detached: true, head: 'a1b2c3d' })).toBe(
+      'asadev/terminaldeck · detached at a1b2c3d',
+    )
+    expect(folderLine(FOLDER_REPO, { name: null, detached: true, head: null })).toBe(
+      'asadev/terminaldeck · detached HEAD',
+    )
+  })
+
+  it('falls back to the repository alone when no branch was read', () => {
+    expect(folderLine(FOLDER_REPO, null)).toBe('asadev/terminaldeck')
+  })
+
+  /**
+   * The three local failures keep their own sentences here rather than
+   * collapsing into "no repository": `github.ts` spends a whole failure
+   * vocabulary telling them apart and this is where the user reads it.
+   */
+  it('passes the resolution’s own sentence through untouched', () => {
+    const failure: GitHubFailure = {
+      ok: false,
+      kind: 'not-a-repo',
+      message: 'This folder is not a git repository.',
+      action: 'git init',
+      detail: '',
+    }
+    expect(folderLine(failure, null)).toBe('This folder is not a git repository.')
+    expect(folderLine(null, null)).toBeNull()
+  })
+})
+
+/* ------------------------------------------------------ what it asks for -- */
+
+/**
+ * The block that exists because of a screenshot: GitHub's page said "Full
+ * control of private repositories" and there was no way to pick which ones.
+ * These assertions are about the words, because the words are the fix.
+ */
+describe('AccessNotice', () => {
+  const render = (state: GitHubAuthState) =>
+    renderToStaticMarkup(<AccessNotice state={state} />)
+
+  it('prints GitHub’s own wording before the button is pressed', () => {
+    expect(consentWording('repo')).toBe('Full control of private repositories')
+    const html = render(DISCONNECTED)
+    expect(html).toContain('Full control of private repositories')
+    expect(html).toContain('Access notifications')
+  })
+
+  /**
+   * Softening it would be worse than saying nothing — the user is thirty
+   * seconds from reading GitHub's own page. What the app owes them is the
+   * reason: GitHub offers no narrower scope, and the thing that would change
+   * it is a GitHub App registration this build does not have.
+   */
+  it('says why there is no repository picker, and what would give one', () => {
+    const html = render(DISCONNECTED)
+    expect(html).toContain('no narrower scope')
+    expect(html).toContain('GitHub App')
+    expect(html).toContain('does not have yet')
+  })
+
+  it('does not ask for anything this app stopped using', () => {
+    expect(render(DISCONNECTED)).not.toContain('read:org')
+  })
+
+  /** With a registration the sentence is the opposite one: you choose. */
+  it('promises a repository choice once a GitHub App is registered', () => {
+    const html = render({
+      ...DISCONNECTED,
+      clientKind: 'github-app',
+      appConfigured: true,
+      installUrl: 'https://github.com/apps/terminal-deck/installations/new',
+    })
+    expect(html).toContain('only select repositories')
+    expect(html).toContain('Choose repositories on GitHub')
+    expect(html).not.toContain('Full control of private repositories')
+  })
+})
+
+/* ---------------------------------------------------------- repositories -- */
+
+const REPOS: RepoSummary[] = [
+  {
+    owner: 'asadev',
+    name: 'terminaldeck',
+    nameWithOwner: 'asadev/terminaldeck',
+    url: 'https://github.com/asadev/terminaldeck',
+    private: false,
+    fork: false,
+    archived: false,
+    description: 'A desktop workspace for AI coding agents.',
+    language: 'TypeScript',
+    defaultBranch: 'main',
+    pushedAt: '2026-08-12T09:00:00Z',
+    canPush: true,
+  },
+  {
+    owner: 'asadev',
+    name: 'commander',
+    nameWithOwner: 'asadev/commander',
+    url: 'https://github.com/asadev/commander',
+    private: true,
+    fork: false,
+    archived: false,
+    description: 'Orchestrator workspace.',
+    language: 'PLpgSQL',
+    defaultBranch: 'main',
+    pushedAt: '2026-08-11T09:00:00Z',
+    canPush: true,
+  },
+]
+
+const ACCESS: RepoAccessList = {
+  ok: true,
+  repos: REPOS,
+  atLeast: 2,
+  truncated: false,
+  source: 'account',
+  selection: null,
+  rateRemaining: 4993,
+  fetchedAt: NOW,
+}
+
+describe('accessSummary', () => {
+  it('counts exactly when the whole list is here', () => {
+    expect(accessSummary(ACCESS)).toBe('2 repositories')
+    expect(accessSummary({ ...ACCESS, repos: [REPOS[0]], atLeast: 1 })).toBe('1 repository')
+  })
+
+  /**
+   * The regression this is written against is the same one `countLabel` guards
+   * on the tabs: a bare "100" for an account with five hundred repositories is
+   * a specific wrong number that looks exactly like a right one.
+   */
+  it('never prints a bare count for a list it knows is cut off', () => {
+    const summary = accessSummary({ ...ACCESS, truncated: true, atLeast: 401 })
+    expect(summary).toContain('401+')
+    expect(summary).toContain('most recently pushed')
+  })
+})
+
+describe('selectionSentence', () => {
+  /** An OAuth `repo` scope leaves no choice, so describing one would be a lie. */
+  it('says nothing about selection for an account-wide token', () => {
+    expect(selectionSentence(ACCESS)).toBeNull()
+  })
+
+  it('tells the two GitHub App installations apart', () => {
+    const installed = { ...ACCESS, source: 'installation' as const }
+    expect(selectionSentence({ ...installed, selection: 'all' })).toContain('all your repositories')
+    expect(selectionSentence({ ...installed, selection: 'selected' })).toContain('you selected')
+  })
+})
+
+describe('filterRepos', () => {
+  it('matches the name and the description, case-insensitively', () => {
+    expect(filterRepos(REPOS, 'DECK').map((repo) => repo.name)).toEqual(['terminaldeck'])
+    expect(filterRepos(REPOS, 'orchestrator').map((repo) => repo.name)).toEqual(['commander'])
+    expect(filterRepos(REPOS, '')).toHaveLength(2)
+    expect(filterRepos(REPOS, '   ')).toHaveLength(2)
+  })
+})
+
+describe('RepositoryList', () => {
+  const render = (access: RepoAccessList | GitHubFailure | null, query = '', current: string | null = null) =>
+    renderToStaticMarkup(
+      <RepositoryList
+        access={access}
+        query={query}
+        onQuery={() => {}}
+        current={current}
+        installUrl={null}
+        onRetry={() => {}}
+        now={NOW}
+      />,
+    )
+
+  it('lists the repositories the sign-in can reach', () => {
+    const html = render(ACCESS)
+    expect(html).toContain('asadev/terminaldeck')
+    expect(html).toContain('asadev/commander')
+    expect(html).toContain('TypeScript')
+    expect(html).toContain('2 repositories')
+  })
+
+  /** Private and public are the one distinction worth a badge in this list. */
+  it('marks which repositories are private', () => {
+    const html = render(ACCESS)
+    expect(html).toContain('>private<')
+    expect(html).toContain('>public<')
+  })
+
+  it('marks the repository of the folder that is open', () => {
+    const html = render(ACCESS, '', 'asadev/commander')
+    expect(html).toContain('data-current="true"')
+    expect(html).toContain('this folder')
+  })
+
+  /**
+   * A filter over a truncated page must say so. "No matches" for a repository
+   * that exists — because it is on page four — is the kind of wrong answer that
+   * looks like a right one.
+   */
+  it('admits that a filter only searched the page it has', () => {
+    const html = render({ ...ACCESS, truncated: true, atLeast: 401 }, 'nothing-matches-this')
+    expect(html).toContain('in the page loaded here')
+  })
+
+  it('renders a failed listing as a failure, not as an empty list', () => {
+    const html = render({
+      ok: false,
+      kind: 'rate-limited',
+      message: 'GitHub’s API rate limit is exhausted.',
+      action: null,
+      detail: '',
+    })
+    expect(html).toContain('GitHub rate limit reached')
+    expect(html).toContain('Retry')
+  })
+
+  /**
+   * Signed in, and genuinely nothing to see. It is a real state — a brand new
+   * account, or a GitHub App installed on nothing — and it gets a sentence
+   * rather than a blank column.
+   */
+  it('explains an empty list instead of showing a blank page', () => {
+    expect(render({ ...ACCESS, repos: [], atLeast: 0 })).toContain('cannot reach any repositories')
   })
 })

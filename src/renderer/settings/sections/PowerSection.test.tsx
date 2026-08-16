@@ -39,6 +39,7 @@ const HELD: LidAwakeState = {
   battery: { present: true, discharging: false, percent: 100 },
   detail: null,
   warning: null,
+  idleBlocked: true,
 }
 
 function render(props: Partial<Parameters<typeof PowerView>[0]> = {}): string {
@@ -72,6 +73,14 @@ describe('toLidAwakeState', () => {
     }
     expect(toLidAwakeState(null)).toBeNull()
     expect(toLidAwakeState('nonsense')).toBeNull()
+  })
+
+  it('claims no wake lock a build did not send one for', () => {
+    // Same pessimism, on the field added when the wake lock was decoupled from
+    // the privileged setting: an older main process that has never heard of
+    // `idleBlocked` must draw no promise, not a promise it cannot keep.
+    expect(toLidAwakeState({ supported: true, on: true, known: true })?.idleBlocked).toBe(false)
+    expect(toLidAwakeState({ idleBlocked: 'yes' })?.idleBlocked).toBe(false)
   })
 })
 
@@ -316,5 +325,54 @@ describe('the Power pane', () => {
     const html = render({ unwired: true, state: null })
     expect(html).toContain('disabled=""')
     expect(html).toContain('no way to read or change that setting')
+  })
+
+  /*
+   * The wake lock, said out loud.
+   *
+   * These pin the reported fault at the layer a person actually meets it. The
+   * app now holds an idle-sleep block whatever the privileged switch says, and
+   * a screen that knew only about the switch had to imply the opposite — an off
+   * switch reading as "nothing is protecting the session I left running". That
+   * implication was true of the old behaviour, which is exactly why removing it
+   * needs an assertion rather than a good intention.
+   */
+  describe('the app’s own wake lock', () => {
+    it('says what it is doing while the privileged switch is off', () => {
+      const html = render({ state: { ...HELD, on: false, preexisting: false } })
+      expect(html).toMatch(/will not fall asleep on its own/i)
+      expect(html).toMatch(/closing the lid or choosing sleep still does/i)
+    })
+
+    it('promises nothing when no lock is held', () => {
+      const html = render({ state: { ...HELD, idleBlocked: false } })
+      expect(html).not.toMatch(/will not fall asleep on its own/i)
+    })
+
+    it('still says it on a platform where the lid switch itself is not offered', () => {
+      /*
+       * The case that matters most for the report, and the one that would be
+       * lost by putting this line inside the `unavailable` guard. Asad's own
+       * Windows PC is a desktop: `powercfg /query SCHEME_CURRENT SUB_BUTTONS
+       * LIDACTION` prints a scheme header and no setting block at all there —
+       * checked on DESKTOP-DDGMNCV over SSH — so the pane reports the machine
+       * as unsupported and offers no switch. The wake lock is this app's own
+       * and needs no platform support, so that machine is precisely the one
+       * that should still hear about it.
+       */
+      const html = render({
+        state: { ...HELD, supported: false, on: false, detail: 'This machine reports no lid-close action.' },
+      })
+      expect(html).toContain('This machine reports no lid-close action.')
+      expect(html).toMatch(/will not fall asleep on its own/i)
+    })
+
+    it('does not name a lid on a machine that has none', () => {
+      const html = render({
+        state: { ...HELD, battery: { present: false, discharging: false, percent: null } },
+      })
+      expect(html).toMatch(/will not fall asleep on its own/i)
+      expect(html).not.toMatch(/closing the lid/i)
+    })
   })
 })

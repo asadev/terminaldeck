@@ -4,7 +4,10 @@ import { sectionMeta } from '../settings-schema'
 import type { SectionProps } from '../settings-bridge'
 import {
   accountsBridge,
+  normalizeAccountName,
+  renameAccount,
   useAccounts,
+  MAX_ACCOUNT_NAME_LENGTH,
   type AccountView,
   type AccountsSnapshot,
   type AccountsBridge,
@@ -42,7 +45,13 @@ import {
  * than leaving a person to discover it.
  */
 
-const MAX_NAME_LENGTH = 60
+/**
+ * The cap, and the trim-and-compare behind a rename, both live in `accounts.ts`
+ * now. The account chip inside a session renames too (NEXT-UPDATE item 2), and
+ * a rename that behaves differently depending on which of the two you reached
+ * for is worse than one of them not existing.
+ */
+const MAX_NAME_LENGTH = MAX_ACCOUNT_NAME_LENGTH
 
 /* ----------------------------------------------------------------- view -- */
 
@@ -149,9 +158,9 @@ export function AccountsView({
                     className="settings-inline-form"
                     onSubmit={(event) => {
                       event.preventDefault()
-                      const name = editing.name.trim()
+                      const name = normalizeAccountName(editing.name, account.name)
                       setRenaming(null)
-                      if (name && name !== account.name) onRename(account, name)
+                      if (name !== null) onRename(account, name)
                     }}
                   >
                     <input
@@ -353,9 +362,17 @@ export function AccountsSection({ startSession }: SectionProps) {
       onSignIn={startSession ? (account) => startSession({ profileId: account.id }) : null}
       onCheck={() => accounts.check(true)}
       onCreate={(name) => run(bridge?.createProfile?.(name), 'Could not add that account.')}
-      onRename={(account, name) =>
-        run(bridge?.renameProfile?.(account.id, name), 'Could not rename that account.')
-      }
+      /* Through `renameAccount` rather than straight at the bridge, so this
+         screen and the account chip inside a session are the same rename. */
+      onRename={(account, name) => {
+        setBusy(true)
+        setFailure(null)
+        void renameAccount(bridge, account, name).then((problem) => {
+          setBusy(false)
+          if (problem) setFailure(problem)
+          else accounts.reload()
+        })
+      }}
       onRemove={(account) =>
         run(bridge?.deleteProfile?.(account.id), 'Could not remove that account.')
       }

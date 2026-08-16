@@ -181,10 +181,22 @@ export function providersFor(
       resumeArgs: ['--continue'],
       spawn: launch('claude', [], ['--continue']),
     },
-    // UNVERIFIED: codex/gemini --help block on stdin so the flags could not be
-    // confirmed here. An empty resumeArgs simply starts a fresh session, so a
-    // wrong guess would silently do the wrong thing — codex is left in because
-    // `resume --last` is documented, gemini is left empty until confirmed.
+    /*
+     * Confirmed against the installed CLI's own `--help` on 2026-08-16
+     * (`codex-cli 0.146.0-alpha.3.1`):
+     *
+     *   resume  Resume a previous interactive session (picker by default;
+     *           use --last to continue the most recent)
+     *
+     * The note that used to be here said codex's `--help` "blocks on stdin so
+     * the flags could not be confirmed", and that was true of the npm-installed
+     * launcher on this Mac — its native binary is missing from the package
+     * (`vendor/aarch64-apple-darwin/path/` holds `rg` and nothing else), so
+     * every invocation throws ENOENT before printing anything. A working copy
+     * of the same CLI is on this machine and answers normally. The distinction
+     * matters beyond this comment: the same broken launcher is why Codex was
+     * refused an account mechanism it has always had. See `provider-accounts.ts`.
+     */
     codex: {
       id: 'codex',
       label: 'Codex CLI',
@@ -193,6 +205,24 @@ export function providersFor(
       resumeArgs: ['resume', '--last'],
       spawn: launch('codex', [], ['resume', '--last']),
     },
+    /*
+     * Gemini's resume flag exists and is still not used here, which is a
+     * deliberate gap rather than an unanswered question.
+     *
+     * `gemini --help` (0.32.1, installed) documents it:
+     *
+     *   -r, --resume  Resume a previous session. Use "latest" for most recent
+     *                 or index number (e.g. --resume 5)
+     *
+     * What could not be exercised is the case that decides whether it is safe:
+     * `--resume latest` in a folder with no previous session. This machine has
+     * no Gemini login, so the CLI refuses before it reaches its session code
+     * ("Please set an Auth method in your .../settings.json"), and a resume flag
+     * that turns out to error on an empty history would kill the tab with no
+     * explanation — which is worse than the current behaviour, where the resume
+     * option is simply not offered. `ProviderPicker`'s `canResume` says the same
+     * thing, so nothing on screen promises it either.
+     */
     gemini: {
       id: 'gemini',
       label: 'Gemini CLI',

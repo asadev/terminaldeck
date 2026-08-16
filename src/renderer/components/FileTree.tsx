@@ -23,24 +23,41 @@ export interface FsEntry {
   symlink: boolean
   /** Refused: a link out of the project, a loop, a broken link or a device. */
   blocked: boolean
+  /** Only when the level was listed `withStats` — the root level is. */
+  modifiedAt?: number
+  bytes?: number
 }
 
 export interface DirListing {
   relPath: string
   entries: FsEntry[]
   truncated: boolean
+  /**
+   * The file this level would open first, chosen in `src/main/fs-tree.ts`.
+   * Present on the root listing only, because that is the only level this tree
+   * asks for stats on. Never re-derived here — see `pickDefaultFile`.
+   */
+  defaultFile?: string | null
 }
 
 interface FsBridge {
-  listDir(root: string, relDir: string, options?: { showIgnored?: boolean }): Promise<DirListing>
+  listDir(
+    root: string,
+    relDir: string,
+    options?: { showIgnored?: boolean; withStats?: boolean },
+  ): Promise<DirListing>
 }
 
-function listDir(root: string, relDir: string, showIgnored: boolean): Promise<DirListing> {
+function listDir(
+  root: string,
+  relDir: string,
+  options: { showIgnored: boolean; withStats: boolean },
+): Promise<DirListing> {
   const api = (window as unknown as { deck?: Partial<FsBridge> }).deck
   if (!api?.listDir) {
     return Promise.reject(new Error('preload bridge is missing terminaldeck.listDir'))
   }
-  return api.listDir(root, relDir, { showIgnored })
+  return api.listDir(root, relDir, options)
 }
 
 /** Electron wraps IPC rejections; the prefix is noise in a tree row. */
@@ -54,6 +71,35 @@ const ROOT = ''
 function parentOf(relPath: string): string {
   const cut = relPath.lastIndexOf('/')
   return cut === -1 ? ROOT : relPath.slice(0, cut)
+}
+
+/**
+ * May this listing open a file on the reader's behalf?
+ *
+ * A named rule rather than three conditions inside a callback, because all
+ * three exist to stop the same thing — the tree taking the selection away from
+ * somebody who is using it — and each one is a bug if it goes missing:
+ *
+ *  - **root only.** Expanding `src/` must not jump the viewer to `src/index.ts`.
+ *  - **nothing open.** Arriving at Files from Source control, with a changed
+ *    file already open, must show that file and not the README.
+ *  - **once per project.** The listing is re-fetched when an ignore file is
+ *    edited or `showIgnored` is toggled, and each of those would otherwise drag
+ *    the reader back to the README from whatever they had opened.
+ */
+export function shouldAutoOpen(params: {
+  autoSelect: boolean
+  /** The directory that was just listed. */
+  dir: string
+  root: string
+  /** The root this tree has already opened a file for, if any. */
+  openedFor: string | null
+  selected: string | null | undefined
+}): boolean {
+  if (!params.autoSelect) return false
+  if (params.dir !== ROOT) return false
+  if (params.openedFor === params.root) return false
+  return !params.selected
 }
 
 /* --------------------------------------------------------------- state -- */
@@ -202,6 +248,14 @@ interface Props {
   onSelect?(entry: FsEntry): void
   /** Show entries the ignore files hide. node_modules and .git stay hidden. */
   showIgnored?: boolean
+  /**
+   * Open a file by itself when the tree first lands and nothing is selected.
+   *
+   * On by default, and the reason this page stopped opening on an instruction.
+   * Off is for a tree used as a picker inside a dialog, where choosing
+   * something on the user's behalf would answer a question they were asked.
+   */
+  autoSelect?: boolean
   className?: string
 }
 
@@ -214,7 +268,14 @@ interface Props {
  * with real DOM focus would fight the roving-tabindex expectations of a tree
  * and steal focus from the terminal on every arrow key.
  */
-export function FileTree({ root, selected, onSelect, showIgnored = false, className }: Props) {
+export function FileTree({
+  root,
+  selected,
+  onSelect,
+  showIgnored = false,
+  autoSelect = true,
+  className,
+}: Props) {
   const [state, dispatch] = useReducer(reducer, EMPTY)
   const listRef = useRef<HTMLDivElement>(null)
   const baseId = useId()
@@ -223,18 +284,64 @@ export function FileTree({ root, selected, onSelect, showIgnored = false, classN
   // cannot overwrite the new one.
   const genRef = useRef(0)
 
+  /*
+   * Read through refs inside `load`, never closed over.
+   *
+   * `onSelect` is an inline arrow at every call site, so depending on it would
+   * rebuild `load` on every render of the parent and re-fetch the whole root
+   * listing with it. `selected` changes the moment the auto-selection lands,
+   * which would do the same thing and then immediately auto-select again.
+   */
+  const onSelectRef = useRef(onSelect)
+  onSelectRef.current = onSelect
+  const selectedRef = useRef(selected)
+  selectedRef.current = selected
+  /** The root this tree has already opened a file for. Once per project. */
+  const openedFor = useRef<string | null>(null)
+
   const load = useCallback(
     async (dir: string) => {
       const gen = genRef.current
       dispatch({ type: 'load-start', dir })
       try {
-        const listing = await listDir(root, dir, showIgnored)
-        if (genRef.current === gen) dispatch({ type: 'load-ok', dir, listing })
+        // Stats on the root level only. They cost a `stat` per row, they are
+        // what `defaultFile` is decided from, and no other level needs them.
+        const listing = await listDir(root, dir, { showIgnored, withStats: dir === ROOT })
+        if (genRef.current !== gen) return
+        dispatch({ type: 'load-ok', dir, listing })
+
+        /*
+         * Open something.
+         *
+         * The Files page was reported as showing nothing: the tree was there,
+         * and the whole right-hand pane said "pick something from the tree and
+         * it opens here". A file browser that has read the folder already
+         * knows what to show — `pickDefaultFile` in `src/main/fs-tree.ts`
+         * chooses it, and `shouldAutoOpen` above says when this is allowed to.
+         */
+        if (
+          !shouldAutoOpen({
+            autoSelect,
+            dir,
+            root,
+            openedFor: openedFor.current,
+            selected: selectedRef.current,
+          })
+        ) {
+          return
+        }
+        openedFor.current = root
+        const first = listing.defaultFile
+          ? listing.entries.find((entry) => entry.relPath === listing.defaultFile)
+          : undefined
+        if (!first) return
+        dispatch({ type: 'focus', relPath: first.relPath })
+        onSelectRef.current?.(first)
       } catch (err) {
         if (genRef.current === gen) dispatch({ type: 'load-fail', dir, message: messageOf(err) })
       }
     },
-    [root, showIgnored],
+    [root, showIgnored, autoSelect],
   )
 
   useEffect(() => {

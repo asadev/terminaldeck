@@ -139,12 +139,17 @@ function base32(bytes: Buffer, length: number): string {
  * The public name of a host, derived from a secret only that host holds.
  *
  * The Mac invents a random 32-byte secret on first run; its public name is
- * `BASE32(SHA-256(secret))`, which is what goes in the pairing QR. Claiming the
- * name at the relay means presenting the secret — a preimage nobody else can
- * produce — so an attacker who photographs a QR code learns a name they cannot
- * impersonate, and the relay stores neither value.
+ * `BASE32(SHA-256(secret))`. Claiming the name at the relay means presenting the
+ * secret — a preimage nobody else can produce — so learning a host id gets an
+ * attacker a name they cannot impersonate, and the relay stores neither value.
  *
  * 26 characters is 130 bits, which is not a number anyone enumerates.
+ *
+ * A plain hash is right *here* and would be catastrophic one layer up. This
+ * secret is 32 random bytes, so there is nothing to search. The rendezvous slot
+ * a pairing code names is the same function applied to a secret derived from six
+ * digits, and that derivation is scrypt precisely because the input is a
+ * million-wide space — see `main/remote/machines/rendezvous.ts`.
  */
 export function hostIdFor(hostSecret: Buffer): string {
   return base32(createHash('sha256').update(hostSecret).digest(), 26)

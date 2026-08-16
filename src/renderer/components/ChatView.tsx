@@ -7,6 +7,7 @@ import { UsageStrip, useTranscriptChanges } from '../chat/usage'
 import { useFeatures } from '../features/FeaturesProvider'
 import { useEvery } from '../schedule'
 import { useSessionTranscript, type SessionScope } from '../session-transcript'
+import { useAgentPresence } from '../shell/agent-presence'
 import type { ProviderId } from '@shared/types'
 import './ChatView.css'
 
@@ -253,6 +254,9 @@ function resolveBridge(): ChatBridge | null {
 /** How close to the bottom still counts as "following along". */
 const STICK_PX = 72
 
+/** The floor between two re-attributions. See `onTranscriptChange`. */
+const REATTRIBUTE_MS = 3000
+
 /* ---------------------------------------------------------------- one bubble */
 
 export function ChatBubble({ message, heading }: { message: ChatMessage; heading: string | null }) {
@@ -282,12 +286,46 @@ export function ChatBubble({ message, heading }: { message: ChatMessage; heading
   )
 }
 
+/**
+ * The conversation, and nothing else.
+ *
+ * A component of its own so the rule below is a thing a test can hold: **the
+ * last element in the column is the last message**. There used to be a line of
+ * explanatory prose stapled underneath it —
+ *
+ *   > "at the end of the chat we have some kind of sentence which should not be
+ *   > there ... there should be only last message whoever has said, no great
+ *   > line under there"
+ *
+ * — and it was wrong for a reason worth writing down rather than just deleting.
+ * It was a caption about the *pane* ("read from the session transcript, prompts
+ * and replies only") positioned at the *end of the conversation*, so it moved
+ * with the newest message and sat exactly where the eye lands after the agent
+ * finishes talking. A caption belongs where the thing it describes begins, or in
+ * a state where the conversation is not what the reader is looking at; the empty
+ * states above already say the same thing at the moment it is useful.
+ */
+export function ChatColumn({ messages }: { messages: readonly ChatMessage[] }) {
+  return (
+    <div className="cv-column">
+      {messages.map((message, i) => (
+        <ChatBubble
+          key={message.id}
+          message={message}
+          heading={dayBreak(message.at, i > 0 ? messages[i - 1].at : 0)}
+        />
+      ))}
+    </div>
+  )
+}
+
 /* ------------------------------------------------------------ empty states -- */
 
 export type ChatEmptyState =
   | 'loading'
   | 'no-transcript'
   | 'no-session-transcript'
+  | 'ambiguous'
   | 'silent'
   | 'no-project'
   | 'unwired'
@@ -312,6 +350,25 @@ export function ChatEmpty({ state }: { state: ChatEmptyState }) {
       title: 'Nothing from this session yet',
       detail:
         'Claude Code writes a transcript once a session makes its first request. Send a first message in the terminal and it will appear here.',
+    },
+    /*
+     * The one state that is an admission rather than a wait.
+     *
+     * Several conversations in this folder began after this session did, and
+     * more than one open session could have written each of them. A transcript
+     * records the folder, the branch, the CLI version and its own id, and
+     * nothing at all about the terminal that produced it — checked against the
+     * real files, not assumed — so there is no tie-break to reach for.
+     *
+     * Showing one of them anyway is what this whole item is about: a chat pane
+     * confidently rendering the session next door's words under this session's
+     * name. The terminal is exact, and it is one click away, so that is what
+     * this points at.
+     */
+    ambiguous: {
+      title: 'Cannot tell which conversation is this session’s',
+      detail:
+        'More than one session is open in this folder, and Claude Code does not record which terminal wrote which conversation — so showing one here would be a guess. The terminal view is exact. Running the second session in its own folder keeps them apart.',
     },
     silent: {
       title: 'Nothing said yet',
@@ -347,6 +404,8 @@ interface LiveSession {
   id: string
   cwd: string
   exitCode: number | null
+  /** When this tab's process started. What `SessionScope.startedAt` is. */
+  createdAt: number
 }
 
 /**
@@ -372,23 +431,15 @@ interface SessionEvents {
 const RESOLVE_COALESCE_MS = 250
 
 /**
- * The id of the pty this conversation is a view of.
+ * Every session this app has in `cwd` — live or exited.
  *
- * `sessionId` is the authority whenever a caller knows it. `App` does not pass
- * it — it renders this view straight from a session record and threads only the
- * project path — so without a fallback the control row underneath spends its
- * whole life telling someone who has a session open to open a session, and
- * nothing under it can be changed. That is the "renders but does nothing"
- * failure, arrived at through a missing prop rather than a missing handler.
- *
- * So the id is resolved by asking the main process which sessions are live and
- * taking the one whose cwd is this project. Exactly one match counts: two
- * sessions in the same folder are two different terminals, and a slash command
- * typed into the wrong one is a real change made in the wrong place. Ambiguity
- * therefore resolves to "no id", and the row disables itself and says so.
- *
- * Not derived from the transcript's own `sessionId`, which is the agent's id
- * for the conversation and means nothing to the pty registry.
+ * Two things read it, and the second is why it is a list rather than the single
+ * id it used to be. `liveSessionIdOf` needs the one live session to type into.
+ * `siblingStarts` needs *all* of them, because a conversation in this folder can
+ * only be attributed to this session when no other session could have written
+ * it — the whole of item 3. The old version returned early whenever the caller
+ * had already been given a session id, which is always, so the list it would
+ * have needed for that was never even fetched.
  *
  * ## Why this does not poll
  *
@@ -399,12 +450,12 @@ const RESOLVE_COALESCE_MS = 250
  * hook has not seen before. Ids already accounted for are ignored, so the
  * constant output of the session in front of the user costs nothing here.
  */
-function useLiveSessionId(cwd: string | null, provided: string | undefined): string | undefined {
-  const [found, setFound] = useState<string | undefined>(undefined)
+function useFolderSessions(cwd: string | null): readonly LiveSession[] {
+  const [sessions, setSessions] = useState<readonly LiveSession[]>([])
 
   useEffect(() => {
-    if (provided || !cwd) {
-      setFound(undefined)
+    if (!cwd) {
+      setSessions([])
       return
     }
     // `globalThis`, not `window`: this component is rendered to a string in its
@@ -430,12 +481,9 @@ function useLiveSessionId(cwd: string | null, provided: string | undefined): str
       try {
         const answer = await deck.listSessions?.()
         if (!alive || !Array.isArray(answer)) return
-        const sessions = (answer as LiveSession[]).filter((session) => session != null)
-        for (const session of sessions) known.add(session.id)
-        const live = sessions.filter(
-          (session) => session.cwd === cwd && session.exitCode === null,
-        )
-        setFound(live.length === 1 ? live[0].id : undefined)
+        const all = (answer as LiveSession[]).filter((session) => session != null)
+        for (const session of all) known.add(session.id)
+        setSessions(all.filter((session) => session.cwd === cwd))
       } catch {
         // Leave it unresolved; the row says "not running" rather than guessing.
       }
@@ -472,9 +520,93 @@ function useLiveSessionId(cwd: string | null, provided: string | undefined): str
       offStatus?.()
       offExit?.()
     }
-  }, [cwd, provided])
+  }, [cwd])
 
-  return provided ?? found
+  return sessions
+}
+
+/**
+ * The id of the pty this conversation is a view of.
+ *
+ * `sessionId` is the authority whenever a caller knows it. Without a fallback
+ * the control row underneath would spend its whole life telling someone who has
+ * a session open to open a session. Exactly one live session in the folder
+ * counts: two sessions in the same folder are two different terminals, and a
+ * slash command typed into the wrong one is a real change made in the wrong
+ * place. Ambiguity resolves to "no id", and the row disables itself and says so.
+ *
+ * Not derived from the transcript's own `sessionId`, which is the agent's id
+ * for the conversation and means nothing to the pty registry.
+ */
+function liveSessionIdOf(sessions: readonly LiveSession[], provided: string | undefined): string | undefined {
+  if (provided) return provided
+  const live = sessions.filter((session) => session.exitCode === null)
+  return live.length === 1 ? live[0].id : undefined
+}
+
+/**
+ * The start times of the *other* sessions in this folder.
+ *
+ * Handed to `useSessionTranscript`, which cannot attribute a conversation
+ * without them — see the note at the top of `session-transcript.ts`. Exited
+ * sessions are included on purpose: the process is gone but its transcript is
+ * still lying in the directory, and it is still not this session's.
+ *
+ * Compared by *time*, not by id, because that is what the attribution uses. A
+ * session with the same start time as this one is indistinguishable from it
+ * anyway, so excluding by id and excluding by time come to the same answer,
+ * and the caller does not always know its own id.
+ */
+/**
+ * What is running in a session, as opposed to what this app launched into it.
+ *
+ * Only one case differs, and it exists because Run Claude does (NEXT-UPDATE
+ * item 1): a session spawned as `$SHELL -l` with an agent now in front of it.
+ * `provider` still says `shell` — it is a record of the spawn and it is not
+ * wrong — but every piece of copy keyed off it would be. The pane would go on
+ * telling a reader with a live conversation in front of them that "a shell just
+ * runs what you type, so there is nothing here to read".
+ *
+ * The answer is `undefined`, not `'claude'`. `undefined` already means "not
+ * known" everywhere this is passed, and not known is the truth: somebody typed
+ * a CLI into a terminal and this app never saw which one. Naming Claude here
+ * would be a guess that reads as a fact, and `codex` is one keystroke away from
+ * being the thing actually running.
+ *
+ * Anything other than a shell is returned untouched, including `undefined`.
+ */
+export function runningProvider(
+  provider: ProviderId | undefined,
+  agentRunning: boolean | null,
+): ProviderId | undefined {
+  if (provider === 'shell' && agentRunning === true) return undefined
+  return provider
+}
+
+/**
+ * Whether the named session's process is gone.
+ *
+ * Absent from the list is treated as *not* exited: a list that has not arrived
+ * yet, or a session belonging to another window, is not evidence of a death,
+ * and reading it as one would withdraw a live session's controls.
+ */
+function exitedIn(sessions: readonly LiveSession[], id: string): boolean {
+  const found = sessions.find((session) => session.id === id)
+  return found ? found.exitCode !== null : false
+}
+
+function siblingStarts(sessions: readonly LiveSession[], self: number | null): number[] {
+  const starts: number[] = []
+  let skippedSelf = self === null
+  for (const session of sessions) {
+    if (typeof session.createdAt !== 'number') continue
+    if (!skippedSelf && session.createdAt === self) {
+      skippedSelf = true
+      continue
+    }
+    starts.push(session.createdAt)
+  }
+  return starts.sort((a, b) => a - b)
 }
 
 /* ---------------------------------------------------------------- the view -- */
@@ -491,14 +623,40 @@ export function ChatView({
 }: ChatViewProps) {
   const resolved = bridge ?? resolveBridge()
   const features = useFeatures()
-  const liveSessionId = useLiveSessionId(cwd, sessionId)
+  const folderSessions = useFolderSessions(cwd)
+  const liveSessionId = liveSessionIdOf(folderSessions, sessionId)
+
+  /**
+   * What is actually running in the session, as opposed to what was launched.
+   *
+   * `undefined` where an agent is running in a session this app started as a
+   * shell — that is `AgentControls`' own word for "not known", and it is the
+   * truth: somebody typed a CLI into a terminal and the app never saw which
+   * one. The row then draws its pickers with the agent wording, which is right,
+   * instead of withdrawing them because the *pty* is a shell.
+   */
+  const presence = useAgentPresence(
+    sessionId && provider ? { id: sessionId, provider, exited: exitedIn(folderSessions, sessionId) } : null,
+  )
+  const effectiveProvider = runningProvider(provider, presence.running)
   // Scoped to the session when there is one. An explicit path always wins.
   const scoped = session != null && !transcriptPath
-  const lookup = useSessionTranscript(scoped ? cwd : null, session ?? null)
+  /**
+   * Bumped whenever a transcript in this folder is written to, so the
+   * attribution below re-runs then rather than on its own slow backstop timer.
+   * The subscription itself is set up further down, once `tail` exists; this is
+   * only the counter it feeds.
+   */
+  const [transcriptRevision, setTranscriptRevision] = useState(0)
+  const lookup = useSessionTranscript(scoped ? cwd : null, session ?? null, {
+    // Without these, two tabs on one project both resolve to whichever
+    // conversation started first — the bug in item 3 of NEXT-UPDATE.md.
+    others: siblingStarts(folderSessions, session?.startedAt ?? null),
+    revision: transcriptRevision,
+  })
   const ownPath = lookup.status === 'ready' ? lookup.choice.path : null
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [found, setFound] = useState<boolean | null>(null)
-  const [path, setPath] = useState('')
   const [behind, setBehind] = useState(false)
 
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -540,7 +698,6 @@ export function ChatView({
   const apply = useCallback((update: ChatUpdate | null): boolean => {
     if (!update || typeof update !== 'object' || !Array.isArray(update.messages)) return false
     setFound(update.found)
-    setPath(update.transcriptPath)
     pathRef.current = update.transcriptPath
     setMessages((current) =>
       update.reset ? [...update.messages] : mergeMessages(current, update.messages),
@@ -606,8 +763,36 @@ export function ChatView({
    * project's transcript directory and pushes on every append, so riding it
    * costs nothing while the agent is quiet and arrives within its 300 ms
    * debounce while it is talking.
+   *
+   * Two things ride it now. Tailing the bound file is the original job. The
+   * second is telling the attribution to look again: a session that runs
+   * `/clear` starts a *new* file in the same directory, and that push is the
+   * first moment anything can know. Subscribed whenever there is a folder —
+   * not only once a transcript is bound — because the case that needs it most
+   * is the pane that has not managed to bind one yet.
    */
-  const watched = useTranscriptChanges(key === '' ? null : cwd, tail)
+  /**
+   * The last time the *attribution* was nudged, as opposed to the file tailed.
+   *
+   * Tailing on every push is the point of the push. Re-attributing is not: it
+   * is a directory listing plus a stat per transcript, and a project this app
+   * has been used on for a week has hundreds of them — so doing it on every
+   * 300 ms debounce of a streaming reply would be a directory scan three times
+   * a second for an answer that changes when somebody runs `/clear`.
+   *
+   * Three seconds is chosen against what it is for: a new conversation begins
+   * with a prompt, which produces pushes for as long as the reply lasts, so the
+   * first one past the window rebinds well inside the first answer.
+   */
+  const nudgedAt = useRef(0)
+  const onTranscriptChange = useCallback(() => {
+    tail()
+    const now = Date.now()
+    if (now - nudgedAt.current < REATTRIBUTE_MS) return
+    nudgedAt.current = now
+    setTranscriptRevision((n) => n + 1)
+  }, [tail])
+  const watched = useTranscriptChanges(scoped || key !== '' ? cwd : null, onTranscriptChange)
 
   /**
    * The fallback, for a build with no cost channel or a pane opened on a
@@ -646,12 +831,24 @@ export function ChatView({
   // A shell short-circuits every transcript state below it: there is no file to
   // look for, so "Reading…" followed by "nothing yet" would be a search the app
   // knows in advance will fail.
-  const shell = provider === 'shell'
+  //
+  // "A shell" is not the same as "was started as a shell", and that stopped
+  // being a distinction this file could ignore the moment Run Claude existed
+  // (NEXT-UPDATE item 1). A shell session with Claude running in it has a real
+  // conversation being written, and telling its reader that "a shell just runs
+  // what you type, so there is nothing here to read" would be the app arguing
+  // with the transcript it is about to find.
+  const shell = effectiveProvider === 'shell'
 
   const state: ChatEmptyState | null =
     shell ? 'shell'
     : !resolved ? 'unwired'
-    : scoped && !target ? (lookup.status === 'loading' ? 'loading' : 'no-session-transcript')
+    : scoped && !target
+      ? lookup.status === 'loading'
+        ? 'loading'
+        : lookup.status === 'ambiguous'
+          ? 'ambiguous'
+          : 'no-session-transcript'
     : key === '' ? 'no-project'
     : found === null ? 'loading'
     : found === false ? 'no-transcript'
@@ -668,22 +865,7 @@ export function ChatView({
           floating over the last message, just above the box. */}
       <div className="cv-stage">
         <div className="cv-scroll" ref={scrollRef} onScroll={onScroll}>
-          {state ? (
-            <ChatEmpty state={state} />
-          ) : (
-            <div className="cv-column">
-              {messages.map((message, i) => (
-                <ChatBubble
-                  key={message.id}
-                  message={message}
-                  heading={dayBreak(message.at, i > 0 ? messages[i - 1].at : 0)}
-                />
-              ))}
-              <p className="cv-source" title={path}>
-                Read from the session transcript — prompts and replies only.
-              </p>
-            </div>
-          )}
+          {state ? <ChatEmpty state={state} /> : <ChatColumn messages={messages} />}
         </div>
         {behind ? (
           <button type="button" className="cv-jump" onClick={jump}>
@@ -721,7 +903,9 @@ export function ChatView({
           <AgentControls
             sessionId={liveSessionId}
             cwd={cwd}
-            provider={provider}
+            // What is running in it, not what was launched — see
+            // `effectiveProvider`.
+            provider={effectiveProvider}
             // The usage strip reads a transcript. With none — a shell — it
             // falls back to the project's most recent session, which is how a
             // pane that had never been prompted came to report somebody else's

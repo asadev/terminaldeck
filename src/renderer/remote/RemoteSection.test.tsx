@@ -2,6 +2,9 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import {
   attachedFor,
+  canMintCode,
+  codeSecondsLeft,
+  codeShown,
   connectionNote,
   deviceLabel,
   deviceStateAfter,
@@ -29,10 +32,12 @@ import {
   type RemoteTunnel,
   type RemoteViewProps,
 } from './RemoteSection'
-import type { PairPath } from './pairing-link'
+import type { MachineActions, MachinesHalf } from '../machines/MachineLinks'
+import type { Machine, MachineLinkState } from '../machines/types'
+import { CODE_LENGTH } from '../../shared/short-code'
 
 /**
- * What this panel says in each of the states it can be in.
+ * What this section says in each of the states it can be in.
  *
  * The states are the point. This is the screen that decides whether a stranger
  * gets a shell on the machine, and every one of its failure modes has to be a
@@ -40,6 +45,12 @@ import type { PairPath } from './pairing-link'
  * here is why, nothing paired, something waiting to be let in, something
  * attached right now. A regression in any of those looks like a working panel
  * and is not one, so each is pinned to the words it puts on screen.
+ *
+ * It is also the merged section now — the sidebar's Machines page folded into
+ * Remote — so a second class of regression matters here: a capability that used
+ * to be on the other screen and is quietly not on this one. Those are pinned
+ * together, under "the merge", against the list of what the machines page could
+ * do.
  *
  * `renderToStaticMarkup` never runs an effect, which is why `RemoteView` takes
  * its state as props — a component that fetched its own status would only ever
@@ -54,12 +65,65 @@ const NOTHING: RemoteActions = {
   dismissEnable: () => {},
   pair: () => {},
   closePairing: () => {},
-  choosePath: () => {},
   approve: () => {},
   deny: () => {},
   revoke: () => {},
   disconnect: () => {},
   stopTunnel: () => {},
+}
+
+const NO_MACHINE_ACTIONS: MachineActions = {
+  type: () => {},
+  pair: () => {},
+  connect: () => {},
+  disconnect: () => {},
+  forget: () => {},
+  newSession: () => {},
+  open: () => {},
+  close: () => {},
+}
+
+/** A paired desktop, and the link to it. Both halves of one row. */
+const STUDIO: Machine = {
+  id: 'MACHINE1',
+  name: 'Studio PC',
+  hostId: 'MACHINE1',
+  fingerprint: 'ABCD-EFGH-JKLM-NPQR-STUV-WXYZ',
+  platform: 'win32',
+  pairedAt: NOW - 86_400_000,
+  lastConnectedAt: NOW - 60_000,
+}
+
+const STUDIO_LINK: MachineLinkState = {
+  id: 'MACHINE1',
+  state: 'online',
+  reason: null,
+  sessions: [
+    {
+      id: 's1',
+      title: 'agent',
+      cwd: '/Users/a/projects/deck',
+      provider: 'claude',
+      status: 'running',
+      exitCode: null,
+    },
+  ],
+  folders: ['/Users/a/projects/deck'],
+  capabilities: ['create'],
+  hostPlatform: 'win32',
+  retryAt: null,
+}
+
+function machinesHalf(over: Partial<MachinesHalf> = {}): MachinesHalf {
+  return {
+    wired: true,
+    view: { machines: [], links: [], blocked: null },
+    reading: false,
+    entry: { digits: '', busy: false, error: null, blocked: null },
+    open: null,
+    actions: NO_MACHINE_ACTIONS,
+    ...over,
+  }
 }
 
 /** A relay that is up, with the identity a pairing link is built from. */
@@ -150,7 +214,7 @@ function render(props: Partial<RemoteViewProps> = {}): string {
       secondsLeft={null}
       busy={null}
       confirmEnable={false}
-      pairPath={null}
+      machines={machinesHalf()}
       actions={NOTHING}
       now={NOW}
       platform="mac"
@@ -256,8 +320,8 @@ describe('serving, with nothing paired', () => {
   })
 
   it('offers pairing, and says a code alone lets nothing in', () => {
-    expect(html).toMatch(/<button(?![^>]*disabled)[^>]*>Pair a device<\/button>/)
-    expect(html).toContain('it does not let anything in')
+    expect(html).toMatch(/<button(?![^>]*disabled)[^>]*>Show a code<\/button>/)
+    expect(html).toContain('it lets nothing in on its own')
   })
 })
 
@@ -274,7 +338,7 @@ describe('reachable only through the relay', () => {
   const html = render({ state: RELAY_ONLY })
 
   it('still offers to pair, with no URL anywhere in sight', () => {
-    expect(html).toMatch(/<button(?![^>]*disabled)[^>]*>Pair a device<\/button>/)
+    expect(html).toMatch(/<button(?![^>]*disabled)[^>]*>Show a code<\/button>/)
   })
 
   it('does not draw a route this machine does not have', () => {
@@ -350,7 +414,7 @@ describe('the relay is not connected', () => {
 
   it('refuses to hand out a code for a path that is down, and says why', () => {
     // A code minted here produces a phone that scans, waits, and fails.
-    expect(html).toMatch(/<button[^>]*disabled[^>]*>Pair a device<\/button>/)
+    expect(html).toMatch(/<button[^>]*disabled[^>]*>Show a code<\/button>/)
     // Not "neither way in": on this machine only one row was ever drawn, and
     // "neither" sent the reader looking for a second one.
     expect(html).toContain('Nothing above is up')
@@ -370,7 +434,7 @@ describe('the relay is switched off in this build', () => {
   })
 
   it('still pairs, because the tailnet is a whole path on its own', () => {
-    expect(html).toMatch(/<button(?![^>]*disabled)[^>]*>Pair a device<\/button>/)
+    expect(html).toMatch(/<button(?![^>]*disabled)[^>]*>Show a code<\/button>/)
   })
 })
 
@@ -499,90 +563,74 @@ describe('a phone with a page open on one of this Mac’s ports', () => {
   })
 })
 
+/**
+ * The code, and everything that used to be beside it.
+ *
+ * There was a QR code here and a copyable `terminaldeck://pair?…` link. Both are
+ * gone — a QR can only be read by a phone, which left a second desktop with
+ * nothing, and the link carried a live bearer token through whatever chat app
+ * moved it. What is on screen now is six digits from `shared/short-code.ts`,
+ * which any device can be told out loud.
+ *
+ * The negative assertions are the ones that matter. A QR figure or a link added
+ * back would pass every positive check in this file and fail these.
+ */
 describe('a live pairing code', () => {
-  const pairing = { token: '8fb1c2d4e5a6b7c8d9e0f1a2', expiresAt: NOW + 45_000 }
+  const pairing = { token: '482913', expiresAt: NOW + 45_000 }
   const html = render({ state: RUNNING, pairing, secondsLeft: 45 })
-  const relayLink = `terminaldeck://pair?v=1&r=wss%3A%2F%2Frelay.terminaldeck.dev&h=${RELAY.hostId}&k=${RELAY.publicKey}&t=${pairing.token}`
-  const directLink = 'https://asads-macbook-pro-1.taile59277.ts.net:8443/#t=8fb1c2d4e5a6b7c8d9e0f1a2'
 
-  it('draws the code as an SVG with a real path in it', () => {
-    expect(html).toContain('<svg class="remote-qr"')
-    expect(html).toMatch(/<path class="remote-qr-ink" d="M\d+ \d+h/)
+  it('shows the code as digits, exactly as the main process minted it', () => {
+    expect(html).toContain('>482913<')
+    expect(html).toContain('class="remote-code"')
+    // `codeShown` is the canonical form and it is idempotent, so what is on
+    // screen is what the other machine will accept.
+    expect(codeShown('482913')).toBe('482913')
+    expect(codeShown('482 913')).toBe('482913')
+    expect(html.match(/class="remote-code"[^>]*>(\d+)</)?.[1]).toHaveLength(CODE_LENGTH)
   })
 
-  it('counts down', () => {
+  it('draws no QR code and no link, anywhere', () => {
+    expect(html).not.toContain('<svg')
+    expect(html).not.toContain('remote-qr')
+    expect(html).not.toContain('terminaldeck://')
+    expect(html).not.toContain('Can’t scan it?')
+    expect(html).not.toContain('Scanning it')
+    // The tailnet URL is still a fact about the route, on the route's own row —
+    // what has gone is a *pairing link*, which is that address with a token
+    // stapled to it.
+    expect(html).not.toContain('#t=')
+  })
+
+  it('counts down, without announcing every second of it', () => {
     expect(html).toContain('Expires in 45s')
+    expect(html).toContain('aria-live="off"')
+    expect(codeSecondsLeft(NOW + 45_000, NOW)).toBe(45)
   })
 
-  it('hands over the relay path first, because that is the endpoint the phone keeps', () => {
-    // Pairing on the tailnet produces a phone that only works on the tailnet,
-    // which is a surprise waiting at an airport.
-    expect(html).toContain(relayLink.replaceAll('&', '&amp;'))
-    expect(html).toContain('Can’t scan it?')
+  it('offers a copy, because the other device is often on the same clipboard', () => {
+    expect(html).toContain('>Copy</button>')
   })
 
-  it('offers the other path as a button rather than a second code', () => {
-    expect(html).toContain('Direct on your tailnet')
-    expect(html).toMatch(/aria-pressed="true"[^>]*>Through the relay</)
-  })
-
-  it('honours that choice, and prints the tailnet link instead', () => {
-    const chosen = render({ state: RUNNING, pairing, secondsLeft: 45, pairPath: 'direct' })
-    expect(chosen).toContain(directLink)
-    expect(chosen).not.toContain(relayLink.replaceAll('&', '&amp;'))
-    expect(chosen).toMatch(/aria-pressed="true"[^>]*>Direct on your tailnet</)
-  })
-
-  it('names the parameter in the tailnet link, because the PWA reads it as one', () => {
-    // A bare `#<token>` reads as no token at all in `pwa/src/pair.ts`, and the
-    // phone lands on the pair screen as if the QR had not been scanned.
-    const chosen = render({ state: RUNNING, pairing, secondsLeft: 45, pairPath: 'direct' })
-    expect(chosen).toContain('/#t=')
-  })
-
-  it('shows this Mac’s fingerprint, so the phone’s copy can be compared with it', () => {
+  it('shows this Mac’s fingerprint, so the device’s copy can be compared with it', () => {
     expect(html).toContain(RELAY.fingerprint)
     expect(html).toContain('same six groups')
   })
 
-  it('drops the fingerprint on the tailnet path, where no key is exchanged', () => {
-    const chosen = render({ state: RUNNING, pairing, secondsLeft: 45, pairPath: 'direct' })
-    expect(chosen).not.toContain('same six groups')
-  })
-
-  it('offers no choice when there is only one way in', () => {
-    const only = render({ state: RELAY_ONLY, pairing, secondsLeft: 45 })
-    expect(only).toContain(relayLink.replaceAll('&', '&amp;'))
-    expect(only).not.toContain('aria-pressed')
-  })
-
   it('has one press to kill the code early', () => {
-    expect(html).toContain('Cancel this code')
+    expect(html).toContain('Hide the code')
   })
 
-  it('says plainly when it has run out, rather than leaving a dead code on screen', () => {
-    const expired = render({ state: RUNNING, pairing, secondsLeft: 0 })
-    expect(expired).toContain('That code has expired')
-    expect(expired).toContain('Nothing was let in')
-    expect(expired).toContain('New code')
-    expect(expired).not.toContain('<svg class="remote-qr"')
-    // And the link goes with it — a dead one left on screen to type is worse
-    // than none at all.
-    expect(expired).not.toContain(relayLink.replaceAll('&', '&amp;'))
-    expect(expired).not.toContain(directLink)
-  })
-
-  it('says the right thing when every path goes away underneath it', () => {
-    // Reachable: the relay drops while the code is on screen. "Expired" would
-    // be the wrong reason and would send somebody to make another one.
-    const stranded = render({
-      state: { ...RELAY_ONLY, relay: { ...RELAY, connected: false, reason: 'The link dropped.' } },
+  it('says a code minted with the relay down reaches only the tailnet', () => {
+    // True and narrow. Nothing can look the code up without the relay, but a
+    // device already on the tailnet can still reach the address above and
+    // redeem it there — so this is neither "it works" nor "it is dead".
+    const tailnet = render({
+      state: { ...RUNNING, relay: { ...RELAY, connected: false, reason: 'The link dropped.' } },
       pairing,
       secondsLeft: 45,
     })
-    expect(stranded).toContain('nowhere to point this code')
-    expect(stranded).not.toContain('<svg class="remote-qr"')
-    expect(stranded).not.toContain('That code has expired')
+    expect(tailnet).toContain('only a device already on your tailnet can use this code')
+    expect(tailnet).toContain('>482913<')
   })
 
   it('does not count down when the main process never said when it expires', () => {
@@ -593,6 +641,307 @@ describe('a live pairing code', () => {
     })
     expect(html2).toContain('did not say when this expires')
     expect(html2).not.toMatch(/Expires in/)
+  })
+
+  it('says the right thing when every path goes away underneath it', () => {
+    // Reachable: the relay drops while the code is on screen on a machine with
+    // no tailnet. "Expired" would be the wrong reason and would send somebody to
+    // make another one that would be just as unreachable.
+    const stranded = render({
+      state: { ...RELAY_ONLY, relay: { ...RELAY, connected: false, reason: 'The link dropped.' } },
+      pairing,
+      secondsLeft: 45,
+    })
+    expect(stranded).toContain('nowhere to point this code')
+    expect(stranded).not.toContain('That code has expired')
+    expect(stranded).not.toContain('>482913<')
+  })
+})
+
+/**
+ * The state he screenshotted, on Windows, and the dead end behind it.
+ *
+ * The wording is his and it is right: it says what happened and what to do
+ * about it in one line. What was wrong was the second half — the panel it was
+ * printed on could reach a state where "show another one" was not a thing you
+ * could do, because the only control that would mint one was disabled or absent.
+ * So the sentence is pinned *and* the button under it is, in both directions.
+ */
+describe('a code that expired while the panel was open', () => {
+  const pairing = { token: '482913', expiresAt: NOW - 1_000 }
+  const html = render({ state: RUNNING, pairing, secondsLeft: 0 })
+
+  it('says so in the words that were already right', () => {
+    expect(html).toContain('That code has expired. Show another one.')
+  })
+
+  it('leaves nothing on screen that could still be typed', () => {
+    expect(html).not.toContain('>482913<')
+    expect(html).toContain('Expired')
+  })
+
+  it('offers a live button that mints another, which is the whole fix', () => {
+    // Not disabled: the dead end was an expired code beside a control that
+    // could not replace it.
+    expect(html).toMatch(/<button(?![^>]*disabled)[^>]*>Show another one<\/button>/)
+    expect(html).toContain('>Done</button>')
+  })
+
+  it('and that button is `pair`, the same one that minted the first code', () => {
+    // Pinned on the action rather than the markup: a second "mint" path is how
+    // the two screens' codes drifted apart before they were merged.
+    const pressed: string[] = []
+    const actions: RemoteActions = { ...NOTHING, pair: () => pressed.push('pair') }
+    const markup = renderToStaticMarkup(
+      <RemoteView
+        state={RUNNING}
+        wired
+        problem={null}
+        notice={null}
+        pairing={pairing}
+        secondsLeft={0}
+        busy={null}
+        confirmEnable={false}
+        machines={machinesHalf()}
+        actions={actions}
+        now={NOW}
+        platform="mac"
+      />,
+    )
+    expect(markup).toContain('Show another one')
+    // The press itself is exercised in "the switch"/"pairing" below, through
+    // `remoteActions`; what this pins is that the control exists in this state.
+    actions.pair()
+    expect(pressed).toEqual(['pair'])
+  })
+
+  it('says why instead, when nothing could mint one', () => {
+    // The other half of the same rule. The button is still there and it is
+    // *disabled*, which is the treatment the first press already gets on this
+    // screen — and the sentence beside it is the reason, in place of the
+    // expiry notice. What must not happen is an enabled button whose only
+    // possible outcome is a failure notice, or a disabled one with nothing
+    // saying why.
+    const stranded = render({
+      state: { ...RELAY_ONLY, relay: { ...RELAY, connected: false, reason: 'The link dropped.' } },
+      pairing,
+      secondsLeft: 0,
+    })
+    expect(stranded).toContain('nowhere to point this code')
+    expect(stranded).toMatch(/<button[^>]*disabled[^>]*>Show another one<\/button>/)
+    expect(stranded).not.toContain('That code has expired')
+  })
+
+  it('knows when a code could be minted at all', () => {
+    expect(canMintCode(null)).toBe(false)
+    expect(canMintCode({ ...RUNNING, running: false })).toBe(false)
+    expect(canMintCode(RELAY_ONLY)).toBe(true)
+    // The relay is down, but this machine has a tailnet address — which is a
+    // way in, and refusing to mint on it is the bug the relay-only users hit
+    // from the other direction.
+    expect(canMintCode({ ...RUNNING, relay: { ...RELAY, connected: false } })).toBe(true)
+    expect(
+      canMintCode({ ...RELAY_ONLY, relay: { ...RELAY, connected: false } }),
+    ).toBe(false)
+  })
+})
+
+/**
+ * The merge itself: what the sidebar's Machines page could do, on this screen.
+ *
+ * Two screens became one and the failure mode of that is not a broken build —
+ * it is a control that quietly did not come across, found weeks later by
+ * somebody who used to have it. So this suite is written against the list of
+ * what that page did: show a code, take a code, list the machines, say what is
+ * running on each, start a session, connect, disconnect, forget, and open a
+ * session as a terminal. Every one of them is asserted on the merged section.
+ */
+describe('the merge', () => {
+  const both = render({
+    state: { ...RUNNING, devices: [{ ...PHONE, state: 'approved' }] },
+    machines: machinesHalf({
+      view: { machines: [STUDIO], links: [STUDIO_LINK], blocked: null },
+    }),
+  })
+
+  it('holds a phone and a second computer on one screen', () => {
+    // The whole argument of the merge, in one render: the roster of things that
+    // can reach this machine, and the roster of machines it can reach.
+    expect(both).toContain('Asad’s iPhone')
+    expect(both).toContain('Studio PC')
+    expect(both).toContain('Devices')
+    expect(both).toContain('Machines you can reach')
+  })
+
+  it('draws both halves of pairing, in the order somebody does them', () => {
+    // Show a code here, type one from there. Splitting those across two screens
+    // meant explaining which screen to open on which machine before anything
+    // could happen, inside a code that lasts a minute.
+    expect(both).toContain('Let a device in')
+    expect(both).toContain('Add another computer')
+    expect(both.indexOf('Let a device in')).toBeLessThan(both.indexOf('Add another computer'))
+  })
+
+  it('takes a code in one box per digit, numeric, and nothing else', () => {
+    const boxes = both.match(/class="machine-entry-box"/g) ?? []
+    expect(boxes).toHaveLength(CODE_LENGTH)
+    expect(both).toContain('inputMode="numeric"')
+    expect(both).toContain('autoComplete="one-time-code"')
+    // The old field's placeholder was a real-looking example code set in the
+    // same mono face, so an empty field read as a filled one. There is no
+    // placeholder at all now — six empty boxes say what is wanted.
+    expect(both).not.toMatch(/placeholder="[0-9]/)
+  })
+
+  it('will not send an incomplete code', () => {
+    expect(both).toMatch(/<button[^>]*disabled[^>]*>Pair<\/button>/)
+    const ready = render({
+      state: RUNNING,
+      machines: machinesHalf({ entry: { digits: '482913', busy: false, error: null, blocked: null } }),
+    })
+    expect(ready).toMatch(/<button(?![^>]*disabled)[^>]*>Pair<\/button>/)
+  })
+
+  it('prints the far machine’s own words when a code is refused', () => {
+    // Verbatim, because `pairWithCode` writes these to say what to do — "no
+    // machine is showing that code" and "they last a minute" is the answer to
+    // both a wrong code and an expired one.
+    const refused = render({
+      state: RUNNING,
+      machines: machinesHalf({
+        entry: {
+          digits: '482913',
+          busy: false,
+          error:
+            'No machine is showing that code. Check the digits, and that the code on the other machine has not run out — they last a minute.',
+          blocked: null,
+        },
+      }),
+    })
+    expect(refused).toContain('No machine is showing that code')
+    expect(refused).toContain('aria-invalid="true"')
+  })
+
+  it('goes quiet with a reason rather than failing on submit', () => {
+    const blocked = render({
+      state: RUNNING,
+      machines: machinesHalf({
+        entry: {
+          digits: '',
+          busy: false,
+          error: null,
+          blocked: 'This machine is not connected to the relay yet, so it cannot show or read a pairing code.',
+        },
+      }),
+    })
+    expect(blocked).toContain('not connected to the relay yet')
+    expect(blocked).toMatch(/<input[^>]*class="machine-entry-box"[^>]*disabled/)
+  })
+
+  it('keeps every control the machines page had on a machine row', () => {
+    expect(both).toContain('>New session</button>')
+    expect(both).toContain('>Disconnect</button>')
+    expect(both).toContain('>Forget</button>')
+    // Its state, its kind, and the key a person compares with the other screen.
+    expect(both).toContain('Connected')
+    expect(both).toContain('PC')
+    expect(both).toContain(STUDIO.fingerprint)
+    // And what is running on it, as a control that opens it.
+    expect(both).toContain('agent')
+    expect(both).toContain('…/projects/deck')
+    expect(both).toContain('aria-pressed="false"')
+  })
+
+  it('offers Connect instead when the link is down, and says what to do while it waits', () => {
+    const offline = render({
+      state: RUNNING,
+      machines: machinesHalf({
+        view: {
+          machines: [STUDIO],
+          links: [{ ...STUDIO_LINK, state: 'awaiting-approval', sessions: [] }],
+          blocked: null,
+        },
+      }),
+    })
+    expect(offline).toContain('>Connect</button>')
+    expect(offline).toContain('Waiting to be approved')
+    // The one sentence the far machine writes for the wrong reader: it says
+    // "approve it in the desktop app" to a desktop that *is* the app.
+    expect(offline).toContain('Approve this Mac on Studio PC')
+    expect(offline).not.toContain('in the desktop app')
+  })
+
+  it('opens a session as a terminal in the same section', () => {
+    const open = render({
+      state: RUNNING,
+      machines: machinesHalf({
+        view: { machines: [STUDIO], links: [STUDIO_LINK], blocked: null },
+        open: { machineId: 'MACHINE1', sessionId: 's1' },
+        // The real one builds an xterm against a DOM, which is why it arrives
+        // as a node rather than being built by the view.
+        pane: <div className="pane-stand-in" />,
+      }),
+    })
+    expect(open).toContain('machines-pane')
+    expect(open).toContain('pane-stand-in')
+    expect(open).toContain('/Users/a/projects/deck')
+    expect(open).toContain('aria-pressed="true"')
+    expect(open).toContain('>Close</button>')
+  })
+
+  it('says so plainly when this build cannot reach the machine channels', () => {
+    const older = render({ state: RUNNING, machines: machinesHalf({ wired: false }) })
+    expect(older).toContain('older preload')
+    expect(older).toContain('cannot pair with another desktop')
+    // And nothing that looks like it would work.
+    expect(older).toMatch(/<input[^>]*class="machine-entry-box"[^>]*disabled/)
+  })
+
+  it('says the list is empty rather than showing an empty list', () => {
+    expect(render({ state: RUNNING })).toContain('No other machine yet')
+    expect(render({ state: RUNNING, machines: machinesHalf({ reading: true }) })).toContain(
+      'Reading the machines this desktop knows',
+    )
+  })
+
+  it('puts the folder chooser between the devices and the machines', () => {
+    // The order is the argument the section makes: pair a device, approve it,
+    // choose what it may open, and then the machines this one dials out to.
+    const ordered = render({
+      state: { ...RUNNING, devices: [{ ...PHONE, state: 'approved' }] },
+      folders: <div className="folders-stand-in" />,
+      machines: machinesHalf({ view: { machines: [STUDIO], links: [STUDIO_LINK], blocked: null } }),
+    })
+    expect(ordered.indexOf('Devices')).toBeLessThan(ordered.indexOf('folders-stand-in'))
+    expect(ordered.indexOf('folders-stand-in')).toBeLessThan(
+      ordered.indexOf('Machines you can reach'),
+    )
+  })
+
+  it('keeps the machines half even when remote access is not in the build', () => {
+    // Two features of the main process: one lets a device in, the other dials
+    // out. A build missing the first can perfectly well have the second, and
+    // hiding the machines would take a working half away with the other one.
+    const markup = renderToStaticMarkup(
+      <RemoteView
+        state={null}
+        wired={false}
+        problem={null}
+        notice={null}
+        pairing={null}
+        secondsLeft={null}
+        busy={null}
+        confirmEnable={false}
+        machines={machinesHalf({
+          view: { machines: [STUDIO], links: [STUDIO_LINK], blocked: null },
+        })}
+        actions={NOTHING}
+        now={NOW}
+        platform="mac"
+      />,
+    )
+    expect(markup).toContain('not wired into this build')
+    expect(markup).toContain('Studio PC')
   })
 })
 
@@ -641,7 +990,7 @@ describe('the noun for the machine', () => {
       devices: [PHONE],
       connections: [TUNNELLED],
     },
-    pairing: { token: 'tok-abc', expiresAt: NOW + 60_000 } as RemotePairing,
+    pairing: { token: '482913', expiresAt: NOW + 60_000 } as RemotePairing,
     secondsLeft: 42,
     confirmEnable: true,
   }
@@ -655,7 +1004,6 @@ describe('the noun for the machine', () => {
     expect(mac).toContain('shell on this Mac')
     expect(mac).toContain('A rendezvous service this Mac dials out to')
     expect(mac).toContain('This Mac’s fingerprint')
-    expect(mac).toContain('The phone will reach this Mac from any network')
     expect(mac).toContain('served from this Mac to that phone’s browser')
     expect(mac).toContain('the row below shows what this Mac received')
   })
@@ -666,14 +1014,20 @@ describe('the noun for the machine', () => {
     expect(pc).toContain('shell on this PC')
     expect(pc).toContain('A rendezvous service this PC dials out to')
     expect(pc).toContain('This PC’s fingerprint')
-    expect(pc).toContain('The phone will reach this PC from any network')
     expect(pc).toContain('served from this PC to that phone’s browser')
     expect(pc).toContain('the row below shows what this PC received')
   })
 
   it('never says Mac on Windows anywhere on the panel', () => {
     // Everything the panel renders, including labels a screen reader gets.
-    expect(pc).not.toContain('Mac')
+    //
+    // A word boundary rather than a substring, and that is not a loosening: the
+    // merged section has a heading reading "Machines you can reach", which
+    // contains those three letters and is the correct English word for a
+    // Windows PC, a Mac and a Linux box together. What must never appear is the
+    // Apple noun, and `\bMac\b` is exactly that — "Machines" does not match it
+    // and "this Mac" does.
+    expect(pc).not.toMatch(/\bMac\b/)
   })
 
   it('falls back to a word that is true rather than guessing Mac', () => {
@@ -681,7 +1035,7 @@ describe('the noun for the machine', () => {
     // land here. "computer" is not a Mac and not a PC, and it is not wrong.
     const other = render({ ...busy, platform: 'other' })
     expect(other).toContain('Drive this computer from a phone')
-    expect(other).not.toContain('Mac')
+    expect(other).not.toMatch(/\bMac\b/)
     expect(other).not.toContain('this PC')
   })
 })
@@ -927,7 +1281,6 @@ interface Harness {
   notices: Array<{ ok: boolean; text: string }>
   pairing: RemotePairing | null
   confirming: boolean
-  path: PairPath | null
   settled(): Promise<void>
 }
 
@@ -964,7 +1317,7 @@ function fakeBridge(
 function harness(bridge: Partial<RemoteBridge>, pairing: RemotePairing | null = null): Harness {
   const notices: Harness['notices'] = []
   const pending: Array<Promise<void>> = []
-  const state = { pairing, confirming: false, path: null as PairPath | null }
+  const state = { pairing, confirming: false }
   const actions = remoteActions({
     bridge,
     pairing,
@@ -973,9 +1326,6 @@ function harness(bridge: Partial<RemoteBridge>, pairing: RemotePairing | null = 
     },
     setConfirmEnable: (next) => {
       state.confirming = next
-    },
-    setPairPath: (next) => {
-      state.path = next
     },
     run: (_key, work, done) => {
       pending.push(
@@ -1000,9 +1350,6 @@ function harness(bridge: Partial<RemoteBridge>, pairing: RemotePairing | null = 
     },
     get confirming() {
       return state.confirming
-    },
-    get path() {
-      return state.path
     },
     settled: async () => {
       await Promise.all(pending)
@@ -1261,16 +1608,30 @@ describe('pairing', () => {
     expect(h.pairing).toBeNull()
   })
 
-  it('re-points a live code without minting a second one', async () => {
-    // Both paths carry the same one-shot token. A second mint here would burn
-    // the code that is on screen and being photographed.
-    const { bridge, calls } = fakeBridge()
-    const h = harness(bridge, { token: 'tok-1', expiresAt: NOW + 60_000 })
-    h.actions.choosePath('direct')
+  it('mints a fresh code from an expired one rather than re-showing it', async () => {
+    // The Windows dead end, pinned on the action: pressing "Show another one"
+    // has to reach `remote:pair` and replace what is on screen. A guard that
+    // refused while `pairing` was still set — the expired code is still in
+    // state at that moment — would leave the button doing nothing at all.
+    const { bridge, calls } = fakeBridge({
+      startRemotePairing: { token: '913482', expiresAt: NOW + 60_000 },
+    })
+    const dead = { token: '482913', expiresAt: NOW - 1_000 }
+    const h = harness(bridge, dead)
+    h.actions.pair()
     await h.settled()
-    expect(calls).toEqual([])
-    expect(h.path).toBe('direct')
-    expect(h.pairing).toEqual({ token: 'tok-1', expiresAt: NOW + 60_000 })
+    expect(calls).toEqual(['startRemotePairing()'])
+    expect(h.pairing).toEqual({ token: '913482', expiresAt: NOW + 60_000 })
+  })
+
+  it('leaves no stale code on screen when the mint fails', async () => {
+    // Otherwise the expired code stays up next to a failure notice, which reads
+    // as a code somebody could still type.
+    const { bridge } = fakeBridge({ startRemotePairing: { expiresAt: NOW } })
+    const h = harness(bridge, { token: '482913', expiresAt: NOW - 1_000 })
+    h.actions.pair()
+    await h.settled()
+    expect(h.pairing).toBeNull()
   })
 
   it('never leaves a tokenless answer on screen as if it were a code', async () => {

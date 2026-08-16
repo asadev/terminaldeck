@@ -66,6 +66,11 @@ final class LiveTransferUITests: XCTestCase {
     /// Simulator takes longer than that to boot the app — mint it first and it
     /// has expired by the time anything can read it.
     private var readyFile: String { env("TD_READY_FILE") }
+    /// Where the harness writes the six digits, once it has seen `readyFile`.
+    /// The other half of the same handshake, and it is a file for the same
+    /// reason: the code is minted after this test gets to the pairing screen, so
+    /// it cannot have been an environment variable set at launch.
+    private var codeFile: String { env("TD_CODE_FILE") }
     /// Where the host puts files that arrive from a phone.
     private var uploadsDir: String { env("TD_UPLOADS_DIR") }
     /// The photo, at the path the Simulator's own library holds it at.
@@ -93,7 +98,7 @@ final class LiveTransferUITests: XCTestCase {
             .filter { $0.hasPrefix("TD_") || $0.hasPrefix("TEST_RUNNER") }
             .sorted()
         return "No live host is being driven. Run ios/Harness/live-transfer.sh, which starts the "
-            + "headless host on the live relay, mints the pairing link and reads the evidence "
+            + "headless host on the live relay, mints the pairing code and reads the evidence "
             + "off the Mac afterwards. This runner can see: "
             + (seen.isEmpty ? "no TD_ variables at all" : seen.joined(separator: ", "))
     }
@@ -254,31 +259,35 @@ final class LiveTransferUITests: XCTestCase {
      * code — which is that claim holding rather than a convenience.
      */
     private func connect() throws {
-        if app.textFields["pairing.field"].waitForExistence(timeout: 25) {
+        let field = app.textFields["pairing.field"]
+        if field.waitForExistence(timeout: 25) {
             capture("01-waiting-for-a-code")
-            // The harness is watching for this file. It mints the code and hands
-            // it to the app through `simctl openurl`, which is the same door a
-            // scanned QR code comes through — `TerminalDeckApp` answers it in
-            // `onOpenURL`.
+            // The harness is watching for this file. It mints a code and writes
+            // the six digits to `codeFile`, which is what this test then types.
             try? "ready\n".write(toFile: readyFile, atomically: true, encoding: .utf8)
+
             /*
-             * And then somebody has to say yes.
+             * Typed, not deep-linked, because typing is the product.
              *
-             * A URL arriving from outside raises **Open in "Terminal Deck"?**
-             * before `onOpenURL` sees anything, because as far as iOS is
-             * concerned another program is asking to hand this app a link, and
-             * `simctl openurl` is another program. Nothing in the app's own code
-             * can dismiss it — it belongs to SpringBoard.
+             * This used to be `simctl openurl` with a `terminaldeck://pair?…`
+             * link — the same door a scanned QR came through — and it dragged a
+             * SpringBoard alert with it: **Open in "Terminal Deck"?**, raised
+             * before the app saw anything, because as far as iOS was concerned
+             * another program was handing this app a link. The test had to find
+             * and tap that alert, and the first run of it waited two minutes for
+             * a pairing that never happened while a screenshot showed the alert
+             * sitting over the pairing screen with nobody to answer it.
              *
-             * Found the slow way rather than reasoned about: the first run of
-             * this pointed `simctl openurl` at the Simulator, got exit 0, and
-             * waited two minutes for a pairing that never happened, while a
-             * screenshot taken at that moment showed this alert sitting over the
-             * pairing screen with nobody to answer it.
+             * None of that exists now. There is one way into this app and it is
+             * six digits in a field, so the proof puts six digits in the field.
              */
-            XCTAssertTrue(tapOpenInApp(timeout: 240),
-                          "the pairing link never arrived, or nothing offered to open it")
-            capture("01b-link-opened")
+            let code = waitForCode(timeout: 240)
+            XCTAssertEqual(code.count, 6, "the harness never wrote a six-digit code to TD_CODE_FILE")
+            field.tap()
+            field.typeText(code)
+            capture("01b-code-typed")
+            // No tap on Pair: the field submits itself on the sixth digit, which
+            // is behaviour worth proving rather than working around.
         } else {
             capture("01-already-paired")
         }
@@ -354,24 +363,28 @@ final class LiveTransferUITests: XCTestCase {
     }
 
     /**
-     * Answer the system's "Open in …?" for the pairing link.
+     * Wait for the harness to write six digits, and return them.
      *
-     * Looked for in SpringBoard first and in this app second, because a system
-     * alert is not reliably in either process's tree across releases and a helper
-     * that only knew about one of them would work until the day it did not.
+     * A poll rather than a watcher, and it is the same trade `live-desktop.ts`
+     * makes on its side: there is no event to subscribe to across a process
+     * boundary that is a file on a Mac, the wait is bounded, and the alternative
+     * is a `DispatchSource` on a file that does not exist yet.
+     *
+     * Whitespace is stripped rather than trusted: the file is written without a
+     * trailing newline on purpose, and a newline typed into a `.numberPad` field
+     * would be a character the parser refuses — a failure that would read as the
+     * code being wrong.
      */
-    private func tapOpenInApp(timeout: TimeInterval) -> Bool {
-        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+    private func waitForCode(timeout: TimeInterval) -> String {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            for candidate in [springboard.buttons["Open"], app.buttons["Open"]]
-            where candidate.exists && candidate.isHittable {
-                candidate.tap()
-                return true
+            if let raw = try? String(contentsOfFile: codeFile, encoding: .utf8) {
+                let digits = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                if digits.count == 6 { return digits }
             }
             usleep(400_000)
         }
-        return false
+        return ""
     }
 
     private func tapAllowPaste(timeout: TimeInterval) -> Bool {

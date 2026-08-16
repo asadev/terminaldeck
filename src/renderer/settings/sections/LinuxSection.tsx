@@ -194,17 +194,19 @@ export function LinuxView({
       <SectionHead title={meta.label} blurb={meta.blurb} />
 
       {/*
-        The rule, in one sentence, before anything can be clicked.
+        The rule, in one sentence, before anything can be clicked — and now
+        actually one sentence.
 
         It is the whole mental model and it is not obvious: people expect an app
-        to have a "use Linux" switch. Saying that the folder decides — and that
-        the two halves are kept together on purpose — is what stops somebody
-        looking for the switch that is deliberately not here.
+        to have a "use Linux" switch, and saying that the folder decides is what
+        stops somebody hunting for the switch that is deliberately not here.
+        What came out was the third sentence, which argued *why* the shell and
+        the files are kept on one side. That is the reasoning behind the design,
+        and nobody reading a settings pane is auditing the design.
       */}
       <p className="settings-prose">
-        A session opens where its folder is. A project inside Linux runs inside Linux, and a project
-        on this {here}’s own drive runs on Windows. Keeping the shell and the files on the same side
-        is what makes either of them fast.
+        A session opens where its folder is: a project inside Linux runs inside Linux, a project on
+        this {here}’s own drive runs on Windows.
       </p>
 
       {unwired && (
@@ -224,8 +226,7 @@ export function LinuxView({
 
       {!unwired && snapshot?.read && snapshot.state === 'no-distros' && (
         <Notice tone="warn">
-          Windows Subsystem for Linux is here but has no Linux installed in it, so there is nothing
-          to open a session in. <LinkOutInstall />
+          Windows Subsystem for Linux has no Linux installed in it. <LinkOutInstall />
         </Notice>
       )}
 
@@ -285,8 +286,7 @@ export function LinuxView({
       */}
       {ready && snapshot.distros.length > 1 && (
         <p className="settings-prose">
-          Sessions in a Linux folder use {snapshot.active}. This is remembered for this {here},
-          not asked again per session.
+          Sessions in a Linux folder use {snapshot.active}, remembered for this {here}.
         </p>
       )}
 

@@ -57,16 +57,12 @@ describe('the table itself', () => {
 
 describe('remote access is not in the store', () => {
   /*
-   * Every surface remote owns, named the way the app names it. The Machines
-   * page, the Remote settings section and Power — which is the desk-side half
-   * of the same feature: keeping the machine awake is what makes a session
-   * survive the lid closing, and reaching it from a phone is why you would want
-   * that.
+   * Every surface remote owns, named the way the app names it: the Remote
+   * settings section — which absorbed the old Machines page, so remote owns no
+   * panel at all any more — and Power, the desk-side half of the same feature,
+   * because keeping the machine awake is what makes a session survive the lid
+   * closing, and reaching it from a phone is why you would want that.
    */
-  it('claims none of its panels', () => {
-    expect(featureOwningPanel('machines')).toBeNull()
-  })
-
   it('claims none of its settings sections', () => {
     expect(featureOwningSection('remote')).toBeNull()
     expect(featureOwningSection('power')).toBeNull()
@@ -80,8 +76,8 @@ describe('remote access is not in the store', () => {
 })
 
 describe('the app itself is not in the store', () => {
-  it('leaves sessions, files, search, source control and the overview alone', () => {
-    for (const panel of ['overview', 'files', 'search', 'git'] as const) {
+  it('leaves sessions, files, artifacts, source control and the overview alone', () => {
+    for (const panel of ['overview', 'files', 'artifacts', 'git'] as const) {
       expect(featureOwningPanel(panel), panel).toBeNull()
     }
     for (const widget of ['sessions', 'git'] as const) {

@@ -1860,15 +1860,16 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
 
 /* ---------------------------------------------------------------- adapters -- */
 
-/** A code that is on screen, and whether eight typed characters can find it. */
+/** A code that is on screen, and whether six typed digits can find it. */
 export interface ShownCode {
   code: PairingToken
   /**
    * Is this machine sitting in the rendezvous slot the code names?
    *
-   * False means the code still works for anything that already knows this
-   * machine's address — a QR carries it inside the link — and does not work for
-   * somebody typing eight characters into another machine, because there is
+   * False means the code still works for a client that already knows this
+   * machine's address — which, now that there is no QR and no link, is only the
+   * browser client this machine serves on its own tailnet — and does not work
+   * for anybody typing it into a phone or a second desktop, because there is
    * nothing at the relay for them to look the address up in.
    */
   findable: boolean
@@ -1888,7 +1889,7 @@ export interface ShownCode {
  * It did not, and the result was two codes that looked identical and behaved
  * differently. `machines:code` minted from this desk *and* started a beacon at
  * the relay; the phone pairing on the Remote panel minted from this same desk
- * and started nothing. Both screens showed eight characters in the same shape,
+ * and started nothing. Both screens showed six digits in the same shape,
  * and only one of them could be typed into another machine — the other fell
  * through to a direct attempt that most users have no route for. The failure
  * read as "the relay is broken", three metres from the machine that could have
@@ -1916,7 +1917,7 @@ export interface PairingDesk {
    * `offer` is this machine's address as {@link offerFrom} reads it off the
    * relay link, or null when the link is not up. Null is not a refusal: the code
    * is still minted and still redeemable by anything holding the address
-   * already, which is what keeps the QR and the pairing link working on a
+   * already, which is what keeps the tailnet-served browser client working on a
    * machine with no relay. It comes back with `findable: false`, and it is the
    * caller's business whether that is worth refusing over.
    *
@@ -2067,13 +2068,16 @@ export function pairingDesk(
        *
        * That did not matter while the token was 256 bits from `randomBytes`,
        * which is why the caller below is allowed to refuse a wrong code without
-       * ever reaching the limiter. It matters now that the token is a
-       * forty-bit code a person can type. So the count lives with the code
-       * itself, where the guesser cannot get away from it: five wrong answers
-       * and the code is dead, whoever sent them and from wherever.
+       * ever reaching the limiter. It matters enormously now that the token is
+       * **six digits**. So the count lives with the code itself, where the
+       * guesser cannot get away from it: five wrong answers and the code is
+       * dead, whoever sent them and from wherever.
        *
-       * That is also the fifth line of the arithmetic in `shared/short-code.ts`,
-       * and it is the one that was not true until this counter existed.
+       * This counter is the single line that makes the arithmetic in
+       * `shared/short-code.ts` come out at 5 × 10⁻⁶ rather than at "as many
+       * tries as you like against a million". Delete it and the format is
+       * indefensible; there is no second counter anywhere behind it that would
+       * catch a guesser who mints a fresh key per attempt.
        */
       live.misses += 1
       if (live.misses >= MAX_FAILED_ATTEMPTS) forget()
@@ -2139,12 +2143,14 @@ export function authenticatorFor(
       }
 
       // Checked before redeeming rather than after, so a cancelled code cannot
-      // create a device row on its way to being refused. It costs the rate
-      // limiter a sighting of the guess, which is a trade this token can
-      // afford: it is 256 bits from `randomBytes`, not something a person
-      // chose, so guessing it is infeasible whether or not anyone is counting.
-      // The limiter still sees every attempt on the path an attacker actually
-      // has, which is `verifyCredential` above.
+      // create a device row on its way to being refused — and, far more
+      // importantly, so that every wrong answer is counted. `desk.offers` is
+      // where the five-guesses-per-code limit lives, and it is the only thing
+      // between six digits and unlimited attempts: `redeemPairingToken`'s own
+      // limiter keys on the source address, which through the relay is a public
+      // key a guesser mints fresh for every try. Returning early here without
+      // asking the desk would hand an attacker a free retry, so this call must
+      // stay on the path of every guess, wrong ones included.
       if (!desk.offers(token)) {
         return { ok: false, message: 'That pairing code is not right.' }
       }
@@ -2771,18 +2777,27 @@ export function registerRemoteIpc(ipcMain: InvokeRegistrar, deps: RemoteIpcDeps)
    * code this product shows is published.
    *
    * It used to be `desk.create()` and nothing else, and that one missing half is
-   * worth writing down. The panel offers two ways to use the same code: scan the
-   * QR, which carries this machine's relay address inside the link, or type the
-   * eight characters into something that has no address at all. The second only
-   * works if this machine is sitting in the rendezvous slot the code names — and
-   * nothing here ever put it there. The characters were valid, the screen was
-   * right, and the other end reported that no machine was showing that code.
+   * worth writing down. The panel used to offer two ways to use the same code:
+   * scan a QR that carried this machine's relay address inside a link, or type
+   * the code into something that has no address at all. The second only works if
+   * this machine is sitting in the rendezvous slot the code names — and nothing
+   * here ever put it there. The characters were valid, the screen was right, and
+   * the other end reported that no machine was showing that code.
    *
-   * Not refused when there is no address to publish. `show` still mints, and the
-   * QR path is untouched: it never needed the rendezvous, because the address is
-   * already in the link. A machine reachable only over the tailnet is exactly
-   * that case, and refusing there would take away a pairing that works today to
-   * protect one that could not have worked anyway.
+   * There is no QR and no link any more, so typing is the only way in and the
+   * rendezvous is no longer one path of two — it is the path. This still does
+   * not refuse when there is no address to publish, and that is now a narrower
+   * claim than it used to be: the one client a `findable: false` code still
+   * works for is the browser client served *by this machine* over the tailnet,
+   * where the page's own origin is the address and no lookup is needed. Every
+   * other client — iOS, Android, a second desktop — needs the slot.
+   *
+   * A caller that wants to know reads `findable` off `desk.show`; this handler
+   * deliberately does not, because narrowing its return type is a change to the
+   * contract the Remote panel is written against. See the note in the handover
+   * for this change: the panel should say "only reachable from your tailnet"
+   * when the slot did not come up, rather than showing six digits that most
+   * clients cannot use.
    */
   ipcMain.handle('remote:pair', async (): Promise<PairingToken> => {
     const shown = await desk.show(offerFrom(server.status().relay))

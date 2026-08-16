@@ -26,13 +26,24 @@
  * every escape that was attempted and what happened, all of it measured on
  * macOS 27 rather than read.
  *
- * **Windows: not confined.** AppContainer, restricted tokens and job objects
- * are the mechanisms that exist, and none of them was measured — this
- * repository has no Windows machine and CI is macOS-only by policy. An
- * unmeasured boundary is worse than none, because the wording on the grant
- * screen would start claiming something nobody has ever watched hold. So
- * Windows sessions run exactly as they did, and the grant screen says so in its
- * own sentence rather than sharing one with the Mac.
+ * **Windows: confined once the machine has been set up, and not before.**
+ * AppContainer, through a launcher this repository compiles, because the
+ * container has to be applied inside the `CreateProcess` call and nothing
+ * reachable from Node can make it. Restricted tokens and job objects were
+ * measured on the same machine and are not boundaries on their own;
+ * `appcontainer.ts` and `CONFINEMENT.md` say what each of them did.
+ *
+ * The "once the machine has been set up" is the part that is unlike the other
+ * two platforms, and it is not a caveat that can be engineered away. An
+ * AppContainer reaches a file only through an ACE, and the ACEs a session needs
+ * on `C:\`, `C:\Users` and the directories holding node and git cannot be
+ * written by an unprivileged process — measured with a real non-elevated token,
+ * not inferred. Writing them per session would mean an administrator prompt per
+ * session. So they are written **once**, to a capability SID rather than to a
+ * per-device container SID, and `tools.ts` owns that. Until it has happened,
+ * {@link confinementKind} answers `'none'` for Windows and the grant screen says
+ * so in its own sentence — the same shape as a platform with no mechanism at
+ * all, because from the user's side that is exactly what it is.
  *
  * **Linux, including WSL: confined.** A user namespace, a mount namespace, a
  * PID namespace, and every capability dropped before the shell starts.
@@ -134,6 +145,7 @@
 import { execFile } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   realpathSync,
@@ -145,6 +157,21 @@ import { tmpdir } from 'node:os'
 import { join, posix } from 'node:path'
 import { promisify } from 'node:util'
 import { currentPlatform, type Platform } from '../platform/host'
+import {
+  appContainerArgs,
+  containerName,
+  proveAppContainer,
+  WINDOWS_SETUP_NEEDED,
+  WINDOWS_UNCONFINED_REASON,
+  type AppContainerLaunch,
+  type LauncherRunner,
+} from './appcontainer'
+import {
+  readGrantRecord,
+  toolProbe,
+  windowsConfinementReady,
+  windowsToolsInstall,
+} from './tools'
 import {
   LINUX_SHELL,
   linuxCommand,
@@ -159,6 +186,7 @@ import {
   confinedEnv,
   deviceHomeDir,
   deviceHomesRoot,
+  deviceKeyOf,
   sessionPlan,
   within,
   type ConfinementPlan,
@@ -176,7 +204,7 @@ const run = promisify(execFile)
  * *why*, and because a second mechanism arriving later — a Linux one — should
  * be a new value here rather than a second boolean somewhere else.
  */
-export type ConfinementKind = 'seatbelt' | 'namespace' | 'none'
+export type ConfinementKind = 'seatbelt' | 'namespace' | 'appcontainer' | 'none'
 
 export function confinementKind(platform: Platform = currentPlatform()): ConfinementKind {
   if (platform === 'darwin') return 'seatbelt'
@@ -187,6 +215,28 @@ export function confinementKind(platform: Platform = currentPlatform()): Confine
   // that path needs and `wsl.ts` for why it is a shell line rather than an
   // argument vector.
   if (platform === 'linux') return 'namespace'
+  /*
+   * Windows is the one platform whose answer is not a property of the platform.
+   *
+   * The other two mechanisms are there or not depending on the operating
+   * system, and `sandbox-exec` and `unshare` ship with it. This one needs two
+   * things that a Windows machine does not come with: a launcher this project
+   * compiles, and a one-time permission on the folders holding node, git and
+   * the agent CLIs that only an administrator can write. `tools.ts` explains why
+   * the permission cannot be per session — measured, an unprivileged process
+   * cannot write the ACL of `C:\` or `C:\Users`, and a confined session that
+   * cannot list those cannot resolve an absolute path.
+   *
+   * Answering `'none'` until both are true is the honest reading of what this
+   * function means. It is asked "does this machine have a boundary this
+   * repository has measured", and on a Windows machine where the grant has never
+   * been made the answer is no — not "yes, but every session will refuse to
+   * start", which is what claiming the kind here would produce. When the grant
+   * *is* there, this answers `'appcontainer'` and the per-session probe still
+   * has to pass before anything claims to be confined; see
+   * {@link proveConfinement}.
+   */
+  if (platform === 'win32') return windowsConfinementReady() ? 'appcontainer' : 'none'
   return 'none'
 }
 
@@ -201,12 +251,23 @@ export function confinementKind(platform: Platform = currentPlatform()): Confine
  */
 export function unconfinedReason(platform: Platform): string {
   if (platform === 'win32') {
-    // Windows only, now that Linux has a mechanism. The finding behind this
-    // sentence is in `CONFINEMENT.md`: AppContainer has to be applied at
-    // process creation through `UpdateProcThreadAttribute`, there are no
-    // PowerShell cmdlets for it, and neither Node nor node-pty can reach it —
-    // so this is "ship a native launcher", not "wire up an API".
-    return 'Windows confinement (AppContainer, restricted tokens, job objects) has not been built or measured.'
+    /*
+     * Two sentences, because there are two reasons and they have different
+     * remedies — and neither is the sentence this used to carry, which said
+     * these mechanisms "has not been built or measured". That was written when
+     * it was true. It has not been true since the launcher was written and put
+     * through a real Windows 11 machine: AppContainer holds, restricted tokens
+     * and job objects were measured and written off, and the whole account is in
+     * `CONFINEMENT.md`. A UI sentence that outlives its measurement is the same
+     * kind of lie as a boundary that outlives its proof.
+     *
+     * Which of the two applies is a fact about this machine, so it is asked of
+     * the machine: a build without the launcher cannot be fixed by the user, and
+     * a machine without the one-time grant can be, in one prompt.
+     */
+    const install = windowsToolsInstall()
+    const shipped = install !== null && existsSync(install.launcher)
+    return shipped ? WINDOWS_SETUP_NEEDED : WINDOWS_UNCONFINED_REASON
   }
   return 'No confinement mechanism has been measured on this platform.'
 }
@@ -327,6 +388,23 @@ export function prepareDeviceHome(root: string, deviceKey: string): string {
 /** The device-homes root, re-exported so callers need one import. */
 export { deviceHomesRoot }
 
+/**
+ * The Windows pieces `host-core.ts` has to hand over at assembly, re-exported
+ * here so that the one file wiring this feature imports from one place.
+ *
+ * `installWindowsTools` is the same shape as `installDeviceHomes` and is there
+ * for the same reason: where Electron unpacked its resources and where this
+ * install keeps its storage are facts about the app, and `confine/` has no way
+ * to learn either without being told.
+ */
+export { installWindowsTools, windowsToolsFor } from './tools'
+
+/**
+ * The environment a confined *Windows* session needs, which is not the one
+ * `confinedEnv` builds. Re-exported for the same reason.
+ */
+export { windowsConfinedEnv } from './appcontainer'
+
 /** The environment a confined session adds. Re-exported so callers need one import. */
 export { confinedEnv }
 
@@ -423,6 +501,7 @@ export async function proveConfinement(
 ): Promise<ConfinementProof> {
   const kind = confinementKind(platform)
   if (kind === 'namespace') return proveNamespace(plan, runner, machine)
+  if (kind === 'appcontainer') return proveWindows(plan, runner)
   if (kind !== 'seatbelt') return { ok: false, detail: unconfinedReason(platform) }
 
   const profile = seatbeltProfile(plan)
@@ -573,6 +652,62 @@ async function proveNamespace(
 }
 
 /**
+ * Everything the Windows launcher needs for one session, or the sentence saying
+ * why this machine cannot produce it.
+ *
+ * Built here rather than by the caller because two of the four pieces come from
+ * state this module owns — the installed launcher and the one-time grant — and
+ * the other two are derived from the plan. The caller would have to be told
+ * about `tools.ts` to assemble it, and then there would be two places that know
+ * how a container is named.
+ */
+function windowsLaunch(
+  plan: ConfinementPlan,
+): { launcher: string; launch: AppContainerLaunch } | { detail: string } {
+  const install = windowsToolsInstall()
+  if (install === null) return { detail: WINDOWS_UNCONFINED_REASON }
+  const record = readGrantRecord(install.recordFile)
+  // Reachable only if the grant is withdrawn between `confinementKind` and here
+  // — a repair install, or somebody undoing it by hand while a session starts.
+  // It is not a race worth locking against; it is a session that refuses.
+  if (record === null) return { detail: WINDOWS_SETUP_NEEDED }
+  return {
+    launcher: install.launcher,
+    launch: {
+      container: containerName(deviceKeyOf(plan.home)),
+      plan,
+      tools: {
+        capability: record.capability,
+        read: record.read,
+        ancestors: record.ancestors,
+        probe: toolProbe(record.read),
+      },
+    },
+  }
+}
+
+/**
+ * The Windows proof, run through the same runner seam as the other two.
+ *
+ * The adapter in the middle is doing real work rather than shuffling types.
+ * `proveAppContainer` needs the *output* of a run that exited non-zero — the
+ * probe reads a file it must be refused, so a non-zero exit is the expected
+ * case — and this module's runner rejects on one. {@link capture} is what turns
+ * that rejection back into data, and it is the same function the Linux proof
+ * leans on for the same reason.
+ */
+async function proveWindows(plan: ConfinementPlan, runner: ProofRunner): Promise<ConfinementProof> {
+  const built = windowsLaunch(plan)
+  if ('detail' in built) return { ok: false, detail: built.detail }
+  const launcherRunner: LauncherRunner = async (command, args) => {
+    const ran = await capture(runner, command, args)
+    const code = (ran.error as { code?: unknown } | null)?.code
+    return { stdout: ran.stdout, stderr: ran.stderr, code: typeof code === 'number' ? code : null }
+  }
+  return proveAppContainer(built.launch, built.launcher, plan.home, launcherRunner)
+}
+
+/**
  * Run one probe, treating a non-zero exit as data rather than as an exception.
  *
  * `cat` of a refused file exits 1, which is `execFile` rejecting — and that
@@ -655,6 +790,18 @@ export async function confineSpawn(
 ): Promise<{ command: string; args: string[] }> {
   const proof = await proveConfinement(plan, platform, runner, machine)
   if (!proof.ok) throw new ConfinementUnavailableError(proof.detail)
+  if (confinementKind(platform) === 'appcontainer') {
+    const built = windowsLaunch(plan)
+    // Unreachable in practice — the proof above went through the same function
+    // and would have refused — and a throw rather than a fall-through anyway,
+    // because the alternative is handing back an unconfined command line, which
+    // is the one thing this function must never do.
+    if ('detail' in built) throw new ConfinementUnavailableError(built.detail)
+    return {
+      command: built.launcher,
+      args: appContainerArgs(built.launch, command, args),
+    }
+  }
   if (confinementKind(platform) === 'namespace') {
     // A staging directory of its own, not the proof's: that one was made and
     // taken apart inside a namespace that has already exited, and reusing the

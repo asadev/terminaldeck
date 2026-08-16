@@ -1,156 +1,240 @@
 /**
  * The pairing code, as a person reads it off one screen and types it into another.
  *
- * ## Why a typed code rather than a link
+ * ## One way in, and it is six digits
  *
- * A phone has a camera pointed at the desktop, so it gets a QR code carrying
- * everything: the relay address, the host id, the host's public key and the
- * pairing token. A second desktop has no camera pointed at anything. Handing a
- * Mac a 200-character `terminaldeck://pair?…` URL means copying it into a
- * messaging app and out again, which is both worse to do and worse for the
- * secret inside it — a pairing token that has been through a chat history is a
- * pairing token somebody else's server has.
+ * There used to be three: a QR code, a `terminaldeck://pair?…` link, and an
+ * eight-character code. The QR did not work — reported from the product, not
+ * guessed at here — and the link was a two-hundred-character string carrying a
+ * live bearer secret that had to travel through a messaging app to be useful,
+ * which is a pairing token somebody else's server then has a copy of. Both are
+ * gone. What is left is the thing that never needed a camera, a URL handler or a
+ * clipboard: six digits, on one screen, typed into another.
  *
- * So machine-to-machine pairing is eight characters you read and type. This file
- * is the whole of that format, and it is deliberately in `shared/` with no
- * imports at all: the main process mints one, the renderer normalises what
- * somebody typed, and neither may pull `node:crypto` into the other's bundle.
- * `codeFromBytes` therefore takes its randomness as an argument rather than reaching
- * for it — `pairing-link.ts` restates the host-id alphabet for exactly this
- * reason, and a renderer that imports a Node built-in is a renderer that does
- * not build.
+ * Digits rather than letters because of where they are typed. A phone showing a
+ * numeric keypad has ten large targets instead of a full keyboard; there is no
+ * case to get wrong, no alphabet to explain, and no character anybody has to be
+ * told is not the letter it looks like. The eight-character format needed three
+ * paragraphs about which letters were missing and why. This one needs none.
  *
- * ## The alphabet, and the four letters that are missing
+ * This file is the whole of that format, and it is deliberately in `shared/`
+ * with no imports at all: the main process mints one, the renderer and the
+ * browser client normalise what somebody typed, and neither may pull
+ * `node:crypto` into the other's bundle. `codeFromBytes` therefore takes its
+ * randomness as an argument rather than reaching for it — a renderer that
+ * imports a Node built-in is a renderer that does not build.
  *
- * Crockford's base32: the ten digits, then A–Z without **I**, **L**, **O** or
- * **U**. Thirty-two symbols exactly, which is what makes five bits per character
- * come out even.
+ * ## The arithmetic, done honestly, because it got a million times worse
  *
- * Three of the four are there because somebody has to read the code off a screen
- * in a font they did not choose: `I` and `L` are `1`, `O` is `0`. The fourth is
- * `U`, and it is dropped for a different reason — with a 30-symbol alphabet an
- * eight-character code spells an English obscenity often enough to matter, and
- * the one letter that makes most of them possible is the one nobody needs.
+ * Eight symbols of Crockford base32 was 32^8 = 1,099,511,627,776 codes. Six
+ * decimal digits is 10^6 = 1,000,000. That is a reduction of a factor of
+ * **1,099,511** — call it a million-fold — and no amount of writing around it
+ * makes it smaller. It is acceptable only because of what a guess has to
+ * survive, and each of the following is pinned by a test that fails if somebody
+ * removes it:
  *
- * Dropping the *letters* rather than the digits is what keeps the count at 32. An
- * alphabet that also dropped `0` and `1` would be thirty symbols, which is not a
- * power of two — and a mint that reduces random bytes modulo thirty is a mint
- * with a bias in it, which is a real if small loss of the entropy the whole
- * design is counting on.
+ *   - the code lives **60 seconds** (`PAIRING_TTL_MS` in `device-auth.ts`),
+ *     enforced on redemption with `>=` so it is dead at t+60000;
+ *   - it is **single use** and is burned the instant it matches, before the
+ *     device name is checked and before anything is written to disk;
+ *   - **five wrong answers kill the code itself** — not the guesser, the code.
+ *     `pairingDesk.offers` in `server.ts` counts misses against the one code on
+ *     screen and takes it down at `MAX_FAILED_ATTEMPTS`, so a guesser who mints
+ *     a fresh key or dials from a fresh address for every attempt does not get a
+ *     fresh budget. That counter is what carries this format;
+ *   - `RemoteAuth` additionally locks a *source* out for `LOCKOUT_MS` (fifteen
+ *     minutes) after five failures, which is the tailnet path where a source is
+ *     an IP address and means something.
  *
- * ## The arithmetic, because the entropy is the argument
+ * Five guesses against 10^6 is **5 × 10⁻⁶**, one in two hundred thousand, per
+ * pairing window. The eight-character format was 4.5 × 10⁻¹². This is worse by
+ * exactly the factor above and the number is written here rather than buried,
+ * because one in two hundred thousand is a number somebody should be allowed to
+ * disagree with.
  *
- * Eight symbols out of thirty-two is 32^8 = 2^40 = 1,099,511,627,776 codes.
- * Forty bits sounds small next to the 256 the old token carried, and it is
- * plentiful here because of what a guess has to survive:
+ * What it buys, when it succeeds, is a **pending** device: a row in a list on
+ * the other machine that a human has to approve before it can attach to
+ * anything. The code has never been the gate. It is the first of two, and it is
+ * the half that is only worth as much as the sixty seconds and the five tries.
  *
- *   - the code lives **60 seconds** (`PAIRING_TTL_MS`);
- *   - it is **single use** and is burned the instant it matches;
- *   - **five wrong guesses** kill it (`MAX_FAILED_ATTEMPTS`), and lock the
- *     source out for fifteen minutes.
+ * ## The attack that six digits would have opened, and the scrypt that closes it
  *
- * Five guesses against 2^40 is a probability of 5 / 1.1e12 ≈ **4.5 × 10⁻¹²** per
- * pairing. Put the other way round: to reach a one-in-a-million chance an
- * attacker needs about 1.1 million guesses, and at five per code that is 220,000
- * separate pairings — every one of them a code a human deliberately put on
- * screen, inside its own sixty seconds.
+ * A typed code cannot carry an address — a relay URL, a 130-bit host id and a
+ * 256-bit public key are four hundred bits and nobody types that — so the code
+ * *names a rendezvous slot at the relay* instead, and the machine showing it
+ * sits in that slot answering with its real address. `machines/rendezvous.ts`
+ * has the full argument.
  *
- * Redeeming it still only creates a *pending* device that somebody at the other
- * machine has to approve. The code is not the gate; it is the first of two.
+ * That lookup is a free oracle if it is cheap. An attacker who could enumerate
+ * slots would not be guessing at 5-in-10^6: they would sweep the million,
+ * find the one live slot, learn the code **exactly**, and redeem it on the first
+ * try. The five-guess budget would be worth nothing, because they would never
+ * need a second guess.
+ *
+ * So the slot is not named by a hash. Both ends derive it with **scrypt at
+ * N=16384, r=8, p=1** — 16 MiB and about 36 ms per attempt, measured on this
+ * machine. Sweeping 10^6 of those is roughly **ten CPU-hours**, and it has to
+ * happen inside the sixty seconds the slot is up, which means about 16,700
+ * derivations per second: ~533 GB/s of sustained memory traffic, which is one
+ * top-end datacentre GPU running flat out and doing nothing else, alongside
+ * 16,700 new WebSocket connections a second at the relay. And the prize for all
+ * of it is still a row in an approval list.
+ *
+ * If that derivation is ever changed to a plain hash, this comment becomes a
+ * lie and six digits becomes a space anybody sweeps in seconds. It is not a
+ * tuning parameter. It is the reason the format is this short.
+ *
+ * The offline version of the same attack — a hostile relay recording the
+ * handshake and searching at leisure — costs the same ten CPU-hours with no
+ * clock on it, and buys a code that is by then expired and spent. Nothing else
+ * ever travels on that channel: the credential is issued over a second,
+ * separate connection to the machine's own static key.
  *
  * ## Reading is looser than writing
  *
- * `formatCode` only ever emits the 32 symbols above. `normaliseCode` accepts
- * more than that, because the person typing is copying characters off a screen
- * and their keyboard has an `O` on it: `O` folds to `0`, `I` and `L` fold to `1`,
- * case is ignored, and anything that is not a letter or a digit — spaces, the
- * hyphen, a dash a messaging app helpfully curled — is dropped. That is
- * Crockford's own decoding rule and it is what makes the code typeable by
- * somebody who has never heard of base32.
+ * `formatCode` emits six digits and nothing else. `normaliseCode` accepts more,
+ * because the string makes a journey: it is read off a screen, sometimes retyped
+ * into a chat window, and chat windows insert things. Spaces, hyphens, the
+ * curly dash a messaging app substitutes, non-breaking spaces — all separator
+ * noise, all dropped.
+ *
+ * A **letter is not dropped**; it makes the whole input null. The old format
+ * folded `O` onto `0` and `I`/`L` onto `1`, which was right when the screen was
+ * showing letters and some of them were unprintable in the wrong face. The
+ * screen now shows digits. A letter in the input is therefore a typo, and
+ * folding a typo produces a *different valid code* — six characters that
+ * normalise cleanly and belong to somebody else's pairing, or to nobody. "That
+ * is not six digits" is the correct answer and it is the one a person can act
+ * on.
  */
 
-/** The 32 symbols a code is written in. No I, L, O or U — see above. */
-export const CODE_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'
+/** Digits a code is written in. Ten symbols, no alphabet to explain. */
+export const CODE_ALPHABET = '0123456789'
 
-/** Characters in a code, before the hyphen goes in. */
-export const CODE_LENGTH = 8
+/** Digits in a code. There is no grouping character; see `formatCode`. */
+export const CODE_LENGTH = 6
 
-/** Two groups of four: `H4K9-2FQT`. Long runs of characters are misread. */
-export const CODE_GROUP = 4
-
-/** Bytes of randomness a code is worth. Eight symbols × five bits = forty. */
-export const CODE_ENTROPY_BYTES = 5
+/** How many codes there are: 10^6. Named because the arithmetic above is about it. */
+export const CODE_SPACE = 1_000_000
 
 /**
- * Turn forty bits into eight symbols.
+ * Bytes consumed per attempt at minting, and how many attempts one call gets.
  *
- * Five bits per symbol taken from the top down, which is the same order
- * `relay-wire.ts` reads its base32 in and the same order a person reads the
- * string. Fewer than five bytes is a caller bug rather than a short code: a code
- * padded out with zeroes has the entropy of whatever it was given and the
- * *appearance* of forty bits, and appearing to be strong is the failure this
- * whole file is arithmetic about.
+ * Four bytes is one unsigned 32-bit draw, which is the smallest word that holds
+ * 10^6 with room for the rejection region to be tiny. Four attempts is what
+ * makes exhaustion negligible — see `codeFromBytes`.
+ */
+export const CODE_WORD_BYTES = 4
+export const CODE_DRAWS = 4
+
+/** Randomness `codeFromBytes` requires. Sixteen bytes, four draws of four. */
+export const CODE_ENTROPY_BYTES = CODE_WORD_BYTES * CODE_DRAWS
+
+/**
+ * The largest multiple of 10^6 that fits in 32 bits: 4,294,000,000.
+ *
+ * This constant is the entire uniformity argument and it is worth stating
+ * rather than inlining. 2^32 is 4,294,967,296, which is **not** a multiple of a
+ * million: it is 4,294 full millions plus a remainder of 967,296. A mint that
+ * did `draw % 1_000_000` would therefore hand out the first 967,296 codes with
+ * probability 4,295/2^32 and the remaining 32,704 with probability 4,294/2^32 —
+ * a 0.023% bias, small-sounding and completely unacceptable, because a biased
+ * code is a code an attacker guesses in the order of its bias rather than at
+ * random. The five-guesses-in-a-million number above assumes uniform; skewing
+ * the distribution silently makes it false.
+ *
+ * So a draw at or above this limit is thrown away and another is taken. The
+ * rejection region is 967,296 / 2^32 ≈ **1 in 4,440**, which is what makes
+ * throwing away cheap.
+ */
+export const CODE_DRAW_LIMIT = Math.floor(2 ** 32 / CODE_SPACE) * CODE_SPACE
+
+/**
+ * Turn randomness into six digits, uniformly over 0…999999.
+ *
+ * Rejection sampling, and the rejection is the point: see `CODE_DRAW_LIMIT` for
+ * why the obvious `% 1_000_000` is biased and why a biased pairing code is a
+ * guessable one.
+ *
+ * Four draws rather than one because a draw can be rejected, and a caller that
+ * has to handle "try again" is a caller that will eventually not. Each draw is
+ * rejected with probability 1/4,440, so all four being rejected has probability
+ * (1/4440)^4 ≈ **2.6 × 10⁻¹⁵** — a machine minting a code every second would
+ * meet it about once every twelve million years, which is a good deal less
+ * often than it meets a bit flip. When it does happen this throws, loudly,
+ * rather than falling back to a modulo: a mint that silently degrades to a
+ * biased code on one in 4 × 10¹⁴ calls is a mint nobody would ever catch doing
+ * it.
+ *
+ * Fewer than `CODE_ENTROPY_BYTES` is a caller bug rather than a short code. A
+ * code minted from two bytes has the entropy of two bytes and the *appearance*
+ * of a million, and appearing to be strong is the failure this whole file is
+ * arithmetic about.
  */
 export function codeFromBytes(bytes: Uint8Array): string {
   if (bytes.length < CODE_ENTROPY_BYTES) {
     throw new Error(`a pairing code needs ${CODE_ENTROPY_BYTES} bytes of randomness`)
   }
-  let bits = 0
-  let value = 0
-  let out = ''
-  for (const byte of bytes.subarray(0, CODE_ENTROPY_BYTES)) {
-    value = (value << 8) | byte
-    bits += 8
-    while (bits >= 5) {
-      bits -= 5
-      out += CODE_ALPHABET[(value >> bits) & 31]
-    }
+  for (let at = 0; at + CODE_WORD_BYTES <= bytes.length; at += CODE_WORD_BYTES) {
+    // Big-endian, assembled by hand rather than through a DataView: this module
+    // is imported by a browser bundle and by the main process, and `>>> 0` is
+    // what keeps the top bit from making the whole thing negative.
+    const draw =
+      ((bytes[at] << 24) | (bytes[at + 1] << 16) | (bytes[at + 2] << 8) | bytes[at + 3]) >>> 0
+    if (draw >= CODE_DRAW_LIMIT) continue
+    return formatCode(String(draw % CODE_SPACE).padStart(CODE_LENGTH, '0'))
   }
-  return formatCode(out)
+  throw new Error(
+    `every draw in ${bytes.length} bytes fell in the rejection region, which should not happen`,
+  )
 }
 
 /**
- * `H4K92FQT` → `H4K9-2FQT`.
+ * The digits, as they go on screen. Today that is the digits, unchanged.
  *
- * The hyphen is presentation and nothing else — `normaliseCode` throws it away
- * again — but it is presentation that halves the misreads, because eight
- * characters in a row is one character longer than the run most people can hold
- * in their head between two screens.
+ * An identity function with a name is not an accident here. It is the single
+ * place that says a pairing code has **no grouping character**, and it exists so
+ * that the day somebody decides `123 456` reads better on the desktop, they
+ * change one line — and `normaliseCode` is already guaranteed to undo it,
+ * because a space is separator noise. The alternative is a space added at a call
+ * site, which produces a code that is correct on one screen and refused by the
+ * machine on the other.
  */
-export function formatCode(symbols: string): string {
-  return (symbols.match(new RegExp(`.{1,${CODE_GROUP}}`, 'g')) ?? []).join('-')
+export function formatCode(digits: string): string {
+  return digits
 }
 
 /**
  * What somebody typed, as the code they meant — or null when it cannot be one.
  *
- * Null rather than a best effort. A seven-character code is not a code with a
- * character missing that we can guess at; it is something that will be refused
- * by the machine on the other end with a sentence about pairing, which is a
- * worse thing to read than "that is not eight characters" on the screen you are
- * typing into.
+ * Null rather than a best effort. Five digits is not a code with one missing
+ * that we can guess at; it is something that would be refused by the machine on
+ * the other end with a sentence about pairing, which is a worse thing to read
+ * than "that is not six digits" on the screen you are typing into.
  *
  * The input is bounded before it is scanned. Nothing here is a security boundary
- * — the code is checked for real by `device-auth.ts` — but a paste of a
- * megabyte is still a megabyte to walk, and the answer was never going to be
- * longer than eight symbols.
+ * — the code is checked for real by `device-auth.ts` — but a paste of a megabyte
+ * is still a megabyte to walk, and the answer was never going to be longer than
+ * six digits.
  */
 export function normaliseCode(typed: string): string | null {
   if (typeof typed !== 'string') return null
-  let symbols = ''
-  for (const character of typed.slice(0, 256).toUpperCase()) {
-    // Crockford's decoding rule: the three characters that were left out of the
-    // alphabet because they are misread fold onto the ones they are misread as.
-    // `U` is not folded — it was dropped for obscenity rather than for
-    // ambiguity, so a `U` in the input is a typo and reads as one.
-    const folded = character === 'O' ? '0' : character === 'I' || character === 'L' ? '1' : character
-    if (CODE_ALPHABET.includes(folded)) symbols += folded
-    else if (/[A-Z0-9]/.test(folded)) return null
-    // Everything else — spaces, hyphens, the curly dash a chat app substitutes —
-    // is separator noise and is dropped. Refusing it would mean refusing the
-    // exact string that is printed on the other screen.
+  let digits = ''
+  for (const character of typed.slice(0, 256)) {
+    if (character >= '0' && character <= '9') {
+      digits += character
+      // Bail the moment it is too long rather than after the whole scan, so a
+      // paste of a thousand digits is not a thousand string concatenations.
+      if (digits.length > CODE_LENGTH) return null
+      continue
+    }
+    // A letter is a typo, and a typo folded into a digit is a different valid
+    // code. See the header. Everything else — spaces, hyphens, the curly dash a
+    // chat app substitutes — is separator noise and is dropped, because refusing
+    // it would mean refusing the exact string somebody pasted out of a message.
+    if (/[A-Za-z]/.test(character)) return null
   }
-  return symbols.length === CODE_LENGTH ? formatCode(symbols) : null
+  return digits.length === CODE_LENGTH ? formatCode(digits) : null
 }
 
 /** True for a string this file would emit. Used to tell a code from a credential. */

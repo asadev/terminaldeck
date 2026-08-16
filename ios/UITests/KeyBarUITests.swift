@@ -80,16 +80,18 @@ final class KeyBarUITests: XCTestCase {
     private static let notRunning =
         "No harness. Start ios/Harness/run.sh host --approve-after 4000 and run again."
 
-    /// The pairing URI, straight from the harness — or a skip, when there is no
-    /// harness to ask.
+    /// The six-digit pairing code, straight from the harness — or a skip, when
+    /// there is no harness to ask. `/pair` answered with a `terminaldeck://pair?…`
+    /// URI until the link was removed from the product; it answers with `code`
+    /// now, and the code is typed rather than opened.
     private func pairingCode() throws -> String {
         guard let data = try? Data(contentsOf: Self.control.appendingPathComponent("pair")),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let uri = json["uri"] as? String else {
+              let code = json["code"] as? String else {
             Self.reachable = false
             throw XCTSkip(Self.notRunning)
         }
-        return uri
+        return code
     }
 
     // MARK: - The bar

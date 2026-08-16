@@ -87,12 +87,16 @@ class FakeWebContentsView {
   readonly webContents = new FakeWebContents()
   bounds: unknown = null
   visible = false
+  /** Every colour the module painted, in order — the last one is what shows. */
+  readonly backgrounds: string[] = []
 
   constructor() {
     created.push(this)
   }
 
-  setBackgroundColor(): void {}
+  setBackgroundColor(value: string): void {
+    this.backgrounds.push(value)
+  }
 
   setBounds(value: unknown): void {
     this.bounds = value
@@ -155,6 +159,7 @@ interface TabState {
   label: string
   inspecting: boolean
   error: string | null
+  failed: boolean
 }
 
 /** Shaped like the guest's message, because that is what the module parses. */
@@ -172,11 +177,19 @@ let host: FakeWebContents
 
 async function openTab(
   options: Record<string, unknown> = {},
-): Promise<{ state: TabState; guest: FakeWebContents }> {
+): Promise<{ state: TabState; guest: FakeWebContents; view: FakeWebContentsView }> {
   const state = (await invoke('browser:create', { sender: host }, options)) as TabState
   const view = created.at(-1)
   if (!view) throw new Error('no view was constructed')
-  return { state, guest: view.webContents }
+  return { state, guest: view.webContents, view }
+}
+
+/** The newest state the module pushed at the renderer. */
+function lastPush(): TabState {
+  const pushed = host.sent.filter((m) => m.channel === 'browser:state-changed')
+  const state = pushed.at(-1)?.args[0] as TabState | undefined
+  if (!state) throw new Error('no state was pushed')
+  return state
 }
 
 async function inspecting(): Promise<{ state: TabState; guest: FakeWebContents }> {
@@ -314,5 +327,180 @@ describe('tab lifecycle', () => {
     guest.url = `http://evil.example/${'a'.repeat(200_000)}`
     const next = (await invoke('browser:state', {}, state.id)) as TabState
     expect(next.label.length).toBeLessThanOrEqual(121)
+  })
+})
+
+/**
+ * The recording of 2026-08-16, on Windows: a new tab opened on
+ * `http://localhost:3000`, nothing was listening, and the first thing the
+ * product ever showed was Chromium's red "connection refused" document. The
+ * app's own message underneath it said `ERR_CONNECTION_REFUSED (-102)`, which
+ * is the same machine text in a smaller font.
+ *
+ * These pin both halves of the fix: the sentence, and the flag that lets the
+ * renderer put that sentence on screen INSTEAD of the error page.
+ */
+describe('a load that fails', () => {
+  it('reports a written sentence, not a Chromium constant', async () => {
+    const { state, guest } = await openTab({ url: 'http://localhost:3000' })
+    host.sent.length = 0
+    guest.emit('did-fail-load', {}, -102, 'ERR_CONNECTION_REFUSED', 'http://localhost:3000/', true)
+
+    const next = lastPush()
+    expect(next.id).toBe(state.id)
+    expect(next.error).toContain('localhost:3000')
+    expect(next.error).not.toContain('ERR_')
+    expect(next.error).not.toContain('-102')
+  })
+
+  it('marks the view as showing an error page, which a refusal does not', async () => {
+    // `error` alone cannot drive the renderer: a blocked pop-up sets it too and
+    // leaves a perfectly good page on screen. Only `failed` means "what is in
+    // the view is Chromium's error document".
+    const { guest } = await openTab({ url: 'http://localhost:3000' })
+    host.sent.length = 0
+
+    guest.emit('did-fail-load', {}, -102, 'ERR_CONNECTION_REFUSED', 'http://localhost:3000/', true)
+    expect(lastPush().failed).toBe(true)
+  })
+
+  it('survives the error page committing on top of it', async () => {
+    /*
+     * The ordering bug this was written for. Chromium fires `did-fail-load` and
+     * then commits its error document, which is a navigation carrying the URL
+     * that just failed. `tab.error = null` on every `did-navigate` therefore
+     * wiped the message one event after it was written, and the user was left
+     * looking at the raw error page with nothing explaining it.
+     */
+    const { guest } = await openTab({ url: 'http://localhost:3000' })
+    guest.emit('did-fail-load', {}, -102, 'ERR_CONNECTION_REFUSED', 'http://localhost:3000/', true)
+    host.sent.length = 0
+
+    guest.emit('did-navigate', {}, 'http://localhost:3000/')
+
+    const next = lastPush()
+    expect(next.error, 'the error page wiped its own explanation').not.toBeNull()
+    expect(next.failed).toBe(true)
+  })
+
+  it('clears once the tab lands somewhere that works', async () => {
+    const { state, guest } = await openTab({ url: 'http://localhost:3000' })
+    guest.emit('did-fail-load', {}, -102, 'ERR_CONNECTION_REFUSED', 'http://localhost:3000/', true)
+    host.sent.length = 0
+
+    guest.emit('did-navigate', {}, 'http://localhost:5173/')
+
+    const next = lastPush()
+    expect(next.error).toBeNull()
+    expect(next.failed).toBe(false)
+    expect((await invoke('browser:state', {}, state.id) as TabState).failed).toBe(false)
+  })
+
+  it('lets Reload retry the same address, which did-navigate deliberately cannot', async () => {
+    // "Try that again" is the whole purpose of the control, and the URL match
+    // that protects the message from the error page would otherwise make the
+    // one address that failed the one address that can never clear.
+    const { state, guest } = await openTab({ url: 'http://localhost:3000' })
+    guest.emit('did-fail-load', {}, -102, 'ERR_CONNECTION_REFUSED', 'http://localhost:3000/', true)
+
+    const reloaded = (await invoke('browser:reload', {}, state.id)) as TabState
+    expect(reloaded.failed).toBe(false)
+    expect(reloaded.error).toBeNull()
+
+    host.sent.length = 0
+    guest.emit('did-navigate', {}, 'http://localhost:3000/')
+    expect(lastPush().failed).toBe(false)
+  })
+
+  it('says nothing at all about an aborted navigation', async () => {
+    // -3 is what typing a new address mid-load reports, and what Stop reports,
+    // and what a tab closing mid-load reports. None of them is a failure.
+    const { guest } = await openTab({ url: 'http://localhost:3000' })
+    host.sent.length = 0
+    guest.emit('did-fail-load', {}, -3, 'ERR_ABORTED', 'http://localhost:3000/', true)
+    expect(host.sent.filter((m) => m.channel === 'browser:state-changed')).toEqual([])
+  })
+
+  it('ignores a subframe that failed, because the page itself is fine', async () => {
+    const { guest } = await openTab({ url: 'http://localhost:3000' })
+    host.sent.length = 0
+    guest.emit('did-fail-load', {}, -102, 'ERR_CONNECTION_REFUSED', 'http://ads.example/', false)
+    expect(host.sent.filter((m) => m.channel === 'browser:state-changed')).toEqual([])
+  })
+
+  it('keeps a blocked pop-up out of the error-page path', async () => {
+    // The other half of the `error` / `failed` split, from the other side: this
+    // must set a message and must NOT make the renderer hide the page.
+    const { guest, view } = await openTab({ url: 'http://localhost:3000' })
+    host.sent.length = 0
+    // `setWindowOpenHandler` is what the module registers the refusal through;
+    // the fake accepts and discards it, so drive the same path through a
+    // navigation the guard refuses instead.
+    guest.emit('will-navigate', { preventDefault: () => undefined }, 'file:///etc/passwd')
+
+    const next = lastPush()
+    expect(next.error).toMatch(/http/)
+    expect(next.failed, 'a refusal is not an error page').toBe(false)
+    expect(view.visible).toBe(false)
+  })
+})
+
+/**
+ * "An empty browser page is white in dark mode" — the same recording.
+ *
+ * The view used to be constructed with a hardcoded `#ffffff`, which is both a
+ * white rectangle in the middle of a dark app and a raw hex literal in a
+ * codebase whose every colour comes from `tokens.css`.
+ */
+describe('the view’s backdrop', () => {
+  it('wears the app’s canvas colour when there is no page in it', async () => {
+    const { view } = await openTab({ background: '#191919' })
+    expect(view.backgrounds.at(-1)).toBe('#191919')
+  })
+
+  it('wears white for a real page, whatever the app theme is', async () => {
+    // Load-bearing: bare HTML declares no background, so a dark base colour
+    // renders an unstyled dev-server page as black text on dark grey.
+    const { view } = await openTab({ url: 'http://localhost:3000', background: '#191919' })
+    expect(view.backgrounds.at(-1)).toBe('#ffffff')
+  })
+
+  it('changes on the way into a navigation, not on the way out of one', async () => {
+    // `did-navigate` is a frame late — the document has already committed, so
+    // switching there shows one frame of the previous colour.
+    const { guest, view } = await openTab({ background: '#191919' })
+    expect(view.backgrounds.at(-1)).toBe('#191919')
+
+    guest.emit('did-start-navigation', {
+      url: 'http://localhost:5173/',
+      isMainFrame: true,
+      isSameDocument: false,
+    })
+    expect(view.backgrounds.at(-1)).toBe('#ffffff')
+  })
+
+  it('ignores a navigation that swaps no document', async () => {
+    const { guest, view } = await openTab({ url: 'http://localhost:3000', background: '#191919' })
+    const before = view.backgrounds.length
+    guest.emit('did-start-navigation', {
+      url: 'http://localhost:3000/#section',
+      isMainFrame: true,
+      isSameDocument: true,
+    })
+    guest.emit('did-start-navigation', {
+      url: 'http://ads.example/frame',
+      isMainFrame: false,
+      isSameDocument: false,
+    })
+    expect(view.backgrounds.length).toBe(before)
+  })
+
+  it('falls back to white rather than to black when no colour was sent', async () => {
+    // An older preload, or a token rename. Conventional-but-wrong beats a black
+    // rectangle nobody chose.
+    const { view } = await openTab({})
+    expect(view.backgrounds.at(-1)).toBe('#ffffff')
+    const refused = await openTab({ background: 'var(--bg-primary)' })
+    expect(refused.view.backgrounds.at(-1)).toBe('#ffffff')
   })
 })

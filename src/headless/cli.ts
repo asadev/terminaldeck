@@ -203,21 +203,22 @@ export function renderNotRunning(stateDir: string): string {
 /**
  * `code` is printed exactly as it was minted.
  *
- * `codeFromBytes` already returns the grouped form — `H4K9-2FQT` — because the
- * hyphen is what halves the misreads and both screens have to show the same
- * string. Re-grouping it here produced `CSPA--0EC-H`, which is a code nobody can
- * type and which no test of the formatter on its own would ever have caught.
+ * `codeFromBytes` returns the string every screen has to show, and re-formatting
+ * it here is how the two stop matching: an earlier version regrouped an
+ * already-grouped code into `CSPA--0EC-H`, which nobody can type and which no
+ * test of the formatter on its own would ever have caught. The format has since
+ * become six digits with no grouping at all, and the rule is the same.
  *
- * ## Why this says two different things to two kinds of device
+ * ## One route now, and it is the same one for every device
  *
- * A code and a phone are not enough for each other, and pretending otherwise is
- * the failure this whole screen is for. Another machine running this app looks a
- * code up at the relay — that is what `machines:code` publishes and it is why
- * `pair` mints through that channel. A **phone** cannot: it needs the relay
- * address, the host id and this machine's public key as well, which the desktop
- * hands over as a QR code, and this build cannot draw one. So the phone is told
- * the truth and given the route that does work, rather than a code that would
- * fail after somebody had typed it.
+ * This used to say two different things to two kinds of device, because a phone
+ * needed the relay address, the host id and this machine's public key as well —
+ * which the desktop handed over inside a QR code that this build cannot draw. The
+ * QR is gone from the product and every client now looks a code up at the
+ * rendezvous the way a second desktop always did, so there is one sentence here
+ * instead of two. What still matters is the relay: without it there is no slot to
+ * look the code up in, and the code only works for something that already knows
+ * this machine's address.
  */
 export function renderPairCode(
   code: string,
@@ -237,10 +238,11 @@ export function renderPairCode(
 
   if (relay !== null && relay.connected) {
     lines.push(
-      '  A phone needs more than the code — the relay, this host’s id and its public',
-      '  key, which the desktop app hands over as a QR code. This build cannot draw',
-      '  one yet, so pair a phone from a desktop, or scan from one that can see this',
-      '  machine. What a phone would need is:',
+      '  On a phone: open the app and type the code. It finds this machine through',
+      '  the relay slot the code names — there is no link and nothing to scan.',
+      '',
+      '  The fingerprint below is what the phone will show before it connects. They',
+      '  match, or something else answered:',
       '',
       `      relay        ${relay.url}`,
       `      host id      ${relay.hostId}`,

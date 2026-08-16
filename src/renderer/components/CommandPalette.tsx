@@ -18,15 +18,35 @@ import {
   type MatchRange,
 } from '../fuzzy'
 import { formatChord } from '../keymap'
+import { relativeTime } from './relative-time'
 import './CommandPalette.css'
 
 /**
- * Quick open and the command palette are the same surface. They share a text
- * field, a ranked list, the same keys and the same highlighting; the only
- * difference is where the rows come from. Building them as two components
- * meant two sets of keyboard bugs, so this is one component with two row
- * sources, switched by a leading `>` exactly like the editors people already
- * have muscle memory for.
+ * Quick open, the command palette and past-session search are the same surface.
+ * They share a text field, a ranked list, the same keys and the same
+ * highlighting; the only difference is where the rows come from. Building them
+ * as separate components meant separate sets of keyboard bugs, so this is one
+ * component with three row sources, switched by a leading sigil exactly like
+ * the editors people already have muscle memory for:
+ *
+ *     (nothing)   files in this project, by name
+ *     >           commands
+ *     ?           everything past sessions in this project said and did
+ *
+ * ## Why the third one lives here
+ *
+ * It used to be a page in the sidebar called **Search**, and Asad's verdict on
+ * that page was "I don't know what I can search here". The capability behind it
+ * was never the problem — `src/main/session-search.ts` streams every transcript
+ * a project has, ranks the hits and returns highlighted snippets, and it is one
+ * of the better pieces of machinery in this app. What was wrong was the
+ * doorway: a permanently-empty page whose field explained nothing, sitting in a
+ * rail beside Files and Source control as though it searched them.
+ *
+ * A palette is where people look for search, it is one keystroke from anywhere,
+ * and it is already the surface that answers "find me a thing". So the page
+ * goes and the capability moves here, where the same keystroke that opens
+ * quick open reaches it.
  */
 
 export interface PaletteCommand {
@@ -53,7 +73,76 @@ export interface FileSelection {
   line?: number
 }
 
-export type PaletteMode = 'files' | 'commands'
+export type PaletteMode = 'files' | 'commands' | 'sessions'
+
+/* ------------------------------------------------------------ session hits -- */
+
+/**
+ * Mirrors the reply of `session-search:run` in `src/main/session-search.ts`,
+ * narrowed to what a row needs. Duplicated rather than imported because the
+ * renderer tsconfig does not include `src/main`; when the orchestrator lifts
+ * these into `src/shared/types.ts` this block goes away.
+ */
+export type SearchRole = 'user' | 'assistant' | 'thinking' | 'tool' | 'system'
+
+export interface SessionSnippet {
+  text: string
+  /** `{ start, length }` — the main process's spelling, not `fuzzy`'s. */
+  ranges: Array<{ start: number; length: number }>
+  truncatedStart: boolean
+  truncatedEnd: boolean
+}
+
+export interface SessionHit {
+  sessionId: string
+  at: number
+  role: SearchRole
+  tool?: string
+  isSidechain: boolean
+  /** Folder name of the project the session ran in. Only shown when searching
+   *  every project, where it is the thing that tells two hits apart. */
+  projectName?: string
+  snippet: SessionSnippet
+}
+
+export type SessionSearchResponse =
+  | { ok: true; hits: SessionHit[]; truncated: boolean }
+  | { ok: false; error: string; message: string }
+
+export interface SessionSearchBridge {
+  searchSessions(request: {
+    cwd: string
+    query: string
+    scope?: 'project' | 'all'
+    roles?: string[]
+    maxHits?: number
+  }): Promise<SessionSearchResponse>
+  cancelSessionSearch(): Promise<void>
+}
+
+export const ROLE_LABEL: Record<SearchRole, string> = {
+  user: 'You',
+  assistant: 'Reply',
+  thinking: 'Thinking',
+  tool: 'Tool',
+  system: 'System',
+}
+
+/**
+ * Roles a palette search covers.
+ *
+ * Wider than the old page's default of prompts and replies, because a palette
+ * has no filter chips to widen it with afterwards and "what did that tool
+ * do" is half of why anybody goes looking. Tool *results* are still the bulk of
+ * a transcript and still rank last — see `ROLE_WEIGHT` in the main process.
+ */
+const SEARCH_ROLES: readonly SearchRole[] = ['user', 'assistant', 'thinking', 'tool']
+
+/** Rows a palette can usefully show. The page offered 200 and scrolled. */
+const MAX_SESSION_HITS = 40
+
+/** Keystrokes settle before a scan of every transcript in the project starts. */
+const SESSION_DEBOUNCE_MS = 260
 
 export interface CommandPaletteProps {
   open: boolean
@@ -69,6 +158,8 @@ export interface CommandPaletteProps {
    * supply this to drive the palette from an existing list or in a test.
    */
   loadFiles?(root: string, signal: AbortSignal): Promise<string[]>
+  /** Override the transcript search. Defaults to the preload bridge. */
+  sessionBridge?: SessionSearchBridge
 }
 
 /** Rows past this point are noise — nobody scrolls a fuzzy list to 200. */
@@ -173,9 +264,101 @@ function recentsFirst(files: readonly string[], recents: readonly string[]): str
   return [...lead, ...files.filter((path) => !leadSet.has(path))]
 }
 
+function sessionSearchBridge(): SessionSearchBridge | null {
+  if (typeof window === 'undefined') return null
+  const api = (window as unknown as { deck?: Partial<SessionSearchBridge> }).deck
+  return api && typeof api.searchSessions === 'function' ? (api as SessionSearchBridge) : null
+}
+
+/**
+ * Ask the main process to drop whatever it is scanning, and never throw doing
+ * it. A window that is closing rejects every in-flight `invoke`, and the caller
+ * is a cleanup function with nowhere to report one.
+ */
+function cancelQuietly(bridge: SessionSearchBridge | null): void {
+  void bridge?.cancelSessionSearch?.()?.catch(() => undefined)
+}
+
+/**
+ * A snippet's highlight ranges, in `fuzzy`'s spelling.
+ *
+ * The main process records `{ start, length }` and `segmentByRanges` wants
+ * `{ start, end }` with `end` exclusive. Converted rather than re-matched: the
+ * offsets are computed once, against the text before whitespace was collapsed,
+ * and re-finding the query in the snippet here would disagree with them the
+ * moment a term matched a word the collapse had joined.
+ */
+export function snippetRanges(snippet: SessionSnippet): MatchRange[] {
+  return snippet.ranges
+    .filter((range) => range.length > 0 && range.start >= 0 && range.start < snippet.text.length)
+    .sort((a, b) => a.start - b.start)
+    .map((range) => ({ start: range.start, end: range.start + range.length }))
+}
+
+/** What a session row copies: the snippet, with its ellipses left off. */
+export function hitText(hit: SessionHit): string {
+  return hit.snippet.text
+}
+
+/**
+ * How many leading characters of the query are the sigil rather than the search.
+ *
+ * Keyed off what the query *starts with*, never off the mode it produced. With
+ * no project open the palette is pinned to command mode whatever is typed, so
+ * assuming a `>` is present would eat the first character of every query
+ * somebody typed after deleting it — `abc` searching for `bc`, silently.
+ */
+export function sigilLength(query: string, sessionMode: boolean): number {
+  if (sessionMode) return query.startsWith('??') ? 2 : 1
+  return query.startsWith('>') ? 1 : 0
+}
+
+/**
+ * What the palette says when it has no rows.
+ *
+ * Pulled out because it is the fiddliest piece of copy in the component and the
+ * one most worth pinning: it is the only place that tells somebody the wider
+ * search exists, and it has six branches that a static render cannot reach —
+ * the two searches behind it are asynchronous, and this project's tests have no
+ * DOM to run effects in.
+ */
+export function paletteEmptyMessage(state: {
+  mode: PaletteMode
+  /** The query with its sigil already stripped. */
+  term: string
+  sessionScope: 'project' | 'all'
+  sessions: { searching: boolean; error: string | null; unavailable: boolean }
+  files: { loading: boolean; unavailable: boolean }
+}): string {
+  const term = state.term.trim()
+
+  if (state.mode === 'sessions') {
+    if (state.sessions.unavailable) return 'Past-session search is not connected to the main process.'
+    if (state.sessions.error) return state.sessions.error
+    if (state.sessions.searching) return 'Reading past sessions…'
+    // Said out loud at exactly the moment somebody has typed `?` and is
+    // looking at an empty list, which is the only moment it helps.
+    if (term.length < 2) return 'Type at least two characters. Quoted “phrases” and -exclusions work.'
+    return state.sessionScope === 'all'
+      ? `Nothing on this machine said “${term}”.`
+      : 'Nothing in this project’s sessions. Start the query with ?? to search every project.'
+  }
+
+  if (state.mode === 'files') {
+    if (state.files.unavailable) return 'Could not read this project’s files.'
+    if (state.files.loading) return 'Reading project files…'
+    if (term === '') return 'No files found.'
+    return `No matches for “${term}”.`
+  }
+
+  if (term === '') return 'No commands available.'
+  return `No matches for “${term}”.`
+}
+
 type PaletteRow =
   | { kind: 'file'; key: string; path: string; ranges: MatchRange[] }
   | { kind: 'command'; key: string; command: PaletteCommand; ranges: MatchRange[] }
+  | { kind: 'session'; key: string; hit: SessionHit }
 
 function Highlight({ text, ranges }: { text: string; ranges: readonly MatchRange[] }): ReactNode {
   if (ranges.length === 0) return text
@@ -246,6 +429,106 @@ function useProjectFiles(
   return { files, loading, unavailable }
 }
 
+interface SessionSearchState {
+  hits: SessionHit[]
+  searching: boolean
+  /** The main process's own message, when it refused the query. */
+  error: string | null
+  unavailable: boolean
+}
+
+/**
+ * Runs a transcript search as the reader types, and never lets a slow answer
+ * overwrite a newer one.
+ *
+ * Debounced because a scan reads every transcript the project has — on this
+ * machine that is up to 154 MB in one file — and cancelled on close for the
+ * same reason: a scan running for a palette nobody is looking at is the main
+ * process doing work with nowhere to put it.
+ */
+function useSessionSearch(
+  root: string | null,
+  term: string,
+  active: boolean,
+  scope: 'project' | 'all',
+  override?: SessionSearchBridge,
+): SessionSearchState {
+  const [state, setState] = useState<SessionSearchState>({
+    hits: [],
+    searching: false,
+    error: null,
+    unavailable: false,
+  })
+
+  const bridge = useMemo(() => override ?? sessionSearchBridge(), [override])
+  const run = useRef(0)
+
+  useEffect(() => {
+    if (!active || !root) return
+    if (!bridge) {
+      setState({ hits: [], searching: false, error: null, unavailable: true })
+      return
+    }
+
+    const trimmed = term.trim()
+    if (trimmed.length < 2) {
+      run.current += 1
+      setState({ hits: [], searching: false, error: null, unavailable: false })
+      cancelQuietly(bridge)
+      return
+    }
+
+    const id = run.current + 1
+    run.current = id
+    setState((current) => ({ ...current, searching: true, error: null }))
+
+    const timer = setTimeout(() => {
+      void (async () => {
+        try {
+          const response = await bridge.searchSessions({
+            cwd: root,
+            query: trimmed,
+            scope,
+            roles: [...SEARCH_ROLES],
+            maxHits: MAX_SESSION_HITS,
+          })
+          if (run.current !== id) return
+          if (response.ok) {
+            setState({ hits: response.hits, searching: false, error: null, unavailable: false })
+          } else if (response.error !== 'cancelled') {
+            setState({ hits: [], searching: false, error: response.message, unavailable: false })
+          }
+        } catch {
+          if (run.current !== id) return
+          setState({ hits: [], searching: false, error: null, unavailable: true })
+        }
+      })()
+    }, SESSION_DEBOUNCE_MS)
+
+    return () => clearTimeout(timer)
+  }, [bridge, root, term, active, scope])
+
+  const wasActive = useRef(false)
+  useEffect(() => {
+    if (active) {
+      wasActive.current = true
+      return
+    }
+    // Only after a search has actually been active. Without this the palette
+    // sends a cancel down the bridge every time it opens in file or command
+    // mode, for a scan that was never started.
+    if (!wasActive.current) return
+    wasActive.current = false
+    // Closing the palette used to leave the scan running: the run counter stops
+    // a stale answer being *shown*, not the main process from streaming every
+    // transcript for nobody.
+    run.current += 1
+    cancelQuietly(bridge)
+  }, [active, bridge])
+
+  return state
+}
+
 export function CommandPalette({
   open,
   mode = 'files',
@@ -254,11 +537,14 @@ export function CommandPalette({
   onClose,
   onOpenFile,
   loadFiles,
+  sessionBridge,
 }: CommandPaletteProps) {
   // The mode the caller asked for, expressed the only way the palette stores
   // mode: as the query's prefix.
-  const seedQuery = mode === 'commands' || projectRoot === null ? '>' : ''
+  const seedQuery =
+    projectRoot === null || mode === 'commands' ? '>' : mode === 'sessions' ? '?' : ''
   const [query, setQuery] = useState(seedQuery)
+  const [copied, setCopied] = useState(false)
   const [activeIndex, setActiveIndex] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLUListElement>(null)
@@ -287,17 +573,40 @@ export function CommandPalette({
     }
   }
 
-  // Command mode is a `>` prefix, so switching modes is just editing the
-  // query — one piece of state, and the field always shows the true mode.
-  const commandMode = query.startsWith('>') || projectRoot === null
-  const rawTerm = commandMode ? query.replace(/^>/, '') : query
-  const { text: fileTerm, line } = commandMode ? { text: rawTerm, line: undefined } : parseFileQuery(rawTerm)
-  const term = commandMode ? rawTerm : fileTerm
+  // Each mode is a prefix, so switching modes is just editing the query — one
+  // piece of state, and the field always shows the true mode. Session mode is
+  // tested first: with no project open there is nothing to search, and the
+  // palette falls back to commands exactly as it always has.
+  const sessionMode = projectRoot !== null && query.startsWith('?')
+  const commandMode = !sessionMode && (query.startsWith('>') || projectRoot === null)
+  const fileMode = !sessionMode && !commandMode
+  /*
+   * `??` widens the search to every project on the machine.
+   *
+   * Not a nicety. Measured on this machine: `~/Projects/terminaldeck` has 16
+   * transcripts of its own, and every one of the 193 file writes into that
+   * folder is recorded under a *different* project's transcripts, because the
+   * agent that made them was launched from a parent workspace and reached in.
+   * A search pinned to one project would answer "nothing" about a folder
+   * somebody had just spent a night working in — so the wider search has a
+   * doorway, and the empty state below points at it.
+   */
+  const sessionScope: 'project' | 'all' = query.startsWith('??') ? 'all' : 'project'
+  const rawTerm = query.slice(sigilLength(query, sessionMode))
+  const { text: fileTerm, line } = fileMode ? parseFileQuery(rawTerm) : { text: rawTerm, line: undefined }
+  const term = fileMode ? fileTerm : rawTerm
   // Ranking runs on every keystroke over the whole project. Deferring it keeps
   // the field itself responsive when the list is large.
   const deferredTerm = useDeferredValue(term)
 
   const { files, loading, unavailable } = useProjectFiles(projectRoot, open, loadFiles)
+  const sessions = useSessionSearch(
+    projectRoot,
+    term,
+    open && sessionMode,
+    sessionScope,
+    sessionBridge,
+  )
   const recents = (projectRoot ? recentFiles.get(projectRoot) : undefined) ?? NO_RECENTS
 
   // `recents` is a stable reference: the map only ever hands back a new array
@@ -308,6 +617,17 @@ export function CommandPalette({
   )
 
   const rows = useMemo<PaletteRow[]>(() => {
+    if (sessionMode) {
+      // Already ranked, by the process that read the transcripts. Re-ranking
+      // 260-character snippets by fuzzy name score here would throw away
+      // recency, role weight and phrase matching and call it an improvement.
+      return sessions.hits.map((hit, index) => ({
+        kind: 'session',
+        key: `${hit.sessionId}-${hit.at}-${index}`,
+        hit,
+      }))
+    }
+
     if (commandMode) {
       const selectable = commands.filter((command) => command.enabled !== false)
       return rankMatches(selectable, deferredTerm, commandSearchText, {
@@ -326,7 +646,7 @@ export function CommandPalette({
       limit: MAX_RESULTS,
       path: true,
     }).map(({ item, ranges }) => ({ kind: 'file', key: item, path: item, ranges }))
-  }, [commandMode, commands, candidates, deferredTerm])
+  }, [sessionMode, sessions.hits, commandMode, commands, candidates, deferredTerm])
 
   const active = rows.length === 0 ? 0 : Math.min(activeIndex, rows.length - 1)
 
@@ -348,7 +668,12 @@ export function CommandPalette({
 
   useEffect(() => {
     setActiveIndex(0)
-  }, [deferredTerm, commandMode])
+  }, [deferredTerm, commandMode, sessionMode])
+
+  // "Copied" belongs to the row it was pressed on, not to the palette.
+  useEffect(() => {
+    setCopied(false)
+  }, [query, active])
 
   useEffect(() => {
     if (!scrollPending.current) return
@@ -377,6 +702,29 @@ export function CommandPalette({
     (index: number) => {
       const row = rows[index]
       if (!row) return
+
+      /*
+       * A hit is a thing to read, so pressing it takes it rather than going
+       * somewhere.
+       *
+       * There is nowhere in this app to "open" a message from a session that
+       * finished last week — no transcript reader, and the session it belongs
+       * to may not exist any more — so a row that pretended to navigate would
+       * be the dead click this window has a rule against. Copying is the thing
+       * somebody actually wants next: the sentence goes into the prompt they
+       * are writing. The footer says `↩ copy` in this mode, so nothing claims
+       * otherwise, and the palette stays open because finding one line usually
+       * means finding two.
+       */
+      if (row.kind === 'session') {
+        const text = hitText(row.hit)
+        void navigator.clipboard
+          ?.writeText(text)
+          .then(() => setCopied(true))
+          .catch(() => setCopied(false))
+        return
+      }
+
       onClose()
       if (row.kind === 'command') {
         // A command that throws — or rejects — must not take the app's error
@@ -465,20 +813,31 @@ export function CommandPalette({
 
   if (!open) return null
 
-  const placeholder = commandMode
-    ? 'Run a command…'
-    : projectRoot
-      ? 'Search files by name — add :42 for a line'
-      : 'Open a project to search files'
-  const label = commandMode ? 'Command palette' : 'Quick open'
+  // One clock for the whole list, read at render. Fifty rows each calling
+  // `Date.now()` would date themselves a millisecond apart for no reason.
+  const now = Date.now()
 
-  let emptyMessage: string | null = null
-  if (rows.length === 0) {
-    if (!commandMode && unavailable) emptyMessage = 'Could not read this project’s files.'
-    else if (!commandMode && loading) emptyMessage = 'Reading project files…'
-    else if (term.trim() === '') emptyMessage = commandMode ? 'No commands available.' : 'No files found.'
-    else emptyMessage = `No matches for “${term.trim()}”.`
-  }
+  const placeholder = sessionMode
+    ? sessionScope === 'all'
+      ? 'Search every project’s past sessions'
+      : 'Search everything past sessions said and did'
+    : commandMode
+      ? 'Run a command…'
+      : projectRoot
+        ? 'Search files by name — add :42 for a line'
+        : 'Open a project to search files'
+  const label = sessionMode ? 'Past sessions' : commandMode ? 'Command palette' : 'Quick open'
+
+  const emptyMessage =
+    rows.length === 0
+      ? paletteEmptyMessage({
+          mode: sessionMode ? 'sessions' : commandMode ? 'commands' : 'files',
+          term,
+          sessionScope,
+          sessions,
+          files: { loading, unavailable },
+        })
+      : null
 
   return (
     <div className="palette-backdrop" role="presentation" onMouseDown={onBackdropMouseDown}>
@@ -487,7 +846,18 @@ export function CommandPalette({
       <div className="palette" role="dialog" aria-modal="true" aria-label={label} onKeyDown={onKeyDown}>
         <div className="palette-field">
           <span className="palette-glyph" aria-hidden="true">
-            {commandMode ? (
+            {sessionMode ? (
+              // A speech mark: this searches what was *said*, not what is on
+              // disk, and that is the whole distinction between this mode and
+              // the magnifier beside it.
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <path
+                  d="M4 6.5A2.5 2.5 0 0 1 6.5 4h11A2.5 2.5 0 0 1 20 6.5v7a2.5 2.5 0 0 1-2.5 2.5H10l-4.5 3.5v-3.5h.5A2.5 2.5 0 0 1 4 13.5z"
+                  strokeWidth="1.5"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            ) : commandMode ? (
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor">
                 <path d="M8 9l3 3-3 3M13 15h4" strokeWidth="1.8" strokeLinecap="round" />
                 <rect x="3" y="4" width="18" height="16" rx="3" strokeWidth="1.5" />
@@ -518,9 +888,14 @@ export function CommandPalette({
             onChange={(event) => setQuery(event.target.value)}
           />
 
-          {!commandMode && files.length > 0 && (
+          {fileMode && files.length > 0 && (
             <span className="palette-count" aria-hidden="true">
               {rows.length}/{files.length}
+            </span>
+          )}
+          {sessionMode && sessions.searching && (
+            <span className="palette-count" aria-hidden="true">
+              …
             </span>
           )}
         </div>
@@ -538,8 +913,12 @@ export function CommandPalette({
               }}
               onClick={() => activate(index)}
             >
-              {row.kind === 'file' ? <FileRow path={row.path} ranges={row.ranges} /> : (
+              {row.kind === 'file' ? (
+                <FileRow path={row.path} ranges={row.ranges} />
+              ) : row.kind === 'command' ? (
                 <CommandRow command={row.command} ranges={row.ranges} />
+              ) : (
+                <SessionRow hit={row.hit} now={now} showProject={sessionScope === 'all'} />
               )}
             </li>
           ))}
@@ -555,8 +934,10 @@ export function CommandPalette({
           <span>
             {/* Through `formatChord` so the footer and the shortcuts sheet
                 agree: ↩ on a Mac, the word Enter on a keyboard that prints
-                Enter on the key. */}
-            <kbd>{formatChord('enter')}</kbd> {commandMode ? 'run' : 'open'}
+                Enter on the key. Never a verb the row does not do — this is
+                the label that keeps `copy` from reading as `open`. */}
+            <kbd>{formatChord('enter')}</kbd>{' '}
+            {sessionMode ? 'copy' : commandMode ? 'run' : 'open'}
           </span>
           <span>
             <kbd>esc</kbd> close
@@ -566,11 +947,16 @@ export function CommandPalette({
               <kbd>&gt;</kbd> for commands
             </span>
           )}
+          {!sessionMode && projectRoot !== null && (
+            <span className="palette-footer-hint">
+              <kbd>?</kbd> for past sessions
+            </span>
+          )}
         </div>
 
         {/* Screen readers get the result count; sighted users get the list. */}
         <div className="palette-status" role="status" aria-live="polite">
-          {rows.length === 1 ? '1 result' : `${rows.length} results`}
+          {copied ? 'Copied to the clipboard.' : rows.length === 1 ? '1 result' : `${rows.length} results`}
         </div>
       </div>
     </div>
@@ -595,6 +981,32 @@ function FileRow({ path, ranges }: { path: string; ranges: MatchRange[] }) {
           </span>
         </span>
       )}
+    </>
+  )
+}
+
+export function SessionRow({
+  hit,
+  now,
+  showProject = false,
+}: {
+  hit: SessionHit
+  now: number
+  /** Only when searching every project, where it is what tells hits apart. */
+  showProject?: boolean
+}) {
+  return (
+    <>
+      <span className="palette-group">
+        {showProject && hit.projectName ? hit.projectName : (hit.tool ?? ROLE_LABEL[hit.role])}
+      </span>
+      <span className="palette-name palette-snippet">
+        {hit.snippet.truncatedStart ? '…' : null}
+        <Highlight text={hit.snippet.text} ranges={snippetRanges(hit.snippet)} />
+        {hit.snippet.truncatedEnd ? '…' : null}
+      </span>
+      {hit.isSidechain && <span className="palette-sub">sub-agent</span>}
+      <span className="palette-when">{relativeTime(hit.at, now)}</span>
     </>
   )
 }

@@ -941,3 +941,245 @@ button.gh-device-code:hover {
 .gh-panel .page-blank-hint code {
   white-space: nowrap;
 }
+
+/* ============================================================== what it asks
+
+   The block that exists because of a screenshot.
+
+   GitHub's authorisation page said "Full control of private repositories" with
+   no repository picker on it, and the app had given no warning it was about to
+   ask for that. This says the same thing first, in GitHub's own words, so that
+   nobody arrives at that page surprised. It sits under the Connect button on
+   the empty page, so it is centred with everything else there and constrained
+   to the same measure — a full-width list of scopes under a centred block reads
+   as belonging to some other screen.
+   ============================================================================ */
+
+.gh-asks {
+  max-width: 30rem;
+  margin: var(--sp-5) auto 0;
+  padding: var(--sp-4);
+  border-radius: var(--radius-md);
+  /* A fill with a radius, not an outline: the panel has one ink line in it and
+     it is under the selected tab. */
+  background: var(--fill-quaternary);
+  text-align: left;
+}
+
+.gh-asks-title {
+  margin: 0 0 var(--sp-2);
+  color: var(--text-primary);
+  font-size: var(--t-callout);
+  font-weight: var(--w-semibold);
+}
+
+.gh-asks-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.gh-asks-list li {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.gh-asks-list code {
+  align-self: flex-start;
+  padding: 1px var(--sp-1);
+  border-radius: var(--radius-sm);
+  background: var(--fill-tertiary);
+  font-family: var(--font-mono);
+  font-size: var(--t-footnote);
+  color: var(--text-primary);
+  user-select: text;
+}
+
+/* GitHub's own phrase for the scope, which is what the consent screen prints.
+   It is the loudest line in the block on purpose: it is the sentence the user
+   is about to read on somebody else's page. */
+.gh-asks-wording {
+  color: var(--text-primary);
+  font-size: var(--t-callout);
+}
+
+.gh-asks-why,
+.gh-asks-body {
+  color: var(--text-muted);
+  font-size: var(--t-footnote);
+}
+
+.gh-asks-body {
+  margin: var(--sp-3) 0 0;
+  line-height: var(--lh-body);
+}
+
+.gh-asks-body code {
+  padding: 1px var(--sp-1);
+  border-radius: var(--radius-sm);
+  background: var(--fill-tertiary);
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  user-select: text;
+}
+
+.gh-asks-link {
+  height: var(--control-h-sm);
+  margin-top: var(--sp-3);
+  padding: 0 var(--sp-2);
+  margin-left: calc(var(--sp-2) * -1);
+  border-radius: var(--radius-sm);
+  color: var(--accent);
+  font-size: var(--t-footnote);
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.gh-asks-link:hover {
+  background: var(--bg-hover);
+}
+
+/* ============================================================== repositories
+
+   The third tab. It reads the credential rather than the folder, so it is the
+   only thing on this page with something to show when the open folder is not a
+   GitHub repository — which is the state that made a successful sign-in look
+   like a failed one.
+   ============================================================================ */
+
+.gh-repos {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.gh-repos-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-height: var(--control-h);
+  margin-bottom: var(--sp-2);
+  padding: 0 var(--sp-3);
+}
+
+/* "500+ repositories · showing the 100 most recently pushed". Quiet, because
+   it is a caveat on the list rather than a heading over it. */
+.gh-repos-count {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--t-footnote);
+}
+
+/* 11rem is the width `.debug-filter` settled on for the same job — long enough
+   for a repository name, short enough to leave the count beside it. There is no
+   spacing token past 64px, and inventing one for a single control would put a
+   value in the design system that nothing else uses. */
+.gh-repos-filter {
+  width: 11rem;
+  max-width: 40%;
+  height: var(--control-h-sm);
+  padding: 0 var(--sp-2);
+  border-radius: var(--radius-sm);
+  background: var(--fill-tertiary);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: var(--t-footnote);
+}
+
+.gh-repos-filter::placeholder {
+  color: var(--text-muted);
+}
+
+.gh-repos-filter:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+/*
+  A repository row runs name-first, facts-after — the opposite way round to a
+  pull-request row, and it has to be said explicitly.
+
+  `.gh-title` grows by default because a pull-request title is the long thing
+  on the row and everything else is a short cluster pinned right. A repository
+  name is the *short* thing, so the same rule pushed the description and the
+  language over to the far edge with a hand's width of nothing between them and
+  the name. Here the name hugs its text and the fact cluster takes the slack.
+*/
+.gh-row[data-kind='repo'] .gh-title {
+  flex: 0 1 auto;
+}
+
+.gh-row[data-kind='repo'] .gh-meta {
+  flex: 1;
+  min-width: 0;
+}
+
+/*
+  Visibility is not a status, so it does not get a status colour.
+
+  These two used to borrow `data-badge="open"` and `="draft"`, which painted
+  every public repository in the green that means "this pull request is waiting
+  on you" — the one colour rule this panel has is that a meaningful colour
+  means something specific, and "public" is not it. Private is the slightly
+  louder of the two because it is the one worth noticing in a screen-share.
+*/
+.gh-badge[data-badge='private'] {
+  color: var(--text-secondary);
+}
+
+.gh-badge[data-badge='public'] {
+  color: var(--text-muted);
+}
+
+/* The folder you are standing in, marked in the list. A tint rather than a
+   rule, and no second colour: it is "you are here", not a status. */
+.gh-row[data-current] {
+  background: var(--fill-quaternary);
+}
+
+.gh-here {
+  margin-left: var(--sp-2);
+  padding: 0 var(--sp-1);
+  border-radius: var(--radius-sm);
+  background: var(--fill-tertiary);
+  color: var(--text-muted);
+  font-size: var(--t-caption);
+  font-weight: var(--w-regular);
+}
+
+/* The description shares the row's fact cluster with the language and the age,
+   so it is the one that gives way. */
+.gh-repo-desc {
+  flex: 1 1 var(--sp-16);
+  /* Same basis as `.gh-title`, so a row with a long description and a row
+     without one put the age in the same column. */
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-muted);
+}
+
+.gh-repo-lang {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+/* The folder line in the head, when there is no repository to link to. Same
+   size and position as `.gh-repo` so the head does not jump as the answer
+   arrives, but not a button, because there is nowhere for it to go. */
+.gh-repo-none {
+  min-width: 0;
+  margin: 0;
+  padding: 0 var(--sp-2);
+  color: var(--text-muted);
+  font-size: var(--t-callout);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

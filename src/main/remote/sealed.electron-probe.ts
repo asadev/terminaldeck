@@ -397,14 +397,24 @@ const CREDENTIAL_KAT = '4bf290a5a496b447a9166888fb58f41b13c8a9aa68a518737e3262a0
  * and a responder key pair.
  */
 const RENDEZVOUS_KAT =
-  '21997b4b8533227a9e94ca653ef8d29a3c0053bb631b231c1163865b25d90dd4' +
-  'dd03190926474bf2dff0820a86943da2f434463ecb0dbaed4902234466d9cec4'
+  '646639452580485e5bedb2a94a33340c6c00e6408ad91636c9144a00552f202b' +
+  '8a9cbc26a0a81dbe81811217934593f968d4378c98b57bdd8589b8b0bec8cd89'
 
-/** A code somebody could be reading off the other machine's screen. */
-const CODE = 'h4k9 2fqt'
-const CODE_HOST_ID = 'ZWG39KXXW8GKVHZP6UF2SGUARD'
-const CODE_FINGERPRINT = '7XQA-UMES-XHFR-5S8L-46TV-H9XN'
-const CODE_PUBLIC_KEY = 'aQPhyoFeCJkVcrnoSvne9Eft2vkXQrmYitfzy2JowX8='
+/**
+ * A code somebody could be reading off the other machine's screen.
+ *
+ * Six digits, because that is what a code is now. These constants and
+ * `RENDEZVOUS_KAT` were recorded against the old eight-character Crockford
+ * code (`h4k9 2fqt`), and re-recording them was not a formality: the derivation
+ * is keyed by the code, so every byte downstream of it moves. They were
+ * regenerated under plain Node — the same way the originals were — and this
+ * check then confirmed Electron reaches the identical bytes, which is the only
+ * thing it exists to say.
+ */
+const CODE = '482913'
+const CODE_HOST_ID = 'PNN7FEFPVPEPG8J6JD5LTK22CW'
+const CODE_FINGERPRINT = '4JZJ-V39S-DBQ2-CQ5X-GGBS-9JSR'
+const CODE_PUBLIC_KEY = 'PluJUUCYOIi9dWOnMK0Sq8NrO635DqyD0yTLIyeLlAU='
 
 const credentialSecret = Buffer.alloc(32, 0x2a)
 const credentialSalt = Buffer.alloc(16, 0x5b)
@@ -415,7 +425,7 @@ check('scryptSync exists here and answers what OpenSSL answered', () => {
 })
 
 check('the rendezvous seed is the same 64 bytes it is everywhere else', () => {
-  const seed = scryptSync('H4K9-2FQT', RENDEZVOUS_SALT, 64, { ...SCRYPT, maxmem: SCRYPT_MAXMEM })
+  const seed = scryptSync('482913', RENDEZVOUS_SALT, 64, { ...SCRYPT, maxmem: SCRYPT_MAXMEM })
   equalBytes(seed, Buffer.from(RENDEZVOUS_KAT, 'hex'), 'the rendezvous seed')
 })
 

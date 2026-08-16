@@ -208,11 +208,12 @@ reimplemented, wrapped in the smallest stand-in desktop that can serve them.
 ios/Harness/run.sh host --approve-after 6000 --log-input
 ```
 
-It prints a pairing URI and writes it to `ios/Harness/.build/pairing.txt`. Hand
-it to the app the same way the desktop would:
+It prints a six-digit pairing code, writes it to `ios/Harness/.build/pairing.txt`
+and sits in the rendezvous slot that code names. Type it into the app's pairing
+field, which is the only way in the product has:
 
 ```sh
-xcrun simctl openurl booted "$(cat ios/Harness/.build/pairing.txt)"
+cat ios/Harness/.build/pairing.txt   # six digits — type them into the Simulator
 ```
 
 A control server on the next port up stands in for the human at the Mac, because
@@ -279,7 +280,7 @@ offered it. They need the harness and a phone that is already paired with it:
 
 ```sh
 ios/Harness/run.sh host --approve-after 6000 --log-input &
-xcrun simctl openurl booted "$(cat ios/Harness/.build/pairing.txt)"
+cat ios/Harness/.build/pairing.txt   # type the six digits into the Simulator
 xcodebuild test -project ios/TerminalDeck.xcodeproj -scheme TerminalDeck \
   -destination 'platform=iOS Simulator,name=iPhone 17' \
   -derivedDataPath ios/build/DerivedData \
@@ -296,13 +297,16 @@ because a server is not running on someone's laptop is a test that gets deleted
 in a week.
 
 Pairing happens outside the test on purpose: the code is minted at run time and
-has to cross from the host machine into the Simulator. A pasteboard hand-off
-runs into the system's Allow Paste prompt, so `simctl openurl` is the mechanism
-— it is the door the product already has, the one a scanned QR code comes
-through. **The Simulator then asks "Open in 'Terminal Deck'?" and somebody has
-to answer it**, because as far as iOS is concerned another program is offering
-this app a link. `LiveTransferUITests.tapOpenInApp` is that somebody; without it
-`simctl openurl` returns 0 and nothing happens at all.
+has to cross from the host machine into the Simulator.
+
+This used to be `xcrun simctl openurl` with a `terminaldeck://pair?…` link — the
+door a scanned QR code came through — and it dragged a SpringBoard alert with it:
+**"Open in 'Terminal Deck'?"**, which nothing in the app's own code could dismiss
+and which a helper had to find and tap. Every one of those problems is gone with
+the link. There is one way into this app now and it is six digits in a field, so
+the tests type six digits: `LiveTransferUITests` reads them from `TD_CODE_FILE`
+(the harness writes it once the phone says it is at the pairing screen), and the
+rest ask the harness's control server for one.
 
 `TEST_RUNNER_…` injection is how the run-time values reach the runner, and the
 *form* matters more than anything else on this page. Measured on Xcode 26.6 with
@@ -322,8 +326,8 @@ as one command rather than as a recipe to be retyped.
 
 #### `FindShareAndAlertsUITests` pairs itself
 
-The newest file in the target does not need `simctl openurl` at all: it asks the
-harness's control server for a code and types it, the way `KeyBarUITests` does.
+It asks the harness's control server for a code and types it, the way
+`KeyBarUITests` does — which is now what every file in the target does.
 So the whole of find, text size, share and the alerts screen is one command:
 
 ```sh

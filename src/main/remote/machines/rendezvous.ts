@@ -1,19 +1,24 @@
 /**
- * How eight typed characters find a machine.
+ * How six typed digits find a machine.
  *
  * ## The problem, stated honestly
  *
- * A phone pairs from a QR code, and that code carries four things: the relay
- * address, the 26-character host id, the host's 32-byte X25519 public key and
- * the pairing token. The first three are the *address* — they are what makes
- * the handshake Noise IK instead of trust-on-first-use — and none of them is a
- * secret. They are simply large: 130 bits of host id and 256 bits of key.
+ * Reaching a machine takes three facts: the relay address, the 26-character
+ * host id, and the host's 32-byte X25519 public key. Together they are the
+ * *address* — they are what makes the handshake Noise IK instead of
+ * trust-on-first-use — and none of them is a secret. They are simply large: 130
+ * bits of host id and 256 bits of key.
  *
- * A typed code cannot carry them. Forty bits is a code somebody will type; four
- * hundred is not. So a machine-to-machine pairing needs somewhere for the guest
- * to *look the address up*, and the only party both machines can already reach
- * is the relay — which is the one party in this design that is assumed to be
- * hostile.
+ * A typed code cannot carry them. Twenty bits is a code somebody will type; four
+ * hundred is not. This used to be somebody else's problem, because a phone read
+ * a QR code that carried all four fields at once — but the QR did not work and
+ * the link that carried them was a bearer secret people were pasting into chat
+ * apps, so both are gone and *every* client now arrives here holding nothing but
+ * six digits.
+ *
+ * So pairing needs somewhere for the guest to *look the address up*, and the
+ * only party every client can already reach is the relay — which is the one
+ * party in this design that is assumed to be hostile.
  *
  * ## The trick, which needs no change to the relay at all
  *
@@ -42,21 +47,44 @@
  * refuses. There is no new handshake here, no new primitive, and no new frame
  * format on the wire: it is `sealed.ts`, unchanged, keyed by the code.
  *
- * ## Which leaves exactly one attack, and the reason for the scrypt
+ * ## The scrypt is not a precaution. It is what makes six digits possible.
  *
- * A relay that records the handshake can guess the code offline: for each guess,
- * derive the responder private key and try to open the initiator's static. That
- * is a 2^40 search, and X25519 plus one AEAD is fast enough — about fifty
- * microseconds — that a GPU rig would finish it in days, and hours if somebody
- * really cared. Days is far too long to matter for a code that dies in sixty
- * seconds, but the credential the guest receives afterwards is sealed under keys
- * an attacker who eventually recovers the code could also derive.
+ * This is the paragraph to read before changing anything in this file.
  *
- * The seed is therefore memory-hard. `scrypt` at the same parameters
- * `device-auth.ts` uses costs about 36ms and 16MB per attempt: once per pairing
- * for each honest machine, and roughly four months of a dedicated rig for the
- * full space. Against a secret that is dead in a minute and can only ever be
- * used once, that is a margin with nothing to argue about.
+ * There are a million codes. `device-auth.ts` and `pairingDesk.offers` between
+ * them give an attacker five guesses at one, inside sixty seconds, for a prize
+ * that is a *pending* device somebody still has to approve — 5 × 10⁻⁶, which is
+ * the number `shared/short-code.ts` argues is acceptable.
+ *
+ * That argument only holds while an attacker has to **guess**. The slot below is
+ * derived from the code, and a slot lookup answers a yes/no question about a
+ * candidate code with no rate limit anywhere in the path. If deriving it were a
+ * hash, an attacker would sweep the million in seconds, find the single live
+ * slot, learn the code exactly, and redeem it on the first try. Five guesses
+ * against a million would be worth precisely nothing, because they would never
+ * need a second one.
+ *
+ * So the seed is memory-hard. `scrypt` at the same parameters `device-auth.ts`
+ * uses costs about **36ms and 16MB** per attempt — once per pairing for an
+ * honest machine, and about **ten CPU-hours** for the full million. Inside the
+ * sixty seconds a slot is up that is ~16,700 derivations a second, which is
+ * ~533 GB/s of sustained memory traffic: one top-end datacentre GPU doing
+ * nothing else, alongside 16,700 fresh WebSocket connections a second at a relay
+ * that has no per-source connection limit. And what it wins is the machine's
+ * *public* address, plus one first-try redemption that produces a row in an
+ * approval list.
+ *
+ * Lowering N, or replacing this with SHA-256 because it is faster on a phone,
+ * turns six digits into a space anybody sweeps between two coffees. There is
+ * nothing to negotiate and no fallback, which is also why {@link RENDEZVOUS_SALT}
+ * is versioned: a build that disagrees fails to find its peer rather than
+ * quietly agreeing on the cheaper of two derivations.
+ *
+ * The offline version — a hostile relay recording the handshake and searching at
+ * leisure — costs the same ten CPU-hours with no clock on it, and buys a code
+ * that is expired and spent by the time it lands. Nothing else ever travels on
+ * this channel: the credential is issued over a second, separate connection to
+ * the machine's own static key.
  *
  * ## What is deliberately *not* here
  *
@@ -90,12 +118,12 @@ export const RENDEZVOUS_SALT = 'terminaldeck-machine-pairing-v1'
 
 /**
  * The same parameters `device-auth.ts` hashes credentials with, and for a
- * stronger reason.
+ * far stronger reason.
  *
  * There the KDF is defence in depth over a 256-bit random secret, so the cost is
- * a formality. Here it is the only thing standing between a forty-bit code and
- * an offline search, which is the case scrypt was designed for. ~36ms and 16MB
- * per attempt, measured on this machine.
+ * a formality. Here it is the only thing standing between a million-code space
+ * and a sweep that would make the five-guess budget meaningless — see the header.
+ * ~36ms and 16MB per attempt, measured on this machine.
  */
 const SCRYPT = { N: 16384, r: 8, p: 1 } as const
 
@@ -112,9 +140,9 @@ const SEED_BYTES = HOST_SECRET_BYTES + 32
  */
 export function rendezvousIdentity(code: string): HostIdentity | null {
   // Normalised first, so the two ends derive from the same string however each
-  // of them was typed or printed. `H4K9-2FQT`, `h4k92fqt` and a code with an
-  // `O` where a zero was meant all have to land on one seed, or pairing depends
-  // on which keyboard somebody used.
+  // of them was typed or printed. `123456`, ` 123 456 ` and `123-456` — the
+  // shape that comes back out of a chat app — all have to land on one seed, or
+  // pairing depends on what somebody's keyboard put between the digits.
   const canonical = normaliseCode(code)
   if (canonical === null) return null
 
@@ -170,10 +198,11 @@ export interface MachineOffer {
  *
  * It lives here, next to the frame it fills in, because two paths need it: the
  * Machines screen, which refuses to show a code without one, and the phone
- * pairing on the Remote panel, which shows its code either way because a QR
- * carries the address inside the link. Two spellings of one offer is exactly the
- * kind of thing that works on the machine it was written on — which is also why
- * the key is re-encoded below rather than passed through.
+ * pairing on the Remote panel, which shows its code either way — a decision that
+ * used to rest on the QR carrying the address inside a link, and now rests only
+ * on the browser client this machine serves on its own tailnet. Two spellings of
+ * one offer is exactly the kind of thing that works on the machine it was written
+ * on — which is also why the key is re-encoded below rather than passed through.
  */
 export function offerFrom(relay: RelayState | null): MachineOffer | null {
   if (relay === null || !relay.connected || relay.hostId === '' || relay.publicKey === '') return null
@@ -335,7 +364,7 @@ export function startBeacon(options: BeaconOptions): Beacon | null {
      * The reply is written in the same synchronous run as this callback
      * returns, so a microtask is enough to land behind it — and it is the
      * smallest delay that is still ordered, which matters when a person is
-     * waiting to type eight characters.
+     * waiting to type six digits.
      */
     queueMicrotask(() => wire.send(payload))
     // Deliberately not closed from this side. The guest reads the offer and

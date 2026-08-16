@@ -15,10 +15,10 @@
  * either is how the two sides drift apart:
  *
  *  - the control protocol, which is imported from `src/headless/control.ts`;
- *  - the pairing link, which is built by `relayPairingLink` in
- *    `src/shared/pairing-link.ts` — the very function the desktop's own
- *    Pair panel calls. A link hand-assembled here could scan, parse on the phone
- *    and still be a shape the shipping desktop never produces.
+ *  - the pairing code, which is minted by `machines:code` on the host — the very
+ *    command the desktop's own Pair panel and the CLI both send. It publishes the
+ *    rendezvous beacon for the life of the code, and a code minted any other way
+ *    would be six digits the phone can look up nowhere.
  *
  * ## Why the phone is approved from a script and not by a person
  *
@@ -32,7 +32,7 @@
  *
  * ## Commands
  *
- *     live-desktop pair    --state <dir> --out <file>   mint a link, write it
+ *     live-desktop pair    --state <dir> --out <file>   mint a code, write it
  *     live-desktop approve --state <dir> [--wait <ms>]  approve whatever pairs
  *     live-desktop folder  --state <dir> --path <dir>   grant it to every device
  *     live-desktop status  --state <dir>                the host's own status
@@ -49,7 +49,6 @@ import type { Device } from '../../src/main/remote/device-auth'
 import type { DeviceFolderGrant } from '../../src/main/remote/folder-grants'
 import type { PairingToken } from '../../src/main/remote/device-auth'
 import type { HostStatus } from '../../src/headless/host'
-import { relayPairingLink } from '../../src/shared/pairing-link'
 
 /* ------------------------------------------------------------- arguments -- */
 
@@ -118,13 +117,20 @@ async function ask(at: DaemonRecord, cmd: string, ...args: unknown[]): Promise<u
 /* -------------------------------------------------------------- commands -- */
 
 /**
- * Mint a code and write the link a phone can follow.
+ * Mint the six digits a phone is going to have typed into it.
  *
  * `machines:code` rather than `remote:pair`, for the reason `main.ts` gives at
  * length: it publishes a rendezvous beacon for the life of the code, which is
  * what lets a device that has never met this host find it. It also refuses when
  * the relay is down, and that refusal is the correct answer — a code nobody can
  * look up is a code that fails after it has been typed.
+ *
+ * This used to write a `terminaldeck://pair?…` link, which `live-transfer.sh`
+ * then handed to the Simulator with `simctl openurl`. Neither exists any more:
+ * the link is gone from the product, so the proof types what a person types. The
+ * file it writes is the channel — the UI test polls for it, reads six digits and
+ * puts them in the field — because the code is minted *after* the phone reaches
+ * the pairing screen and cannot be an environment variable set at launch.
  */
 async function pair(options: Options): Promise<void> {
   const at = record(options.state)
@@ -132,8 +138,8 @@ async function pair(options: Options): Promise<void> {
   const relay = status.remote.relay
   if (relay === null || !relay.connected) {
     throw new Error(
-      'The host is not on the relay, so a relay link cannot be minted. This proof is ' +
-        'about the live relay specifically — a tailnet link would test another path.',
+      'The host is not on the relay, so there is nowhere to publish the rendezvous slot the ' +
+        'code names. This proof is about the live relay specifically.',
     )
   }
 
@@ -142,16 +148,10 @@ async function pair(options: Options): Promise<void> {
     | { ok: false; message: string }
   if (!offer.ok) throw new Error(offer.message)
 
-  const link = relayPairingLink(
-    { url: relay.url, hostId: relay.hostId, publicKey: relay.publicKey },
-    offer.code.token,
-  )
-  if (link === null) {
-    throw new Error('The host published a relay identity a pairing link cannot be built from.')
-  }
-
-  if (options.out !== '') await writeFile(options.out, `${link}\n`, 'utf8')
-  process.stdout.write(`${link}\n`)
+  // No trailing newline in the file. The test reads it whole and types it, and a
+  // newline typed into a `.numberPad` field is a character the parser refuses.
+  if (options.out !== '') await writeFile(options.out, offer.code.token, 'utf8')
+  process.stdout.write(`${offer.code.token}\n`)
   process.stderr.write(
     `host ${relay.hostId} on ${relay.url}, code good until ` +
       `${new Date(offer.code.expiresAt).toISOString()}\n`,

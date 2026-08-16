@@ -138,6 +138,42 @@ export function foreignNote(status: HookProviderStatus): string | null {
   return `${count} hook${count === 1 ? '' : 's'} here belong${count === 1 ? 's' : ''} to ${owner}. ${count === 1 ? 'It is' : 'They are'} never modified or removed.`
 }
 
+/**
+ * The line under the header: where the local endpoint is, or that it is not up.
+ *
+ * The running half used to carry a second sentence — that the address and its
+ * token change every run, so hooks are reinstalled when the app starts. True,
+ * and a description of our own implementation: nothing in it changes what the
+ * reader does, and it doubled the length of a line whose whole job is to show
+ * an address. The *not* running half keeps its consequence, because "hooks have
+ * nowhere to report to" is why the page underneath will look inert.
+ *
+ * Pure and exported so both halves can be pinned; `server` arrives from an
+ * effect, which a static render never runs.
+ */
+export function endpointLine(server: HookServerInfo | null): string {
+  return server?.running
+    ? `Listening on 127.0.0.1:${server.port}.`
+    : 'The local endpoint is not running, so hooks have nowhere to report to.'
+}
+
+/**
+ * What the panel promises before it writes to somebody's settings file.
+ *
+ * Two sentences before the app-wide shortening pass and one clause after it,
+ * and it stayed on screen at all because it is the fact that makes the button
+ * safe to press: this is a file the user may well have edited by hand, and the
+ * removal reaches only the entries this app put there. Cutting it would have
+ * been the shortening taking a real assurance with it.
+ *
+ * Exported so it can be pinned. The sentence itself only appears after a press,
+ * and this project has no DOM in its tests — a static render can never reach
+ * the state that draws it, so the string is asserted where it is written.
+ */
+export function removalPromise(file: string): string {
+  return `Only our own entries are removed from ${file}. Everything else stays.`
+}
+
 /* ------------------------------------------------------------------- rows -- */
 
 export interface HookRowProps {
@@ -184,12 +220,7 @@ export function HookRow({ status, busy, result, onInstall, onRemove }: HookRowPr
           <p className="hooks-backup">Original kept at {status.backupPath}</p>
         ) : null}
 
-        {confirming ? (
-          <p className="hooks-confirm">
-            This removes only the entries tagged as ours from {status.file}. Every other hook and
-            setting in the file is left exactly as it is.
-          </p>
-        ) : null}
+        {confirming ? <p className="hooks-confirm">{removalPromise(status.file)}</p> : null}
 
         {result ? (
           <p className="hooks-result" data-ok={result.ok}>
@@ -334,8 +365,7 @@ export function HooksPanel({ bridge }: HooksPanelProps) {
               structure rather than looking at it. */}
           <h2 className="hooks-heading">Provider hooks</h2>
           <p className="hooks-sub">
-            Agent CLIs can call out on session and tool events. Installing hooks lets this app
-            follow a session without reading its terminal output.
+            Lets this app follow a session without reading its terminal output.
           </p>
         </div>
         <button type="button" className="hooks-refresh" onClick={() => void refresh()}>
@@ -344,9 +374,7 @@ export function HooksPanel({ bridge }: HooksPanelProps) {
       </header>
 
       <p className="hooks-endpoint" data-running={server?.running ?? false}>
-        {server?.running
-          ? `Listening on 127.0.0.1:${server.port}. The address and its token change every run, so hooks are reinstalled when the app starts.`
-          : 'The local endpoint is not running, so hooks have nowhere to report to.'}
+        {endpointLine(server)}
       </p>
 
       {error ? <p className="hooks-error">{error}</p> : null}
@@ -379,8 +407,7 @@ export function HooksPanel({ bridge }: HooksPanelProps) {
           the redundancy the rules call out. */}
       {statuses !== null && statuses.length === 0 && !error ? (
         <PageEmpty icon={panelSpec('hooks').icon} title="No agent CLIs on this machine">
-          There is nothing to install hooks into yet. Install Claude Code, Codex or Gemini CLI,
-          then press Refresh.
+          Install Claude Code, Codex or Gemini CLI, then press Refresh.
         </PageEmpty>
       ) : null}
     </section>

@@ -117,25 +117,60 @@ final class MultiHostTests: XCTestCase {
     private var transports: [String: ScriptedTransport] = [:]
     private var model: DeckModel!
 
+    /**
+     * The fake rendezvous: which machine is sitting behind which six digits.
+     *
+     * A code carries no address any more — the QR and the link that used to
+     * carry one are gone — so pairing is two steps, and the first is a lookup at
+     * a relay. Stubbing it here is what keeps these tests off the network;
+     * `RendezvousTests` is where the derivation itself is checked, against the
+     * desktop's own vectors.
+     */
+    private var rendezvous: [String: MachineOffer] = [:]
+    private var nextCode = 482_910
+
     override func setUp() {
         super.setUp()
         store = MemoryStore()
         transports = [:]
+        rendezvous = [:]
+        nextCode = 482_910
         UserDefaults.standard.removeObject(forKey: "terminaldeck.currentHost.v1")
-        model = DeckModel(credentials: store,
-                          device: DeviceDescriptor(name: "iPhone", platform: "iOS 26")) { [weak self] hostId, _, _ in
+        model = makeModel()
+    }
+
+    private func makeModel() -> DeckModel {
+        DeckModel(credentials: store,
+                  device: DeviceDescriptor(name: "iPhone", platform: "iOS 26"),
+                  lookup: { [weak self] code in self?.rendezvous[code] }) { [weak self] hostId, _, _ in
             let transport = ScriptedTransport(hostId: hostId)
             self?.transports[hostId] = transport
             return transport
         }
     }
 
-    private func code(_ hostId: String, token: String = "pairing-token") -> String {
-        let key = Data(repeating: 5, count: 32).base64EncodedString()
-            .replacingOccurrences(of: "+", with: "-")
-            .replacingOccurrences(of: "/", with: "_")
-            .replacingOccurrences(of: "=", with: "")
-        return "terminaldeck://pair?v=1&r=wss://relay.example&h=\(hostId)&k=\(key)&t=\(token)"
+    /**
+     * A fresh six-digit code for a machine, registered with the fake rendezvous.
+     *
+     * Fresh every call on purpose: a code is single-use, so two pairings of the
+     * same machine are two codes, and a helper that returned the same digits
+     * twice would be testing something the product refuses.
+     */
+    private func code(_ hostId: String) -> String {
+        let digits = String(format: "%06d", nextCode)
+        nextCode += 1
+        rendezvous[digits] = MachineOffer(relayURL: URL(string: "wss://relay.example")!,
+                                          hostId: hostId,
+                                          hostKey: Data(repeating: 5, count: 32))
+        return digits
+    }
+
+    /// Pair, and wait for it. `pair(with:)` starts a task; the async half is what
+    /// a test has to await, or every assertion below would run before the lookup.
+    private func pair(_ hostId: String) async -> String {
+        let digits = code(hostId)
+        await model.pairAsync(with: digits)
+        return digits
     }
 
     private func session(_ id: String, title: String, status: String = "idle") -> RemoteSession {
@@ -150,11 +185,11 @@ final class MultiHostTests: XCTestCase {
     // MARK: - Pairing adds
 
     /// The requirement, at the level a user would notice it.
-    func testPairingASecondMachineKeepsTheFirst() {
-        model.pair(with: code(Self.macId))
+    func testPairingASecondMachineKeepsTheFirst() async {
+        _ = await pair(Self.macId)
         XCTAssertEqual(model.hosts.count, 1)
 
-        model.pair(with: code(Self.pcId))
+        _ = await pair(Self.pcId)
 
         XCTAssertEqual(model.hosts.count, 2)
         XCTAssertEqual(Set(model.hosts.map(\.id)), [Self.macId, Self.pcId])
@@ -163,43 +198,43 @@ final class MultiHostTests: XCTestCase {
     }
 
     /// Both come back on the next launch, which is when the loss would be noticed.
-    func testBothMachinesComeBackOnRelaunch() {
-        model.pair(with: code(Self.macId))
-        model.pair(with: code(Self.pcId))
+    func testBothMachinesComeBackOnRelaunch() async {
+        _ = await pair(Self.macId)
+        _ = await pair(Self.pcId)
 
-        let relaunched = DeckModel(credentials: store,
-                                   device: DeviceDescriptor(name: "iPhone", platform: "iOS 26")) { hostId, _, _ in
-            ScriptedTransport(hostId: hostId)
-        }
+        let relaunched = makeModel()
         XCTAssertEqual(Set(relaunched.hosts.map(\.id)), [Self.macId, Self.pcId])
     }
 
     /// The machine just paired is the one on screen. Anything else is a pairing
     /// that appears to have done nothing.
-    func testTheNewMachineBecomesTheCurrentOne() {
-        model.pair(with: code(Self.macId))
-        model.pair(with: code(Self.pcId))
+    func testTheNewMachineBecomesTheCurrentOne() async {
+        _ = await pair(Self.macId)
+        _ = await pair(Self.pcId)
         XCTAssertEqual(model.current?.id, Self.pcId)
     }
 
     /// Re-pairing after a revoke is normal, and must not cost the other machine.
-    func testRePairingAMachineDoesNotDuplicateOrDropIt() throws {
-        model.pair(with: code(Self.macId))
-        model.pair(with: code(Self.pcId))
+    func testRePairingAMachineDoesNotDuplicateOrDropIt() async throws {
+        _ = await pair(Self.macId)
+        _ = await pair(Self.pcId)
 
-        model.pair(with: code(Self.macId, token: "fresh-token"))
+        let fresh = await pair(Self.macId)
 
         XCTAssertEqual(model.hosts.count, 2)
-        XCTAssertEqual(store.load(Self.macId)?.token, "fresh-token")
-        XCTAssertEqual(store.load(Self.pcId)?.token, "pairing-token")
+        // The token stored is the code itself: it is what the far end hashed when
+        // it minted one, and what this phone presents on the `hello` that
+        // redeems it.
+        XCTAssertEqual(store.load(Self.macId)?.token, fresh)
+        XCTAssertNotEqual(store.load(Self.pcId)?.token, fresh)
         XCTAssertEqual(model.current?.id, Self.macId)
     }
 
     /// A machine that refuses the credential takes itself out of the list and
     /// nothing else with it.
-    func testARefusalRemovesOnlyThatMachine() throws {
-        model.pair(with: code(Self.macId))
-        model.pair(with: code(Self.pcId))
+    func testARefusalRemovesOnlyThatMachine() async throws {
+        _ = await pair(Self.macId)
+        _ = await pair(Self.pcId)
         model.start()
 
         try transport(Self.pcId).refuse("The desktop refused this device.")
@@ -213,9 +248,9 @@ final class MultiHostTests: XCTestCase {
         XCTAssertEqual(model.collectionError?.contains("K3ZQW7"), true)
     }
 
-    func testForgettingOneMachineKeepsTheOther() {
-        model.pair(with: code(Self.macId))
-        model.pair(with: code(Self.pcId))
+    func testForgettingOneMachineKeepsTheOther() async {
+        _ = await pair(Self.macId)
+        _ = await pair(Self.pcId)
 
         model.unpair(Self.macId)
 
@@ -229,18 +264,18 @@ final class MultiHostTests: XCTestCase {
 
     /// Not connect-on-switch. The switcher's whole job is live status for the
     /// machines that are *not* on screen.
-    func testEveryMachineIsStartedNotJustTheCurrentOne() throws {
-        model.pair(with: code(Self.macId))
-        model.pair(with: code(Self.pcId))
+    func testEveryMachineIsStartedNotJustTheCurrentOne() async throws {
+        _ = await pair(Self.macId)
+        _ = await pair(Self.pcId)
         model.start()
 
         XCTAssertGreaterThanOrEqual(try transport(Self.macId).starts, 1)
         XCTAssertGreaterThanOrEqual(try transport(Self.pcId).starts, 1)
     }
 
-    func testAMachineThatIsNotOnScreenStillReportsItsSessions() throws {
-        model.pair(with: code(Self.macId))
-        model.pair(with: code(Self.pcId))
+    func testAMachineThatIsNotOnScreenStillReportsItsSessions() async throws {
+        _ = await pair(Self.macId)
+        _ = await pair(Self.pcId)
         model.start()
 
         try transport(Self.macId).goLive([session("mac-1", title: "api", status: "working")])
@@ -256,9 +291,9 @@ final class MultiHostTests: XCTestCase {
 
     // MARK: - Separation
 
-    func testSessionListsDoNotMerge() throws {
-        model.pair(with: code(Self.macId))
-        model.pair(with: code(Self.pcId))
+    func testSessionListsDoNotMerge() async throws {
+        _ = await pair(Self.macId)
+        _ = await pair(Self.pcId)
         model.start()
 
         try transport(Self.macId).goLive([session("mac-1", title: "api"), session("mac-2", title: "web")])
@@ -277,9 +312,9 @@ final class MultiHostTests: XCTestCase {
      * The worst bug this feature could have: not losing a pairing, but typing
      * into the wrong computer.
      */
-    func testTypingGoesToTheMachineTheSessionBelongsTo() throws {
-        model.pair(with: code(Self.macId))
-        model.pair(with: code(Self.pcId))
+    func testTypingGoesToTheMachineTheSessionBelongsTo() async throws {
+        _ = await pair(Self.macId)
+        _ = await pair(Self.pcId)
         model.start()
         try transport(Self.macId).goLive([session("mac-1", title: "api")])
         try transport(Self.pcId).goLive([session("pc-1", title: "installer")])
@@ -296,9 +331,9 @@ final class MultiHostTests: XCTestCase {
 
     /// Attaching on one machine does not attach on the other, even for an id both
     /// could plausibly have.
-    func testAttachingIsPerMachine() throws {
-        model.pair(with: code(Self.macId))
-        model.pair(with: code(Self.pcId))
+    func testAttachingIsPerMachine() async throws {
+        _ = await pair(Self.macId)
+        _ = await pair(Self.pcId)
         model.start()
         try transport(Self.macId).goLive([session("shared-id", title: "api")])
         try transport(Self.pcId).goLive([session("shared-id", title: "installer")])
@@ -315,9 +350,9 @@ final class MultiHostTests: XCTestCase {
      * A route carries the machine, so switching cannot leave one machine's
      * terminal open under another machine's name.
      */
-    func testSwitchingPopsTheOtherMachinesTerminal() throws {
-        model.pair(with: code(Self.macId))
-        model.pair(with: code(Self.pcId))
+    func testSwitchingPopsTheOtherMachinesTerminal() async throws {
+        _ = await pair(Self.macId)
+        _ = await pair(Self.pcId)
         model.start()
         try transport(Self.macId).goLive([session("mac-1", title: "api")])
         try transport(Self.pcId).goLive([session("pc-1", title: "installer")])
@@ -331,8 +366,8 @@ final class MultiHostTests: XCTestCase {
     }
 
     /// Forgetting a machine closes anything of its that was open.
-    func testForgettingAMachinePopsItsTerminal() throws {
-        model.pair(with: code(Self.macId))
+    func testForgettingAMachinePopsItsTerminal() async throws {
+        _ = await pair(Self.macId)
         model.start()
         try transport(Self.macId).goLive([session("mac-1", title: "api")])
         model.open(session: "mac-1")
@@ -348,9 +383,9 @@ final class MultiHostTests: XCTestCase {
      * that wrote it does not know the phone has any others. So the machine is the
      * one actually listing that session.
      */
-    func testADeepLinkFindsTheMachineThatHasTheSession() throws {
-        model.pair(with: code(Self.macId))
-        model.pair(with: code(Self.pcId))
+    func testADeepLinkFindsTheMachineThatHasTheSession() async throws {
+        _ = await pair(Self.macId)
+        _ = await pair(Self.pcId)
         model.start()
         try transport(Self.macId).goLive([session("mac-1", title: "api")])
         try transport(Self.pcId).goLive([session("pc-1", title: "installer")])
@@ -364,8 +399,8 @@ final class MultiHostTests: XCTestCase {
 
     /// A link for a session nothing is listing opens nothing, rather than
     /// attaching the current machine to an id it has never heard of.
-    func testADeepLinkForAnUnknownSessionOpensNothing() throws {
-        model.pair(with: code(Self.macId))
+    func testADeepLinkForAnUnknownSessionOpensNothing() async throws {
+        _ = await pair(Self.macId)
         model.start()
         try transport(Self.macId).goLive([session("mac-1", title: "api")])
 
@@ -374,7 +409,7 @@ final class MultiHostTests: XCTestCase {
                        "with one machine there is only one place it could mean")
 
         model.route = []
-        model.pair(with: code(Self.pcId))
+        _ = await pair(Self.pcId)
         try transport(Self.pcId).goLive([])
         model.open(URL(string: "terminaldeck://session/somebody-elses")!)
         XCTAssertEqual(model.route, [.session(host: Self.pcId, id: "somebody-elses")],
@@ -391,8 +426,8 @@ final class MultiHostTests: XCTestCase {
      * The picker showed one folder while the desktop would have taken four, and
      * nothing on either screen explained the difference.
      */
-    func testThePickerOffersWhatTheMachineGranted() throws {
-        model.pair(with: code(Self.macId))
+    func testThePickerOffersWhatTheMachineGranted() async throws {
+        _ = await pair(Self.macId)
         try transport(Self.macId).goLive([session("s1", title: "alpha")],
                                          folders: ["/Users/asad/alpha", "/Users/asad/beta"])
 
@@ -403,8 +438,8 @@ final class MultiHostTests: XCTestCase {
 
     /// A desktop that predates the field keeps the behaviour it always had.
     /// Absent is "I have not told you", not "you may use nothing".
-    func testADesktopThatSaysNothingFallsBackToTheFoldersOnScreen() throws {
-        model.pair(with: code(Self.macId))
+    func testADesktopThatSaysNothingFallsBackToTheFoldersOnScreen() async throws {
+        _ = await pair(Self.macId)
         try transport(Self.macId).goLive([session("s1", title: "alpha"), session("s2", title: "beta")])
 
         XCTAssertEqual(model.startableFolders, ["/Users/asad/alpha", "/Users/asad/beta"])
@@ -419,8 +454,8 @@ final class MultiHostTests: XCTestCase {
      * so the button goes — absent rather than disabled, the same rule the
      * capability list follows — and the screen says where to fix it.
      */
-    func testAMachineThatGrantedNothingOffersNoNewSession() throws {
-        model.pair(with: code(Self.macId))
+    func testAMachineThatGrantedNothingOffersNoNewSession() async throws {
+        _ = await pair(Self.macId)
         try transport(Self.macId).goLive([session("s1", title: "alpha")], folders: [])
 
         XCTAssertTrue(model.startableFolders.isEmpty)
@@ -435,8 +470,8 @@ final class MultiHostTests: XCTestCase {
 
     /// Pushed, not polled. Somebody edits the list on the desktop and the phone
     /// in their other hand stops offering the folder that went.
-    func testTheFolderListIsReplacedByThePushedFrame() throws {
-        model.pair(with: code(Self.macId))
+    func testTheFolderListIsReplacedByThePushedFrame() async throws {
+        _ = await pair(Self.macId)
         let mac = try transport(Self.macId)
         mac.goLive([session("s1", title: "alpha")], folders: ["/Users/asad/alpha", "/Users/asad/beta"])
 
@@ -451,9 +486,9 @@ final class MultiHostTests: XCTestCase {
 
     /// Per machine, like everything else here. Offering a Mac's folder to a
     /// Windows PC would be a picker full of choices that fail.
-    func testEachMachineHasItsOwnGrant() throws {
-        model.pair(with: code(Self.macId))
-        model.pair(with: code(Self.pcId))
+    func testEachMachineHasItsOwnGrant() async throws {
+        _ = await pair(Self.macId)
+        _ = await pair(Self.pcId)
         try transport(Self.macId).goLive([], folders: ["/Users/asad/alpha"])
         try transport(Self.pcId).goLive([], folders: ["C:\\\\Projects\\\\deck"])
 
@@ -466,8 +501,8 @@ final class MultiHostTests: XCTestCase {
     /// A grant belongs to a live connection. Remembering an empty one across a
     /// teardown would leave the phone refusing to offer New Session on a machine
     /// that has simply not been asked yet.
-    func testAGrantDoesNotSurviveTheConnection() throws {
-        model.pair(with: code(Self.macId))
+    func testAGrantDoesNotSurviveTheConnection() async throws {
+        _ = await pair(Self.macId)
         let mac = try transport(Self.macId)
         mac.goLive([], folders: [])
         XCTAssertTrue(model.hasNoGrantedFolders)
@@ -478,22 +513,22 @@ final class MultiHostTests: XCTestCase {
 
     // MARK: - The switcher
 
-    func testTheSwitcherOnlyAppearsWhenThereIsAChoice() {
-        model.pair(with: code(Self.macId))
+    func testTheSwitcherOnlyAppearsWhenThereIsAChoice() async {
+        _ = await pair(Self.macId)
         XCTAssertFalse(model.hasSeveralHosts)
-        model.pair(with: code(Self.pcId))
+        _ = await pair(Self.pcId)
         XCTAssertTrue(model.hasSeveralHosts)
     }
 
-    func testAMachineCanBeNamed() {
-        model.pair(with: code(Self.macId))
+    func testAMachineCanBeNamed() async {
+        _ = await pair(Self.macId)
         model.rename(Self.macId, to: "Studio")
         XCTAssertEqual(model.current?.label, "Studio")
         XCTAssertEqual(store.load(Self.macId)?.nickname, "Studio")
 
         // And the name survives a re-pair, which is when the user is least
         // pleased to lose it.
-        model.pair(with: code(Self.macId, token: "fresh"))
+        _ = await pair(Self.macId)
         XCTAssertEqual(model.current?.label, "Studio")
     }
 

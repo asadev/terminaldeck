@@ -64,9 +64,13 @@ export function Onboarding({ onContinue, onOpenProject }: Props) {
     <div className="onboarding">
       <div className="onboarding-inner">
         <h1>Welcome to {BRAND.name}</h1>
+        {/* The second half stays. "It never sees your logins" is the security
+            claim this whole screen exists to make good on, and it is the one
+            sentence a first-run screen is entitled to spend. What went was the
+            explanation of *how* — the agent signing you in inside the session
+            is something the reader will watch happen in a minute anyway. */}
         <p className="onboarding-lede">
-          {BRAND.name} runs coding agents in real terminals. It never sees your logins — each agent signs
-          you in itself, inside the session.
+          {BRAND.name} runs coding agents in real terminals, and never sees your logins.
         </p>
 
         <section>
@@ -122,8 +126,7 @@ export function Onboarding({ onContinue, onOpenProject }: Props) {
 
         {prereq?.needsLogin && (
           <p className="onboarding-callout">
-            An agent is installed but not signed in. Open a project and start a session — the agent
-            will walk you through signing in, right there in the terminal.
+            An agent is installed but not signed in. Start a session and it will ask.
           </p>
         )}
 

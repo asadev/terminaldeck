@@ -18,8 +18,8 @@ import dev.terminaldeck.android.github.GitHubSignIn
 import dev.terminaldeck.android.github.KeystoreGitHubStore
 import dev.terminaldeck.android.github.SignInPhase
 import dev.terminaldeck.android.github.harnessGitHubEndpoints
-import dev.terminaldeck.android.pairing.PairingCode
 import dev.terminaldeck.android.pairing.PairingCodes
+import dev.terminaldeck.android.pairing.Rendezvous
 import dev.terminaldeck.android.protocol.Capability
 import dev.terminaldeck.android.protocol.ClientMessage
 import dev.terminaldeck.android.protocol.HostPlatform
@@ -111,6 +111,14 @@ class DeckViewModel(
      * once per machine — see [resume].
      */
     private val heartbeat: Heartbeat = Heartbeat.shared,
+    /**
+     * Where six typed digits turn into an address.
+     *
+     * A parameter rather than a direct call, and it is the only seam this class has for the network:
+     * the real one derives a memory-hard seed and opens a WebSocket to the public relay, so a unit
+     * test that reached it would dial the internet from whatever machine ran the suite.
+     */
+    private val lookup: suspend (String, String) -> Rendezvous.Offer? = Rendezvous::lookupAt,
     private val transportFactory: (CoroutineScope, String, DeviceVault) -> DeckTransport,
 ) : ViewModel() {
 
@@ -129,6 +137,8 @@ class DeckViewModel(
     private var addingHost = false
 
     private var pairingError: String? = null
+    /** True while the rendezvous is being asked where a typed code's machine is. */
+    private var pairingLookup: Boolean = false
 
     private var notice: String? = null
 
@@ -444,32 +454,73 @@ class DeckViewModel(
     }
 
     /**
-     * Pair with a machine in a code, **adding** it.
+     * Pair with the machine behind six typed digits, **adding** it.
      *
-     * The code is parsed before anything is stored, and stored before anything is sent: a device
-     * that has written down which machine it is talking to can come back to the same one after a
-     * crash mid-handshake, and one that has not would have spent a single-use token for nothing.
+     * ## Two steps, because a code carries no address
+     *
+     *  1. **The rendezvous.** [Rendezvous] explains it at length: the code names a slot at the
+     *     relay, the machine showing the code is sitting in it, and the channel is Noise IK against a
+     *     responder key both ends derive from the code. What comes back is an *address* and nothing
+     *     else.
+     *  2. **The pairing itself.** With the address in hand this is the path this app has always
+     *     taken: dial the machine, run IK against its real key, and say `hello` with the code as the
+     *     token. The far end mints a credential, sends it back inside `welcome`, and then refuses the
+     *     connection because a human still has to approve the device.
+     *
+     * The address is stored before anything is sent: a device that has written down which machine it
+     * is talking to can come back to the same one after a crash mid-handshake, and one that has not
+     * would have spent a single-use token for nothing.
      *
      * Pairing with a machine already in the list replaces *that machine's* record and nothing else —
      * a re-pair after a revoke is a normal thing to do and it must not cost the user their other
      * machines. Every other machine keeps its socket through this; not one of them is touched.
+     *
+     * ## Why `pairingLookup` goes up before the first suspension
+     *
+     * The lookup is a memory-hard derivation and a round trip to a relay: about a second between
+     * them, and the only thing on screen for all of it is a button. `pairingLookup` drives the
+     * spinner on that button, so it is published before the coroutine suspends rather than after.
      */
     fun pair(raw: String) {
         val code = PairingCodes.parse(raw)
         if (code == null) {
-            pairingError = "That is not a pairing code."
+            pairingError = "That is not a pairing code. It is six digits, like 123456."
             publish()
             return
         }
-        vault.beginPairing(
-            hostId = code.hostId,
-            hostStaticPublicKey = code.hostStaticPublicKey,
-            relayUrl = code.relayUrl ?: DEFAULT_RELAY,
-            pairingToken = code.token,
-        )
-        val record = vault.pairing(code.hostId) ?: return
+        if (pairingLookup) return
 
-        val existing = links[code.hostId]
+        pairingLookup = true
+        pairingError = null
+        publish()
+
+        viewModelScope.launch {
+            val offer = try {
+                lookup(code, DEFAULT_RELAY)
+            } finally {
+                pairingLookup = false
+            }
+            if (offer == null) {
+                pairingError = "No machine is showing that code. Check the digits, and that the code " +
+                    "on the other machine has not run out — they last a minute."
+                publish()
+                return@launch
+            }
+            adoptPaired(offer, code)
+        }
+    }
+
+    /** The half of [pair] that runs once an address is in hand. */
+    private fun adoptPaired(offer: Rendezvous.Offer, code: String) {
+        vault.beginPairing(
+            hostId = offer.hostId,
+            hostStaticPublicKey = offer.hostKey,
+            relayUrl = offer.relayUrl,
+            pairingToken = code,
+        )
+        val record = vault.pairing(offer.hostId) ?: return
+
+        val existing = links[offer.hostId]
         if (existing != null) {
             // The same machine with a new token. Taken down and brought back up so the transport
             // reads the credential that was just written rather than retrying with the one that was
@@ -483,15 +534,12 @@ class DeckViewModel(
 
         // The machine that was just paired is the one the user is looking at. Anything else would be
         // a pairing that appears to have done nothing.
-        selectedHostId = code.hostId
-        vault.selectHost(code.hostId)
+        selectedHostId = offer.hostId
+        vault.selectHost(offer.hostId)
         addingHost = false
         pairingError = null
         publish()
     }
-
-    /** Read a code without acting on it, so the pair screen can show what it is about to trust. */
-    fun preview(raw: String): PairingCode? = PairingCodes.parse(raw)
 
     fun clearPairingError() {
         pairingError = null
@@ -878,6 +926,7 @@ class DeckViewModel(
             live = current?.live ?: false,
             notice = notice,
             pairingError = pairingError,
+            pairingLookup = pairingLookup,
             upload = current?.uploadView,
             addingHost = addingHost,
             gitHubAccount = accounts.account(),
@@ -979,6 +1028,13 @@ data class DeckUiState(
     val live: Boolean = false,
     val notice: String? = null,
     val pairingError: String? = null,
+    /**
+     * True while six typed digits are being looked up at the rendezvous.
+     *
+     * A second between the memory-hard derivation and the round trip, with nothing else on screen —
+     * so the pair screen's button says so rather than appearing to have stuck.
+     */
+    val pairingLookup: Boolean = false,
     /** The file on its way to the selected machine, if any. Null is the normal state. */
     val upload: UploadView? = null,
     /** The user asked to add a machine, so the pair screen shows the field rather than a wait. */

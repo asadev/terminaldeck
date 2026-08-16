@@ -231,30 +231,51 @@ final class SessionAlertsTests: XCTestCase {
 
     private static let macId = "M9G95TNJT64Q928VW3HVRYDR8J"
 
-    private func code(_ hostId: String) -> String {
-        let key = Data(repeating: 5, count: 32).base64EncodedString()
-            .replacingOccurrences(of: "+", with: "-")
-            .replacingOccurrences(of: "/", with: "_")
-            .replacingOccurrences(of: "=", with: "")
-        return "terminaldeck://pair?v=1&r=wss://relay.example&h=\(hostId)&k=\(key)&t=token"
+    /**
+     * The fake rendezvous, and the code that finds it.
+     *
+     * A code carries no address any more — the QR and the link that used to
+     * carry one are gone — so pairing is a lookup followed by a connection.
+     * Stubbing the lookup is what keeps this suite off the network; the
+     * derivation itself is checked in `RendezvousTests` against the desktop's
+     * own vectors.
+     */
+    private static let pairingCode = "482913"
+
+    private func offer(_ hostId: String) -> MachineOffer {
+        MachineOffer(relayURL: URL(string: "wss://relay.example")!,
+                     hostId: hostId,
+                     hostKey: Data(repeating: 5, count: 32))
     }
+
 
     private var transport: ScriptedTransport!
     private var presenter: RecordingAlerts!
     private var model: DeckModel!
 
-    override func setUp() {
-        super.setUp()
+    /*
+     * `async`, and that is a consequence of the format rather than a style
+     * choice: six digits carry no address, so pairing is a rendezvous lookup
+     * followed by a connection, and `pair(with:)` starts a task. A synchronous
+     * `setUp` would return before the machine existed and every case below would
+     * run against an unpaired model.
+     */
+    override func setUp() async throws {
+        try await super.setUp()
         UserDefaults.standard.removeObject(forKey: "terminaldeck.currentHost.v1")
         AlertSettings.needsYou = true
         AlertSettings.finished = true
         transport = ScriptedTransport()
         presenter = RecordingAlerts()
         let transport = transport!
+        let macId = Self.macId
         model = DeckModel(credentials: MemoryStore(),
                           device: DeviceDescriptor(name: "iPhone", platform: "iOS 26"),
-                          alerts: presenter) { _, _, _ in transport }
-        model.pair(with: code(Self.macId))
+                          alerts: presenter,
+                          lookup: { [weak self] typed in
+                              typed == Self.pairingCode ? self?.offer(macId) : nil
+                          }) { _, _, _ in transport }
+        await model.pairAsync(with: Self.pairingCode)
         model.start()
     }
 

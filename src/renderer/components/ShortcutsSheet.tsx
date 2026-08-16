@@ -200,8 +200,10 @@ export function ShortcutsSheet({ open, onClose, ...list }: ShortcutsSheetProps) 
       title="Keyboard shortcuts"
       // "this window answers to", not "the app knows about": the sheet leaves
       // out the chords whose feature is uninstalled, so the old sentence
-      // promised a completeness it no longer has.
-      description="Every shortcut this window answers to, straight from its keymap."
+      // promised a completeness it no longer has. "straight from its keymap"
+      // came off — where the list is generated from is our concern, not the
+      // reader's.
+      description="Every shortcut this window answers to."
       onClose={onClose}
       size="lg"
     >

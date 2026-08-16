@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   describeAnswer,
   parseAuthStatus,
+  parseCodexLoginStatus,
   readSignIn,
   resetSignInCache,
   SIGNIN_TIMEOUT_MS,
@@ -175,6 +176,7 @@ describe('readSignIn', () => {
   const profile: Profile = {
     id: 'work',
     name: 'Work',
+    provider: 'claude',
     configDir: '/tmp/deck-test-profiles/work',
     system: false,
     color: '--accent',
@@ -267,7 +269,17 @@ describe('readSignIn', () => {
     // Nothing is run: there is no verified way to point this agent at another
     // config directory, so any answer would be about the machine's own login.
     expect(spawned).toBe(false)
-    expect(report.detail).toContain('Claude-only')
+    /*
+     * The reason has to name *this* agent's problem.
+     *
+     * It used to say "Separate accounts are Claude-only for now", which was one
+     * sentence covering three agents and is now wrong about two of them: Codex
+     * does have a verified mechanism, and Gemini's problem was never that
+     * nothing had been checked — it is that its config variable moves the
+     * settings and leaves the OAuth token in one shared keychain slot.
+     */
+    expect(report.detail).toContain('keychain')
+    expect(report.detail).not.toContain('Claude-only')
   })
 
   it('never rejects, whatever the spawn does', async () => {
@@ -291,5 +303,178 @@ describe('unsupportedReason', () => {
     // A wrong variable name does not fail loudly — it shares one login between
     // two accounts. That is the sentence a person needs.
     expect(unsupportedReason('codex')).toContain('login')
+  })
+})
+
+/* ------------------------------------------------------ codex, in English -- */
+
+/**
+ * Codex answers in sentences, so the parser reads sentences.
+ *
+ * `codex login status --json` is rejected outright by its argument parser
+ * ("error: unexpected argument '--json' found", checked against `codex-cli
+ * 0.146.0-alpha.3.1`), so there is no structured answer to ask for. The four
+ * signed-in phrasings below are the ones in the shipped binary's own strings;
+ * the two that were also *observed* are marked.
+ *
+ * The rule from the module header does not bend for this: a line the parser
+ * does not recognise is `unknown`, never `signed-out`. A localised build, a
+ * renamed subcommand or a missing binary must not be read as "you are logged
+ * out" and send somebody to redo a login they already have.
+ */
+describe('parseCodexLoginStatus', () => {
+  it('reads the two answers actually observed on this machine', () => {
+    // `CODEX_HOME=<fresh dir> codex login status`
+    expect(parseCodexLoginStatus('Not logged in\n')).toEqual({
+      loggedIn: false,
+      account: null,
+      plan: null,
+    })
+    // `codex login status`, against the real ~/.codex
+    expect(parseCodexLoginStatus('Logged in using ChatGPT\n')).toEqual({
+      loggedIn: true,
+      account: null,
+      plan: 'ChatGPT',
+    })
+  })
+
+  it('reads the other phrasings the binary can print', () => {
+    expect(parseCodexLoginStatus('Logged in using an API key - work')?.plan).toBe(
+      'an API key - work',
+    )
+    expect(parseCodexLoginStatus('Logged in using personal access token')?.plan).toBe(
+      'personal access token',
+    )
+    expect(parseCodexLoginStatus('Logged in using Amazon Bedrock API key')?.loggedIn).toBe(true)
+  })
+
+  it('names no email, because the command prints none', () => {
+    /*
+     * The only place an address exists for a Codex account is inside
+     * `auth.json`'s id token. Reading a user's credential file to decorate a row
+     * is not a trade this app makes: nothing here ever holds a credential, and
+     * that is the property that keeps this process uninteresting to an attacker.
+     */
+    expect(parseCodexLoginStatus('Logged in using ChatGPT')?.account).toBeNull()
+  })
+
+  it('ignores whatever a CLI prints above its own answer', () => {
+    // Update nags and deprecation notices go to stdout above the answer, which
+    // is the same reason `parseAuthStatus` hunts for braces rather than parsing
+    // the whole string.
+    expect(
+      parseCodexLoginStatus('\n  A new version is available.\n\nLogged in using ChatGPT\n')?.plan,
+    ).toBe('ChatGPT')
+  })
+
+  it('answers null — not "signed out" — for anything it does not recognise', () => {
+    for (const said of ['', 'command not found: codex', 'Connexion établie', '{"loggedIn":true}']) {
+      expect(parseCodexLoginStatus(said)).toBeNull()
+    }
+  })
+})
+
+describe('the report, per agent', () => {
+  it('reads a Codex probe with Codex’s parser and says what it is signed in with', () => {
+    const report = toSignInReport(
+      'work',
+      'codex',
+      'codex login status',
+      probe({ stdout: 'Logged in using ChatGPT\n' }),
+    )
+    expect(report.state).toBe('signed-in')
+    expect(report.plan).toBe('ChatGPT')
+    expect(report.detail).toBe('Signed in using ChatGPT')
+  })
+
+  it('tells a signed-out account that agent’s own login command', () => {
+    /*
+     * The half of this that matters is the *own*: telling somebody with a Codex
+     * account to run `claude auth login` is worse than telling them nothing,
+     * because it is a specific instruction that will not work.
+     */
+    expect(
+      toSignInReport('work', 'codex', 'codex login status', probe({ stdout: 'Not logged in' }))
+        .detail,
+    ).toContain('codex login')
+    expect(
+      toSignInReport('work', 'claude', 'claude auth status --json', probe({ stdout: SIGNED_OUT }))
+        .detail,
+    ).toContain('claude auth login')
+  })
+
+  it('still refuses to guess when a Codex probe says something unreadable', () => {
+    const report = toSignInReport(
+      'work',
+      'codex',
+      'codex login status',
+      probe({ stderr: 'command not found: codex', exitCode: 127 }),
+    )
+    expect(report.state).toBe('unknown')
+    expect(report.detail).toContain('command not found: codex')
+  })
+})
+
+describe('probing an account of an agent other than Claude', () => {
+  const codexAccount: Profile = {
+    id: 'work-codex',
+    name: 'Work',
+    provider: 'codex',
+    configDir: '/tmp/deck-test-profiles/work-codex',
+    system: false,
+    color: '--accent',
+    createdAt: 0,
+    lastUsedAt: null,
+  }
+
+  it('asks Codex’s question, under CODEX_HOME, without being told to', async () => {
+    /*
+     * Regression, and the sharpest one in this file.
+     *
+     * `readSignIn` used to default the provider to `'claude'`, which was right
+     * while an account could only be a Claude one. Left that way it would probe
+     * a Codex account by running `claude auth status --json` with
+     * `CLAUDE_CONFIG_DIR` pointed at a Codex home — a command that answers "not
+     * signed in" about a perfectly good ChatGPT login, and leaves a
+     * `.claude.json` inside the Codex directory on the way past. The account
+     * knows which agent it belongs to; nothing should have to tell it.
+     */
+    resetSignInCache()
+    const seen: Array<{ args: string[]; env: Record<string, string | undefined> }> = []
+    const report = await readSignIn(codexAccount, {
+      platform: 'darwin',
+      path: '/usr/bin:/bin',
+      refresh: true,
+      exec: async (_command, args, options) => {
+        seen.push({ args, env: options.env })
+        return probe({ stdout: 'Logged in using ChatGPT\n' })
+      },
+    })
+
+    expect(seen).toHaveLength(1)
+    expect(seen[0].args).toEqual(['login', 'status'])
+    expect(seen[0].env.CODEX_HOME).toBe(codexAccount.configDir)
+    // The other agent's variable must not travel with it, or the probe would
+    // point Claude Code at a Codex home for the life of the process.
+    expect(seen[0].env.CLAUDE_CONFIG_DIR).toBeUndefined()
+    expect(report.provider).toBe('codex')
+    expect(report.state).toBe('signed-in')
+    expect(report.command).toBe('codex login status')
+  })
+
+  it('exports nothing at all for the user’s own install', async () => {
+    resetSignInCache()
+    let sawEnv: Record<string, string | undefined> = {}
+    await readSignIn(systemProfile(), {
+      platform: 'darwin',
+      path: '/usr/bin:/bin',
+      refresh: true,
+      exec: async (_command, _args, options) => {
+        sawEnv = options.env
+        return probe({ stdout: SIGNED_IN })
+      },
+    })
+    // `CLAUDE_CONFIG_DIR=$HOME/.claude` is not a no-op — see `profiles.ts`.
+    expect(sawEnv.CLAUDE_CONFIG_DIR).toBeUndefined()
   })
 })

@@ -253,9 +253,12 @@ export function contextAlerts(input: AlertInput): Alert[] {
         kind: 'context-bloat',
         severity: warning.level,
         title: `Context ${Math.round(newest.context.percent)}% full`,
+        // The old third sentence argued the case for compacting now. The alert
+        // already carries a "Compact this session" button; an alert that has to
+        // sell its own action twice is one sentence too long.
         detail: `${warning.message} Session ${shortId(newest.sessionId)} is holding ${formatTokens(
           newest.context.tokens,
-        )} of a ${formatTokens(newest.context.window)} window. Compacting now costs one request; letting it fill costs quality on every request until it does.`,
+        )} of a ${formatTokens(newest.context.window)} window.`,
         sessionId: newest.sessionId,
         at: newest.lastActivityAt,
         action: { kind: 'compact-session', label: 'Compact this session', target: newest.sessionId },
@@ -271,7 +274,7 @@ export function contextAlerts(input: AlertInput): Alert[] {
       kind: 'pre-context-bloat',
       severity: prefix.level,
       title: 'Every request starts heavy',
-      detail: `${prefix.message} That prefix is re-sent on every turn of every session in this project, so trimming it is the one change that pays back more than once.`,
+      detail: `${prefix.message} It is re-sent on every turn of every session in this project.`,
       sessionId: newest.sessionId,
       at: newest.lastActivityAt,
       action: { kind: 'open-inspector', label: 'Open the inspector', target: newest.transcriptPath },
@@ -345,7 +348,11 @@ export function providerAlerts(input: AlertInput): Alert[] {
       kind: 'provider-missing',
       severity: 'critical',
       title: `${spec.label} is not installed`,
-      detail: `This project is set up to run ${spec.label}, but \`${spec.bin}\` is not on the login shell's PATH. Sessions started with it will fail immediately.`,
+      // Both halves earn their place: the binary name is what somebody types to
+      // check, and "sessions will fail" is why this is critical rather than
+      // informational. What went was "This project is set up to run X, but" —
+      // the title says that already.
+      detail: `\`${spec.bin}\` is not on the login shell's PATH, so sessions started with it fail immediately.`,
       at: input.now,
       action: { kind: 'install-provider', label: `Set up ${spec.label}`, target: provider },
     })
@@ -422,7 +429,10 @@ export function dirtyTreeAlerts(input: AlertInput): Alert[] {
       kind: 'dirty-tree',
       severity: since >= DIRTY_TREE_CRITICAL_STREAK ? 'warning' : 'info',
       title: `${git.changedFiles} file${git.changedFiles === 1 ? '' : 's'} uncommitted across ${since} sessions`,
-      detail: `The working tree has been dirty since before the last ${since} sessions started. Every one of them has been reading and rewriting on top of changes nothing can roll back to — commit or stash before the next one.`,
+      // Shortened but not softened: the risk here is that there is no clean
+      // state to return to, and an alert that dropped that would be advice
+      // without a reason.
+      detail: `Dirty since before the last ${since} sessions started — there is no clean state to roll back to. Commit or stash before the next one.`,
       at: git.lastChangeAt,
       action: { kind: 'open-git', label: 'Open the git panel', target: input.projectPath },
     },

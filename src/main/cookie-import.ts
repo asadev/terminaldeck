@@ -5,10 +5,14 @@ import { join } from 'node:path'
 import { app, type IpcMain, type Session } from 'electron'
 import { cookieRemovalUrl, guestSession } from './browser-session'
 import {
+  browserDataAccess,
+  canRead,
+  describeAccessFailure,
   detectBrowsers,
   snapshotDatabase,
   type BrowserId,
   type DatabaseOpener,
+  type PrivacyPane,
   type ReadonlyDatabase,
 } from './chrome-import'
 
@@ -124,6 +128,16 @@ export interface CookieImportReport {
   keychain: KeychainFailure | 'ok' | null
   /** One sentence, safe to show. Never contains a value or a key. */
   message: string
+  /**
+   * A System Settings pane that would unblock this, or null.
+   *
+   * Set only when the run stopped on a permission the user can actually grant,
+   * so a panel can put a button beside the sentence instead of leaving somebody
+   * to find Full Disk Access by hand. Null for every other outcome, including a
+   * denied keychain — that one is re-asked by running the import again, and
+   * sending a person into a security pane to fix it would be the wrong door.
+   */
+  settings: PrivacyPane | null
 }
 
 /* ---------------------------------------------------------- the keychain -- */
@@ -776,10 +790,34 @@ function pickSource(request: ImportRequest, sources: readonly CookieSource[]): C
   return wanted[0] ?? null
 }
 
+/**
+ * What to say when no profile could be picked at all.
+ *
+ * Two different situations reach this and only one of them is a permission:
+ * a machine with no Chromium browser installed, and a machine where every
+ * installed browser's data is refused. The old sentence merged them — *"No
+ * installed browser with a readable cookie database was found. macOS protects
+ * those files until this app has Full Disk Access."* — which reads as an
+ * accusation on a machine that simply has no Chrome, and offers nothing to
+ * press on the machine where the permission really is the problem.
+ *
+ * `browserDataAccess` already knows which it is, because `detectBrowsers` keeps
+ * a blocked browser in its list precisely so this question can be answered.
+ */
+function noSourceMessage(): { message: string; pane: PrivacyPane | null } {
+  const access = browserDataAccess()
+  if (access.problem) return { message: access.problem.message, pane: access.problem.pane }
+  return {
+    message: 'No installed Chromium browser was found on this machine, so there is nothing to import from.',
+    pane: null,
+  }
+}
+
 function failure(
   source: CookieSource | null,
   keychain: KeychainFailure | 'ok' | null,
   message: string,
+  settings: PrivacyPane | null = null,
 ): CookieImportReport {
   return {
     ok: false,
@@ -792,6 +830,7 @@ function failure(
     domains: 0,
     keychain,
     message,
+    settings,
   }
 }
 
@@ -803,22 +842,81 @@ function failure(
  * and a sentence, because each one is something the user can do something about
  * and none of them is a bug.
  */
+/**
+ * The three machine-shaped facts an import depends on, injectable.
+ *
+ * Added for one assertion that cannot be made any other way: **the keychain is
+ * not asked for when the file cannot be read.** That is the whole of the fix
+ * below, it is invisible in a return value — a run that stops on the file and a
+ * run that stops after a refused keychain both come back `ok: false` — and the
+ * difference the user sees is whether macOS put a password dialog on their
+ * screen. Only a spy can see that, so only a seam can test it.
+ *
+ * Every one of them defaults to the real thing, so production has no idea this
+ * exists.
+ */
+export interface ImportDeps {
+  /** The candidate profiles. A test needs no installed browser. */
+  sources?: readonly CookieSource[]
+  /** The keychain read — the prompt. A test proves it was never reached. */
+  keychain?: (browserId: BrowserId, browserName: string) => Promise<KeychainResult>
+  /** Whether the cookie database can be opened. See {@link canRead}. */
+  readable?: (path: string) => boolean
+}
+
 export async function importCookies(
   request: ImportRequest,
   target: Session = guestSession(),
   now: number = Date.now(),
+  deps: ImportDeps = {},
 ): Promise<CookieImportReport> {
-  const source = pickSource(request, listCookieSources())
+  const readable = deps.readable ?? canRead
+  const keychainOf = deps.keychain ?? readSafeStorageKey
+  const source = pickSource(request, deps.sources ?? listCookieSources())
   if (!source) {
+    const reason = noSourceMessage()
     return failure(
       null,
       null,
-      'No installed browser with a readable cookie database was found. macOS protects those files until this app has Full Disk Access.',
+      reason.message,
+      reason.pane,
     )
   }
 
   const label = sourceLabel(source)
-  const keychain = await readSafeStorageKey(source.browserId, source.browserName)
+
+  /*
+   * The file first, the keychain second. This order is the fix for the fault
+   * Asad reported: *"it is not asking if it needs full access — let it ask full
+   * access in that case rather than asking only this much, so it can
+   * successfully import."*
+   *
+   * An import needs two separate permissions and they are not interchangeable.
+   * The keychain one is asked by macOS with a dialog naming this app and the
+   * browser's Safe Storage item; full disk access is what lets the cookie file
+   * be opened at all. The run used to ask for the *keychain* first — so on a
+   * machine without full disk access the user was shown a real, alarming
+   * security prompt about their stored passwords, granted it, and the import
+   * then died on a file it had never even tried to open. The prompt they
+   * answered could not have made it succeed. That is a prompt asking for too
+   * little, exactly as reported.
+   *
+   * `listCookieSources` cannot catch this earlier, and deliberately so: it
+   * finds the database with `existsSync`, which is a `stat`, and `stat`
+   * succeeds on a protected path where every read raises EPERM (measured — see
+   * `chrome-import.ts`). Being able to *see* the file is not being able to read
+   * it, so the check has to be a real open, and `canRead` is one.
+   *
+   * The keychain is still not asked for a moment earlier than it is needed,
+   * which is the other half of the same principle: this asks for what the
+   * operation actually requires, when it requires it, and never for more.
+   */
+  if (!readable(source.path)) {
+    const denied = describeAccessFailure({ code: 'EPERM' }, `${label}’s cookies`)
+    return failure(source, null, denied.message, denied.pane)
+  }
+
+  const keychain = await keychainOf(source.browserId, source.browserName)
   if (!keychain.ok) return failure(source, keychain.reason, keychain.detail)
 
   const key = deriveCookieKey(keychain.secret)
@@ -827,12 +925,11 @@ export async function importCookies(
   try {
     rows = await readCookieRows(source.path)
   } catch (err) {
-    const code = (err as NodeJS.ErrnoException)?.code
-    const message =
-      code === 'EPERM' || code === 'EACCES'
-        ? `macOS is blocking access to ${label}’s cookie database. Grant Full Disk Access to import from it.`
-        : `${label}’s cookie database could not be opened (${code ?? 'unknown error'}).`
-    return failure(source, 'ok', message)
+    // Still handled, because `canRead` above proves the file could be opened a
+    // moment ago and not that it can be read through to the end — a lock, a
+    // revoked grant or a disk error can all land here.
+    const denied = describeAccessFailure(err, `${label}’s cookie database`)
+    return failure(source, 'ok', denied.message, denied.pane)
   }
 
   const tally = planImport(rows, key, normaliseDomains(request.domains), now)
@@ -871,6 +968,8 @@ export async function importCookies(
     domains: tally.domains.size,
     keychain: 'ok',
     message: importMessage(tally, label),
+    // Nothing was blocked, so there is nothing to send anybody to.
+    settings: null,
   }
 }
 

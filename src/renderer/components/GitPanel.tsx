@@ -271,7 +271,23 @@ export function GitPanel({ cwd, onSelectFile, selectedPath, bridge, focusGroup }
     return (
       <section className="git-panel" aria-label="Git status">
         <PageEmpty icon={panelSpec('git').icon} title={UNAVAILABLE_TITLE[status?.reason ?? 'error']}>
-          {status ? UNAVAILABLE_COPY[status.reason] : UNAVAILABLE_COPY.error}
+          {/*
+            `status.message` first, because it is now written prose rather than
+            git's stderr.
+
+            `git.ts` used to hand back whatever git printed, so every surface
+            rendered things like "fatal: not a git repository (or any of the
+            parent directories): .git" at a person. That is fixed at the source,
+            and the message it now produces is more specific than the four
+            generic lines below: a repository refused for "dubious ownership"
+            lands in the `not-a-repo` bucket, where the generic sentence — "This
+            folder is not a git repository" — is simply false, and names no way
+            out. The written message names the `safe.directory` command and the
+            path.
+
+            The constants stay as the fallback for a status with no message.
+          */}
+          {status ? (status.message ?? UNAVAILABLE_COPY[status.reason]) : UNAVAILABLE_COPY.error}
         </PageEmpty>
       </section>
     )

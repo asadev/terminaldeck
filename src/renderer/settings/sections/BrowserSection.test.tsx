@@ -49,10 +49,19 @@ describe('the cookie import block', () => {
     clearImportedCookies: async () => ({ removed: 0 }),
   }
 
+  /**
+   * The block was two paragraphs and is one. Both warnings survived the cut on
+   * purpose — a shorter panel that leaves somebody unaware that a system
+   * permission dialog is coming, or that what is being copied is a live
+   * credential, is a worse panel rather than a tidier one. Asserted as the
+   * lower-case clause it now is, because the sentence it used to start was
+   * folded into the one before it.
+   */
   it('warns that macOS will ask, before anything is pressed', () => {
     const html = render(wired)
     expect(html).toMatch(/macOS will ask/)
-    expect(html).toMatch(/Nothing is read until you press/)
+    expect(html).toMatch(/nothing is read until you press/)
+    expect(html).toMatch(/credentials that keep you signed in/)
   })
 
   it('says what an isolated tab does with them, which is the surprise afterwards', () => {

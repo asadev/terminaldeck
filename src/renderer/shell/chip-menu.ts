@@ -81,8 +81,17 @@ export interface ChipMenu {
  * the folder list, the account list. The menu is measured to be placed, so a
  * row appearing after it opened (a sign-in state arriving, a folder added)
  * changes its height and leaves it positioned for the height it used to have.
+ *
+ * `holdEscape` is for a menu with something *inside* it that Escape should
+ * cancel first — the account chip renames an account in place, and Escape there
+ * means "stop renaming", not "close the menu and throw the field away". It has
+ * to be a flag rather than the row's own key handler because the listener below
+ * is registered on the document in the **capture** phase, so it runs before
+ * anything inside the menu ever sees the key; `stopPropagation` from a row is
+ * too late by then. Held only while the caller says so, so a menu with nothing
+ * being edited still closes on Escape the way every other one does.
  */
-export function useChipMenu(remeasure?: unknown): ChipMenu {
+export function useChipMenu(remeasure?: unknown, holdEscape = false): ChipMenu {
   const [open, setOpen] = useState(false)
   const [at, setAt] = useState({ left: 0, top: 0 })
   const hostRef = useRef<HTMLDivElement>(null)
@@ -134,6 +143,9 @@ export function useChipMenu(remeasure?: unknown): ChipMenu {
     }
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return
+      // Something inside the menu owns this key right now. Not stopped either:
+      // the thing that owns it is inside the menu and has to receive it.
+      if (holdEscape) return
       // Stopped here so Escape does not travel on to whatever else in the
       // window treats it as "close" — the menu is the innermost thing open.
       event.stopPropagation()
@@ -145,7 +157,7 @@ export function useChipMenu(remeasure?: unknown): ChipMenu {
       document.removeEventListener('pointerdown', onDown, true)
       document.removeEventListener('keydown', onKey, true)
     }
-  }, [open])
+  }, [open, holdEscape])
 
   const toggle = useCallback(() => setOpen((value) => !value), [])
   const choose = useCallback((next: () => void) => {

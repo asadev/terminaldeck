@@ -24,7 +24,7 @@ const OFFER: MachineOffer = {
   platform: 'win32',
 }
 
-const CODE = 'H4K9-2FQT'
+const CODE = '482913'
 
 type Script = (request: DialRequest) => 'offer' | 'welcome' | 'refuse' | 'hang-up' | 'no-credential'
 
@@ -131,7 +131,9 @@ describe('pairing with a typed code', () => {
       request.hostId === rendezvousIdentity(CODE)?.hostId ? 'offer' : 'welcome',
     )
     const result = await pairWithCode({
-      code: '  h4k9 2fqt ',
+      // The shape a code comes back in after a round trip through a chat app:
+      // spaces around it and a separator somebody's keyboard put in the middle.
+      code: '  482-913 ',
       relayUrl: 'wss://relay.example',
       dial: rig.dial,
     })

@@ -1,0 +1,165 @@
+/* ============================================================================
+   The top tab strip — the windows promoted out of the side panel.
+
+   It sits directly under the unified toolbar and over `.panes`, so it is the
+   second band of chrome in a window whose whole design is "one sidebar and one
+   toolbar". That is a real cost, and it is paid for by being the thing the user
+   put there themselves: nothing appears in this strip except by a drag, so an
+   untouched install never sees it at all.
+
+   Consequently it carries no borders. The toolbar above already draws the one
+   hairline in this part of the window; a strip with a rule of its own would put
+   two lines four pixels apart and read as two stacked apps — the exact fault
+   `PLAN-0.2.0.md` opens with about the Windows chrome. The separation here is a
+   tint change and nothing else: the strip is `--bg-secondary`, the panes below
+   are `--bg-primary`, and the selected tab is filled with the panes' colour so
+   it reads as the top of the thing it opens.
+   ============================================================================ */
+
+.strip {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex-shrink: 0;
+  height: var(--tabbar-height);
+  padding: 0 var(--sp-2);
+  background: var(--bg-secondary);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  -webkit-app-region: no-drag;
+}
+
+.strip::-webkit-scrollbar {
+  display: none;
+}
+
+/* Nothing promoted yet: a hint, and a drop target that is genuinely there.
+
+   Quieter than a real tab and shorter than one, so an empty strip is a line of
+   grey text rather than an empty shelf. */
+.strip-empty {
+  justify-content: center;
+}
+
+.strip-empty[data-over] {
+  background: var(--accent-soft);
+}
+
+.strip-hint {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--t-footnote);
+}
+
+/* -------------------------------------------------------------- one tab -- */
+
+.strip-tab {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  max-width: 220px;
+  height: 26px;
+  padding: 0 var(--sp-1) 0 var(--sp-2);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.strip-tab:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+/* The page's own colour, so the selected tab reads as the top edge of the
+   content under it rather than as a highlighted row. */
+.strip-tab[data-active] {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+/* The insertion caret. A line in the gap, not a gap that opens — a strip that
+   reflows under the pointer moves the target you were aiming at. */
+.strip-tab[data-drop-before]::before,
+.strip-drop-end {
+  content: '';
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: -3px;
+  width: 2px;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+}
+
+.strip-drop-end {
+  position: relative;
+  left: 0;
+  align-self: stretch;
+  margin: 3px 0;
+  flex-shrink: 0;
+}
+
+.strip-tab-face {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-width: 0;
+  height: 100%;
+  color: inherit;
+  font-size: var(--t-footnote);
+}
+
+.strip-tab-icon {
+  flex-shrink: 0;
+  opacity: 0.65;
+}
+
+.strip-tab[data-active] .strip-tab-icon {
+  opacity: 1;
+}
+
+.strip-tab-label {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* The dot is `.status-dot` from `components/StatusDot.tsx`, styled once in
+   `app.css` and shared with the sidebar. Nothing is restyled here — the status
+   colours are data and keep their meaning wherever they are drawn. */
+.strip-tab-face .status-dot {
+  flex-shrink: 0;
+}
+
+.strip-tab-fold,
+.strip-tab-close {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+}
+
+/* Revealed on hover and on focus. Focus matters as much as hover here: these
+   are the only way to empty the strip without knowing the drag gesture, and a
+   control that appears only under a pointer is unreachable from a keyboard. */
+.strip-tab:hover .strip-tab-fold,
+.strip-tab:hover .strip-tab-close,
+.strip-tab-fold:focus-visible,
+.strip-tab-close:focus-visible {
+  opacity: 1;
+}
+
+.strip-tab-fold:hover,
+.strip-tab-close:hover {
+  background: var(--fill-tertiary);
+  color: var(--text-primary);
+}

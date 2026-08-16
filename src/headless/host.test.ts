@@ -79,11 +79,10 @@ describe('it starts with no Electron in the process', () => {
 describe('pairing is the desktop mechanism, not a second one', () => {
   it('mints a code of the same alphabet and shape the app shows', async () => {
     const minted = (await host.invoke('remote:pair')) as { token: string; expiresAt: number }
-    // Eight symbols from the Crockford-style alphabet in shared/short-code.ts,
-    // already grouped, because that is the form both screens show. A headless
-    // build with its own code format would be a second thing for a phone to be
-    // wrong about.
-    expect(minted.token).toMatch(/^[0-9ABCDEFGHJKMNPQRSTVWXYZ]{4}-[0-9ABCDEFGHJKMNPQRSTVWXYZ]{4}$/)
+    // Six digits from `shared/short-code.ts`, with no grouping character,
+    // because that is the form every screen shows. A headless build with its
+    // own code format would be a second thing for a phone to be wrong about.
+    expect(minted.token).toMatch(/^[0-9]{6}$/)
     expect(minted.expiresAt).toBeGreaterThan(Date.now())
   })
 

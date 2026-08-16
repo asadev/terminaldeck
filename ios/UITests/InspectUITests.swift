@@ -138,7 +138,7 @@ final class InspectUITests: XCTestCase {
         let done = expectation(description: "minted")
         URLSession.shared.dataTask(with: url) { data, _, _ in
             if let data, let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                answer = json["uri"] as? String
+                answer = json["code"] as? String
             }
             done.fulfill()
         }.resume()

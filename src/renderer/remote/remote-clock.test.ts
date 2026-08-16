@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   attachedFor,
+  codeSecondsLeft,
   nextClockChange,
   retryNote,
   unsettled,
@@ -248,5 +249,40 @@ describe('unsettled', () => {
 
   it('is false before the first read lands', () => {
     expect(unsettled(null, null)).toBe(false)
+  })
+})
+
+/**
+ * The life left on a pairing code.
+ *
+ * The code is on screen for sixty seconds and for a while nothing said so: it
+ * simply stopped working mid-typing, and the first anybody heard of a time
+ * limit was the error afterwards. This is the function under that countdown,
+ * and it is one function rather than the two the two screens used to have —
+ * a merged section with two clocks rounding differently is a section where the
+ * same code has two ages on it.
+ */
+describe('codeSecondsLeft', () => {
+  it('counts whole seconds down, and never below zero', () => {
+    expect(codeSecondsLeft(NOW + 60_000, NOW)).toBe(60)
+    // Rounded up: with 59.4 seconds left the honest thing to print is 60,
+    // because 59 would be the first number a reader sees and it would be a
+    // second short of the truth.
+    expect(codeSecondsLeft(NOW + 59_400, NOW)).toBe(60)
+    expect(codeSecondsLeft(NOW + 1, NOW)).toBe(1)
+    expect(codeSecondsLeft(NOW, NOW)).toBe(0)
+    // A code that died while the window was asleep counts zero, not backwards.
+    expect(codeSecondsLeft(NOW - 30_000, NOW)).toBe(0)
+  })
+
+  it('agrees with the tick that redraws it', () => {
+    // The countdown's wake-up comes from `nextClockChange`, so the two have to
+    // land on the same second: a tick computed a millisecond early redraws the
+    // number that is already on screen and then never fires again.
+    const pairing = { token: '482913', expiresAt: NOW + 45_000 }
+    const at = nextClockChange(state(), pairing, NOW)
+    expect(at).not.toBeNull()
+    expect(codeSecondsLeft(pairing.expiresAt, (at ?? 0) - 1)).toBe(45)
+    expect(codeSecondsLeft(pairing.expiresAt, at ?? 0)).toBe(44)
   })
 })

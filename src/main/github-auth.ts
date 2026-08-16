@@ -54,6 +54,26 @@
  * (or changing the constant) makes both the caveat and the sentence disappear
  * on their own.
  *
+ * ## Two client kinds, and the one that lets the user choose repositories
+ *
+ * Borrowing the CLI's client id also borrows the CLI's appetite: `gh` asks for
+ * everything `gh` can do. The consent screen the user sees says **"Full control
+ * of private repositories"** with no repository picker anywhere on it, because
+ * an OAuth app's `repo` scope is a single all-or-nothing grant. There is no
+ * narrower OAuth scope that can read a private repository — that is GitHub's
+ * design, not an oversight here.
+ *
+ * The mechanism that *does* give per-repository choice is a **GitHub App**, and
+ * this module can sign in through one: same device flow, same endpoints, no
+ * `scope` parameter, because a GitHub App's permissions come from its
+ * registration and its repository list comes from what the user ticked when
+ * they installed it. `github-app.ts` holds that registration — currently empty,
+ * because creating one requires a human clicking through github.com, and an
+ * invented client id would be a Connect button that can never succeed. So the
+ * OAuth path stays the shipping default and the app path switches itself on the
+ * moment a real client id is configured. `clientKind` is on the status, and the
+ * panel says which one is in force.
+ *
  * ## Nothing here prints a token
  *
  * Every string that can leave this module — a failure `detail`, anything a log
@@ -83,7 +103,14 @@ import type { IpcMain } from 'electron'
 // Types only. `github.ts` imports this module at run time, so anything but a
 // type import here would be a real cycle; `import type` is erased before the
 // bundler ever sees it, which keeps the runtime edge pointing one way.
-import type { GitHubErrorKind, GitHubFailure, RepoRef } from './github'
+import type { BranchRef, GitHubErrorKind, GitHubFailure, RepoRef } from './github'
+import {
+  appInstallUrl,
+  clientKindFor,
+  githubAppRegistration,
+  type ClientKind,
+} from './github-app'
+import { readAccessibleRepos, type RepoAccess } from './github-repos'
 import { currentPlatform, machineNoun, withPath, type Platform } from './platform/host'
 import { loginPath } from './providers'
 import { redact } from './redact'
@@ -120,14 +147,34 @@ const CLIENT_ID_ENV = 'TERMINALDECK_GITHUB_CLIENT_ID'
  * in case": every extra scope is something the user has to agree to hand over,
  * and an unexplained one is how a consent screen starts looking like a trap.
  *
- *  - `repo`          — pull requests and issues on private repositories. The
- *                      panel is useless on a work machine without it.
- *  - `read:org`      — repositories owned by an organisation, and the SAML
- *                      handshake that some orgs put in front of them.
+ *  - `repo`          — pull requests and issues on private repositories, and
+ *                      the repository list itself. The panel is useless on a
+ *                      work machine without it. It is also the scope GitHub
+ *                      renders as "Full control of private repositories", and
+ *                      there is no narrower one: `public_repo` excludes exactly
+ *                      the repositories this is for, and no read-only private
+ *                      scope exists. Per-repository choice needs a GitHub App;
+ *                      see `github-app.ts`.
  *  - `notifications` — the unread bell. This one is genuinely optional, and a
  *                      token without it still shows every list.
+ *
+ * **`read:org` was removed on 2026-08-16 and must not come back without a
+ * reason.** It was here on the belief that org-owned repositories need it. They
+ * do not: `repo` covers private repositories whoever owns them, and everything
+ * this product asks GitHub for — `gh pr list -R`, `gh issue list -R`, the
+ * notifications endpoint, `/user`, `/user/repos?affiliation=…,organization_member`
+ * — works without it. What `read:org` actually grants is read access to
+ * organisation membership, org projects and team membership, none of which is
+ * read anywhere in `github.ts`. `gh` requests it because `gh` has commands that
+ * list teams and organisations; borrowing its client id is not a reason to
+ * borrow its appetite.
+ *
+ * Cutting it removes a whole line from the consent screen ("Read org and team
+ * membership, read org projects"). If organisation repositories ever go missing
+ * from the lists, that is the symptom to match against this decision — but
+ * re-adding the scope should follow a reproduction, not a hunch.
  */
-export const REQUESTED_SCOPES = ['repo', 'read:org', 'notifications'] as const
+export const REQUESTED_SCOPES = ['repo', 'notifications'] as const
 
 /**
  * Which scopes satisfy which. GitHub's scopes nest, so a token holding
@@ -143,6 +190,16 @@ const SCOPE_IMPLIES: Record<string, readonly string[]> = {
 
 /** Long enough that opening the panel twice costs one request, not two. */
 export const IDENTITY_TTL_MS = 60_000
+
+/**
+ * Longer than the identity's, because the answer changes far more slowly.
+ *
+ * Somebody creates a repository perhaps weekly; the connection cache expires
+ * every minute and would otherwise drag a fresh `/user/repos` page behind it
+ * every time, which on an account with five hundred repositories is a megabyte
+ * of JSON parsed on the main thread for a list that has not moved.
+ */
+export const ACCESS_TTL_MS = 5 * 60_000
 
 const GH_TIMEOUT_MS = 10_000
 const HTTP_TIMEOUT_MS = 15_000
@@ -177,10 +234,21 @@ export interface DeviceFlowPrompt {
   verificationUri: string
   /** Epoch ms after which the code stops working. */
   expiresAt: number
-  /** Scopes this attempt asked for. */
+  /**
+   * Scopes this attempt asked for. **Empty in `github-app` mode**, and that is
+   * a fact rather than an omission: a GitHub App device-flow request carries no
+   * `scope` at all, because the permissions are fixed by the registration and
+   * the repositories are chosen at install time. The card on screen has to say
+   * two different things for the two cases, so it needs to be able to tell them
+   * apart — hence `clientKind` beside this rather than an empty list standing
+   * in for "nothing was asked for".
+   */
   scopes: string[]
   /** True while the consent screen names the GitHub CLI rather than this app. */
   borrowedClient: boolean
+  clientKind: ClientKind
+  /** Where to choose repositories, when a GitHub App slug is configured. */
+  installUrl: string | null
 }
 
 export interface GitHubAuthState {
@@ -203,6 +271,21 @@ export interface GitHubAuthState {
   ghInstalled: boolean
   /** True when the OAuth client is the GitHub CLI's rather than this app's. */
   borrowedClient: boolean
+  /** Which registration a sign-in from here would run through. */
+  clientKind: ClientKind
+  /**
+   * True when a real GitHub App registration exists in this build. False is the
+   * shipping state and is said on screen: the panel explains that
+   * per-repository access is not on offer *yet* rather than leaving the user to
+   * wonder why GitHub asked for everything.
+   */
+  appConfigured: boolean
+  /**
+   * Where the user picks which repositories the GitHub App may see. Null
+   * without a registration, and null with one that has no slug configured —
+   * a link that cannot be built is not rendered.
+   */
+  installUrl: string | null
   /**
    * What pressing Disconnect will do, in one sentence, or null when there is
    * nothing this app can revoke. A button that cannot act is not rendered.
@@ -220,9 +303,39 @@ export interface GitHubAuthState {
   expiredCredentialRemoved: boolean
   /** The GitHub repository of the folder asked about, or why there is none. */
   repo: RepoRef | GitHubFailure | null
+  /**
+   * The branch checked out in that folder, or null when there is no repository
+   * there to have one.
+   *
+   * It rides with the sign-in rather than with the pull-request payload because
+   * it has to survive every state the payload does not reach: rate-limited,
+   * offline, or a folder whose repository this account cannot see. "You are
+   * connected as X, this folder is Y, on branch Z" is one sentence, and taking
+   * a third of it from a call that fails independently is how it ends up
+   * half-rendered.
+   */
+  branch: BranchRef | null
+  /**
+   * Every repository this credential can reach, or why that could not be
+   * listed. Null while nothing is connected.
+   *
+   * This is the answer to "I connected and nothing happened": the panel used to
+   * have nothing to show unless the open folder happened to be a GitHub
+   * repository, so a successful sign-in from anywhere else looked exactly like
+   * a failed one.
+   */
+  access: RepoAccess | null
 }
 
-/** What the file on disk holds. */
+/**
+ * What the file on disk holds.
+ *
+ * `expiresAt` arrives with GitHub App credentials when the registration has
+ * "Expire user authorization tokens" left on, and is absent for every OAuth
+ * token, which never expires on its own. It is stored rather than ignored so
+ * that a dead token produces "your sign-in expired, connect again" instead of a
+ * 401 from whichever list happened to load first.
+ */
 interface StoredCredential {
   version: 1
   host: string
@@ -230,6 +343,10 @@ interface StoredCredential {
   login: string
   scopes: string[]
   obtainedAt: number
+  /** Epoch ms, or absent/null for a credential that does not expire. */
+  expiresAt?: number | null
+  /** Which registration issued it, so the right endpoints are asked later. */
+  clientKind?: ClientKind
 }
 
 /* ---------------------------------------------------------- http plumbing -- */
@@ -407,6 +524,20 @@ interface AccessTokenResponse {
   access_token?: string
   scope?: string
   interval?: number
+  /**
+   * Seconds. Sent only by a GitHub App whose registration has "Expire user
+   * authorization tokens" left on — an OAuth token has no expiry at all.
+   */
+  expires_in?: number
+  /**
+   * Sent alongside `expires_in`. **Deliberately unused.** Exchanging it needs a
+   * client secret, which a desktop app cannot hold and the device flow does not
+   * issue, so there is no honest way to refresh from here; the registration is
+   * meant to have expiry switched off (`github-app.ts` step 5). It is named
+   * here so that a later reader finds this note instead of assuming the field
+   * was overlooked.
+   */
+  refresh_token?: string
   error?: string
   error_description?: string
 }
@@ -432,6 +563,13 @@ export interface GitHubAuthOptions {
   storageDir: string
   /** Injected so this module never imports `github.ts` at run time. */
   resolveRepo(cwd: string): Promise<RepoRef | GitHubFailure>
+  /**
+   * The checked-out branch of a folder. Optional, and the default answers null:
+   * every existing caller of this class predates it, and a required option
+   * would have made "no branch reader wired" a compile error rather than the
+   * honest empty answer it is.
+   */
+  resolveBranch?(cwd: string): Promise<BranchRef | null>
   /**
    * Called whenever the credential in use changes. `github.ts` drops its
    * overview cache on it: that cache holds up to a minute of answers taken
@@ -468,14 +606,21 @@ export class GitHubAuthenticator {
   private readonly now: () => number
   private readonly sleep: (ms: number, signal: AbortSignal) => Promise<void>
   private readonly resolveRepo: (cwd: string) => Promise<RepoRef | GitHubFailure>
+  private readonly resolveBranch: (cwd: string) => Promise<BranchRef | null>
   private readonly onAuthChanged: () => void
 
   readonly host: string
+  /** Which registration a *new* sign-in runs through. See `github-app.ts`. */
+  readonly clientKind: ClientKind
+  readonly appConfigured: boolean
+  readonly installUrl: string | null
 
   /** `undefined` = not read yet, `null` = read and absent. */
   private stored: StoredCredential | null | undefined = undefined
   private ghPresent: boolean | null = null
   private cached: { at: number; state: GitHubAuthState } | null = null
+  /** Keyed on the token as well as the clock, so a re-sign-in never reuses it. */
+  private accessCache: { at: number; token: string; value: RepoAccess } | null = null
   private flow: FlowRun | null = null
 
   /**
@@ -494,11 +639,33 @@ export class GitHubAuthenticator {
     this.env = options.env ?? process.env
     this.platform = options.platform ?? currentPlatform()
     this.host = (options.host ?? this.env.GH_HOST ?? 'github.com').trim().toLowerCase() || 'github.com'
+
+    /*
+     * Client selection, in the order that keeps every existing deployment
+     * working while letting a registration take over the moment there is one.
+     *
+     * An explicit `clientId` option is a test or an embedder pinning a value
+     * and always wins. Otherwise a configured GitHub App is preferred, because
+     * it is the grant that lets the user choose repositories. `clientKindFor`
+     * returns `oauth` whenever there is no registration — which is today —
+     * so the shipping behaviour is byte-for-byte what it was, and the app path
+     * cannot switch itself on against a client id nobody registered.
+     */
+    const registration = githubAppRegistration(this.env)
+    const explicitClient = (options.clientId ?? '').trim()
+    this.clientKind = explicitClient ? 'oauth' : clientKindFor(this.env)
+    this.appConfigured = registration.clientId !== null
+    this.installUrl = appInstallUrl(registration.slug, this.host)
     this.clientId =
-      (options.clientId ?? '').trim() || (this.env[CLIENT_ID_ENV] ?? '').trim() || GH_CLI_CLIENT_ID
+      explicitClient ||
+      (this.clientKind === 'github-app' && registration.clientId
+        ? registration.clientId
+        : (this.env[CLIENT_ID_ENV] ?? '').trim() || GH_CLI_CLIENT_ID)
+
     this.http = options.http ?? globalFetch
     this.now = options.now ?? (() => Date.now())
     this.resolveRepo = options.resolveRepo
+    this.resolveBranch = options.resolveBranch ?? (async () => null)
     this.onAuthChanged = options.onAuthChanged ?? (() => undefined)
     this.sleep =
       options.sleep ??
@@ -520,6 +687,19 @@ export class GitHubAuthenticator {
   /** True while the consent screen will name the GitHub CLI, not this app. */
   get borrowedClient(): boolean {
     return this.clientId === GH_CLI_CLIENT_ID
+  }
+
+  /**
+   * Whether a stored credential has passed the expiry GitHub gave it.
+   *
+   * Only GitHub App tokens carry one, and only when the registration leaves
+   * "Expire user authorization tokens" on. Checking it locally rather than
+   * waiting for the 401 is worth the four lines: the 401 arrives from whichever
+   * request happens to run first, so without this the user's first sign of an
+   * expired token is a repository list that failed for no stated reason.
+   */
+  private storedExpired(credential: StoredCredential): boolean {
+    return typeof credential.expiresAt === 'number' && this.now() >= credential.expiresAt
   }
 
   /* --------------------------------------------------------- credentials -- */
@@ -577,6 +757,12 @@ export class GitHubAuthenticator {
     })
     this.stored = credential
     this.cached = null
+    // A repository list read under the previous credential is not this
+    // credential's answer. It is keyed on the token as well, so this is belt
+    // and braces — but a stale "you can see these 40 repositories" under a
+    // freshly-connected account is exactly the half-connected display this
+    // module exists to end.
+    this.accessCache = null
     this.onAuthChanged()
   }
 
@@ -589,6 +775,7 @@ export class GitHubAuthenticator {
     }
     this.stored = null
     this.cached = null
+    this.accessCache = null
     this.onAuthChanged()
   }
 
@@ -606,6 +793,20 @@ export class GitHubAuthenticator {
     const stored = this.readStored()
     if (stored) out.push(stored.token)
     return out
+  }
+
+  /**
+   * `secrets()` plus the credential this call is using.
+   *
+   * The two are the same set for an environment token and for a stored one, and
+   * they are *not* for a `gh auth login` reused from the CLI: that token is
+   * never held by this process, so it is absent from `secrets()` and would have
+   * survived redaction if GitHub — or, more realistically, a proxy in front of
+   * it — echoed the Authorization header back in an error body.
+   */
+  private secretsWith(token: string): string[] {
+    const all = this.secrets()
+    return all.includes(token) ? all : [...all, token]
   }
 
   /**
@@ -690,7 +891,7 @@ export class GitHubAuthenticator {
             'GitHub rejected this sign-in — the token has expired or been revoked.',
             null,
             body,
-            this.secrets(),
+            this.secretsWith(token),
           ),
         }
       }
@@ -702,7 +903,7 @@ export class GitHubAuthenticator {
             'GitHub’s API rate limit is exhausted, so the sign-in could not be checked. It resets within the hour.',
             null,
             body,
-            this.secrets(),
+            this.secretsWith(token),
           ),
         }
       }
@@ -714,7 +915,7 @@ export class GitHubAuthenticator {
             `GitHub answered HTTP ${response.status} when asked who this sign-in belongs to.`,
             null,
             body,
-            this.secrets(),
+            this.secretsWith(token),
           ),
         }
       }
@@ -728,7 +929,7 @@ export class GitHubAuthenticator {
       if (!raw || typeof raw.login !== 'string') {
         return {
           ok: false,
-          failure: fail('error', 'GitHub returned an account it did not name.', null, body, this.secrets()),
+          failure: fail('error', 'GitHub returned an account it did not name.', null, body, this.secretsWith(token)),
         }
       }
 
@@ -759,12 +960,61 @@ export class GitHubAuthenticator {
               `Could not reach ${this.host} — check your connection.`,
               null,
               errorText(error),
-              this.secrets(),
+              this.secretsWith(token),
             ),
       }
     } finally {
       clearTimeout(timer)
     }
+  }
+
+  /* ------------------------------------------------------ repository list -- */
+
+  /**
+   * Which repositories a credential can reach.
+   *
+   * Cached separately from the connection, and **only when it succeeded**. The
+   * asymmetry is the same one the connection cache makes and for the same
+   * reason: a rate limit or a flapping network must not be frozen on screen for
+   * the life of a cache entry, while a good answer is worth keeping so that
+   * opening the panel twice does not cost two round trips.
+   */
+  private async readAccess(token: string): Promise<RepoAccess> {
+    const cached = this.accessCache
+    if (cached && this.now() - cached.at < ACCESS_TTL_MS && cached.token === token) {
+      return cached.value
+    }
+    const value = await readAccessibleRepos({
+      token,
+      host: this.host,
+      http: this.http,
+      secrets: this.secretsWith(token),
+      now: this.now,
+      kind: this.clientKind,
+    })
+    if (value.ok) this.accessCache = { at: this.now(), token, value }
+    return value
+  }
+
+  /**
+   * Prove a credential is alive and find out what it can see, in one round
+   * trip's worth of latency rather than two.
+   *
+   * The two calls are independent — both take the same bearer token, neither
+   * needs the other's answer — so they are issued together and the repository
+   * list is thrown away if the identity call turns out to have failed. That
+   * wastes one request against a dead token, which is rare and costs nothing
+   * anybody notices; running them in sequence instead would put a second
+   * network round trip in front of every first paint of the panel, which
+   * everybody notices.
+   */
+  private async check(token: string): Promise<
+    | { ok: true; identity: GitHubIdentity; scopes: string[]; scopesReported: boolean; access: RepoAccess }
+    | { ok: false; failure: GitHubFailure }
+  > {
+    const [checked, access] = await Promise.all([this.identify(token), this.readAccess(token)])
+    if (!checked.ok) return checked
+    return { ...checked, access }
   }
 
   /* ------------------------------------------------------- state machine -- */
@@ -808,13 +1058,31 @@ export class GitHubAuthenticator {
      * `gh auth token` spawn at worst, and `ghPresent` is cached separately), so
      * it is simply taken again every time it is asked for.
      */
-    if (!fresh && connection.connected) this.cached = { at: this.now(), state: connection }
+    /*
+     * A *fully* working connection is what gets cached, and the repository list
+     * is part of "fully".
+     *
+     * The original rule — cache when connected — was written before the status
+     * carried anything that could fail on its own. It can now: the repository
+     * list has its own rate limit, its own network failure and its own Retry
+     * button, and caching a connected-but-failed-list state froze that button
+     * for a minute. That is the same defect the failure path was written to
+     * avoid, one field along: a control that appears to do nothing.
+     *
+     * Re-reading costs one `/user` call, and the successful half of the answer
+     * is still held by the access cache, so the retry is cheap as well as real.
+     */
+    const worthCaching = connection.connected && connection.access?.ok !== false
+    if (!fresh && worthCaching) this.cached = { at: this.now(), state: connection }
 
-    return {
-      ...connection,
-      pending: this.flow?.prompt ?? null,
-      repo: cwd ? await this.resolveRepo(cwd) : null,
-    }
+    // Together rather than one after the other: both are local `git` reads of
+    // the same folder, and sequencing them puts a second process spawn in the
+    // path of every status call for no gain.
+    const [repo, branch] = cwd
+      ? await Promise.all([this.resolveRepo(cwd), this.resolveBranch(cwd)])
+      : [null, null]
+
+    return { ...connection, pending: this.flow?.prompt ?? null, repo, branch }
   }
 
   /** Everything except the folder-specific parts, so it can be cached. */
@@ -830,18 +1098,23 @@ export class GitHubAuthenticator {
       missingScopes: [],
       ghInstalled,
       borrowedClient: this.borrowedClient,
+      clientKind: this.clientKind,
+      appConfigured: this.appConfigured,
+      installUrl: this.installUrl,
       disconnect: null,
       pending: null,
       failure: null,
       expiredCredentialRemoved: false,
       repo: null,
+      branch: null,
+      access: null,
     }
 
     let expiredCredentialRemoved = false
 
     const fromEnv = this.envToken()
     if (fromEnv) {
-      const checked = await this.identify(fromEnv)
+      const checked = await this.check(fromEnv)
       if (checked.ok) {
         return {
           ...base,
@@ -851,6 +1124,7 @@ export class GitHubAuthenticator {
           scopes: checked.scopes,
           scopesReported: checked.scopesReported,
           missingScopes: checked.scopesReported ? missingScopes(checked.scopes) : [],
+          access: checked.access,
           // Deliberately not offering a button. This app cannot unset a
           // variable in the shell that launched it, and a Disconnect that
           // silently does nothing is worse than no Disconnect at all.
@@ -869,7 +1143,19 @@ export class GitHubAuthenticator {
 
     const stored = this.readStored()
     if (stored) {
-      const checked = await this.identify(stored.token)
+      // Expiry is read off the credential before the network is touched. A
+      // GitHub App token that GitHub already considers dead is dead whatever
+      // the API says next, and asking anyway spends a request to be told so.
+      const checked = this.storedExpired(stored)
+        ? ({
+            ok: false,
+            failure: fail(
+              'auth-expired',
+              'The GitHub sign-in this app stored has expired.',
+              null,
+            ),
+          } as const)
+        : await this.check(stored.token)
       if (checked.ok) {
         return {
           ...base,
@@ -879,6 +1165,7 @@ export class GitHubAuthenticator {
           scopes: checked.scopes,
           scopesReported: checked.scopesReported,
           missingScopes: checked.scopesReported ? missingScopes(checked.scopes) : [],
+          access: checked.access,
           disconnect: ghInstalled
             ? 'Deletes the sign-in this app stored. The GitHub CLI in your terminal keeps its own.'
             : 'Deletes the sign-in this app stored.',
@@ -898,7 +1185,7 @@ export class GitHubAuthenticator {
 
     const fromGh = ghInstalled ? await this.ghToken() : null
     if (fromGh) {
-      const checked = await this.identify(fromGh)
+      const checked = await this.check(fromGh)
       if (checked.ok) {
         return {
           ...base,
@@ -908,6 +1195,7 @@ export class GitHubAuthenticator {
           scopes: checked.scopes,
           scopesReported: checked.scopesReported,
           missingScopes: checked.scopesReported ? missingScopes(checked.scopes) : [],
+          access: checked.access,
           disconnect:
             'Signs the GitHub CLI out on this machine, so your terminal is signed out too.',
           expiredCredentialRemoved,
@@ -962,7 +1250,20 @@ export class GitHubAuthenticator {
           'Content-Type': 'application/x-www-form-urlencoded',
           'User-Agent': 'terminaldeck',
         },
-        body: form({ client_id: this.clientId, scope: REQUESTED_SCOPES.join(' ') }),
+        /*
+         * A GitHub App device-code request carries no `scope`, and that is not
+         * an omission to tidy up later. A GitHub App's permissions are fixed by
+         * its registration and its repositories are chosen at install time, so
+         * there is nothing for a scope string to say; sending one asks GitHub
+         * to reconcile two different permission models in the same request.
+         * The OAuth path sends the scopes it needs, spelled out in
+         * `REQUESTED_SCOPES` with the reasoning for each.
+         */
+        body: form(
+          this.clientKind === 'github-app'
+            ? { client_id: this.clientId }
+            : { client_id: this.clientId, scope: REQUESTED_SCOPES.join(' ') },
+        ),
         signal: controller.signal,
       })
       body = await response.text()
@@ -986,10 +1287,15 @@ export class GitHubAuthenticator {
       // as "GitHub said no".
       return fail(
         'auth-unavailable',
-        this.borrowedClient
-          ? 'GitHub would not start a sign-in for this app. Its OAuth client may have been revoked; set ' +
-            `${CLIENT_ID_ENV} to a client id you control.`
-          : `GitHub would not start a sign-in for client ${this.clientId}. Check the OAuth app still exists and has device flow enabled.`,
+        this.clientKind === 'github-app'
+          ? // The single most likely cause, and it is invisible from the
+            // response: a GitHub App with "Enable Device Flow" left unticked
+            // answers exactly like one that does not exist.
+            `GitHub would not start a sign-in for GitHub App client ${this.clientId}. Check the app still exists and has Enable Device Flow ticked.`
+          : this.borrowedClient
+            ? 'GitHub would not start a sign-in for this app. Its OAuth client may have been revoked; set ' +
+              `${CLIENT_ID_ENV} to a client id you control.`
+            : `GitHub would not start a sign-in for client ${this.clientId}. Check the OAuth app still exists and has device flow enabled.`,
         null,
         body,
       )
@@ -1000,8 +1306,10 @@ export class GitHubAuthenticator {
       userCode: parsed.user_code,
       verificationUri: parsed.verification_uri ?? `https://${this.host}/login/device`,
       expiresAt: this.now() + Math.max(60, parsed.expires_in ?? 900) * 1000,
-      scopes: [...REQUESTED_SCOPES],
+      scopes: this.clientKind === 'github-app' ? [] : [...REQUESTED_SCOPES],
       borrowedClient: this.borrowedClient,
+      clientKind: this.clientKind,
+      installUrl: this.installUrl,
     }
 
     const flowController = new AbortController()
@@ -1117,6 +1425,11 @@ export class GitHubAuthenticator {
             login: checked.identity.login,
             scopes: checked.scopes,
             obtainedAt: this.now(),
+            expiresAt:
+              typeof parsed.expires_in === 'number' && parsed.expires_in > 0
+                ? this.now() + parsed.expires_in * 1000
+                : null,
+            clientKind: this.clientKind,
           })
         } catch (error) {
           /*
@@ -1229,6 +1542,7 @@ export class GitHubAuthenticator {
     }
 
     this.cached = null
+    this.accessCache = null
     this.ghPresent = null
     this.lastFlowFailure = null
     // `clearStored` already fired this for a device-flow credential; a gh

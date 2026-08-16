@@ -69,9 +69,31 @@ describe('visibility', () => {
     expect(html).toContain('not available')
   })
 
+  /**
+   * The hint was cut from three lines to two when the app's copy was shortened
+   * across the board, and this is the half that had to survive it: somebody is
+   * about to paste this into a public issue. The list of *which* secrets are
+   * stripped moved to the hover, where the tooltip layer picks it up from
+   * `title` — so both halves are still asserted, one on screen and one on the
+   * attribute, and neither can be deleted without failing here.
+   */
   it('warns that the bundle is worth reading before pasting', () => {
     const html = renderToStaticMarkup(<DebugPanel enabled bridge={BRIDGE} live={false} />)
-    expect(html).toContain('stripped out')
+    expect(html).toContain('Secrets are stripped')
+    expect(html).toContain('check it before you paste it anyway')
+    expect(html).toContain('Tokens, API keys, authorization headers and your home directory')
+  })
+
+  /**
+   * The shortening had a rule — a consequence, never a mechanism — and the
+   * cheapest way to keep a page honest to it is to hold the line count down.
+   * Prose that grows back arrives one clause at a time and nothing fails.
+   */
+  it('keeps the support-bundle hint to two sentences', () => {
+    const html = renderToStaticMarkup(<DebugPanel enabled bridge={BRIDGE} live={false} />)
+    const hint = /<p class="debug-hint"[^>]*>([^<]*)<\/p>/.exec(html)?.[1] ?? ''
+    expect(hint).not.toBe('')
+    expect(hint.split('.').filter((part) => part.trim() !== '')).toHaveLength(2)
   })
 })
 

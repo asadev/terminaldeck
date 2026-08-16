@@ -1,0 +1,280 @@
+/* ============================================================================
+   The machines half of Remote — the desktops this one can reach.
+
+   This used to be a page of its own, `MachinesPanel.css`, sized for a window:
+   82rem wide, its own button treatment, its own type scale. It lives inside the
+   Remote section now, so everything that had a settings equivalent has been
+   dropped rather than restyled — buttons are `settings-btn`, paragraphs are
+   `settings-prose`, and a row is dressed exactly like the `.remote-path` rows
+   further up the same screen. What is left here is the handful of things the
+   settings controls have no answer for: a machine row, the sessions under it,
+   the six boxes a pairing code is typed into, and the terminal pane.
+
+   Everything set in mono is data that is exact and countable — the pairing
+   code, the key fingerprint, session titles' folders. Nothing else is.
+   ============================================================================ */
+
+/* ------------------------------------------------------- typing a code -- */
+
+.machine-entry {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+  margin: var(--sp-3) 0 0;
+}
+
+/* Six boxes rather than one field, and the gap in the middle is not decoration:
+   it is the only thing on screen that says how the code is grouped. A single
+   run of six identical boxes is a number to count; two groups of three is a
+   shape to copy. */
+.machine-entry-boxes {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-15);
+}
+
+.machine-entry-box {
+  width: 2.5rem;
+  height: var(--control-h-lg);
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  /* Mono and tabular for the same reason the code on the other screen is: every
+     digit occupies the same width, so six boxes hold six digits that line up
+     with the six the other machine is showing. */
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--t-title3);
+  text-align: center;
+}
+
+.machine-entry-box:focus-visible,
+.machine-entry-box:focus {
+  outline: none;
+  border-color: var(--accent-line);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.machine-entry-box:disabled {
+  opacity: 0.5;
+}
+
+/* ---------------------------------------------------------------- list -- */
+
+.machines-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin: var(--sp-2) 0 0;
+  padding: 0;
+}
+
+/* The same soft block as a `.remote-path` row above it, on purpose: a machine
+   and a route into this machine are both "one thing with a state", and drawing
+   them differently would make one section read as two. */
+.machines-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-15);
+  padding: var(--sp-3) var(--sp-4);
+  border: none;
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+}
+
+.machines-row-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-3);
+}
+
+/* One dot, coloured by state. The only colour in a row, so the eye finds the
+   machine that needs something without reading a word. */
+.machines-dot {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  align-self: center;
+  border-radius: var(--radius-pill);
+  background: var(--text-muted);
+}
+
+.machines-row[data-state='online'] .machines-dot {
+  background: var(--status-completed);
+}
+
+.machines-row[data-state='connecting'] .machines-dot {
+  background: var(--status-working);
+}
+
+.machines-row[data-state='awaiting-approval'] .machines-dot {
+  background: var(--status-waiting);
+}
+
+.machines-row[data-state='error'] .machines-dot {
+  background: var(--color-critical);
+}
+
+.machines-name {
+  font-size: var(--t-body);
+  font-weight: var(--w-medium);
+  color: var(--text-primary);
+}
+
+/* Both sit beside the machine rather than at the far edge of the row: read as
+   one phrase — dot, name, kind, state — it scans in a glance. */
+.machines-kind,
+.machines-state {
+  font-size: var(--t-footnote);
+  color: var(--text-muted);
+}
+
+.machines-reason,
+.machines-note {
+  margin: 0;
+  max-width: 62ch;
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+  color: var(--text-secondary);
+}
+
+/* The key, in the form a person compares with the other screen. Data, so mono;
+   quiet, because it is only read when somebody is checking. */
+.machines-key {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--t-footnote);
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  user-select: text;
+}
+
+/* ------------------------------------------------------------ sessions -- */
+
+.machines-sessions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-05);
+  margin: var(--sp-1) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.machines-session-open {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-3);
+  width: 100%;
+  min-height: var(--row-h);
+  padding: 0 var(--sp-2);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: inherit;
+  font-family: inherit;
+  font-size: var(--t-callout);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+/* A hover state is a promise, so it is only on the control that keeps it. */
+.machines-session-open:hover {
+  background: var(--bg-hover);
+}
+
+.machines-session-open:active {
+  background: var(--bg-active);
+}
+
+.machines-session-open[aria-pressed='true'] {
+  background: var(--accent-soft);
+}
+
+.machines-session-open:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.machines-session-title {
+  font-weight: var(--w-medium);
+  color: var(--text-primary);
+}
+
+/* A path is exact and countable, so it is mono. The label beside it is not. */
+.machines-session-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: var(--t-footnote);
+  color: var(--text-muted);
+}
+
+.machines-session-status {
+  font-size: var(--t-footnote);
+  color: var(--text-muted);
+}
+
+/* ------------------------------------------------------------- actions -- */
+
+.machines-actions {
+  margin-top: var(--sp-1);
+}
+
+.machines-confirm {
+  font-size: var(--t-callout);
+  color: var(--text-secondary);
+}
+
+/* --------------------------------------------------------------- pane -- */
+
+/* The session itself, under the list. It gets the full width of the section
+   rather than a column beside the list: a terminal squeezed into a column is
+   the thing this app's whole layout pass was about. */
+.machines-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 20rem;
+  margin: var(--sp-3) 0 0;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background: var(--terminal-bg);
+}
+
+.machines-pane-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--fill-quaternary);
+}
+
+.machines-pane-title {
+  font-size: var(--t-callout);
+  font-weight: var(--w-medium);
+  color: var(--text-primary);
+}
+
+.machines-pane-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: var(--t-footnote);
+  color: var(--text-muted);
+}
+
+.machines-terminal {
+  flex: 1;
+  min-height: 0;
+  padding: var(--sp-2);
+}

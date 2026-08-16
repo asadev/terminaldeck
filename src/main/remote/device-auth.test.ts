@@ -74,6 +74,33 @@ function silenceErrors(): void {
 
 /* -------------------------------------------------------------------------- */
 
+/**
+ * The four numbers the six-digit format is only sound because of.
+ *
+ * `shared/short-code.ts` states the arithmetic: 10^6 codes, five guesses, sixty
+ * seconds, and a *pending* device at the end of a successful one. Every one of
+ * those is a constant somebody could raise or lower without touching a line of
+ * this file's logic, and the arithmetic in that header would silently become
+ * false. So they are asserted as values, not merely used.
+ *
+ * If one of these has to change, the header over there changes with it — that
+ * is the whole point of failing here rather than in a behavioural test that
+ * would still pass with a ten-minute TTL.
+ */
+describe('the constants the code length is arguing against', () => {
+  it('gives a code sixty seconds and no more', () => {
+    expect(PAIRING_TTL_MS).toBe(60_000)
+  })
+
+  it('tolerates five wrong answers, not more', () => {
+    expect(MAX_FAILED_ATTEMPTS).toBe(5)
+  })
+
+  it('locks a source out for fifteen minutes once it has spent them', () => {
+    expect(LOCKOUT_MS).toBe(15 * 60_000)
+  })
+})
+
 describe('pairing tokens', () => {
   it('opens once, inside its life', async () => {
     const time = clock()
@@ -81,14 +108,13 @@ describe('pairing tokens', () => {
 
     const { token, expiresAt } = auth.createPairingToken()
     expect(expiresAt).toBe(time.now() + PAIRING_TTL_MS)
-    // The short code from `shared/short-code.ts`, because the other end of a
-    // pairing is now sometimes a second desktop with no camera and a person
-    // typing. Forty bits, guarded by the sixty seconds above, a single use and
-    // five wrong answers — the arithmetic is written out in that file.
+    // The short code from `shared/short-code.ts`, because every pairing is now
+    // a person reading a code off one screen and typing it into another — there
+    // is no QR and no link. A million codes, guarded by the sixty seconds above,
+    // a single use, and five wrong answers killing the code in
+    // `pairingDesk.offers`; the arithmetic is written out in that file.
     expect(isCode(token)).toBe(true)
-    // Still base64url-safe, so nothing between a screen, a phone and a query
-    // string has to escape it. The hyphen is in that alphabet.
-    expect(token).toMatch(/^[A-Za-z0-9_-]+$/)
+    expect(token).toMatch(/^[0-9]{6}$/)
 
     time.advance(PAIRING_TTL_MS - 1)
     const result = await auth.redeemPairingToken(token, 'iPhone')

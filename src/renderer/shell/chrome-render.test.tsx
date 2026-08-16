@@ -182,9 +182,21 @@ describe('AccountChip', () => {
    */
   it('explains itself on the button when the agent has no login to isolate', () => {
     for (const [provider, expected] of [
-      ['shell', 'no login to isolate'],
-      ['codex', 'only apply to Claude'],
-      ['gemini', 'only apply to Claude'],
+      // "A shell has no login to sign in to", not the older "no login to
+      // isolate". The copy pass replaced the mechanism (isolating a config
+      // directory) with the consequence, which is the standard the whole
+      // settings sweep was edited to. The assertion follows the shipped copy
+      // rather than the copy being reverted to satisfy it.
+      ['shell', 'no login to sign in to'],
+      // Gemini is the interesting one, and its sentence is not "only apply to
+      // Claude" any more because that was never the real reason. `GEMINI_CLI_HOME`
+      // exists and moves settings — what it does not move is the OAuth token,
+      // which goes to the OS keychain under two constants that never read the
+      // home. So two "accounts" address one keychain item and `setPassword`
+      // overwrites: signing into a second would not share the first login, it
+      // would destroy it. That is why it is refused rather than offered.
+      ['gemini', 'a second account cannot be pointed at'],
+      // `codex` is deliberately NOT in this list any more — see the test below.
     ] as const) {
       const blocked = renderToStaticMarkup(
         <AccountChip
@@ -201,18 +213,38 @@ describe('AccountChip', () => {
     }
   })
 
-  it('keeps the ordinary invitation for the one agent that does read a config directory', () => {
-    const claude = renderToStaticMarkup(
-      <AccountChip
-        current={null}
-        projectPath={projects[0].path}
-        provider="claude"
-        onPick={noop}
-        onManage={noop}
-      />,
-    )
-    expect(claude).toContain('Choose which account a new session here uses')
-    expect(claude).not.toContain('no login to isolate')
+  /*
+   * It is two agents now, not one, and that is the point of this test.
+   *
+   * Codex was refused accounts here on the grounds that it "ships as a shim
+   * around a native binary that is not present on this machine" — true of the
+   * npm package, whose vendored directory holds `rg` and nothing else, so
+   * `codex --version` throws ENOENT. That got read as "the mechanism does not
+   * exist". It does: `CODEX_HOME` moves the login, verified against the real
+   * CLI — one binary, three homes, one "Logged in using ChatGPT" and two "Not
+   * logged in" — and the credential is a plain `auth.json` inside it, so it
+   * moves with the directory by construction rather than by policy.
+   *
+   * So this asserts the pair, and a wrong answer for either is a real
+   * regression: dropping Claude breaks the feature, and dropping Codex silently
+   * returns Asad to the thing he asked to have fixed — every "add an account"
+   * sending him to a Claude login when he wanted ChatGPT.
+   */
+  it('keeps the ordinary invitation for the agents whose login can be isolated', () => {
+    for (const provider of ['claude', 'codex'] as const) {
+      const invited = renderToStaticMarkup(
+        <AccountChip
+          current={null}
+          projectPath={projects[0].path}
+          provider={provider}
+          onPick={noop}
+          onManage={noop}
+        />,
+      )
+      expect(invited, provider).toContain('Choose which account a new session here uses')
+      expect(invited, provider).not.toContain('no login to sign in to')
+      expect(invited, provider).not.toContain('cannot be pointed at')
+    }
   })
 })
 

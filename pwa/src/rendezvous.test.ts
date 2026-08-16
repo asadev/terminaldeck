@@ -1,5 +1,5 @@
 /**
- * Eight typed characters, and the machine they have to name.
+ * Six typed digits, and the machine they have to name.
  *
  * ## The vectors, and why they are the point of this file
  *
@@ -48,14 +48,23 @@ import type { BinarySocketLike } from './relay-socket'
  */
 const VECTORS = [
   {
-    code: 'H4K9-2FQT',
-    hostId: 'ZWG39KXXW8GKVHZP6UF2SGUARD',
-    publicKey: 'aQPhyoFeCJkVcrnoSvne9Eft2vkXQrmYitfzy2JowX8=',
+    code: '482913',
+    hostId: 'PNN7FEFPVPEPG8J6JD5LTK22CW',
+    publicKey: 'PluJUUCYOIi9dWOnMK0Sq8NrO635DqyD0yTLIyeLlAU=',
   },
   {
-    code: 'ABCD-EFGH',
-    hostId: 'BBZFGL6PYFH6W23H5LGX4KERVZ',
-    publicKey: 'NinFdauDs0+5UobA6Txvq2rhXZiyD1c4676VktxUN0A=',
+    // The leading-zero case, pinned on purpose. A code is six *digits*, not a
+    // number: anything that parses `000000` as an integer on the way to the
+    // derivation lands on `0`, derives a different slot from every other client,
+    // and reads on screen as a code that was typed correctly and found nothing.
+    code: '000000',
+    hostId: 'ESVP7D6GDHN28MLNU5AEGRGGC7',
+    publicKey: 'AFF3srTJviOR9zEbStt+iPZuTjl1Gp595oLklTIfLgc=',
+  },
+  {
+    code: '999999',
+    hostId: 'UAFTGU2WS5MN5GYUKF48KJG5SK',
+    publicKey: 'bleS0Mpc5kqiW5FJ7wNs6uardUbhJgcrjUN583t7Zx4=',
   },
 ] as const
 
@@ -78,16 +87,18 @@ describe('the identity a code derives', () => {
 
   it('lands on one identity however the code was typed', async () => {
     // The two ends derive from the *normalised* string, or pairing depends on
-    // which keyboard somebody used. `O` folds to zero and `I`/`L` to one, which
-    // is Crockford's own decoding rule.
-    const canonical = await rendezvousIdentity('H4K9-2FQT')
-    for (const typed of ['h4k92fqt', ' H4K9 2FQT ', 'H4K9—2FQT']) {
+    // what somebody's keyboard put between the digits on the way here.
+    const canonical = await rendezvousIdentity('482913')
+    for (const typed of ['482-913', ' 482 913 ', '482–913']) {
       expect((await rendezvousIdentity(typed))?.hostId).toBe(canonical?.hostId)
     }
   }, 30_000)
 
   it('refuses a string that is not a code, instead of hashing it anyway', async () => {
-    for (const typed of ['', 'H4K9', 'H4K9-2FQTX', 'not a code at all']) {
+    // Five digits, seven digits, a letter, and the eight-character shape this
+    // format replaced — all refused rather than derived into a slot nobody else
+    // lands on.
+    for (const typed of ['', '48291', '4829131', 'O82913', 'H4K9-2FQT', 'not a code at all']) {
       expect(await rendezvousIdentity(typed)).toBeNull()
     }
   })
@@ -104,8 +115,8 @@ describe('the offer a machine answers with', () => {
   const offer = {
     t: 'machine',
     relayUrl: 'wss://relay.terminaldeck.dev',
-    hostId: 'ZWG39KXXW8GKVHZP6UF2SGUARD',
-    publicKey: 'NinFdauDs0+5UobA6Txvq2rhXZiyD1c4676VktxUN0A=',
+    hostId: 'PNN7FEFPVPEPG8J6JD5LTK22CW',
+    publicKey: 'AFF3srTJviOR9zEbStt+iPZuTjl1Gp595oLklTIfLgc=',
     name: 'Asad’s MacBook Pro',
     platform: 'darwin',
   }
@@ -120,11 +131,12 @@ describe('the offer a machine answers with', () => {
   })
 
   it('accepts a key in standard base64, which is what the desktop sends', () => {
-    // The regression this exists for: `isHostKey` in `shared/pairing-link.ts`
-    // describes the base64url form a *link* carries and rejects `+` and `/`.
-    // Validating an offer with it would refuse most real machines at random —
-    // the vector above contains a `+` — and read on screen as a code that had
-    // expired.
+    // The regression this exists for: the offer's key is **standard** base64,
+    // because `machines/ipc.ts` re-encodes it that way, and standard base64 of
+    // 32 random bytes contains a `+` or a `/` most of the time. A validator
+    // written for the base64url form a link used to carry would refuse most real
+    // machines at random — the vector above contains a `+` — and read on screen
+    // as a code that had expired.
     expect(offer.publicKey).toContain('+')
     expect(hostKeyBytes(offer.publicKey)?.length).toBe(32)
     expect(parseOffer(JSON.stringify(offer))).not.toBeNull()
@@ -186,12 +198,12 @@ function beacon(keys: StaticKeyPair, payload: string | null): { open: (url: stri
 }
 
 describe('looking a code up', () => {
-  const CODE = 'H4K9-2FQT'
+  const CODE = '482913'
   const offer = JSON.stringify({
     t: 'machine',
     relayUrl: 'wss://relay.terminaldeck.dev',
-    hostId: 'BBZFGL6PYFH6W23H5LGX4KERVZ',
-    publicKey: 'NinFdauDs0+5UobA6Txvq2rhXZiyD1c4676VktxUN0A=',
+    hostId: 'UAFTGU2WS5MN5GYUKF48KJG5SK',
+    publicKey: 'bleS0Mpc5kqiW5FJ7wNs6uardUbhJgcrjUN583t7Zx4=',
   })
 
   it('reaches the machine showing that code and reads its address', async () => {
@@ -200,7 +212,7 @@ describe('looking a code up', () => {
     const relay = beacon(identity.keys, offer)
 
     const found = await lookupMachine({ code: CODE, relayUrl: 'wss://relay.example', open: relay.open })
-    expect(found?.hostId).toBe('BBZFGL6PYFH6W23H5LGX4KERVZ')
+    expect(found?.hostId).toBe('UAFTGU2WS5MN5GYUKF48KJG5SK')
     expect(relay.urls).toEqual(['wss://relay.example/v1/join?host=' + identity.hostId])
   }, 30_000)
 

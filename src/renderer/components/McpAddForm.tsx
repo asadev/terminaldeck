@@ -79,7 +79,7 @@ export function scopeChoices(projectPath: string | null): ScopeChoice[] {
     {
       value: 'user',
       label: 'All projects',
-      help: 'Saved in your Claude Code configuration and available everywhere.',
+      help: 'Available everywhere.',
     },
   ]
   if (projectPath) {
@@ -97,7 +97,12 @@ export function scopeChoices(projectPath: string | null): ScopeChoice[] {
         // approval. Saying so here is the difference between a greyed-out row
         // reading as a working safeguard and reading as a failed add.
         label: 'This project, shared',
-        help: 'Written to .mcp.json in the folder, so it can be committed. It stays inactive until Claude Code asks you to approve it.',
+        // The approval clause stays. A server added this way comes back from
+        // the reader as `enabled: false` — measured, not guessed — and without
+        // the warning a working safeguard reads as a failed add. What went was
+        // the sentence about `.mcp.json` being committable, which the label
+        // ("shared") already carries.
+        help: 'Stays inactive until Claude Code asks you to approve it.',
       },
     )
   }
@@ -138,9 +143,12 @@ export function draftToRequest(draft: McpAddDraft, projectPath: string | null): 
  * the click had missed. A control that looks pressable has to answer.
  */
 export function missingFrom(draft: McpAddDraft): string | null {
-  if (draft.name.trim() === '') return 'Give the server a name first — it is how you refer to it later.'
+  // Each of these is a hover label on a button somebody cannot press. It has to
+  // name the empty field and nothing else — "it is how you refer to it later"
+  // was answering a question the reader had not asked, in a tooltip.
+  if (draft.name.trim() === '') return 'Give the server a name first.'
   if (draft.transport === 'stdio' && draft.command.trim() === '')
-    return 'Say which command starts it, the way you would type it in a terminal.'
+    return 'Say which command starts it.'
   if (draft.transport !== 'stdio' && draft.url.trim() === '')
     return 'Say which URL it is reached at.'
   return null
@@ -254,9 +262,7 @@ export function McpAddForm({ projectPath, onSubmit, onAdded, onCancel }: McpAddF
             disabled={busy}
           />
           <span className="mcp-field-help">
-            {stdio
-              ? 'Written the way you would type it in a terminal. Quote anything containing a space.'
-              : 'The address Claude Code will connect to.'}
+            {stdio ? 'As you would type it in a terminal. Quote anything with a space.' : 'Where Claude Code connects.'}
           </span>
         </label>
 

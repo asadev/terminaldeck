@@ -1,18 +1,19 @@
 /**
- * How eight typed characters find a machine, from a browser.
+ * How six typed digits find a machine, from a browser.
  *
  * ## The problem this solves, and why a code cannot simply be dialled
  *
- * A pairing link carries four things: the relay, the 26-character host id, the
- * machine's X25519 public key and the token. The first three are the *address*,
- * and they are what makes the handshake Noise IK rather than trust-on-first-use.
- * They are not secret — they are simply large, 130 bits of host id and 256 of
- * key, and a code somebody reads off one screen and types into another cannot
- * carry them.
+ * Reaching a machine takes three facts: the relay, the 26-character host id and
+ * the machine's X25519 public key. They are the *address*, and they are what
+ * makes the handshake Noise IK rather than trust-on-first-use. They are not
+ * secret — they are simply large, 130 bits of host id and 256 of key, and six
+ * digits somebody reads off one screen cannot carry them.
  *
- * So a typed code needs somewhere to look the address up, and the only party
- * both ends can already reach is the relay — the one party this design assumes
- * is hostile.
+ * A link used to carry all of it, and a QR code used to carry the link. Both are
+ * gone: the QR did not work, and a link is a bearer secret with a route through
+ * a chat app attached. So a typed code needs somewhere to look the address up,
+ * and the only party both ends can already reach is the relay — the one party
+ * this design assumes is hostile.
  *
  * ## The mechanism, which is the desktop's and is not restated
  *
@@ -26,16 +27,20 @@
  * handshake refuses it. Nothing was added to the relay and nothing is stored
  * anywhere; the slot exists for exactly as long as the code is on screen.
  *
- * The seed is memory-hard because a code is forty bits and a relay that recorded
- * the handshake could otherwise walk the whole space offline. scrypt at these
- * parameters costs about a third of a second in a browser, once per pairing.
+ * The seed is memory-hard, and with six digits that is no longer a precaution.
+ * There are only 10^6 codes; if the slot were named by a hash, anybody could
+ * sweep the million in seconds, find the live slot, learn the code exactly, and
+ * spend the five guesses `server.ts` allows on a single certain one. scrypt at
+ * these parameters costs about a third of a second in a browser — once per
+ * pairing here, and about ten CPU-hours for the whole space. The full argument
+ * is in the desktop's module and is worth reading there.
  *
  * ## What is shared with the desktop and what is not
  *
  * Shared, imported: `staticFromSeed` and the whole handshake from
  * `shared/sealed.ts`; `hostIdFor`, `HOST_SECRET_BYTES` and the relay's default
  * address from `shared/relay-wire.ts`; `normaliseCode` from
- * `shared/short-code.ts`; the field validators from `shared/pairing-link.ts`.
+ * `shared/short-code.ts`; the address validators from `shared/pairing-link.ts`.
  *
  * Not shared, and stated plainly because somebody will otherwise assume it is:
  * the **salt and the scrypt parameters** below, and the offer parser. The
@@ -91,9 +96,9 @@ export interface RendezvousIdentity {
  * nobody could have typed.
  *
  * Normalised first, so the two ends derive from the same string however each was
- * typed or printed: `H4K9-2FQT`, `h4k92fqt` and a code with an `O` where a zero
- * was meant all have to land on one seed, or pairing depends on which keyboard
- * somebody used.
+ * typed or printed: `482913`, ` 482 913 ` and `482-913` — the shape a code comes
+ * back in after a round trip through a chat app — all have to land on one seed,
+ * or pairing depends on what somebody's keyboard put between the digits.
  *
  * Asynchronous where the desktop's is not, and only for that reason: `scryptSync`
  * on the main thread of a browser freezes the page for the third of a second it
@@ -151,14 +156,14 @@ export function parseOffer(raw: string): RelayEndpoint | null {
    * Decoded, not shape-checked — and this is the one field where using the
    * shared validator would have been wrong.
    *
-   * `isHostKey` in `shared/pairing-link.ts` describes the **base64url** form a
-   * pairing link carries: `[A-Za-z0-9_-]{43}=?`. An offer carries the same 32
-   * bytes as **standard base64**, because `machines/ipc.ts` re-encodes them on
-   * the way out — and standard base64 of 32 random bytes contains a `+` or a `/`
-   * most of the time. Validating an offer with the link's regex would therefore
-   * refuse most real machines, intermittently, in a way that looks like the code
-   * having expired. The desktop's own `parseOffer` decodes and measures for the
-   * same reason; `hostKeyBytes` does both alphabets.
+   * An offer carries 32 bytes as **standard base64**, because `machines/ipc.ts`
+   * re-encodes them on the way out — and standard base64 of 32 random bytes
+   * contains a `+` or a `/` most of the time. A validator written for the
+   * base64url form (`[A-Za-z0-9_-]{43}=?`) that the old pairing link carried
+   * would therefore refuse most real machines, intermittently, in a way that
+   * looks like the code having expired. That regex is what used to be here. The
+   * desktop's own `parseOffer` decodes and measures for the same reason;
+   * `hostKeyBytes` does both alphabets.
    */
   if (typeof publicKey !== 'string' || hostKeyBytes(publicKey) === null) return null
 

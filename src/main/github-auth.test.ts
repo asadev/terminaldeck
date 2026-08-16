@@ -18,7 +18,9 @@ import {
   type HttpFetch,
   type HttpResponse,
 } from './github-auth'
-import type { GitHubFailure, RepoRef } from './github'
+import { APP_CLIENT_ID_ENV, APP_SLUG_ENV } from './github-app'
+import { userReposUrl, type RepoAccessList } from './github-repos'
+import type { BranchRef, GitHubFailure, RepoRef } from './github'
 import type { Platform } from './platform/host'
 
 /**
@@ -135,6 +137,31 @@ const userRoute =
       ? response(status, body, scopes === null ? {} : { 'X-OAuth-Scopes': scopes })
       : null
 
+/**
+ * The repository list, which every connected status now fetches alongside the
+ * identity.
+ *
+ * Most tests in this file deliberately do *not* install this route, and that is
+ * an assertion in itself: the fake transport throws for an unrouted request, so
+ * a connection that still reports `connected: true` in those tests is proof
+ * that a failed repository list cannot take the sign-in down with it.
+ */
+const REPO_ROW = {
+  full_name: 'asadev/terminaldeck',
+  name: 'terminaldeck',
+  owner: { login: 'asadev' },
+  html_url: 'https://github.com/asadev/terminaldeck',
+  private: false,
+  default_branch: 'main',
+  pushed_at: '2026-08-16T00:46:23Z',
+  permissions: { push: true },
+}
+
+const reposRoute =
+  (rows: unknown[] = [REPO_ROW], headers: Record<string, string> = {}) =>
+  (call: Call): HttpResponse | null =>
+    call.url === userReposUrl('github.com') ? response(200, JSON.stringify(rows), headers) : null
+
 /** `gh` is not installed: every spawn fails the way `execFile` reports it. */
 const ghMissing = async (): Promise<never> => {
   throw Object.assign(new Error('spawn gh ENOENT'), { code: 'ENOENT' })
@@ -159,6 +186,7 @@ function make(options: {
   fetch?: HttpFetch
   gh?: (args: string[]) => Promise<{ stdout: string; stderr: string }>
   repo?: RepoRef | GitHubFailure
+  branch?: BranchRef | null
   now?: () => number
   /** Windows only where a test is about Windows; everything else is a Mac. */
   platform?: Platform
@@ -177,6 +205,7 @@ function make(options: {
     // fifteen minutes a device code really lives.
     sleep: async () => undefined,
     resolveRepo: async () => options.repo ?? REPO,
+    resolveBranch: async () => options.branch ?? null,
   })
 }
 
@@ -371,7 +400,11 @@ describe('caching', () => {
   })
 
   it('serves a working connection from the cache rather than re-asking GitHub', async () => {
-    const { fetch, calls } = http([userRoute('repo, read:org, notifications')])
+    // The repository route is installed here where most tests leave it out,
+    // because "working" now includes the repository list: a connection whose
+    // list failed is deliberately not cached, so that the Retry button under
+    // the failure does something. That rule has its own test below.
+    const { fetch, calls } = http([userRoute('repo, notifications'), reposRoute()])
     const auth = make({ fetch, gh: ghWith(GH_TOKEN) })
 
     expect((await auth.status()).connected).toBe(true)
@@ -380,6 +413,31 @@ describe('caching', () => {
     // One `/user` call for two looks: opening the panel twice, or React
     // mounting it twice under StrictMode, must not cost two round trips.
     expect(calls.filter((call) => call.url === apiUserUrl('github.com'))).toHaveLength(1)
+  })
+
+  /**
+   * The Retry button under a failed repository list has to do something.
+   *
+   * Caching a connected-but-failed-list state froze it for a minute, which is
+   * the same defect the failure path was written to avoid — a control that
+   * appears to do nothing — one field along. The identity call is re-made; the
+   * successful half of an answer is still held by the access cache, so a real
+   * retry stays cheap.
+   */
+  it('does not cache a connection whose repository list failed', async () => {
+    const { fetch, calls } = http([
+      userRoute('repo'),
+      (call) =>
+        call.url === userReposUrl('github.com')
+          ? response(500, '{"message":"server error"}')
+          : null,
+    ])
+    const auth = make({ fetch, gh: ghWith(GH_TOKEN) })
+
+    expect((await auth.status()).connected).toBe(true)
+    expect((await auth.status()).connected).toBe(true)
+
+    expect(calls.filter((call) => call.url === apiUserUrl('github.com'))).toHaveLength(2)
   })
 })
 
@@ -896,5 +954,250 @@ describe('registerGitHubAuthIpc', () => {
 
     expect(state.connected).toBe(false)
     expect(state.failure?.kind).toBe('auth-declined')
+  })
+})
+
+/* ------------------------------------------------- what the sign-in buys -- */
+
+/**
+ * "I connect and I see nothing."
+ *
+ * The panel used to have nothing to show unless the folder that happened to be
+ * open was a GitHub repository, so a perfectly good sign-in from anywhere else
+ * looked exactly like a failed one. What proves a sign-in worked is the list of
+ * repositories it can reach, and that is a property of the credential rather
+ * than of the folder — which is why it rides on the status.
+ */
+describe('the repository list a sign-in buys', () => {
+  it('names the repositories the credential can reach', async () => {
+    const auth = make({
+      gh: ghWith(GH_TOKEN),
+      fetch: http([userRoute('repo, notifications'), reposRoute()]).fetch,
+    })
+    const state = await auth.status('/tmp/project')
+
+    expect(state.connected).toBe(true)
+    const access = state.access as RepoAccessList
+    expect(access.ok).toBe(true)
+    expect(access.repos.map((repo) => repo.nameWithOwner)).toEqual(['asadev/terminaldeck'])
+    expect(access.truncated).toBe(false)
+    expect(access.atLeast).toBe(1)
+  })
+
+  /**
+   * The list and the identity are two independent facts, and the connection
+   * belongs to the identity. A rate limit on the repository list must not
+   * repaint the panel as signed out — that is the "half connected and I cannot
+   * tell what it is doing" complaint, rebuilt one field along.
+   */
+  it('stays connected when the list itself fails', async () => {
+    const auth = make({
+      gh: ghWith(GH_TOKEN),
+      fetch: http([
+        userRoute('repo, notifications'),
+        (call) =>
+          call.url === userReposUrl('github.com')
+            ? response(403, '{"message":"API rate limit exceeded"}', { 'X-RateLimit-Remaining': '0' })
+            : null,
+      ]).fetch,
+    })
+    const state = await auth.status()
+
+    expect(state.connected).toBe(true)
+    expect(state.identity?.login).toBe('asadev')
+    expect((state.access as GitHubFailure).kind).toBe('rate-limited')
+  })
+
+  /**
+   * One round trip's worth of latency, not two. The identity call and the
+   * repository call take the same bearer token and neither needs the other's
+   * answer, so sequencing them would put a second network wait in front of
+   * every first paint of the panel.
+   */
+  it('asks for both at once rather than one after the other', async () => {
+    let inFlight = 0
+    let overlapped = false
+    const fetch: HttpFetch = async (url) => {
+      inFlight += 1
+      if (inFlight > 1) overlapped = true
+      await Promise.resolve()
+      inFlight -= 1
+      return url === apiUserUrl('github.com')
+        ? response(200, USER_JSON, { 'X-OAuth-Scopes': 'repo' })
+        : response(200, JSON.stringify([REPO_ROW]))
+    }
+    const auth = make({ gh: ghWith(GH_TOKEN), fetch })
+
+    await auth.status()
+    expect(overlapped).toBe(true)
+  })
+
+  it('does not re-ask GitHub for a list it fetched a moment ago', async () => {
+    const { fetch, calls } = http([userRoute('repo'), reposRoute()])
+    const auth = make({ gh: ghWith(GH_TOKEN), fetch })
+
+    await auth.status()
+    await auth.status()
+    await auth.status(undefined, { refresh: true })
+
+    // The connection cache covers the first repeat; the access cache — which
+    // outlives it, because the answer changes weekly rather than by the minute
+    // — covers the forced refresh.
+    expect(calls.filter((call) => call.url === userReposUrl('github.com'))).toHaveLength(1)
+  })
+
+  it('reports the folder’s branch beside its repository', async () => {
+    const auth = make({
+      gh: ghWith(GH_TOKEN),
+      fetch: http([userRoute('repo'), reposRoute()]).fetch,
+      branch: { name: 'main', detached: false, head: null },
+    })
+    const state = await auth.status('/tmp/project')
+
+    expect(state.repo).toMatchObject({ nameWithOwner: 'asadev/terminaldeck' })
+    expect(state.branch).toEqual({ name: 'main', detached: false, head: null })
+  })
+
+  /** No folder asked about, no folder facts invented. */
+  it('has no branch and no repository when no folder was named', async () => {
+    const auth = make({ gh: ghWith(GH_TOKEN), fetch: http([userRoute('repo'), reposRoute()]).fetch })
+    const state = await auth.status()
+    expect(state.repo).toBeNull()
+    expect(state.branch).toBeNull()
+  })
+})
+
+/* --------------------------------------------------- what is asked for -- */
+
+describe('what the consent screen is asked for', () => {
+  /**
+   * `read:org` was removed on 2026-08-16. It granted read access to
+   * organisation membership, org projects and team membership — none of which
+   * this product reads anywhere — and it put a whole extra line on the consent
+   * screen. `repo` alone covers private repositories whoever owns them.
+   */
+  it('no longer asks for organisation membership', async () => {
+    expect([...REQUESTED_SCOPES]).toEqual(['repo', 'notifications'])
+
+    const { fetch, calls } = http(flowRoutes({}))
+    const auth = make({ fetch })
+    await auth.connect()
+
+    const started = calls.find((call) => call.url.endsWith('/login/device/code'))
+    // `form()` percent-encodes, so the separator is `%20` rather than `+`.
+    expect(started?.body).toContain('scope=repo%20notifications')
+    expect(started?.body).not.toContain('read%3Aorg')
+  })
+
+  /**
+   * The shipping default, and the reason `github-app.ts` ships with a null
+   * client id: an invented one is a Connect button that reaches GitHub, gets a
+   * 404 that does not name the id, and can never succeed.
+   */
+  it('signs in through the OAuth client while no GitHub App is registered', async () => {
+    const auth = make({ gh: ghWith(GH_TOKEN), fetch: http([userRoute('repo'), reposRoute()]).fetch })
+    const state = await auth.status()
+
+    expect(state.clientKind).toBe('oauth')
+    expect(state.appConfigured).toBe(false)
+    expect(state.installUrl).toBeNull()
+    expect(state.borrowedClient).toBe(true)
+  })
+})
+
+describe('the GitHub App path, once a registration exists', () => {
+  const APP_ENV = { [APP_CLIENT_ID_ENV]: 'Iv23liEXAMPLE', [APP_SLUG_ENV]: 'terminal-deck' }
+
+  /**
+   * A GitHub App device-code request carries no `scope`. Its permissions are
+   * fixed by the registration and its repositories are chosen at install time,
+   * so a scope string has nothing to say and asking GitHub to reconcile two
+   * permission models in one request is how this path breaks silently.
+   */
+  it('asks for no scopes at all, because the app registration holds them', async () => {
+    const { fetch, calls } = http(flowRoutes({}))
+    const auth = make({ env: APP_ENV, fetch })
+    const prompt = await auth.connect()
+
+    const started = calls.find((call) => call.url.endsWith('/login/device/code'))
+    expect(started?.body).toContain('client_id=Iv23liEXAMPLE')
+    expect(started?.body).not.toContain('scope')
+    expect(prompt).toMatchObject({ clientKind: 'github-app', scopes: [], borrowedClient: false })
+  })
+
+  it('hands the user the install screen where repositories are chosen', async () => {
+    const auth = make({
+      env: APP_ENV,
+      gh: ghMissing,
+      fetch: http([userRoute(null), reposRoute()]).fetch,
+    })
+    const state = await auth.status()
+
+    expect(state.clientKind).toBe('github-app')
+    expect(state.appConfigured).toBe(true)
+    expect(state.installUrl).toBe('https://github.com/apps/terminal-deck/installations/new')
+  })
+
+  /**
+   * A GitHub App user token can expire, and GitHub says so when it issues one.
+   * Checking that locally is worth the four lines: without it the first sign of
+   * an expired token is whichever list happens to 401 first, with no sentence
+   * anywhere saying the sign-in is the thing that died.
+   */
+  it('treats a token past its stated expiry as expired without asking GitHub', async () => {
+    const dir = tempDir()
+    let clock = Date.parse('2026-08-16T00:00:00Z')
+    const seeded = make({
+      dir,
+      env: APP_ENV,
+      now: () => clock,
+      fetch: http([
+        ...flowRoutes({
+          final: response(200, JSON.stringify({ access_token: TOKEN, expires_in: 28_800 })),
+        }),
+      ]).fetch,
+    })
+    await seeded.connect()
+    expect((await seeded.awaitConnect()).connected).toBe(true)
+
+    // Eight hours and a minute later, with a transport that would answer 200 to
+    // anything: the credential is gone on the strength of its own expiry.
+    clock += 8 * 3600_000 + 60_000
+    const { fetch, calls } = http([userRoute('repo'), reposRoute()])
+    const auth = make({ dir, env: APP_ENV, now: () => clock, fetch, gh: ghMissing })
+    const state = await auth.status()
+
+    expect(state.connected).toBe(false)
+    expect(state.expiredCredentialRemoved).toBe(true)
+    expect(calls).toHaveLength(0)
+  })
+})
+
+/**
+ * The one credential this process does not hold, and therefore did not redact.
+ *
+ * A `gh auth login` token is read out of the CLI and handed straight to GitHub;
+ * it never lands in `secrets()`, which only knows about the environment and the
+ * file this app writes. So it was the one token that could have survived
+ * redaction if GitHub — or a proxy in front of it — echoed the Authorization
+ * header back in an error body.
+ */
+describe('a reused gh login is redacted too', () => {
+  it('keeps the CLI’s token out of a failed repository listing', async () => {
+    const auth = make({
+      gh: ghWith(GH_TOKEN),
+      fetch: http([
+        userRoute('repo'),
+        (call) =>
+          call.url === userReposUrl('github.com')
+            ? response(500, `{"message":"upstream said ${GH_TOKEN}"}`)
+            : null,
+      ]).fetch,
+    })
+
+    const state = await auth.status()
+    expect(state.connected).toBe(true)
+    expect(JSON.stringify(state)).not.toContain(GH_TOKEN)
+    expect((state.access as GitHubFailure).detail).toContain('[redacted]')
   })
 })

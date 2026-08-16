@@ -1,4 +1,5 @@
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -12,14 +13,19 @@ import { basename, join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
   BROWSERS,
+  browserDataAccess,
+  canRead,
   chromeTimeToUnixMs,
   classifyLocalUrl,
   collectBookmarkUrls,
   dedupeUrls,
+  describeAccessFailure,
   detectBrowsers,
+  fullDiskAccessPane,
   listSessionFiles,
   parseProfileNames,
   readHistoryRows,
+  registerChromeImportIpc,
   scanForDevUrls,
   scanProfile,
   snapshotDatabase,
@@ -730,6 +736,153 @@ describe('paths and detection on this machine', () => {
       if (browser.access !== 'blocked') continue
       expect(browser.note).toBeTruthy()
       expect(browser.note).toMatch(/Full Disk Access/)
+    }
+  })
+})
+
+/* ---------------------------------------------------- the permission gate -- */
+
+/**
+ * Asad: *"it is not asking if it needs full access; let it ask full access in
+ * that case rather than asking only this much, so it can successfully import."*
+ *
+ * The half of that which lives here is the destination — knowing the permission
+ * is missing, saying which one, and having somewhere to send the person. The
+ * other half, the order in which permissions are asked for, is in
+ * `cookie-import.test.ts`.
+ */
+describe('the permission this needs, and where it lives', () => {
+  it('points at the pane macOS actually calls Full Disk Access', () => {
+    /*
+     * The anchor is not documented and is not guessed. It is
+     * `revealElementKeyName` for `kTCCServiceSystemPolicyAllFiles` in the
+     * privacy pane's own TCCServiceList.plist on macOS 27 — see the comment on
+     * `fullDiskAccessPane`. Pinned as a string because the day it changes, an
+     * unrecognised anchor opens System Settings on whatever page it feels like
+     * and nothing anywhere reports a failure.
+     */
+    const pane = fullDiskAccessPane('darwin')
+    expect(pane?.url).toBe(
+      'x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles',
+    )
+    expect(pane?.label).toContain('Full Disk Access')
+  })
+
+  it('offers nothing to open where there is nothing to open', () => {
+    // Windows and Linux have no gate on another program's profile directory,
+    // so a refusal there is a lock or an ACL. Telling somebody to grant Full
+    // Disk Access would be an instruction for an operating system they are not
+    // running.
+    expect(fullDiskAccessPane('win32')).toBeNull()
+    expect(fullDiskAccessPane('linux')).toBeNull()
+    expect(describeAccessFailure({ code: 'EPERM' }, 'Chrome’s data', 'win32').pane).toBeNull()
+    expect(describeAccessFailure({ code: 'EPERM' }, 'Chrome’s data', 'win32').block).toBe(
+      'permission',
+    )
+  })
+
+  it('does not dress "there is nothing here" up as a permission', () => {
+    // The distinction that earns the function. Sending somebody into a security
+    // pane to grant access to a browser they have not installed is worse than
+    // saying nothing at all.
+    const missing = describeAccessFailure({ code: 'ENOENT' }, 'Brave’s data', 'darwin')
+    expect(missing.block).toBe('missing')
+    expect(missing.pane).toBeNull()
+    expect(missing.message).not.toMatch(/full disk access/i)
+
+    const other = describeAccessFailure({ code: 'EBUSY' }, 'Brave’s data', 'darwin')
+    expect(other.block).toBe('other')
+    expect(other.pane).toBeNull()
+  })
+
+  it('names the pane and the action rather than only the permission', () => {
+    const denied = describeAccessFailure({ code: 'EPERM' }, 'Chrome’s cookies', 'darwin')
+    expect(denied.block).toBe('permission')
+    expect(denied.message).toMatch(/Privacy & Security → Full Disk Access/)
+    expect(denied.message).toMatch(/add this app/i)
+    expect(denied.pane?.url).toContain('Privacy_AllFiles')
+  })
+
+  it('answers per browser, because macOS grants access per browser', () => {
+    const browsers: DetectedBrowser[] = [
+      { id: 'chrome', name: 'Chrome', userDataDir: '/x', access: 'blocked', profiles: [] },
+      { id: 'brave', name: 'Brave', userDataDir: '/y', access: 'ok', profiles: [] },
+    ]
+    const access = browserDataAccess(browsers, 'darwin')
+    expect(access.blocked).toEqual(['chrome'])
+    expect(access.readable).toEqual(['brave'])
+    expect(access.problem?.message).toContain('Chrome')
+    expect(access.problem?.pane).not.toBeNull()
+  })
+
+  it('reports no problem when nothing is refusing', () => {
+    const browsers: DetectedBrowser[] = [
+      { id: 'chrome', name: 'Chrome', userDataDir: '/x', access: 'ok', profiles: [] },
+    ]
+    expect(browserDataAccess(browsers, 'darwin').problem).toBeNull()
+  })
+
+  it('opens the pane through the one channel, and says when there is none to open', async () => {
+    const handlers = new Map<string, (...args: unknown[]) => unknown>()
+    const opened: string[] = []
+    const register = (platform: 'darwin' | 'win32'): void =>
+      registerChromeImportIpc(
+        {
+          handle: (channel: string, fn: (...args: unknown[]) => unknown) => {
+            handlers.set(channel, fn)
+          },
+        } as unknown as Electron.IpcMain,
+        { platform, openPane: async (url) => void opened.push(url) },
+      )
+
+    register('darwin')
+    expect([...handlers.keys()]).toContain('chrome-import:open-privacy-settings')
+    expect([...handlers.keys()]).toContain('chrome-import:access')
+    await expect(handlers.get('chrome-import:open-privacy-settings')?.()).resolves.toEqual({
+      opened: true,
+    })
+    expect(opened).toEqual([
+      'x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles',
+    ])
+
+    // A button that cannot do anything says so rather than doing nothing —
+    // "nothing at all is indistinguishable from a broken control".
+    register('win32')
+    await expect(handlers.get('chrome-import:open-privacy-settings')?.()).resolves.toEqual({
+      opened: false,
+    })
+    expect(opened).toHaveLength(1)
+  })
+
+  const onDisk = process.platform === 'win32' ? it.skip : it
+  onDisk('checks a real open, not a stat', () => {
+    /*
+     * The trap this whole gate is built around, exercised against the
+     * filesystem rather than described. On a TCC-protected path — measured on
+     * this Mac — `stat` succeeds and every read raises EPERM, so a probe built
+     * on `stat` reports "fine" for exactly the machine that is about to fail.
+     * A mode-000 file reproduces the same shape without needing macOS's
+     * permission system: it stats, and it will not open.
+     *
+     * Skipped on Windows, where mode bits are not enforced that way — the point
+     * being checked is a property of POSIX permissions, not of this function's
+     * cross-platform behaviour.
+     */
+    const dir = mkdtempSync(join(tmpdir(), 'terminaldeck-access-'))
+    try {
+      const readable = join(dir, 'open')
+      writeFileSync(readable, 'x')
+      expect(canRead(readable)).toBe(true)
+
+      const shut = join(dir, 'shut')
+      writeFileSync(shut, 'x')
+      chmodSync(shut, 0o000)
+      expect(existsSync(shut)).toBe(true)
+      expect(canRead(shut)).toBe(false)
+
+      expect(canRead(join(dir, 'not-there'))).toBe(false)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
     }
   })
 })

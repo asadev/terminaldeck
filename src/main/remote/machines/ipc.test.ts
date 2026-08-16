@@ -272,7 +272,7 @@ describe('showing a code', () => {
 
   it('withdraws a code whose slot never comes up, rather than showing it anyway', async () => {
     // The relay took the socket and never confirmed the slot. This screen has no
-    // second way in — no QR, no link — so the code is minted, found to be
+    // second way in at all — the QR and the link are gone — so the code is minted, found to be
     // unpublishable, and taken back before it reaches anybody's eyes.
     const app = rig({ slotClaimed: false })
     expect(await app.invoke('machines:code')).toMatchObject({
@@ -314,7 +314,7 @@ describe('adding a machine', () => {
         }),
     })
 
-    expect(await app.invoke('machines:pair', 'H4K9-2FQT')).toMatchObject({ ok: true })
+    expect(await app.invoke('machines:pair', '482913')).toMatchObject({ ok: true })
     const stored = new MachineStore(app.dir).list()
     expect(stored).toHaveLength(1)
     expect(stored[0].hostId).toBe(offer.hostId)
@@ -329,7 +329,7 @@ describe('adding a machine', () => {
       pair: () =>
         Promise.resolve({ ok: false, reason: 'refused', message: 'That pairing code is not right.' }),
     })
-    expect(await app.invoke('machines:pair', 'H4K9-2FQT')).toEqual({
+    expect(await app.invoke('machines:pair', '482913')).toEqual({
       ok: false,
       reason: 'refused',
       message: 'That pairing code is not right.',

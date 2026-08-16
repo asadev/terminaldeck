@@ -68,6 +68,30 @@ export interface RepoRef {
   remote: string
 }
 
+/**
+ * The branch checked out in a project folder.
+ *
+ * Deliberately *not* a field on `RepoRef`. A `RepoRef` is a repository's
+ * identity — the same three values whoever is looking and whatever they have
+ * checked out — and folding a working-copy fact into it would mean two
+ * worktrees of one repository produced two different "repositories", which is
+ * precisely the confusion the cache keys in this module were written to avoid.
+ *
+ * `git.ts` has a much richer `GitBranch` (ahead, behind, upstream, oid) read
+ * from `git status --porcelain=v2`. This is not that and must not become it:
+ * `git status` refreshes the index and walks the worktree, which on a large
+ * repository is tens of milliseconds and occasionally seconds, and this runs on
+ * every GitHub sign-in status read. One `git symbolic-ref` answers the only
+ * question this panel asks.
+ */
+export interface BranchRef {
+  /** Null when HEAD is detached. */
+  name: string | null
+  detached: boolean
+  /** Short commit id, filled in only when detached — otherwise null. */
+  head: string | null
+}
+
 export interface GitHubLabel {
   name: string
   /** Six hex digits with no leading '#', exactly as GitHub reports it. */
@@ -725,6 +749,54 @@ export async function resolveRepo(cwd: string): Promise<RepoRef | GitHubFailure>
   return repo
 }
 
+/**
+ * Which branch is checked out, or null when the question does not apply.
+ *
+ * `git symbolic-ref --quiet --short HEAD` rather than `git rev-parse
+ * --abbrev-ref HEAD`, and the difference only shows up in the two states that
+ * matter here:
+ *
+ *  - On a repository with **no commits yet** (`git init`, nothing committed)
+ *    `rev-parse` fails outright with "ambiguous argument 'HEAD'", so a brand
+ *    new repository would report no branch at all. `symbolic-ref` answers
+ *    `main`, which is true — the branch exists, it just has nothing on it.
+ *  - When HEAD is **detached**, `symbolic-ref` exits 1 with no output, which is
+ *    an unambiguous signal. `rev-parse` prints the literal string `HEAD`, which
+ *    is indistinguishable from a branch somebody actually named `HEAD`.
+ *
+ * The second `rev-parse` only runs in the detached case, so the common path is
+ * one process. Every failure is null rather than a thrown error: the caller is
+ * a status card that already has a repository to show, and "this folder has no
+ * branch to name" is a line that simply does not render.
+ */
+export async function readBranch(cwd: string): Promise<BranchRef | null> {
+  if (typeof cwd !== 'string' || !isAbsolute(cwd)) return null
+  try {
+    const name = (await git(cwd, ['symbolic-ref', '--quiet', '--short', 'HEAD'])).trim()
+    if (name) return { name, detached: false, head: null }
+  } catch (error) {
+    /*
+     * Exit 1 with nothing on stderr is "HEAD is not a symbolic ref", i.e.
+     * detached, and the second call below resolves it. Anything with stderr is
+     * a folder that is not a repository, a missing git, or a folder that is
+     * gone — all of which `resolveRepo` reports properly, so this returns null
+     * rather than saying it a second time in a different voice, and returns it
+     * *without* spawning git again. On a folder that is not a repository this
+     * status runs on every panel open, and one wasted spawn per open is one
+     * more than nothing.
+     */
+    const failure = error as ExecFailure
+    if ((failure?.stderr ?? '').trim() !== '' || failure?.code === 'ENOENT') return null
+  }
+
+  try {
+    const head = (await git(cwd, ['rev-parse', '--short', 'HEAD'])).trim()
+    return head ? { name: null, detached: true, head } : null
+  } catch {
+    return null
+  }
+}
+
 /* ---------------------------------------------------------------- mapping -- */
 
 interface RawAuthor {
@@ -1251,6 +1323,12 @@ export function registerGitHubIpc(
   return registerGitHubAuthIpc(ipcMain, {
     storageDir: options.userDataDir,
     resolveRepo: (cwd) => resolveRepo(cwd),
+    // Handed over the same way and for the same reason as `resolveRepo`: the
+    // auth module must not import this one at run time, or the two of them
+    // become a cycle. It is what puts "on branch main" beside the repository
+    // name in every state of the panel, including the ones where no GitHub
+    // request succeeded.
+    resolveBranch: (cwd) => readBranch(cwd),
     // Signing in or out changes what every list is allowed to see, and the
     // overview cache holds up to a minute of answers taken under the *old*
     // credential. Dropping it here is why pressing Connect repaints the panel

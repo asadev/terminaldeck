@@ -591,8 +591,25 @@ describe('LidAwakeController', () => {
     expect(blockersStopped.length).toBe(1)
   })
 
-  it('does not take a blocker on a machine that is not held awake', async () => {
+  /*
+   * The reported fault, as a test.
+   *
+   * This case used to assert the opposite — "does not take a blocker on a
+   * machine that is not held awake" — and that assertion *was* the bug. The
+   * privileged lid setting needs an administrator password, so `SleepDisabled 0`
+   * is the state of every machine on first run and of every machine where the
+   * password sheet was dismissed. On all of those the app held nothing at all
+   * and an idle timer was free to sleep a Mac with a phone attached to a running
+   * agent: *"after a few seconds I can get disconnected."*
+   *
+   * The two locks are independent. `powerSaveBlocker` is free, unprivileged,
+   * blocks only idle system sleep, and is the app's own; the lid setting is the
+   * privileged one on top. Giving out the free one only to people who already
+   * have the expensive one is backwards, so the free one is now unconditional.
+   */
+  it('holds the idle blocker even when the privileged lid setting is off', async () => {
     blockersStarted.length = 0
+    blockersStopped.length = 0
     const controller = new LidAwakeController({
       platform: 'darwin',
       run: runner([
@@ -600,8 +617,149 @@ describe('LidAwakeController', () => {
         ['pmset -g', { stdout: PMSET_OFF }],
       ]),
     })
+    const state = await controller.refresh({ initial: true })
+    expect(state.on).toBe(false)
+    expect(state.idleBlocked).toBe(true)
+    expect(blockersStarted.length).toBe(1)
+    expect(blockersStopped.length).toBe(0)
+    controller.stop()
+    expect(blockersStopped.length).toBe(1)
+  })
+
+  it('takes the blocker before the machine has been read at all', async () => {
+    /*
+     * Ordering, not just eventual state. Reading the machine spawns `pmset`,
+     * which is not instant, and on a platform this module does not support at
+     * all it never answers "on" — so a blocker that waited for a read would
+     * leave a window at every launch, and forever on Linux. Nothing about
+     * blocking idle sleep needs the machine's answer.
+     */
+    blockersStarted.length = 0
+    blockersStopped.length = 0
+    let answered = false
+    const controller = new LidAwakeController({
+      platform: 'darwin',
+      run: () =>
+        new Promise((resolve) =>
+          setImmediate(() => {
+            answered = true
+            resolve({ code: 0, stdout: PMSET_OFF, stderr: '' })
+          }),
+        ),
+    })
+    controller.start()
+    expect(answered).toBe(false)
+    expect(blockersStarted.length).toBe(1)
+    controller.stop()
+  })
+
+  it('keeps the blocker when the machine stops answering', async () => {
+    /*
+     * The quiet half of the same fault. `pmset` is given five seconds, and five
+     * seconds is not much on a machine running several agents at once — which is
+     * the machine this app is for. A single slow read used to come back
+     * `known: false`, fall into the `else` branch and *release* a wake lock that
+     * was correctly held, then cancel the only timer that would have re-read it.
+     * The lock was gone for the rest of the run, with nothing on screen and
+     * nothing in the log.
+     */
+    blockersStarted.length = 0
+    blockersStopped.length = 0
+    let attempt = 0
+    const controller = new LidAwakeController({
+      platform: 'darwin',
+      run: (file, args) => {
+        if (args.includes('batt')) return Promise.resolve({ code: 0, stdout: BATT_AC, stderr: '' })
+        attempt += 1
+        return attempt === 1
+          ? Promise.resolve({ code: 0, stdout: PMSET_ON, stderr: '' })
+          : Promise.resolve({ code: -1, stdout: '', stderr: `${file} timed out` })
+      },
+    })
     await controller.refresh({ initial: true })
-    expect(blockersStarted.length).toBe(0)
+    expect(blockersStarted.length).toBe(1)
+
+    const afterFailure = await controller.refresh()
+    expect(afterFailure.known).toBe(false)
+    expect(afterFailure.idleBlocked).toBe(true)
+    expect(blockersStopped.length).toBe(0)
+    controller.stop()
+    expect(blockersStopped.length).toBe(1)
+  })
+
+  it('does not retire the low-battery warning because a read failed', async () => {
+    /*
+     * The same "unreadable is not a no" rule, on the other mechanism it broke.
+     * A laptop being held awake on battery with 14% left is exactly the moment
+     * the warning matters, and a `pmset` that times out told the controller the
+     * machine was no longer held awake — which silently retired the warning and
+     * cancelled the watch.
+     */
+    let attempt = 0
+    const controller = new LidAwakeController({
+      platform: 'darwin',
+      run: (_file, args) => {
+        if (args.includes('batt')) return Promise.resolve({ code: 0, stdout: BATT_LOW, stderr: '' })
+        attempt += 1
+        return attempt === 1
+          ? Promise.resolve({ code: 0, stdout: PMSET_ON, stderr: '' })
+          : Promise.resolve({ code: -1, stdout: '', stderr: 'pmset timed out' })
+      },
+      schedule: () => ({ cancel: () => {} }),
+    })
+    const first = await controller.refresh({ initial: true })
+    expect(first.warning).toMatch(/14%/)
+
+    const second = await controller.refresh()
+    expect(second.known).toBe(false)
+    expect(second.warning).toMatch(/14%/)
+    controller.stop()
+  })
+
+  it('does not record a blocker the platform refused, and takes it on the next read', async () => {
+    /*
+     * "Started but never acquired". `powerSaveBlocker.start` hands back an
+     * integer whether or not the assertion was granted, so recording it
+     * unconditionally made `hold()`'s early return fire forever against a lock
+     * that did not exist — the app reporting success from the side that was not
+     * doing the work.
+     */
+    let granted = false
+    const started: number[] = []
+    const stopped: number[] = []
+    const controller = new LidAwakeController({
+      platform: 'darwin',
+      run: runner([
+        ['pmset -g batt', { stdout: BATT_AC }],
+        ['pmset -g', { stdout: PMSET_ON }],
+      ]),
+      power: {
+        startBlocker: () => {
+          started.push(started.length + 1)
+          return started.length
+        },
+        stopBlocker: (id) => void stopped.push(id),
+        isBlockerStarted: () => granted,
+        onBatteryPower: () => false,
+        onPowerSourceChange: () => () => {},
+        notify: () => {},
+      },
+    })
+
+    const refused = await controller.refresh({ initial: true })
+    expect(started).toHaveLength(1)
+    expect(refused.idleBlocked).toBe(false)
+
+    granted = true
+    const taken = await controller.refresh()
+    expect(started).toHaveLength(2)
+    expect(taken.idleBlocked).toBe(true)
+
+    // And once it is genuinely held, no further attempt is made.
+    await controller.refresh()
+    expect(started).toHaveLength(2)
+    controller.stop()
+    expect(stopped).toEqual([2])
   })
 
   it('pushes every state it reads to the renderer', async () => {

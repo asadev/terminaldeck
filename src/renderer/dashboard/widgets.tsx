@@ -6,7 +6,7 @@ import { StatusDot } from '../components/StatusDot'
 // there; re-declaring them a third time is how the three copies start to drift.
 import type { GitRepoStatus, GitStatusResult } from '../components/GitPanel'
 import type { PanelId } from '../shell/panels'
-import { WIDGET_TYPES, type WidgetType } from './layout'
+import { isRetiredWidget, WIDGET_TYPES, type WidgetType } from './layout'
 
 /**
  * Widget registry for the project dashboard.
@@ -676,7 +676,24 @@ function GitWidget({ context }: { context: WidgetContext }): ReactElement {
       return (
         <WidgetMessage
           tone="muted"
-          title={status.reason === 'not-a-repo' ? 'Not a git repository' : 'Git unavailable'}
+          /*
+            The same headings Source control uses for the same four situations,
+            so the tile and the page it links to do not describe one folder two
+            ways. `detail` is now a written sentence in every case `git.ts`
+            recognises — it used to be git's own stderr, and this tile printed
+            "fatal: not a git repository (or any of the parent directories):
+            .git" at a person, which is a command's error text rather than
+            anything addressed to a reader.
+          */
+          title={
+            status.reason === 'not-a-repo'
+              ? 'Nothing to track here'
+              : status.reason === 'git-missing'
+                ? 'git is not installed'
+                : status.reason === 'no-such-folder'
+                  ? 'That folder is gone'
+                  : 'Source control is unavailable'
+          }
           detail={status.message}
         />
       )
@@ -1078,9 +1095,16 @@ export function getWidgetDefinition(type: WidgetType): WidgetDefinition | undefi
     : undefined
 }
 
-/** Every definition, in the order the picker offers them. */
+/**
+ * Every definition the picker offers, in order.
+ *
+ * Retired types are filtered rather than deleted — a tile already in somebody's
+ * saved layout keeps rendering, it just stops being offered again. See
+ * `RETIRED_WIDGETS` in `layout.ts` for why Sessions is one.
+ */
 export function listWidgetDefinitions(): WidgetDefinition[] {
   return WIDGET_TYPES.flatMap((type) => {
+    if (isRetiredWidget(type)) return []
     const definition = getWidgetDefinition(type)
     return definition ? [definition] : []
   })

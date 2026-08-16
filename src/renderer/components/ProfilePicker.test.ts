@@ -26,6 +26,7 @@ function view(overrides: Partial<ProfileView> = {}): ProfileView {
   return {
     id: 'work',
     name: 'Work',
+    provider: 'claude',
     configDir: '/u/Library/Application Support/terminaldeck/profiles/work',
     system: false,
     color: '--accent',
@@ -187,15 +188,26 @@ describe('projectDefaultFor', () => {
 })
 
 describe('isolationNotice', () => {
-  it('stays quiet for Claude, which is the only agent profiles apply to', () => {
+  /*
+   * Codex moved from "explains itself" to "stays quiet" when its mechanism was
+   * measured rather than assumed: `CODEX_HOME=<fresh dir> codex login status`
+   * says "Not logged in" while the bare command says "Logged in using ChatGPT".
+   * The old assertions pinned a sentence — "profiles only apply to Claude" —
+   * that had become false, which is the failure mode a message assertion has:
+   * it keeps passing while the claim it encodes stops being true.
+   */
+  it('stays quiet for the agents an account can actually be isolated on', () => {
     expect(isolationNotice('claude')).toBeNull()
+    expect(isolationNotice('codex')).toBeNull()
     expect(isolationNotice(undefined)).toBeNull()
   })
 
-  it('explains itself for every other agent', () => {
-    expect(isolationNotice('shell')).toMatch(/no login to isolate/)
-    expect(isolationNotice('codex')).toMatch(/only apply to Claude/)
-    expect(isolationNotice('gemini')).toMatch(/only apply to Claude/)
+  it('explains itself for the agents it cannot', () => {
+    expect(isolationNotice('shell')).toMatch(/no login/)
+    // Gemini's reason has to be about Gemini. It has a config-directory
+    // variable; what it does not have is one that moves the login.
+    expect(isolationNotice('gemini')).toMatch(/one login per machine/)
+    expect(isolationNotice('gemini')).not.toMatch(/only apply to Claude/)
   })
 })
 

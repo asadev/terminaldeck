@@ -1,6 +1,8 @@
 import { access } from 'node:fs/promises'
 import type { CreateSessionInput, ProviderId, SessionMeta } from '../shared/types'
+import { currentPlatform, isWindows, type Platform } from './platform/host'
 import { newestConversation, transcriptDir } from './transcript'
+import { isLinuxPath } from './wsl'
 
 /**
  * Putting the sessions you had open back, continued rather than started over.
@@ -53,14 +55,21 @@ import { newestConversation, transcriptDir } from './transcript'
  *     reads to decide whether an older transcript may be attributed to this
  *     tab.
  *
- *  3. **Not every agent can be asked.** `codex resume --last` keeps its own
- *     store, which this app does not read, so "is there a conversation?" has a
- *     third answer here: unknown. Unknown resumes — the tab was open when the
- *     app closed, so a conversation almost certainly exists, and if it does not
- *     the CLI says so in its own words, which is the tool speaking plainly
- *     rather than this app pretending. Providers with no resume flag at all
- *     (a plain shell, and gemini until its flag is confirmed) are never asked;
- *     there is nothing to continue and starting one is not a failure.
+ *  3. **Not every store can be read.** `codex resume --last` keeps its own,
+ *     which this app does not read, so "is there a conversation?" has a third
+ *     answer here: unknown. Unknown resumes — the tab was open when the app
+ *     closed, so a conversation almost certainly exists, and if it does not the
+ *     CLI says so in its own words, which is the tool speaking plainly rather
+ *     than this app pretending. Providers with no resume flag at all (a plain
+ *     shell, and gemini until its flag is confirmed) are never asked; there is
+ *     nothing to continue and starting one is not a failure.
+ *
+ *     A **session that ran inside WSL** is the second member of that case and
+ *     was for a long time the reason this feature worked on the Mac and not on
+ *     Windows. Its agent is a Linux process writing Linux paths under a Linux
+ *     home, and the Windows side of the machine can neither name that directory
+ *     nor encode the folder the way the agent did. See `ranInsideWsl`, which
+ *     has the whole reproduction.
  *
  * ## The picture, which is a separate thing from the context
  *
@@ -322,7 +331,14 @@ export async function planRestore(
             reason:
               found === 'found'
                 ? 'continuing the conversation on disk'
-                : 'continuing — this agent keeps its history where the app cannot read it, so it was taken at its word',
+                : // Worded to cover both ways a store can be out of reach — an
+                  // agent that keeps its history in a format this app does not
+                  // read (Codex) and an agent that ran inside a WSL
+                  // distribution, whose history is a Linux file under a home
+                  // directory this process was never told. Naming only the
+                  // first would put a sentence in the app log that is untrue of
+                  // every session on a Windows machine.
+                  'continuing — this conversation is kept where the app cannot read it, so the agent was taken at its word',
             configDir,
           },
     )
@@ -370,13 +386,77 @@ export async function folderExists(cwd: string): Promise<boolean> {
 export async function conversationOnDisk(
   session: SavedSession,
   configDir: string,
+  platform: Platform = currentPlatform(),
 ): Promise<Conversation> {
   if (session.provider !== 'claude') return 'unknown'
+  if (ranInsideWsl(session, platform)) return 'unknown'
   // The same call the replay makes, on purpose: "is there a conversation" and
   // "which file is it" have to be one lookup, or the tab can be continued
   // against one transcript and painted from another.
   const found = await newestConversation(transcriptDir(session.cwd, configDir))
   return found === null ? 'none' : 'found'
+}
+
+/**
+ * Did this session's agent run inside a WSL distribution rather than on Windows?
+ *
+ * A Linux folder on a Windows host is the whole test, and it is the same
+ * one-character decision `wsl.ts` makes for routing — deliberately, because a
+ * session whose working directory begins with `/` is a session `cmd.exe` cannot
+ * open under any circumstance, so it went through `wsl.exe` and its agent ran
+ * as a Linux process with a Linux `HOME`.
+ *
+ * ## Why this exists: "pick up where you left off" worked on the Mac and not on Windows
+ *
+ * Asad reported it, and it reproduced exactly, on his own PC. Two path faults
+ * compose, and either one alone is enough to lose the conversation:
+ *
+ *  1. **`encodeProjectPath` resolves against the host.** It calls
+ *     `path.resolve`, so on Windows `/home/asad/ClaudeImza` becomes
+ *     `C:\home\asad\ClaudeImza` and encodes to `C--home-asad-ClaudeImza`. The
+ *     agent that actually wrote the transcript was a Linux process and encoded
+ *     the same folder as `-home-asad-ClaudeImza`.
+ *  2. **The config directory is the host's.** `resolveProfile` answers
+ *     `C:\Users\<user>\.claude`; the agent's own is `/home/asad/.claude`, inside
+ *     the distribution, where Windows has no `.claude` at all.
+ *
+ * So the lookup asked a directory that cannot exist about a folder name that
+ * was never written, got "nothing", and reported `none` — which is a confident
+ * claim that there is no conversation to continue. `planRestore` then started
+ * every tab clean. His app log says it in those words, twice, once per tab:
+ *
+ *     [restore] started clean: no earlier conversation was found on disk for
+ *     this folder {"folder":"/home/asad/ClaudeImza","agent":"claude"}
+ *
+ * while `/home/asad/.claude/projects/-home-asad-ClaudeImza` sat inside the
+ * distribution with that morning's conversation in it. On macOS neither fault
+ * can fire — the folder is already a host path and the agent is a host process —
+ * which is exactly why the feature looked fine on one platform and broken on
+ * the other.
+ *
+ * ## Why the answer is `unknown` and not a corrected lookup
+ *
+ * `unknown` is not a shrug here, it is this module's third case and it already
+ * has a precise meaning: *this agent keeps its history somewhere this app does
+ * not read, so take it at its word and continue.* That is literally the
+ * situation — the store is inside a Linux filesystem, under a home directory
+ * this process has not been told, in a distribution whose name lives on the
+ * `WslLink` that `session-restore.ts` has no handle on. Codex is treated the
+ * same way for the same reason, and `claude --continue` running *inside* the
+ * distribution finds its own transcript without help, because it is a Linux
+ * process looking at Linux paths.
+ *
+ * Answering it properly — reading
+ * `\\wsl.localhost\<distro>\home\<user>\.claude\projects\<posix-encoded>` over
+ * the UNC path, which is reachable and which the folder check beside this
+ * already uses — needs the distribution and its home directory, and both are
+ * held by `WslLink` in `src/main/index.ts`. That is a wiring change in a file
+ * this change may not touch; it is written up in the report as the follow-up,
+ * and it would only add the ability to say "there is genuinely nothing here"
+ * rather than change what happens in the case that was broken.
+ */
+export function ranInsideWsl(session: SavedSession, platform: Platform): boolean {
+  return isWindows(platform) && isLinuxPath(session.cwd)
 }
 
 /* -------------------------------------------------------------------------- */

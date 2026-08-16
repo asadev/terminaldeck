@@ -451,11 +451,11 @@ final class FindShareAndAlertsUITests: XCTestCase {
     private func pairingCode() throws -> String {
         guard let data = try? Data(contentsOf: Self.control.appendingPathComponent("pair")),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let uri = json["uri"] as? String else {
+              let code = json["code"] as? String else {
             Self.reachable = false
             throw XCTSkip(Self.notRunning)
         }
-        return uri
+        return code
     }
 
     private func openFind() {

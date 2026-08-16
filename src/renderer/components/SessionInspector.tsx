@@ -401,9 +401,7 @@ function ContextChart({ series }: { series: ContextPoint[] }) {
   // line along the floor and calling it a chart.
   if (max <= 0) {
     return (
-      <p className="si-empty">
-        No request has reported a prompt size, so there is nothing to plot yet.
-      </p>
+      <p className="si-empty">No request has reported a prompt size yet.</p>
     )
   }
 
@@ -683,10 +681,14 @@ export function CostTab({ insights }: { insights: SessionInsights }) {
             ))}
           </tbody>
         </table>
-        <p className="si-note">
-          {formatPercent(insights.cacheHitRate * 100)} of the prompt came from cache, billed at a
-          tenth of the input rate. Cache writes are the expensive half — they cost 1.25x input at
-          five minutes and 2x at an hour.
+        {/* The rate card moves to the hover. Somebody reading a cost table
+            wants the number; the person who wants to know why cache writes
+            cost more than cache reads can ask for it. */}
+        <p
+          className="si-note"
+          title="Cache reads are billed at a tenth of input. Cache writes cost 1.25x input at five minutes, 2x at an hour."
+        >
+          {formatPercent(insights.cacheHitRate * 100)} of the prompt came from cache.
         </p>
       </section>
 
@@ -825,10 +827,10 @@ export function ToolsTab({ insights }: { insights: SessionInsights }) {
             ))}
           </tbody>
         </table>
-        <p className="si-note">
-          Timings are wall clock from the call to its result, so anything that waits on you — a
-          permission prompt, a question — counts every second of the wait.
-        </p>
+        {/* Kept as a caveat, cut to a caveat. A tool that "took" four minutes
+            because it sat on a permission prompt is a number somebody will
+            otherwise act on. */}
+        <p className="si-note">Wall clock, so time spent waiting on you counts.</p>
       </section>
     </div>
   )
@@ -855,8 +857,7 @@ export function ContextTab({ insights }: { insights: SessionInsights }) {
             <Meter percent={context.percent} level={context.level} />
             {context.percent > 100 && (
               <p className="si-note">
-                Over the window: auto-compaction fires at the limit, so the last request before it
-                tips slightly past. The bar stops at 100%, the number does not.
+                Over the window — the bar stops at 100%, the number does not.
               </p>
             )}
           </>
@@ -884,9 +885,8 @@ export function ContextTab({ insights }: { insights: SessionInsights }) {
               : 'system prompt, CLAUDE.md and tool schemas'}
           </span>
         </div>
-        <p className="si-note">
-          Measured from the first request. Every later turn re-pays it, so it is the one number
-          worth trimming — CLAUDE.md and MCP tool schemas are usually the bulk of it.
+        <p className="si-note" title="Usually CLAUDE.md and MCP tool schemas.">
+          Every turn re-pays it, so it is the one number worth trimming.
         </p>
       </section>
 
@@ -1144,8 +1144,8 @@ export function SessionInspector({
         {state.status === 'empty' && (
           <p className="si-empty">
             {session
-              ? 'This session has not written a transcript yet. One appears once it makes its first request — until then there is nothing here that belongs to it.'
-              : 'No Claude Code transcript for this folder yet. One appears once a session makes its first request.'}
+              ? 'No transcript yet — one appears with the session’s first request.'
+              : 'No transcript for this folder yet — one appears with a session’s first request.'}
           </p>
         )}
 

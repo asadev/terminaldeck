@@ -14,7 +14,8 @@ import {
   type ServerMessage,
 } from './protocol'
 import type { TailnetReady } from './tailnet'
-import { RemoteAuth } from './device-auth'
+import { MAX_FAILED_ATTEMPTS, RemoteAuth } from './device-auth'
+import { CODE_LENGTH, isCode } from '../../shared/short-code'
 import {
   WS_PATH,
   authenticatorFor,
@@ -1457,6 +1458,103 @@ describe('pairing, against the real trust store', () => {
 
     expect((await authenticator.authenticate(first.token, phone, '100.86.107.7')).ok).toBe(false)
     expect(auth.listDevices()).toEqual([])
+  })
+
+  /*
+   * The five-guess limit, which is the line the six-digit format stands on.
+   *
+   * `shared/short-code.ts` puts a guess at 5 × 10⁻⁶ against a million codes. The
+   * five in that fraction is `pairingDesk.offers` and nothing else: `RemoteAuth`
+   * also limits, but it keys on the *source*, and through the relay a source is
+   * an authenticated device key that a guesser mints fresh for every attempt.
+   * These tests are what fails if somebody removes the counter, moves it onto
+   * the address, or lets a wrong answer skip the desk on its way to a refusal.
+   */
+  it('mints six digits, so the arithmetic being argued is the right one', () => {
+    const { desk } = realAuth()
+    const { token } = desk.create()
+    expect(token).toMatch(/^[0-9]{6}$/)
+    expect(token).toHaveLength(CODE_LENGTH)
+    expect(isCode(token)).toBe(true)
+  })
+
+  it('kills the code after five wrong answers, however many places they came from', async () => {
+    const { auth, desk } = realAuth()
+    const authenticator = authenticatorFor(auth, desk)
+    const { token } = desk.create()
+
+    // A different address and a different device name each time, which is what
+    // a guesser trivially does. None of it buys a sixth attempt, because the
+    // count is against the code rather than against whoever is asking.
+    for (let attempt = 0; attempt < MAX_FAILED_ATTEMPTS; attempt++) {
+      const guess = String((Number(token) + attempt + 1) % 1_000_000).padStart(CODE_LENGTH, '0')
+      const refused = await authenticator.authenticate(guess, { name: `guesser-${attempt}`, platform: 'iOS' }, `100.86.107.${attempt}`)
+      expect(refused.ok).toBe(false)
+    }
+
+    // The real code, from a source that has never failed at anything. Dead.
+    const after = await authenticator.authenticate(token, phone, '100.86.107.200')
+    expect(after.ok).toBe(false)
+    expect(after.ok === false && after.credential).toBeUndefined()
+    expect(auth.listDevices()).toEqual([])
+    // And the desk itself agrees, so the rendezvous slot is down too.
+    expect(desk.open()).toBe(false)
+    expect(desk.offers(token)).toBe(false)
+  })
+
+  it('still has the code on the fifth attempt, so the limit is five and not four', async () => {
+    const { auth, desk } = realAuth()
+    const authenticator = authenticatorFor(auth, desk)
+    const { token } = desk.create()
+
+    for (let attempt = 0; attempt < MAX_FAILED_ATTEMPTS - 1; attempt++) {
+      const guess = String((Number(token) + attempt + 1) % 1_000_000).padStart(CODE_LENGTH, '0')
+      expect((await authenticator.authenticate(guess, phone, '100.86.107.7')).ok).toBe(false)
+    }
+
+    const paired = await authenticator.authenticate(token, phone, '100.86.107.7')
+    expect(paired.ok === false && paired.credential).toMatch(/\./)
+  })
+
+  it('takes the rendezvous slot down with the code when the guesses run out', async () => {
+    /*
+     * A slot that outlives its code is a machine at the relay advertising an
+     * address that will refuse whoever dials it — and, worse now that a code is
+     * six digits, a slot an attacker can still confirm by name after the code
+     * behind it is dead. Confirming a slot is how a sweep learns which of the
+     * million codes was live, so a spent code has to take its slot with it.
+     *
+     * The beacon is stubbed because a real one dials the public relay from
+     * whatever machine this test runs on.
+     */
+    const { auth } = realAuth()
+    let stopped = false
+    const desk = pairingDesk(auth, Date.now, () => ({
+      stop: () => {
+        stopped = true
+      },
+      connected: () => true,
+      ready: async () => true,
+    }))
+
+    const shown = await desk.show({
+      relayUrl: 'wss://relay.example',
+      hostId: 'ABCDEFGHJKLMNPQRSTUVWXYZ23',
+      publicKey: randomBytes(32).toString('base64'),
+      name: 'This Mac',
+      platform: 'darwin',
+    })
+    expect(shown.findable).toBe(true)
+    expect(stopped).toBe(false)
+
+    for (let attempt = 0; attempt < MAX_FAILED_ATTEMPTS; attempt++) {
+      const guess = String((Number(shown.code.token) + attempt + 1) % 1_000_000).padStart(CODE_LENGTH, '0')
+      expect(desk.offers(guess)).toBe(false)
+    }
+
+    expect(stopped, 'the rendezvous slot outlived the code that named it').toBe(true)
+    expect(desk.open()).toBe(false)
+    expect(desk.offers(shown.code.token)).toBe(false)
   })
 
   it('refuses a revoked device without saying that is why', async () => {

@@ -6,7 +6,7 @@
  * handshake, real PTYs — through a phone that has already been paired with it:
  *
  *     ios/Harness/run.sh host --approve-after 6000 --log-input &
- *     xcrun simctl openurl booted "$(cat ios/Harness/.build/pairing.txt)"
+ *     # then type the six digits in ios/Harness/.build/pairing.txt into the field
  *     # approve, then:
  *     xcodebuild test -project ios/TerminalDeck.xcodeproj -scheme TerminalDeck \
  *       -destination 'platform=iOS Simulator,name=iPhone 17' \
@@ -75,7 +75,7 @@ final class LiveSessionUITests: XCTestCase {
 
     private static let notRunning =
         "This phone is not connected to a running harness. Start ios/Harness/run.sh host, "
-        + "then: xcrun simctl openurl booted \"$(cat ios/Harness/.build/pairing.txt)\" "
+        + "then type the six digits in ios/Harness/.build/pairing.txt into the pairing field "
         + "and approve the device."
 
     // MARK: - 1. The connection says what it is

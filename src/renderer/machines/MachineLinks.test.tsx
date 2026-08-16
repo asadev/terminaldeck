@@ -1,0 +1,598 @@
+import { renderToStaticMarkup } from 'react-dom/server'
+import { describe, expect, it } from 'vitest'
+import {
+  MachineLinks,
+  MachineRow,
+  SessionRow,
+  linkFor,
+  machineActions,
+  newSessionOffer,
+  shortPath,
+  type MachineActions,
+  type MachinesHalf,
+} from './MachineLinks'
+import {
+  asOutput,
+  asPairResult,
+  asView,
+  machineNoun,
+  resolveBridge,
+  type Machine,
+  type MachineLinkState,
+  type MachinesBridge,
+  type MachinesView,
+} from './types'
+
+/**
+ * The machines this desktop can reach — the half of Remote that dials out.
+ *
+ * No DOM here, so these render to static markup. That covers what a refactor
+ * quietly breaks on this screen: which state a row prints, whether the key it
+ * asks a person to compare is still on it, and whether New session is offered
+ * against a machine that could not serve it.
+ *
+ * The presses are pinned separately, through `machineActions`, because markup
+ * cannot tell you what a button *does* — and what is behind these is a shell on
+ * somebody else's computer.
+ */
+
+function machine(partial: Partial<Machine> = {}): Machine {
+  return {
+    id: 'MACHINE1',
+    name: 'Studio PC',
+    hostId: 'MACHINE1',
+    fingerprint: 'ABCD-EFGH-JKLM-NPQR-STUV-WXYZ',
+    platform: 'win32',
+    pairedAt: 1,
+    lastConnectedAt: null,
+    ...partial,
+  }
+}
+
+function link(partial: Partial<MachineLinkState> = {}): MachineLinkState {
+  return {
+    id: 'MACHINE1',
+    state: 'online',
+    reason: null,
+    sessions: [],
+    folders: ['/Users/a/projects/deck'],
+    capabilities: ['create'],
+    hostPlatform: 'win32',
+    retryAt: null,
+    ...partial,
+  }
+}
+
+const NOTHING: MachineActions = {
+  type: () => {},
+  pair: () => {},
+  connect: () => {},
+  disconnect: () => {},
+  forget: () => {},
+  newSession: () => {},
+  open: () => {},
+  close: () => {},
+}
+
+const NOOP_BRIDGE: MachinesBridge = {
+  listMachines: () => Promise.resolve({}),
+  startMachineCode: () => Promise.resolve({}),
+  cancelMachineCode: () => Promise.resolve({}),
+  pairMachine: () => Promise.resolve({}),
+  forgetMachine: () => Promise.resolve({}),
+  renameMachine: () => Promise.resolve({}),
+  connectMachine: () => Promise.resolve({}),
+  disconnectMachine: () => Promise.resolve({}),
+  attachMachineSession: () => Promise.resolve(true),
+  detachMachineSession: () => Promise.resolve(true),
+  writeToMachineSession: () => Promise.resolve(true),
+  resizeMachineSession: () => Promise.resolve(true),
+  createMachineSession: () => Promise.resolve(true),
+  onMachinesState: () => () => {},
+  onMachineOutput: () => () => {},
+}
+
+function row(state: MachineLinkState, overrides: Partial<Machine> = {}): string {
+  return renderToStaticMarkup(
+    <MachineRow
+      machine={machine(overrides)}
+      link={state}
+      openSessionId={null}
+      actions={NOTHING}
+      platform="mac"
+    />,
+  )
+}
+
+function half(over: Partial<MachinesHalf> = {}): MachinesHalf {
+  return {
+    wired: true,
+    view: { machines: [], links: [], blocked: null },
+    reading: false,
+    entry: { digits: '', busy: false, error: null, blocked: null },
+    open: null,
+    actions: NOTHING,
+    ...over,
+  }
+}
+
+describe('a machine row', () => {
+  it('names the machine, the kind of machine it is, and what the link is doing', () => {
+    const markup = row(link())
+    expect(markup).toContain('Studio PC')
+    expect(markup).toContain('PC')
+    expect(markup).toContain('Connected')
+    expect(markup).toContain('data-state="online"')
+  })
+
+  it('keeps the key on screen, because comparing it is the point of having it', () => {
+    expect(row(link())).toContain('ABCD-EFGH-JKLM-NPQR-STUV-WXYZ')
+  })
+
+  it('says "waiting to be approved" rather than an error', () => {
+    // The two are a different instruction to the person reading them: one is
+    // "press a button on the other machine", the other is "something is wrong".
+    const markup = row(
+      link({
+        state: 'awaiting-approval',
+        reason: 'This device is waiting to be approved. Approve it in the desktop app, then reconnect.',
+      }),
+    )
+    expect(markup).toContain('Waiting to be approved')
+    expect(markup).not.toContain('Cannot connect')
+  })
+
+  it('rewrites the one sentence the far machine writes for a phone', () => {
+    /*
+     * `authenticatorFor` answers a pending device with "Approve it in the
+     * desktop app, then reconnect". That is right for a phone and nonsense on a
+     * desktop that *is* the app: the person is being told to go somewhere they
+     * already are, when what they have to do is walk to the other keyboard.
+     * Every other refusal keeps the far machine's own words.
+     *
+     * It now names the section as well, and the section it names has moved:
+     * approving happens under Remote, because the Machines page it used to say
+     * has been folded into it.
+     */
+    const markup = row(
+      link({
+        state: 'awaiting-approval',
+        reason: 'This device is waiting to be approved. Approve it in the desktop app, then reconnect.',
+      }),
+      { name: 'Studio PC' },
+    )
+    expect(markup).toContain('on Studio PC, under Remote')
+    expect(markup).not.toContain('in the desktop app')
+
+    // And a machine that is genuinely broken still says what it was told.
+    expect(row(link({ state: 'error', reason: 'The relay stopped answering.' }))).toContain(
+      'The relay stopped answering.',
+    )
+  })
+
+  it('offers Connect when it is not connected and Disconnect when it is', () => {
+    expect(row(link({ state: 'offline' }))).toContain('Connect')
+    expect(row(link({ state: 'online' }))).toContain('Disconnect')
+  })
+
+  it('offers to forget it, and asks first', () => {
+    // Pairing again from scratch is the cost, so it is a two-press control —
+    // and the confirmation is inline rather than a dialog, because this screen
+    // is already inside one.
+    expect(row(link())).toContain('>Forget</button>')
+  })
+
+  it('says nothing is running rather than leaving a blank where a list would be', () => {
+    expect(row(link())).toContain('Nothing is running on that PC')
+  })
+
+  it('lists the sessions on that machine', () => {
+    const markup = row(
+      link({
+        sessions: [
+          {
+            id: 's1',
+            title: 'agent',
+            cwd: '/Users/a/projects/deck',
+            provider: 'claude',
+            status: 'running',
+            exitCode: null,
+          },
+        ],
+      }),
+    )
+    expect(markup).toContain('agent')
+    expect(markup).toContain('projects/deck')
+    expect(markup).toContain('running')
+  })
+
+  it('calls a machine that never said what it is a desktop, never a Mac', () => {
+    // The bug this noun exists to end: a phone paired to a Windows PC printed
+    // "Running on the Mac" because the only place the kind appeared was a
+    // constant compiled into the client.
+    // Both blank: what the link just heard, and what the store remembers from
+    // the last time it heard anything.
+    expect(row(link({ hostPlatform: '' }), { platform: '' })).toContain('desktop')
+    expect(machineNoun('')).toBe('desktop')
+    expect(machineNoun('darwin')).toBe('Mac')
+    expect(machineNoun('win32')).toBe('PC')
+    expect(machineNoun('linux')).toBe('machine')
+  })
+})
+
+describe('what New session may do', () => {
+  it('is offered when that machine can serve it', () => {
+    expect(newSessionOffer(link())).toEqual({ can: true, note: null })
+    expect(row(link())).toContain('New session')
+  })
+
+  it('is not a button against a machine that cannot start one, and says why', () => {
+    const offer = newSessionOffer(link({ capabilities: [] }))
+    expect(offer.can).toBe(false)
+    expect(offer.note).toMatch(/cannot start a session/)
+    const markup = row(link({ capabilities: [] }))
+    expect(markup).not.toContain('>New session<')
+    expect(markup).toContain('cannot start a session')
+  })
+
+  it('is not a button when no folder has been shared with this device', () => {
+    // Empty is a real state with a real remedy on the other machine, and it is
+    // not the same as a machine that never mentioned folders at all.
+    const offer = newSessionOffer(link({ folders: [] }))
+    expect(offer.can).toBe(false)
+    expect(offer.note).toMatch(/No folder has been shared/)
+    // And the remedy names where to go, which is now Remote on that machine.
+    expect(offer.note).toMatch(/under Remote/)
+  })
+
+  it('is offered to a machine that never mentioned folders', () => {
+    expect(newSessionOffer(link({ folders: null })).can).toBe(true)
+  })
+
+  it('is nothing at all while the link is down', () => {
+    // Not a note either: "that machine cannot start a session" is untrue of a
+    // machine nobody has asked yet.
+    expect(newSessionOffer(link({ state: 'offline' }))).toEqual({ can: false, note: null })
+  })
+})
+
+describe('a session row', () => {
+  it('is a control that says whether it is the one open', () => {
+    const session = {
+      id: 's1',
+      title: 'agent',
+      cwd: '/Users/a/projects/deck',
+      provider: 'claude',
+      status: 'running',
+      exitCode: null,
+    }
+    const closed = renderToStaticMarkup(
+      <SessionRow session={session} open={false} onOpen={() => {}} onClose={() => {}} />,
+    )
+    const open = renderToStaticMarkup(
+      <SessionRow session={session} open onOpen={() => {}} onClose={() => {}} />,
+    )
+    expect(closed).toContain('aria-pressed="false"')
+    expect(open).toContain('aria-pressed="true"')
+  })
+})
+
+describe('the list', () => {
+  it('says the list is empty rather than drawing an empty list', () => {
+    const markup = renderToStaticMarkup(<MachineLinks half={half()} platform="mac" />)
+    expect(markup).toContain('No other machine yet')
+    expect(markup).toContain('Machines you can reach')
+  })
+
+  it('waits for the first read without taking the rest of the section with it', () => {
+    // A section that says "Reading…" for a moment is a section whose first
+    // frame is one nobody can start a pairing on — and the code somebody has
+    // walked over to type is minted at the top of it.
+    const markup = renderToStaticMarkup(<MachineLinks half={half({ reading: true })} platform="mac" />)
+    expect(markup).toContain('Reading the machines this desktop knows')
+    expect(markup).not.toContain('No other machine yet')
+  })
+
+  it('says so plainly when this build cannot reach the feature at all', () => {
+    const markup = renderToStaticMarkup(<MachineLinks half={half({ wired: false })} platform="mac" />)
+    expect(markup).toContain('older preload')
+    expect(markup).not.toContain('No other machine yet')
+  })
+
+  it('puts the terminal it was handed under the machine whose session is open', () => {
+    const markup = renderToStaticMarkup(
+      <MachineLinks
+        half={half({
+          view: {
+            machines: [machine()],
+            links: [
+              link({
+                sessions: [
+                  {
+                    id: 's1',
+                    title: 'agent',
+                    cwd: '/Users/a/projects/deck',
+                    provider: 'claude',
+                    status: 'running',
+                    exitCode: null,
+                  },
+                ],
+              }),
+            ],
+            blocked: null,
+          },
+          open: { machineId: 'MACHINE1', sessionId: 's1' },
+          pane: <div className="pane-stand-in" />,
+        })}
+        platform="mac"
+      />,
+    )
+    expect(markup).toContain('machines-pane')
+    expect(markup).toContain('pane-stand-in')
+    expect(markup).toContain('>Close</button>')
+  })
+
+  it('draws no pane for a session that is not in the link any more', () => {
+    // Reachable: the far machine ends the session while its terminal is open.
+    // A head with a Close button over an empty box would claim a session that
+    // no longer exists.
+    const markup = renderToStaticMarkup(
+      <MachineLinks
+        half={half({
+          view: { machines: [machine()], links: [link()], blocked: null },
+          open: { machineId: 'MACHINE1', sessionId: 'gone' },
+          pane: <div className="pane-stand-in" />,
+        })}
+        platform="mac"
+      />,
+    )
+    expect(markup).not.toContain('pane-stand-in')
+    expect(markup).not.toContain('machines-pane')
+  })
+})
+
+describe('shortening a path', () => {
+  it('keeps a short one whole and trims a long one to its last two parts', () => {
+    expect(shortPath('/tmp')).toBe('/tmp')
+    expect(shortPath('/Users/a')).toBe('/Users/a')
+    expect(shortPath('/Users/a/projects/deck')).toBe('…/projects/deck')
+    expect(shortPath('C:\\Users\\a\\projects\\deck')).toBe('…/projects/deck')
+  })
+})
+
+describe('the link for a machine', () => {
+  it('is the resting state for one nothing has dialled yet', () => {
+    const resting = linkFor({ machines: [], links: [], blocked: null }, 'MACHINE1')
+    expect(resting.state).toBe('offline')
+    expect(resting.sessions).toEqual([])
+    // Null rather than `[]`: "that machine never mentioned folders" is not "no
+    // folder was shared", and `newSessionOffer` answers differently to each.
+    expect(resting.folders).toBeNull()
+  })
+})
+
+/* ------------------------------------------------------------- pressing -- */
+
+function recorder(answers: Partial<Record<keyof MachinesBridge, unknown>> = {}): {
+  bridge: MachinesBridge
+  calls: string[]
+} {
+  const calls: string[] = []
+  const bridge: MachinesBridge = { ...NOOP_BRIDGE }
+  for (const name of Object.keys(NOOP_BRIDGE) as Array<keyof MachinesBridge>) {
+    // The two `on*` channels return an unsubscribe function rather than a
+    // promise, so they keep the no-op above: a recorder that made them
+    // promise-shaped would be a stub disagreeing with the preload, which is the
+    // thing `.harness/stub.ts` has a paragraph about.
+    if (name.startsWith('on')) continue
+    // Widened to write, rather than narrowed to read: every value put here is a
+    // function with the shape the interface asks for, and the index signature is
+    // only how the loop reaches it.
+    ;(bridge as unknown as Record<string, unknown>)[name] = (
+      ...args: unknown[]
+    ): Promise<unknown> => {
+      calls.push(`${name}(${args.map((arg) => String(arg)).join(', ')})`)
+      return Promise.resolve(answers[name] ?? null)
+    }
+  }
+  return { bridge, calls }
+}
+
+function pressing(bridge: MachinesBridge | null, digits = ''): {
+  actions: MachineActions
+  state: { digits: string; view: MachinesView; busy: boolean; error: string | null }
+  settled(): Promise<void>
+} {
+  const state = {
+    digits,
+    view: { machines: [], links: [], blocked: null } as MachinesView,
+    busy: false,
+    error: null as string | null,
+  }
+  const actions = machineActions({
+    bridge,
+    digits,
+    setDigits: (next) => {
+      state.digits = next
+    },
+    setView: (next) => {
+      state.view = next
+    },
+    setPairing: (next) => {
+      state.busy = next
+    },
+    setError: (next) => {
+      state.error = next
+    },
+    setOpen: () => {},
+    isAlive: () => true,
+  })
+  // Nothing here returns its promise, which is the point — these are presses.
+  // One turn of the microtask queue is enough for a resolved bridge.
+  return { actions, state, settled: () => new Promise((resolve) => setTimeout(resolve, 0)) }
+}
+
+describe('typing a code and sending it', () => {
+  it('sends the canonical code rather than whatever was typed', async () => {
+    // `pairWithCode` normalises again on the other side, so this is not what
+    // makes it work — it is what makes the code in the notice, the code in the
+    // field and the code the far machine matched the same string.
+    const { bridge, calls } = recorder({ pairMachine: { ok: true } })
+    const h = pressing(bridge, '482 913')
+    h.actions.pair()
+    await h.settled()
+    expect(calls[0]).toBe('pairMachine(482913)')
+  })
+
+  it('clears the field and re-reads the list when it works', async () => {
+    const { bridge, calls } = recorder({
+      pairMachine: { ok: true },
+      listMachines: { machines: [machine()], links: [link()], blocked: null },
+    })
+    const h = pressing(bridge, '482913')
+    h.actions.pair()
+    await h.settled()
+    expect(calls).toEqual(['pairMachine(482913)', 'listMachines()'])
+    expect(h.state.digits).toBe('')
+    expect(h.state.view.machines).toHaveLength(1)
+    expect(h.state.busy).toBe(false)
+  })
+
+  it('prints the refusal in the far machine’s own words, and keeps the code', async () => {
+    // Keeping it is deliberate: a wrong digit is one box to fix, and clearing
+    // six boxes because one of them was wrong is the field punishing a typo.
+    const { bridge } = recorder({
+      pairMachine: {
+        ok: false,
+        reason: 'not-found',
+        message: 'No machine is showing that code. They last a minute.',
+      },
+    })
+    const h = pressing(bridge, '482913')
+    h.actions.pair()
+    await h.settled()
+    expect(h.state.error).toBe('No machine is showing that code. They last a minute.')
+    expect(h.state.digits).toBe('482913')
+    expect(h.state.busy).toBe(false)
+  })
+
+  it('says something rather than nothing when the code is not whole', async () => {
+    const { bridge, calls } = recorder()
+    const h = pressing(bridge, '4829')
+    h.actions.pair()
+    await h.settled()
+    expect(calls).toEqual([])
+    expect(h.state.error).toBe('That is not a whole code yet.')
+  })
+
+  it('drops the error the moment the code is retyped', () => {
+    const { bridge } = recorder()
+    const h = pressing(bridge, '482913')
+    h.actions.type('48291')
+    expect(h.state.digits).toBe('48291')
+    expect(h.state.error).toBeNull()
+  })
+
+  it('does not throw when the build has no machine channels', async () => {
+    const h = pressing(null, '482913')
+    h.actions.pair()
+    h.actions.connect(machine())
+    h.actions.forget(machine())
+    h.actions.newSession(machine(), link())
+    await h.settled()
+    expect(h.state.error).toBeNull()
+  })
+})
+
+describe('the machine buttons', () => {
+  it('draw the view that came back rather than the one that was on screen', async () => {
+    // The same rule the devices half is built on: what this screen claims about
+    // the world comes from an answer, never from the fact that a call returned.
+    const answer = { machines: [machine({ name: 'Studio PC' })], links: [link()], blocked: null }
+    const { bridge, calls } = recorder({
+      connectMachine: answer,
+      disconnectMachine: answer,
+      forgetMachine: { machines: [], links: [], blocked: null },
+    })
+    const h = pressing(bridge)
+    h.actions.connect(machine())
+    await h.settled()
+    expect(calls).toEqual(['connectMachine(MACHINE1)'])
+    expect(h.state.view.machines).toHaveLength(1)
+
+    h.actions.forget(machine())
+    await h.settled()
+    expect(h.state.view.machines).toHaveLength(0)
+  })
+
+  it('starts a session in the first folder that machine shared, and nowhere else', async () => {
+    const { bridge, calls } = recorder()
+    const h = pressing(bridge)
+    h.actions.newSession(machine(), link({ folders: ['/Users/a/projects/deck', '/tmp'] }))
+    await h.settled()
+    expect(calls).toEqual(['createMachineSession(MACHINE1, /Users/a/projects/deck)'])
+  })
+
+  it('lets a machine that never mentioned folders choose for itself', async () => {
+    // An empty string is that machine's own default. A path invented here would
+    // be a folder this end guessed at for a filesystem it cannot see.
+    const { bridge, calls } = recorder()
+    const h = pressing(bridge)
+    h.actions.newSession(machine(), link({ folders: null }))
+    await h.settled()
+    expect(calls).toEqual(['createMachineSession(MACHINE1, )'])
+  })
+})
+
+describe('narrowing what crosses the bridge', () => {
+  it('reads a whole view', () => {
+    const view = asView({
+      machines: [{ id: 'M1', name: 'PC', hostId: 'M1', fingerprint: 'AAAA', platform: 'win32', pairedAt: 2 }],
+      links: [{ id: 'M1', state: 'online', sessions: [{ id: 's1' }], capabilities: ['create'] }],
+      blocked: null,
+    })
+    expect(view.machines).toHaveLength(1)
+    expect(view.links[0].state).toBe('online')
+    expect(view.links[0].sessions[0].id).toBe('s1')
+  })
+
+  it('treats an unreadable answer as an empty one rather than throwing in an effect', () => {
+    // A captive portal, an older preload, a channel that answered `undefined`.
+    // The screen says "no machines" instead of showing a stack trace nobody
+    // opens a console to read.
+    expect(asView(undefined)).toEqual({ machines: [], links: [], blocked: null })
+    expect(asView('nope')).toEqual({ machines: [], links: [], blocked: null })
+    expect(asView({ machines: 'no', links: 7 })).toEqual({ machines: [], links: [], blocked: null })
+  })
+
+  it('refuses a link state it has never heard of rather than printing it', () => {
+    expect(asView({ links: [{ id: 'M1', state: 'exploded' }] }).links[0].state).toBe('offline')
+  })
+
+  it('reads a pairing result', () => {
+    expect(asPairResult({ ok: true })).toEqual({ ok: true })
+    expect(asPairResult({ ok: false, reason: 'refused', message: 'no' })).toEqual({
+      ok: false,
+      reason: 'refused',
+      message: 'no',
+    })
+  })
+
+  it('reads a chunk of output, and drops one that names no session', () => {
+    expect(asOutput({ machineId: 'M1', sessionId: 's1', data: 'hi', replay: true })).toEqual({
+      machineId: 'M1',
+      sessionId: 's1',
+      data: 'hi',
+      replay: true,
+    })
+    expect(asOutput({ machineId: 'M1', data: 'hi' })).toBeNull()
+    expect(asOutput(null)).toBeNull()
+  })
+
+  it('reports no bridge rather than pretending there is one', () => {
+    // The seam that has broken three times without a type error: a panel calling
+    // a method the preload stopped exposing.
+    expect(resolveBridge()).toBeNull()
+    expect(resolveBridge(NOOP_BRIDGE)).toBe(NOOP_BRIDGE)
+  })
+})

@@ -89,6 +89,67 @@ export interface ControlReading {
   unavailableReason?: string
 }
 
+/**
+ * Whether an agent CLI is drawing this session's screen right now.
+ *
+ * ## Why this is not "did we spawn one"
+ *
+ * A session started as a plain shell can have an agent running in it — the user
+ * types `claude`, or presses Run Claude, and now the pty is a shell with Claude
+ * Code in the foreground. And it can stop having one: `/exit` returns the shell,
+ * and the session is still alive. `SessionMeta.provider` answers "what did this
+ * app launch", which is a different question and stops being the same answer the
+ * first time somebody quits the CLI.
+ *
+ * ## What is actually read, and what it is worth
+ *
+ * The session's own screen, through the headless terminal `session-activity.ts`
+ * keeps per session — the same buffer the permission footer is read off. The
+ * markers below were transcribed from a real pty on this machine
+ * (`claude 2.1.233`, spawned into `/bin/zsh -l`, screen dumped through the same
+ * emulator this app uses), not from documentation:
+ *
+ *   `╭─── Claude Code v2.1.233 ───…`            the banner, on start
+ *   `⏵⏵ bypass permissions on (shift+tab to cycle)`  the footer, while idle
+ *   `esc to interrupt`                          the footer, while working
+ *
+ * The same run established the two things that decide how far this can be
+ * trusted. On a clean `/exit` Claude Code **clears the screen** — the dump
+ * straight afterwards held nothing but the shell prompt — so a session that has
+ * left the CLI stops matching. But it does *not* use the alternate screen
+ * buffer, so a CLI that dies without clearing (killed, or aborted at the trust
+ * prompt before it has drawn any of this) can leave text behind. Aborting at
+ * the trust prompt was checked and is harmless: none of these markers have been
+ * drawn at that point.
+ *
+ * So: a match is strong evidence, and the absence of one is weak. The reading
+ * says which, and the caller is expected to treat "no evidence" as "not known"
+ * rather than as "no agent".
+ *
+ * ## The signal this would rather have been
+ *
+ * The pty's foreground process. `node-pty`'s `IPty.process` answers `zsh` for a
+ * plain shell and `2.1.233` while Claude Code is in front of it — Claude Code
+ * sets its process title to its version — and it flips back to `zsh` on exit.
+ * Driven and confirmed on this machine. That is a fact about the operating
+ * system rather than about pixels, and it cannot be faked by leftover text. It
+ * needs one accessor on `PtyManager`, which is not this module's file; until
+ * that exists, `evidence` is `screen` and never `process`, and nothing here
+ * pretends otherwise.
+ */
+export type AgentEvidence = 'screen' | 'process'
+
+export interface AgentPresence {
+  /** True only when something was actually read that says an agent is there. */
+  running: boolean
+  /** What said so, or null when nothing did. Null is "not known", not "no". */
+  evidence: AgentEvidence | null
+  /** The line that settled it, verbatim, so a caller can show its working. */
+  saw: string | null
+}
+
+export const NO_AGENT: AgentPresence = { running: false, evidence: null, saw: null }
+
 export interface ControlsReading {
   model: ControlReading
   effort: ControlReading
@@ -96,6 +157,8 @@ export interface ControlsReading {
   permission: ControlReading
   /** False when no live session was addressable, so nothing could be applied. */
   live: boolean
+  /** Whether an agent CLI is in the foreground of this session. */
+  agent: AgentPresence
 }
 
 export interface ApplyRequest {
@@ -213,6 +276,63 @@ export function readPermissionMode(screen: string): PermissionModeId | null {
   for (let i = tail.length - 1; i >= 0; i--) {
     for (const mode of PERMISSION_MODES) {
       if (mode.screen.test(tail[i])) return mode.id
+    }
+  }
+  return null
+}
+
+/**
+ * Lines only Claude Code draws.
+ *
+ * Every one is copied from a screen this app's own emulator produced while the
+ * CLI was running in a pty — see {@link AgentPresence} for the capture and for
+ * what a match is and is not worth.
+ *
+ * Deliberately narrow. A pattern loose enough to also match, say, the word
+ * "claude" in a shell prompt or in a file being `cat`-ed would turn a plain
+ * terminal into one wearing an agent's controls, which is the exact complaint
+ * this is being written for, inverted.
+ */
+const AGENT_ON_SCREEN: readonly RegExp[] = [
+  // The banner, drawn once on start. Version-agnostic: the box's title is
+  // `Claude Code v2.1.233` here and the number will move.
+  /╭─+\s*Claude Code v\d/,
+  // The footer while it is working. Same string `session-activity.ts` classifies
+  // "working" from, for the same reason: it is the CLI's, not the shell's.
+  /esc to interrupt/i,
+]
+
+/**
+ * The hint the CLI prints beside the mode in its idle footer.
+ *
+ * The mode phrase on its own is not enough to identify Claude Code — `plan mode
+ * on` is three ordinary words, and `PERMISSION_MODES` matches it deliberately
+ * loosely because by the time *that* is read the screen is already known to be
+ * the CLI's. Requiring the hint as well makes the pair a sentence only this CLI
+ * writes. Both arms are real: `manual` ends `· ? for shortcuts` while every
+ * other mode ends `(shift+tab to cycle)`, which is already recorded above
+ * `PERMISSION_MODES` and is why this is two alternatives rather than one.
+ */
+const FOOTER_HINT = /\(shift\+tab to cycle\)|\? for shortcuts/i
+
+/**
+ * The line that says an agent is in front of this session, or null.
+ *
+ * Only the visible viewport is considered, because that is all the caller
+ * passes and all that "right now" can mean — scrollback would keep answering
+ * yes for a CLI that exited ten minutes ago.
+ *
+ * The mode phrases come from `PERMISSION_MODES` rather than being written out
+ * again. They are the same strings, read off the same footer, and a second copy
+ * here is one that would not be updated the next time the CLI reworded one.
+ */
+export function readAgentFromScreen(screen: string): string | null {
+  for (const line of lines(screen)) {
+    for (const pattern of AGENT_ON_SCREEN) {
+      if (pattern.test(line)) return line
+    }
+    if (FOOTER_HINT.test(line) && PERMISSION_MODES.some((mode) => mode.screen.test(line))) {
+      return line
     }
   }
   return null
@@ -538,7 +658,10 @@ export async function readControls(
     return fastFromSettings(settings)
   })()
 
-  return { model, effort, fast, permission, live: screen !== null }
+  const saw = screen === null ? null : readAgentFromScreen(screen)
+  const agent: AgentPresence = saw === null ? NO_AGENT : { running: true, evidence: 'screen', saw }
+
+  return { model, effort, fast, permission, live: screen !== null, agent }
 }
 
 /* -------------------------------------------------------------------------- */

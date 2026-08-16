@@ -60,9 +60,12 @@
 	     TARGETED_DEVICE_FAMILY is 1. See project.yml for why, and add both back
 	     together on the day the layout has actually been looked at on an iPad. -->
 
-	<!-- The desktop opens a session on the phone by handing the OS a link, the
-	     same way it hands one to the browser for the PWA. `Deeplink.swift` is
-	     the only thing that reads these. -->
+	<!-- The desktop opens a *session* on the phone by handing the OS a link.
+	     `terminaldeck://pair?…` used to come through the same door and no longer
+	     exists: a pairing link is a live bearer token in a string any app
+	     registered for the scheme could be handed. A session link carries an id
+	     the desktop already knows this phone can see, which is why the scheme
+	     itself stays. `DeckModel.open(_:)` is the only thing that reads these. -->
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -77,18 +80,19 @@
 		</dict>
 	</array>
 
-	<!-- Pairing reads a QR code off the Mac's screen. Absent until now because
-	     there was no camera code to describe; `Screens/QRScanner.swift` is the
-	     only thing that opens the camera and it does nothing else with it. -->
-	<key>NSCameraUsageDescription</key>
-	<string>Terminal Deck uses the camera once, to read the pairing code shown on your Mac.</string>
+	<!-- There is deliberately no NSCameraUsageDescription. Pairing used to read a
+	     QR code off the Mac's screen and this app carried a scanner for it; the
+	     QR did not work, pairing is six typed digits now, and `QRScanner.swift`
+	     is deleted. A usage string for a capability the binary does not exercise
+	     is something App Review asks about and something a user is right to be
+	     suspicious of, so it goes with the code that needed it. -->
 
 	<!-- Required before this app may reach an address on the local subnet, which
 	     it now can: a pairing code may name a relay on a LAN, and the desktop's
 	     own listener is often on one. A tailnet address is not the local network
 	     for this purpose; a 192.168.x.x one is. `NSBonjourServices` is still
 	     absent because nothing here discovers anything — the address always
-	     comes from a pairing code a person scanned. -->
+	     comes back from the rendezvous a typed code named. -->
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Terminal Deck connects to the Mac you paired with, which may be on this network.</string>
 

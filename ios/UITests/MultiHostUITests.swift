@@ -171,7 +171,7 @@ final class MultiHostUITests: XCTestCase {
         URLSession.shared.dataTask(with: url) { data, _, _ in
             if let data,
                let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                answer = json["uri"] as? String
+                answer = json["code"] as? String
             }
             done.fulfill()
         }.resume()
