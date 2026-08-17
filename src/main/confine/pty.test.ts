@@ -175,11 +175,43 @@ async function terminal(
    * its output, which reads as "the confinement broke git" when the truth is
    * that git was never asked.
    *
-   * Any byte is enough — a login zsh prints a prompt, and nothing else is
-   * printing yet. Ceiling rather than sleep, for the same reason as the steps.
+   * **Any byte is not enough, and believing it was cost two release builds.**
+   * The first version of this waited for `out !== ''` and then typed. A login
+   * zsh does not print its prompt in one write: it emits terminal setup, then
+   * sources its startup files, then draws the prompt — and it is not reading
+   * until the last of those. On this Mac the whole sequence is one chunk and the
+   * distinction never appears. On a shared runner it is several, and a keystroke
+   * written after the first chunk lands while zsh is still sourcing, where it is
+   * simply dropped.
+   *
+   * The failure that proves it, from CI on 2026-08-17 — 30 seconds of capture
+   * holding two prompts and no echo of the command at all:
+   *
+   *     "%                    runner@iad20-…-66368FA23B21 granted % "
+   *
+   * That is not a slow `git --version`; git was never asked. Raising the ceiling
+   * again would have been treating a lost keystroke as a late one, and the
+   * comment on that step already says the numbers are not tuned timeouts.
+   *
+   * So wait for the shell to go **quiet** instead of to make a noise: at least
+   * one byte, and then a stretch with nothing new. A shell that has stopped
+   * printing has finished drawing its prompt and is in `read`. Both bounds are
+   * ceilings, not sleeps — a fast machine leaves as soon as the quiet arrives.
    */
+  const QUIET_MS = 300
   const ready = Date.now() + 10_000
-  while (out === '' && !shell.exited && Date.now() < ready) {
+  let lastLength = -1
+  let quietSince = Number.POSITIVE_INFINITY
+  while (!shell.exited && Date.now() < ready) {
+    if (out.length !== lastLength) {
+      lastLength = out.length
+      // Only start counting quiet once something has actually been printed;
+      // the silence *before* the shell starts looks identical to the silence
+      // after it is ready, and only one of them means it can read.
+      quietSince = out === '' ? Number.POSITIVE_INFINITY : Date.now()
+    } else if (Date.now() - quietSince >= QUIET_MS) {
+      break
+    }
     await new Promise((resolve) => setTimeout(resolve, 25))
   }
 

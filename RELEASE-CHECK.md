@@ -180,6 +180,34 @@ broad to fix as a side quest, and each is real.
       Cookies and everything else under the Electron root. Correct call; needs a
       narrower fix.
 
+## Pairing has two kinds of device (2026-08-17) — queued, not built
+
+His model, and it supersedes per-tier checkboxes as the thing a person sees:
+
+> *"We need maybe two types of connection — saying something like **my device**
+> vs **giving someone else access**. If you connect to your device, everything
+> comes with full access. If you give it to someone else, then you choose the
+> access / folders."*
+
+Why it is better than what is being built underneath it: the tier question
+("should this phone hold `alter`?") is one nobody wants to answer about their own
+phone, and everybody wants to answer about somebody else's. Asking *whose device
+is this* answers it once, correctly, in the words the person already thinks in.
+
+- **My device** — full access. Sessions, copilot, every tier, all folders. It is
+  the same person at a different keyboard.
+- **Someone else** — the existing pickers. Folder grants already exist
+  (`folder-grants.ts`, `DeviceFolders`); copilot access and its tiers join them.
+
+This layers **on top of** the separate-copilot-connection work, which is the
+mechanism and is needed either way. What changes is the pairing flow and the
+defaults, not the enforcement.
+
+Open, and worth his answer when it is built: can a device be changed from one
+kind to the other afterwards, or does that mean re-pairing? Re-pairing is safer
+and is probably right — a device that was a guest becoming an owner by a toggle
+is the kind of quiet escalation this app has been removing all night.
+
 ## Release scope — every surface, tested before any of it ships
 
 He was explicit, twice:
