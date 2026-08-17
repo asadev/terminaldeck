@@ -138,6 +138,32 @@ describe.skipIf(!onMac)('a confined session, run for real', () => {
     expect(ran.stdout).toContain('written')
   })
 
+  /**
+   * Rule five: a confinement that breaks node or git is not usable.
+   *
+   * This assertion lived in `pty.test.ts` until 2026-08-17, where it cost three
+   * release builds. It was written there because the product runs its shells
+   * through a pty, but the claim it makes is not about a pty at all — it is
+   * about which paths the profile permits, and the toolchain lives outside the
+   * granted folder by construction. Proving that through an interactive login
+   * shell meant typing at `zsh -l` and reading back what it echoed, and on a
+   * shared macOS runner the keystroke was repeatedly swallowed while the shell
+   * was still starting: thirty seconds of capture holding two prompts and no
+   * echo of the command. Waiting for a byte did not fix it, and neither did
+   * waiting for quiet.
+   *
+   * A pipe answers the same question with no timing in it. `pty.test.ts` keeps
+   * the three claims that genuinely need a terminal — that the profile survives
+   * the trip as one argument, that a login shell starts inside the boundary,
+   * and that Ctrl-C reaches the foreground job.
+   */
+  it('still finds the tools, which live outside the folder', async () => {
+    const ran = await sh('git --version && node -e "console.log(6*7)"')
+    expect(ran.stdout).toMatch(/git version/)
+    expect(ran.stdout).toContain('42')
+    expect(ran.code).toBe(0)
+  })
+
   it('cannot list the folder above it', async () => {
     const ran = await sh('cd .. && ls')
     expect(ran.stdout).not.toContain('elsewhere')

@@ -288,21 +288,31 @@ describe.skipIf(!onMac)('a confined session in a real terminal', () => {
     expect(seen).toContain('MARK-INT')
   }, 20_000)
 
-  it('still finds the tools, which live outside the folder', async () => {
-    // Rule five: a confinement that breaks node or git is not usable. Both are
-    // outside the granted folder by construction, and this is the arrangement
-    // they have to work in.
-    // 15s ceiling, satisfied the instant 42 appears — see `terminal`.
-    const seen = await terminal([
-      ['git --version && node -e "console.log(6*7)"\r', 30_000, /42/],
-    ])
-    expect(seen).toMatch(/git version/)
-    expect(seen).toContain('42')
-    // 45s, raised with the ceiling above after this failed a release build on a
-    // `macos-latest` runner. Neither number is a tuned timeout: the step ends
-    // the instant `42` appears, so a fast machine is unaffected and a slow one
-    // gets the same answer later.
-  }, 45_000)
+  /*
+   * "still finds the tools, which live outside the folder" moved to
+   * `escapes.test.ts` on 2026-08-17, after costing three release builds here.
+   *
+   * It asked whether the profile lets a confined process reach git and node,
+   * which are outside the granted folder by construction. That is a question
+   * about the profile, not about a terminal — and answering it here meant typing
+   * at an interactive `zsh -l` and reading back the echo. On a shared macOS
+   * runner the keystroke was swallowed while the shell was still sourcing its
+   * startup files: thirty seconds of capture holding two prompts and no echo of
+   * the command at all, which reads as "the confinement broke git" when the
+   * truth is that git was never asked.
+   *
+   * Two fixes were tried and both were wrong in the same way. Raising the
+   * ceiling treats a lost keystroke as a late one. Waiting for the shell to go
+   * quiet before typing is better — it is still in the helper above and worth
+   * keeping — but a startup that pauses mid-way looks exactly like one that has
+   * finished.
+   *
+   * The tests left in this file are the three the header argues for, and each
+   * genuinely needs a pty: the profile surviving the trip as a single argument,
+   * a login shell starting inside the boundary, and Ctrl-C reaching its own
+   * foreground job.
+   */
+
 
   /**
    * The helper waits for the shell it started to actually exit.
