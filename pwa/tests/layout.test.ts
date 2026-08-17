@@ -121,6 +121,11 @@ describe('the layout decisions that cannot be seen from a test', () => {
     // because it is the one preference somebody changes *because of what is on
     // the screen right now*, and a control that disappeared before pairing would
     // be missing from the first screen anybody sees.
+    //
+    // `.setting` is a settings row — an icon-less title, its current value and
+    // either a chevron or a stepper. It is never hidden: a row that would have
+    // nothing to say is not drawn at all, which is the same rule the tab strip
+    // and the folder picker follow.
     const never = [
       '#app',
       '.appearance',
@@ -129,6 +134,7 @@ describe('the layout decisions that cannot be seen from a test', () => {
       '.header',
       '.keybar',
       '.session',
+      '.setting',
       '.terminal-screen',
     ]
     expect(flexBlocks.filter((selector) => !hidden.includes(selector)).sort()).toEqual(never)
@@ -148,6 +154,48 @@ describe('the layout decisions that cannot be seen from a test', () => {
     expect(block('#app.is-terminal .appearance')).toContain('display: none')
     const source = readFileSync(fileURLToPath(new URL('../src/main.ts', import.meta.url)), 'utf8')
     expect(source).toContain("classList.toggle('is-terminal'")
+  })
+
+  it('really hides the toast when there is nothing being said', () => {
+    /*
+     * The general rule again, for the one element added since it was written.
+     * `.toast` is `position: fixed` with a `z-index`, so an author `display` that
+     * outranks the UA's `hidden` would leave an empty capsule floating over the
+     * bottom of every screen — visible as a dark pill on a dark theme only when
+     * something happened to be behind it, which is exactly the class of bug that
+     * ships.
+     */
+    expect(block('.toast[hidden]')).toContain('display: none')
+    // And it may never take a press. It is an aside — everything that matters has
+    // a surface that stays until it stops being true — so a finger aimed at the
+    // row underneath must reach the row.
+    expect(block('.toast')).toContain('pointer-events: none')
+  })
+
+  it('caps the settings and machines screens without capping the terminal', () => {
+    /*
+     * Both new screens are `.screen`, which is where `--column` is applied, and
+     * neither invents a width of its own. The rule being pinned is that they went
+     * through the existing decision rather than around it: a screen that set its
+     * own `max-width` would be the third answer to a question this sheet already
+     * answers in one place, and the one that drifts.
+     */
+    for (const selector of ['.group', '.machine', '.machines', '.portgroup']) {
+      expect(block(selector), `${selector} must not cap its own width`).not.toContain('max-width')
+    }
+  })
+
+  it('draws no line between the port rows now that they are grouped', () => {
+    /*
+     * "A lot of separations is not a good idea, it's not Apple style." The rows
+     * were separated by a hairline each while they were one flat list. They are
+     * grouped under headers now, and a rule between every row *inside* a group is
+     * a separation inside a separation — space does that job here, and the group
+     * header does the rest.
+     */
+    expect(block('.port')).not.toContain('border-bottom')
+    expect(block('.portgroup')).not.toContain('border')
+    expect(block('.portgroup__head')).not.toContain('border')
   })
 
   it('paints the terminal in the terminal’s own paper, in both appearances', () => {

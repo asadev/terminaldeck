@@ -21,6 +21,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { Terminal, type ITheme } from '@xterm/xterm'
 import { MAX_COLS, MAX_ROWS, MIN_COLS, MIN_ROWS } from '../../src/main/remote/protocol'
 import { controlByteForCode } from './keybar'
+import { clampTextSize, STANDARD_TEXT_SIZE } from './text-size'
 import type { Appearance } from './theme'
 
 export interface TerminalSize {
@@ -55,6 +56,18 @@ export interface TerminalHandle {
    * focus and the negotiated size, which is a high price for a colour.
    */
   setAppearance(appearance: Appearance): void
+  /**
+   * Redraw at another character size, without losing the session.
+   *
+   * The same trade `setAppearance` makes and for the same reason — xterm re-lays
+   * out what it already has when its font changes, so somebody who makes the text
+   * bigger mid-session keeps every line of scrollback. What they do *not* keep is
+   * the column count: a bigger font in the same box is fewer columns, so the
+   * caller has to `fit()` afterwards and let the resize reach the machine. That
+   * is deliberately not done here, because `fit` measures the element and this
+   * handle is created before it is on screen.
+   */
+  setFontSize(size: number): void
   dispose(): void
 }
 
@@ -170,15 +183,23 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, Math.round(value)))
 }
 
-export function createTerminal(handlers: TerminalHandlers, appearance: Appearance = 'dark'): TerminalHandle {
+export function createTerminal(
+  handlers: TerminalHandlers,
+  appearance: Appearance = 'dark',
+  fontSize: number = STANDARD_TEXT_SIZE,
+): TerminalHandle {
   const element = document.createElement('div')
   element.className = 'terminal'
 
   const term = new Terminal({
     // 13px is the smallest that stays readable on a phone at arm's length, and
     // it fits 80 columns on a 6.1" screen in landscape — the width most CLI
-    // output is still written for.
-    fontSize: 13,
+    // output is still written for. It is the default rather than the value now:
+    // the same page is opened on a monitor and on a phone, and `text-size.ts`
+    // holds what the person answered. Built at the answered size rather than
+    // built at 13 and corrected, for the reason the appearance is — a terminal
+    // that reflows every line one frame after it appears reads as a fault.
+    fontSize: clampTextSize(fontSize),
     lineHeight: 1.2,
     fontFamily: "'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace",
     theme: TERMINAL_THEMES[appearance],
@@ -251,6 +272,14 @@ export function createTerminal(handlers: TerminalHandlers, appearance: Appearanc
     },
     setAppearance(next: Appearance): void {
       term.options.theme = TERMINAL_THEMES[next]
+    },
+    setFontSize(size: number): void {
+      // Clamped here as well as in the store, because this is the other door into
+      // the same option and `text-size.ts` says there is to be one place that can
+      // be wrong. An unclamped value reaches `fit`, which computes a column count
+      // the protocol refuses — and a rejected `resize` closes the socket over a
+      // font-size setting, which is the trap this file's header already names.
+      term.options.fontSize = clampTextSize(size)
     },
     dispose(): void {
       term.dispose()

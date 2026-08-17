@@ -350,6 +350,40 @@ button {
   text-overflow: ellipsis;
 }
 
+/* Which machine you are looking at, when there is more than one.
+
+   The subtitle already named the machine, so this is the same line made
+   pressable rather than a new control — the smallest thing that turns a label
+   into a way to the screen where machines are managed. It is drawn only when
+   there are two or more; one machine is not a choice, which is the same rule the
+   folder picker and the tab strip follow.
+
+   The name and the chevron are separate nodes so the name can ellipsise without
+   taking the affordance with it: a nickname is up to twenty-four characters and
+   a phone header is not. */
+.header__machine {
+  max-width: 100%;
+  padding: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+}
+.header__machine:active {
+  color: var(--text-primary);
+}
+
+.header__machine-mark {
+  display: inline-block;
+  margin-left: 4px;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1;
+  transform: rotate(90deg) translateX(1px);
+}
+
 /* -------------------------------------------------------------- appearance */
 
 /* Auto / Light / Dark, in the header, on every screen.
@@ -662,10 +696,13 @@ input[type='text']:focus-visible {
 }
 
 /* The same question, restated after pairing, where the answer can be changed.
-   The session list is edge-to-edge, so this carries its own gutter — the same
-   arrangement `.start` uses above it. */
+
+   It carried its own 16px gutter while it lived at the foot of the edge-to-edge
+   session list. It is on the Settings screen now, which has a gutter of its own,
+   and the two together indented it visibly further than the group above it —
+   measured on a render. */
 .lifetime {
-  margin: 20px 16px 0;
+  margin: 0;
 }
 
 .lifetime__note {
@@ -1037,26 +1074,55 @@ input[type='text']:focus-visible {
   padding: 0;
 }
 
+/* One row, whichever kind it is — a listening port or a project's dev server.
+   They share the list item because they are one list answering one question, and
+   a `ready` dev server is joined to its own port row rather than drawn beside it.
+
+   No line between rows. There was one, and with the rows now grouped under
+   headers it was a rule inside a rule inside a screen whose complaint was noise —
+   the group is the separation, and inside a group the space is. */
 .port {
-  padding: 6px 16px 10px;
-  border-bottom: 1px solid var(--border-subtle);
+  padding: 10px 16px 12px;
 }
 
 .port__line {
   display: flex;
   align-items: center;
-  gap: 12px;
-  min-height: 44px;
+  gap: 10px;
+  min-height: 24px;
 }
 
-/* Mono, because a port number and a process name are exact and countable — the
-   same promise the folder rows make. `min-width: 0` so a long process name
-   ellipsises instead of pushing Check off the side of a phone. */
+/* Mono, because a port number is exact and countable — the same promise the
+   folder rows make. `min-width: 0` so a long process name ellipsises instead of
+   pushing the row's controls off the side of a phone. */
 .port__label {
   flex: 1;
   min-width: 0;
   font-family: var(--font-mono);
   font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Once somebody has named a port, the name leads and it is not mono: monospace
+   is a promise that the characters are exact and countable, which is true of
+   `localhost:3000` and false of "client billing app". It is also heavier,
+   because a named row is a row its owner said matters. */
+.port__label--named {
+  font-family: var(--font-ui);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+/* Whatever is left that identifies the row — the address a name replaced, or the
+   process holding it. Omitted rather than guessed at when the machine could not
+   name the owner, which is what `guessed` means. */
+.port__detail {
+  margin: 3px 0 0;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1098,38 +1164,19 @@ input[type='text']:focus-visible {
 
 /* ------------------------------------------------------------- dev servers */
 
-/* One project per row, under the ports, because the two halves answer the same
-   question in opposite directions: the list above says what *is* listening, and
-   this says what could be. `dev-server.ts` owns every word and every rule here;
-   this is only how they sit.
+/* A project's dev server, as one row of the list above rather than a list of its
+   own. `dev-server.ts` owns every word and every rule here; this is only how they
+   sit, and what changed is where they sit — `port-catalog.ts` puts a dev server
+   in its own group, or joins it to the port row it is proven to be serving on.
 
    A project whose package.json declares no dev script has no row at all — not a
    row with a disabled button, which is a promise that some future press might
-   work. */
+   work.
 
-.dev__caption {
-  margin: 20px 16px 8px;
-  color: var(--text-muted);
-  font-size: 12px;
-}
-
-.dev {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-
-.dev__row {
-  padding: 10px 16px 12px;
-  border-bottom: 1px solid var(--border-subtle);
-}
-
-.dev__head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-height: 34px;
-}
+   `.dev__caption`, `.dev`, `.dev__row` and `.dev__head` are gone with the second
+   list they belonged to. The row is `.port` now and the head is `.port__line`,
+   which is what makes a project and a port line up in one column instead of
+   nearly lining up. */
 
 /* The same dot vocabulary as the session list, because it is the same question
    — is this thing alive, and does it want me — and a second set of colours for
@@ -1185,6 +1232,20 @@ input[type='text']:focus-visible {
   text-overflow: ellipsis;
 }
 
+/* The project's own name, when the person has given its port one of theirs. A
+   chip rather than a second line, and beside the name rather than replacing it:
+   the name says which server this is to them, and this says which project it is
+   on the machine. The same treatment the session rows give the agent's name, for
+   the same reason — it is a name, and the line it sits on is a state. */
+.dev__project {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
 /* The command, the progress line, the port or the failure — whichever this row
    is. Indented to the dot's column so the rows read as a list rather than as
    four paragraphs. */
@@ -1230,42 +1291,6 @@ input[type='text']:focus-visible {
   color: var(--text-secondary);
   font-family: var(--font-mono);
   font-size: 12.5px;
-}
-
-.dev__actions {
-  display: flex;
-  gap: 8px;
-  margin: 10px 0 0 19px;
-}
-
-/* `.button` is display:block, width:100% and carries a top margin, because every
-   other button in this client is the primary action of its screen. These two sit
-   side by side under a row. */
-.dev__actions .button {
-  width: auto;
-  margin: 0;
-  min-height: 34px;
-  padding: 6px 14px;
-  font-size: 13px;
-}
-
-/* Start and Try again are **not** the accent's filled button, and that is the
-   house rule rather than restraint for its own sake: one accent, for the single
-   primary action of a screen. With eight projects on this list, eight filled
-   blue buttons would be the loudest thing in the client and none of them would
-   be the primary anything — it was measured on a screenshot and it was exactly
-   that.
-
-   A tint instead. It still reads as the action of its row, it sits at the same
-   weight as the Check buttons on the ports above it, and the quiet grey one
-   beside it stays visibly secondary. */
-.dev__actions .button:not(.button--quiet) {
-  background: var(--accent-soft);
-  color: var(--accent);
-}
-.dev__actions .button:not(.button--quiet):active {
-  filter: none;
-  background: var(--bg-active);
 }
 
 /* --------------------------------------------------------------- terminal */
@@ -1370,6 +1395,450 @@ input[type='text']:focus-visible {
 .keybar__key--ctrl.is-armed {
   background: var(--accent);
   color: var(--accent-fg);
+}
+
+/* ------------------------------------------------------------------ groups */
+
+/* A folded group of ports, and the header that folds it.
+
+   The header is the whole hit target rather than a chevron beside it, because a
+   12px chevron is not a touch target and the row is already the shape of one.
+   The count is on it because a folded group has to be worth opening before
+   anybody opens it — "Other services 9" answers that where "Other services" does
+   not.
+
+   No line between the header and its rows, and none between one group and the
+   next: the separation is the space, then the tint on the header's own text.
+   That is the house rule in order, and on a screen whose whole complaint was
+   visual noise it is the rule that matters most. */
+.portgroup {
+  display: block;
+  padding-top: 10px;
+}
+
+.portgroup__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 34px;
+  padding: 4px 16px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-align: left;
+  text-transform: uppercase;
+}
+.portgroup__head:active {
+  background: var(--bg-hover);
+}
+
+/* The disclosure mark is the group's state and nothing else.
+
+   One glyph turned, rather than two glyphs swapped. Rendered both ways: `›` and
+   `⌄` have different metrics and different baselines in this face, so the header
+   shifted by a pixel and the mark sat visibly low when a group was open. A
+   rotation cannot do that, and it is also the only thing on this screen worth
+   animating — the group opening under a finger is the one moment the reader needs
+   to be told which control did it. */
+.portgroup__mark {
+  display: inline-block;
+  flex: none;
+  width: 10px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1;
+  text-align: center;
+  transition: transform var(--fold-turn, 140ms) ease;
+}
+
+.portgroup__mark--open {
+  transform: rotate(90deg);
+}
+
+/* Somebody who has asked their system not to animate things has asked this one
+   too. The mark still turns; it simply arrives. */
+@media (prefers-reduced-motion: reduce) {
+  .portgroup__mark {
+    transition: none;
+  }
+}
+
+.portgroup__title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Mono, because it is a count — the same promise the port numbers make. */
+.portgroup__count {
+  flex: none;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+
+/* ---------------------------------------------------------- row actions -- */
+
+/* The row's own verb — Start, Try again, Open session — on a line of its own.
+
+   Check and the three dots are not here: they are the same two controls on every
+   row and they sit on the identity line, where a flexible label keeps them beside
+   the thing they act on at any width. This is for the control whose label is a
+   different length on every row and whose meaning is about the project rather
+   than about the port. */
+.port__controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 0 19px;
+}
+
+/* `.button` is display:block, width:100% and carries a top margin, because every
+   other button in this client is the primary action of its screen. These sit in
+   a row of their own. */
+.port__action {
+  width: auto;
+  margin: 0;
+  min-height: 34px;
+  padding: 6px 14px;
+  font-size: 13px;
+}
+
+/* Start and Try again are **not** the accent's filled button, and that is the
+   house rule rather than restraint for its own sake: one accent, for the single
+   primary action of a screen. With eight projects on this list, eight filled
+   blue buttons would be the loudest thing in the client and none of them would be
+   the primary anything. A tint instead, at the same weight as Check beside it. */
+.port__action:not(.button--quiet) {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.port__action:not(.button--quiet):active {
+  filter: none;
+  background: var(--bg-active);
+}
+
+/* The three dots. Pushed to the trailing edge so it is in the same place on
+   every row whatever else that row is offering — a menu that moves is a menu
+   people miss. */
+.port__more {
+  flex: none;
+  min-width: 40px;
+  min-height: 34px;
+  border-radius: var(--radius-md);
+  color: var(--text-muted);
+  font-size: 15px;
+  letter-spacing: 0.08em;
+}
+.port__more:active {
+  background: var(--bg-active);
+}
+
+/* The menu itself, opened in the row rather than over it.
+
+   A popover would be the desktop's answer; in a fixed frame with one scrolling
+   region inside it, an absolutely-positioned menu has to be dismissed,
+   repositioned on a resize and kept inside the viewport. This costs one row of
+   height and cannot be misplaced. */
+.port__menu {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.port__menu-item {
+  min-height: 34px;
+  padding: 6px 12px;
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 13px;
+}
+.port__menu-item:active {
+  background: var(--bg-active);
+}
+
+/* Forget, and nothing else. Not a filled red button — it is one item in a menu,
+   not the action of the screen — but its ink says what it is. */
+.port__menu-item--warn {
+  color: var(--color-critical);
+}
+
+/* ------------------------------------------------------------- renaming -- */
+
+/* The one field this client has besides the pairing code, shared by both
+   renames. The line above it says what is being named, because a bare field in
+   a list of nine rows is a field somebody has to remember the target of. */
+.rename {
+  margin-top: 10px;
+}
+
+.rename__about {
+  margin: 0 0 6px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rename__field {
+  display: block;
+  width: 100%;
+  max-width: var(--form);
+  min-height: 44px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 15px;
+}
+
+.rename__actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.rename__actions .button {
+  width: auto;
+  margin: 0;
+  min-height: 34px;
+  padding: 6px 16px;
+  font-size: 13px;
+}
+
+/* ------------------------------------------------------------- settings -- */
+
+/* A card holding rows, and the caption over it.
+
+   The design brief again: separate with space, then with a tint, and only then
+   with a line — so a group is a fill with a radius and there is no line anywhere
+   on this screen. */
+.group {
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+  overflow: hidden;
+}
+
+.caption {
+  margin: 24px 2px 8px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.setting {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 52px;
+  padding: 12px 16px;
+  color: var(--text-primary);
+  font-size: 16px;
+  text-align: left;
+}
+.setting:active {
+  background: var(--bg-hover);
+}
+
+/* A row that is a control rather than a way somewhere else takes no press state
+   of its own — the stepper inside it has one, and a whole row lighting up when
+   somebody aims at a small button inside it reads as having hit the wrong thing. */
+.setting--static:active {
+  background: none;
+}
+
+.setting__title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* What the row currently is — the count of machines, the size in pixels. It is
+   the whole point of a settings row: a row that always read "Machines" would
+   have to be opened to find out nothing had changed. */
+.setting__value {
+  flex: none;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+.setting__mark {
+  flex: none;
+  color: var(--text-muted);
+}
+
+.setting__stepper {
+  display: flex;
+  flex: none;
+  gap: 4px;
+}
+
+.setting__step {
+  width: 40px;
+  height: 34px;
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 17px;
+  line-height: 1;
+}
+.setting__step:active {
+  background: var(--bg-active);
+}
+.setting__step:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.setting__step:disabled:active {
+  background: var(--bg-tertiary);
+}
+
+/* A paragraph that is a paragraph rather than a boxed aside. `.note` wears a
+   border because on the pair screen and under the port list it is a distinct
+   block; the ones on the settings screen are the text under a group and belong
+   to it. */
+.note--plain {
+  margin: 8px 2px 0;
+  padding: 0;
+  border: none;
+}
+
+/* ------------------------------------------------------------- machines -- */
+
+.machines {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* One machine, as a card. Cards rather than the session list's full-bleed rows
+   because a machine row is three lines and sometimes five — with a menu open or
+   a name being typed — and at that height a list with no gaps reads as one
+   block of text. */
+.machine {
+  margin-bottom: 10px;
+  padding: 12px 12px 12px 14px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+}
+
+.machine__line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* The name is the target for switching; the dots beside it are the target for
+   everything else. Two hit areas, because one of them is a thing people do
+   twenty times a day and the other is a thing they do once and regret. */
+.machine__choose {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+  min-height: 34px;
+  text-align: left;
+}
+.machine__choose:active {
+  opacity: 0.7;
+}
+
+/* The dot is the connection, and it is filled only for the machine this browser
+   is actually talking to. An outline everywhere else is deliberate: a solid dot
+   on a row whose state nobody has checked is the lie this client exists not to
+   tell — see the note on one socket at a time in `machines.ts`. */
+.machine__dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--status-idle);
+}
+
+.machine__dot--here {
+  background: var(--status-completed);
+  box-shadow: none;
+}
+
+.machine__name {
+  min-width: 0;
+  font-size: 16px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The endpoint. Mono because it is data, and wrapped to two lines rather than
+   truncated: the summary is a host id, a relay and how it is protected, and cut
+   at either end it loses one of the three. This is a screen with room. */
+.machine__where {
+  margin: 6px 0 0 19px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.machine__state {
+  margin: 5px 0 0 19px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+/* Adding a machine is the only action on this screen that is not attached to a
+   row, so it is tinted rather than grey — the same treatment a dev server's Start
+   gets, and for the same reason: it reads as an action without becoming the
+   loudest thing on a page that is mostly somebody's list of computers. */
+.machines__add {
+  width: auto;
+  margin: 4px 0 0;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.machines__add:active {
+  filter: none;
+  background: var(--bg-active);
+}
+
+/* ---------------------------------------------------------------- toast -- */
+
+/* One sentence, said and then not said. The only floating thing in this client.
+
+   Fixed to the frame rather than to the scrolling region, because the row that
+   raised it may be anywhere in a long list — and `pointer-events: none` because
+   it is an aside and must never be the thing a finger lands on. */
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(24px + var(--dock-safe));
+  z-index: 10;
+  max-width: min(92vw, var(--prose));
+  padding: 9px 14px;
+  border-radius: 999px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 13px;
+  text-align: center;
+  transform: translateX(-50%);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.28);
+  pointer-events: none;
+}
+.toast[hidden] {
+  display: none;
 }
 
 /* ------------------------------------------------------------------ wider */
