@@ -113,6 +113,7 @@ function fakeSurface(): Recorder {
       state.sessions = state.sessions.filter((session) => session.id !== id)
     },
     sessionScreen: async () => 'the last screen\nof a shell',
+    sessionScrollback: () => 'the last screen\nof a shell',
     listProjects: () => [
       { path: '/work/api', lastOpenedAt: 3 },
       { path: '/work/web', lastOpenedAt: 2 },
@@ -1043,6 +1044,7 @@ describe('settings the copilot may never write', () => {
 describe('reading a transcript is bounded', () => {
   function longConversation(count: number): TranscriptMessage[] {
     return Array.from({ length: count }, (_unused, index) => ({
+      id: `${index % 2 === 0 ? 'you' : 'agent'}:m${index}`,
       role: index % 2 === 0 ? ('you' as const) : ('agent' as const),
       at: 1000 + index,
       text: `message ${index}`,
@@ -1104,6 +1106,7 @@ describe('reading a transcript is bounded', () => {
     const { control, state } = build()
     state.transcriptSize = 10_000
     state.transcript = Array.from({ length: 40 }, (_unused, index) => ({
+      id: `agent:big${index}`,
       role: 'agent' as const,
       at: index,
       text: 'x'.repeat(50_000),

@@ -81,7 +81,17 @@ function rig(options: {
         return options.diff ? options.diff(path) : `--- a/${path}\n+++ b/${path}\n+one line\n`
       },
       fileModifiedAt: async (path) => {
-        const key = path.slice(ROOT.length + 1)
+        /*
+         * The rig is keyed by the repo-relative path with forward slashes,
+         * because that is how git spells a path in `ChangedFile` and how every
+         * `mtimes` map below is written. `collectFolderDiff` hands this an
+         * absolute path built with `join`, which on Windows comes back with
+         * backslashes — so slicing the root off and looking the remainder up
+         * verbatim missed every key there, silently fell through to the
+         * default `5_000`, and turned "no session could have written this" and
+         * "this file is gone" into two wrong answers with no error anywhere.
+         */
+        const key = path.slice(ROOT.length + 1).split('\\').join('/')
         return key in (options.mtimes ?? {}) ? (options.mtimes?.[key] ?? null) : 5_000
       },
     },

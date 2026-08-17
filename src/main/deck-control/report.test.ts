@@ -200,9 +200,9 @@ describe('reportOnSession', () => {
   it('promotes the last thing the agent said, and nothing the tools said', async () => {
     const built = rig({
       messages: [
-        { role: 'you', at: 1, text: 'do the thing', truncated: false },
-        { role: 'agent', at: 2, text: 'starting', truncated: false },
-        { role: 'agent', at: 3, text: 'done, tests pass', truncated: false },
+        { id: 'you:1', role: 'you', at: 1, text: 'do the thing', truncated: false },
+        { id: 'agent:2', role: 'agent', at: 2, text: 'starting', truncated: false },
+        { id: 'agent:3', role: 'agent', at: 3, text: 'done, tests pass', truncated: false },
       ],
     })
     const report = await reportOnSession(built.surface, view())
@@ -211,7 +211,9 @@ describe('reportOnSession', () => {
 
   it('cuts a very long final message and says it cut it', async () => {
     const built = rig({
-      messages: [{ role: 'agent', at: 2, text: 'z'.repeat(MAX_LAST_MESSAGE_CHARS * 2), truncated: false }],
+      messages: [
+        { id: 'agent:2', role: 'agent', at: 2, text: 'z'.repeat(MAX_LAST_MESSAGE_CHARS * 2), truncated: false },
+      ],
     })
     const report = await reportOnSession(built.surface, view())
     expect(report.lastMessage?.truncated).toBe(true)

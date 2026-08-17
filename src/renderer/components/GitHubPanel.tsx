@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useWhenActive } from '../schedule'
+import { linkProps, openLinkExternally } from '../link'
 import { panelSpec } from '../shell/panels'
 import { PageEmpty, PageNote } from './PageEmpty'
 import './GitHubPanel.css'
@@ -247,16 +248,55 @@ function resolveBridge(): GitHubBridge | null {
 }
 
 /**
- * Hand a URL to the real browser. The main process denies every in-app window
- * and calls `shell.openExternal` instead, so this is the whole mechanism.
+ * Where this panel's links go, and the one exception.
  *
- * The scheme is checked here rather than trusted: these URLs arrive from a
- * network response, and `javascript:` reaching `window.open` is a scripting
- * hole no amount of upstream trust is worth betting on.
+ * Everything you can *read* on GitHub — a repository, a pull request, an issue,
+ * your own profile — opens in a browser tab in this window, through
+ * {@link linkProps}. That is the change Asad asked for on 2026-08-17:
+ * *"currently it's opening a separate window — I want it to use the same window
+ * inside Terminal Deck for browser."* Right-clicking any of them still offers
+ * *Open in System Browser*, so a link that wants the browser you are signed
+ * into can have it.
+ *
+ * The exception is {@link openAuthorizationUrl}, and it is deliberate rather
+ * than left over.
  */
-export function openExternal(url: string): void {
-  if (!/^https?:\/\//i.test(url)) return
-  window.open(url, '_blank', 'noopener,noreferrer')
+
+/**
+ * The two URLs that are **not** pages to read: the device-flow verification
+ * page, and the App-installation page. Both go to the system browser.
+ *
+ * ## Why these keep leaving the app
+ *
+ * Because they are the two places where the *point* is that you are already
+ * signed in to GitHub, and the app's own browser is the one browser on this
+ * machine where you are not:
+ *
+ *  - It is a separate, hardened session partition. `browser-tab.ts` sets it up
+ *    with every permission request refused, dialogs disabled and downloads
+ *    blocked, and it starts with no github.com cookie at all. So a device-flow
+ *    URI opened in-app means signing in to GitHub from scratch, with 2FA,
+ *    inside a panel — in order to complete a sign-in. The flow that was meant
+ *    to replace "connect it yourself" would begin by asking you to connect it
+ *    yourself.
+ *  - Second factors are worse than merely inconvenient there. A security key or
+ *    a platform passkey needs the browser to be a registered WebAuthn client,
+ *    and an Electron guest view is not one, so an account that signs in with a
+ *    passkey cannot complete the flow in-app at all. TOTP would work; "works
+ *    unless you use the strongest second factor" is not a default.
+ *
+ * Nothing in the app *depends* on which browser this is — device flow has no
+ * redirect back, and `github-app.ts` polls for the token — so this is a choice
+ * about where the person is signed in, not a constraint. It is the same choice
+ * every editor with a GitHub sign-in has made, for the same reason.
+ *
+ * The session *would* persist if they signed in (the guest partition is
+ * `persist:`), so the in-app answer gets better after the first time. It is the
+ * first time that matters here, and the first time is the one where somebody is
+ * trying to connect an account and hits a login wall instead.
+ */
+function openAuthorizationUrl(url: string): void {
+  openLinkExternally(url)
 }
 
 const MINUTE = 60_000
@@ -533,7 +573,9 @@ export function AccessNotice({ state }: { state: GitHubAuthState }) {
         <button
           type="button"
           className="gh-asks-link"
-          onClick={() => state.installUrl && openExternal(state.installUrl)}
+          // Out, not in — see `openAuthorizationUrl`. Choosing repositories is
+          // an authorisation page, not a page to read.
+          onClick={() => state.installUrl && openAuthorizationUrl(state.installUrl)}
         >
           Choose repositories on GitHub
         </button>
@@ -601,7 +643,7 @@ export function ConnectionBar({
           <button
             type="button"
             className="gh-conn-login"
-            onClick={() => state.identity && openExternal(state.identity.htmlUrl)}
+            {...linkProps(state.identity?.htmlUrl ?? '')}
             title={`Open ${login} on ${state.host}`}
           >
             {login}
@@ -1001,7 +1043,7 @@ export function RepoRow({
         className="gh-row"
         data-kind="repo"
         data-current={current || undefined}
-        onClick={() => openExternal(repo.url)}
+        {...linkProps(repo.url)}
         title={`${repo.nameWithOwner} — open on GitHub`}
       >
         {/*
@@ -1115,7 +1157,13 @@ export function RepositoryList({
       )}
 
       {installUrl && (
-        <button type="button" className="gh-asks-link" onClick={() => openExternal(installUrl)}>
+        // An authorisation page, so out to the system browser — the same
+        // reasoning as the install link on the sign-in card.
+        <button
+          type="button"
+          className="gh-asks-link"
+          onClick={() => openAuthorizationUrl(installUrl)}
+        >
           Change which repositories this app can see
         </button>
       )}
@@ -1130,7 +1178,7 @@ export function PullRow({ pull, now }: { pull: PullRequest; now: number }) {
       <button
         type="button"
         className="gh-row"
-        onClick={() => openExternal(pull.url)}
+        {...linkProps(pull.url)}
         title={`${pull.title} — open on GitHub`}
       >
         <span className="gh-badge" data-badge={pull.badge}>
@@ -1174,7 +1222,7 @@ export function IssueRow({ issue, now }: { issue: Issue; now: number }) {
       <button
         type="button"
         className="gh-row"
-        onClick={() => openExternal(issue.url)}
+        {...linkProps(issue.url)}
         title={`${issue.title} — open on GitHub`}
       >
         <span className="gh-badge" data-badge={issue.state === 'closed' ? 'closed' : 'open'}>
@@ -1367,7 +1415,11 @@ export function GitHubPanel({ cwd, bridge, now, initialTab = 'pulls' }: GitHubPa
       // "connect it yourself" flow this was meant to replace, not a version of
       // it — and the card keeps an "Open GitHub again" button for the tab that
       // gets closed by accident.
-      openExternal(started.verificationUri)
+      //
+      // The *system* browser, deliberately, while every other link in this
+      // panel now opens in-app: this is the one page where being already signed
+      // in to GitHub is the point. See `openAuthorizationUrl`.
+      openAuthorizationUrl(started.verificationUri)
       setAuth((current) => ({ ...(current ?? bridgeSilentState()), pending: started, failure: null }))
 
       const settled = await api.githubAwaitConnect(asked)
@@ -1502,7 +1554,7 @@ export function GitHubPanel({ cwd, bridge, now, initialTab = 'pulls' }: GitHubPa
           copied={copied}
           busy={authBusy}
           onCopy={clipboard ? () => copyCode(pending.userCode) : undefined}
-          onOpen={() => openExternal(pending.verificationUri)}
+          onOpen={() => openAuthorizationUrl(pending.verificationUri)}
           onCancel={() => void cancelConnect()}
         />
       </section>
@@ -1638,7 +1690,7 @@ export function GitHubPanel({ cwd, bridge, now, initialTab = 'pulls' }: GitHubPa
           <button
             type="button"
             className="gh-repo"
-            onClick={() => openExternal(folderRepo.url)}
+            {...linkProps(folderRepo.url)}
             title={`${folderRepo.nameWithOwner} — open on GitHub (remote: ${folderRepo.remote})`}
           >
             {folder}

@@ -1,0 +1,258 @@
+/* ============================================================================
+   The tour recap — what was shown, kept where it can be read.
+
+   Every value is a token. Space first, then a tint, then a line: there is one
+   line in this sheet, on the quote, and it is the mark that says "this text is
+   somebody else's" rather than a divider between two things.
+   ============================================================================ */
+
+.tr {
+  padding: var(--sp-4) var(--sp-5) var(--sp-6);
+  max-width: var(--page-measure);
+}
+
+.tr-title {
+  margin: 0;
+  font-size: var(--t-title3);
+  letter-spacing: var(--t-title3-ls);
+  font-weight: var(--w-semibold);
+  color: var(--text-primary);
+}
+
+/*
+  Whose record this is.
+
+  The one sentence that makes the quotes below worth anything: they were checked
+  by the app against a real transcript or a real terminal before a box went
+  round them, and the file they came from is outside the folder the copilot can
+  write to. Set quietly, because it is provenance rather than a warning.
+*/
+.tr-provenance {
+  margin: var(--sp-1) 0 var(--sp-3);
+  font-size: var(--t-footnote);
+  color: var(--text-muted);
+}
+
+/* ---------------------------------------------------------------- a tour -- */
+
+/*
+  A card is a fill with a radius, not an outline — the design rule, applied.
+  Cards are separated from each other by space alone.
+*/
+.tr-card {
+  margin-bottom: var(--sp-2);
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+  overflow: hidden;
+}
+
+.tr-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-05);
+  width: 100%;
+  padding: var(--sp-3);
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  color: var(--text-primary);
+}
+
+.tr-head:hover {
+  background: var(--bg-hover);
+}
+
+.tr-question {
+  font-size: var(--t-body);
+  font-weight: var(--w-medium);
+}
+
+.tr-when {
+  font-size: var(--t-footnote);
+  color: var(--text-muted);
+}
+
+.tr-body {
+  padding: 0 var(--sp-3) var(--sp-3);
+}
+
+.tr-headline {
+  margin: 0 0 var(--sp-2);
+  font-size: var(--t-body);
+  line-height: 1.5;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+}
+
+/*
+  The two honest lines: how much was seen, and how much was never shown.
+
+  Given a tint of its own so it cannot be skimmed past. A tour that stopped after
+  four of eleven is not a tour that showed eleven things, and the difference is
+  the whole reason a record is worth keeping.
+*/
+.tr-honest {
+  margin: 0 0 var(--sp-3);
+  padding: var(--sp-2);
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  font-size: var(--t-footnote);
+  color: var(--text-muted);
+}
+
+/* ---------------------------------------------------------------- stops -- */
+
+.tr-stops {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.tr-stop[data-unseen] {
+  opacity: 0.66;
+}
+
+.tr-stop-top {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-15);
+}
+
+.tr-where {
+  font-size: var(--t-footnote);
+  color: var(--text-muted);
+}
+
+.tr-badge {
+  padding: 0 var(--sp-1);
+  border-radius: var(--radius-pill);
+  background: var(--bg-hover);
+  font-size: var(--t-caption);
+  letter-spacing: var(--t-caption-ls);
+  color: var(--text-muted);
+}
+
+.tr-badge[data-why='blocked-on-you'],
+.tr-badge[data-why='failed'],
+.tr-badge[data-why='tool-failing'] {
+  color: var(--status-input);
+}
+
+.tr-badge[data-why='looping'],
+.tr-badge[data-why='expensive'] {
+  color: var(--status-waiting);
+}
+
+.tr-badge[data-why='finished'] {
+  color: var(--status-completed);
+}
+
+/* Never reached, because the tour was stopped before it got here. */
+.tr-unseen {
+  font-size: var(--t-caption);
+  color: var(--text-muted);
+}
+
+.tr-note {
+  margin: var(--sp-05) 0 0;
+  font-size: var(--t-body);
+  line-height: 1.45;
+  color: var(--text-primary);
+}
+
+/*
+  The quote, in full and inline.
+
+  `<pre>` because terminal output is column-significant — a stack trace or a
+  diffstat re-wrapped to prose measure is not the thing that was on screen — and
+  it scrolls sideways inside its own box rather than making the page do it.
+
+  Rendered as a text node, so no Markdown, no HTML, no link autodetection: this
+  is another agent's output under this app's chrome, which
+  `COPILOT-CAPABILITIES.md` §3.2 item 8 classes as evidence from an untrusted
+  source. The rule on screen: it must never arrive looking like the app said it.
+*/
+.tr-quote {
+  margin: var(--sp-15) 0 0;
+  padding: var(--sp-2);
+  border-left: 2px solid var(--border-strong);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: var(--bg-tertiary);
+  font-family: var(--font-mono);
+  font-size: var(--t-caption);
+  line-height: 1.5;
+  color: var(--text-secondary);
+  white-space: pre;
+  overflow-x: auto;
+}
+
+.tr-degraded {
+  margin: var(--sp-1) 0 0;
+  font-size: var(--t-caption);
+  color: var(--text-muted);
+}
+
+/*
+  Take me there: a link rather than a button shape.
+
+  It navigates and points; it does not drive. Giving it a button's weight would
+  put it in the same family as the transport, which is the control that moves
+  the screen on its own — and this is the opposite of that, a thing the person
+  asked for.
+*/
+.tr-goto {
+  margin-top: var(--sp-1);
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: var(--t-footnote);
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.tr-goto:hover {
+  text-decoration: underline;
+}
+
+/* -------------------------------------------------------------- dropped -- */
+
+.tr-dropped {
+  margin-top: var(--sp-4);
+  padding-top: var(--sp-3);
+}
+
+.tr-dropped h3 {
+  margin: 0 0 var(--sp-15);
+  font-size: var(--t-footnote);
+  font-weight: var(--w-medium);
+  color: var(--text-muted);
+}
+
+.tr-dropped ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.tr-dropped li {
+  display: flex;
+  flex-direction: column;
+  font-size: var(--t-footnote);
+}
+
+.tr-drop-title {
+  color: var(--text-secondary);
+}
+
+.tr-drop-why {
+  color: var(--text-muted);
+}

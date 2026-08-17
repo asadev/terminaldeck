@@ -175,26 +175,59 @@ const api = {
   setDeviceFolders: (deviceId: string, folders: string[]): Promise<unknown> =>
     ipcRenderer.invoke('remote:folders:set', deviceId, folders),
   /**
-   * Which devices may reach the copilot, and how far.
+   * The copilot connections: who holds one, what it may do, how one is made and
+   * how one is ended.
    *
-   * The same shape as the folder channels above — read the whole list, write one
-   * device, answer with the whole list again — and for a sharper version of the
-   * same reason. `CopilotGrants.set` genuinely does not store everything it is
-   * handed: `alter` is dropped whatever arrives, and a device past the ceiling
-   * is refused outright. A panel that drew its own ask rather than the answer
-   * would therefore show a permission that is not on disk, which is the one
-   * mistake a permission screen must not make.
+   * Four channels rather than the folder pair, because copilot access is not a
+   * property of a paired device that a checkbox toggles. It is a **separate
+   * connection** — its own six-digit code, its own credential, its own record —
+   * and `copilotConnectCode` and `disconnectDeviceCopilot` are the two acts that
+   * create and destroy one. `remote/copilot-link.ts` carries the argument,
+   * including the one it superseded.
+   *
+   * The shape is otherwise the folder channels' and for the same reason: read
+   * the whole list, write one device, answer with the whole list again. A panel
+   * that drew its own ask rather than the answer would show a permission that is
+   * not on disk, which is the one mistake a permission screen must not make —
+   * and `CopilotLinks.set` genuinely does not store everything it is handed. It
+   * **refuses to create a record at all** for a device that has not connected,
+   * which is what keeps this channel from being a second door onto copilot
+   * access.
    *
    * `tiers` crosses as a plain object and is **not** narrowed here. The rule
    * lives in the store, because that is what a hand-edited file is read through
    * too, and a copy of a permission rule in the preload would be the copy that
-   * gets it wrong. A device with nothing granted simply does not appear in the
-   * reply — that is the default state, and inventing a row for it would make
-   * "never granted" and "unticked to nothing" two spellings of one fact.
+   * gets it wrong.
+   *
+   * `copilotConnectCode` returns six digits that live sixty seconds, are usable
+   * once, and die after five wrong guesses. It reaches page code because a
+   * person has to read it off this screen and type it into a device — that is
+   * the whole ceremony, and there is no version of it where the code stays in
+   * the main process.
    */
   listDeviceCopilot: (): Promise<unknown> => ipcRenderer.invoke('remote:copilot'),
   setDeviceCopilot: (deviceId: string, tiers: Record<string, boolean>): Promise<unknown> =>
     ipcRenderer.invoke('remote:copilot:set', deviceId, tiers),
+  copilotConnectCode: (tiers: Record<string, boolean>): Promise<unknown> =>
+    ipcRenderer.invoke('remote:copilot:code', tiers),
+  disconnectDeviceCopilot: (deviceId: string): Promise<unknown> =>
+    ipcRenderer.invoke('remote:copilot:disconnect', deviceId),
+  /**
+   * A device redeemed a connect code, and the list changed off this machine.
+   *
+   * The one copilot state change that does not come back as the answer to
+   * something the panel asked for: somebody reads a code out and it is typed
+   * into a phone in the next room. An event rather than a poll — the standing
+   * preference in this workspace, and here it is also the only honest option,
+   * because the panel would otherwise keep showing a live code until it expired
+   * and then fall back to a Connect button, having never noticed the connection
+   * it had just authorised.
+   */
+  onDeviceCopilotChanged: (cb: (links: unknown) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, links: unknown) => cb(links)
+    ipcRenderer.on('remote:copilot:changed', handler)
+    return () => ipcRenderer.off('remote:copilot:changed', handler)
+  },
   onRemoteConnections: (cb: (connections: unknown) => void): (() => void) => {
     const handler = (_e: IpcRendererEvent, connections: unknown) => cb(connections)
     ipcRenderer.on('remote:connections', handler)
@@ -650,6 +683,40 @@ const api = {
     return () => ipcRenderer.off('deck-control:action', handler)
   },
 
+  /* --------------------------------------------------------- driving -- */
+
+  /**
+   * A tour, arriving already checked.
+   *
+   * The plan on this channel has been through `deck-control/tour.ts`: every
+   * `why` re-evaluated against the app's own data, every quote found in a real
+   * transcript or a real terminal, every stop that failed either dropped and the
+   * drop listed in the record beside it. So the window's job is to *play* it —
+   * it does not get to decide what is important, and it must not, because a
+   * second judgement in here is how the tour and the overnight report come to
+   * disagree about the same night.
+   *
+   * `reportTour` is the way back, and the split of authority is worth stating
+   * because it is easy to get backwards. The window says **what happened** —
+   * which stops were reached, for how long, which could not be boxed. It does
+   * not say what was quoted; the main process writes its own validated text over
+   * whatever arrives, because the record is an audit artefact and a renderer bug
+   * that shuffled the quotes would put unchecked text in it.
+   *
+   * `tours` reads the records back for the recap card. They live in
+   * `<userData>/copilot-log/tours/`, outside the folder the copilot can write
+   * to, for the reason `COPILOT-CAPABILITIES.md` §7 gives about the action log:
+   * the audited party must not be able to author the record of what it did.
+   */
+  onTour: (cb: (tour: unknown) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, tour: unknown) => cb(tour)
+    ipcRenderer.on('deck-control:tour', handler)
+    return () => ipcRenderer.off('deck-control:tour', handler)
+  },
+  reportTour: (report: unknown): Promise<unknown> =>
+    ipcRenderer.invoke('deck-control:tour-report', report),
+  tours: (count?: number): Promise<unknown> => ipcRenderer.invoke('deck-control:tours', count),
+
   /* -------------------------------------------------------- routines -- */
 
   /**
@@ -753,6 +820,64 @@ const api = {
     const handler = (_e: IpcRendererEvent, id: string, element: unknown) => cb(id, element)
     ipcRenderer.on('browser:element', handler)
     return () => ipcRenderer.off('browser:element', handler)
+  },
+
+  /* ------------------------------------------------------------ links -- */
+
+  /**
+   * A link that should become a browser tab in this window.
+   *
+   * The main process decides — see `main/link-open.ts` — because the request
+   * arrives there: `window.open` from the app's own UI, and `target="_blank"`
+   * inside a page, both surface as a window-open request in the main process
+   * and both are denied a window and routed here instead. The channel name is
+   * held against this subscription by `main/link-open.channels.test.ts`; a
+   * `send` to a channel nobody listens on is a silent no-op, which is exactly
+   * how the browser's progress bar was dead for a week.
+   */
+  onOpenLinkTab: (cb: (url: string) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, url: string) => cb(url)
+    ipcRenderer.on('link:open-tab', handler)
+    return () => ipcRenderer.off('link:open-tab', handler)
+  },
+  /** The explicit way out: this URL, in the browser the person uses. */
+  openLinkExternally: (url: string): Promise<boolean> => ipcRenderer.invoke('link:system', url),
+  /** Right-click on anything that opens a link — a native menu at the pointer. */
+  showLinkMenu: (url: string): Promise<boolean> => ipcRenderer.invoke('link:menu', url),
+
+  /* ------------------------------------------------- browser driving -- */
+  /*
+   * The copilot driving a page, and the person taking it back.
+   *
+   * Four channels and no more, because the drive itself lives entirely in the
+   * main process — the renderer never sends a click, never resolves a selector
+   * and never sees a page's contents. What it does is open the tab when asked,
+   * draw the banner, and carry one answer back.
+   *
+   * `browserDriveOpened` is a `send`, not an `invoke`, because the request came
+   * *from* main: the reply is a message on an `ipcMain.on` channel keyed by the
+   * request id, not the return value of anything the renderer called.
+   */
+  onBrowserDriveOpen: (cb: (request: unknown) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, request: unknown) => cb(request)
+    ipcRenderer.on('browser:drive-open', handler)
+    return () => ipcRenderer.off('browser:drive-open', handler)
+  },
+  browserDriveOpened: (id: string, tabId: string | null): void => {
+    ipcRenderer.send('browser:drive-opened', id, tabId)
+  },
+  browserDriveStatus: (): Promise<unknown> => ipcRenderer.invoke('browser:drive-status'),
+  onBrowserDriveState: (cb: (status: unknown) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, status: unknown) => cb(status)
+    ipcRenderer.on('browser:drive-state', handler)
+    return () => ipcRenderer.off('browser:drive-state', handler)
+  },
+  // True is "done, carry on"; false is "stop, I'll take it from here", which is
+  // a refusal to the agent rather than a resume. Deliberately not bound to a
+  // key: a handover is somebody typing a password, and a keystroke is precisely
+  // what gets hit by accident in the middle of one.
+  browserDriveResume: (carryOn: boolean): void => {
+    ipcRenderer.send('browser:drive-resume', carryOn)
   },
 
   /* --------------------------------------------------- chrome import -- */

@@ -36,87 +36,79 @@
   margin-left: auto;
 }
 
-/* --------------------------------------------------------------- the page -- */
+/* ------------------------------------------------------------- the window -- */
 
+/*
+  The copilot's window, laid out exactly like a session's.
+
+  `position: absolute; inset: 0` is not a flourish — it is what `.terminal-host`
+  does, and it is what lets this stay *mounted while hidden* the way every other
+  session's terminal does. A copilot that remounted its terminal every time you
+  clicked another pill would redraw from the main process's scrollback each time,
+  and the login prompt a person is halfway through would scroll past.
+
+  There is no padding here. The page this replaces had `--sp-4 --sp-5`, which is
+  right for a page and wrong for a window: a session's terminal is flush with the
+  pane on all four sides, and the copilot's is a session's.
+*/
 .copilot-page {
+  position: absolute;
+  inset: 0;
   display: flex;
   flex-direction: column;
-  gap: var(--sp-3);
-  height: 100%;
   min-height: 0;
-  padding: var(--sp-4) var(--sp-5) var(--sp-4);
+}
+
+.copilot-page[data-visible='false'] {
+  display: none;
 }
 
 /*
-  The page's own control row.
+  Everything the window has to say that is not the conversation: the sign-in
+  explanation, a failed start, the turn that opened it, the tours, the sessions
+  it started.
 
-  It deliberately does not repeat the word "Copilot": the window's toolbar,
-  three centimetres above, is already headed with it and with the page's blurb.
-  What is here is what the toolbar cannot know — whether it is running, who it
-  is signed in as, which of its two views you are looking at, and how to stop it.
+  Bounded and scrolling, because two of those are as long as they happen to be
+  and the pane below is what somebody came here to use. `:empty` is what makes
+  the ordinary case cost nothing at all — with a running, signed-in copilot and
+  no tour behind it, this element has no children and is not in the layout, so
+  the terminal fills the window edge to edge.
 */
-.cp-bar {
+/*
+  `scroll-fade` in the class list, like every other scrolling region in this
+  window: a run of content cut dead at a hard edge reads as content that failed
+  to load, and the mask is what says "there is more of this" without spending a
+  rule on it. Measured here rather than assumed — the first build of this cut a
+  tour card through the middle of a quoted line.
+*/
+.cp-strip {
+  flex-shrink: 0;
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  flex-direction: column;
   gap: var(--sp-3);
-  flex-shrink: 0;
+  max-height: 38%;
+  overflow-y: auto;
+  padding: var(--sp-3) var(--sp-4);
 }
 
-.cp-identity {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  min-width: 0;
+.cp-strip:empty {
+  display: none;
 }
 
-.cp-state {
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  font-size: var(--t-callout);
-  color: var(--text-secondary);
-}
+/*
+  Stop, in the copilot's own toolbar.
 
-.cp-controls {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  flex-shrink: 0;
-}
+  The one control this window has that a session's does not, and it is there
+  because of what the copilot does not have: a row in the rail, and therefore the
+  ✕ that ends a session. It is a **singleton** — one copilot, no ＋ that makes a
+  second — so the rail deliberately gives it neither, and a window whose subject
+  cannot be switched off is a fault. Stopping is restartable by construction: the
+  pinned row starts it again, and Settings → Copilot has the same pair.
 
-/* The same segmented control the session bar uses for Terminal/Chat: a tinted
-   trough with the selected segment lifted onto the page's own surface. */
-.cp-switch {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-05);
-  padding: var(--sp-05);
-  border-radius: var(--radius-sm);
-  background: var(--fill-quaternary);
-}
-
-.cp-switch-btn {
-  height: var(--control-h-sm);
-  padding: 0 var(--sp-3);
-  border-radius: var(--radius-sm);
-  color: var(--text-secondary);
-  font-size: var(--t-callout);
-  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
-}
-
-.cp-switch-btn:hover {
-  color: var(--text-primary);
-}
-
-.cp-switch-btn[aria-pressed='true'] {
-  background: var(--bg-primary);
-  color: var(--text-primary);
-  font-weight: var(--w-medium);
-  box-shadow: var(--shadow-sm);
-}
-
+  Sized off `--control-h-sm`, which is what the mode switch beside it is drawn
+  at, so the two read as one row of controls rather than a button parked next to
+  a segmented control.
+*/
 .cp-btn {
   height: var(--control-h-sm);
   padding: 0 var(--sp-3);
@@ -232,13 +224,19 @@
 
 /* ------------------------------------------------------------- the panes -- */
 
+/*
+  The pane itself, which is now the window rather than a card on a page.
+
+  No radius and no inset: `.terminal-host` paints `--terminal-bg` right out to
+  its own edges, and a rounded card here would put four corners of app
+  background over a terminal that no other session has corners on.
+*/
 .cp-body {
   position: relative;
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  border-radius: var(--radius-lg);
   background: var(--terminal-bg);
   overflow: hidden;
 }

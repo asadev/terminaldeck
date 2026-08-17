@@ -22,6 +22,7 @@ import {
 import { composeAgentContext, parseCapture, type ElementCapture } from './selector'
 import { disposeIsolatedSession, isolatedSession } from './browser-isolation'
 import { onWebContentsDestroyed } from './web-contents-teardown'
+import { openGuestLink, showLinkMenu } from './link-open'
 
 /**
  * The embedded browser tab: a real Chromium view, hosted inside the app window,
@@ -573,6 +574,31 @@ export function destroyAllBrowserTabs(): void {
   for (const tab of [...tabs.values()]) destroyTab(tab)
 }
 
+/**
+ * The live contents of one tab, by the id `browser:create` handed back.
+ *
+ * The one way anything outside this module reaches a guest `WebContents`, and
+ * it is deliberately the *only* way — `browser-driver.ts` takes a
+ * `contentsFor(tabId)` function rather than an Electron object precisely so
+ * that the set of pages a drive can ever touch is "tabs this module opened",
+ * structurally, rather than "tabs somebody remembered to filter for".
+ *
+ * The app's own renderer is not in this map and cannot be put in it: entries
+ * are only ever created by `browser:create`, which builds a fresh
+ * `WebContentsView` in the guest partition. There is no code path from a
+ * renderer's `WebContents` to a value in `tabs`, and adding one would mean
+ * writing a function whose only purpose is to do that. `browser-cdp.test.ts`
+ * pins the absence of the two calls — `getAllWebContents` and
+ * `fromWebContents` — that would make one possible.
+ *
+ * Null covers three cases that are the same to a caller: no such id, a tab
+ * whose view is gone, and a tab whose renderer took it down with a reload.
+ */
+export function browserTabContents(id: unknown): WebContents | null {
+  const tab = typeof id === 'string' ? tabs.get(id) : undefined
+  return tab ? liveContents(tab) : null
+}
+
 function destroyTabsFor(host: WebContents): void {
   for (const tab of [...tabs.values()]) {
     if (tab.host === host) destroyTab(tab)
@@ -738,10 +764,50 @@ function wireGuestEvents(tab: BrowserTab): void {
     refuse(url)
   })
 
-  // target="_blank" and window.open never get a window of their own here.
+  /*
+   * `target="_blank"` and `window.open`: a tab of ours, not a window of
+   * Chromium's.
+   *
+   * The deny stays and is not the part that was wrong. A guest view must never
+   * be handed a bare Electron window — it would have no toolbar, no address
+   * bar, and none of the `will-navigate` / `will-frame-navigate` /
+   * `will-redirect` guards above, so a page could open one and then walk it
+   * anywhere. What was wrong was stopping there: the answer used to be
+   * *"Blocked a pop-up to X."* written over the page, which is a browser
+   * refusing to follow an ordinary link.
+   *
+   * So the destination becomes a **tab in the workspace strip** instead — a
+   * window of the app's, created the same way the globe creates one, with the
+   * same chrome and the same gate. `openGuestLink` pushes it at the renderer
+   * that owns this view; `App.tsx` opens it and keeps it in the strip.
+   *
+   * Anything that is not http(s) is still refused outright, and is deliberately
+   * NOT handed to `shell.openExternal` the way the app shell's own links are.
+   * A website that could say `window.open('file:///Users/…')` and have the main
+   * process give it to Launch Services would step over all three navigation
+   * guards at once — see the asymmetry note in `link-open.ts`.
+   */
   wc.setWindowOpenHandler(({ url }) => {
-    fail(tab, `Blocked a pop-up to ${shortLabel(url)}.`)
+    if (openGuestLink(tab.host, url) === 'refused') {
+      fail(tab, `Blocked a pop-up to ${shortLabel(url) || 'another scheme'} — only http and https open here.`)
+    }
     return { action: 'deny' }
+  })
+
+  /*
+   * The way back out to the real browser, where a browser puts it.
+   *
+   * In-app is the default now, and some links want the browser the person is
+   * already signed into. A native menu rather than an HTML one because this
+   * view composites above the entire renderer — an HTML menu would be painted
+   * behind the website and could not be seen at all, which is the whole subject
+   * of `overlay-watch.ts`.
+   *
+   * `linkURL` is empty unless the click was on a link, in which case the page's
+   * own address is the useful thing to offer.
+   */
+  wc.on('context-menu', (_event, params) => {
+    showLinkMenu(tab.window, params.linkURL || (liveContents(tab)?.getURL() ?? ''))
   })
 
   // The backdrop follows the destination, one event before it paints. A

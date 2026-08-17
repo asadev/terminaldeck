@@ -359,6 +359,26 @@ export interface ToolContext {
    * wrong.
    */
   caller: Caller
+  /**
+   * Is there a person who could see what this call does?
+   *
+   * `control.ts` has held this since routines landed and used it for one thing:
+   * refusing an `alter` call from an unwatched run rather than putting a dialog
+   * on a screen nobody is at. That covered every tool where "nobody is watching"
+   * matters *because a confirmation is needed*.
+   *
+   * `tour.play` is the first where it matters for a different reason. Driving is
+   * `act` — nothing it does persists, so a confirmation would be the
+   * confirmation fatigue this file refuses — and yet a tour that plays on a
+   * locked screen at 03:00 is the whole feature happening to nobody, and then
+   * being over. The gate it needs is not "ask a person" but "there has to be
+   * one", and that is this field.
+   *
+   * Handed down rather than kept to the dispatcher for the same reason
+   * {@link ToolContext.caller} is: the tier check stays in one place, and a tool
+   * whose *effect* depends on who is there narrows itself.
+   */
+  attended: boolean
   /** Did this run's copilot start that session? Drives the tier escalation. */
   startedByCopilot(sessionId: string): boolean
   /** Remember a session the copilot started, so later calls on it stay `act`. */
@@ -406,6 +426,30 @@ export interface ToolSpec {
    * call will succeed.
    */
   precheck?(args: Record<string, unknown>, context: ToolContext): void
+  /**
+   * Replace the arguments before they are written down.
+   *
+   * `scrubArgs` in `action-log.ts` redacts by **key name** against a pattern
+   * matching `token`, `secret`, `password`, `cookie` and their friends. That is
+   * exactly right for a tool whose secrets are *named* like secrets, and it is
+   * exactly wrong for a form field: `browser.step {verb: 'type', value: '…'}`
+   * has a key called `value`, which matches nothing, so the string a person
+   * typed on a website would land in `actions.jsonl` verbatim.
+   *
+   * Blanket-redacting `value` globally is not the fix — it is far too common a
+   * key, and a log that hides every value is a log nobody can read. So the tool
+   * that knows its argument is page text says so, here, and everything else is
+   * unaffected.
+   *
+   * The contrast with `sessions.send` is the point and is deliberate: that one
+   * logs its `text` on purpose, because a prompt sent to an agent is a thing a
+   * person needs to be able to read back. A password is not.
+   *
+   * Applied immediately before `scrubArgs`, never instead of it, so a tool that
+   * implements this badly still gets the key-name pass. Returning the arguments
+   * unchanged is the same as not implementing it.
+   */
+  redactArgs?(args: Record<string, unknown>): Record<string, unknown>
   /** One sentence naming what will happen. Shown in the dialog, kept in the log. */
   summary(args: Record<string, unknown>, context: ToolContext): string
   run(args: Record<string, unknown>, context: ToolContext): Promise<ToolOutput>
@@ -479,7 +523,16 @@ export { BadArgument }
  * `waiting` means an empty prompt and not "waiting for you", which is a fact
  * about this codebase that no model can be expected to hold.
  */
-function viewOf(context: ToolContext, meta: ReturnType<DeckSurface['listSessions']>[number]): SessionView {
+/*
+ * Exported, since `tour-tool.ts` needs the same view.
+ *
+ * A tour's plan is validated against the fleet, and the fleet has to be the one
+ * the person is looking at — same attention, same ordering, same derivation. A
+ * second copy of this in the tour's own file would be a second answer to "which
+ * of these needs a person", which is exactly the duplication `importance.ts` was
+ * written one level up to prevent.
+ */
+export function viewOf(context: ToolContext, meta: ReturnType<DeckSurface['listSessions']>[number]): SessionView {
   const live = context.surface.sessionStatus(meta.id)
   const status = statusOf(meta.exitCode, live?.status)
   const statusSince = live?.at ?? meta.createdAt

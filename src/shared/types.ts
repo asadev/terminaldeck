@@ -268,6 +268,20 @@ export interface DeckApi {
    */
   setHiddenMenuCommands(commands: string[]): void
 
+  /**
+   * Links.
+   *
+   * A link opens in a tab of this app's own browser by default — it is the main
+   * process that decides, in `main/link-open.ts`, because both kinds of request
+   * (`window.open` from this UI, `target="_blank"` inside a page) arrive there
+   * as a window-open request. {@link onOpenLinkTab} is how the decision comes
+   * back; the other two are the way out, for the person who wants this
+   * particular link in the browser they are already signed into.
+   */
+  onOpenLinkTab(cb: (url: string) => void): () => void
+  openLinkExternally(url: string): Promise<boolean>
+  showLinkMenu(url: string): Promise<boolean>
+
   // Feature modules. These cross the bridge as `unknown` and each consumer
   // narrows to its own module's types — the main-process modules own those
   // definitions, and duplicating them here would let the two drift apart.

@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { WorkspaceTabStrip } from './browser/WorkspaceTabStrip'
 import type { ProviderId, SessionStatus } from '@shared/types'
-import { StoreProvider, useStore } from './state/store'
+import { StoreProvider, useStore, type Session } from './state/store'
 import { TerminalView } from './components/TerminalView'
 import { EmptyState } from './components/EmptyState'
 import { SettingsWindow } from './settings/SettingsWindow'
@@ -12,6 +12,7 @@ import { JoinRemoteDialog } from './components/JoinRemoteDialog'
 import { SessionInspector } from './components/SessionInspector'
 import { AlertsWindow, withInsights } from './components/AlertsPanel'
 import { useProjectAlerts } from './alerts-feed'
+import { openLinkExternally } from './link'
 import { markSeen, readSeen, unreadCount, writeSeen, type SeenAlerts } from './alerts-unread'
 import {
   CloseSessionConfirm,
@@ -46,6 +47,10 @@ import {
   splitFocused,
 } from './layout/panes'
 import { CopilotConsent } from './copilot/CopilotConsent'
+import { CopilotStop } from './copilot/CopilotStop'
+import { CopilotView } from './copilot/CopilotView'
+import { defaultPane } from './copilot/copilot-model'
+import { COPILOT_NAME } from './copilot/identity'
 import { useConsent } from './copilot/useConsent'
 import { useCopilot } from './copilot/useCopilot'
 import { partitionByOrigin, startedByCopilot, turnOf } from './copilot/session-origin'
@@ -58,11 +63,22 @@ import { SessionControls } from './shell/SessionControls'
 import { PanelView } from './shell/PanelView'
 import { useSidebar } from './shell/useSidebar'
 import { PANELS, panelSpec, type PanelId } from './shell/panels'
+import { registerNavigator } from './copilot/driving/navigator'
 import { FeaturesProvider, useFeatures } from './features/FeaturesProvider'
 import { useControlOffer } from './features/offer'
 import { availableFeatures } from './features/state'
 import { nextActiveId, sessionLabel, type WorkspaceTab } from './shell/workspace-tabs'
-import { keepNewWindowInStrip, stripIsPresent } from './browser/workspace-strip'
+import {
+  AUTO_SELECTION,
+  resolveActiveTab,
+  showTabSelection,
+  type TabSelection,
+} from './shell/tab-selection'
+import {
+  keepNewWindowInStrip,
+  removeWindowFromStrip,
+  stripIsPresent,
+} from './browser/workspace-strip'
 import { ErrorBoundary } from './shell/ErrorBoundary'
 import { Tooltips } from './shell/Tooltips'
 import { UnreadTracker } from './unread'
@@ -141,35 +157,50 @@ function Workspace() {
   /**
    * The window's one connection to the copilot, held here because three places
    * have to agree about it and must not each ask separately: the pinned row in
-   * the rail, the page it opens, and the filter below that keeps the copilot's
+   * the rail, the window it opens, and the split below that keeps the copilot's
    * *own* session out of the ordinary session list.
    *
    * It starts nothing. `useCopilot` only reads; the copilot is spawned when its
-   * page is opened, which is the moment somebody has said they want to talk to
+   * window is opened, which is the moment somebody has said they want to talk to
    * it — an agent CLI bills for what it does, and a standing charge for opening
    * the app is not something anybody agreed to.
    */
   const copilot = useCopilot()
 
   /**
-   * Everything open, minus the copilot itself.
+   * The fleet, and the copilot, told apart — because they are not the same list
+   * even though they are the same kind of thing.
    *
-   * The copilot **is** a session — that is the whole design, and it is what
-   * makes the transcript viewer, chat mode, the cost pane and the alert watcher
-   * work on it with no changes at all. The cost of that is right here: it is in
-   * `session:list` like any other, so a window that drew what it was handed
-   * would put the copilot's folder in the sidebar as a project, its session as a
-   * row inside it, and its terminal in the workspace — all while the pinned
-   * entry at the top of the rail claims to be the one place the copilot lives.
-   * Two things on screen contradicting each other, and one of them a second
-   * xterm bound to a pty another view is already resizing.
+   * The copilot **is** a session. That is the whole design, and it is what makes
+   * the transcript viewer, chat mode, the cost pane, the alert watcher and —
+   * since 2026-08-17 — the tab strip, the account chip and the model / effort /
+   * fast-mode / connectors cluster work on it with no changes at all. Asad:
+   * *"nothing should be less than that. And it can stay as a window pill with
+   * the other windows."*
    *
-   * So it comes out here, once, by id and by folder. By **both**, because the
-   * two answers arrive at different moments: the id identifies the running
-   * process, and the folder catches the row for a copilot session that has
-   * exited but is still in the list, and catches the project heading its cwd
-   * would otherwise create. Neither is guessed — both come from
-   * `copilot:state`, which is the module that decides where the copilot lives.
+   * What it is not is one of **your project's sessions**. It lives in a folder
+   * of its own that is not a project you work in, it has a pinned row of its own
+   * at the top of the rail, and it is not part of the fleet that the dashboard
+   * counts, the swarm grid tiles, the alert scanner reads or the auto-titler
+   * renames. Drawn into those it would put its home folder in the sidebar as a
+   * project with itself as a row inside it, three centimetres under the pinned
+   * entry that claims to be the one place it lives.
+   *
+   * So there are two lists, and the difference between them is exactly one
+   * session:
+   *
+   *  - `sessions` — the fleet. Everything that is not the copilot. Every count,
+   *    every scan, every grid and the rail's project runs read this.
+   *  - `windowSessions` — the fleet plus the copilot. Everything that *draws a
+   *    session as a window* reads this: the tab list, the heading, the control
+   *    cluster, the terminals, the panes.
+   *
+   * The split is by id and by folder. By **both**, because the two answers
+   * arrive at different moments: the id identifies the running process, and the
+   * folder catches the row for a copilot session that has exited but is still in
+   * the list, and catches the project heading its cwd would otherwise create.
+   * Neither is guessed — both come from `copilot:state`, which is the module
+   * that decides where the copilot lives.
    *
    * Until that answer lands, nothing is filtered and the row is briefly visible.
    * That is the honest trade: the alternative is holding the whole session list
@@ -184,6 +215,29 @@ function Workspace() {
         (session) => session.id !== copilotSessionId && session.projectPath !== copilotRoot,
       ),
     [storedSessions, copilotSessionId, copilotRoot],
+  )
+  /**
+   * The copilot's own `SessionMeta`, when it is running and this window has seen
+   * it arrive.
+   *
+   * Both halves are needed and neither is enough. `copilot:state` knows the id
+   * of the pty; the store knows the account it was spawned under, its title, its
+   * status and its provider — the facts the bar, the chip and the control
+   * cluster are made of. Null while the copilot is stopped, and null for the
+   * moment between `ensureCopilot` returning and `session:created` landing here,
+   * which is what `copilotPending` below covers.
+   */
+  const copilotSession = useMemo(
+    () =>
+      copilotSessionId === null
+        ? null
+        : storedSessions.find((session) => session.id === copilotSessionId) ?? null,
+    [storedSessions, copilotSessionId],
+  )
+  /** The fleet plus the copilot. See the note above for which list is which. */
+  const windowSessions = useMemo(
+    () => (copilotSession ? [...sessions, copilotSession] : sessions),
+    [sessions, copilotSession],
   )
   const projects = useMemo(
     () => storedProjects.filter((project) => project.path !== copilotRoot),
@@ -206,7 +260,40 @@ function Workspace() {
   const sidebar = useSidebar()
   const { panel, selectPanel, clearPanel } = sidebar
   const [extraTabs, setExtraTabs] = useState<WorkspaceTab[]>([])
-  const [activeTabId, setActiveTabId] = useState<string | null>(null)
+  /** Makes a page's id unique when two are opened in the same millisecond. */
+  const tabSeq = useRef(0)
+  /**
+   * What the window is showing — and, since 2026-08-17, whether it is showing
+   * anything on purpose.
+   *
+   * This was `string | null`, and the `null` was carrying two different answers:
+   * "nobody has chosen yet", which is a launch and should show the first session
+   * you have open, and "the person just took the last tab off the bar", which
+   * should leave an empty pane. Resolving both to `tabs[0]` is why the last tab
+   * in the strip could not be closed — it came straight back as a transient tab,
+   * because `shownTabs` always draws whatever is active. `shell/tab-selection.ts`
+   * carries the full account and owns the resolution.
+   */
+  const [selection, setSelection] = useState<TabSelection>(AUTO_SELECTION)
+  /**
+   * The copilot's window has been asked for and its session has not arrived yet.
+   *
+   * Spawning it is a `sandbox-exec` proof and a CLI launch — seconds, not
+   * frames — and its tab is derived from the running session, so without this
+   * the pinned row would be a button that did nothing visible for that whole
+   * time. While it is set, the window draws the copilot's own starting state,
+   * and the effect below hands it over to a real tab the moment there is one.
+   */
+  const [copilotPending, setCopilotPending] = useState(false)
+  /**
+   * The action-log row the copilot's window should open on, when something
+   * asked "why does this session exist".
+   *
+   * The same mechanism `panelFocus` is for the views, kept separate for the same
+   * reason it is separate from the panel itself: a plain open must not land you
+   * where a link once sent you.
+   */
+  const [copilotTurn, setCopilotTurn] = useState<string | null>(null)
   const [swarm, setSwarm] = useState(false)
   const [sessionView, setSessionView] = useState<Record<string, SessionViewMode>>({})
   /**
@@ -317,41 +404,51 @@ function Workspace() {
     // minutes later by a timeout nobody could have prevented.
     consent.question !== null
 
+  /**
+   * One session, as a window.
+   *
+   * Extracted so the copilot goes through it too. It is a session, so every
+   * fact a tab carries about a session is true of it — the status dot, the
+   * account it runs as, the folder it was spawned in — and a second spelling of
+   * this object for the copilot would be the place those started to differ.
+   */
+  const windowTab = (session: Session): WorkspaceTab => ({
+    id: session.id,
+    kind: 'session' as const,
+    label: session.title,
+    status: session.status,
+    projectPath: session.projectPath,
+    // The account this session actually runs as, filled in by the main
+    // process at spawn. Absent for a shell and for any agent whose login this
+    // app cannot isolate — see `SessionMeta.profileId`. The sidebar shows it
+    // only when there is more than one in play; two sessions in one folder
+    // under two accounts have to be tellable apart, and one account on every
+    // row is noise.
+    // `provider` goes with it so the account chip can draw the agent's mark
+    // without opening the account list — see `WorkspaceTab.account`.
+    ...(session.profileId && session.profileName
+      ? {
+          account: {
+            id: session.profileId,
+            name: session.profileName,
+            provider: session.provider,
+          },
+        }
+      : {}),
+    // Who wanted this session, and which copilot turn started it. Carried
+    // straight off `SessionMeta` — the main process writes both at spawn —
+    // so the rail can group what the copilot started under its own heading
+    // and link each row back to the turn that explains it. Conditional, so
+    // "no origin" crosses into the tab as an absent key rather than as
+    // `undefined`, which is the same distinction `PtyManager` preserves.
+    ...(session.origin ? { origin: session.origin } : {}),
+    ...(session.originRunId ? { originRunId: session.originRunId } : {}),
+    closable: true,
+  })
+
   /** Sessions first, then anything else the user opened, in one list. */
   const tabs: WorkspaceTab[] = [
-    ...sessions.map((session) => ({
-      id: session.id,
-      kind: 'session' as const,
-      label: session.title,
-      status: session.status,
-      projectPath: session.projectPath,
-      // The account this session actually runs as, filled in by the main
-      // process at spawn. Absent for a shell and for any agent whose login this
-      // app cannot isolate — see `SessionMeta.profileId`. The sidebar shows it
-      // only when there is more than one in play; two sessions in one folder
-      // under two accounts have to be tellable apart, and one account on every
-      // row is noise.
-      // `provider` goes with it so the account chip can draw the agent's mark
-      // without opening the account list — see `WorkspaceTab.account`.
-      ...(session.profileId && session.profileName
-        ? {
-            account: {
-              id: session.profileId,
-              name: session.profileName,
-              provider: session.provider,
-            },
-          }
-        : {}),
-      // Who wanted this session, and which copilot turn started it. Carried
-      // straight off `SessionMeta` — the main process writes both at spawn —
-      // so the rail can group what the copilot started under its own heading
-      // and link each row back to the turn that explains it. Conditional, so
-      // "no origin" crosses into the tab as an absent key rather than as
-      // `undefined`, which is the same distinction `PtyManager` preserves.
-      ...(session.origin ? { origin: session.origin } : {}),
-      ...(session.originRunId ? { originRunId: session.originRunId } : {}),
-      closable: true,
-    })),
+    ...sessions.map(windowTab),
     /*
      * Pages other than sessions — which today means browser tabs, and only
      * while the browser is installed.
@@ -363,9 +460,30 @@ function Workspace() {
      * this.
      */
     ...extraTabs.filter((tab) => tab.kind !== 'browser' || features.on('browser')),
+    /*
+     * And the copilot, which is a window like the rest of them.
+     *
+     * Asad, 2026-08-17: *"it can stay as a window pill with the other windows."*
+     * So it is here, with `isCopilot` on it — the flag that the handful of
+     * genuinely different behaviours hang off, and nothing else. Everything that
+     * asks `kind === 'session'` gets a yes: the strip draws its status dot, the
+     * bar carries its name and account and control cluster, the mode switch
+     * offers it Terminal, Chat and Split, and a pane can hold it.
+     *
+     * **Last**, deliberately. `tabs[0]` is what a window with no selection falls
+     * back to, ⌘1–9 counts from the front, and ⌘⇧[ / ⌘⇧] walk this order — so
+     * putting the copilot at the head would quietly make it the thing every
+     * launch opened on and the thing ⌘1 meant. It is opened from its own pinned
+     * row, which is one press at the very top of the rail.
+     *
+     * Present only while it is running, because the tab *is* the session: stop
+     * the copilot and its window goes, the same way any session's window goes
+     * when its process ends. The pinned row starts it again.
+     */
+    ...(copilotSession ? [{ ...windowTab(copilotSession), isCopilot: true as const }] : []),
   ]
 
-  const activeTab = tabs.find((t) => t.id === activeTabId) ?? tabs[0] ?? null
+  const activeTab = resolveActiveTab(selection, tabs)
   const activeSession = activeTab?.kind === 'session' ? activeTab : null
 
   /** True while one of the sidebar's views has the window. */
@@ -379,6 +497,12 @@ function Workspace() {
    * "terminaldeck" while the row the user clicked said "Session 2".
    */
   const labelOf = (tab: WorkspaceTab): string => {
+    // The copilot is called Copilot, in the bar, in the strip and in the rail.
+    // Without this it would be numbered like the session it is — and its title
+    // is its own folder's name, which is precisely what `sessionLabel` turns
+    // into "Session N". `tabLabel` in `workspace-tabs.ts` answers the same way
+    // for the strip; the two are the same rule stated where each is read.
+    if (tab.isCopilot) return COPILOT_NAME
     if (tab.kind !== 'session') return tab.label
     /*
      * Siblings are the sessions listed *beside* this one, which since the
@@ -405,9 +529,9 @@ function Workspace() {
    * The sessions the copilot started, named the way the rail names them.
    *
    * The forward half of "why does this exist": the rail's Copilot sessions
-   * group is the list, and the copilot's own page carries this so a person
+   * group is the list, and the copilot's own window carries this so a person
    * standing in front of the thing that started them can open each one. Named
-   * through `labelOf` rather than off `tab.label` so the page and the row say
+   * through `labelOf` rather than off `tab.label` so the window and the row say
    * the same words — an untitled session is "Session 3" in both places or in
    * neither.
    */
@@ -424,6 +548,19 @@ function Workspace() {
    */
   const sessionsRef = useRef(sessions)
   sessionsRef.current = sessions
+  /*
+   * The same, plus the copilot, for the callbacks that are about *windows*.
+   *
+   * The two lists are told apart at the top of this component, and the rule for
+   * picking one is there: anything that draws or focuses a session as a window
+   * reads this, and anything about the project's fleet reads `sessionsRef`. The
+   * three callers below — the tab that is shown instead, the pane that takes
+   * focus, the pane that survives a close — are all "which session is on screen
+   * now", and a copilot missing from that answer is a window whose terminal is
+   * drawn and whose store never learns it is the active one.
+   */
+  const windowSessionsRef = useRef(windowSessions)
+  windowSessionsRef.current = windowSessions
   /*
    * Everything open, for the same reason and read the same way.
    *
@@ -455,8 +592,24 @@ function Workspace() {
     lastFolderRef.current = readLastFolder(globalThis.localStorage ?? null)
   }
 
+  /**
+   * The project the window is *working in* — which is deliberately not the
+   * copilot's folder, even while the copilot's window is the one in front.
+   *
+   * This one answer drives ⌘T's folder, the alert scanner, the dashboard, the
+   * file tree and Source control. The copilot's cwd is a real folder with real
+   * files in it — its `CLAUDE.md` and its `memory/`, and Settings → Copilot
+   * lists them — but it is its home, not a project you work in: it is filtered
+   * out of `projects` for exactly that reason. Letting it through here would
+   * mean opening the copilot silently re-pointed New session at the assistant's
+   * memory folder, and started scanning it for alerts.
+   *
+   * So the copilot's window keeps the project you were in, which is also the
+   * honest answer to "which folder would a new session open in" while you are
+   * talking to it about that project.
+   */
   const activeProjectPath =
-    activeSession?.projectPath ??
+    (activeSession?.isCopilot ? null : activeSession?.projectPath) ??
     sessions.find((s) => s.id === activeSessionId)?.projectPath ??
     projects[0]?.path ??
     null
@@ -748,7 +901,7 @@ function Workspace() {
   const showTab = useCallback(
     (id: string) => {
       clearPanel()
-      setActiveTabId(id)
+      setSelection(showTabSelection(id))
     },
     [clearPanel],
   )
@@ -919,20 +1072,31 @@ function Workspace() {
    * active session, the focused pane in a split — still has to happen, or the
    * terminal on screen and the tab that names it disagree.
    *
-   * `null` is a real answer and not a failure: it means nothing is left on the
-   * bar to fall back to. It does not blank the window — `activeTab` above has
-   * resolved a null selection to `tabs[0]` since long before this bar existed,
-   * so the last tab you take off is replaced by the first session you have
-   * open, drawn as a transient tab. That is the right outcome and not an
-   * accident of the fallback: a window that is showing a terminal must have a
-   * tab naming it, which is the whole reason `shownTabs` always draws the
-   * active one.
+   * ## `null` empties the window, and until 2026-08-17 it did not
+   *
+   * It means there is nothing left on the bar to fall back to, and the window
+   * used to answer that by drawing `tabs[0]` — so the last tab you took off came
+   * straight back, in italic, as a transient tab. Asad: *"if there are three or
+   * two windows open and I close all of them, the last one I will not be able to
+   * close from the top bar."* A control that redraws itself the instant you press
+   * it is a control that does not work.
+   *
+   * The reasoning behind the old behaviour was coherent — "a window showing a
+   * terminal must have a tab naming it", which is why `shownTabs` always draws
+   * the active tab — but that invariant is one the app chose, not one the user
+   * asked for, and the honest way to keep it is to stop showing a terminal.
+   * Closing every tab leaves an **empty pane**, the way closing every tab in a
+   * browser leaves you somewhere sensible rather than refusing.
+   *
+   * Nothing is closed by this. Every session is still running and still in the
+   * rail, which is the model of the strip itself: *"side panel will have
+   * everything inside, and above we just set a view which one we want to see."*
    */
   const showInstead = useCallback(
     (id: string | null) => {
-      setActiveTabId(id)
+      setSelection(showTabSelection(id))
       if (id === null) return
-      if (sessionsRef.current.some((session) => session.id === id)) setActiveSession(id)
+      if (windowSessionsRef.current.some((session) => session.id === id)) setActiveSession(id)
       setPanes((current) => (isSplit(current) ? showInFocusedPane(current, id) : current))
     },
     [setActiveSession],
@@ -957,7 +1121,35 @@ function Workspace() {
     )
   }, [])
 
-  const newBrowserTab = useCallback(() => {
+  /**
+   * Open a browser page.
+   *
+   * `url` is empty for the globe — a new tab goes to the start page — and set
+   * when a *link* asked for this tab: a repository in the GitHub panel, or a
+   * `target="_blank"` inside a page the browser is already showing. Both
+   * arrive through `onOpenLinkTab` below, and both are the same act as pressing
+   * the globe, so they take the same route and get the same treatment on the
+   * bar rather than a second path that could drift from it.
+   */
+  const newBrowserTab = useCallback((target?: string) => {
+    /*
+     * Only a string is an address, and this is the boundary that says so.
+     *
+     * This function is handed to `onNewBrowserTab` in two components, and both
+     * put it straight on a button's `onClick` — so React calls it with a
+     * `MouseEvent`. TypeScript cannot see that: `(target?: string) => void` is
+     * assignable to `() => void`, because a handler that ignores its argument
+     * and one that reads it are the same type. Both call sites now pass
+     * `() => newBrowserTab()` and this line means the next one does not have to
+     * remember.
+     *
+     * It was not hypothetical for long. On 2026-08-17 the event travelled from
+     * here as `WorkspaceTab.url`, arrived in `BrowserWorkspace` as `initialUrl`,
+     * became a tab's `draft`, and threw `input.trim is not a function` out of
+     * `resolveOmnibox` during render — which the error boundary turned into
+     * "New tab stopped working" across every pane in the window.
+     */
+    const url = typeof target === 'string' ? target : ''
     /*
      * Asking for a browser tab you do not have installs the pane and opens one.
      *
@@ -968,8 +1160,18 @@ function Workspace() {
      * sentence about somewhere else.
      */
     if (!features.on('browser')) features.install('browser')
-    const id = `browser:${Date.now()}`
-    setExtraTabs((prev) => [...prev, { id, kind: 'browser', label: 'New tab', closable: true }])
+    /*
+     * Unique even when two arrive in the same millisecond.
+     *
+     * `Date.now()` alone was enough while the only way in was a click on the
+     * globe. It is not any more: a page is allowed to open two `target="_blank"`
+     * links from one gesture, and two tabs sharing an id would be two React
+     * children with the same key, one strip entry for both, and a ✕ that closes
+     * whichever the map happened to keep.
+     */
+    tabSeq.current += 1
+    const id = `browser:${Date.now()}:${tabSeq.current}`
+    setExtraTabs((prev) => [...prev, { id, kind: 'browser', label: 'New tab', closable: true, url }])
     showTab(id)
     /*
      * Started while the window is split: the page belongs in the pane you are
@@ -1019,13 +1221,19 @@ function Workspace() {
        * pane model refusing to hold a page — see `layout/panes.ts`.
        */
       setPanes((current) => (isSplit(current) ? showInFocusedPane(current, id) : current))
+      // Navigating anywhere cancels a copilot open that has not landed yet.
+      // Otherwise the effect below would yank the window onto the copilot
+      // seconds after somebody changed their mind and clicked something else.
+      setCopilotPending(false)
       // Terminals key off the store's active session; keep the two in step or
       // switching to a session shows the previously focused terminal. A page
       // has no session to make active, and must not overwrite the one that is.
-      if (!sessions.some((session) => session.id === id)) return
+      // `windowSessions`, because the copilot is one of the sessions a click can
+      // land on now — the pinned row, a pill, or ⌘1–9.
+      if (!windowSessions.some((session) => session.id === id)) return
       setActiveSession(id)
     },
-    [sessions, setActiveSession, showTab],
+    [windowSessions, setActiveSession, showTab],
   )
 
   /**
@@ -1065,6 +1273,38 @@ function Workspace() {
     })
   }, [setSessionStatus, notifier])
 
+  /**
+   * A link, arriving as a browser page in this window.
+   *
+   * Both kinds come down this one channel because both are the same request
+   * seen from the main process: `window.open` from this app's own UI — a
+   * repository, a pull request, an issue in the GitHub panel — and
+   * `target="_blank"` inside a page the embedded browser is already showing.
+   * Neither gets a window of Chromium's; both get a tab of ours. See
+   * `main/link-open.ts` for the decision and for why a guest page is answered
+   * more strictly than the app shell is.
+   *
+   * ## When the browser is not installed
+   *
+   * The link still opens — in the real browser. That is the one place this
+   * differs from the globe, which *installs* the browser pane because pressing
+   * the globe is asking for one. Pressing a repository is not: somebody who has
+   * switched the browser off in Features has said what they want, and quietly
+   * installing a pane in answer to a link would be the app arguing with them.
+   * The link opening somewhere is the requirement; opening here is the default.
+   */
+  useEffect(
+    () =>
+      window.deck.onOpenLinkTab((url) => {
+        if (!features.on('browser')) {
+          openLinkExternally(url)
+          return
+        }
+        newBrowserTab(url)
+      }),
+    [features, newBrowserTab],
+  )
+
   const closeTabNow = useCallback(
     (id: string) => {
       const tab = tabs.find((t) => t.id === id)
@@ -1081,7 +1321,12 @@ function Workspace() {
       } else {
         setExtraTabs((prev) => prev.filter((t) => t.id !== id))
       }
-      setActiveTabId(following)
+      // `nextActiveId` answers null when that was the last window, and null now
+      // means an empty pane rather than "fall back to the first thing open" —
+      // which is the same correction `showInstead` above carries the argument
+      // for. Closing the only thing you had open leaves you looking at nothing,
+      // which is what you asked for.
+      setSelection(showTabSelection(following))
     },
     [tabs, removeSession, unread, notifier, titler],
   )
@@ -1140,13 +1385,36 @@ function Workspace() {
   const closeTab = useCallback(
     (id: string) => {
       const tab = tabs.find((t) => t.id === id)
+      /*
+       * ⌘W on the copilot **puts it away**. It does not end it.
+       *
+       * The copilot is a singleton with no row in the rail, so it has no ✕ that
+       * ends a session — deliberately, because a second ✕ a few pixels from the
+       * session rows meaning something else is the confusion `Sidebar.tsx`
+       * carries a paragraph about. That leaves ⌘W as the one path in this window
+       * that could have reached `killSession` for it, and killing the copilot
+       * from a chord that says "close this window" is exactly the ending-with-no-
+       * way-back this feature must not have.
+       *
+       * So it does what the ✕ on its own pill does: takes the pill off the bar,
+       * moves to the neighbour, and leaves the process running. Stopping it is a
+       * named act with its own button, in its toolbar and in Settings → Copilot,
+       * and both of those are restartable from the pinned row.
+       */
+      if (tab?.isCopilot) {
+        const removal = removeWindowFromStrip(id, tabs, activeTab?.id ?? null)
+        // `undefined` means it was not the tab on screen, so nothing moves —
+        // the same three-valued answer the strip's own ✕ acts on.
+        if (removal.select !== undefined) showInstead(removal.select)
+        return
+      }
       if (tab?.kind === 'session' && tab.status && needsCloseConfirm(tab.status, confirmClose)) {
         setPendingClose({ kind: 'session', tab })
         return
       }
       closeTabNow(id)
     },
-    [tabs, confirmClose, closeTabNow],
+    [tabs, activeTab, showInstead, confirmClose, closeTabNow],
   )
 
   /** Step through the open sessions and pages, wrapping at each end. */
@@ -1177,9 +1445,101 @@ function Workspace() {
     (id: PanelId, focus: string | null = null) => {
       setPanelFocus(focus)
       selectPanel(id)
+      // Going to a view cancels a copilot open that has not landed yet — see
+      // `selectTab`, which does the same for the same reason.
+      setCopilotPending(false)
     },
     [selectPanel],
   )
+
+  /**
+   * Open the copilot's window — the pinned row, the palette row, and the "why
+   * does this exist" link on a session the copilot started.
+   *
+   * ## Three things in one press, because the copilot is a session that may not
+   * exist yet
+   *
+   * `ensure()` starts it if it is not running, and is idempotent by contract, so
+   * pressing this twice is one copilot. That is what makes opening the window
+   * the moment it is spawned — an agent CLI bills for what it does, and a
+   * standing charge for launching the app is not something anybody agreed to.
+   *
+   * Its tab is derived from the running session, so when there is one this is a
+   * plain `showTab` plus `keepNewWindowInStrip` — the same pair every *created*
+   * window gets, because this is that act: *"if I open any new session… it
+   * should automatically open in the top bar… If I want to remove it from there
+   * and keep only side panel, I should have to do it myself specifically."*
+   * When there is not one yet, `copilotPending` holds the window on the
+   * copilot's own starting state until the effect below can hand it a real tab.
+   *
+   * `turn` is the action-log row the window should open on, and it is cleared on
+   * a plain open for the reason `panelFocus` is: a door has to open onto the
+   * thing it named, and the next plain press must not land you there again.
+   */
+  const openCopilot = useCallback(
+    (turn?: string | null) => {
+      setCopilotTurn(turn ?? null)
+      copilot.ensure()
+      if (copilotSessionId === null) {
+        setCopilotPending(true)
+        clearPanel()
+        return
+      }
+      /*
+       * `selectTab`, not `showTab`, and the difference only shows up in a split:
+       * a click in the rail fills the pane you are *looking at* rather than
+       * taking the whole window back, and the copilot is one of the windows that
+       * rule is about. With `showTab` the selection moved and the layout did
+       * not, so pressing Copilot while the window was split changed nothing on
+       * screen — the same class of defect as a page that could not be reached
+       * from the rail while split.
+       *
+       * It also clears `copilotPending`, which is right: the window it was
+       * waiting for is the one being shown.
+       */
+      selectTab(copilotSessionId)
+      keepNewWindowInStrip(copilotSessionId)
+    },
+    [copilot, copilotSessionId, clearPanel, selectTab],
+  )
+
+  /**
+   * The copilot has finished starting, so the window it was asked for arrives.
+   *
+   * An effect rather than an `await` inside {@link openCopilot}, because the id
+   * does not come back from `ensureCopilot` alone: the session has to reach this
+   * window through `session:created` before there is a tab to select, and those
+   * are two different arrivals. Watching for the id is the only thing that is
+   * true of both orders.
+   */
+  useEffect(() => {
+    if (!copilotPending || copilotSessionId === null) return
+    setCopilotPending(false)
+    selectTab(copilotSessionId)
+    keepNewWindowInStrip(copilotSessionId)
+  }, [copilotPending, copilotSessionId, selectTab])
+
+  /**
+   * Which half of the copilot a first run opens on, seeded once.
+   *
+   * `defaultPane` says the terminal for a signed-out copilot, and it is not a
+   * preference: the login prints a URL and reads a code back, and a conversation
+   * pane can do neither. It goes into the same `sessionView` map every other
+   * session's mode lives in — so the window's own mode switch reads and writes
+   * it, and there is one answer to "how is this drawn" rather than two.
+   *
+   * Seeded only where the map has no entry, so the moment somebody presses
+   * Terminal or Chat themselves that decision stands. A stage that changes
+   * afterwards — a login completing — must not move the pane under them.
+   */
+  useEffect(() => {
+    if (copilotSessionId === null) return
+    setSessionView((views) =>
+      copilotSessionId in views
+        ? views
+        : { ...views, [copilotSessionId]: defaultPane(copilot.stage) },
+    )
+  }, [copilotSessionId, copilot.stage])
 
   /** Source control hands a file here; the Files page is what can show it. */
   const showFile = useCallback(
@@ -1262,7 +1622,7 @@ function Workspace() {
       // the half you were working in rather than at whatever tab was active
       // before you split.
       if (focusedId) {
-        setActiveTabId(focusedId)
+        setSelection(showTabSelection(focusedId))
         setActiveSession(focusedId)
         setSessionView((views) => ({ ...views, [focusedId]: next }))
       }
@@ -1291,9 +1651,9 @@ function Workspace() {
       const next = closePaneOrCollapse(panes, paneId)
       setPanes(next)
       if (isSplit(next) || !survivor) return
-      setActiveTabId(survivor)
+      setSelection(showTabSelection(survivor))
       // The survivor can be a page, which the store has no session for.
-      if (sessionsRef.current.some((session) => session.id === survivor)) {
+      if (windowSessionsRef.current.some((session) => session.id === survivor)) {
         setActiveSession(survivor)
       }
     },
@@ -1323,6 +1683,35 @@ function Workspace() {
   }, [panes.focusedPaneId, closePaneAt])
 
   /**
+   * The four things a tour is allowed to do to this window, handed over once.
+   *
+   * Driving mode is mounted in `main.tsx` as a sibling of this component — it
+   * has to be, because a panel inside `.app`'s flex row would push `.main`
+   * narrower, refit every terminal and reflow the buffers its own highlights are
+   * anchored to. Being a sibling means it cannot be passed a callback down a
+   * tree it is not in, so it asks a registry instead, and this is the answer.
+   *
+   * The surface is deliberately four functions rather than this component's
+   * command dispatcher. A tour's arguments were composed by a model out of other
+   * sessions' transcripts, and a dispatcher takes ids like `session.close`; four
+   * named functions cannot be talked into closing a tab, and the reason they
+   * cannot is structural rather than a check somebody has to remember to write.
+   * See `copilot/driving/navigator.ts`.
+   */
+  useEffect(
+    () =>
+      registerNavigator({
+        selectTab,
+        showPanel: (id, focus) => showPanel(id as PanelId, focus ?? null),
+        setSessionMode: (sessionId, mode) => {
+          setSessionView((views) => (views[sessionId] === mode ? views : { ...views, [sessionId]: mode }))
+        },
+        cwdOf: (sessionId) => sessionsRef.current.find((s) => s.id === sessionId)?.projectPath ?? null,
+      }),
+    [selectTab, showPanel],
+  )
+
+  /**
    * While the window is split, the focused pane *is* the active session.
    *
    * One effect rather than a line in each of the four places focus can move —
@@ -1335,7 +1724,7 @@ function Workspace() {
     if (!splitting) return
     const id = focusedTabId(panes)
     if (!id) return
-    setActiveTabId(id)
+    setSelection(showTabSelection(id))
     /*
      * Only a session reaches the store.
      *
@@ -1345,7 +1734,7 @@ function Workspace() {
      * Leaving it on the last session pane that had focus is not a fallback, it
      * is the right answer: a page beside a terminal sends to that terminal.
      */
-    if (sessionsRef.current.some((session) => session.id === id)) setActiveSession(id)
+    if (windowSessionsRef.current.some((session) => session.id === id)) setActiveSession(id)
   }, [panes, splitting, setActiveSession])
 
   const commands = useMemo<PaletteCommand[]>(() => {
@@ -1423,7 +1812,11 @@ function Workspace() {
       // something already reachable in one — and every chord spent is one fewer
       // left for the sessions this app is actually about. The palette row still
       // earns its place: it is where somebody looks for a thing by name.
-      { id: 'view.copilot', title: 'Copilot', group: 'View', run: () => showPanel('copilot') },
+      // It opens a *window* now, not a view — the copilot is a session and has
+      // the chrome of one. The id keeps its `view.` prefix because that is what
+      // the feature registry and any menu item dispatch, and renaming it to
+      // describe a change the user cannot see would drop it out of both.
+      { id: 'view.copilot', title: COPILOT_NAME, group: 'View', run: () => openCopilot() },
       { id: 'view.dashboard', title: 'Overview', group: 'View', run: () => showPanel('overview') },
       { id: 'view.files', title: 'Files', group: 'View', run: () => showPanel('files') },
       // `view.search` keeps its id, and therefore its ⌘⇧F chord, while what it
@@ -1495,6 +1888,7 @@ function Workspace() {
     openNewSessionDialog,
     openProject,
     showPanel,
+    openCopilot,
     openSettings,
     sidebar,
     splitPanes,
@@ -1649,6 +2043,40 @@ function Workspace() {
     )
   }
 
+  /**
+   * The copilot's window, wherever it is drawn.
+   *
+   * One expression for the two moments it can appear in, because they are the
+   * same window: mounted beside the other sessions' terminals once it has a
+   * session, and filling the pane on its own for the seconds between the pinned
+   * row being pressed and a CLI finishing its launch. Two spellings of it would
+   * be two places for a prop to go missing, which is precisely the seam
+   * `wiring.test.ts` exists to watch.
+   *
+   * `mode` is its entry in the same `sessionView` map every other session's mode
+   * lives in, written by the same segmented control in the same bar — the whole
+   * of what "a window like the others" means here. It falls to the conversation
+   * before the session exists, where there is nothing to draw either pane of
+   * yet; `defaultPane` seeds the real answer the moment there is a session, and
+   * on a first run that answer is the terminal, because a login prints a URL and
+   * reads a code back and a chat pane can do neither.
+   */
+  const copilotMode: SessionViewMode =
+    copilotSessionId === null ? 'chat' : sessionView[copilotSessionId] ?? 'chat'
+  const copilotWindow = (visible: boolean) => (
+    <CopilotView
+      copilot={copilot}
+      visible={visible}
+      mode={copilotMode}
+      focus={copilotTurn}
+      startedSessions={copilotStarted}
+      onOpenSession={selectTab}
+      fontSize={terminalFontSize}
+      fontFamily={terminalFontFamily}
+      copyOnSelect={copyOnSelect}
+    />
+  )
+
   const mainView = () => {
     if (showingPanel && panel) {
       return (
@@ -1662,24 +2090,10 @@ function Workspace() {
           // Source control, so the click did nothing you could see.
           onOpenFile={showFile}
           focus={panelFocus}
-          /*
-            What the copilot's page can reach. Spelled out as an object like
-            `dashboard` below, and for the same reason: every one of these is a
-            thing the page cannot work out for itself, and passing it here is
-            what stops the page growing a second connection to the copilot that
-            would disagree with the rail's.
-
-            The terminal settings are the same three the session terminals read,
-            so the copilot's terminal is not a differently-shaped terminal.
-          */
-          copilot={{
-            copilot,
-            startedSessions: copilotStarted,
-            onOpenSession: selectTab,
-            fontSize: terminalFontSize,
-            fontFamily: terminalFontFamily,
-            copyOnSelect,
-          }}
+          /* There was a `copilot` object here. It went with the copilot's page:
+             the copilot is a window now, rendered beside the other sessions'
+             terminals further down this file, because that is where a session is
+             rendered. See `copilot/identity.ts`. */
           /* `showInsights` and `onAlertAction` used to be handed down here.
              They belong to the AlertsWindow sheet now — mounted at the bottom
              of this file — because Alerts is a dialog over the window rather
@@ -1731,7 +2145,28 @@ function Workspace() {
       )
     }
 
-    if (!activeTab) return <EmptyState onOpenProject={openProject} />
+    /*
+     * The copilot, asked for and not started yet.
+     *
+     * Above the empty branches because it is the one case where the window has
+     * something to show and no tab to show it from: spawning the copilot is a
+     * CLI launch, its tab is derived from the running session, and without this
+     * the pinned row would be a press that produced nothing on screen for
+     * several seconds. `CopilotView` draws its own "Starting the copilot…" here,
+     * and — if the start refuses — the CLI's own sentence with the button that
+     * retries it, which is exactly the state that must not be invisible.
+     */
+    if (copilotPending && copilotSession === null) return copilotWindow(true)
+
+    /*
+     * A launch, with nothing open anywhere — and the launch screen is a door:
+     * open a project.
+     *
+     * Split from the *emptied* window below, which used to be the same branch
+     * and is not the same state. Here there is genuinely nothing; there, four
+     * agents are running and the person has taken the last tab off the bar.
+     */
+    if (tabs.length === 0) return <EmptyState onOpenProject={openProject} />
 
     if (swarm) {
       return (
@@ -1804,7 +2239,7 @@ function Workspace() {
             const sessionTab = paneTab?.kind === 'session' ? paneTab : null
             const pageTab = paneTab?.kind === 'browser' ? paneTab : null
             const session = sessionTab
-              ? sessions.find((entry) => entry.id === sessionTab.id) ?? null
+              ? windowSessions.find((entry) => entry.id === sessionTab.id) ?? null
               : null
 
             return (
@@ -1920,6 +2355,9 @@ function Workspace() {
                       visible={!showingPanel}
                       parkPage={anyModalOpen}
                       startUrl={stringSetting(settings, 'browser.startUrl')}
+                      // Where a *link* asked this page to open, when one did.
+                      // Empty for the globe, which goes to the start page.
+                      initialUrl={pageTab.url}
                       onStartUrl={(url) => {
                         applySettings({ ...settings, 'browser.startUrl': url })
                         void window.deck.setSettings({ 'browser.startUrl': url })
@@ -1957,6 +2395,35 @@ function Workspace() {
       )
     }
 
+    /*
+     * The window, emptied on purpose.
+     *
+     * Asad, 2026-08-17: *"if there are three or two windows open and I close all
+     * of them, the last one I will not be able to close from the top bar."* It
+     * came straight back because a null selection resolved to `tabs[0]`, and
+     * `shownTabs` always draws whatever is active — so the ✕ redrew the tab it
+     * had just removed. Now the pane goes to its own empty state, the same
+     * "Nothing in this pane yet" a split pane shows, because it is the same
+     * situation: nothing is closed, every session is still running and one click
+     * away in the rail, and the strip above still holds its two openers.
+     *
+     * Below `swarm` and `splitting` on purpose. Both of those draw sessions the
+     * strip's selection has nothing to do with — a grid of every terminal, or a
+     * hand-made layout of panes — and taking the last pill off the bar must not
+     * throw away an arrangement that is still on screen and still holding two
+     * agents. Above it, this branch would have done exactly that.
+     */
+    if (!activeTab) {
+      return (
+        <PageEmpty
+          title="Nothing in this pane yet"
+          action={{ label: 'New session', onClick: () => openNewSessionDialog() }}
+        >
+          Pick a session in the sidebar and it opens here.
+        </PageEmpty>
+      )
+    }
+
     // Every browser and terminal stays mounted and is shown or hidden, so a
     // page keeps its scroll position and a terminal keeps its scrollback when
     // you switch away and come back.
@@ -1976,6 +2443,9 @@ function Workspace() {
               // Settings owns where a page opens; the panel's own button
               // writes the same setting rather than a copy of it.
               startUrl={stringSetting(settings, 'browser.startUrl')}
+              // Where a *link* asked this page to open, when one did. Empty for
+              // the globe, which goes to the start page.
+              initialUrl={tab.url}
               onStartUrl={(url) => {
                 applySettings({ ...settings, 'browser.startUrl': url })
                 void window.deck.setSettings({ 'browser.startUrl': url })
@@ -2027,6 +2497,27 @@ function Workspace() {
             </Fragment>
           )
         })}
+        {/*
+          The copilot, mounted beside them and hidden the same way.
+
+          Not in the `sessions` map above, because it is not one of the project's
+          sessions — see the two lists at the top of this component — and because
+          it has a little to say that no other session does: a sign-in
+          explanation on a first run, the turn that opened it, the tours it drove.
+          `CopilotView` draws those above its pane and nothing at all when there
+          is nothing to say, which is the ordinary case.
+
+          Mounted whenever it is running rather than only while it is in front,
+          for the same reason every terminal above is: a remount redraws from the
+          main process's scrollback, and a login prompt somebody is halfway
+          through would scroll away under them.
+
+          `mode` is its entry in the same `sessionView` map, written by the same
+          segmented control in the same bar. That is the whole of what "a window
+          like the others" means here — there is no second switch and no second
+          piece of state.
+        */}
+        {copilotSession && copilotWindow(activeTab.id === copilotSession.id && !showingPanel)}
       </>
     )
   }
@@ -2094,7 +2585,7 @@ function Workspace() {
    */
   const headingSession =
     !showingPanel && headingTab?.kind === 'session'
-      ? sessions.find((entry) => entry.id === headingTab.id) ?? null
+      ? windowSessions.find((entry) => entry.id === headingTab.id) ?? null
       : null
 
   /**
@@ -2130,11 +2621,26 @@ function Workspace() {
           // account a *new* session here would use.
           account: headingTab.kind === 'session' ? headingTab.account ?? null : null,
         }
-      : splitting
-        // A split whose host pane has not been filled. There is no name to
-        // print, and printing the app's own name over an empty pane would read
-        // as "nothing is open" while two sessions are running beside it. The
-        // pane's body already says what it is; the bar keeps the mode switch.
+      : copilotPending
+        // The copilot, starting, with no tab yet. It is named because there is
+        // something true to name — the window below is its own starting state —
+        // and because a bar reading "Terminal Deck" over it would say the app
+        // had nothing open while a CLI was being spawned three lines down.
+        ? { title: COPILOT_NAME, subtitle: null, folder: null, account: null }
+        : splitting || tabs.length > 0
+        // Two states with one right answer, which is to say nothing.
+        //
+        // A split whose host pane has not been filled: printing the app's own
+        // name over an empty pane would read as "nothing is open" while two
+        // sessions run beside it, and falling back to the *guest's* name is the
+        // claim this bar must never make. The pane's body already says what it
+        // is; the bar keeps the mode switch, which is the only way back out.
+        //
+        // And, since 2026-08-17, a window whose last tab has been taken off the
+        // bar. Every session is still running and still in the rail, so the app's
+        // name would be as wrong here as it is over an empty pane — and naming
+        // whichever session happens to be first is precisely the fallback that
+        // made the ✕ on the last tab look broken.
         ? { title: null, subtitle: null, folder: null, account: null }
         // No subtitle. "Nothing open yet." is the sidebar's line, and it is there to
         // explain why the list beneath it is empty — a job this heading does not
@@ -2192,8 +2698,26 @@ function Workspace() {
    * panes' logins apart. And it carries the mode switch, which is the only way
    * back out of a split — dropping the bar because the host pane happens to
    * hold a web page would shut the door behind the user.
+   *
+   * ## And it is absent over an emptied window
+   *
+   * With every tab taken off the bar there is no heading, no folder, no account
+   * and no mode to switch — `heading` above resolves to a title of `null` for
+   * exactly that reason — so what would be left is 48 pixels of empty chrome
+   * under the strip. The strip is already the top band in that state (it draws
+   * whenever anything is open), so it carries the lights, the drag and the
+   * reveal, and this bar has nothing to add.
+   *
+   * `!hasStrip` keeps it for the launch screen, where there is no strip at all
+   * and this bar *is* the top band — which is the first thing anybody sees, and
+   * the one case where the app's own name over an empty window is the truth.
    */
-  const showSessionBar = showingPanel || splitting || headingTab?.kind !== 'browser'
+  const showSessionBar =
+    showingPanel ||
+    splitting ||
+    !hasStrip ||
+    (headingTab !== null && headingTab.kind !== 'browser') ||
+    copilotPending
 
   return (
     <div className="app" data-sidebar-peek={sidebar.peeking || undefined}>
@@ -2245,13 +2769,25 @@ function Workspace() {
           // sidebar so the component stays where the wiring test can see it and
           // where its bridge subscription belongs.
           update={<UpdateBanner />}
-          /* The pinned row's status dot and its sentence. One connection, read
-             here, so the rail and the page it opens cannot disagree about
-             whether the copilot is running. */
-          copilot={{ stage: copilot.stage, state: copilot.state }}
-          /* Only the rows that link back to a turn use this; the pinned row
-             navigates through `onSelectPanel` like every other view. */
-          onOpenCopilot={(focus) => showPanel('copilot', focus ?? null)}
+          /* The pinned row's status dot, its sentence, and whether the window
+             it opens is the one on screen. One connection, read here, so the
+             rail and the window cannot disagree about whether it is running.
+
+             `active` is asked here rather than derived from `activeTabId`
+             because the copilot's tab is deliberately not among the `tabs` the
+             rail draws — it has this row instead, which is the whole point of a
+             singleton having one home. `copilotPending` counts: the window is
+             showing the copilot's own starting state, so the row that asked for
+             it is current. */
+          copilot={{
+            stage: copilot.stage,
+            state: copilot.state,
+            active: !showingPanel && (copilotPending || (activeTab?.isCopilot ?? false)),
+          }}
+          /* Both the pinned row and the "why does this exist" links, which pass
+             the turn they want the window to land on. There is nothing to
+             navigate to any more — the copilot is a window, so this opens one. */
+          onOpenCopilot={(focus) => openCopilot(focus)}
           onSelectTab={selectTab}
           onCloseTab={closeTab}
           onSelectPanel={showPanel}
@@ -2269,7 +2805,10 @@ function Workspace() {
           onNewSession={(projectPath, resume) =>
             resume ? newSession(projectPath, true) : openNewSessionDialog(projectPath)
           }
-          onNewBrowserTab={newBrowserTab}
+          // Wrapped, not passed. The rail puts this straight on a button's
+          // onClick, so passing it bare hands React's MouseEvent in as the
+          // address — see the guard at the top of `newBrowserTab`.
+          onNewBrowserTab={() => newBrowserTab()}
           onOpenProject={openProject}
           onCloseProject={closeProject}
           onOpenSettings={() => openSettings()}
@@ -2330,7 +2869,9 @@ function Workspace() {
                not a session — the same single route the rail's button takes —
                and the globe opens a page on the start page. */
             onNewSession={() => openNewSessionDialog()}
-            onNewBrowserTab={newBrowserTab}
+            // Wrapped for the same reason as the rail's globe above: the strip
+            // puts this on a button, and a button hands its handler an event.
+            onNewBrowserTab={() => newBrowserTab()}
             sidebarHidden={sidebar.collapsed}
             onRevealSidebar={sidebar.pin}
             onEdgeEnter={sidebar.beginPeek}
@@ -2455,6 +2996,26 @@ function Workspace() {
             ) : null}
             {(activeSession || splitting) && !showingPanel && !swarm ? (
               <ModeSwitch mode={mode} onChange={setMode} splitOffer={!features.on('split')} />
+            ) : null}
+            {/*
+              Stop — the one control here a session's bar does not have, and the
+              only thing about this window that is *more* rather than the same.
+
+              It is here because of what the copilot does not have: a row in the
+              rail, and so the ✕ that ends a session. It is a singleton, and the
+              rail deliberately gives it neither a ＋ nor a ✕; the ✕ on its pill
+              takes the pill off the bar like every other pill's does. Without
+              this it would be the one session in the window that cannot be
+              switched off anywhere you can see it. Stopping is restartable from
+              the pinned row, which is what makes it safe to offer — see
+              `CopilotStop`.
+
+              Last in the row, where the rail puts a session's ✕ at the end of
+              its own row, and after the mode switch so it can never come between
+              the controls and the way out of a split.
+            */}
+            {headingTab?.isCopilot && !showingPanel && !swarm ? (
+              <CopilotStop copilot={copilot} />
             ) : null}
           </WindowToolbar>
         )}

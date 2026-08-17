@@ -56,6 +56,21 @@ export interface ConsentSettledView {
   id: string
   granted: boolean
   reason: RefusalReason | null
+  /**
+   * Which surface answered it: `'window'`, `device:<id>`, or null for nobody.
+   *
+   * The dialog on this Mac is no longer the only place a confirmation can be
+   * answered — a device with its own copilot connection can answer its own run's
+   * questions, and first answer wins. So when this dialog closes without the
+   * person having pressed anything, it has to be able to say *where the answer
+   * came from* rather than vanishing. A dialog that disappears on its own
+   * teaches a person that the app does things behind their back.
+   *
+   * The device id itself is deliberately not rendered. It is opaque, it means
+   * nothing to a person reading it, and the Activity pane is where a row can be
+   * resolved to a device by name.
+   */
+  by: string | null
 }
 
 /* --------------------------------------------------------------- narrowing -- */
@@ -110,6 +125,7 @@ export function readConsentSettled(value: unknown): ConsentSettledView | null {
     id: source.id,
     granted: outcome.granted === true,
     reason: typeof reason === 'string' ? (reason as RefusalReason) : null,
+    by: typeof outcome.by === 'string' ? outcome.by : null,
   }
 }
 
@@ -201,11 +217,35 @@ export function timeoutSentence(seconds: number): string {
  * not this dialog's.
  */
 export function settledSentence(settled: ConsentSettledView): string | null {
+  /*
+   * Answered somewhere else, and said so.
+   *
+   * Checked before `granted`, because an *allowed* question is the one case that
+   * used to return null — there was nothing to say, since the only surface that
+   * could allow it was this one. That is no longer true: a device holding a
+   * copilot connection can answer its own run's question, and this dialog then
+   * closes on an outcome the person in front of it did not choose. Saying so is
+   * the difference between a race that is visible and one that is not.
+   *
+   * A refusal answered on a device gets the same treatment, and it comes first
+   * so that "declined" — which normally returns null, because the person here
+   * just pressed the button — does not swallow a decline that happened
+   * elsewhere.
+   */
+  if (settled.by?.startsWith('device:') === true) {
+    return settled.granted
+      ? 'Allowed on a connected device.'
+      : 'Refused on a connected device.'
+  }
   if (settled.granted) return null
   switch (settled.reason) {
     case 'timeout':
       return 'Nobody answered in time, so it was refused.'
     case 'caller-gone':
+      // Two callers can produce this now: the copilot at the desk hanging up,
+      // and a connected device's copilot connection dropping while its own
+      // question was on screen. The sentence covers both because the outcome is
+      // the same — nobody is waiting for the answer any more.
       return 'The copilot stopped waiting, so the question was withdrawn.'
     case 'shutting-down':
       return 'The app is quitting, so it was refused.'

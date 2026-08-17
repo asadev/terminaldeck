@@ -2,7 +2,12 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { buildCatalogue } from '../deck-control/catalogue'
-import { COPILOT_FRAME_TIER, parseClientMessage, type ClientMessage } from './protocol'
+import {
+  COPILOT_FRAME_TIER,
+  COPILOT_UNTIERED_FRAMES,
+  parseClientMessage,
+  type ClientMessage,
+} from './protocol'
 
 /**
  * **No tool name ever appears in a frame a phone can construct.**
@@ -41,6 +46,30 @@ import { COPILOT_FRAME_TIER, parseClientMessage, type ClientMessage } from './pr
 
 /** The fields a `copilot.*` **client** frame is allowed to declare, and no others. */
 const ALLOWED_FIELDS: Readonly<Record<string, readonly string[]>> = {
+  /*
+   * The connect ceremony. A six-digit code and a credential, both minted on this
+   * machine and neither of them naming anything: a code is a number a person
+   * read off a screen, and a credential is 32 random bytes that mean *this
+   * device* to a store that will only ever say yes or no about them.
+   *
+   * They are the frames that establish a copilot connection — the second act of
+   * authorisation that replaced *"the alter tier cannot be granted remotely"* —
+   * and they carry no tier for the reason `COPILOT_UNTIERED_FRAMES` gives.
+   */
+  'copilot.connect': ['code'],
+  'copilot.hello': ['credential'],
+  'copilot.bye': [],
+  /*
+   * Answering a confirmation: a question id and a boolean.
+   *
+   * The id is a `randomUUID` the desktop itself sent to this device moments
+   * earlier, and the boolean is a decision. Neither names a tool, and that is
+   * exactly why this frame does not weaken the property: a device answers a
+   * question the desktop composed, it does not compose a call. The tool, the
+   * arguments and the effect are all decided on this machine, before anybody was
+   * asked anything.
+   */
+  'copilot.answer': ['id', 'approved'],
   'copilot.attach': [],
   'copilot.detach': [],
   'copilot.state': [],
@@ -70,6 +99,10 @@ const ALLOWED_FIELDS: Readonly<Record<string, readonly string[]>> = {
 
 /** Every copilot client frame a phone can build, as it goes onto the wire. */
 const FRAMES: ClientMessage[] = [
+  { t: 'copilot.connect', code: '481902' },
+  { t: 'copilot.hello', credential: 'Zm9vYmFyLWNyZWRlbnRpYWwtaGVyZQ' },
+  { t: 'copilot.bye' },
+  { t: 'copilot.answer', id: '9f1c2ae0-8f1d-4b1e-9a2f-77d7c0a1b3e5', approved: true },
   { t: 'copilot.attach' },
   { t: 'copilot.detach' },
   { t: 'copilot.state' },
@@ -171,9 +204,20 @@ describe('a phone cannot name a tool', () => {
    * request. The tier table is what decides which frames exist inbound, so the
    * assertion is against that.
    */
-  it('has no inbound verb for a tool, a run, or an approval', () => {
+  it('has no inbound verb for a tool or a run', () => {
+    /*
+     * `copilot.approve` and `copilot.allow` used to be on this list and are not
+     * any more, and the reason is not that they were allowed in — it is that
+     * neither name exists. Answering a confirmation is `copilot.answer`, and it
+     * takes a question id the desktop composed and sent, never a tool and never
+     * an argument. A device decides about a call; it cannot describe one.
+     *
+     * So the property this test defends is unchanged: no inbound verb names a
+     * tool, a run, or anything a phone could use to construct one.
+     */
     for (const verb of ['copilot.tool', 'copilot.run', 'copilot.approve', 'copilot.allow']) {
-      expect(COPILOT_FRAME_TIER[verb], `${verb} must not be a client verb`).toBeUndefined()
+      expect(COPILOT_FRAME_TIER[verb], `${verb} must not be a tiered client verb`).toBeUndefined()
+      expect(COPILOT_UNTIERED_FRAMES).not.toContain(verb)
       expect(parseClientMessage(JSON.stringify({ t: verb })).ok).toBe(false)
     }
   })
@@ -186,9 +230,30 @@ describe('a phone cannot name a tool', () => {
    * by one for the same reason, so that adding one without deciding its tier
    * stops the build.
    */
-  it('gives every copilot client frame exactly one tier', () => {
-    expect(Object.keys(COPILOT_FRAME_TIER).sort()).toEqual(Object.keys(ALLOWED_FIELDS).sort())
-    for (const frame of FRAMES) expect(COPILOT_FRAME_TIER[frame.t]).toBeDefined()
+  it('gives every copilot client frame exactly one tier, or names it untiered', () => {
+    /*
+     * Two lists cover the surface between them, and neither may grow without the
+     * other shrinking.
+     *
+     * `COPILOT_FRAME_TIER` is the tiered half. `COPILOT_UNTIERED_FRAMES` is the
+     * ceremony — the three frames that establish a copilot connection, which
+     * cannot be tier-gated because a device with no connection has no tiers and
+     * requiring one would mean no device could ever connect.
+     *
+     * Checking their *union* rather than only the first list is what stops a
+     * verb being quietly parked in the untiered set to avoid deciding its tier.
+     * Adding one to neither list fails here; adding one to both fails here too.
+     */
+    const tiered = Object.keys(COPILOT_FRAME_TIER)
+    const untiered = [...COPILOT_UNTIERED_FRAMES]
+    expect(tiered.filter((verb) => untiered.includes(verb))).toEqual([])
+    expect([...tiered, ...untiered].sort()).toEqual(Object.keys(ALLOWED_FIELDS).sort())
+    for (const frame of FRAMES) {
+      expect(
+        COPILOT_FRAME_TIER[frame.t] !== undefined || untiered.includes(frame.t),
+        `${frame.t} is in neither list`,
+      ).toBe(true)
+    }
   })
 })
 

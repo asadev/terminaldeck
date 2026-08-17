@@ -281,6 +281,33 @@ export function keepNewWindowInStrip(id: string, storage: Storage | null = defau
 }
 
 /**
+ * The inverse, against the same store: put a window away.
+ *
+ * The other half of the seam above, and it exists for one caller — ⌘W on the
+ * **copilot**. Every other window ⌘W closes is a session or a page that can be
+ * closed; the copilot is a singleton with no row in the rail and therefore no ✕
+ * that ends it, so the honest answer to "close this window" is the one the tab's
+ * own ✕ already gives: take it off the bar and leave the process running. That
+ * has to happen from a keyboard handler, which cannot read `usePromotedOrder`,
+ * which is exactly what {@link promotedStore} is for.
+ *
+ * The {@link Removal} is handed back rather than acted on, because moving the
+ * selection is the window's business and this file has no idea what else is on
+ * screen — see {@link removeFromStrip} for why the selection has to move at all.
+ */
+export function removeWindowFromStrip(
+  id: string,
+  tabs: readonly WorkspaceTab[],
+  activeId: string | null,
+  storage: Storage | null = defaultStorage(),
+): Removal {
+  const store = promotedStore(storage)
+  const result = removeFromStrip(store.get(), tabs, id, activeId)
+  store.set(result.order)
+  return result
+}
+
+/**
  * Whether the window has a tab strip at all.
  *
  * One predicate, read by both ends, because the answer decides two things that

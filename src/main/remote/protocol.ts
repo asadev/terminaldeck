@@ -132,9 +132,10 @@ export const PROTOCOL_VERSION = 1
  *
  * Every other name on this list is a promise about a *host*: this desktop
  * speaks these frames, so send them. This one is a promise about the host and
- * nothing at all about the device — copilot access is a **separate per-device
- * grant, off by default**, and the grant travels beside the capability rather
- * than inside it (see `welcome.copilot`).
+ * nothing at all about the device — copilot access is a **separate connection**
+ * with its own code, its own credential and its own record, off by default, and
+ * it travels beside the capability rather than inside it (see
+ * `welcome.copilot` and {@link CopilotLinkWire}).
  *
  * The split is deliberate and it is the shape `folders` already has. A
  * capability answers *can this machine do it*; a grant answers *may you*. Fold
@@ -539,29 +540,34 @@ export interface DeviceDescriptor {
 /* -------------------------------------------------- capability `copilot` -- */
 
 /**
- * The two tiers a device can be given, on the wire.
+ * The three tiers a copilot connection can be given, on the wire.
  *
- * **`alter` is not here, and its absence is the mechanism rather than an
- * omission.** `remote/copilot-grants.ts` refuses to store it, `REMOTE_GRANTABLE_TIERS`
- * refuses to read it out of a hand-edited file, and this type refuses to carry
- * it — three independent refusals, so that closing any one of them by accident
- * still leaves a device without the tier whose entire safety property is *a
- * human at the machine says yes*.
+ * **`alter` used to be absent here and its absence was called the mechanism.**
+ * `remote/copilot-grants.ts` refused to store it, refused to read it out of a
+ * hand-edited file, and this type refused to carry it — three independent
+ * refusals guarding the tier whose safety property is *a human at the machine
+ * says yes*. That is superseded, and the reason is not that the property was
+ * abandoned: it is that the second factor moved. Copilot access is no longer a
+ * box ticked beside an already-paired phone; it is a **separate connection**
+ * with its own code, its own credential and its own record
+ * (`remote/copilot-link.ts`). The thing a device must have in order to answer
+ * its own confirmation is no longer *be at the desk*, it is *have been
+ * deliberately authorised for the copilot in a ceremony performed at the desk*.
+ * `COPILOT-REMOTE.md` §4 carries the full argument and what it replaced.
  *
  * Not spelled `Tier` and not imported from `deck-control/surface.ts`, even
- * though the words match. That module is main-process-only and this file
- * compiles into a browser (see the header); more importantly, the two are
- * genuinely different sets. The tier set is `deck-control`'s and has three
- * members; the *grantable* set is this feature's and has two, and a third tier
- * added over there must not silently become grantable over here by sharing a
- * type.
+ * though the members now match. That module is main-process-only and this file
+ * compiles into a browser (see the header); and the two remain genuinely
+ * different sets — the tier set is `deck-control`'s, the *grantable* set is this
+ * feature's, and a fourth tier added over there must not silently become
+ * grantable over here by sharing a type.
  */
-export type CopilotTier = 'read' | 'act'
+export type CopilotTier = 'read' | 'act' | 'alter'
 
 /**
- * One device's copilot access, as `welcome` and `copilot.grant` carry it.
+ * One connection's copilot access, as `welcome` and `copilot.grant` carry it.
  *
- * Always both fields, never a partial object and never absent-meaning-false.
+ * Always all three fields, never a partial object and never absent-meaning-false.
  * A client then has exactly one shape to read, and "no access" has one spelling
  * rather than three — which matters because the difference between them is the
  * difference between a Copilot tab that is hidden and one that is drawn and
@@ -570,6 +576,32 @@ export type CopilotTier = 'read' | 'act'
 export interface CopilotGrantWire {
   read: boolean
   act: boolean
+  alter: boolean
+}
+
+/**
+ * Whether this device has a copilot connection at all, and whether this socket
+ * has opened it.
+ *
+ * Three facts rather than one, because a client has three different screens to
+ * draw and folding them together makes one of them wrong:
+ *
+ *  - `linked` — this desktop holds a copilot record for this device. False means
+ *    *ask the person for a connect code*; there is no frame that will work
+ *    before one is redeemed.
+ *  - `open` — **this socket** has presented the copilot credential. Every
+ *    `copilot.*` verb needs it, including the read-tier ones. A client that
+ *    reconnects has a `linked` of true and an `open` of false until it sends
+ *    `copilot.hello` again, which is the whole point of a separate connection:
+ *    the copilot is not something a session channel carries by existing.
+ *  - `grant` — what the connection may do once open. Sent even while closed, so
+ *    a device can show what it would get rather than discovering it a frame
+ *    later.
+ */
+export interface CopilotLinkWire {
+  linked: boolean
+  open: boolean
+  grant: CopilotGrantWire
 }
 
 /**
@@ -600,7 +632,43 @@ export const COPILOT_FRAME_TIER: Readonly<Record<string, CopilotTier>> = {
   'copilot.say': 'act',
   'copilot.cancel': 'act',
   'copilot.stop': 'act',
+  /**
+   * Answering a confirmation is `alter`, and it is the only frame that is.
+   *
+   * Not because answering *is* an alter action — it is not, it is a decision
+   * about one — but because the tier is exactly the question being asked. A
+   * connection that may not perform alter-tier work has no business deciding
+   * whether alter-tier work happens, and letting a `read` device answer would
+   * make the read tier a way to authorise everything the act tier refuses.
+   *
+   * The ownership rule is separate and is enforced in the broker, not here:
+   * **a question may only be answered by the surface that raised it, or by the
+   * desktop.** This table cannot express that, because it is about verbs and
+   * that rule is about one particular question — see `deck-control/consent.ts`.
+   */
+  'copilot.answer': 'alter',
 }
+
+/**
+ * The three frames that are **not** in the tier table, and why.
+ *
+ * `copilot.connect`, `copilot.hello` and `copilot.bye` are the authorisation
+ * ceremony itself. Gating them on a tier would be circular: a device with no
+ * copilot connection has no tiers, so requiring one to send the frame that
+ * establishes the connection would mean no device could ever connect.
+ *
+ * They are listed here rather than left implicit so that a reader checking
+ * "which verbs skip the tier check" gets an answer from the code instead of
+ * inferring one from an absence. `server.ts` handles each of them explicitly and
+ * `copilot-frames.test.ts` asserts that the two lists together cover every
+ * `copilot.*` client verb — so a verb added without deciding which list it
+ * belongs in fails the suite rather than falling through to a handler.
+ */
+export const COPILOT_UNTIERED_FRAMES: readonly string[] = [
+  'copilot.connect',
+  'copilot.hello',
+  'copilot.bye',
+]
 
 /**
  * Largest `copilot.say`, in UTF-8 bytes.
@@ -719,24 +787,127 @@ export interface CopilotActionRow {
 }
 
 /**
- * A confirmation waiting at the desk, as a phone *watches* it.
+ * A confirmation that is waiting, as a device *watches* it.
  *
- * There is no Allow and no Refuse on this row and there must never be one. The
- * alter tier's whole safety property is that a human at the machine says yes,
- * and the party holding the phone is by definition not that human — a phone
- * that could answer its own request holds `alter`, and the grant that withheld
- * it was a ceremony. What this row is for is the failure the design named: the
- * desktop dialog is on a screen nobody is looking at, and two minutes later it
- * times out in silence. The phone's job is to say *go and look*.
+ * This row used to carry no `mine` and the type said, in those words, that
+ * there must never be an Allow or a Refuse on it. That was true while copilot
+ * access was a box ticked beside a paired phone; it is not true now that a
+ * copilot connection is its own authorisation. See {@link CopilotLinkWire} and
+ * `COPILOT-REMOTE.md` §4.
+ *
+ * What survives unchanged is the *watching* half, and it is still most of the
+ * value: the failure the design named is a desktop dialog on a screen nobody is
+ * looking at, timing out in silence two minutes later. A device sees every
+ * question, including ones it may not answer, so it can say *go and look*.
+ *
+ * There is deliberately no `args` here. Watching a question is not judging it,
+ * and the arguments of a pending alter call are the most sensitive thing on this
+ * surface — a settings key and its new value, a session id and the text about to
+ * be typed into it. A device that *can* answer gets them, in full, on
+ * {@link CopilotConsentQuestion}; a device that cannot has no decision to make
+ * with them.
  */
 export interface CopilotPendingRow {
   id: string
   tool: string
   summary: string
   requestedAt: number
-  /** When it refuses itself, so the phone counts down exactly as the dialog does. */
+  /** When it refuses itself, so the device counts down exactly as the dialog does. */
+  expiresAt: number
+  /**
+   * May **this** connection answer it?
+   *
+   * Computed per device on this desktop, never inferred by the client, and it is
+   * the wire half of the rule §4.2 flags as non-obvious: *a question may only be
+   * answered by the surface that owns the run that raised it, or by the desktop.*
+   * Otherwise device A approves device B's action, which is a permission model
+   * with a shared password.
+   *
+   * A client must still send `copilot.answer` and be refused rather than trusting
+   * this — it is drawn from a snapshot and the desktop is the boundary — but a
+   * client that drew an Allow button on somebody else's question would be
+   * offering a control that is always refused.
+   */
+  mine: boolean
+}
+
+/**
+ * A confirmation this connection may answer, with everything needed to judge it.
+ *
+ * ## Why this is a different type from {@link CopilotPendingRow}
+ *
+ * Because the two answer different questions and one of them is dangerous to get
+ * wrong. A pending row says *something needs attention*; this says *decide*. A
+ * consent prompt without enough context becomes a reflex Yes, and a gate that is
+ * always answered yes is worse than no gate at all, because it looks like
+ * protection. So this carries what a person actually needs:
+ *
+ *  - **what** — the tool, by its canonical dotted id, and the desktop's own
+ *    one-line summary. Composed by the tool that is about to run, never
+ *    re-composed on the client: a client that wrote its own sentence would be
+ *    describing an action it did not implement.
+ *  - **who** — which run raised it. `origin` is `'window'` for the copilot at
+ *    the desk and `device:<id>` for a connection's own run, so *my phone's
+ *    copilot asked for this* and *the Mac's copilot asked for this* never read
+ *    the same.
+ *  - **with what arguments** — `args`, verbatim, already through `scrubArgs`.
+ *    Every one of them, in the order the tool declares them. This is the field
+ *    that turns a prompt from a shape into a decision, and it is why the type
+ *    exists separately from the watch-only row.
+ *  - **what happens if you say nothing** — `expiresAt`. It expires into a
+ *    *refusal*, so a person who walks away has decided rather than deferred, and
+ *    the countdown has to be in front of them.
+ */
+export interface CopilotConsentQuestion {
+  id: string
+  tool: string
+  /** Always `alter` today. Carried so a client renders the stakes rather than assuming them. */
+  tier: string
+  summary: string
+  /** Scrubbed arguments, verbatim, in the tool's own order. */
+  args: Record<string, unknown>
+  /** `'window'`, or `device:<id>` for the connection whose run raised it. */
+  origin: string
+  requestedAt: number
   expiresAt: number
 }
+
+/**
+ * A question closed, and **where** it was answered.
+ *
+ * Pushed to every connection that could see the question, including the one that
+ * answered it. The `by` field is the whole reason this frame is not just a
+ * dismissal: first answer wins, and the surface that loses the race has to
+ * withdraw its dialog *saying where it went* rather than having it vanish. A
+ * dialog that disappears on its own teaches a person that the app does things
+ * behind their back.
+ */
+export interface CopilotSettledRow {
+  id: string
+  granted: boolean
+  /** `'window'`, `device:<id>`, or null when nobody answered — a timeout. */
+  by: string | null
+  /** The refusal reason when it was refused. Null when it was allowed. */
+  reason: string | null
+}
+
+/**
+ * Largest `copilot.connect` code, in characters.
+ *
+ * Six digits with room for whatever separators a client's keypad inserts. The
+ * store normalises and the cap is here so a malformed frame is refused before it
+ * reaches a hash.
+ */
+export const MAX_COPILOT_CODE_CHARS = 32
+
+/**
+ * Largest copilot credential, in characters.
+ *
+ * 32 bytes of base64url is 43. The ceiling is generous and finite for the reason
+ * `device-auth.ts` gives about its own: a caller that forgets to check a frame
+ * size must not be able to hand a megabyte to scrypt.
+ */
+export const MAX_COPILOT_CREDENTIAL_CHARS = 512
 
 export type ClientMessage =
   /**
@@ -998,6 +1169,58 @@ export type ClientMessage =
    * here, because that one frame gives back everything the design bought.
    */
   /**
+   * ## The copilot is a **separate connection**, and these three frames are it
+   *
+   * `copilot.connect`, `copilot.hello` and `copilot.bye` carry no tier because
+   * they *are* the authorisation. A device paired to run terminals has no
+   * copilot reach at all until a person at the desktop mints a connect code and
+   * this device redeems it; after that, every socket it opens has to present the
+   * resulting credential before a single `copilot.*` verb is served, read tier
+   * included.
+   *
+   * The second factor is therefore *having been deliberately authorised for the
+   * copilot*, not *being in the room* — which is what makes it honest for a
+   * device to hold `alter` and answer its own confirmations. See
+   * `remote/copilot-link.ts` for the argument this replaced, in full.
+   *
+   * Redeem a connect code. Sent on an already-authenticated sealed channel, so
+   * the device id is a fact rather than a claim and the code is the second thing
+   * being proved rather than the first. Answered once with `copilot.linked`
+   * carrying the credential, or with `error`.
+   */
+  | { t: 'copilot.connect'; code: string }
+  /**
+   * Open the copilot connection on this socket, with the stored credential.
+   *
+   * Answered with `copilot.grant` carrying `open: true`. Required after every
+   * reconnect: a session channel does not carry the copilot by existing, which
+   * is the entire difference between this design and the per-device grant it
+   * replaced.
+   */
+  | { t: 'copilot.hello'; credential: string }
+  /**
+   * Close the copilot connection on this socket, and keep the terminals.
+   *
+   * Not a disconnect: the credential and the record survive, so the next
+   * `copilot.hello` works. It is what a client sends when a person leaves the
+   * Copilot tab on a device they share.
+   */
+  | { t: 'copilot.bye' }
+  /**
+   * Answer a confirmation.
+   *
+   * `alter`, and refused unless this connection owns the run that raised the
+   * question — see {@link COPILOT_FRAME_TIER} and `deck-control/consent.ts`.
+   * First answer wins; the loser is told where it was answered rather than
+   * having its dialog vanish.
+   *
+   * `approved` is a required boolean and nothing else is read as yes. A client
+   * whose wiring sent `undefined` must not approve somebody's settings being
+   * rewritten — the same rule `deck-control:consent-respond` keeps one process
+   * in.
+   */
+  | { t: 'copilot.answer'; id: string; approved: boolean }
+  /**
    * Watch this device's copilot surface, and replay what exists.
    *
    * Starts nothing and spends nothing, which is why it is `read`. Answered with
@@ -1098,22 +1321,20 @@ export type ServerMessage =
        */
       folders?: string[]
       /**
-       * What this device may do with the copilot. **Absent means nothing.**
+       * This device's copilot connection. **Absent means this host has none.**
        *
        * Carried per-device, beside the host-wide `capabilities`, for the reason
        * `folders` is and `CAPABILITY.copilot` restates: one says what this
        * machine can do, the other says what *you* may do, and a client that
        * reads the first as the second draws a control that is always refused.
        *
-       * Absent and `{read:false, act:false}` mean the same thing, and both are
-       * sendable: a desktop older than this field sends nothing, and a current
-       * desktop sends the object so a client has one shape to read. `alter` is
-       * not a field here — not as `false`, not at all. `copilot-grants.ts`
-       * makes the same choice for the file on disk and gives the reason: a
-       * stored `"alter": false` reads, to somebody looking at it, like a switch
-       * that could be turned on.
+       * `open` is always false here, on every `welcome`, and that is not a
+       * placeholder — it is the shape of the feature. A session channel does not
+       * carry the copilot by existing; the client sends `copilot.hello` with its
+       * stored credential and gets `copilot.grant` back with `open: true`. A
+       * desktop older than this field sends nothing at all.
        */
-      copilot?: CopilotGrantWire
+      copilot?: CopilotLinkWire
     }
   | { t: 'sessions'; sessions: RemoteSession[] }
   | { t: 'attached'; id: string }
@@ -1331,14 +1552,47 @@ export type ServerMessage =
   | { t: 'copilot.log'; rows: CopilotActionRow[]; more: boolean }
   | { t: 'copilot.pending'; questions: CopilotPendingRow[] }
   /**
-   * This device's copilot grant changed while it was connected.
+   * This connection's copilot state changed: opened, closed, regranted, or
+   * disconnected entirely.
    *
-   * Pushed, so a revoked phone's Copilot tab goes away without a reconnect. The
-   * *rule* is already live without this frame, because the grant is read per
-   * message and per tool call — which is exactly what makes this push honest
-   * rather than load-bearing. Same argument, same shape, as `folders`.
+   * Pushed, so a disconnected device's Copilot tab goes away without a
+   * reconnect. The *rule* is already live without this frame, because the grant
+   * is read per message and per tool call — which is exactly what makes this
+   * push honest rather than load-bearing. Same argument, same shape, as
+   * `folders`.
    */
-  | { t: 'copilot.grant'; grant: CopilotGrantWire }
+  | { t: 'copilot.grant'; link: CopilotLinkWire }
+  /**
+   * The copilot connection was established, and here is the credential.
+   *
+   * Sent exactly once, in answer to `copilot.connect`, and never again by any
+   * frame: the desktop stores a scrypt hash and cannot show it a second time. A
+   * client that loses it asks the person for a new code — which is the right
+   * failure, because minting a code is a deliberate act at the machine and
+   * re-issuing a credential on request would not be.
+   *
+   * The client must store it where it stores its session credential and with the
+   * same care. On iOS that is the keychain; anywhere else it is whatever holds
+   * the pairing credential today, because the two are worth exactly the same.
+   */
+  | { t: 'copilot.linked'; credential: string; link: CopilotLinkWire }
+  /**
+   * A confirmation this connection may answer. Pushed the moment it is raised.
+   *
+   * Only ever sent to the surface that owns the run that raised it. Everybody
+   * else who is watching sees it as a `copilot.pending` row with `mine: false`,
+   * which is a notification and not a decision.
+   */
+  | { t: 'copilot.ask'; question: CopilotConsentQuestion }
+  /**
+   * A confirmation closed, and where it was answered.
+   *
+   * Pushed to every connection that was told about it, including the one that
+   * answered. See {@link CopilotSettledRow}: a dialog that vanishes without
+   * saying where the answer came from is the app doing something behind a
+   * person's back.
+   */
+  | { t: 'copilot.settled'; settled: CopilotSettledRow }
 
 /**
  * Every refusal this protocol can name, as a value rather than only a type.
@@ -2056,10 +2310,59 @@ export function parseClientMessage(raw: unknown): ParseResult {
     case 'copilot.start':
     case 'copilot.cancel':
     case 'copilot.stop':
+    case 'copilot.bye':
       // Listed one by one rather than caught by a prefix test, so that adding a
       // verb to this capability without deciding what it carries stops the build
       // instead of silently arriving as a bare frame.
       return { ok: true, message: { t: parsed.t } }
+    case 'copilot.connect': {
+      /*
+       * A connect code, shape-checked and nothing more.
+       *
+       * Not normalised here and not compared here. `copilot-link.ts` owns the
+       * alphabet, the expiry, the single use and the five-wrong-guesses rule,
+       * and a second opinion about what a code looks like living in the parser
+       * is how the two come apart — the same reason this file shape-checks a
+       * pairing token and lets `device-auth.ts` decide whether it is real.
+       */
+      const code = parsed.code
+      if (typeof code !== 'string' || code === '') return bad('copilot.connect without a code')
+      if (code.length > MAX_COPILOT_CODE_CHARS) return bad('copilot.connect with an unusable code')
+      return { ok: true, message: { t: 'copilot.connect', code } }
+    }
+    case 'copilot.hello': {
+      const credential = parsed.credential
+      if (typeof credential !== 'string' || credential === '') {
+        return bad('copilot.hello without a credential')
+      }
+      // Bounded before it reaches scrypt. The store checks the alphabet too;
+      // this is the transport refusing to hand a megabyte to a KDF, which is a
+      // check that belongs at the edge whether or not the store repeats it.
+      if (credential.length > MAX_COPILOT_CREDENTIAL_CHARS) {
+        return bad('copilot.hello with an unusable credential')
+      }
+      return { ok: true, message: { t: 'copilot.hello', credential } }
+    }
+    case 'copilot.answer': {
+      const answerId = id(parsed.id)
+      // A consent id is a `randomUUID` from `consent.ts`. Checked here so the
+      // refusal says "that is not a question id" rather than surfacing as an
+      // answer that quietly did nothing.
+      if (!answerId) return bad('copilot.answer without a question id')
+      /*
+       * A required boolean, and **only a literal `true` is yes**.
+       *
+       * The same rule `deck-control:consent-respond` keeps inside the process,
+       * for the same reason and with more at stake: this frame decides whether
+       * an alter-tier action happens, and a client whose wiring sent `undefined`
+       * or `"true"` must not have that read as approval. Refused rather than
+       * coerced — a malformed answer is a client bug, and answering it as "no"
+       * would hide the bug behind a plausible outcome.
+       */
+      const approved = parsed.approved
+      if (typeof approved !== 'boolean') return bad('copilot.answer without a decision')
+      return { ok: true, message: { t: 'copilot.answer', id: answerId, approved } }
+    }
     case 'copilot.say': {
       // Read once, for the reason spelled out on `input.data`: on the object
       // path a property can be a getter, and the string that is measured has to

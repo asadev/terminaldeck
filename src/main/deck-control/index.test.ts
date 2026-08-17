@@ -6,6 +6,7 @@ import type { IpcMain } from 'electron'
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import type { ConsentOutcome, ConsentRequest } from './consent'
 import type { DeckSurface } from './surface'
 import type { SessionMeta } from '../../shared/types'
 
@@ -100,6 +101,7 @@ function surface(settings: Record<string, string | number | boolean>): DeckSurfa
     writeToSession: () => undefined,
     killSession: () => undefined,
     sessionScreen: async () => '',
+    sessionScrollback: () => '',
     listProjects: () => [{ path: '/work/api', lastOpenedAt: 1 }],
     gitStatus: async () => ({ repo: false }),
     alerts: async () => ({ alerts: [] }),
@@ -155,15 +157,40 @@ let approverWindow: FakeWindow
 let otherWindow: FakeWindow
 let broadcasts: Array<{ channel: string; args: unknown[] }>
 
+/**
+ * The second surface a confirmation can appear on, recorded rather than drawn.
+ *
+ * `deck-control/index.ts` fans every question out to a `ConsentRelay` as well as
+ * to the window, because a connected device runs a copilot of its own and may
+ * answer its own run's questions. This stands in for `CopilotRuns` — the point
+ * of these tests is the *wiring*, and a fake that records what it was handed is
+ * exactly enough to prove a question reached it.
+ */
+let relay: {
+  asked: ConsentRequest[]
+  settled: Array<[string, ConsentOutcome]>
+  /** Whether the relay reports that somebody on that side could be asked. */
+  delivers: boolean
+  /** Make `ask` throw, which is the same situation as no relay at all. */
+  throws: boolean
+}
+
 async function boot(options: { trustEveryWindow?: boolean } = {}): Promise<void> {
   ipc = new FakeIpcMain()
   settings = { 'appearance.density': 'comfortable' }
   approverWindow = new FakeWindow(ipc)
   otherWindow = new FakeWindow(ipc)
   broadcasts = []
+  relay = { asked: [], settled: [], delivers: false, throws: false }
 
   handle = await registerDeckControlIpc(ipc as unknown as IpcMain, {
-    ptys: { list: () => [], write: () => undefined, kill: () => undefined, screen: async () => null },
+    ptys: {
+      list: () => [],
+      write: () => undefined,
+      kill: () => undefined,
+      screen: async () => null,
+      scrollback: () => '',
+    },
     startSession: async () => SESSION,
     sessionStatus: () => undefined,
     // The real app answers this with `contents === mainWindow.webContents`.
@@ -175,6 +202,24 @@ async function boot(options: { trustEveryWindow?: boolean } = {}): Promise<void>
     surface: surface(settings),
     logDir: join(ROOT, 'log'),
     consentTimeoutMs: 150,
+    /*
+     * Always attached, and inert by default.
+     *
+     * `relay.delivers` starts false, so `ask` records the question and reports
+     * that nobody on that side saw it — which leaves every case above exactly
+     * the wiring it had before a device could answer anything: the window
+     * decides whether a question is live. A test that wants the second surface
+     * flips one boolean rather than rebooting the rig, and re-registering would
+     * mean tearing down a live loopback server mid-file for one flag.
+     */
+    remoteApprover: {
+      ask: (request: ConsentRequest) => {
+        if (relay.throws) throw new Error('the phone layer blew up')
+        relay.asked.push(request)
+        return relay.delivers
+      },
+      settled: (id: string, outcome: ConsentOutcome) => relay.settled.push([id, outcome]),
+    },
   })
 }
 
@@ -226,7 +271,13 @@ describe('registration', () => {
   it('refuses to register twice rather than taking the app down on a duplicate channel', async () => {
     await expect(
       registerDeckControlIpc(ipc as unknown as IpcMain, {
-        ptys: { list: () => [], write: () => undefined, kill: () => undefined, screen: async () => null },
+        ptys: {
+      list: () => [],
+      write: () => undefined,
+      kill: () => undefined,
+      screen: async () => null,
+      scrollback: () => '',
+    },
         startSession: async () => SESSION,
         sessionStatus: () => undefined,
         isApprover: () => false,
@@ -712,5 +763,120 @@ describe('the CLI’s permission mode is not this gate', () => {
     expect(result.isError).toBe(true)
     expect(settings['appearance.density']).toBe('comfortable')
     expect(approverWindow.sent).toEqual([])
+  })
+})
+
+/* ------------------------------------------------- the second approver -- */
+
+/**
+ * A confirmation reaches a connected device as well as the window.
+ *
+ * This is the wiring test for the thing `copilot-answer.test.ts` proves the
+ * behaviour of, and the two are not the same assertion. That file drives a real
+ * broker and a real run manager and shows the answer decides a tool call; this
+ * one shows that `registerDeckControlIpc` actually *hands the question over* —
+ * which is the failure this repository has paid for twice, a capability that
+ * typechecks, passes its own tests and is wired to nothing.
+ */
+describe('a confirmation goes to both surfaces', () => {
+  it('hands the question to the relay as well as to the window', async () => {
+    approverWindow.answers = true
+    await ipc.invoke('deck-control:consent-attach', approverWindow)
+
+    const result = await callTool('settings_write', {
+      scope: 'settings',
+      patch: { 'appearance.density': 'compact' },
+    })
+
+    expect(result.isError).toBe(false)
+    expect(relay.asked).toHaveLength(1)
+    expect(relay.asked[0]).toMatchObject({ tool: 'settings.write', tier: 'alter' })
+    // Withdrawn on both sides too, so a dialog on a device closes when the
+    // person at the desk answers first.
+    expect(relay.settled).toHaveLength(1)
+    expect(relay.settled[0][1]).toMatchObject({ granted: true, by: 'window' })
+  })
+
+  /**
+   * A relay that takes the question is enough on its own.
+   *
+   * `delivered` is an OR and not an AND: one surface is enough for the question
+   * to be live, and requiring both would refuse every question raised while a
+   * phone happened to be in a lift — or, more commonly, while no window had
+   * enrolled at all, which is a state a headless host is permanently in.
+   */
+  it('does not refuse for want of a window when a device can be asked', async () => {
+    relay.delivers = true
+    /*
+     * No window enrolled at all — the state the last test in the block above
+     * asserts is `no-approver`. With a relay that took the question it is not:
+     * one surface is enough for the question to be live, and requiring both
+     * would refuse every question raised while a device happened to be the only
+     * thing watching.
+     *
+     * Answered from a timer rather than after a fixed sleep, because standing up
+     * an MCP client and dispatching a tool call is not a duration this test may
+     * guess at — a sleep too short reads `relay.asked[0]` of an empty array and
+     * leaves the call hanging for the length of the suite.
+     */
+    const answered = new Promise<void>((done) => {
+      const poll = setInterval(() => {
+        const [question] = handle.consent.list()
+        if (!question) return
+        clearInterval(poll)
+        handle.consent.respond(question.id, true, 'window')
+        done()
+      }, 5)
+    })
+
+    const result = await callTool('settings_write', {
+      scope: 'settings',
+      patch: { 'appearance.density': 'compact' },
+    })
+    await answered
+
+    expect(relay.asked).toHaveLength(1)
+    expect(result.isError).toBe(false)
+    expect(settings['appearance.density']).toBe('compact')
+  })
+
+  /**
+   * And a relay that says nobody could be asked does not hold the call open.
+   *
+   * `no-approver` at once rather than two minutes of a tool call blocked on a
+   * dialog that was never drawn — the existing default-deny behaviour reaching
+   * one transport further out.
+   */
+  it('refuses at once when neither surface can be asked', async () => {
+    // Neither: no window enrolled, and a relay that reports nobody saw it.
+    relay.delivers = false
+
+    const started = Date.now()
+    const result = await callTool('settings_write', {
+      scope: 'settings',
+      patch: { 'appearance.density': 'compact' },
+    })
+
+    expect(result.isError).toBe(true)
+    expect(settings['appearance.density']).toBe('comfortable')
+    // Well inside the 150ms consent timeout this rig is booted with, so the
+    // refusal is the `no-approver` path rather than a timeout wearing its coat.
+    expect(Date.now() - started).toBeLessThan(140)
+  })
+
+  /**
+   * A relay that throws is the same situation as no relay, and must not stop the
+   * window being told.
+   */
+  it('still asks the window when the relay blows up', async () => {
+    approverWindow.answers = true
+    await ipc.invoke('deck-control:consent-attach', approverWindow)
+    relay.throws = true
+
+    const result = await callTool('settings_write', {
+      scope: 'settings',
+      patch: { 'appearance.density': 'compact' },
+    })
+    expect(result.isError).toBe(false)
   })
 })

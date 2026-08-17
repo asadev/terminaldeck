@@ -240,6 +240,47 @@ did, not just what it said.
 macOS first. He explicitly deferred other channels: *"let's not think about the
 other channels."*
 
+> **Corrected 2026-08-17 — "a full chat view" turned out to mean a *window*, not
+> a page.** Asad, having used it:
+>
+> > *"Give the copilot a full window like the other windows. It is not that much
+> > of a big window, it is like a small box inside the copilot page. Let it have
+> > a proper window like others — proper dropdowns on the top, like changing the
+> > counts, efforts, models, all those things should be there, exactly like the
+> > other sessions. It should have all of those things, nothing should be less
+> > than that. And it can stay as a window pill with the other windows."*
+>
+> The page was a `PanelId` — one of the places the window can travel to — and
+> being one is what gave it a bespoke bar carrying a state line, a second
+> spelling of Terminal/Chat and a Stop, above a terminal squeezed into the middle
+> third of the window. Every one of those had a first-class equivalent one row up
+> that the copilot was not being given, for one reason: it is filtered out of the
+> session list, and that list is what feeds the tab strip, the heading, the
+> account chip and the model / effort / fast-mode / connectors / usage cluster.
+>
+> So it is a **window** now. There are two lists in `App.tsx` — the fleet, which
+> the dashboard, the swarm, the alert scanner and the rail's project runs read,
+> and the fleet *plus the copilot*, which everything that draws a session as a
+> window reads. The copilot's tab carries `isCopilot`, and the handful of things
+> that are genuinely different hang off that flag and nothing else: it is called
+> Copilot rather than Session N, it wears its compass in the strip, it is not
+> listed in the rail (the pinned row is its home), its folder is not a project
+> `⌘T` would open into, and `⌘W` puts it away instead of ending it. `PanelId` no
+> longer has a `copilot` member — a member with no page is a dead route by
+> construction — and its name and glyph live in `renderer/copilot/identity.ts`.
+>
+> What survives of the page is drawn only when it has something to say, in a
+> bounded strip above the pane: the sign-in explanation on a first run, a refused
+> start in the CLI's own words, the turn a "why does this exist" link asked
+> about, the tours, and the sessions it started. With the copilot running and
+> signed in, that strip has no children and the terminal fills the window.
+>
+> Its main-process side needed one line: `session:created` was never fired for
+> the copilot, because the channel exists for sessions a window did not ask for
+> and nobody had counted this as one. The renderer therefore knew its *id* and
+> nothing else — no title, no status, no account — which is enough for a page
+> that mounts a terminal and not enough for a window.
+
 ---
 
 ## Remote, and why it is last
@@ -251,6 +292,28 @@ Correct instinct, and the existing model already supports it: pairing grants a
 device access to specific folders. Copilot access becomes a **separate
 capability grant**, off by default, granted per device. A paired phone gets
 terminal access and no copilot unless you say so.
+
+> **Corrected 2026-08-17 — "separately connect" turned out to mean it
+> literally.** This paragraph read the phrase as a *grant*: a checkbox beside an
+> already-paired device. Asad, on the finished spec: *"Phones will have full
+> control over copilot, same as the actual machine app. But connecting copilot
+> will be a separate connection than the sessions."*
+>
+> So it is a connection, not a capability bit. Its own six-digit code minted at
+> the desktop, its own credential, its own record, its own revoke — and a device
+> paired to run terminals has **no** copilot reach until it has been through
+> that ceremony. `COPILOT-REMOTE.md` §6 is the design and
+> `src/main/remote/copilot-link.ts` is the store.
+>
+> The consequence worth naming here, because it contradicts the tier table
+> above: a connected device **can** hold the alter tier and answer its own
+> confirmations. Not because the tier got safer, but because the second factor
+> behind it moved from *be at the desk* to *have been deliberately authorised for
+> the copilot* — which is a boundary rather than a geography. Every alter call
+> still draws a question, still expires into a refusal, and still writes a row
+> naming the surface that answered it: *allowed on a connected device* is a
+> different row from *allowed by the person*. `COPILOT-REMOTE.md` §4 carries the
+> full argument and the one it superseded.
 
 Deliberately phase 4. Remote access to an agent that can rewrite settings and
 spawn sessions is the highest-stakes surface in the product, and it should be

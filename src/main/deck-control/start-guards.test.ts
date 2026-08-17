@@ -86,6 +86,7 @@ function rig(options: { projects?: string[]; sessions?: SessionMeta[]; owned?: s
       screen.onLook?.()
       return screen.value
     },
+    sessionScrollback: () => screen.value ?? '',
     listProjects: () =>
       (options.projects ?? ['/work/api', '/work/web', join(state, 'copilot')]).map((path) => ({
         path,
@@ -126,6 +127,10 @@ function rig(options: { projects?: string[]; sessions?: SessionMeta[]; owned?: s
     context: {
       surface,
       callId: 'row-1',
+      // Somebody is at the keyboard. Only `tour.play` reads this, and these
+      // tests are about what a *start* refuses — but the field is required, so
+      // a fixture that left it out would be claiming an unattended run.
+      attended: true,
       // The person at this keyboard. Remote callers are `remote/`'s subject;
       // these tests are about what a start refuses, which is the same for both.
       caller: LOCAL_CALLER,

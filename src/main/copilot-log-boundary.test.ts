@@ -69,7 +69,7 @@
 import { execFile } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
   recordsFenceAgrees,
@@ -133,7 +133,18 @@ function logOnDisk(): string {
 }
 
 beforeAll(() => {
-  if (!onMac) return
+  /*
+   * No `if (!onMac) return` here, and its removal is the point.
+   *
+   * It used to be the first line, which left `userData` an empty string and
+   * `paths` undefined off macOS — so the one case in this file that is *not*
+   * about Seatbelt, the agreement between the fence's spelling of the log and
+   * `copilotPaths().log`, failed on Windows against paths composed from an
+   * empty string. That assertion is the thing that makes every refusal below
+   * mean something, and it is pure path composition: it should hold on every
+   * platform, and now it is checked on every platform. Only the `sandbox-exec`
+   * runs need a Mac, and those are the `describe.skipIf` further down.
+   */
   /*
    * Realpathed up front, and not for tidiness.
    *
@@ -191,8 +202,11 @@ describe('the fence names the log this app really writes', () => {
       }),
     ).toBe(true)
     // And it is not inside the folder the copilot works in, which is the whole
-    // move that closed the hole.
-    expect(paths.actions.startsWith(`${paths.root}/`)).toBe(false)
+    // move that closed the hole. `sep` rather than a literal slash: with a
+    // slash this would answer `false` on Windows for the wrong reason — every
+    // path there is spelled with backslashes — and a check that cannot fail is
+    // not a check.
+    expect(paths.actions.startsWith(`${paths.root}${sep}`)).toBe(false)
   })
 })
 

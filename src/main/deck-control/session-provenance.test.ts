@@ -50,6 +50,7 @@ function surface(started: CreateSessionInput[]): DeckSurface {
     writeToSession: () => undefined,
     killSession: () => undefined,
     sessionScreen: async () => null,
+    sessionScrollback: () => '',
     listProjects: () => [
       { path: '/work/api', lastOpenedAt: 1 },
       { path: '/work/web', lastOpenedAt: 2 },

@@ -17,7 +17,8 @@ import {
 import type { DevServerState, DevServers } from '../dev-server'
 import type { TailnetReady } from './tailnet'
 import { MAX_FAILED_ATTEMPTS, RemoteAuth } from './device-auth'
-import { CopilotGrants } from './copilot-grants'
+import { CopilotLinks } from './copilot-link'
+import { ConsentBroker, type ConsentOutcome } from '../deck-control/consent'
 import { CopilotRuns } from './copilot-runs'
 import { SessionFanout, type PtySource } from './session-fanout'
 import { CODE_LENGTH, isCode } from '../../shared/short-code'
@@ -2237,33 +2238,85 @@ describe('starting a project’s dev server from a phone', () => {
  * The copilot surface, over a real socket, from hello to refusal.
  *
  * The unit tests beside this one prove the rules — `copilot-enforcement.test.ts`
- * for the tier check at the point a tool is dispatched, `copilot-runs.test.ts`
- * for the run manager, `copilot-frames.test.ts` for the property that a phone
- * cannot name a tool. What none of them can prove is that the frames actually
- * reach any of it, which is the failure this repository has paid for twice: a
- * feature that typechecks, passes its unit tests and is wired to nothing.
+ * for the tier check at the point a tool is dispatched, `copilot-link.test.ts`
+ * for the connection store, `copilot-runs.test.ts` for the run manager,
+ * `copilot-frames.test.ts` for the property that a device cannot name a tool.
+ * What none of them can prove is that the frames actually reach any of it, which
+ * is the failure this repository has paid for twice: a feature that typechecks,
+ * passes its unit tests and is wired to nothing.
  *
  * So everything below goes down a loopback WebSocket, through the framing,
  * through the hello, through `copilotFor`, and into a real {@link CopilotRuns}
- * over a real {@link CopilotGrants} on a real temp directory. The only fakes are
+ * over a real {@link CopilotLinks} on a real temp directory. The only fakes are
  * the pty and the Claude CLI, which cannot be spawned in a test.
+ *
+ * ## What changed, and why every test here now has two ceremonies in it
+ *
+ * Copilot access used to be a per-device grant riding this same channel: say
+ * hello, and if a box had been ticked on the desktop the Copilot tab worked. It
+ * is now a **separate connection** — its own six-digit code, its own credential,
+ * its own record — and a device paired to run terminals has no copilot reach at
+ * all until it redeems one. So the fixtures pair *and then connect*, in that
+ * order, and the tests that matter most are the ones that stop after the first
+ * step.
  */
 
 function copilotHost(): {
   copilot: CopilotRuns
-  grants: CopilotGrants
+  links: CopilotLinks
+  consent: ConsentBroker
   dir: string
   spawned: number
   stopped: string[]
   said: Array<{ id: string; text: string }>
+  deskAttached: boolean
 } {
   const dir = mkdtempSync(join(tmpdir(), 'deck-copilot-wire-'))
   roots.push(dir)
-  const grants = new CopilotGrants(dir)
+  const links = new CopilotLinks(dir)
   const alive = new Set<string>()
-  const box = { spawned: 0, stopped: [] as string[], said: [] as Array<{ id: string; text: string }> }
-  const copilot = new CopilotRuns({
-    grants,
+  const box = {
+    spawned: 0,
+    stopped: [] as string[],
+    said: [] as Array<{ id: string; text: string }>,
+    /**
+     * Is a window attached as the desktop approver?
+     *
+     * Default false, so a test that says nothing about the desk gets the state a
+     * headless host is in — and the honest consequence of it, which is that a
+     * question nobody can be asked refuses itself at once rather than waiting
+     * two minutes for a dialog that was never drawn.
+     *
+     * The tests about the *ownership* rule flip it on, because what they are
+     * proving is that a device cannot answer somebody else's question — and with
+     * no approver anywhere the question would resolve `no-approver` before the
+     * device could try, which is a green test for the wrong reason.
+     */
+    deskAttached: false,
+  }
+  /*
+   * A real broker, wired to the run manager exactly as `deck-control/index.ts`
+   * wires it: `ask` fans the question out to both surfaces and `settled`
+   * withdraws it from both. Fake it and the answering path — first answer wins,
+   * the ownership rule, the withdrawal frame — would be tested against a mock of
+   * the thing that holds all three.
+   *
+   * `delivered` is an OR, exactly as it is in the real wiring: one surface is
+   * enough for the question to be live, and requiring both would refuse every
+   * question raised while a phone happened to be in a lift.
+   */
+  let copilot: CopilotRuns
+  const consent = new ConsentBroker({
+    ask: (request) => {
+      const remote = copilot.ask(request)
+      return box.deskAttached || remote
+    },
+    settled: (id, outcome) => copilot.settled(id, outcome),
+    timeoutMs: 5_000,
+  })
+  copilot = new CopilotRuns({
+    links,
+    consent: () => consent,
     callers: { set: () => {}, delete: () => true },
     endpoint: () => ({ url: 'http://127.0.0.1:5599/mcp' }),
     copilotRoot: () => join(dir, 'copilot'),
@@ -2284,10 +2337,31 @@ function copilotHost(): {
     cost: () => ({ tools: 11, turnTokens: 900 }),
     sessions: () => [],
     log: () => ({ rows: [], more: false }),
-    pending: () => [],
     chat: () => () => {},
   })
-  return Object.assign(box, { copilot, grants, dir })
+  return Object.assign(box, { copilot, links, consent, dir })
+}
+
+/**
+ * The connect ceremony, over the wire, exactly as a person performs it.
+ *
+ * Somebody at the desktop mints a code — that is `links.offer(tiers)`, which is
+ * what the settings panel calls — reads it out, and it is typed into the device.
+ * The device sends it on its already-authenticated sealed channel and is handed
+ * a credential it stores as carefully as its pairing one.
+ *
+ * Returns the credential, because the tests about reconnecting need it.
+ */
+async function connectCopilot(
+  client: Client,
+  host: ReturnType<typeof copilotHost>,
+  tiers: Record<string, boolean>,
+): Promise<string> {
+  const offer = host.links.offer(tiers)
+  client.send({ t: 'copilot.connect', code: offer.code })
+  const linked = await client.until((m) => m.t === 'copilot.linked', 'the copilot credential')
+  if (linked.t !== 'copilot.linked') throw new Error('unreachable')
+  return linked.credential
 }
 
 describe('the copilot capability is advertised only when it exists', () => {
@@ -2297,8 +2371,8 @@ describe('the copilot capability is advertised only when it exists', () => {
    *
    * `advertised` is built by filtering `CAPABILITIES`, and a name with no case
    * in that filter falls through to `return true`. A desktop built from such a
-   * tree tells every phone it speaks `copilot` while implementing none of it, so
-   * a client gating its Copilot tab on the capability — which is exactly what
+   * tree tells every device it speaks `copilot` while implementing none of it,
+   * so a client gating its Copilot tab on the capability — which is exactly what
    * the capability is for — draws a tab that answers `unauthorized` to
    * everything. The two tests here are the pair: present when the layer is
    * injected, absent when it is not.
@@ -2310,62 +2384,256 @@ describe('the copilot capability is advertised only when it exists', () => {
 
     const welcome = await client.until((m) => m.t === 'welcome', 'the welcome')
     expect(welcome.t === 'welcome' && welcome.capabilities).not.toContain(CAPABILITY.copilot)
-    // And the per-device grant is absent too, which is a different fact from
-    // "granted nothing" and is what stops a phone drawing a switch it cannot
-    // change: there is no copilot here at all.
+    // And the per-device link is absent too, which is a different fact from
+    // "not connected" and is what stops a client drawing a Connect button it
+    // cannot use: there is no copilot here at all.
     expect(welcome.t === 'welcome' && welcome.copilot).toBeUndefined()
   })
 
-  it('advertises it, and the device’s own grant, when the layer is there', async () => {
+  it('advertises it, and says this device has no connection yet', async () => {
     const host = copilotHost()
-    host.grants.set('device-1', { read: true })
     const harness = await serve({ copilot: host.copilot })
     const client = await connect(harness.port)
     client.send(HELLO)
 
     const welcome = await client.until((m) => m.t === 'welcome', 'the welcome')
     expect(welcome.t === 'welcome' && welcome.capabilities).toContain(CAPABILITY.copilot)
-    // `alter` is not on the wire at all — not as `false`, not as anything.
-    expect(welcome.t === 'welcome' && welcome.copilot).toEqual({ read: true, act: false })
+    expect(welcome.t === 'welcome' && welcome.copilot).toEqual({
+      linked: false,
+      open: false,
+      grant: { read: false, act: false, alter: false },
+    })
   })
 
-  it('says the capability is there and the grant is nothing, for an ungranted device', async () => {
+  /**
+   * `open` is false on **every** welcome, even for a device that has connected.
+   *
+   * This is the shape of the whole revision in one assertion. A session channel
+   * does not carry the copilot by existing; the client sends `copilot.hello`
+   * with its stored credential to open it, on every socket, after every
+   * reconnect. A desktop that reported `open: true` here would have made the
+   * separate connection a fact about pairing again.
+   */
+  it('says linked and not open for a device that has connected before', async () => {
     const host = copilotHost()
+    const offer = host.links.offer({ read: true, act: true, alter: true })
+    await host.links.redeem(offer.code, 'device-1')
+
     const harness = await serve({ copilot: host.copilot })
     const client = await connect(harness.port)
     client.send(HELLO)
 
     const welcome = await client.until((m) => m.t === 'welcome', 'the welcome')
-    expect(welcome.t === 'welcome' && welcome.capabilities).toContain(CAPABILITY.copilot)
-    expect(welcome.t === 'welcome' && welcome.copilot).toEqual({ read: false, act: false })
+    expect(welcome.t === 'welcome' && welcome.copilot).toEqual({
+      linked: true,
+      open: false,
+      grant: { read: true, act: true, alter: true },
+    })
   })
 })
 
-describe('a watching phone can watch, and cannot do', () => {
-  /** The round trip: attach, and get the state of a real copilot layer back. */
-  it('attaches and is answered with the state', async () => {
+describe('a device paired for sessions has no copilot reach', () => {
+  /**
+   * **The headline property of the whole design, over a real socket.**
+   *
+   * This client is fully paired and approved — `allowKnownDevice` let it in, the
+   * welcome carried its sessions, and it could attach to a terminal right now.
+   * It has simply never redeemed a copilot code. Every `copilot.*` verb it can
+   * construct is refused, *including the read-tier ones*, so there is no frame
+   * it can send that measures anything about the copilot at all: not whether one
+   * is running, not how many confirmations are waiting, not whether a grant it
+   * does not have would have been enough.
+   */
+  it('refuses every copilot verb from a paired device that has not connected', async () => {
     const host = copilotHost()
-    host.grants.set('device-1', { read: true })
     const harness = await serve({ copilot: host.copilot })
     const client = await connect(harness.port)
     client.send(HELLO)
     await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    const verbs = [
+      { t: 'copilot.attach' },
+      { t: 'copilot.state' },
+      { t: 'copilot.sessions' },
+      { t: 'copilot.pending' },
+      { t: 'copilot.log' },
+      { t: 'copilot.start' },
+      { t: 'copilot.say', text: 'anything' },
+      { t: 'copilot.answer', id: '9f1c2ae0-8f1d-4b1e-9a2f-77d7c0a1b3e5', approved: true },
+    ]
+    for (const frame of verbs) client.send(frame)
+    client.send({ t: 'ping' })
+    await client.until((m) => m.t === 'pong', 'the pong')
+
+    const errors = client.received.filter((m) => m.t === 'error')
+    expect(errors.length).toBe(verbs.length)
+    for (const error of errors) {
+      expect(error).toMatchObject({ t: 'error', code: 'unauthorized' })
+      // The sentence says *this device is not connected*, not *you need more
+      // access*. Two different remedies, and the second would send somebody
+      // looking for a checkbox that is not the obstacle.
+      expect(error.t === 'error' && error.message).toMatch(/not connected to the copilot/)
+    }
+    // Nothing about the copilot leaked into any of it.
+    expect(client.received.some((m) => m.t.startsWith('copilot.'))).toBe(false)
+    expect(host.spawned).toBe(0)
+  })
+
+  /**
+   * And its terminals still work, which is the other half of *revoking one does
+   * not revoke the other*.
+   *
+   * A device with no copilot connection is not a device in trouble. It is an
+   * ordinary paired phone, and the session surface has to be exactly as it was.
+   */
+  it('leaves the session surface untouched for a device with no copilot', async () => {
+    const host = copilotHost()
+    const harness = await serve({ copilot: host.copilot })
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    client.send({ t: 'list' })
+    const sessions = await client.until((m) => m.t === 'sessions', 'the session list')
+    expect(sessions.t === 'sessions' && sessions.sessions.length).toBeGreaterThan(0)
+  })
+})
+
+describe('opening the copilot connection', () => {
+  it('hands over a credential once, and opens this socket with it', async () => {
+    const host = copilotHost()
+    const harness = await serve({ copilot: host.copilot })
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    const credential = await connectCopilot(client, host, { read: true, act: true, alter: true })
+    expect(credential.length).toBeGreaterThan(20)
+
+    // Redeeming opens the connection on this socket as well: it has just proved
+    // it holds a code minted at the machine seconds ago, which is a stronger
+    // claim than the credential it was handed.
+    const grant = await client.until((m) => m.t === 'copilot.grant', 'the open grant')
+    expect(grant).toEqual({
+      t: 'copilot.grant',
+      link: { linked: true, open: true, grant: { read: true, act: true, alter: true } },
+    })
+
+    client.send({ t: 'copilot.state' })
+    const state = await client.until((m) => m.t === 'copilot.state', 'the state')
+    expect(state).toMatchObject({ state: { desk: 'running', tools: 11 } })
+  })
+
+  it('refuses a code that was never minted', async () => {
+    const host = copilotHost()
+    const harness = await serve({ copilot: host.copilot })
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    client.send({ t: 'copilot.connect', code: '000000' })
+    const error = await client.until((m) => m.t === 'error', 'the refusal')
+    expect(error).toMatchObject({ t: 'error', code: 'unauthorized' })
+    expect(host.links.linked('device-1')).toBe(false)
+  })
+
+  /**
+   * A reconnect has to send `copilot.hello`, and until it does it has nothing.
+   *
+   * The credential survives the socket; the *connection* does not. This is the
+   * assertion that would go red if somebody "helpfully" made a device's copilot
+   * access follow from its pairing again, which is the design this replaced.
+   */
+  it('gives a reconnected device nothing until it presents the credential', async () => {
+    const host = copilotHost()
+    const harness = await serve({ copilot: host.copilot })
+
+    const first = await connect(harness.port)
+    first.send(HELLO)
+    await first.until((m) => m.t === 'welcome', 'the welcome')
+    const credential = await connectCopilot(first, host, { read: true, act: true })
+
+    const second = await connect(harness.port)
+    second.send(HELLO)
+    await second.until((m) => m.t === 'welcome', 'the second welcome')
+
+    second.send({ t: 'copilot.state' })
+    const error = await second.until((m) => m.t === 'error', 'the refusal')
+    expect(error).toMatchObject({ t: 'error', code: 'unauthorized' })
+
+    second.send({ t: 'copilot.hello', credential })
+    const grant = await second.until((m) => m.t === 'copilot.grant', 'the reopened grant')
+    expect(grant).toMatchObject({ link: { linked: true, open: true } })
+
+    second.send({ t: 'copilot.state' })
+    await second.until((m) => m.t === 'copilot.state', 'the state after reopening')
+  })
+
+  it('refuses a credential that is not this device’s', async () => {
+    const host = copilotHost()
+    const harness = await serve({ copilot: host.copilot })
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    client.send({ t: 'copilot.hello', credential: 'bm90LWEtcmVhbC1jcmVkZW50aWFs' })
+    const error = await client.until((m) => m.t === 'error', 'the refusal')
+    expect(error).toMatchObject({ t: 'error', code: 'unauthorized' })
+  })
+
+  /**
+   * `copilot.bye` ends the connection on this socket and keeps the credential.
+   *
+   * What a person closing the Copilot tab on a shared machine wants is that
+   * socket's access gone, not their connection deleted.
+   */
+  it('closes the connection on bye and reopens on the same credential', async () => {
+    const host = copilotHost()
+    const harness = await serve({ copilot: host.copilot })
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+    const credential = await connectCopilot(client, host, { read: true })
+
+    client.send({ t: 'copilot.bye' })
+    await client.until(
+      (m) => m.t === 'copilot.grant' && m.link.open === false,
+      'the closed grant',
+    )
+
+    client.send({ t: 'copilot.state' })
+    const error = await client.until((m) => m.t === 'error', 'the refusal after bye')
+    expect(error).toMatchObject({ t: 'error', code: 'unauthorized' })
+
+    client.send({ t: 'copilot.hello', credential })
+    await client.until((m) => m.t === 'copilot.grant' && m.link.open === true, 'the reopened grant')
+  })
+})
+
+describe('a watching connection can watch, and cannot do', () => {
+  it('attaches and is answered with the state', async () => {
+    const host = copilotHost()
+    const harness = await serve({ copilot: host.copilot })
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+    await connectCopilot(client, host, { read: true })
 
     client.send({ t: 'copilot.attach' })
     const state = await client.until((m) => m.t === 'copilot.state', 'the state')
     expect(state).toMatchObject({
       t: 'copilot.state',
-      state: { desk: 'running', run: null, tools: 11, grant: { read: true, act: false } },
+      state: { desk: 'running', run: null, tools: 11, grant: { read: true, act: false, alter: false } },
     })
   })
 
   it('answers every read verb and starts nothing', async () => {
     const host = copilotHost()
-    host.grants.set('device-1', { read: true })
     const harness = await serve({ copilot: host.copilot })
     const client = await connect(harness.port)
     client.send(HELLO)
     await client.until((m) => m.t === 'welcome', 'the welcome')
+    await connectCopilot(client, host, { read: true })
 
     client.send({ t: 'copilot.state' })
     await client.until((m) => m.t === 'copilot.state', 'the state')
@@ -2378,37 +2646,38 @@ describe('a watching phone can watch, and cannot do', () => {
 
     expect(log).toEqual({ t: 'copilot.log', rows: [], more: false })
     // Watching costs this machine one callback and spends no money. That is the
-    // whole argument for the read tier being the one to hand out.
+    // whole argument for the read tier still existing as a thing to hand out.
     expect(host.spawned).toBe(0)
   })
 
   /**
-   * The frame a phone should not be allowed to send, sent anyway.
+   * The frames a connection should not be allowed to send, sent anyway.
    *
    * `copilot.say` is `act` because talking to the copilot *is* `sessions.send`
-   * by the time it lands — it spends money and causes tool calls — and that line
-   * is what makes `read` a genuinely useful watching grant rather than a
-   * decorative one. A phone holding only `read` gets a clean refusal, and
-   * nothing is spawned, nothing is typed, and nothing is stopped.
+   * by the time it lands — it spends money and causes tool calls. `copilot.answer`
+   * is `alter` because a connection that may not perform alter-tier work has no
+   * business deciding whether alter-tier work happens; without that line, `read`
+   * would be a way to authorise everything `act` refuses.
    */
-  it('refuses say, start, cancel and stop from a read-only device', async () => {
+  it('refuses say, start, cancel, stop and answer from a read-only connection', async () => {
     const host = copilotHost()
-    host.grants.set('device-1', { read: true })
     const harness = await serve({ copilot: host.copilot })
     const client = await connect(harness.port)
     client.send(HELLO)
     await client.until((m) => m.t === 'welcome', 'the welcome')
+    await connectCopilot(client, host, { read: true })
 
     const acting = [
       { t: 'copilot.say', text: 'stop everything' },
       { t: 'copilot.start' },
       { t: 'copilot.cancel' },
       { t: 'copilot.stop' },
+      { t: 'copilot.answer', id: '9f1c2ae0-8f1d-4b1e-9a2f-77d7c0a1b3e5', approved: true },
     ]
     for (const frame of acting) client.send(frame)
     // Waited for by count rather than one at a time, because `until` resolves on
     // anything already received and would otherwise hand back the first
-    // refusal four times over — a loop that looks like it checked four frames
+    // refusal five times over — a loop that looks like it checked five frames
     // and checked one.
     client.send({ t: 'ping' })
     await client.until((m) => m.t === 'pong', 'the pong')
@@ -2428,59 +2697,49 @@ describe('a watching phone can watch, and cannot do', () => {
     expect(host.stopped).toEqual([])
   })
 
-  it('refuses every verb, including the read ones, from a device with no grant', async () => {
-    const host = copilotHost()
-    const harness = await serve({ copilot: host.copilot })
-    const client = await connect(harness.port)
-    client.send(HELLO)
-    await client.until((m) => m.t === 'welcome', 'the welcome')
-
-    client.send({ t: 'copilot.attach' })
-    const error = await client.until((m) => m.t === 'error', 'the refusal')
-    expect(error).toMatchObject({ t: 'error', code: 'unauthorized' })
-    // The state must not have leaked into the refusal — it is the thing being
-    // protected, and this is the assertion the unauthenticated tests above make
-    // about the session list for the same reason.
-    expect(client.received.some((m) => m.t === 'copilot.state')).toBe(false)
-  })
-
   /**
-   * An untick lands on the next frame, with no reconnect.
+   * A disconnect lands on the next frame, with no reconnect.
    *
-   * The grant is read per message — `copilot.granted(deviceId)` inside
-   * `copilotFor` — never captured at hello. This is the same property
-   * `folders()` has for `create`, and it is what makes the `copilot.grant` push
-   * honest rather than load-bearing: the rule is already live without it.
+   * The store is read per message — `copilot.granted(deviceId)` and
+   * `copilot.linked(deviceId)` inside `copilotFor` — never captured at hello.
+   * This is the same property `folders()` has for `create`, and it is what makes
+   * the `copilot.grant` push honest rather than load-bearing: the rule is
+   * already live without it.
    */
-  it('refuses on the very next frame after the grant is taken away', async () => {
+  it('refuses on the very next frame after the copilot is disconnected', async () => {
     const host = copilotHost()
-    host.grants.set('device-1', { read: true, act: true })
     const harness = await serve({ copilot: host.copilot })
     const client = await connect(harness.port)
     client.send(HELLO)
     await client.until((m) => m.t === 'welcome', 'the welcome')
+    await connectCopilot(client, host, { read: true, act: true })
 
     client.send({ t: 'copilot.start' })
     await client.until((m) => m.t === 'copilot.state', 'the started state')
     expect(host.spawned).toBe(1)
 
-    host.grants.forget('device-1')
+    host.links.disconnect('device-1')
 
     client.send({ t: 'copilot.say', text: 'anything at all' })
     const error = await client.until((m) => m.t === 'error', 'the refusal')
     expect(error).toMatchObject({ t: 'error', code: 'unauthorized' })
     expect(host.said).toEqual([])
+
+    // And the terminals are untouched: revoking one does not revoke the other.
+    client.send({ t: 'list' })
+    const sessions = await client.until((m) => m.t === 'sessions', 'the session list')
+    expect(sessions.t === 'sessions' && sessions.sessions.length).toBeGreaterThan(0)
   })
 })
 
-describe('an acting phone gets its own run', () => {
+describe('an acting connection gets its own run', () => {
   it('starts one run, answers a second start with it, and says into it', async () => {
     const host = copilotHost()
-    host.grants.set('device-1', { read: true, act: true })
     const harness = await serve({ copilot: host.copilot })
     const client = await connect(harness.port)
     client.send(HELLO)
     await client.until((m) => m.t === 'welcome', 'the welcome')
+    await connectCopilot(client, host, { read: true, act: true })
 
     client.send({ t: 'copilot.attach' })
     await client.until((m) => m.t === 'copilot.state', 'the first state')
@@ -2495,7 +2754,7 @@ describe('an acting phone gets its own run', () => {
     client.send({ t: 'ping' })
     await client.until((m) => m.t === 'pong', 'the pong')
 
-    // One process for two starts. A phone that reconnects and taps Start —
+    // One process for two starts. A device that reconnects and taps Start —
     // which is what a person does when a screen looks empty — must not spawn a
     // second Claude CLI in the same folder.
     expect(host.spawned).toBe(1)
@@ -2504,11 +2763,11 @@ describe('an acting phone gets its own run', () => {
 
   it('stops its own run and nothing else', async () => {
     const host = copilotHost()
-    host.grants.set('device-1', { read: true, act: true })
     const harness = await serve({ copilot: host.copilot })
     const client = await connect(harness.port)
     client.send(HELLO)
     await client.until((m) => m.t === 'welcome', 'the welcome')
+    await connectCopilot(client, host, { read: true, act: true })
 
     client.send({ t: 'copilot.start' })
     await client.until((m) => m.t === 'copilot.state' && m.state.run !== null, 'the run')
@@ -2516,5 +2775,245 @@ describe('an acting phone gets its own run', () => {
     await client.until((m) => m.t === 'copilot.state' && m.state.run === null, 'the stopped state')
 
     expect(host.stopped).toEqual(['run-1'])
+  })
+})
+
+/* ------------------------------------------------ answering a confirmation */
+
+/**
+ * A question raised by this device's own run, put to it, and answered on it.
+ *
+ * The rule the design flags as non-obvious and which these tests exist for:
+ * **a question may only be answered by the surface that owns the run that raised
+ * it, or by the desktop.** Otherwise one device approves another device's
+ * action, which is a permission model with a shared password.
+ */
+function raise(host: ReturnType<typeof copilotHost>, origin: string): Promise<ConsentOutcome> {
+  return host.consent.request({
+    tool: 'settings.write',
+    tier: 'alter',
+    summary: 'Change the density to compact',
+    args: { scope: 'settings', patch: { 'appearance.density': 'compact' } },
+    origin,
+  })
+}
+
+describe('a confirmation answered from a device', () => {
+  it('arrives with its arguments, is answered, and the answer names the device', async () => {
+    const host = copilotHost()
+    const harness = await serve({ copilot: host.copilot })
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+    await connectCopilot(client, host, { read: true, act: true, alter: true })
+    client.send({ t: 'copilot.attach' })
+    await client.until((m) => m.t === 'copilot.state', 'the state')
+
+    const answer = raise(host, 'device:device-1')
+
+    const ask = await client.until((m) => m.t === 'copilot.ask', 'the question')
+    expect(ask).toMatchObject({
+      t: 'copilot.ask',
+      question: {
+        tool: 'settings.write',
+        tier: 'alter',
+        summary: 'Change the density to compact',
+        origin: 'device:device-1',
+      },
+    })
+    // The arguments cross, verbatim. A prompt without them is a shape rather
+    // than a decision, and a gate that is always answered yes is worse than no
+    // gate because it looks like protection.
+    expect(ask.t === 'copilot.ask' && ask.question.args).toEqual({
+      scope: 'settings',
+      patch: { 'appearance.density': 'compact' },
+    })
+    const id = ask.t === 'copilot.ask' ? ask.question.id : ''
+
+    // And the same question is in the watch list, flagged as this device's.
+    const pending = await client.until((m) => m.t === 'copilot.pending', 'the pending list')
+    expect(pending.t === 'copilot.pending' && pending.questions).toEqual([
+      expect.objectContaining({ id, mine: true }),
+    ])
+
+    client.send({ t: 'copilot.answer', id, approved: true })
+    const outcome = await answer
+    expect(outcome.granted).toBe(true)
+    // `by` is what the action log records, and it is what makes "allowed on a
+    // connected device" a different row from "allowed by the person".
+    expect(outcome.by).toBe('device:device-1')
+
+    const settled = await client.until((m) => m.t === 'copilot.settled', 'the withdrawal')
+    expect(settled).toEqual({
+      t: 'copilot.settled',
+      settled: { id, granted: true, by: 'device:device-1', reason: null },
+    })
+  })
+
+  it('refuses just as easily, and the refusal is what the run is told', async () => {
+    const host = copilotHost()
+    const harness = await serve({ copilot: host.copilot })
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+    await connectCopilot(client, host, { read: true, act: true, alter: true })
+    client.send({ t: 'copilot.attach' })
+    await client.until((m) => m.t === 'copilot.state', 'the state')
+
+    const answer = raise(host, 'device:device-1')
+    const ask = await client.until((m) => m.t === 'copilot.ask', 'the question')
+    const id = ask.t === 'copilot.ask' ? ask.question.id : ''
+
+    client.send({ t: 'copilot.answer', id, approved: false })
+    const outcome = await answer
+    expect(outcome.granted).toBe(false)
+    expect(outcome.granted === false && outcome.reason).toBe('declined')
+  })
+
+  /**
+   * **The frame a device should not be allowed to send.**
+   *
+   * `device-1` holds `alter` and is fully connected, so the tier check passes and
+   * the transport hands the frame on. What stops it is the ownership rule inside
+   * the broker: the question belongs to another device's run. Without this,
+   * connecting two phones to one copilot would make either of them able to
+   * approve the other's actions.
+   *
+   * The refusal is deliberately the same one a settled question gets, so a
+   * device probing for other devices' question ids learns nothing from the reply.
+   */
+  it('refuses to answer a question raised by another device', async () => {
+    const host = copilotHost()
+    const harness = await serve({ copilot: host.copilot })
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+    await connectCopilot(client, host, { read: true, act: true, alter: true })
+    client.send({ t: 'copilot.attach' })
+    await client.until((m) => m.t === 'copilot.state', 'the state')
+
+    // Somebody is at the desk, so the question stays live long enough for this
+    // device to try to answer it. Without that it would refuse itself as
+    // `no-approver` and this test would pass for the wrong reason.
+    host.deskAttached = true
+    const answer = raise(host, 'device:someone-else')
+
+    // It is visible — that is the watching half, and it is deliberate: a device
+    // can say "go and look" about a question it may not answer.
+    const pending = await client.until(
+      (m) => m.t === 'copilot.pending' && m.questions.length > 0,
+      'the pending list',
+    )
+    const row = pending.t === 'copilot.pending' ? pending.questions[0] : null
+    expect(row?.mine).toBe(false)
+    // And it never arrived as a question, so its arguments never crossed.
+    expect(client.received.some((m) => m.t === 'copilot.ask')).toBe(false)
+
+    client.send({ t: 'copilot.answer', id: row?.id ?? '', approved: true })
+    const error = await client.until((m) => m.t === 'error', 'the refusal')
+    expect(error).toMatchObject({ t: 'error', code: 'unavailable' })
+
+    // Still waiting. The other device's turn is not resolved by this one's tap.
+    let settledEarly = false
+    void answer.then(() => {
+      settledEarly = true
+    })
+    await new Promise((done) => setTimeout(done, 20))
+    expect(settledEarly).toBe(false)
+    host.consent.stop()
+    await answer
+  })
+
+  /**
+   * A question raised at the desk is watched, never answered, from a device.
+   *
+   * The desktop may answer anything — somebody standing at the machine can
+   * already do by hand whatever they are approving — and the reverse is not
+   * true. This is the same rule as the test above with the surfaces swapped, and
+   * it is worth its own case because the desk is the one origin a device might
+   * plausibly be thought to share.
+   */
+  it('refuses to answer a question raised at the desk', async () => {
+    const host = copilotHost()
+    const harness = await serve({ copilot: host.copilot })
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+    await connectCopilot(client, host, { read: true, act: true, alter: true })
+    client.send({ t: 'copilot.attach' })
+    await client.until((m) => m.t === 'copilot.state', 'the state')
+
+    host.deskAttached = true
+    const answer = raise(host, 'window')
+    const pending = await client.until(
+      (m) => m.t === 'copilot.pending' && m.questions.length > 0,
+      'the pending list',
+    )
+    const row = pending.t === 'copilot.pending' ? pending.questions[0] : null
+    expect(row?.mine).toBe(false)
+
+    client.send({ t: 'copilot.answer', id: row?.id ?? '', approved: true })
+    await client.until((m) => m.t === 'error', 'the refusal')
+
+    // The desktop answers it instead, and the device is told where it went.
+    host.consent.respond(row?.id ?? '', true, 'window')
+    const outcome = await answer
+    expect(outcome.granted).toBe(true)
+    const settled = await client.until((m) => m.t === 'copilot.settled', 'the withdrawal')
+    expect(settled).toMatchObject({ settled: { granted: true, by: 'window' } })
+  })
+
+  /**
+   * A device that drops mid-prompt defaults to refusal.
+   *
+   * Not to a desktop dialog left standing: the run that asked is about to be
+   * reaped and the person who asked is gone, so an approval landing afterwards
+   * is a change nobody is waiting for. `caller-gone` is the reason that already
+   * exists for exactly this shape of failure, one transport further in.
+   */
+  it('refuses a device’s question when its socket goes', async () => {
+    const host = copilotHost()
+    const harness = await serve({ copilot: host.copilot })
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+    await connectCopilot(client, host, { read: true, act: true, alter: true })
+    client.send({ t: 'copilot.attach' })
+    await client.until((m) => m.t === 'copilot.state', 'the state')
+
+    const answer = raise(host, 'device:device-1')
+    await client.until((m) => m.t === 'copilot.ask', 'the question')
+
+    // Destroyed rather than closed politely: what is being reproduced is a phone
+    // going into a tunnel, not a person tapping Done.
+    client.socket.destroy()
+    const outcome = await answer
+    expect(outcome.granted).toBe(false)
+    expect(outcome.granted === false && outcome.reason).toBe('caller-gone')
+  })
+
+  /**
+   * Nothing is delivered to a device that cannot answer, so the question refuses
+   * itself rather than waiting for a screen that will never show it.
+   *
+   * With no window attached and no connection holding `alter`, `ask` reports
+   * that nobody could be asked and the broker answers `no-approver` at once.
+   * That is the existing default-deny behaviour reaching one transport further
+   * out, and it is what stops a device's run blocking for two minutes on a
+   * dialog that was never drawn.
+   */
+  it('refuses at once when no surface can be asked', async () => {
+    const host = copilotHost()
+    const harness = await serve({ copilot: host.copilot })
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+    await connectCopilot(client, host, { read: true, act: true })
+    client.send({ t: 'copilot.attach' })
+    await client.until((m) => m.t === 'copilot.state', 'the state')
+
+    const outcome = await raise(host, 'device:device-1')
+    expect(outcome.granted).toBe(false)
+    expect(outcome.granted === false && outcome.reason).toBe('no-approver')
   })
 })

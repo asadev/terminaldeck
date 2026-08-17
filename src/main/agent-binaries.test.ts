@@ -1,3 +1,4 @@
+import { join } from 'node:path'
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
   binaryEvidence,
@@ -94,8 +95,22 @@ describe('resolving one agent', () => {
       },
     })
 
-    expect(tried).toEqual(['codex', '/Users/asad/.codex/plugins/.plugin-appserver/codex'])
-    expect(binary.runnable).toBe('/Users/asad/.codex/plugins/.plugin-appserver/codex')
+    /*
+     * Joined rather than written out, and the reason is a Windows failure that
+     * looked like a Windows bug and was not.
+     *
+     * `platform` here selects how a binary is *looked up* and *launched* —
+     * `which` against `where.exe`, the command processor wrapper — and says
+     * nothing about path syntax. The syntax is the host's, deliberately: the
+     * path is one this machine is about to spawn, so `\` is the right
+     * separator on Windows and `/` is the right one here. Spelling the expected
+     * value with a literal `/` was the test asserting POSIX rather than
+     * asserting behaviour, and it failed on Windows for a difference that is
+     * correct.
+     */
+    const alternate = join('/Users/asad', '.codex/plugins/.plugin-appserver/codex')
+    expect(tried).toEqual(['codex', alternate])
+    expect(binary.runnable).toBe(alternate)
     expect(binary.usedAlternate).toBe(true)
     // Not broken. Codex works on this machine; that the copy on PATH does not is
     // a fact about that copy, and `binaryNote` is where it is said out loud.
@@ -240,9 +255,13 @@ describe('resolving every agent', () => {
 
 describe('home expansion', () => {
   it('only expands a leading ~/', () => {
-    expect(expandHome('~/x', '/Users/asad')).toBe('/Users/asad/x')
+    // `join`, because the answer is a path for *this* machine to open and the
+    // separator is therefore this machine's. What is under test is which
+    // tildes are expanded, not how the result is punctuated.
+    expect(expandHome('~/x', '/Users/asad')).toBe(join('/Users/asad', 'x'))
     expect(expandHome('~', '/Users/asad')).toBe('/Users/asad')
-    // A literal tilde inside a path is a directory name, not a home marker.
+    // A literal tilde inside a path is a directory name, not a home marker, so
+    // this one is returned untouched and keeps its own spelling.
     expect(expandHome('/opt/~/x', '/Users/asad')).toBe('/opt/~/x')
   })
 })

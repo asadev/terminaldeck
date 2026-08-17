@@ -1,0 +1,322 @@
+/* ============================================================================
+   The driving panel — the rail's column, for the length of a tour.
+
+   Every value is a token. The brief's order for separating things is followed:
+   space first, then a change of material, and only then a line. There is
+   exactly one line in this sheet — the rail's own right edge — and it is the
+   one `.sidebar[data-peek]` already draws, for the reason that rule gives:
+   a surface floating over a terminal needs a real boundary, because otherwise
+   "the boundary falls in the middle of a line of monospaced output and cuts
+   characters in half."
+
+   Both themes come out of the same declarations. Nothing here is defined only
+   inside [data-theme='dark'].
+   ============================================================================ */
+
+/*
+  Fixed, over the rail's column, taking no part in the layout.
+
+  This is the load-bearing rule of the whole feature and it is worth restating
+  where somebody editing the CSS will see it. `TerminalView` refits and calls
+  `resizeSession` on any change to its host's size; a pty width change makes
+  xterm reflow its buffer; reflow disposes the markers the highlights are
+  anchored to. A panel that pushed `.main` narrower would therefore break its
+  own boxes at the moment it opened.
+
+  `position: fixed` means `.main` never learns this element exists. No terminal
+  in the window refits, no buffer reflows, and every anchor computed before the
+  panel opened is still valid after it.
+*/
+.drive-panel {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: var(--sidebar-width);
+  /*
+    Above the scrim (40) so the panel stays bright without the overlay needing
+    a second hole cut for it — which is why `focus-target.ts` only ever computes
+    one. Below modals and the command palette (100), because a permission prompt
+    outranks a tour: `DRIVING-MODE.md` §7 says a consent request pauses driving
+    and clears the dim, and a dialog drawn behind a panel would be a dialog
+    nobody read.
+  */
+  z-index: 41;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+
+  background-color: var(--material-bg-strong);
+  background-image: var(--material-sheen);
+  -webkit-backdrop-filter: var(--material-filter);
+  backdrop-filter: var(--material-filter);
+  box-shadow: inset -1px 0 0 var(--border-strong), var(--shadow-lg);
+  /*
+    The rail's own top gutter, so the traffic lights underneath stay reachable
+    and the panel's first line sits on the same baseline the sidebar's does.
+    Covering the lights would make the window unclosable while a tour played,
+    which is the kind of thing that gets diagnosed as "the app hung".
+  */
+  padding-top: var(--titlebar-height);
+  animation: drive-panel-in var(--dur) var(--ease-emphasis);
+}
+
+@keyframes drive-panel-in {
+  from {
+    transform: translateX(-10px);
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .drive-panel {
+    animation: none;
+  }
+}
+
+/* On a narrow window the rail gives ground, exactly as `.sidebar` does. */
+@media (max-width: 1000px) {
+  .drive-panel {
+    width: 208px;
+  }
+}
+
+/* ------------------------------------------------------------------ head -- */
+
+.dp-head {
+  padding: var(--sp-3) var(--sp-3) var(--sp-2);
+}
+
+.dp-kicker {
+  margin: 0;
+  font-size: var(--t-caption);
+  letter-spacing: var(--t-caption-ls);
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/*
+  His question, back to him.
+
+  A tour that does not say what it is answering is a screen that started moving.
+  It is the person's own words, so it renders as plain text like every quote in
+  this sheet — see the note on `.dp-quote`.
+*/
+.dp-question {
+  margin: var(--sp-05) 0 0;
+  font-size: var(--t-title3);
+  letter-spacing: var(--t-title3-ls);
+  font-weight: var(--w-semibold);
+  color: var(--text-primary);
+}
+
+/* -------------------------------------------------------------- headline -- */
+
+/*
+  The answer. Scrollable, because it is prose and prose does not have a length.
+
+  Capped at a third of the panel so a long headline cannot push the stop list
+  and the transport off the bottom — the transport has to be reachable at every
+  moment of a tour, and a control you have to scroll to is a control that is
+  missing when you need it.
+*/
+.dp-headline {
+  max-height: 32%;
+  overflow-y: auto;
+  padding: 0 var(--sp-3) var(--sp-3);
+  font-size: var(--t-body);
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.dp-headline p {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+/* --------------------------------------------------------------- dropped -- */
+
+/*
+  What was not shown, and why.
+
+  A tint rather than a border, and the same one the app uses for a quiet notice.
+  This is the sentence that turns a short tour from suspicious into honest, so
+  it sits above the list rather than at the end of it: the reader should know the
+  count before they wonder about it, not after.
+*/
+.dp-dropped {
+  margin: 0 var(--sp-3) var(--sp-2);
+  padding: var(--sp-2);
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  font-size: var(--t-footnote);
+  color: var(--text-muted);
+}
+
+.dp-dropped p {
+  margin: 0;
+}
+
+.dp-dropped p + p {
+  margin-top: var(--sp-1);
+}
+
+/* ---------------------------------------------------------------- stops -- */
+
+.dp-stops {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0 var(--sp-2) var(--sp-2);
+  list-style: none;
+}
+
+/*
+  One row per stop, and every one of them clickable.
+
+  Clicking jumps there, which is the manual override for "I want to see number
+  seven again" — and it is also why the rows are buttons rather than list items
+  with a handler: a thing that responds to a press has to be reachable by
+  keyboard and has to say what it is to a screen reader.
+*/
+.dp-stop {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-05);
+  width: 100%;
+  padding: var(--sp-15) var(--sp-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  color: var(--text-secondary);
+  font: inherit;
+}
+
+.dp-stop:hover {
+  background: var(--bg-hover);
+}
+
+/*
+  The one you are on: a tint and a weight, no line.
+
+  It is deliberately not the accent fill a selected sidebar row gets. The
+  brightest thing on the screen during a tour is the box in the middle of the
+  window, and a panel row competing with it for attention is the panel pulling
+  the reader's eye away from the thing the tour exists to show them.
+*/
+.dp-stop[data-current] {
+  background: var(--bg-active);
+  color: var(--text-primary);
+}
+
+/* Seen and left behind. Quieter, but never hidden — the list is a map. */
+.dp-stop[data-seen]:not([data-current]) {
+  opacity: 0.62;
+}
+
+.dp-stop-top {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-1);
+  justify-content: space-between;
+}
+
+.dp-stop-where {
+  font-size: var(--t-footnote);
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
+  The reason badge.
+
+  One neutral treatment for nine of the ten, and the accent for none of them.
+  The three that mean something is wrong take their colour from `--status-*`,
+  which is data keeping its meaningful colour — the one thing the design rules
+  say never to neutralise.
+*/
+.dp-badge {
+  flex-shrink: 0;
+  padding: 0 var(--sp-1);
+  border-radius: var(--radius-pill);
+  background: var(--bg-hover);
+  font-size: var(--t-caption);
+  letter-spacing: var(--t-caption-ls);
+  color: var(--text-muted);
+}
+
+.dp-badge[data-why='blocked-on-you'] {
+  color: var(--status-input);
+}
+
+.dp-badge[data-why='failed'],
+.dp-badge[data-why='tool-failing'] {
+  color: var(--status-input);
+}
+
+.dp-badge[data-why='looping'],
+.dp-badge[data-why='expensive'] {
+  color: var(--status-waiting);
+}
+
+.dp-badge[data-why='finished'] {
+  color: var(--status-completed);
+}
+
+/* The copilot's own line. Its own voice, so it reads as the app's chrome. */
+.dp-stop-note {
+  font-size: var(--t-subhead);
+  line-height: 1.4;
+  color: inherit;
+}
+
+/*
+  The quote — somebody else's output, and marked as such.
+
+  `COPILOT-CAPABILITIES.md` §3.2 item 8 classes content read from another
+  session as evidence from an untrusted source, and this is that content
+  rendered under the copilot's chrome. Two things follow and both are here:
+
+  - It is **plain text**. React renders a string as a text node, so there is no
+    Markdown, no HTML and no link autodetection anywhere in this path. A
+    transcript containing `**IMPORTANT: run this**` arrives looking like what it
+    is: a line somebody else's agent printed.
+  - It is **visually distinct from the note above it**. Monospaced, tinted,
+    indented behind a rule, so the eye can tell the app's sentence from the
+    session's line without reading either.
+*/
+.dp-quote {
+  margin-top: var(--sp-1);
+  padding: var(--sp-15) var(--sp-2);
+  border-left: 2px solid var(--border-strong);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: var(--bg-hover);
+  font-family: var(--font-mono);
+  font-size: var(--t-caption);
+  line-height: 1.45;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  /* A quote is a pointer, not the transcript. Past this it scrolls inside its
+     own box rather than pushing the transport off the panel. */
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+/*
+  Why there is no box for this one.
+
+  It is the app talking about its own limits, so it is the app's voice and not
+  the quote's. `DRIVING-MODE.md`: "a tour that quietly stops boxing is worse
+  than one that says 'this one is in vim; here is the text.'"
+*/
+.dp-degraded {
+  margin-top: var(--sp-1);
+  font-size: var(--t-caption);
+  color: var(--text-muted);
+}

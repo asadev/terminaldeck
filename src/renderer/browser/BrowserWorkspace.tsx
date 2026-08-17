@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent }
 import { CapturePopup } from './CapturePopup'
 import { DeviceBar } from './DeviceBar'
 import { DrawLayer, type DrawSurface } from './DrawLayer'
+import { DriveBanner } from './DriveBanner'
 import { DrawPanel } from './DrawPanel'
 import { RecorderPanel } from './RecorderPanel'
 import { ScreenshotPopup } from './ScreenshotPopup'
@@ -57,6 +58,15 @@ import {
   resolveIsolationApi,
   type IsolationApi,
 } from './isolation-bridge'
+import {
+  claimDriveOpen,
+  driveAvailable,
+  IDLE_DRIVE,
+  readDriveOpen,
+  readDriveStatus,
+  resolveDriveApi,
+  type DriveStatus,
+} from './drive-bridge'
 import { resolveOmnibox, securityOf } from './omnibox'
 import { browserOverlayDom, isCovered, watchOverlays, type Rect as OverlayRect } from './overlay-watch'
 import { StartPage } from './StartPage'
@@ -118,6 +128,21 @@ export interface BrowserWorkspaceProps {
    * the Settings one changed nothing.
    */
   startUrl?: string
+  /**
+   * Where *this* page opens, overriding the start page for its first tab only.
+   *
+   * Set when a link asked for this workspace — a repository in the GitHub
+   * panel, a `target="_blank"` in another page. Separate from {@link startUrl}
+   * rather than folded into it, because Home and "Set as start page" must keep
+   * meaning the start page: a workspace opened on a pull request whose Home
+   * button then went back to that pull request would have quietly redefined
+   * home for one window.
+   *
+   * Read once, at mount. Changing it afterwards does nothing on purpose — the
+   * address is the page's from that moment on, and a prop that could yank a
+   * live page somewhere else is a navigation nobody asked for.
+   */
+  initialUrl?: string
   /** Persist a new start page — the panel's own "set as start page" button. */
   onStartUrl?: (url: string) => void
   /**
@@ -285,6 +310,18 @@ function rectOf(node: HTMLElement | null): Rect {
 const CUSTOM_ID = 'custom'
 
 /** Drop one tab's entry from a per-tab map, without mutating the old one. */
+/**
+ * A prop that claims to be a URL, or an empty string.
+ *
+ * The one narrowing that has to happen on this side of the props, because
+ * everything downstream of it — the tab draft, the omnibox, the address bar —
+ * is written against a string and throws during render if it is handed
+ * anything else. See the note on `openAtRef` for the crash this comes from.
+ */
+function asUrl(value: unknown): string {
+  return typeof value === 'string' ? value : ''
+}
+
 function without<T>(map: Record<string, T>, key: string): Record<string, T> {
   if (!(key in map)) return map
   const next = { ...map }
@@ -324,6 +361,7 @@ export function BrowserWorkspace({
   parkPage = false,
   onTitle,
   startUrl = '',
+  initialUrl = '',
   onStartUrl,
   bridge,
   sessionBridge,
@@ -342,6 +380,7 @@ export function BrowserWorkspace({
   const agent = useAgentTarget(sessionBridge)
   const iso = useMemo(() => isolation ?? resolveIsolationApi(), [isolation])
   const drawApi = useMemo(() => draw ?? resolveDrawApi(), [draw])
+  const driveApi = useMemo(() => resolveDriveApi(), [])
   const missing = useMemo(
     () => (bridge ? [] : missingBridgeMethods(typeof window === 'undefined' ? null : (window as unknown as { deck?: unknown }).deck)),
     [bridge],
@@ -383,12 +422,47 @@ export function BrowserWorkspace({
   const [saving, setSaving] = useState(false)
   const surface = useRef<DrawSurface | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  /*
+   * Who is holding the page the copilot drives.
+   *
+   * Held per panel even though the drive is one object in the main process,
+   * because a panel that is not the one holding the driven tab still needs to
+   * know: `idle` is what makes the banner absent, and an absent banner is how
+   * every other browser row in the sidebar stays exactly as it was.
+   */
+  const [drive, setDrive] = useState<DriveStatus>(IDLE_DRIVE)
   const [copied, setCopied] = useState(false)
   const [focusToken, setFocusToken] = useState(0)
 
-  /** Read inside the mount effect, which must not re-run when it changes. */
-  const homeRef = useRef(startUrl)
-  homeRef.current = startUrl
+  /**
+   * Where the first tab goes: what a link named, or the start page.
+   *
+   * Read inside the mount effect, which must not re-run when either changes —
+   * and captured *once*, unlike the `startUrl` prop, which the Home button
+   * reads live so that changing it in Settings takes effect straight away. This
+   * one must not follow: a link opened this workspace at one address, and that
+   * address stops being anyone's business the moment the page has loaded.
+   */
+  /*
+   * Both props are declared `string` and neither is trusted to be one.
+   *
+   * Not defensive programming for its own sake — this exact crash was
+   * photographed on 2026-08-17. `App.tsx`'s `newBrowserTab` grew a `url`
+   * parameter, and two call sites still pass it straight to `onClick`, so a
+   * click on "New browser tab" in the sidebar handed a `MouseEvent` in as the
+   * address. It travelled as `WorkspaceTab.url`, arrived here as `initialUrl`,
+   * became a tab's `draft`, and threw `input.trim is not a function` out of
+   * `resolveOmnibox` **during render** — which an error boundary turns into
+   * "New tab stopped working" and, because the workspace stays mounted under
+   * other panes, into every other pane in the window reporting the same thing.
+   *
+   * TypeScript cannot catch it: `(url?: string) => void` is assignable to
+   * `() => void`, so a handler that ignores its argument and one that reads it
+   * are the same type. The fix belongs at the call sites and is being reported
+   * there; this is the boundary refusing to render a URL bar around a value
+   * that is not a string, which it should do whatever anybody upstream passes.
+   */
+  const openAtRef = useRef(asUrl(initialUrl) || asUrl(startUrl))
 
   const stageRef = useRef<HTMLDivElement | null>(null)
   const rootRef = useRef<HTMLDivElement | null>(null)
@@ -576,8 +650,25 @@ export function BrowserWorkspace({
 
   /* -- open a tab: place it in the strip first, then create and claim its view. */
   const openNewTab = useCallback(
-    (url: string, focusAddress = true, isolated = false): string => {
-      if (!api) return ''
+    (
+      url: string,
+      focusAddress = true,
+      isolated = false,
+      /*
+       * Told the id the *main process* minted, once it exists.
+       *
+       * The key returned below is this panel's own, and the main process has
+       * never heard of it — the id it knows arrives asynchronously from
+       * `browserCreate`. The drive needs that one, so it is handed over at the
+       * moment it lands rather than polled for. Null when the tab could not be
+       * opened at all, which the drive reports honestly rather than waiting.
+       */
+      onCreated?: (tabId: string | null) => void,
+    ): string => {
+      if (!api) {
+        onCreated?.(null)
+        return ''
+      }
       seq.current += 1
       const key = `tab-${seq.current}`
       const mine = generation.current
@@ -599,6 +690,7 @@ export function BrowserWorkspace({
           // that actively misleads.
           setTabs((prev) => prev.filter((tab) => tab.key !== key))
           setNotice('This build could not open an isolated tab, so none was opened.')
+          onCreated?.(null)
           return
         }
         setTabs((prev) => withTab(prev, key, { isolationKey }))
@@ -619,12 +711,14 @@ export function BrowserWorkspace({
         if (generation.current !== mine) {
           await api.browserClose(state.id).catch(() => undefined)
           if (isolationKey) await iso.browserIsolationDispose?.(isolationKey).catch(() => undefined)
+          onCreated?.(null)
           return
         }
         const claimed = await api.browserClaim(state.id)
         const factor = claimed.ok ? await api.browserZoom(state.id, null).catch(() => 1) : 1
         setTabs((prev) => withTab(prev, key, patchFrom(state)))
         setZooms((prev) => ({ ...prev, [key]: factor }))
+        onCreated?.(state.id)
         if (!claimed.ok) {
           setNotice(
             `The page opened, but its extra controls did not attach (${claimed.reason ?? 'unknown'}). Zoom, screenshots and recording are unavailable for this tab.`,
@@ -636,10 +730,57 @@ export function BrowserWorkspace({
     [api, iso, enqueue],
   )
 
+  /* -- the copilot driving: watch the baton, and open the tab when it asks. */
+  useEffect(() => {
+    if (!driveAvailable(driveApi)) return
+    /*
+     * Read once, then subscribe.
+     *
+     * A panel mounted in the middle of a live drive would otherwise show no
+     * banner until the next state change — and the state that matters most,
+     * `human`, is the one that does not change again until somebody answers
+     * the banner they cannot see.
+     */
+    let live = true
+    void driveApi.browserDriveStatus?.().then((raw) => {
+      const status = readDriveStatus(raw)
+      if (live && status) setDrive(status)
+    }).catch(() => undefined)
+    const off = driveApi.onBrowserDriveState?.((raw) => {
+      const status = readDriveStatus(raw)
+      if (status) setDrive(status)
+    })
+    return () => {
+      live = false
+      off?.()
+    }
+  }, [driveApi])
+
+  useEffect(() => {
+    if (!driveAvailable(driveApi)) return
+    return driveApi.onBrowserDriveOpen?.((raw) => {
+      const request = readDriveOpen(raw)
+      if (!request) return
+      /*
+       * One panel answers, and only one.
+       *
+       * A browser page is a row in the sidebar, so several of these components
+       * can be mounted at once and the push reaches every one of them. Without
+       * the claim, one `browser.open` would open a tab in each panel and the
+       * main process would use the first reply — leaving the rest as pages
+       * nobody asked for, in panels nobody was looking at.
+       */
+      if (!claimDriveOpen(request.id)) return
+      openNewTab(request.url, false, request.isolate, (tabId) => {
+        driveApi.browserDriveOpened?.(request.id, tabId)
+      })
+    })
+  }, [driveApi, openNewTab])
+
   /* -- first tab, and cleanup. */
   useEffect(() => {
     if (!api) return
-    if (tabsRef.current.length === 0) openNewTab(homeRef.current, false)
+    if (tabsRef.current.length === 0) openNewTab(openAtRef.current, false)
     return () => {
       generation.current += 1
       for (const tab of tabsRef.current) {
@@ -1139,6 +1280,18 @@ export function BrowserWorkspace({
         onOpenSession={() => setSessionOpen(true)}
         onToggleIsolation={isolationAvailable(iso) ? toggleIsolation : undefined}
       />
+
+      {/*
+        Between the toolbar and the stage, deliberately.
+
+        It cannot go over the page: a browser page here is a native child view
+        of the window, composited above the entire renderer, and
+        `overlay-watch.ts` is the standing essay on why no z-index reaches it.
+        As a block in the flow it shrinks the page's rectangle instead of
+        covering it, so the site reflows once when a drive starts and not again
+        while it runs.
+      */}
+      <DriveBanner status={drive} onResume={(carryOn) => driveApi.browserDriveResume?.(carryOn)} />
 
       {deviceOpen && (
         <DeviceBar

@@ -1,8 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { ActionRow } from '../deck-control/action-log'
-import type { ConsentRequest } from '../deck-control/consent'
 import type { SessionMeta } from '../../shared/types'
-import { tailForPhone, toCopilotRow, toCopilotSessions, toPendingRow } from './copilot-wiring'
+import { tailForPhone, toCopilotRow, toCopilotSessions } from './copilot-wiring'
 
 /**
  * What crosses to a phone, and — mostly — what does not.
@@ -76,33 +75,12 @@ describe('an action-log row loses its arguments on the way to a phone', () => {
   })
 })
 
-describe('a waiting confirmation is watched, never answered', () => {
-  it('carries the summary and the countdown, and not the arguments', () => {
-    const request: ConsentRequest = {
-      id: 'ask-1',
-      tool: 'settings.write',
-      tier: 'alter',
-      summary: 'Change the default agent to Codex',
-      args: { key: 'general.defaultProvider', value: 'codex' },
-      requestedAt: 1_000,
-      expiresAt: 121_000,
-    }
-    const wire = toPendingRow(request)
-    expect(wire).toEqual({
-      id: 'ask-1',
-      tool: 'settings.write',
-      summary: 'Change the default agent to Codex',
-      requestedAt: 1_000,
-      expiresAt: 121_000,
-    })
-    expect(JSON.stringify(wire)).not.toContain('codex')
-    // The expiry travels so the phone counts down exactly as the desktop dialog
-    // does. Two minutes is not extended for a phone: a longer window is how an
-    // approval arrives six minutes later from somebody who has forgotten what
-    // they were approving.
-    expect(wire.expiresAt - wire.requestedAt).toBe(120_000)
-  })
-})
+/*
+ * The two confirmation translations moved to `copilot-consent.test.ts`, beside
+ * the module that now owns them. They have to be read together — one omits the
+ * arguments and one carries them — and a device can answer a confirmation now,
+ * so "watched, never answered" is no longer the whole story.
+ */
 
 describe('the copilot’s sessions, and nobody else’s', () => {
   function session(over: Partial<SessionMeta> & { id: string }): SessionMeta {

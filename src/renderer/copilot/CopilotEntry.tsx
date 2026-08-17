@@ -1,6 +1,6 @@
 import { StatusDot } from '../components/StatusDot'
-import type { PanelSpec } from '../shell/panels'
 import { entryDot, entryTooltip, type CopilotStage, type CopilotStateView } from './copilot-model'
+import { COPILOT_BLURB, COPILOT_ICON, COPILOT_NAME } from './identity'
 import './copilot.css'
 
 /**
@@ -19,8 +19,17 @@ import './copilot.css'
  * would be the same glyph, a few pixels from the session rows, meaning
  * something else entirely — and the rail already carries a long note about how
  * carefully its two existing ✕s had to be told apart. Stopping the copilot is a
- * button inside its own page, where the sentence about what stopping costs can
- * sit next to it.
+ * button in the window this row opens, where the sentence about what stopping
+ * costs can sit next to it, and in Settings → Copilot.
+ *
+ * ## What pressing it does, since 2026-08-17
+ *
+ * It opens a **window**, not a page. The copilot has always been a real
+ * session; what it lacked was the chrome one gets — a pill in the strip, the
+ * account chip, the model/effort/fast/connectors cluster — so now it has all of
+ * it and this row is simply how you reach it, the way the rail's session rows
+ * are how you reach those. The row stays because the copilot is not in the
+ * session list: it is one thing, in one place, at the top.
  *
  * ## What the row is allowed to claim
  *
@@ -29,30 +38,28 @@ import './copilot.css'
  * same table, so the top of the rail does not invent a second colour language
  * directly above the first — see `entryDot` for what each stage maps to.
  *
- * With no `stage`, there is no dot and the tooltip is the view's own blurb.
- * That is the honest rendering for a `Sidebar` mounted on its own in a test or
- * the harness: the row is there and it navigates, and it makes no claim about a
- * copilot nobody has asked about.
+ * With no `stage`, there is no dot and the tooltip is the plain blurb. That is
+ * the honest rendering for a `Sidebar` mounted on its own in a test or the
+ * harness: the row is there and it opens the window, and it makes no claim
+ * about a copilot nobody has asked about.
  */
 
 interface Props {
-  /** The `PANELS` entry, so the label and glyph have one definition. */
-  spec: PanelSpec
   /** What this window knows, or null when nothing has asked. */
   stage?: CopilotStage | null
   state?: CopilotStateView | null
-  /** True while the copilot's page is filling the window. */
+  /** True while the copilot's own window is what the window is showing. */
   active: boolean
   onOpen(): void
 }
 
-export function CopilotEntry({ spec, stage = null, state = null, active, onOpen }: Props) {
+export function CopilotEntry({ stage = null, state = null, active, onOpen }: Props) {
   // Null for a copilot that is not running, and for a machine that cannot run
   // one. `entryDot` carries the argument: there is no session status that means
   // "no process", and both of the near misses print a word that is not true.
   const dot = stage === null ? null : entryDot(stage)
   return (
-    <section className="sb-group sb-pinned" aria-label={spec.label}>
+    <section className="sb-group sb-pinned" aria-label={COPILOT_NAME}>
       <button
         type="button"
         className={`sb-row sb-nav sb-copilot${active ? ' active' : ''}`}
@@ -60,7 +67,7 @@ export function CopilotEntry({ spec, stage = null, state = null, active, onOpen 
         // The whole sentence, not the label again. A tooltip that repeats what
         // is already on the line is one nobody reads twice — and this is the
         // only place a refusal from the last start attempt is ever shown.
-        title={stage === null ? spec.blurb : `${spec.label} — ${entryTooltip(stage, state)}`}
+        title={stage === null ? COPILOT_BLURB : `${COPILOT_NAME} — ${entryTooltip(stage, state)}`}
         onClick={onOpen}
       >
         <svg
@@ -75,9 +82,9 @@ export function CopilotEntry({ spec, stage = null, state = null, active, onOpen 
           strokeLinejoin="round"
           aria-hidden="true"
         >
-          <path d={spec.icon} />
+          <path d={COPILOT_ICON} />
         </svg>
-        <span className="sb-label">{spec.label}</span>
+        <span className="sb-label">{COPILOT_NAME}</span>
         {dot !== null && <StatusDot status={dot} />}
       </button>
     </section>

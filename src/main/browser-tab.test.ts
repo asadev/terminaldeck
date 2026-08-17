@@ -91,7 +91,21 @@ class FakeWebContents extends EventEmitter {
     return Promise.resolve(image)
   }
 
-  setWindowOpenHandler(): void {}
+  /**
+   * Kept rather than discarded, because it stopped being a refusal.
+   *
+   * It used to be a one-liner that always answered `deny` and wrote a message
+   * on the page, so a test could drive the same code path through a refused
+   * navigation instead. Now it decides between "a tab of ours" and "refuse",
+   * and the first of those is the whole point of the change — see
+   * `link-open.ts`. There is nothing else that reaches it.
+   */
+  windowOpenHandler: ((details: { url: string }) => unknown) | null = null
+
+  setWindowOpenHandler(handler: (details: { url: string }) => unknown): void {
+    this.windowOpenHandler = handler
+  }
+
   reload(): void {}
   stop(): void {}
 
@@ -545,18 +559,67 @@ describe('a load that fails', () => {
     expect(host.sent.filter((m) => m.channel === 'browser:state-changed')).toEqual([])
   })
 
-  it('keeps a blocked pop-up out of the error-page path', async () => {
+  it('keeps a blocked navigation out of the error-page path', async () => {
     // The other half of the `error` / `failed` split, from the other side: this
     // must set a message and must NOT make the renderer hide the page.
     const { guest, view } = await openTab({ url: 'http://localhost:3000' })
     host.sent.length = 0
-    // `setWindowOpenHandler` is what the module registers the refusal through;
-    // the fake accepts and discards it, so drive the same path through a
-    // navigation the guard refuses instead.
     guest.emit('will-navigate', { preventDefault: () => undefined }, 'file:///etc/passwd')
 
     const next = lastPush()
     expect(next.error).toMatch(/http/)
+    expect(next.failed, 'a refusal is not an error page').toBe(false)
+    expect(view.visible).toBe(false)
+  })
+})
+
+/**
+ * `target="_blank"`, which used to be answered with *"Blocked a pop-up to X."*
+ *
+ * Asad, 2026-08-17: *"currently it's opening a separate window — I want it to
+ * use the same window inside Terminal Deck for browser."* A guest still gets no
+ * window of Chromium's — that part was right and stays — but the destination
+ * now becomes a tab in the workspace strip, which is a window of the app's.
+ */
+describe('a link that asks for a new window', () => {
+  const openWindow = (guest: FakeWebContents, url: string): unknown => {
+    const handler = guest.windowOpenHandler
+    if (!handler) throw new Error('no window-open handler was registered')
+    return handler({ url })
+  }
+
+  it('becomes a tab in this window instead of a pop-up', async () => {
+    const { guest } = await openTab({ url: 'http://localhost:3000' })
+    host.sent.length = 0
+
+    expect(openWindow(guest, 'https://example.com/docs')).toEqual({ action: 'deny' })
+    expect(host.sent).toEqual([
+      { channel: 'link:open-tab', args: ['https://example.com/docs'] },
+    ])
+    // And no banner: nothing was refused, so there is nothing to apologise for.
+    expect(host.sent.filter((m) => m.channel === 'browser:state-changed')).toEqual([])
+  })
+
+  it('never gets a window of Chromium’s, whatever the answer', async () => {
+    // The deny is not a detail. A bare Electron window would have no toolbar,
+    // no address bar and none of the navigation guards above.
+    const { guest } = await openTab({ url: 'http://localhost:3000' })
+    expect(openWindow(guest, 'https://example.com/')).toEqual({ action: 'deny' })
+    expect(openWindow(guest, 'file:///etc/passwd')).toEqual({ action: 'deny' })
+  })
+
+  it('still refuses anything that is not http or https, and says so', async () => {
+    const { guest, view } = await openTab({ url: 'http://localhost:3000' })
+    host.sent.length = 0
+
+    openWindow(guest, 'file:///etc/passwd')
+    expect(
+      host.sent.filter((m) => m.channel === 'link:open-tab'),
+      'a website must not be able to open a file: URL anywhere',
+    ).toEqual([])
+
+    const next = lastPush()
+    expect(next.error).toMatch(/only http and https/)
     expect(next.failed, 'a refusal is not an error page').toBe(false)
     expect(view.visible).toBe(false)
   })

@@ -1,14 +1,14 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import type { ReactNode } from 'react'
-import { panelSpec } from '../shell/panels'
+import { COPILOT_BLURB } from './identity'
 import type { Copilot } from './useCopilot'
 import type { CopilotStage, CopilotStateView } from './copilot-model'
 
 /**
  * The copilot's surfaces, actually rendered.
  *
- * Three claims here cannot be checked by a pure-logic test, because all three
+ * Five claims here cannot be checked by a pure-logic test, because all five
  * are about what is on the screen:
  *
  *  1. **The pinned row is a singleton.** No ✕ that ends it, no ＋ that starts a
@@ -21,6 +21,17 @@ import type { CopilotStage, CopilotStateView } from './copilot-model'
  *     screen rather than in a comment.
  *  3. **The empty state is a developer's.** No inbox, no calendar, no digest —
  *     *"most probably for developers, to get things done for development."*
+ *  4. **The window is a window.** Since 2026-08-17 the copilot has the chrome
+ *     every session has, which means this component must *not* draw a second
+ *     one: no state line, no private Terminal/Chat switch, no Stop of its own.
+ *     Those are the toolbar's now, and a copy left behind here would be the
+ *     same fact stated twice, forty pixels apart. Asad asked for the window
+ *     because the page had made its terminal *"a small box inside the copilot
+ *     page"*, so what is pinned is that everything above the pane is
+ *     conditional.
+ *  5. **It can still be switched off.** A singleton with no row in the rail has
+ *     no ✕ that ends it, so the Stop it used to have on that page must exist
+ *     somewhere a person standing in front of it can press.
  *
  * ## The harness
  *
@@ -41,11 +52,11 @@ vi.mock('react-dom', async (importOriginal) => {
 ;(globalThis as { document?: unknown }).document = { body: {} }
 
 const { CopilotEntry } = await import('./CopilotEntry')
+const { CopilotStop } = await import('./CopilotStop')
 const { CopilotView } = await import('./CopilotView')
 const { CopilotConsent } = await import('./CopilotConsent')
 
 const noop = (): void => {}
-const spec = panelSpec('copilot')
 
 const state = (over: Partial<CopilotStateView> = {}): CopilotStateView => ({
   status: 'running',
@@ -80,7 +91,7 @@ function copilot(stage: CopilotStage, over: Partial<Copilot> = {}): Copilot {
 
 describe('the pinned sidebar entry', () => {
   const html = renderToStaticMarkup(
-    <CopilotEntry spec={spec} stage="ready" state={state()} active={false} onOpen={noop} />,
+    <CopilotEntry stage="ready" state={state()} active={false} onOpen={noop} />,
   )
 
   it('names itself', () => {
@@ -99,20 +110,26 @@ describe('the pinned sidebar entry', () => {
   })
 
   it('makes no claim when the window has not asked', () => {
-    const quiet = renderToStaticMarkup(
-      <CopilotEntry spec={spec} active={false} onOpen={noop} />,
-    )
+    const quiet = renderToStaticMarkup(<CopilotEntry active={false} onOpen={noop} />)
     expect(quiet).toContain('>Copilot</span>')
     expect(quiet).not.toContain('status-dot')
-    expect(quiet).toContain(spec.blurb)
+    expect(quiet).toContain(COPILOT_BLURB)
   })
 })
 
 /* ------------------------------------------------------------- the view -- */
 
 describe('a signed-out account', () => {
+  // `mode="terminal"`, because that is what a first run actually opens on:
+  // `defaultPane` says so and `App.tsx` seeds it into the window's own
+  // `sessionView`. The pane is a prop now rather than this component's own
+  // state — there is one mode switch in the window and it is the toolbar's.
   const html = renderToStaticMarkup(
-    <CopilotView copilot={copilot('first-run')} activity={{ deckControlActivity: async () => [] }} />,
+    <CopilotView
+      copilot={copilot('first-run')}
+      mode="terminal"
+      activity={{ deckControlActivity: async () => [] }}
+    />,
   )
 
   it('says it is an ordinary account rather than a login of the copilot’s own', () => {
@@ -139,13 +156,30 @@ describe('a signed-out account', () => {
     expect(html).toContain('paste the code back')
   })
 
-  it('opens on the terminal, which is the only pane a login can happen in', () => {
+  it('points at the pane the login can actually happen in', () => {
+    /*
+     * The window opens on the terminal for a first run — `defaultPane` decides
+     * that and `App.tsx` seeds it into the same `sessionView` every session's
+     * mode lives in — so this component is *told* which pane is in front and has
+     * to describe the right one. A sentence pointing at something not on the
+     * screen is a small lie that makes a reader doubt the rest of the paragraph,
+     * which is the paragraph explaining why a signed-out assistant is not a
+     * broken one.
+     */
     expect(html).toContain('data-shown="true"')
-    // And points at it as "below", because that is where it is on this pane. A
-    // sentence pointing at something not on the screen is a small lie that
-    // makes a reader doubt the rest of the paragraph — which is the paragraph
-    // explaining why a signed-out assistant is not a broken one.
     expect(html).toContain('Its terminal is below')
+    // And the other way round, where the terminal is one press away rather than
+    // below — the press being the window's own mode switch, not a control this
+    // component draws any more.
+    const onChat = renderToStaticMarkup(
+      <CopilotView
+        copilot={copilot('first-run')}
+        mode="chat"
+        activity={{ deckControlActivity: async () => [] }}
+      />,
+    )
+    expect(onChat).toContain('press Terminal in the bar above')
+    expect(onChat).not.toContain('Its terminal is below')
   })
 })
 
@@ -157,17 +191,74 @@ describe('the running copilot', () => {
     />,
   )
 
-  it('names the account rather than claiming a bare "signed in"', () => {
+  it('draws its pane and no chrome of its own', () => {
+    /*
+     * The whole of the 2026-08-17 change, seen from the markup. A running,
+     * signed-in copilot with no tour behind it has nothing to say above its
+     * conversation — so the record strip has no children at all and
+     * `.cp-strip:empty` takes it out of the layout, which is what makes this a
+     * window rather than *"a small box inside the copilot page"*.
+     *
+     * Every one of the four things asserted absent here was drawn by this
+     * component's own bar until that day, and every one of them is the window's
+     * now: the account is on the account chip, the two pane buttons are the mode
+     * switch, and Stop is the chip beside it.
+     */
+    expect(html).toContain('cp-strip scroll-fade"></div>')
+    expect(html).not.toContain('cp-bar')
+    expect(html).not.toContain('a@b.c')
+    expect(html).not.toContain('>Chat</button>')
+    expect(html).not.toContain('>Terminal</button>')
+    expect(html).not.toContain('>Stop</button>')
+  })
+
+  it('still has something above the pane when there is something to say', () => {
+    // The strip is absent, not deleted. A first run fills it, which is the case
+    // it exists for.
+    const signedOut = renderToStaticMarkup(
+      <CopilotView
+        copilot={copilot('first-run')}
+        activity={{ deckControlActivity: async () => [] }}
+      />,
+    )
+    expect(signedOut).not.toContain('cp-strip scroll-fade"></div>')
+    expect(signedOut).toContain('cp-notice')
+  })
+})
+
+describe('stopping it', () => {
+  it('is offered, since a singleton nobody can switch off is a fault', () => {
+    /*
+     * The copilot has no row in the rail and therefore no ✕ that ends it — that
+     * is what being a singleton costs — and the ✕ on its pill takes the pill off
+     * the bar like every other pill's does. So this chip is the only place in
+     * the window a person can stop it, which is why it moved into the toolbar
+     * rather than leaving with the page.
+     */
+    const html = renderToStaticMarkup(
+      <CopilotStop
+        copilot={copilot('ready', {
+          signIn: { state: 'signed-in', account: 'a@b.c', plan: 'Max' },
+        })}
+      />,
+    )
+    expect(html).toContain('>Stop</button>')
+    // And it says it comes back. Every other ✕-shaped control in this app
+    // destroys something; this one has to say in as many words that it does not.
+    expect(html).toContain('starts it again')
+    // Naming the account, because "signed in" with no login is the half-fact
+    // this app keeps taking back out.
     expect(html).toContain('a@b.c')
   })
 
-  it('offers both views of the one session', () => {
-    expect(html).toContain('>Chat</button>')
-    expect(html).toContain('>Terminal</button>')
-  })
-
-  it('offers to stop it, since a singleton nobody can switch off is a fault', () => {
-    expect(html).toContain('>Stop</button>')
+  it('is absent rather than greyed while nothing is running', () => {
+    // There is no process to stop, and a disabled control would teach that the
+    // app could stop something if only something were different.
+    expect(
+      renderToStaticMarkup(
+        <CopilotStop copilot={copilot('stopped', { state: state({ status: 'stopped' }) })} />,
+      ),
+    ).toBe('')
   })
 })
 

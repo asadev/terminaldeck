@@ -1,24 +1,39 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
 import { request, type IncomingMessage } from 'node:http'
 import { createServer as createSocketServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { afterEach, describe, expect, it } from 'vitest'
+import { BRAND } from '../shared/brand'
 import { ownPorts, resetOwnPortsForTests } from './own-ports'
 import {
   CONFIG_FILE,
   SESSION_HEADER,
   TOKEN_HEADER,
+  WINDOWS_CLIENT_FILE,
+  WINDOWS_CONFIG_FILE,
   currentHookEndpoint,
+  endpointDir,
+  hookAddress,
+  hookClientPath,
+  hookConfigPath,
   hostIsLocal,
   onHookEvent,
   parseHookPath,
   readBody,
-  SOCKET_FILE,
   startHookServer,
   stopHookServer,
   toHookEvent,
+  windowsClientScript,
   type HookEndpoint,
   type HookEvent,
 } from './hook-server'
@@ -30,11 +45,19 @@ import {
  * a real connection rather than by calling the handler directly — a check that
  * only holds when you call the function the right way is not a check.
  *
- * The address is a unix socket now, and the tests that matter most are the two
- * that pin *why*: the endpoint keeps the same address across a restart, and it
- * binds no TCP port at all. Both of those are the fix for hooks going stale on
- * every launch, and both are the kind of property that is quietly undone by a
- * later "let's just bind a port, it is simpler" change.
+ * The address is a name rather than a port now, and the tests that matter most
+ * are the two that pin *why*: the endpoint keeps the same address across a
+ * restart, and it binds no TCP port at all. Both of those are the fix for hooks
+ * going stale on every launch, and both are the kind of property that is
+ * quietly undone by a later "let's just bind a port, it is simpler" change.
+ *
+ * Everything below is written in whichever spelling the machine running it
+ * uses, through {@link hookAddress} — a unix socket path on POSIX, a named pipe
+ * on Windows. `join(dir, SOCKET_FILE)` used to be written out by hand here, and
+ * that is exactly what made every one of these fail on Windows with `EACCES`:
+ * libuv maps `listen(path)` to a named pipe there, and a filename is not a pipe
+ * name. The spelling now lives in one function, and {@link describe} below pins
+ * both of them from either platform.
  */
 
 let live: HookEndpoint | null = null
@@ -202,13 +225,139 @@ describe('hostIsLocal', () => {
   })
 })
 
+/**
+ * Both spellings of the address, from whichever machine this runs on.
+ *
+ * The Windows half of this module cannot be *bound* from a Mac, but every
+ * decision in it is a string decision and every one of them is reachable here.
+ * That matters more than usual: the unix socket shipped a whole night's work
+ * that had never run on Windows, and the way it failed — `EACCES` from
+ * `listen`, with no mention of pipes anywhere — is not a failure anybody reads
+ * correctly the first time.
+ */
+describe('the address, in both spellings', () => {
+  it('is a path inside the endpoint’s own directory on POSIX', () => {
+    expect(hookAddress('/data', 'darwin')).toBe('/data/hook/hook.sock')
+    expect(hookConfigPath('/data', 'darwin')).toBe('/data/hook/hook-endpoint.conf')
+    // Nothing to run: curl is already installed and already speaks unix sockets.
+    expect(hookClientPath('/data', 'darwin')).toBe(null)
+  })
+
+  it('is a named pipe on Windows, because there is no socket file to be', () => {
+    const address = hookAddress('C:\\Users\\asad\\AppData\\Roaming\\terminaldeck', 'win32')
+    expect(address.startsWith('\\\\.\\pipe\\terminaldeck-hook-')).toBe(true)
+    // A pipe name is not a path: it does not contain the directory, and it does
+    // not grow with it.
+    expect(address).not.toContain('AppData')
+    expect(address.length).toBeLessThan(60)
+  })
+
+  it('gives every data directory its own pipe, because the namespace is one', () => {
+    /*
+     * The failure this prevents is two copies of the app fighting over one
+     * name, which on POSIX cannot happen — two data directories are two paths.
+     * The pipe namespace is machine-wide, so a fixed name would put a dev
+     * build, a packaged build and a second Windows account into a contest, and
+     * the loser is refused the endpoint entirely.
+     */
+    const packaged = hookAddress('C:\\Users\\asad\\AppData\\Roaming\\terminaldeck', 'win32')
+    const dev = hookAddress('C:\\Users\\asad\\scratch\\terminaldeck', 'win32')
+    const other = hookAddress('C:\\Users\\imza\\AppData\\Roaming\\terminaldeck', 'win32')
+    expect(new Set([packaged, dev, other]).size).toBe(3)
+  })
+
+  it('is the same pipe next week, and the same one however the path is cased', () => {
+    // Stability is the whole feature — a name that moved would be the port
+    // problem again with a different spelling. Case-folded because Windows
+    // paths are case-insensitive, so one directory must not produce two names.
+    expect(hookAddress('C:\\Users\\asad\\x', 'win32')).toBe(hookAddress('C:\\Users\\asad\\x', 'win32'))
+    expect(hookAddress('C:\\Users\\asad\\x', 'win32')).toBe(hookAddress('c:\\users\\ASAD\\x', 'win32'))
+  })
+
+  it('keeps the Windows client beside the config it reads', () => {
+    const dir = 'C:\\Users\\asad\\AppData\\Roaming\\terminaldeck'
+    expect(hookConfigPath(dir, 'win32')).toBe(`${dir}\\hook\\hook-endpoint.json`)
+    expect(hookClientPath(dir, 'win32')).toBe(`${dir}\\hook\\hook-post.ps1`)
+  })
+})
+
+/**
+ * The generated client, checked for the four things it exists to do.
+ *
+ * It is generated rather than shipped because every name in it comes from
+ * `BRAND`; a `.ps1` asset holding its own copy of the two header names and the
+ * session variable is three spellings of the brand that go stale silently.
+ */
+describe('the Windows client', () => {
+  const script = windowsClientScript()
+
+  it('reads stdin, and reads it before anything can make it exit', () => {
+    // A client that exits without draining stdin leaves the CLI writing into a
+    // closed pipe, which Claude reports as an EPIPE hook failure. The
+    // no-config early return therefore comes *after* the read.
+    const read = script.indexOf('ReadToEnd()')
+    const bail = script.indexOf('Test-Path')
+    expect(read).toBeGreaterThan(-1)
+    expect(bail).toBeGreaterThan(read)
+  })
+
+  it('always exits 0, so a hook can never fail somebody’s turn', () => {
+    expect(script.trimEnd().endsWith('exit 0')).toBe(true)
+    expect(script).toContain('} catch {')
+  })
+
+  it('carries the header names and the session variable from BRAND', () => {
+    expect(script).toContain(`${TOKEN_HEADER}: $($config.token)`)
+    expect(script).toContain(`${SESSION_HEADER}: $($env:${BRAND.sessionEnvVar})`)
+    // No secret of its own: the token comes out of the config at call time,
+    // which is what lets one command string survive every restart.
+    expect(script).not.toContain('token = ')
+  })
+
+  it('turns the pipe path the config records into the name .NET wants', () => {
+    // `NamedPipeClientStream` takes the name, not the `\\.\pipe\` path the
+    // server binds — passing the path produces `\\.\pipe\\\.\pipe\name`, which
+    // times out rather than failing, and looks exactly like a server that is
+    // not there. Measured, once, the hard way.
+    expect(script).toContain('NamedPipeClientStream')
+    expect(script).toContain('-replace')
+  })
+})
+
 describe('the endpoint', () => {
-  it('listens on a socket inside the directory it was given', async () => {
+  it('listens on the address this platform spells for the directory it was given', async () => {
     const dir = scratch()
     const endpoint = await start(undefined, dir)
-    expect(endpoint.socketPath).toBe(join(dir, SOCKET_FILE))
-    expect(endpoint.configPath).toBe(join(dir, CONFIG_FILE))
+    expect(endpoint.socketPath).toBe(hookAddress(dir))
+    expect(endpoint.configPath).toBe(hookConfigPath(dir))
+    expect(endpoint.clientPath).toBe(hookClientPath(dir))
     expect(currentHookEndpoint()).toEqual(endpoint)
+  })
+
+  /**
+   * The Windows client exists exactly where Windows needs one and nowhere else.
+   *
+   * A `null` here on Windows is a hook command that silently falls back to the
+   * POSIX form — `/usr/bin/curl`, a path that platform does not have — and a
+   * non-null one on POSIX is a script nothing runs. `hooks.ts` chooses the
+   * command shape on this field, so it is the field that decides whether
+   * Windows hooks work at all.
+   */
+  it('writes a client script on Windows and none on POSIX', async () => {
+    const dir = scratch()
+    const endpoint = await start(undefined, dir)
+    if (process.platform === 'win32') {
+      expect(endpoint.clientPath).toBe(join(endpointDir(dir), WINDOWS_CLIENT_FILE))
+      expect(readFileSync(endpoint.clientPath as string, 'utf8')).toBe(windowsClientScript())
+      expect(endpoint.configPath.endsWith(WINDOWS_CONFIG_FILE)).toBe(true)
+      // The token is what the client reads at call time; the pipe name is how
+      // it finds the app.
+      const config = JSON.parse(readFileSync(endpoint.configPath, 'utf8')) as Record<string, string>
+      expect(config).toEqual({ pipe: endpoint.socketPath, token: endpoint.token })
+    } else {
+      expect(endpoint.clientPath).toBe(null)
+      expect(endpoint.configPath.endsWith(CONFIG_FILE)).toBe(true)
+    }
   })
 
   /**
@@ -261,12 +410,27 @@ describe('the endpoint', () => {
     expect(second.token).not.toBe(firstToken)
     expect(second.token).toMatch(/^[0-9a-f]{48}$/)
 
-    // The config curl reads at call time: this run's token, owner-only.
+    // The file the client reads at call time carries this run's token. Its
+    // *shape* is the case above — a curl config here, JSON on Windows, where a
+    // backslash in a path is escaped and a raw `toContain` would be comparing
+    // one spelling against the other.
     const config = readFileSync(second.configPath, 'utf8')
-    expect(config).toContain(`${TOKEN_HEADER}: ${second.token}`)
-    expect(config).toContain(`unix-socket = "${second.socketPath}"`)
-    expect(statSync(second.configPath).mode & 0o777).toBe(0o600)
-    expect(statSync(second.socketPath).mode & 0o777).toBe(0o600)
+    expect(config).toContain(second.token)
+
+    /*
+     * "Owner-only", on the platform where a mode means that.
+     *
+     * Windows is not softened here, it is answered elsewhere: the mode is
+     * synthesised there, `stat` on a pipe name answers EBUSY, and what protects
+     * the config is the `icacls` grant `writeSecretFile` applies — which
+     * `remote/secret-file.test.ts` checks against the real tool on the real OS.
+     */
+    if (process.platform !== 'win32') {
+      expect(config).toContain(`${TOKEN_HEADER}: ${second.token}`)
+      expect(config).toContain(`unix-socket = "${second.socketPath}"`)
+      expect(statSync(second.configPath).mode & 0o777).toBe(0o600)
+      expect(statSync(second.socketPath).mode & 0o777).toBe(0o600)
+    }
   })
 
   /**
@@ -274,14 +438,22 @@ describe('the endpoint', () => {
    * — otherwise one hard quit costs the user their hooks until they find and
    * delete a file nobody has told them about.
    */
-  it('clears a dead file left at the socket path and binds anyway', async () => {
-    const dir = scratch()
-    writeFileSync(join(dir, SOCKET_FILE), 'left behind by a crash')
+  it.skipIf(process.platform === 'win32')(
+    'clears a dead file left at the socket path and binds anyway',
+    async () => {
+      // Windows is skipped and the skip is a fact rather than a gap: a named
+      // pipe exists only while a process serves it, so a crash leaves nothing
+      // at the address to clear. The half of `clearStaleSocket` that *is* real
+      // there — a live copy — is the case below.
+      const dir = scratch()
+      mkdirSync(endpointDir(dir), { recursive: true })
+      writeFileSync(hookAddress(dir), 'left behind by a crash')
 
-    const endpoint = await startHookServer({ dir })
-    expect(endpoint.socketPath).toBe(join(dir, SOCKET_FILE))
-    expect(await post(endpoint)).toBe(204)
-  })
+      const endpoint = await startHookServer({ dir })
+      expect(endpoint.socketPath).toBe(hookAddress(dir))
+      expect(await post(endpoint)).toBe(204)
+    },
+  )
 
   /**
    * The other half of the same decision, and the one that must not be "helpful".
@@ -292,10 +464,15 @@ describe('the endpoint', () => {
    * with the reason in the message, and the second copy's Settings pane is left
    * able to say what happened.
    */
-  it('refuses to take a socket another copy is still serving', async () => {
+  it('refuses to take an address another copy is still serving', async () => {
+    // The same refusal reached two ways: on POSIX by probing a socket file that
+    // answers, on Windows by libuv's `FILE_FLAG_FIRST_PIPE_INSTANCE` turning a
+    // second bind into EADDRINUSE. Both must end at the same sentence, because
+    // it is the sentence the Settings pane shows.
     const dir = scratch()
+    mkdirSync(endpointDir(dir), { recursive: true })
     const other = createSocketServer()
-    await new Promise<void>((resolve) => other.listen(join(dir, SOCKET_FILE), () => resolve()))
+    await new Promise<void>((resolve) => other.listen(hookAddress(dir), () => resolve()))
 
     await expect(startHookServer({ dir })).rejects.toThrow(/another copy/)
     expect(currentHookEndpoint()).toBe(null)

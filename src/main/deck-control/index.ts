@@ -131,17 +131,29 @@ import { userDataDir } from '../platform/paths'
 import { writeSecretFile } from '../remote/secret-file'
 import { onWebContentsDestroyed } from '../web-contents-teardown'
 import { ActionLog, type ActionRow } from './action-log'
-import { ConsentBroker, type ConsentOutcome } from './consent'
+import { ConsentBroker, WINDOW_SURFACE, type ConsentOutcome, type ConsentRequest } from './consent'
 import { DeckControl, type Budgets } from './control'
 import { createLiveSurface, type LiveSurfaceDeps } from './live-surface'
 import { SERVER_NAME, startDeckControlServer, stopDeckControlServer, type DeckControlEndpoint } from './server'
+import type { ToolSpec } from './catalogue'
 import type { DeckSurface } from './surface'
+import { MAX_TOURS_KEPT, TourStage } from './tour-stage'
+import { tourTool } from './tour-tool'
 
 /* -------------------------------------------------------------- constants -- */
 
 export const CONSENT_REQUEST_CHANNEL = 'deck-control:consent-request'
 export const CONSENT_SETTLED_CHANNEL = 'deck-control:consent-settled'
 export const ACTION_CHANNEL = 'deck-control:action'
+/**
+ * A validated tour, pushed to the one window that can play it.
+ *
+ * Sent rather than broadcast, unlike `consent-settled` above, and the asymmetry
+ * is deliberate: a dialog that timed out has to be able to close itself in a
+ * window that has since been replaced, whereas a tour is a thing happening on
+ * *a* screen and a second window playing the same one would be two tours.
+ */
+export const TOUR_CHANNEL = 'deck-control:tour'
 
 /**
  * The copilot's folder, asked of the module that owns it.
@@ -209,7 +221,48 @@ export function unattendedMcpConfigPath(): string {
 
 /* ------------------------------------------------------------------ types -- */
 
+/**
+ * The second place a confirmation can be shown and answered.
+ *
+ * The renderer was the only approver for as long as the only caller was the
+ * copilot at this machine. A connected device now runs a copilot of its own, and
+ * `COPILOT-REMOTE.md` §4 settles that it may answer its own run's questions —
+ * the second factor being the separate copilot connection rather than the
+ * geography of the desk.
+ *
+ * An interface rather than an import, for the reason every seam in this codebase
+ * is one: `remote/copilot-runs.ts` knows about sealed channels and Claude CLI
+ * processes, this file knows about `ipcMain` and a log, and neither has any
+ * business importing the other. It also means the fan-out is exercised with a
+ * plain object literal in a test with no socket anywhere near it.
+ *
+ * Absent is the switch. A build with no remote layer — the headless daemon,
+ * `scripts/remote-host.ts`, the public demo box — delivers to the window and
+ * nowhere else, which is exactly what it did before this existed.
+ */
+export interface ConsentRelay {
+  /**
+   * Show this question on the surface that owns it. True when it was delivered.
+   *
+   * Called for **every** question, including ones a device cannot answer,
+   * because the surface also has to update its watch-only pending list. What it
+   * returns is only whether an *approver* saw it — a pending row is not an
+   * approver, and a question delivered to nobody who can answer must resolve
+   * `no-approver` rather than sit until it times out.
+   */
+  ask(request: ConsentRequest): boolean
+  /** A question closed. Withdraw the dialog, saying where it was answered. */
+  settled(id: string, outcome: ConsentOutcome): void
+}
+
 export interface DeckControlDeps extends LiveSurfaceDeps {
+  /**
+   * Where a confirmation goes besides the window. See {@link ConsentRelay}.
+   *
+   * Optional and unset in every test that predates it, so the default is the
+   * behaviour this app has always had: one approver, the renderer.
+   */
+  remoteApprover?: ConsentRelay
   /**
    * Is this the window allowed to answer a confirmation?
    *
@@ -226,6 +279,21 @@ export interface DeckControlDeps extends LiveSurfaceDeps {
   port?: number
   consentTimeoutMs?: number
   budgets?: Partial<Budgets>
+  /**
+   * Tools another feature contributes, held to exactly the same rules.
+   *
+   * A second entrance for the same reason `extraTools` exists on
+   * `DeckControlOptions` at all: a feature that wants to give the copilot a
+   * capability reaches it *through* the dispatcher rather than beside it. The
+   * tour tool below is a closure over a stage this module builds, so it is
+   * added here; the browser tools are a closure over a drive `src/main/index.ts`
+   * builds, so they arrive through this field.
+   *
+   * Appended to the built-ins, never replacing them, and duplicate ids are
+   * refused by `DeckControl` itself — a contributed tool that shadowed
+   * `settings.write` would be the stricter of the two disappearing silently.
+   */
+  extraTools?: readonly ToolSpec[]
   /** Replaces the real app surface. Tests only; production passes nothing. */
   surface?: DeckSurface
   /** Overrides the copilot log directory. Tests only. */
@@ -251,6 +319,17 @@ export interface DeckControlHandle {
    * catch, which is why they are two named fields rather than one and a flag.
    */
   unattendedConfigPath: string
+  /**
+   * Driving mode's state: what is playing, and the record of what was shown.
+   *
+   * On the handle because `src/main/index.ts` may want to ask — a menu item that
+   * ends a tour, a status line — and because a test needs a way to reach the
+   * stage without going through a window. Nothing about it is optional: an
+   * assembly always has one, and one with no window to play in simply refuses
+   * every tour with `no-window`, which is the honest behaviour rather than a
+   * missing feature.
+   */
+  tours: TourStage
   stop(): Promise<void>
 }
 
@@ -288,15 +367,42 @@ export async function registerDeckControlIpc(
   let approver: Electron.WebContents | null = null
 
   const consent = new ConsentBroker({
+    /*
+     * Delivered to both surfaces, and delivered to the device **first**.
+     *
+     * Both, because either can answer and the race is the design: first answer
+     * wins, and the loser withdraws its dialog saying where the answer came
+     * from. `respond()` already returns false for a settled id, so the race
+     * needs no lock — it needs both surfaces to have been asked.
+     *
+     * The device first because the window's `send` is the one that can throw,
+     * and an ordering where a broken renderer stopped a connected phone from
+     * ever seeing a question would make the desktop a single point of failure
+     * for a feature whose whole point is that the desktop is not in the room.
+     *
+     * `delivered` is an OR and not an AND. One surface is enough for the
+     * question to be live; requiring both would refuse every question raised
+     * while a phone happened to be in a lift.
+     */
     ask: (request) => {
+      let delivered = false
+      if (deps.remoteApprover) {
+        try {
+          delivered = deps.remoteApprover.ask(request) === true
+        } catch (error) {
+          // A relay that throws is the same situation as no relay: nobody on
+          // that side saw the question. It must not stop the window being told.
+          console.error('[deck-control] could not reach a connected device:', error)
+        }
+      }
       const target = approver
-      if (target === null || target.isDestroyed()) return false
+      if (target === null || target.isDestroyed()) return delivered
       try {
         target.send(CONSENT_REQUEST_CHANNEL, request)
         return true
       } catch (error) {
         console.error('[deck-control] could not reach the approver window:', error)
-        return false
+        return delivered
       }
     },
     settled: (id, outcome: ConsentOutcome) => {
@@ -304,14 +410,80 @@ export async function registerDeckControlIpc(
       // timed out has to close itself, and by then the window may already have
       // been replaced.
       deps.broadcast(CONSENT_SETTLED_CHANNEL, { id, outcome })
+      try {
+        deps.remoteApprover?.settled(id, outcome)
+      } catch (error) {
+        // Same rule as the broker's own `settled` guard: by this point the
+        // answer has already been delivered to whoever was waiting on it, and a
+        // subscriber failing to redraw must not fail the call.
+        console.error('[deck-control] could not tell a connected device a question closed:', error)
+      }
     },
     ...(deps.consentTimeoutMs === undefined ? {} : { timeoutMs: deps.consentTimeoutMs }),
+  })
+
+  /*
+   * Driving mode's half, built here for the same reason the consent broker is:
+   * it needs the approver window, and the approver window is a fact this
+   * function holds and nothing below it does.
+   *
+   * `send` returns false when there is nobody to play a tour in, which is what
+   * makes `tour.play` able to answer "there is no window" rather than reporting
+   * success for a tour nobody saw. `watch` is the other half of the same care:
+   * a renderer that reloads mid-tour must not leave this process believing a
+   * tour is still playing, because the driving gate would then refuse every
+   * change the copilot made for the rest of the run.
+   */
+  const tours = new TourStage({
+    dir: deps.logDir ?? actionLogDir(),
+    window: {
+      send: (record, validated) => {
+        const target = approver
+        if (target === null || target.isDestroyed()) return false
+        try {
+          target.send(TOUR_CHANNEL, { record, stops: validated.plan.stops })
+          return true
+        } catch (error) {
+          console.error('[deck-control] could not hand the tour to the window:', error)
+          return false
+        }
+      },
+      watch: (onGone) => {
+        const target = approver
+        if (target === null || target.isDestroyed()) {
+          onGone()
+          return () => {}
+        }
+        /*
+         * A reload is a navigation, and it is the case that matters most: the
+         * playhead is renderer state, so a reload has already ended the tour on
+         * screen whether this side knows it or not. `DRIVING-MODE.md` §8 is
+         * emphatic that a tour must never survive one — "a tour that resumed
+         * itself after a crash is a screen that starts moving on its own" — and
+         * the way to honour that from here is to notice and close the record.
+         */
+        const gone = (): void => onGone()
+        target.on('did-start-navigation', gone)
+        target.once('destroyed', gone)
+        return () => {
+          if (target.isDestroyed()) return
+          target.off('did-start-navigation', gone)
+          target.off('destroyed', gone)
+        }
+      },
+    },
   })
 
   const control = new DeckControl({
     surface,
     log,
     consent,
+    // The one tool contributed through `extraTools` rather than declared in
+    // `catalogue.ts`, because it is a closure over the stage above and
+    // `buildCatalogue()` takes no arguments. It is not special in any other
+    // way: same tier check, same precheck, same budgets, same log row.
+    extraTools: [tourTool(tours), ...(deps.extraTools ?? [])],
+    driving: () => tours.driving(),
     ...(deps.budgets === undefined ? {} : { budgets: deps.budgets }),
     onRow: (row: ActionRow) => deps.broadcast(ACTION_CHANNEL, row),
   })
@@ -408,8 +580,56 @@ export async function registerDeckControlIpc(
     if (typeof id !== 'string' || id.length === 0) throw new Error('deck-control: a request id is required')
     // Anything other than a literal `true` is a no. A dialog that sent
     // `undefined` because of a wiring mistake must not read as approval.
-    const accepted = consent.respond(id, approved === true, 'window')
+    //
+    // `WINDOW_SURFACE` is the desktop, which may answer *any* question including
+    // one a connected device raised — see `ConsentRequest.origin`. That is not a
+    // loophole in the ownership rule; it is the rule. Somebody at this machine
+    // can already do by hand whatever they are approving.
+    const accepted = consent.respond(id, approved === true, WINDOW_SURFACE)
     return { accepted }
+  })
+
+  /* ------------------------------------------------------------- driving -- */
+
+  /**
+   * Everything a window says about a tour, on one channel.
+   *
+   * One handler rather than three, because the three things a player has to say
+   * — *I have it*, *here is where I am*, *it is over* — are the same fact at
+   * three moments, and splitting them across channels would mean three places
+   * to remember the approver check.
+   *
+   * That check is the same one the confirmation channels make and it matters for
+   * the same reason: this writes an audit record, and a second renderer must not
+   * be able to write into the account of what the *first* one showed somebody.
+   */
+  ipcMain.handle('deck-control:tour-report', (event, raw: unknown) => {
+    if (!deps.isApprover(event.sender) || event.sender !== approver) {
+      throw new Error('deck-control: this window may not report on a tour')
+    }
+    if (typeof raw !== 'object' || raw === null) throw new Error('deck-control: a tour report is required')
+    const message = raw as { kind?: unknown; tourId?: unknown; record?: unknown }
+    const tourId = typeof message.tourId === 'string' ? message.tourId : ''
+    const update =
+      typeof message.record === 'object' && message.record !== null
+        ? (message.record as Record<string, unknown>)
+        : {}
+    switch (message.kind) {
+      case 'started':
+        return { accepted: tours.acknowledge(tourId) }
+      case 'progress':
+        return { accepted: tours.progress(tourId, update) !== null }
+      case 'ended':
+        return { accepted: tours.end(tourId, update) !== null }
+      default:
+        throw new Error(`deck-control: unknown tour report ${String(message.kind)}`)
+    }
+  })
+
+  /** Past tours, newest first. What the recap card and the Settings list read. */
+  ipcMain.handle('deck-control:tours', (_event, count?: unknown) => {
+    const want = typeof count === 'number' && Number.isFinite(count) ? Math.trunc(count) : 10
+    return tours.list(Math.min(Math.max(want, 1), MAX_TOURS_KEPT))
   })
 
   return {
@@ -417,12 +637,17 @@ export async function registerDeckControlIpc(
     control,
     log,
     consent,
+    tours,
     configPath,
     unattendedConfigPath: configs.unattended,
     stop: async () => {
       // The broker first: every outstanding question is refused before anything
       // it might have been guarding is torn down.
       consent.stop()
+      // Then the tour, so a shutdown mid-tour closes its record rather than
+      // leaving one whose `endedAt` is null for ever — which would read, months
+      // later, as a tour that is somehow still playing.
+      tours.stop()
       await stopDeckControlServer()
       // Both tokens are dead the moment the server stops, but a file full of a
       // dead token invites somebody to wonder whether it still works.

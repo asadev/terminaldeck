@@ -1,5 +1,5 @@
 import { readFile, readdir, rm } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { join, resolve, sep } from 'node:path'
 import { deflateSync } from 'node:zlib'
 import { describe, expect, it, vi } from 'vitest'
 import type { IpcMain } from 'electron'
@@ -395,7 +395,10 @@ describe('saving a marked frame', () => {
 
     // Same folder and same stem as an ordinary screenshot, with `-marked` on it:
     // draw mode adds a picture, not a second place for pictures to live.
-    expect(saved.path.startsWith(join(PICTURES, BRAND.name) + '/')).toBe(true)
+    // `sep`, not `'/'`: the assertion is "inside that folder", and on Windows
+    // the separator that makes it true is a backslash. A literal slash here was
+    // the test asserting POSIX while the code under it was already right.
+    expect(saved.path.startsWith(join(PICTURES, BRAND.name) + sep)).toBe(true)
     expect(saved.path.endsWith('-marked.png')).toBe(true)
     expect(saved.path).toContain('localhost-3000-')
     expect(saved.url).toBe('http://localhost:3000/dashboard')

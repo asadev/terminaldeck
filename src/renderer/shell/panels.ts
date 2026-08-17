@@ -37,8 +37,30 @@
  * quietly re-create the page: nothing else has to change for it to reappear,
  * which is exactly why the absence is worth this paragraph.
  */
+/**
+ * There is no `copilot` here either, and it is the newest of the three
+ * absences — 2026-08-17, and the reason is the strongest of the lot.
+ *
+ * The copilot is a **window**, not a view. It always was a real session — a pty,
+ * a transcript, a folder, an account, per `COPILOT-DESIGN.md` — and being listed
+ * here made it *also* a page, which is how it ended up with a bespoke bar
+ * carrying a second spelling of Terminal/Chat and a terminal squeezed into the
+ * middle third of the window. Asad: *"Give the copilot a full window like the
+ * other windows… it is like a small box inside the copilot page… nothing should
+ * be less than that. And it can stay as a window pill with the other windows."*
+ *
+ * So it has a pill in the tab strip, the window's own toolbar, the account chip
+ * and the whole control cluster, exactly like every other session — and nothing
+ * navigates to it, because there is nowhere to navigate *to*. Its name and glyph
+ * moved to `renderer/copilot/identity.ts`; the pinned row that opens it is still
+ * the first thing in the rail and is placed by `Sidebar.tsx` by hand.
+ *
+ * Putting the id back here would quietly re-create the page, the same way the
+ * note on `alerts` above describes: `showPanel` would accept it again, and a
+ * remembered id would fill the window at the next launch with a page nothing
+ * renders.
+ */
 export type PanelId =
-  | 'copilot'
   | 'overview'
   | 'files'
   | 'artifacts'
@@ -66,16 +88,19 @@ export type PanelId =
  * and a shape the next reader has to work out the purpose of.
  */
 /**
- * `pinned` is the block above everything, and today it holds exactly one view.
+ * There was a fifth, `pinned`, for the block above everything, and it existed
+ * for exactly one member: the copilot. That member is a window now and not a
+ * view at all, so the group went with it — a group no panel can be in is a
+ * branch in `Sidebar.tsx` that renders nothing and a shape the next reader has
+ * to work out the purpose of, which is the identical argument that removed
+ * `icon` when Alerts became a dialog.
  *
- * Deliberately not in `PANEL_GROUPS`, for the same reason `foot` is not: that
- * array is the list of *labelled* runs, and a heading reading "Copilot" over a
- * single row that also reads "Copilot" is the same word twice in eleven pixels.
- * A view in `pinned` is one the sidebar places by hand, at the top, before the
- * views you work in and before what you have open — which is where Asad asked
- * for it: *"in the top of the session we will make a copilot."*
+ * The pinned block itself is still there, at the top of the rail, before the
+ * views you work in and before what you have open — *"in the top of the session
+ * we will make a copilot"* — and `Sidebar.tsx` places it by hand, because what
+ * goes in it is not one of these.
  */
-export type PanelGroupId = 'pinned' | 'project' | 'integrations' | 'foot' | 'icon'
+export type PanelGroupId = 'project' | 'integrations' | 'foot' | 'icon'
 
 export interface PanelSpec {
   id: PanelId
@@ -111,33 +136,6 @@ export const PANEL_GROUPS: ReadonlyArray<{ id: PanelGroupId; label: string }> = 
  * them. They are pages now: the sidebar names them and the window shows them.
  */
 export const PANELS: PanelSpec[] = [
-  {
-    /*
-     * The copilot, pinned above everything else in the rail.
-     *
-     * A view rather than a tab, and that is the decision the rest of the
-     * feature hangs off. It is a **singleton** — there is one copilot, so there
-     * is no ＋ that starts a second and no ✕ that ends this one — and a tab is
-     * by definition one of many with a ✕ on it. Being a view also means the
-     * routing it needs already exists: `showPanel` opens it, `PanelView`
-     * renders it, `isPanelId` brings it back after a relaunch, and the `focus`
-     * argument every other view uses is what lets a copilot-started session's
-     * row land on the exact turn that started it.
-     *
-     * The glyph is a compass rose — a ring with a needle through it — chosen
-     * against the two marks it has to be told apart from at a glance in the
-     * same rail: the session's `>_` and the browser's globe. Not a sparkle,
-     * which is what every product draws beside the word "AI" and says nothing
-     * about what this one does, and not a speech bubble, which would promise a
-     * chatbot when the whole argument of `COPILOT-DESIGN.md` is that this is a
-     * window onto machinery.
-     */
-    id: 'copilot',
-    label: 'Copilot',
-    group: 'pinned',
-    icon: 'M12 3.4a8.6 8.6 0 1 0 0 17.2 8.6 8.6 0 0 0 0-17.2zM15.2 8.8l-1.9 4.5-4.5 1.9 1.9-4.5z',
-    blurb: 'Your assistant for this deck — the sessions, the diffs, the prompts.',
-  },
   {
     id: 'overview',
     label: 'Overview',

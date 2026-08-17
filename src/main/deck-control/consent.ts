@@ -70,25 +70,33 @@
  * plus: every use writes its own action-log row naming the grant it spent, so
  * "allowed by a standing grant" never reads the same as "allowed by the person";
  * grants expire and are listed in Settings with one-click revoke; and a grant is
- * never obtainable from a paired device, matching the rule that `alter` is not
- * remotely grantable at all.
+ * never obtainable from a paired device, because minting one is an act at this
+ * machine and a standing pre-authorisation is not the same thing as a live
+ * decision. That last clause used to read *"matching the rule that `alter` is
+ * not remotely grantable at all"*, and that rule is gone — a copilot connection
+ * is now its own authorisation and can hold `alter`. The pre-authorisation
+ * constraint survives it: answering a question from a device is a live act by a
+ * present person, and a standing grant to skip the question is not.
  *
  * ## Why the broker does not know what a window is
  *
- * Delivery is a callback. The broker holds the pending questions, the clock and
- * the refusal rules; `index.ts` owns the fact that the answer comes from a
- * particular `WebContents` and that no other sender may answer. Keeping those
- * apart is what lets the default-deny behaviour be tested without Electron —
- * which matters, because the whole point of this file is behaviour under
- * conditions the app is not in.
+ * Delivery is a callback. The broker holds the pending questions, the clock, the
+ * refusal rules and — since devices could answer — **which surface owns which
+ * question**; `index.ts` owns the fact that one answer comes from a particular
+ * `WebContents`, and `remote/server.ts` owns the fact that another comes from a
+ * sealed channel. Keeping those apart is what lets the default-deny behaviour be
+ * tested without Electron and without a socket, which matters because the whole
+ * point of this file is behaviour under conditions the app is not in.
  *
- * ## The three ways a question dies unanswered
+ * ## The four ways a question dies unanswered
  *
  * `timeout` is the ordinary one: the person stepped away. `approver-gone` is
  * the window closing, and it is resolved *immediately* rather than left to time
  * out — a question nobody can see must not hold a tool call open for two
- * minutes. `shutting-down` is quit, and it fires before the app tears anything
- * down so an in-flight alter call cannot land halfway through a teardown.
+ * minutes. `caller-gone` is the surface that raised it going away, which is now
+ * also a device's copilot connection dropping mid-prompt. `shutting-down` is
+ * quit, and it fires before the app tears anything down so an in-flight alter
+ * call cannot land halfway through a teardown.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -122,6 +130,21 @@ export const DEFAULT_MAX_PENDING = 3
 
 /* ------------------------------------------------------------------ types -- */
 
+/**
+ * The surface a question belongs to, and the only one besides the desktop that
+ * may answer it.
+ *
+ * `'window'` for a call the copilot at this machine made; `device:<id>` for a
+ * call made by a paired device's own copilot run. Composed by {@link surfaceFor}
+ * so there is one spelling.
+ */
+export const WINDOW_SURFACE = 'window'
+
+/** The surface id for one paired device's copilot run. */
+export function deviceSurface(deviceId: string): string {
+  return `device:${deviceId}`
+}
+
 /** The question, as it reaches a window and as it is written to the log. */
 export interface ConsentRequest {
   id: string
@@ -135,6 +158,30 @@ export interface ConsentRequest {
   requestedAt: number
   /** When this question refuses itself. Lets a dialog show a countdown. */
   expiresAt: number
+  /**
+   * Which surface raised this, and therefore who besides the desktop may answer.
+   *
+   * `'window'` when the copilot at the desk asked; `device:<id>` when a paired
+   * device's own copilot run did. Defaults to `'window'` for every caller that
+   * does not say, which is every caller that existed before devices could
+   * answer anything.
+   *
+   * ## The rule this field exists for
+   *
+   * **A question may only be answered by the surface that owns the run that
+   * raised it, or by the desktop.** `COPILOT-REMOTE.md` §4.2 flags it as the
+   * non-obvious one and it is: without it, device A approves device B's action,
+   * which is a permission model with a shared password. Two phones connected to
+   * one copilot are two conversations and two authorisations, and the fact that
+   * both were let in says nothing about whether either should decide for the
+   * other.
+   *
+   * The desktop is exempt because the desktop is the machine. Somebody standing
+   * at it can already do by hand anything they would be approving, so refusing
+   * them the dialog would protect nothing and would strand every question raised
+   * by a device that has since walked out of the building.
+   */
+  origin: string
 }
 
 export interface ConsentGranted {
@@ -207,6 +254,8 @@ export class ConsentBroker {
     args: Record<string, unknown>
     /** Aborted when the caller hangs up. Closes the question rather than the deal. */
     signal?: AbortSignal
+    /** Which surface raised it. Defaults to the window. See {@link ConsentRequest.origin}. */
+    origin?: string
   }): Promise<ConsentOutcome> {
     const at = this.now()
     if (this.stopped) return { granted: false, reason: 'shutting-down', by: null, at }
@@ -225,6 +274,12 @@ export class ConsentBroker {
       args: input.args,
       requestedAt: at,
       expiresAt: at + this.timeoutMs,
+      // Defaulted rather than required, and the default is the *narrow* value:
+      // an unnamed origin can only be answered at the desk. A caller that
+      // forgot to say where it came from therefore loses the ability to answer
+      // its own question, which is the failure direction this file exists to
+      // stay in.
+      origin: input.origin ?? WINDOW_SURFACE,
     }
 
     /*
@@ -298,21 +353,97 @@ export class ConsentBroker {
    * the user their answer arrived too late, rather than silently appearing to
    * have worked.
    *
-   * Verifying that the *sender* is allowed to answer is not done here: the
-   * broker has no notion of a window. `index.ts` checks it before calling, and
-   * that check is the one that matters — anything else in the process could
-   * call this method, and anything else in the process could equally well call
-   * the tool directly.
+   * Verifying that the *sender* is who it says it is is still not done here:
+   * the broker has no notion of a window or of a socket. `index.ts` checks that
+   * a renderer is the app's own approver, and `server.ts` checks that a device's
+   * copilot connection is open and holds `alter`, and both of those checks are
+   * about authentication. What **is** checked here is authorisation over this
+   * particular question — see below.
    */
   respond(id: string, approved: boolean, by: string): boolean {
     const entry = this.pending.get(id)
     if (!entry) return false
+    /*
+     * The ownership rule, and it lives here rather than in a transport.
+     *
+     * The header used to say the broker verifies nothing about the sender,
+     * because the only sender was a window and `index.ts` owned the question of
+     * which window. That is no longer the whole of it: a paired device can now
+     * answer, and *which* question it may answer is a property of the question
+     * rather than of the socket that carried the answer. Put the check in
+     * `server.ts` instead and it is a rule the next transport does not have —
+     * the same argument `control.ts` makes about its own gate.
+     *
+     * Two surfaces may answer: the desktop, always, because somebody standing at
+     * this machine can already do by hand whatever they are approving; and the
+     * surface that raised it, because that is the connection whose run is
+     * blocked on the answer and whose person is watching for it.
+     *
+     * A refused answer returns false, which is the same answer a stale id gets,
+     * and the caller reports it back the same way. That is deliberate: a device
+     * probing for other devices' question ids learns nothing from the reply that
+     * it did not already know from its own `copilot.pending` list.
+     */
+    if (by !== WINDOW_SURFACE && by !== entry.request.origin) return false
     const at = this.now()
     this.finish(
       id,
       approved ? { granted: true, by, at } : { granted: false, reason: 'declined', by, at },
     )
     return true
+  }
+
+  /**
+   * May this surface answer this question? Asked before a dialog is drawn.
+   *
+   * The same rule {@link respond} enforces, exposed so a transport can decide
+   * whether to *offer* an Allow button rather than only whether to honour one. A
+   * control that is always refused is the defect this repository has paid for
+   * twice; a client that can ask is a client that draws the right thing.
+   *
+   * It is not the boundary and must never be used as one — `respond` re-checks,
+   * because the set of pending questions changes between the two calls.
+   */
+  mayAnswer(id: string, by: string): boolean {
+    const entry = this.pending.get(id)
+    if (!entry) return false
+    return by === WINDOW_SURFACE || by === entry.request.origin
+  }
+
+  /**
+   * The surface that raised these questions has gone.
+   *
+   * Every question owned by it is refused at once, with `caller-gone` — the
+   * reason that already exists for exactly this shape of failure and whose
+   * comment describes the hole it closes: *"if that timeout fires first the
+   * client stops listening — and if the person then clicked Allow, the change
+   * would land while the model had already been told the call failed."* One
+   * transport further out, that is a device whose copilot connection dropped
+   * while its question was still on somebody's screen.
+   *
+   * **The desktop is not asked to answer for it.** It could — the desktop may
+   * answer anything — and it should not: the run that raised the question is
+   * about to be reaped, the person who asked is gone, and an approval landing
+   * afterwards is a change nobody is waiting for. Refusing is the direction this
+   * file fails in everywhere else and there is no reason for it to fail the
+   * other way here.
+   *
+   * Called with a device surface only. {@link approverGone} is the window's
+   * version and is deliberately wider, because when the window goes there is
+   * nobody at all.
+   */
+  callerGone(surface: string): void {
+    if (surface === WINDOW_SURFACE) {
+      // Guarded rather than allowed to mean "everything": `callerGone('window')`
+      // reads like a narrower call than `approverGone()` and is not, and a
+      // silent alias is how somebody ends up refusing every device's question
+      // because a renderer reloaded.
+      throw new Error('deck-control: use approverGone() for the window')
+    }
+    for (const [id, entry] of [...this.pending]) {
+      if (entry.request.origin !== surface) continue
+      this.finish(id, { granted: false, reason: 'caller-gone', by: null, at: this.now() })
+    }
   }
 
   /**

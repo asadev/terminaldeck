@@ -1,5 +1,7 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import * as panelModule from './GitHubPanel'
 import {
   AccessNotice,
@@ -15,7 +17,6 @@ import {
   formatAge,
   IssueRow,
   minutesLeft,
-  openExternal,
   PullRow,
   RepositoryList,
   repoFailed,
@@ -128,34 +129,59 @@ describe('reviewLabel', () => {
   })
 })
 
-/* --------------------------------------------------------------- external -- */
+/* ------------------------------------------------------------------ links -- */
 
-describe('openExternal', () => {
-  const open = vi.fn()
-  const host = globalThis as { window?: unknown }
+/**
+ * Where this panel's links go.
+ *
+ * The helper itself moved to `renderer/link.ts` and is tested there. What has
+ * to be pinned *here* is the split, because it is a decision about GitHub
+ * rather than about links: pages you read open in this app's own browser, and
+ * the two authorisation URLs deliberately still leave. The rows are rendered
+ * rather than asserted about in the abstract — an `onClick` nobody wired is
+ * exactly the failure this catches.
+ */
+describe('links', () => {
+  const source = readFileSync(join(__dirname, 'GitHubPanel.tsx'), 'utf8')
 
-  // There is no DOM here, so `window.open` — the whole mechanism this helper
-  // relies on — has to be stood up and torn down around each case.
-  beforeEach(() => {
-    open.mockClear()
-    host.window = { open }
+  /**
+   * The line this whole change removed. `openExternal` here meant "deny the
+   * window and hand it to `shell.openExternal`", which is how pressing a pull
+   * request launched Chrome over the app.
+   */
+  it('has no route straight to the system browser left in it', () => {
+    expect(source).not.toContain('openExternal(')
   })
 
-  afterEach(() => {
-    delete host.window
+  it('opens every page you read in a tab of this app', () => {
+    // `linkProps` is both handlers at once — left opens it here, right offers
+    // the system browser — so a row carrying it cannot have picked up one and
+    // forgotten the other.
+    for (const url of ['repo.url', 'pull.url', 'issue.url', 'folderRepo.url']) {
+      expect(source, `${url} is not opened with linkProps`).toContain(`linkProps(${url})`)
+    }
+    expect(source).toContain('linkProps(state.identity?.htmlUrl')
   })
 
-  it('hands an https URL to the window-open handler', () => {
-    openExternal('https://github.com/cli/cli/pull/1')
-    expect(open).toHaveBeenCalledWith('https://github.com/cli/cli/pull/1', '_blank', 'noopener,noreferrer')
+  /**
+   * The exception, deliberately. The app's browser is the one browser on this
+   * machine with no github.com session and no WebAuthn client, so a sign-in
+   * page opened there begins by asking you to sign in. See
+   * `openAuthorizationUrl` for the long form.
+   */
+  it('sends the two authorisation pages to the system browser', () => {
+    expect(source).toContain('openAuthorizationUrl(started.verificationUri)')
+    expect(source).toContain('openAuthorizationUrl(pending.verificationUri)')
+    expect(source).toContain('openAuthorizationUrl(installUrl)')
+    expect(source).toContain('openAuthorizationUrl(state.installUrl)')
+    // And it is the way out, not a second copy of the old habit.
+    expect(source).toContain('openLinkExternally(url)')
   })
 
-  /** These URLs come off the network; a scheme check is cheaper than trust. */
-  it('refuses any scheme that is not http or https', () => {
-    openExternal('javascript:alert(1)')
-    openExternal('file:///etc/passwd')
-    openExternal('')
-    expect(open).not.toHaveBeenCalled()
+  it('reads a file it can actually see', () => {
+    // Guards the guard: every case above is a `toContain`, and all of them
+    // would pass vacuously against an empty read if the path were wrong.
+    expect(source.length).toBeGreaterThan(1000)
   })
 })
 

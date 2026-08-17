@@ -44,9 +44,13 @@ describe('where Gemini keeps things', () => {
      * directly would look at a directory that never has anything in it and
      * report every install signed out.
      */
-    expect(geminiDir({ GEMINI_CLI_HOME: '/tmp/alt' }, '/Users/asad')).toBe('/tmp/alt/.gemini')
-    expect(geminiDir({}, '/Users/asad')).toBe('/Users/asad/.gemini')
-    expect(geminiDir({ GEMINI_CLI_HOME: '   ' }, '/Users/asad')).toBe('/Users/asad/.gemini')
+    // `join`, because the answer is a directory this machine is about to read
+    // and the separator is therefore this machine's. What is under test is
+    // *which* directory, not how it is punctuated — spelling it with a literal
+    // `/` was the test asserting POSIX rather than asserting the inversion.
+    expect(geminiDir({ GEMINI_CLI_HOME: '/tmp/alt' }, '/Users/asad')).toBe(join('/tmp/alt', '.gemini'))
+    expect(geminiDir({}, '/Users/asad')).toBe(join('/Users/asad', '.gemini'))
+    expect(geminiDir({ GEMINI_CLI_HOME: '   ' }, '/Users/asad')).toBe(join('/Users/asad', '.gemini'))
   })
 })
 

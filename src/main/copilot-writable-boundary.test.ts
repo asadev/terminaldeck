@@ -113,7 +113,18 @@ function sh(line: string): Promise<Ran> {
 }
 
 beforeAll(() => {
-  if (!onMac) return
+  /*
+   * No `if (!onMac) return` here, and its removal is the point.
+   *
+   * It used to be the first line, which left `userData` an empty string and
+   * `paths` undefined off macOS — so the one case in this file that is *not*
+   * about Seatbelt, the agreement between the fence's spelling of a path and
+   * the engine's, threw `Cannot read properties of undefined` on Windows rather
+   * than checking anything. A fixture that only exists on one platform quietly
+   * turns a platform-independent claim into a platform-independent failure.
+   * Everything below is ordinary file work; only the `sandbox-exec` runs need a
+   * Mac, and those are the `describe.skipIf` further down.
+   */
   /*
    * Realpath everything up front, and not for tidiness.
    *

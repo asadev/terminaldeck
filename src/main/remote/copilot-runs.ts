@@ -56,10 +56,20 @@
  * `hidden` predicate, and it is not a tidiness measure. A pty is a keyboard, and
  * a keyboard on a Claude CLI holding `deck-control` is the whole machine — every
  * tier check in this design sits *above* that layer, not below it. A phone that
- * could `attach` to its own run's pty would hold `alter` no matter what its
- * grant said, because it could simply type. That is the hole §0.1 of the spec
+ * could `attach` to its own run's pty would hold the **whole machine** no matter
+ * what its grant said, because it could simply type — a keyboard on a Claude CLI
+ * with `Bash` is not a tier, it is everything. That is the hole §0.1 of the spec
  * calls blocking, and it stays closed only while every run id is in that
  * predicate.
+ *
+ * This rule did not soften when devices gained the `alter` tier, and it is worth
+ * saying why, because "full control over copilot" sounds like it should include
+ * the terminal. Full control means its chat, its tools and its confirmations —
+ * things that go through the gate, the budgets and the action log. A pty goes
+ * through none of them: it is *underneath* the permission model, not the top of
+ * it, so handing one over would not be granting the highest tier, it would be
+ * leaving the building. Whether the copilot connection should offer its own
+ * terminal separately is a real question and it is not this file's to answer.
  *
  * ## The token is minted here and dropped here
  *
@@ -75,10 +85,11 @@
 import { randomBytes } from 'node:crypto'
 import { join } from 'node:path'
 import { rmSync } from 'node:fs'
-import { remoteCopilotCaller, type CopilotGrants } from './copilot-grants'
+import { remoteCopilotCaller, type CopilotLinks } from './copilot-link'
 import { hideSession, isHiddenSession, releaseSession } from './hidden-sessions'
 import { writeSecretFile } from './secret-file'
-import type { CopilotOutcome, CopilotRemote, CopilotSink } from './copilot-remote'
+import { toConsentQuestion, toPendingRow } from './copilot-consent'
+import type { CopilotConnected, CopilotOutcome, CopilotRemote, CopilotSink } from './copilot-remote'
 import {
   MAX_COPILOT_LOG_ROWS,
   MAX_COPILOT_MESSAGE_CHARS,
@@ -89,6 +100,7 @@ import {
   type CopilotSessionRow,
   type CopilotStateReport,
 } from './protocol'
+import { deviceSurface, type ConsentOutcome, type ConsentRequest } from '../deck-control/consent'
 import type { Caller } from '../deck-control/surface'
 
 /**
@@ -169,9 +181,39 @@ export interface CopilotChatUpdate {
  * Electron, no pty and no network — which is the only way the grace window and
  * the revocation ordering can be driven at all.
  */
+/**
+ * The consent broker, as this file needs it.
+ *
+ * Structural rather than the class, so a test drives the whole answering path
+ * against an object literal with no `deck-control` endpoint in the room — the
+ * same reason {@link CallerRegistry} is structural. The real one is
+ * `DeckControlHandle.consent`.
+ *
+ * A function returning it rather than the object, because `deck-control` starts
+ * asynchronously and can fail to start at all: capturing it at assembly would
+ * capture null forever. Asked per call, a device with no broker behind it simply
+ * has nothing to answer, and it is told so.
+ */
+export interface CopilotConsent {
+  list(): readonly ConsentRequest[]
+  respond(id: string, approved: boolean, by: string): boolean
+  callerGone(surface: string): void
+}
+
 export interface CopilotRunDeps {
-  /** The store. Read per call, never cached; see the header. */
-  grants: CopilotGrants
+  /**
+   * The copilot connections. Read per call, never cached; see the header.
+   *
+   * This used to be a `CopilotGrants` — a per-device grant riding the session
+   * channel — and it is now a store of separate connections, each with its own
+   * credential. The mechanical difference here is one line: `granted()` answers
+   * nothing for a device with no *link*, so a device that is paired for
+   * terminals and has never redeemed a copilot code cannot reach a tool through
+   * this file no matter what any panel says.
+   */
+  links: CopilotLinks
+  /** The confirmation gate, or null before `deck-control` has come up. */
+  consent(): CopilotConsent | null
   /** Where a run's token is registered, and dropped. */
   callers: CallerRegistry
   /**
@@ -209,8 +251,6 @@ export interface CopilotRunDeps {
   sessions(): CopilotSessionRow[]
   /** The tail of `actions.jsonl`, already scrubbed. */
   log(options: { limit: number; before?: string }): { rows: CopilotActionRow[]; more: boolean }
-  /** Confirmations waiting at the desk. Watch-only. */
-  pending(): CopilotPendingRow[]
   /**
    * Push a run's conversation as it changes. Returns the unsubscribe.
    *
@@ -282,14 +322,125 @@ export class CopilotRuns implements CopilotRemote {
   /**
    * What this device may do, read now.
    *
-   * `alter` is not on the wire at all — not as `false`, not as anything — which
-   * is the same choice `copilot-grants.ts` makes for the file it writes, and for
-   * the same reason it gives: a stored `"alter": false` reads, to somebody
-   * looking at it, like a switch that could be turned on.
+   * All three tiers cross the wire, including `alter`. That is the change: the
+   * grant used to stop at `act` and the absence of the third was called the
+   * mechanism. It is now the *connection* that is the mechanism — a device with
+   * no copilot link gets `{false,false,false}` from the store below, whatever a
+   * panel might have been told. See `copilot-link.ts`.
+   *
+   * Rebuilt field by field rather than passed through, for the reason
+   * `copilot-wiring.ts` gives about every row that crosses to a device: a field
+   * added to `TierGrant` next year reaches a phone only when somebody writes a
+   * line here.
    */
   granted(deviceId: string): CopilotGrantWire {
-    const tiers = this.deps.grants.granted(deviceId)
-    return { read: tiers.read, act: tiers.act }
+    const tiers = this.deps.links.granted(deviceId)
+    return { read: tiers.read, act: tiers.act, alter: tiers.alter }
+  }
+
+  /** Does this desktop hold a copilot record for this device? */
+  linked(deviceId: string): boolean {
+    return this.deps.links.linked(deviceId)
+  }
+
+  /* ------------------------------------------------------ the connection */
+
+  /**
+   * Redeem a connect code for this device's copilot credential.
+   *
+   * Everything about *whether* the code is good — its sixty seconds, its single
+   * use, the five wrong guesses that kill it, the per-device and per-address
+   * lockouts — belongs to `copilot-link.ts` and is not second-guessed here. What
+   * this adds is the wire's vocabulary: a refusal becomes `unauthorized` when it
+   * is about the code and `unavailable` when it is about this machine, because
+   * those are the two sentences a client can act on and `PROTOCOL_ERROR_CODES`
+   * already carries the distinction.
+   *
+   * The reason is deliberately **not** quoted back in the message. `unknown`,
+   * `used` and `expired` are three different facts about a code somebody typed,
+   * and telling a client which one it hit is telling a guesser whether they were
+   * close. One sentence, three causes, exactly as the pairing desk one layer
+   * down already answers.
+   */
+  async connect(deviceId: string, code: string, address?: string): Promise<CopilotConnected> {
+    const outcome = await this.deps.links.redeem(code, deviceId, address)
+    if (outcome.ok) {
+      this.pushLink(deviceId)
+      return { ok: true, credential: outcome.credential }
+    }
+    if (outcome.reason === 'storage') {
+      return {
+        ok: false,
+        code: 'unavailable',
+        message: 'This machine could not save the connection, so nothing was changed.',
+      }
+    }
+    if (outcome.reason === 'too-many-links') {
+      return {
+        ok: false,
+        code: 'unavailable',
+        message: 'Too many devices are connected to this copilot already.',
+      }
+    }
+    if (outcome.reason === 'rate-limited') {
+      return {
+        ok: false,
+        code: 'unauthorized',
+        message: 'Too many attempts. Wait a while, then ask for a new code.',
+      }
+    }
+    return {
+      ok: false,
+      code: 'unauthorized',
+      message: 'That connect code did not work. Ask for a new one on the machine itself.',
+    }
+  }
+
+  /**
+   * Open this connection's copilot access with the stored credential.
+   *
+   * Nothing is started and nothing is spent — it is the proof, not the work. A
+   * device that has been disconnected gets the same answer as one that never
+   * connected, which is the property that stops this being a way to ask whether
+   * a credential was ever real.
+   */
+  async open(deviceId: string, credential: string, address?: string): Promise<CopilotOutcome> {
+    const outcome = await this.deps.links.open(deviceId, credential, address)
+    if (outcome.ok) return { ok: true }
+    if (outcome.reason === 'rate-limited') {
+      return {
+        ok: false,
+        code: 'unauthorized',
+        message: 'Too many attempts. Wait a while before trying again.',
+      }
+    }
+    return {
+      ok: false,
+      code: 'unauthorized',
+      message:
+        'This device is not connected to the copilot. Connect it on the machine itself, in Settings → Remote.',
+    }
+  }
+
+  /**
+   * Every copilot connection this device had is closed.
+   *
+   * The run is **not** stopped: a phone locking its screen in a lift has not
+   * asked for its agent to be killed mid-turn, and the grace window exists for
+   * exactly that. What is not deferred is the consent — every question this
+   * device raised is refused now, with `caller-gone`, because a question is
+   * answered by a person watching for it and there is no longer one. Defaulting
+   * to refusal is the direction the whole consent path fails in; see
+   * `CopilotRemote.closed`.
+   */
+  closed(deviceId: string): void {
+    const consent = this.deps.consent()
+    if (!consent) return
+    try {
+      consent.callerGone(deviceSurface(deviceId))
+    } catch (error) {
+      console.error('[remote] could not withdraw a device’s confirmations:', error)
+    }
   }
 
   /* --------------------------------------------------------------- reading */
@@ -317,7 +468,7 @@ export class CopilotRuns implements CopilotRemote {
       signedIn: desk.signedIn,
       tools: cost.tools,
       turnTokens: cost.turnTokens,
-      pending: this.deps.pending().length,
+      pending: this.questions().length,
       grant: this.granted(deviceId),
       available: desk.available && endpoint !== null,
       reason: desk.available && endpoint !== null ? null : (unavailable ?? null),
@@ -343,8 +494,41 @@ export class CopilotRuns implements CopilotRemote {
     return this.deps.log({ limit, ...(options.before === undefined ? {} : { before: options.before }) })
   }
 
-  pending(): CopilotPendingRow[] {
-    return this.deps.pending()
+  /**
+   * Every waiting confirmation, with `mine` computed for **this** device.
+   *
+   * Every question, not only this device's, and that is the watching half of the
+   * surface rather than an oversight: the failure this feature was built against
+   * is a dialog on a screen nobody is looking at, timing out in silence. A
+   * device seeing a question it may not answer can still say *go and look*.
+   *
+   * `mine` is computed here, on the desktop, from the question's own origin. A
+   * client is never asked to work it out and is never trusted with the answer —
+   * `answer()` re-checks through the broker, which is where the rule lives.
+   */
+  pending(deviceId: string): CopilotPendingRow[] {
+    const surface = deviceSurface(deviceId)
+    return this.questions().map((request) => toPendingRow(request, request.origin === surface))
+  }
+
+  /**
+   * Answer a confirmation on this device's behalf.
+   *
+   * Three things had to be true before this line runs and none of them is
+   * checked here, on purpose, because each belongs somewhere it cannot be
+   * forgotten. The copilot connection is open — `server.ts`, per socket. The
+   * device holds `alter` — `copilotFrameAllowed`, per frame, against the store.
+   * And the device owns the question — `ConsentBroker.respond`, per question,
+   * with the question, so a second transport cannot arrive without it.
+   *
+   * What is left is to pass the surface id and report whether it was taken. A
+   * false answer covers a settled question and one this device does not own, and
+   * the two are deliberately indistinguishable from out there.
+   */
+  answer(deviceId: string, id: string, approved: boolean): boolean {
+    const consent = this.deps.consent()
+    if (!consent) return false
+    return consent.respond(id, approved, deviceSurface(deviceId))
   }
 
   /**
@@ -467,7 +651,7 @@ export class CopilotRuns implements CopilotRemote {
        * hand-assembled `Caller` with `ALL_TIERS` in it — and it is what makes an
        * untick in Settings land on the next tool call.
        */
-      caller: () => remoteCopilotCaller(this.deps.grants, deviceId),
+      caller: () => remoteCopilotCaller(this.deps.links, deviceId),
       signal: abort.signal,
     })
 
@@ -586,6 +770,11 @@ export class CopilotRuns implements CopilotRemote {
    * with the rule, rather than being the rule.
    */
   revoked(deviceId: string): void {
+    // Its pending confirmations go first, and unconditionally. A device whose
+    // access just changed must not be left holding a dialog it may no longer
+    // answer, and re-checking the tier here would be a second copy of a rule the
+    // broker already enforces against the question itself.
+    this.closed(deviceId)
     if (this.granted(deviceId).act) return
     if (this.end(deviceId)) this.pushState(deviceId)
   }
@@ -593,6 +782,76 @@ export class CopilotRuns implements CopilotRemote {
   /** Every run is stopped. Called when the app quits. */
   stopAll(): void {
     for (const deviceId of [...this.runs.keys()]) this.end(deviceId)
+  }
+
+  /* ------------------------------------------------------------- consent */
+
+  /**
+   * A confirmation was raised. Show it wherever it can be shown.
+   *
+   * This is the `ConsentRelay` half of `deck-control/index.ts`'s fan-out, and it
+   * does two different things that are easy to confuse:
+   *
+   *  - **Every watcher** gets a refreshed `pending` list. A question raised at
+   *    the desk is still news to a device that is watching — that is the whole
+   *    of what the read tier was ever worth, and it is unchanged.
+   *  - **The owning device** additionally gets the question itself, with the
+   *    arguments verbatim, because it is the one being asked to decide. See
+   *    `CopilotConsentQuestion` for why the two carry different fields.
+   *
+   * The return value is narrow on purpose: it says whether an *approver* saw it,
+   * not whether anybody did. A pending row is a notification, and a question
+   * delivered only to people who cannot answer it must resolve `no-approver`
+   * rather than sit for two minutes.
+   */
+  ask(request: ConsentRequest): boolean {
+    // Everybody watching, including the surface that raised it: a device's own
+    // pending list has to contain its own question, or a client that draws its
+    // count from that list disagrees with the dialog on its own screen.
+    this.pushPending()
+
+    const deviceId = deviceIdOf(request.origin)
+    if (deviceId === null) return false
+    /*
+     * Re-read the grant here rather than trusting that the tool call got this
+     * far.
+     *
+     * It did — `DeckControl.call` checked `alter` before reaching the broker —
+     * but the check was against a store that can change in between, and this is
+     * the moment a dialog appears on somebody's phone. A device whose connection
+     * was dropped a millisecond ago must not be handed the arguments of a
+     * pending settings change. Cheap, and it fails closed.
+     */
+    if (!this.granted(deviceId).alter) return false
+
+    const question = toConsentQuestion(request)
+    let delivered = false
+    for (const watcher of this.watchers) {
+      if (watcher.deviceId !== deviceId) continue
+      watcher.sink.ask(question)
+      delivered = true
+    }
+    return delivered
+  }
+
+  /**
+   * A confirmation closed. Withdraw it everywhere, saying where it was answered.
+   *
+   * Sent to every watcher rather than only to the owner, for the same reason the
+   * question's pending row was: a device that showed *something needs you* has
+   * to be able to stop showing it. `by` travels with it so a dialog withdrawn on
+   * one surface can name the other rather than vanishing — `CopilotSettledRow`
+   * carries the argument.
+   */
+  settled(id: string, outcome: ConsentOutcome): void {
+    const row = {
+      id,
+      granted: outcome.granted,
+      by: outcome.by,
+      reason: outcome.granted ? null : outcome.reason,
+    }
+    for (const watcher of this.watchers) watcher.sink.settled(row)
+    this.pushPending()
   }
 
   /**
@@ -613,6 +872,47 @@ export class CopilotRuns implements CopilotRemote {
   }
 
   /* -------------------------------------------------------------- internals */
+
+  /**
+   * Every waiting confirmation, or none when the gate is not up yet.
+   *
+   * Asked per call rather than held, because `deck-control` starts
+   * asynchronously and can fail to start at all. An empty list is the honest
+   * answer in that case: there is no gate, so there is nothing waiting at it —
+   * and the state frame beside it is already saying `available: false` with a
+   * reason.
+   */
+  private questions(): readonly ConsentRequest[] {
+    try {
+      return this.deps.consent()?.list() ?? []
+    } catch (error) {
+      console.error('[remote] could not read the waiting confirmations:', error)
+      return []
+    }
+  }
+
+  /** Push the pending list to every watcher, each with its own `mine`. */
+  private pushPending(): void {
+    for (const watcher of this.watchers) {
+      watcher.sink.pending(this.pending(watcher.deviceId))
+    }
+  }
+
+  /**
+   * Push this device's connection state to its watchers.
+   *
+   * Only to watchers, which is a real limit worth naming: a socket that has
+   * opened its copilot connection but not attached does not get this. That is
+   * the right shape — `server.ts` sends `copilot.grant` on the connection that
+   * asked, at the moment it asks — and this is the *push*, for the case where
+   * something changed on the desktop while somebody was looking at a screen.
+   */
+  private pushLink(deviceId: string): void {
+    for (const watcher of this.watchers) {
+      if (watcher.deviceId !== deviceId) continue
+      watcher.sink.state(this.state(deviceId))
+    }
+  }
 
   /** Is anybody watching this device's copilot surface right now? */
   private watching(deviceId: string): boolean {
@@ -711,6 +1011,21 @@ export class CopilotRuns implements CopilotRemote {
 }
 
 /* --------------------------------------------------------------- helpers -- */
+
+/**
+ * Which device raised a question, or null when the desk did.
+ *
+ * The inverse of `deviceSurface`, and it lives here rather than beside that
+ * function because the *composing* side is `deck-control`'s and the *reading*
+ * side is the relay's. A device id is opaque and may contain anything
+ * `device-auth.ts` mints — base64url, which has no colon — so splitting on the
+ * first colon is exact rather than approximate.
+ */
+function deviceIdOf(origin: string): string | null {
+  if (!origin.startsWith('device:')) return null
+  const id = origin.slice('device:'.length)
+  return id === '' ? null : id
+}
 
 /**
  * Cut a bubble that is too long, and say that it was cut.

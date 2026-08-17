@@ -36,7 +36,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { ActionLog } from '../deck-control/action-log'
-import { ConsentBroker, type ConsentRequest } from '../deck-control/consent'
+import { ConsentBroker, WINDOW_SURFACE, type ConsentRequest } from '../deck-control/consent'
 import { DeckControl } from '../deck-control/control'
 import type { ToolSpec } from '../deck-control/catalogue'
 import type { DeckSurface } from '../deck-control/surface'
@@ -314,7 +314,12 @@ describe('an alter-tier call from a routine run', () => {
     expect(asked).toHaveLength(1)
     // Answer it so the promise settles rather than leaving a timer behind.
     expect(asked[0]?.tier).toBe('alter')
-    consent.respond(asked[0].id, false, 'test')
+    // Answered as the window, because that is the only surface that may answer
+    // a question with no device behind it — `ConsentRequest.origin` defaults to
+    // the window and `respond` now checks it. An arbitrary label used to work
+    // and is now refused, which is the point: a device cannot answer another
+    // surface's question by naming itself something.
+    consent.respond(asked[0].id, false, WINDOW_SURFACE)
     const result = await pending
     expect(result.refusal).toBe('declined')
   })

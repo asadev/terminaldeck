@@ -1,0 +1,126 @@
+/*
+ * The one strip that says who is holding the page.
+ *
+ * It sits in the app's own chrome, between the toolbar and the page's
+ * rectangle, and never over the page. Two reasons, and both are structural
+ * rather than aesthetic:
+ *
+ *  - Nothing HTML can be drawn above a `WebContentsView`. `overlay-watch.ts` is
+ *    the standing essay on this — "you cannot fix this with CSS", not with a
+ *    z-index, not with a portal, not with a new stacking context. A banner
+ *    positioned over the page would simply be invisible.
+ *  - It is a block in the flow, so the page's rectangle shrinks by its height
+ *    when it appears rather than being covered. That is the right trade here:
+ *    the site reflows once when the drive starts, and never again while it runs.
+ *
+ * Separate stylesheet from `BrowserWorkspace.css` so this arrives as a new file
+ * rather than as an edit to one several people are working in.
+ */
+
+.bw-drive {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-15) var(--sp-3);
+  font-size: var(--t-footnote);
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+/*
+ * Space, then a tint, and only then a line — the house rule. The agent's row is
+ * a tint of the accent; the person's row is the one place a stronger colour is
+ * right, because it is the only row in this app that is a question.
+ */
+.bw-drive[data-state='agent'] {
+  background: var(--accent-soft);
+  color: var(--text-primary);
+}
+
+.bw-drive[data-state='human'] {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.bw-drive-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+}
+
+.bw-drive[data-state='human'] .bw-drive-dot {
+  background: var(--status-waiting);
+}
+
+/*
+ * A slow pulse while the agent is working, and none at all while it is the
+ * person's turn. Motion here is a status light, not decoration: something is
+ * happening on screen that nobody's hands are causing, and the dot is the only
+ * thing that says so. It stops the moment the baton changes, because a blinking
+ * light next to "your turn" reads as urgency rather than as activity.
+ */
+@keyframes bw-drive-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.bw-drive[data-state='agent'] .bw-drive-dot {
+  animation: bw-drive-pulse 1.6s var(--ease-emphasis) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bw-drive[data-state='agent'] .bw-drive-dot {
+    animation: none;
+  }
+}
+
+.bw-drive-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bw-drive-site {
+  color: var(--text-muted);
+}
+
+.bw-drive-actions {
+  flex: none;
+  display: flex;
+  gap: var(--sp-15);
+}
+
+.bw-drive-button {
+  font: inherit;
+  padding: var(--sp-1) var(--sp-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-emphasis);
+}
+
+.bw-drive-button:hover {
+  background: var(--bg-hover);
+}
+
+.bw-drive-button[data-primary='true'] {
+  background: var(--accent);
+  border-color: transparent;
+  color: var(--accent-fg);
+}
+
+.bw-drive-button[data-primary='true']:hover {
+  background: var(--accent-dim);
+}

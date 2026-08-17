@@ -91,8 +91,39 @@ describe('the pinned entry', () => {
   it('is drawn even with no copilot described, and claims nothing then', () => {
     const quiet = render({ copilot: null })
     expect(quiet).toContain('>Copilot</span>')
-    // No dot, because nothing has been read. The row still navigates.
+    // No dot, because nothing has been read. The row still opens the window.
     expect(quiet.slice(0, quiet.indexOf('>Overview</span>'))).not.toContain('status-dot')
+  })
+
+  it('is the copilot’s only row, even though it is a tab like the others', () => {
+    /*
+     * Since 2026-08-17 the copilot is a **window**: it is in `tabs` with a pill
+     * in the strip, a terminal in the pane and the whole control cluster in the
+     * bar. What it must not also be is a row down here — it already has one, at
+     * the very top, which is the only place a singleton belongs. Listed both
+     * ways it would be one session drawn twice in one rail, once pinned and once
+     * under a project heading for its own home folder.
+     *
+     * The heading is the giveaway and is what this asserts: the copilot's folder
+     * is filtered out of `projects`, so a row for it would land in the orphan
+     * run at the bottom under its own name.
+     */
+    const withCopilot = render({
+      tabs: [
+        ...tabs,
+        {
+          id: 'cp',
+          kind: 'session',
+          label: 'copilot',
+          projectPath: '/Users/apple/Library/Application Support/terminaldeck/copilot',
+          isCopilot: true,
+          closable: true,
+        },
+      ],
+    })
+    // Once, in the pinned block — and the pinned block is above everything.
+    expect(withCopilot.match(/>Copilot<\/span>/g)).toHaveLength(1)
+    expect(withCopilot).not.toContain('Application Support')
   })
 })
 

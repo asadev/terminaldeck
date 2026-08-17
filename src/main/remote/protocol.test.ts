@@ -76,6 +76,10 @@ const CLIENT_TYPES: Record<ClientMessage['t'], true> = {
   'credential.deny': true,
   'dev.status': true,
   'dev.start': true,
+  'copilot.connect': true,
+  'copilot.hello': true,
+  'copilot.bye': true,
+  'copilot.answer': true,
   'copilot.attach': true,
   'copilot.detach': true,
   'copilot.state': true,
@@ -120,6 +124,9 @@ const SERVER_TYPES: Record<ServerMessage['t'], true> = {
   'copilot.log': true,
   'copilot.pending': true,
   'copilot.grant': true,
+  'copilot.linked': true,
+  'copilot.ask': true,
+  'copilot.settled': true,
 }
 
 const VALID_CLIENT: ClientMessage[] = [
@@ -158,10 +165,24 @@ const VALID_CLIENT: ClientMessage[] = [
   { t: 'credential.deny', id: 'req-1', reason: 'no-account' },
   { t: 'dev.status', folder: '/Users/apple/Projects/terminaldeck' },
   { t: 'dev.start', folder: '/Users/apple/Projects/terminaldeck' },
-  // The copilot surface. Eight of the ten carry nothing at all, which is the
-  // property `copilot-frames.test.ts` pins as text: a phone names no tool, no
-  // session and no path, so there is nothing in these frames to be careless
-  // with.
+  // The copilot surface. Nine of the fourteen carry nothing at all, which is
+  // the property `copilot-frames.test.ts` pins as text: a device names no tool,
+  // no session and no path, so there is nothing in these frames to be careless
+  // with. The five that carry something are a code, a credential, a decision, a
+  // sentence and a log cursor — none of them a tool.
+  //
+  // The three that establish the connection. They are the authorisation, so
+  // they carry no tier and cannot: a device with no copilot connection has no
+  // tiers, and requiring one to send the frame that creates the connection
+  // would mean no device could ever connect.
+  { t: 'copilot.connect', code: '481902' },
+  { t: 'copilot.hello', credential: 'Zm9vYmFyLWNyZWRlbnRpYWwtaGVyZQ' },
+  { t: 'copilot.bye' },
+  // Answering a confirmation. `approved` is a required boolean and only a
+  // literal `true` is yes — a client whose wiring sent `undefined` must not have
+  // it read as approval.
+  { t: 'copilot.answer', id: '9f1c2ae0-8f1d-4b1e-9a2f-77d7c0a1b3e5', approved: true },
+  { t: 'copilot.answer', id: '9f1c2ae0-8f1d-4b1e-9a2f-77d7c0a1b3e5', approved: false },
   { t: 'copilot.attach' },
   { t: 'copilot.detach' },
   { t: 'copilot.state' },
@@ -292,7 +313,7 @@ const VALID_SERVER: ServerMessage[] = [
       tools: 14,
       turnTokens: 2200,
       pending: 0,
-      grant: { read: true, act: false },
+      grant: { read: true, act: false, alter: false },
       available: true,
       reason: null,
     },
@@ -345,10 +366,41 @@ const VALID_SERVER: ServerMessage[] = [
         summary: 'Change theme to dark',
         requestedAt: 1_700_000_000_000,
         expiresAt: 1_700_000_120_000,
+        mine: false,
       },
     ],
   },
-  { t: 'copilot.grant', grant: { read: false, act: false } },
+  {
+    t: 'copilot.grant',
+    link: { linked: false, open: false, grant: { read: false, act: false, alter: false } },
+  },
+  {
+    t: 'copilot.linked',
+    credential: 'Zm9vYmFyLWNyZWRlbnRpYWwtaGVyZQ',
+    link: { linked: true, open: true, grant: { read: true, act: true, alter: true } },
+  },
+  {
+    // The frame with the arguments in it, and the only one that has them. A
+    // device that may answer needs the value that will actually be written or
+    // the prompt is a shape rather than a decision.
+    t: 'copilot.ask',
+    question: {
+      id: 'q-1',
+      tool: 'settings.write',
+      tier: 'alter',
+      summary: 'Change the density to compact',
+      args: { scope: 'settings', patch: { 'appearance.density': 'compact' } },
+      origin: 'device:dev-1',
+      requestedAt: 1_700_000_000_000,
+      expiresAt: 1_700_000_120_000,
+    },
+  },
+  {
+    // `by` is the point of this frame: first answer wins, and the surface that
+    // loses withdraws its dialog *saying where it went* rather than vanishing.
+    t: 'copilot.settled',
+    settled: { id: 'q-1', granted: true, by: 'device:dev-1', reason: null },
+  },
   // A `welcome` carrying the per-device copilot grant. Separate from the one at
   // the top of this list because both shapes are on the wire at once: a desktop
   // older than the field sends no key, and a client has to be right about both.
@@ -360,7 +412,9 @@ const VALID_SERVER: ServerMessage[] = [
     token: null,
     sessions: [],
     capabilities: CAPABILITIES,
-    copilot: { read: true, act: true },
+    // `open` is false on every welcome, always: a session channel does not carry
+    // the copilot by existing, and the client sends `copilot.hello` to open it.
+    copilot: { linked: true, open: false, grant: { read: true, act: true, alter: true } },
   },
 ]
 

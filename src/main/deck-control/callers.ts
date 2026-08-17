@@ -32,7 +32,7 @@
  * Settings would be editing a store that the live run no longer consults, and
  * the grant would not actually change anything until the phone reconnected — a
  * permission control that changes nothing, which is the exact defect
- * `reachable.test.ts` warns about in its `copilot-grants.ts` entry.
+ * `reachable.test.ts` warns about in its `copilot-link.ts` entry.
  *
  * Calling `grants.granted(deviceId)` per request is what makes an untick land on
  * the *next tool call*. It is the same property `folders()` has for `create`, and

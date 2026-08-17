@@ -9,8 +9,6 @@ import { ReadinessPanel } from '../components/ReadinessPanel'
 import { McpInspector } from '../components/McpInspector'
 import { HooksPanel } from '../components/HooksPanel'
 import { PageEmpty } from '../components/PageEmpty'
-import { CopilotView } from '../copilot/CopilotView'
-import type { Copilot } from '../copilot/useCopilot'
 import { FeatureOffer } from '../features/FeatureOffer'
 import { useFeatures } from '../features/FeaturesProvider'
 import { Dashboard } from '../dashboard/Dashboard'
@@ -46,32 +44,18 @@ interface Props {
    */
   /** What the dashboard's widgets can reach. Everything on it is a door. */
   dashboard?: Omit<WidgetContext, 'projectPath'>
-  /**
-   * What the copilot's page can reach — spelled the same way `dashboard` is,
-   * and for the same reason.
+  /*
+   * There was a `copilot` here, and it left with the copilot's page on
+   * 2026-08-17 — the same move Alerts made, for a related reason.
    *
-   * The connection to the copilot is held once, in `App.tsx`, because three
-   * places have to agree about it: the pinned row in the rail, this page, and
-   * the filter that keeps the copilot's own session out of the ordinary session
-   * list. A second `useCopilot` in here would be a second answer to "is it
-   * running", and the two would disagree for as long as one of them had not
-   * refreshed.
-   *
-   * Optional, and the page says so rather than half-rendering: without it there
-   * is no bridge to the copilot in this build, which is a sentence, not a blank.
+   * The copilot is a **window** now, not a view: it always was a real session,
+   * and what it lacked was the chrome one gets, so it has a pill in the strip,
+   * the window's toolbar, an account chip and the whole control cluster. It is
+   * rendered by `App.tsx` beside the other sessions' terminals, which is where
+   * a session is rendered. See `copilot/identity.ts` for the argument and
+   * `panels.ts` for why the id is gone from `PanelId` rather than merely
+   * unrouted.
    */
-  copilot?: CopilotContext
-}
-
-export interface CopilotContext {
-  copilot: Copilot
-  /** Sessions the copilot started, for the link from a turn to its work. */
-  startedSessions: readonly { id: string; label: string; runId: string | null }[]
-  onOpenSession(id: string): void
-  /** The same three the session terminals read, so both look the same. */
-  fontSize?: number
-  fontFamily?: string
-  copyOnSelect?: boolean
 }
 
 const GIT_GROUPS: readonly GitFileGroup[] = ['conflicted', 'staged', 'unstaged', 'untracked']
@@ -183,7 +167,6 @@ export function PanelView({
   onOpenFile,
   focus,
   dashboard,
-  copilot,
 }: Props) {
   const spec = panelSpec(panel)
   const features = useFeatures()
@@ -203,33 +186,6 @@ export function PanelView({
     if (owner && !features.on(owner)) return <FeatureOffer id={owner} icon={spec.icon} />
 
     switch (panel) {
-      /*
-       * Above the project gate, like `hooks`, `mcp` and `remote`.
-       *
-       * The copilot has a folder of its own and answers about every session on
-       * the machine, so which project happens to be open has nothing to do with
-       * it — and it is most worth opening on a fresh install where no project
-       * has been added yet, which is exactly when "open a project first" would
-       * hide it.
-       */
-      case 'copilot':
-        return copilot ? (
-          <CopilotView
-            copilot={copilot.copilot}
-            focus={focus}
-            startedSessions={copilot.startedSessions}
-            onOpenSession={copilot.onOpenSession}
-            {...(copilot.fontSize === undefined ? {} : { fontSize: copilot.fontSize })}
-            {...(copilot.fontFamily === undefined ? {} : { fontFamily: copilot.fontFamily })}
-            {...(copilot.copyOnSelect === undefined ? {} : { copyOnSelect: copilot.copyOnSelect })}
-          />
-        ) : (
-          // A sentence rather than a blank. This is only reachable in a build
-          // whose window did not hand the page its connection to the copilot —
-          // a harness, a test — and "nothing rendered" is precisely how an
-          // unwired feature has repeatedly been mistaken here for a broken one.
-          <PageEmpty icon={spec.icon} title="The copilot is not wired into this window" />
-        )
       case 'hooks':
         return <HooksPanel />
       case 'mcp':

@@ -16,11 +16,11 @@
  * every lifecycle event — including session-finished — went nowhere. Nothing was
  * in an error state anywhere; it just did not work.
  *
- * A filesystem socket fixes the cause rather than the symptom, because a path is
+ * A named address fixes the cause rather than the symptom, because a name is
  * something we choose and a port is something the kernel hands out:
  *
- *  - **The address is stable.** `<userData>/hook.sock` is the same string on
- *    every launch, so the command written into a provider config in March is
+ *  - **The address is stable.** `<userData>/hook/hook.sock` is the same string
+ *    on every launch, so the command written into a provider config in March is
  *    still correct in August. Nothing goes stale, so nothing needs repairing.
  *  - **It cannot be inherited by a stranger.** A recycled port number is the
  *    quiet hazard of the old design: a hook firing while the app is closed would
@@ -35,43 +35,116 @@
  *    inside the app's own data directory, so the kernel refuses another user
  *    before a single byte is read.
  *
+ * ## Windows has no filesystem unix socket, so it gets the thing that is one
+ *
+ * Every sentence above is about a *name we choose* rather than a number the
+ * kernel hands out, and none of it is about POSIX. But `hook.sock` is: Windows
+ * has no `AF_UNIX` path that Node can bind — libuv maps `net.listen(path)` to a
+ * named pipe, and handing it a filename produces `EACCES` with no explanation,
+ * which is exactly what the Windows CI job reported for every test in this
+ * file.
+ *
+ * The Windows equivalent is a **named pipe**, `\\.\pipe\<name>`, which
+ * `net.createServer().listen()` accepts natively and which keeps the properties
+ * that mattered most: a stable name this app chooses, no port for anything to
+ * scan or for the kernel to recycle, and no way to reach it from a network
+ * stack. {@link hookAddress} is the one place the two spellings are chosen
+ * between.
+ *
+ * Three differences are worth stating rather than discovering:
+ *
+ *  - **The pipe namespace is machine-wide, not per-directory.** Two installs
+ *    with different data directories collide unless the name says which one it
+ *    is, so the name carries a digest of the directory. That also separates two
+ *    accounts on the same PC, whose data directories differ by username.
+ *  - **A pipe leaves nothing behind.** It disappears with the process that
+ *    served it, so there is no stale file to clear — and a second bind fails
+ *    with `EADDRINUSE` rather than succeeding, because libuv asks for
+ *    `FILE_FLAG_FIRST_PIPE_INSTANCE`. Measured on Windows 11 26200, along with
+ *    `existsSync` answering true while served and false after close.
+ *  - **The pipe is not `chmod 0600`, and pretending otherwise would be the
+ *    worst thing in this file.** Node exposes no way to hand
+ *    `CreateNamedPipe` a security descriptor, so the pipe carries libuv's
+ *    default one. Read off a live pipe on that machine, as SIDs:
+ *
+ *        owner            S-1-5-32-544  (Administrators)
+ *        Allow  Full      S-1-5-18      (SYSTEM)
+ *        Allow  Full      S-1-5-32-544  (Administrators)
+ *        Allow  Read      S-1-1-0       (Everyone)
+ *        Allow  Read      S-1-5-7       (ANONYMOUS LOGON)
+ *
+ *    So on Windows another account on the PC *can* open this pipe, where on
+ *    POSIX the 0600 socket refuses it in the kernel. What it cannot do is send
+ *    anything: posting a hook event is a write, and neither Everyone nor
+ *    Anonymous is granted one. What a reader gets is this server's own reply,
+ *    which is `HTTP/1.1 204 No Content` and nothing else — pipe instances are
+ *    separate, so another connection's payload is not on it. The token is
+ *    still required, and it lives in a file `icacls` locks to this account.
+ *
  * ## The token, and where it now lives
  *
  * Every request still carries a per-run token compared in constant time, but it
  * is no longer written into the hook command — which is the second half of the
  * staleness fix and, separately, a real improvement. The old design put a 48-hex
  * secret directly into `~/.gemini/settings.json` and `~/.codex/hooks.json`, both
- * mode 0644. Now the token goes into {@link HookEndpoint.configPath}, a curl
- * config file written 0600 beside the socket, and the hook command reads it at
- * call time with `curl -K`. So the hook command holds two stable paths and no
- * secret, and the secret is readable only by this user.
+ * mode 0644. Now the token goes into {@link HookEndpoint.configPath}, a file
+ * written beside the socket and readable only by this account, and the hook
+ * command reads it at call time — with `curl -K` on POSIX, and with the client
+ * script below on Windows. So the hook command holds two stable paths and no
+ * secret.
  *
  * Be honest about what the token is still worth: another process running as this
  * user can read that file, and can also just connect to the socket. It stops
  * confused software posting nonsense at us; it is not a defence against a local
  * attacker who is already inside the home directory. The filesystem permissions
  * are the boundary that does the work now.
+ *
+ * On Windows the mode is theatre — `remote/secret-file.ts` says why at length —
+ * so the token file and the client script go through {@link writeSecretFile},
+ * which locks them to this account with `icacls`. That is also why the endpoint
+ * keeps its files in a directory of its own rather than in `<userData>`
+ * directly: locking a directory strips its inherited entries, and doing that to
+ * the whole of `<userData>` would re-permission everything Chromium keeps there
+ * as a side effect of starting a hook server.
  */
 
-import { randomBytes, timingSafeEqual } from 'node:crypto'
-import { chmodSync, existsSync, mkdirSync, unlinkSync, writeFileSync } from 'node:fs'
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
+import { chmodSync, existsSync, mkdirSync, unlinkSync } from 'node:fs'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { connect } from 'node:net'
-import { join } from 'node:path'
+import { posix, win32 } from 'node:path'
 import { BRAND } from '../shared/brand'
+import { currentPlatform, isWindows, type Platform } from './platform/host'
+import { writeSecretFile } from './remote/secret-file'
 
 /* ------------------------------------------------------------------ types -- */
 
 export interface HookEndpoint {
-  /** The unix socket hooks connect to. Stable for the life of an install. */
+  /**
+   * The address hooks connect to. Stable for the life of an install.
+   *
+   * A unix socket path on POSIX and a `\\.\pipe\…` name on Windows — both are
+   * what `net.listen()` and `http.request({ socketPath })` take, which is why
+   * one field carries both. See {@link hookAddress}.
+   */
   socketPath: string
   /**
-   * The curl config file a hook reads the token out of, at call time.
+   * The file a hook reads the token out of, at call time.
    *
-   * Stable like the socket, and rewritten with a fresh token on every start.
+   * Stable like the address, and rewritten with a fresh token on every start.
    * That indirection is the whole reason an installed hook survives a restart.
+   * A curl config on POSIX; JSON read by {@link HookEndpoint.clientPath} on
+   * Windows.
    */
   configPath: string
+  /**
+   * The script the hook command runs on Windows, or null on POSIX where `curl`
+   * is already installed and already speaks unix sockets.
+   *
+   * Stable like the other two, and rewritten on every start so an upgrade
+   * cannot leave an old client talking to a new config.
+   */
+  clientPath: string | null
   /** Per-run secret. Regenerated on every start; lives only in `configPath`. */
   token: string
 }
@@ -100,7 +173,7 @@ export interface HookServerOptions {
   /** Called for every accepted event. Errors thrown here are swallowed. */
   onEvent?: HookEventListener
   /**
-   * The directory the socket and its config file are created in.
+   * The data directory the endpoint keeps its own directory inside.
    *
    * Required rather than defaulted, for the reason `platform/paths.ts` refuses
    * to default: the Electron shell and the headless shell keep their files in
@@ -110,23 +183,54 @@ export interface HookServerOptions {
    * temporary one.
    */
   dir: string
+  /**
+   * Which platform's spelling to use. Defaults to this machine's.
+   *
+   * A parameter for the reason `platform/host.ts` argues at length: CI for this
+   * project is macOS-only, so an inline `process.platform` branch is a branch
+   * nothing in this suite can reach, and the Windows form of an address that
+   * only Windows can bind is exactly the kind of thing that ships unexercised.
+   * Only {@link hookAddress} and the command shape are affected — the server
+   * still binds on the machine it is running on.
+   */
+  platform?: Platform
 }
 
 /* -------------------------------------------------------------- constants -- */
 
-/** Names inside {@link HookServerOptions.dir}. Stable across runs on purpose. */
+/**
+ * The endpoint's own directory inside {@link HookServerOptions.dir}.
+ *
+ * Its own, rather than `<userData>` directly, because of what protecting a
+ * secret costs on Windows: `writeSecretFile` locks the *directory* holding the
+ * secret with `icacls /inheritance:r`, which strips inherited entries from
+ * everything below it. Applied to `<userData>` that would silently
+ * re-permission Chromium's cookies, local storage and cache as a side effect of
+ * a hook server starting. Applied to `<userData>/hook` it locks four files this
+ * module owns.
+ */
+export const ENDPOINT_DIR = 'hook'
+
+/** Names inside {@link ENDPOINT_DIR}. Stable across runs on purpose. */
 export const SOCKET_FILE = 'hook.sock'
 export const CONFIG_FILE = 'hook-endpoint.conf'
+/** The Windows pair: JSON the client reads, and the client that reads it. */
+export const WINDOWS_CONFIG_FILE = 'hook-endpoint.json'
+export const WINDOWS_CLIENT_FILE = 'hook-post.ps1'
 
 /**
  * The longest a unix socket path may be.
  *
  * `sun_path` is 104 bytes on macOS and 108 on Linux, and going over it does not
  * produce a helpful error — `bind` fails with ENAMETOOLONG or, worse, silently
- * truncates on some platforms. The real path is about 64 bytes
- * (`~/Library/Application Support/Terminal Deck/hook.sock`), so this is a guard
- * against a future data directory nobody measured, and it fails with a sentence
- * rather than with an errno.
+ * truncates on some platforms. The real path is about 70 bytes
+ * (`~/Library/Application Support/terminaldeck/hook/hook.sock`), so this is a
+ * guard against a future data directory nobody measured, and it fails with a
+ * sentence rather than with an errno.
+ *
+ * Windows is not subject to it: a pipe name is not a path, it is bounded by
+ * this module rather than by the caller's directory, and it is 256 characters
+ * long at the outside.
  */
 const MAX_SOCKET_PATH_BYTES = 100
 
@@ -154,6 +258,84 @@ const SEGMENT_RE = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/
  */
 const HEADERS_TIMEOUT_MS = 10_000
 const REQUEST_TIMEOUT_MS = 30_000
+
+/* --------------------------------------------------------------- addresses -- */
+
+/**
+ * Where every file this module owns lives, for one data directory.
+ *
+ * `win32.join` and `posix.join` by name rather than the host's `join`, for the
+ * reason `remote/secret-file.ts` spells its `icacls` path that way: a `platform`
+ * argument that quietly resolves to the host's separators is a parameter that
+ * does nothing, and a Mac asking for the Windows answer would get a Mac answer
+ * with a different name on it. It is not hypothetical in the other direction
+ * either — asking for the POSIX answer *on Windows* returned
+ * `\data\hook\hook.sock`, which is how the first Windows run of these tests
+ * failed.
+ */
+export function endpointDir(dir: string, platform: Platform = currentPlatform()): string {
+  return isWindows(platform) ? win32.join(dir, ENDPOINT_DIR) : posix.join(dir, ENDPOINT_DIR)
+}
+
+/**
+ * The address hooks connect to, in this platform's spelling.
+ *
+ * POSIX gets a path inside the endpoint's directory. Windows gets a named pipe,
+ * because there is no filesystem unix socket there to give it — see the header.
+ *
+ * The pipe name carries a digest of the directory rather than being a constant,
+ * and both halves of that matter:
+ *
+ *  - **A digest, because the pipe namespace is one namespace for the whole
+ *    machine.** On POSIX two installs are separated for free, by living in
+ *    different directories; a fixed pipe name would put a dev build, a packaged
+ *    build and a second Windows account into a fight over one name, and the
+ *    loser is refused the endpoint entirely. The digest gives each data
+ *    directory its own name, which is the same separation the path gave.
+ *  - **Of the directory, because that is the thing that is stable.** The whole
+ *    point of this module is an address that is the same string next week, so
+ *    the name may not contain anything minted per run.
+ *
+ * Case-folded first: Windows paths are case-insensitive, so `C:\Users\A` and
+ * `c:\users\a` are the same directory and must not produce two names — which
+ * they would, on a machine started once from a shortcut and once from a
+ * command line spelling `--user-data-dir` differently.
+ */
+export function hookAddress(dir: string, platform: Platform = currentPlatform()): string {
+  if (!isWindows(platform)) return posix.join(endpointDir(dir, platform), SOCKET_FILE)
+  const digest = createHash('sha256').update(dir.toLowerCase()).digest('hex').slice(0, 16)
+  return `\\\\.\\pipe\\${BRAND.id}-hook-${digest}`
+}
+
+/** The file the token is written into, in this platform's spelling. */
+export function hookConfigPath(dir: string, platform: Platform = currentPlatform()): string {
+  return isWindows(platform)
+    ? win32.join(endpointDir(dir, platform), WINDOWS_CONFIG_FILE)
+    : posix.join(endpointDir(dir, platform), CONFIG_FILE)
+}
+
+/**
+ * The script a Windows hook command runs, or null where `curl` already does the
+ * job.
+ *
+ * There is no `curl` form on Windows, and that is not for want of trying: the
+ * `curl.exe` in System32 is built with `UnixSockets` and `--unix-socket` there
+ * opens an `AF_UNIX` socket, which a named pipe is not. Pointed at
+ * `\\.\pipe\…` it answers `Failed to connect to localhost:80 over unix://…`.
+ * Measured against curl 8.21.0 on Windows 11 26200, both with backslashes and
+ * with forward slashes. Node cannot serve `AF_UNIX` on Windows either, so the
+ * two cannot be made to meet and something else has to carry the request.
+ *
+ * That something is Windows PowerShell, which is on every Windows install,
+ * needs nothing shipped or installed, and can open a named pipe with
+ * `System.IO.Pipes.NamedPipeClientStream`. Measured cost on a real machine:
+ * about 200 ms per call, nearly all of it `powershell.exe` starting. That is
+ * slower than curl and it is the price of the transport being right; Claude's
+ * own hook timeout is 5 seconds, so it is well inside what a hook may take.
+ */
+export function hookClientPath(dir: string, platform: Platform = currentPlatform()): string | null {
+  return isWindows(platform) ? win32.join(endpointDir(dir, platform), WINDOWS_CLIENT_FILE) : null
+}
 
 /* --------------------------------------------------------------- internals -- */
 
@@ -478,40 +660,58 @@ function socketAnswers(socketPath: string): Promise<boolean> {
  * meeting a packaged one — two different data directories, two different socket
  * paths, and therefore no contention at all. This exists for the case that is
  * left: a crash that left the file behind.
+ *
+ * Windows has no such case and gets none of this. A named pipe is not a file:
+ * it exists only while a process is serving it and vanishes when that process
+ * goes, so a crash leaves nothing to clear and `unlinkSync` on the name answers
+ * `EBUSY` rather than removing anything. The live-copy half is still real
+ * there, and libuv already answers it — it binds with
+ * `FILE_FLAG_FIRST_PIPE_INSTANCE`, so a second listener gets `EADDRINUSE`
+ * rather than quietly opening a second instance of somebody else's pipe. That
+ * is turned into the same sentence in {@link openServer}.
  */
-async function clearStaleSocket(socketPath: string): Promise<void> {
+async function clearStaleSocket(socketPath: string, platform: Platform): Promise<void> {
+  if (isWindows(platform)) return
   if (!existsSync(socketPath)) return
-  if (await socketAnswers(socketPath)) {
-    throw new Error(
-      `hook server: ${socketPath} is already being served, so another copy of ${BRAND.name} owns it`,
-    )
-  }
+  if (await socketAnswers(socketPath)) throw occupied(socketPath)
   unlinkSync(socketPath)
 }
 
+/** The refusal both platforms end at, spelled once. */
+function occupied(socketPath: string): Error {
+  return new Error(
+    `hook server: ${socketPath} is already being served, so another copy of ${BRAND.name} owns it`,
+  )
+}
+
 /**
- * Write the curl config a hook reads its token out of.
+ * Write the file a hook reads its token out of.
  *
- * 0600 before anything is written into it, not after: a file created 0644 and
- * tightened a moment later has a window in which the token is world-readable,
- * and the whole point of moving the secret out of the provider configs was that
- * those are 0644. `writeFileSync`'s mode is masked by the process umask, so it
- * is set explicitly afterwards as well — the same belt-and-braces `hooks.ts`
- * uses for the same reason.
+ * Through `writeSecretFile` on both platforms rather than a `writeFileSync` and
+ * a `chmod`, and that is the whole reason this module is on the list in
+ * `remote/secret-file.test.ts`. The pair is exactly right on POSIX and does
+ * nothing at all on Windows, where the mode is synthesised and an ACL is the
+ * only protection there is — which is the same mistake `deck-control.json` was
+ * found making, from the same direction. The one door also gets the ordering
+ * right: the file is locked while it is still a temp name, so the real path
+ * never exists in an unprotected state.
  *
- * The values are quoted in curl's own config syntax. The socket path genuinely
- * contains a space on macOS ("Application Support"), so an unquoted line here
- * would be a feature that works on every machine except a real one.
+ * The POSIX body is curl's own config syntax, values double-quoted because the
+ * socket path genuinely contains a space on macOS ("Application Support") — an
+ * unquoted line here would be a feature that works on every machine except a
+ * real one. The Windows body is JSON, because what reads it is the PowerShell
+ * client below and `ConvertFrom-Json` is one call.
  */
-function writeEndpointConfig(configPath: string, socketPath: string, token: string): void {
-  const body = [
-    `# Written by ${BRAND.name} on every start. The token changes; the path does not.`,
-    `unix-socket = ${curlConfigValue(socketPath)}`,
-    `header = ${curlConfigValue(`${TOKEN_HEADER}: ${token}`)}`,
-    '',
-  ].join('\n')
-  writeFileSync(configPath, body, { mode: 0o600 })
-  chmodSync(configPath, 0o600)
+function writeEndpointConfig(live: HookEndpoint, platform: Platform, dir: string): void {
+  const body = isWindows(platform)
+    ? `${JSON.stringify({ pipe: live.socketPath, token: live.token }, null, 2)}\n`
+    : [
+        `# Written by ${BRAND.name} on every start. The token changes; the path does not.`,
+        `unix-socket = ${curlConfigValue(live.socketPath)}`,
+        `header = ${curlConfigValue(`${TOKEN_HEADER}: ${live.token}`)}`,
+        '',
+      ].join('\n')
+  writeSecretFile(dir, live.configPath, body, { platform })
 }
 
 /** A double-quoted curl config value, with the two characters it escapes. */
@@ -519,19 +719,98 @@ function curlConfigValue(value: string): string {
   return `"${value.split('\\').join('\\\\').split('"').join('\\"')}"`
 }
 
+/**
+ * The Windows hook client, generated rather than shipped.
+ *
+ * Generated because every name in it comes from `BRAND` — the two header names
+ * and the session environment variable — and a copy of those in a `.ps1` asset
+ * is a second spelling of the brand that goes stale the day one of them
+ * changes. It is rewritten on every start for the same reason the config is:
+ * an upgrade must not leave an old client reading a new config.
+ *
+ * What it has to get right, in the order it gets it wrong if it does not:
+ *
+ *  - **It reads stdin to the end.** The CLI writes the event JSON into this
+ *    process and blocks; a client that exits without reading leaves the CLI
+ *    writing into a closed pipe, which Claude reports as an EPIPE hook failure.
+ *  - **It always exits 0.** There is no `|| true` doing this work — the command
+ *    has one, but a hook that fires while the app is closed must be silence
+ *    rather than an error in somebody's session, and that is decided here.
+ *  - **A missing config is not an error.** The config is deleted on shutdown,
+ *    so "no config" is the ordinary state of a closed app, and it means there
+ *    is no endpoint and no token to present to whatever might answer.
+ *  - **It takes the session id from the environment itself.** On POSIX the
+ *    shell expands it into the command; here the client is ours, so it can read
+ *    `$env:` directly and the command needs no expansion at all.
+ *  - **It ignores arguments it does not know.** The ownership marker rides at
+ *    the end of the command as a `#` comment, which the POSIX shell Claude runs
+ *    hooks through on Windows strips — but a provider that ran the command some
+ *    other way would pass it through as two more arguments, and an argument the
+ *    client refuses is a hook that fails for a comment.
+ */
+export function windowsClientScript(): string {
+  return `# Written by ${BRAND.name} on every start. Posts one hook event into the
+# app's named pipe. Arguments: <config> <provider> <event>.
+$ErrorActionPreference = 'Stop'
+try {
+  $configPath = $args[0]
+  $body = [Console]::In.ReadToEnd()
+  # A closed app has no config and therefore no endpoint. Reading stdin first
+  # means the CLI's write completes either way.
+  if (-not (Test-Path -LiteralPath $configPath)) { exit 0 }
+  $config = Get-Content -Raw -LiteralPath $configPath | ConvertFrom-Json
+  # NamedPipeClientStream wants the name, not the \\\\.\\pipe\\ path the server
+  # binds and the config records.
+  $name = $config.pipe -replace '^\\\\\\\\\\.\\\\pipe\\\\', ''
+  $bytes = [System.Text.Encoding]::UTF8.GetBytes($body)
+  $pipe = New-Object System.IO.Pipes.NamedPipeClientStream('.', $name, [System.IO.Pipes.PipeDirection]::InOut)
+  $pipe.Connect(1000)
+  try {
+    $head = "POST /hook/$($args[1])/$($args[2]) HTTP/1.1\`r\`n" +
+      "Host: localhost\`r\`n" +
+      "content-type: application/json\`r\`n" +
+      "${TOKEN_HEADER}: $($config.token)\`r\`n" +
+      "${SESSION_HEADER}: $($env:${BRAND.sessionEnvVar})\`r\`n" +
+      "Content-Length: $($bytes.Length)\`r\`n" +
+      "Connection: close\`r\`n\`r\`n"
+    $headBytes = [System.Text.Encoding]::ASCII.GetBytes($head)
+    $pipe.Write($headBytes, 0, $headBytes.Length)
+    $pipe.Write($bytes, 0, $bytes.Length)
+    $pipe.Flush()
+    # The response is read and dropped. The app answers 204 with no body, and
+    # anything returned to the CLI would be parsed as hook output.
+    $reader = New-Object System.IO.StreamReader($pipe)
+    $reader.ReadLine() | Out-Null
+  } finally {
+    $pipe.Dispose()
+  }
+} catch {
+  # Every failure here is somebody's session carrying on regardless.
+}
+exit 0
+`
+}
+
 async function openServer(options: HookServerOptions): Promise<HookEndpoint> {
-  const socketPath = join(options.dir, SOCKET_FILE)
-  if (Buffer.byteLength(socketPath) > MAX_SOCKET_PATH_BYTES) {
+  const platform = options.platform ?? currentPlatform()
+  const home = endpointDir(options.dir, platform)
+  const socketPath = hookAddress(options.dir, platform)
+  if (!isWindows(platform) && Buffer.byteLength(socketPath) > MAX_SOCKET_PATH_BYTES) {
     throw new Error(
       `hook server: ${socketPath} is too long for a unix socket (${Buffer.byteLength(socketPath)} bytes, the limit is ${MAX_SOCKET_PATH_BYTES})`,
     )
   }
 
   const token = randomBytes(24).toString('hex')
-  const live: HookEndpoint = { socketPath, configPath: join(options.dir, CONFIG_FILE), token }
+  const live: HookEndpoint = {
+    socketPath,
+    configPath: hookConfigPath(options.dir, platform),
+    clientPath: hookClientPath(options.dir, platform),
+    token,
+  }
 
-  mkdirSync(options.dir, { recursive: true })
-  await clearStaleSocket(socketPath)
+  mkdirSync(home, { recursive: true })
+  await clearStaleSocket(socketPath, platform)
 
   const next = createServer((req, res) => {
     void handle(req, res, live).catch(() => {
@@ -548,14 +827,18 @@ async function openServer(options: HookServerOptions): Promise<HookEndpoint> {
   next.requestTimeout = REQUEST_TIMEOUT_MS
 
   await new Promise<void>((resolve, reject) => {
-    const onListenError = (error: Error): void => {
+    const onListenError = (error: NodeJS.ErrnoException): void => {
       // A server that failed to bind still holds a handle; drop it rather than
       // leave it behind for every retry.
       next.close()
-      reject(error)
+      // Windows' half of `clearStaleSocket`. libuv binds a pipe with
+      // `FILE_FLAG_FIRST_PIPE_INSTANCE`, so `EADDRINUSE` here is the kernel
+      // saying another process is already serving this name — the same fact,
+      // deserving the same sentence, as a live socket file on POSIX.
+      reject(error.code === 'EADDRINUSE' ? occupied(socketPath) : error)
     }
     next.once('error', onListenError)
-    // A path, not a port. See the header: this is the whole staleness fix — the
+    // A name, not a port. See the header: this is the whole staleness fix — the
     // address a hook was installed with is the address it still is next week.
     next.listen(socketPath, () => {
       next.removeListener('error', onListenError)
@@ -572,8 +855,16 @@ async function openServer(options: HookServerOptions): Promise<HookEndpoint> {
   // umask applied, which on a default macOS account is 0755 — every other
   // account on the machine could open it. The kernel enforces this before a
   // single byte is read, which is a stronger boundary than the token inside.
-  chmodSync(socketPath, 0o600)
-  writeEndpointConfig(live.configPath, socketPath, token)
+  //
+  // Windows gets no line here, and the absence is a limit rather than an
+  // oversight: `chmod` on a pipe name answers EBUSY, and Node exposes no way to
+  // hand `CreateNamedPipe` a security descriptor, so the pipe carries libuv's
+  // default DACL — which grants Everyone *read*. The header has the measured
+  // ACE list and what it does and does not allow. The token in the ACL-locked
+  // config below is the part this module can decide for itself.
+  if (!isWindows(platform)) chmodSync(socketPath, 0o600)
+  if (live.clientPath) writeSecretFile(home, live.clientPath, windowsClientScript(), { platform })
+  writeEndpointConfig(live, platform, home)
 
   // Nothing is claimed in `own-ports.ts` any more, and that is the point: this
   // endpoint no longer holds a loopback port, so there is no longer a way for
@@ -633,7 +924,18 @@ export async function stopHookServer(): Promise<void> {
   // After the close, not before: Node unlinks the socket itself as part of
   // closing a unix-socket server, and removing it first would leave the next
   // start's freshly bound socket looking like ours to delete.
-  if (dead) forget(dead.socketPath)
+  //
+  // A named pipe is skipped rather than swallowed. There is nothing on disk to
+  // remove — the pipe went with the close — and `unlink` on the name answers
+  // EBUSY while it is alive, so calling it would be asking for an error we
+  // already know the answer to.
+  if (dead && !dead.socketPath.startsWith('\\\\.\\pipe\\')) forget(dead.socketPath)
+
+  // The client script deliberately stays. It holds no secret, its content is
+  // the same every run, and leaving it is what makes a hook that fires against
+  // a closed app *silent*: the script runs, finds no config, and exits 0.
+  // Deleting it would make the same event a "file not found" on the CLI's
+  // stderr, every time, for the life of the install.
 }
 
 /** Remove a file we own, treating "already gone" as success. */

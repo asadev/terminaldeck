@@ -8,6 +8,7 @@ import {
   readTabDrag,
   startTabDrag,
   STRIP_LABEL_BUDGET,
+  tabIcon,
   tabLabel,
   tabTooltip,
   TAB_DRAG_MIME,
@@ -834,6 +835,42 @@ describe('tabLabel', () => {
     const page: WorkspaceTab = { id: 'p', kind: 'browser', label: 'localhost:5173', closable: true }
     expect(tabLabel(page, [page])).toBe('localhost:5173')
   })
+
+  it('calls the copilot Copilot, never Session N', () => {
+    /*
+     * The copilot is a session, and its title is the name of its own folder —
+     * which is exactly the case `sessionLabel` turns into "Session 1". So
+     * without the rule in `tabLabel` the pinned row in the rail would read
+     * "Copilot" and the pill three centimetres above it would read "Session 3",
+     * for one window. That is the same defect `tabIdentities` prevents between
+     * two different tabs; it would be worse coming from one.
+     */
+    const copilotTab: WorkspaceTab = {
+      id: 'cp',
+      kind: 'session',
+      label: 'copilot',
+      projectPath: '/Users/apple/Library/Application Support/terminaldeck/copilot',
+      isCopilot: true,
+      closable: true,
+    }
+    const tabs = [inProject('a', 'terminaldeck'), copilotTab]
+    expect(tabLabel(copilotTab, tabs)).toBe('Copilot')
+    // And it is not counted as a sibling of anything: the session beside it is
+    // still Session 1.
+    expect(tabLabel(tabs[0], tabs)).toBe('Session 1')
+  })
+})
+
+describe('tabIcon', () => {
+  it('gives the copilot its own mark and everything else its kind\u2019s', () => {
+    // One of a kind, in a row of `>_` glyphs. Drawn with the same compass the
+    // pinned row wears, from the same constant, so the row and the pill are
+    // recognisably one thing rather than two features with one name.
+    const plain = session('a')
+    const page: WorkspaceTab = { id: 'p', kind: 'browser', label: 'x', closable: true }
+    expect(tabIcon({ ...plain, isCopilot: true })).not.toBe(tabIcon(plain))
+    expect(tabIcon(plain)).not.toBe(tabIcon(page))
+  })
 })
 
 describe('tabTooltip', () => {
@@ -1231,6 +1268,29 @@ describe('every route that opens a window keeps it', () => {
     expect(body).toContain('keepNewWindowInStrip(id)')
   })
 
+  /**
+   * The globe's handler is never handed a DOM event.
+   *
+   * `newBrowserTab` takes an optional address now — a link opens a page the same
+   * way the globe does — and both components that receive it put it straight on
+   * a button's `onClick`, which calls it with a `MouseEvent`. TypeScript cannot
+   * see that, because `(target?: string) => void` is assignable to `() => void`.
+   *
+   * Photographed on 2026-08-17: the event travelled out of `App.tsx` as
+   * `WorkspaceTab.url`, arrived in `BrowserWorkspace` as `initialUrl`, became a
+   * tab's `draft`, and threw `input.trim is not a function` out of
+   * `resolveOmnibox` **during render** — so the error boundary replaced every
+   * browser pane in the window with "New tab stopped working".
+   */
+  it('never hands the globe’s press in as the address', () => {
+    const bare = [...app.matchAll(/onNewBrowserTab=\{([^}]*)\}/g)].map((m) => m[1].trim())
+    expect(bare, 'App.tsx no longer wires onNewBrowserTab at all').not.toEqual([])
+    expect(
+      bare.filter((value) => value === 'newBrowserTab'),
+      'onNewBrowserTab={newBrowserTab} passes React’s MouseEvent in as the URL — wrap it',
+    ).toEqual([])
+  })
+
   it('puts that page in the pane you pressed the globe from', () => {
     /*
      * This assertion is the inverse of the one it replaces, and the flip is the
@@ -1291,11 +1351,35 @@ describe('every route that opens a window keeps it', () => {
   it('promotes on creation and nowhere else, so browsing the rail cannot fill the bar', () => {
     /*
      * The one-line version of this feature — promote whatever becomes active —
-     * is the automatic strip this model rejected on its first page. Three calls
-     * is the whole of it, and a fourth appearing beside `selectTab` or
-     * `showTab` is how that mistake would arrive.
+     * is the automatic strip this model rejected on its first page. Five calls
+     * is the whole of it, and a sixth appearing beside `selectTab` or `showTab`
+     * is how that mistake would arrive.
+     *
+     * It was three until 2026-08-17, and the two that joined are the same act
+     * arriving twice because the copilot may not exist yet: opening it starts a
+     * CLI, so `openCopilot` keeps its window when there is already a session and
+     * the effect that waits for one keeps it when there is not. Both are the
+     * press, not a navigation — the copilot's pinned row is where a window is
+     * *created* for it, exactly as the strip's terminal glyph is for a session.
      */
-    expect(app.match(/keepNewWindowInStrip\(/g)).toHaveLength(3)
+    expect(app.match(/keepNewWindowInStrip\(/g)).toHaveLength(5)
+  })
+
+  it('takes the copilot off the bar rather than ending it', () => {
+    /*
+     * ⌘W is the one path in the window that could have killed the copilot's
+     * session, because a singleton has no row in the rail and therefore no ✕
+     * that ends it. `closeTab` has to answer that press the way the tab's own ✕
+     * does — off the bar, still running — and this is a wiring claim rather than
+     * a component one: every piece involved is correct on its own, and what can
+     * regress is the branch in `App.tsx` that routes the press.
+     */
+    const close = /const closeTab = useCallback\([\s\S]*?\n {2}\)/.exec(app)?.[0] ?? ''
+    expect(close, 'closeTab has changed shape').not.toBe('')
+    expect(close).toContain('tab?.isCopilot')
+    expect(close).toContain('removeWindowFromStrip(')
+    // The guard is before the kill, or it is not a guard.
+    expect(close.indexOf('tab?.isCopilot')).toBeLessThan(close.indexOf('closeTabNow(id)'))
   })
 })
 

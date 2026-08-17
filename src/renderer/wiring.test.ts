@@ -56,10 +56,21 @@ const SEAMS: Array<{ file: string; child: string; props: string[]; why: string }
     why: 'the copilot is a session like any other, so its conversation pane has the same three seams — and `provider` besides, because without it the pane writes shell copy over an agent',
   },
   {
-    file: 'renderer/shell/PanelView.tsx',
+    file: 'renderer/App.tsx',
     child: 'CopilotView',
-    props: ['copilot', 'focus'],
-    why: 'without `copilot` the page has no connection to the agent and draws its "not wired" state; without `focus` a session row asking why it exists lands on the page instead of on the turn that started it',
+    props: ['copilot', 'visible', 'mode', 'focus'],
+    // It moved here from `PanelView` on 2026-08-17, when the copilot stopped
+    // being a page and became a window: it is rendered beside the other
+    // sessions' terminals, because that is where a session is rendered.
+    //
+    // `visible` and `mode` are the two that joined and they are the two that
+    // make it a window rather than a page. Without `visible` it is either
+    // painted over whatever tab you actually chose or remounted on every switch
+    // — and a remount redraws its terminal from scrollback, losing the place a
+    // half-finished login prompt is sitting in. Without `mode` it is stuck on
+    // one pane while the window's own Terminal/Chat switch moves everything
+    // else, which is the shape of a control that looks broken.
+    why: 'without `copilot` it has no connection to the agent and draws its "not wired" state; `visible` and `mode` are what make it a window like the others rather than a page; without `focus` a session row asking why it exists lands on the copilot instead of on the turn that started it',
   },
   {
     file: 'renderer/App.tsx',
@@ -213,6 +224,19 @@ const SEAMS: Array<{ file: string; child: string; props: string[]; why: string }
     // mounted nowhere.
     why: 'unmounted, every hover label in the app reverts to the OS tooltip the design brief replaced',
   },
+  {
+    file: 'renderer/browser/BrowserWorkspace.tsx',
+    child: 'DriveBanner',
+    props: ['status', 'onResume'],
+    // The one place a person can see that the copilot is moving a page, and
+    // the only place they can hand it back after a handover. Unmounted, a
+    // `browser.handover` call is a page that stops responding to the agent
+    // with nothing on screen saying so and no way to release it — the tool
+    // would sit there until its window closed and then say "still waiting"
+    // forever. `onResume` is half of that: without it the banner draws and
+    // its buttons do nothing.
+    why: 'without it a driven page moves with no explanation, and a handover can never be answered',
+  },
 ]
 
 describe('components that are built are also wired', () => {
@@ -336,6 +360,155 @@ describe('one route to a new session, and it is the dialog', () => {
     expect(app).toMatch(/case 'session\.newDialog':\s*\n\s*openNewSessionDialog\(\)/)
     // And exactly one row offering it, rather than two names for one place.
     expect(app.match(/id: 'session\.newDialog', title:/g)).toBeNull()
+  })
+})
+
+/**
+ * The copilot is a window, with everything a window has — and there is no page
+ * left to reach.
+ *
+ * Asad, 2026-08-17: *"Give the copilot a full window like the other windows. It
+ * is not that much of a big window, it is like a small box inside the copilot
+ * page. Let it have a proper window like others — proper dropdowns on the top,
+ * like changing the counts, efforts, models, all those things should be there,
+ * exactly like the other sessions. It should have all of those things, nothing
+ * should be less than that. And it can stay as a window pill with the other
+ * windows."*
+ *
+ * Every one of those is a wiring claim rather than a component one, which is
+ * why they are here. `SessionControls`, `AccountChip`, `ModeSwitch` and the tab
+ * strip were all already correct and already mounted; what the copilot was
+ * missing was being in the *list* they are fed from. It was filtered out of
+ * `sessions` — for good reasons, because it is not one of your project's
+ * sessions — and that one filter is what withheld the pill, the name, the
+ * account and the whole control cluster at once. Nothing about that is visible
+ * from inside any of the components involved.
+ *
+ * The dangerous half, again, is a route left behind: a palette row or a pinned
+ * row that navigates to a panel nobody renders is a blank window.
+ */
+describe('the copilot is a window, not a view', () => {
+  const app = read('renderer/App.tsx')
+
+  it('is not a view at all, so nothing can navigate to it', () => {
+    const panels = read('renderer/shell/panels.ts')
+    expect(panels).not.toMatch(/\|\s*'copilot'/)
+    expect(panels).not.toMatch(/id: 'copilot'/)
+    expect(read('renderer/shell/PanelView.tsx')).not.toContain("case 'copilot':")
+    expect(app, 'nothing may navigate the window to a copilot page').not.toContain(
+      "showPanel('copilot')",
+    )
+  })
+
+  it('is a tab like the others, kept on the bar when it is opened', () => {
+    // `isCopilot` on a `kind: 'session'` tab is the whole of it: everything that
+    // asks "is this a session" gets a yes, and the handful of genuinely
+    // different behaviours hang off the flag. Without the tab there is no pill,
+    // no heading, no account chip and no control cluster — one filter withheld
+    // all four.
+    expect(app).toMatch(/isCopilot: true as const/)
+    const open = /const openCopilot = useCallback\([\s\S]*?\n {2}\)/.exec(app)?.[0] ?? ''
+    expect(open, 'openCopilot has changed shape').not.toBe('')
+    expect(open).toContain('copilot.ensure()')
+    // `selectTab`, not `showTab`: while the window is split a click in the rail
+    // fills the pane you are looking at, and pressing Copilot has to obey the
+    // same rule or it changes the selection and nothing on screen.
+    expect(open).toContain('selectTab(copilotSessionId)')
+    expect(open).toContain('keepNewWindowInStrip(copilotSessionId)')
+  })
+
+  it('feeds the bar’s controls from a list the copilot is in', () => {
+    /*
+     * `headingSession` is what `SessionControls` acts on — model, effort, fast
+     * mode, connectors, usage — and it used to be resolved against `sessions`,
+     * which is the one list the copilot is deliberately not in. That single
+     * lookup is why the copilot had no cluster: the component was mounted, the
+     * bar was drawn, and the session was never found.
+     */
+    expect(app).toMatch(/const headingSession =[\s\S]{0,200}windowSessions\.find/)
+  })
+
+  it('keeps its pinned row, and points it at the window', () => {
+    const tag = openingTag(app, 'Sidebar') ?? ''
+    expect(tag, 'no <Sidebar> in App.tsx').not.toBe('')
+    expect(tag).toMatch(/onOpenCopilot=\{\(focus\) => openCopilot\(focus\)\}/)
+    // And the row says whether the window it opens is the one on screen. It
+    // cannot be derived from `activeTabId` in there, because the copilot's tab
+    // is deliberately not among the tabs the rail draws.
+    expect(propExpression(tag, 'copilot')).toContain('active:')
+  })
+
+  it('offers a way to stop it, since the rail gives it no ✕', () => {
+    // A singleton has no row in the rail and so no ✕ that ends it; the ✕ on its
+    // pill takes the pill off the bar like every other pill's does. Losing the
+    // Stop that lived on its page would have left the one session in the window
+    // that cannot be switched off from anywhere you can see it.
+    expect(openingTag(app, 'CopilotStop')).toMatch(/[\s{]copilot[=}]/)
+  })
+})
+
+/**
+ * Closing every tab leaves an empty pane, rather than putting one back.
+ *
+ * Asad, 2026-08-17: *"If there are three or two windows open and I close all of
+ * them, the last one I will not be able to close from the top bar — I can just
+ * close a few ones."*
+ *
+ * The strip already answered `select: null` for that press. What made the tab
+ * come straight back was `App.tsx` resolving a null selection to `tabs[0]`, so
+ * `shownTabs` drew it again as a transient tab — three correct pieces composing
+ * into a control that does not work. The resolution is a pure function with its
+ * own tests now (`shell/tab-selection.ts`); what those cannot see is whether
+ * this file still routes the press into it, which is exactly the seam this file
+ * is for.
+ */
+describe('the last tab can be closed', () => {
+  const app = read('renderer/App.tsx')
+
+  it('holds the selection in a type that can say "nothing, on purpose"', () => {
+    // A `string | null` cannot tell "nobody has chosen yet" from "the person
+    // emptied the bar", and answering the first for both is the bug.
+    expect(app).toMatch(/useState<TabSelection>\(AUTO_SELECTION\)/)
+    expect(app).toMatch(/resolveActiveTab\(selection, tabs\)/)
+    expect(app, 'the old two-state selection is back').not.toMatch(/setActiveTabId\(/)
+  })
+
+  it('routes the strip’s ✕ through it, null and all', () => {
+    const showInstead = /const showInstead = useCallback\([\s\S]*?\n {2}\)/.exec(app)?.[0] ?? ''
+    expect(showInstead, 'showInstead has changed shape').not.toBe('')
+    expect(showInstead).toContain('setSelection(showTabSelection(id))')
+  })
+
+  it('draws the pane’s own empty state rather than the launch screen', () => {
+    /*
+     * Two different nothings. With no windows open it is a launch, and the
+     * launch screen is a door: open a project. With windows open it is somebody
+     * having emptied the bar, and showing "nothing is open" while four agents
+     * run beside it would be the app contradicting its own sidebar.
+     */
+    expect(app).toMatch(/if \(tabs\.length === 0\) return <EmptyState/)
+    expect(app).toMatch(/if \(!activeTab\) \{[\s\S]{0,200}Nothing in this pane yet/)
+  })
+
+  it('lets a split survive the bar being emptied', () => {
+    /*
+     * The order in `mainView` is the whole of this. Swarm and split draw
+     * sessions the strip's selection has nothing to do with — every terminal at
+     * once, or a hand-made layout — so an empty-selection branch above them
+     * would throw away an arrangement that is still on screen and still holding
+     * two running agents, and would leave the mode switch reading "Split" over a
+     * blank. The way back out of a split is that switch, so it has to survive.
+     */
+    const main = /const mainView = \(\) => \{[\s\S]*?\n {2}\}/.exec(app)?.[0] ?? ''
+    expect(main, 'mainView has changed shape').not.toBe('')
+    expect(main.indexOf('if (splitting)')).toBeLessThan(main.indexOf('if (!activeTab)'))
+    expect(main.indexOf('if (swarm)')).toBeLessThan(main.indexOf('if (!activeTab)'))
+  })
+
+  it('leaves the bar saying nothing rather than naming some other session', () => {
+    // The fallback that put a guest's name in the host's bar was removed on
+    // purpose; the emptied window is the same claim in a different costume.
+    expect(app).toMatch(/: splitting \|\| tabs\.length > 0/)
   })
 })
 

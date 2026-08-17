@@ -3,11 +3,18 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { Caller } from '../deck-control/surface'
-import { CopilotGrants } from './copilot-grants'
+import { CopilotLinks } from './copilot-link'
 import type { CopilotSink } from './copilot-remote'
 import { isHiddenSession, resetHiddenSessions } from './hidden-sessions'
 import { CopilotRuns, runConfigName, type CopilotRunDeps, type CopilotRunSpawn } from './copilot-runs'
-import { MAX_COPILOT_LOG_ROWS, MAX_COPILOT_MESSAGE_CHARS } from './protocol'
+import {
+  MAX_COPILOT_LOG_ROWS,
+  MAX_COPILOT_MESSAGE_CHARS,
+  type CopilotConsentQuestion,
+  type CopilotPendingRow,
+  type CopilotSettledRow,
+} from './protocol'
+import type { ConsentRequest } from '../deck-control/consent'
 
 /**
  * The run manager, driven with no Electron, no pty and no socket.
@@ -26,7 +33,18 @@ let dir: string
 
 interface Harness {
   runs: CopilotRuns
-  grants: CopilotGrants
+  links: CopilotLinks
+  /**
+   * Connect a device to the copilot the way a person does: mint a code at the
+   * desk, redeem it, and let the tiers travel with the code.
+   *
+   * Not `links.set()`, and the difference is the revision this file was updated
+   * for. Copilot access is a **separate connection** now, and the store refuses
+   * to create a record from a settings write precisely so the panel cannot be a
+   * second door onto it — so a fixture that reached for `set()` on an
+   * unconnected device would be exercising a path the product does not have.
+   */
+  connect(deviceId: string, tiers: Record<string, boolean>): Promise<void>
   /** Tokens currently registered, and the caller each resolves to right now. */
   tokens: Map<string, { attended: boolean; caller(): Caller; signal?: AbortSignal }>
   spawned: CopilotRunSpawn[]
@@ -37,6 +55,12 @@ interface Harness {
   alive: Set<string>
   /** Push a chat update into whatever run is subscribed to a session. */
   emitChat(sessionId: string, text: string, reset?: boolean): void
+  /** The confirmations the fake broker is holding. Push one to raise a question. */
+  questions: ConsentRequest[]
+  /** Every answer the fake broker took, with the surface that gave it. */
+  answered: Array<{ id: string; approved: boolean; by: string }>
+  /** Questions withdrawn by `callerGone`, in the order they went. */
+  withdrawn: string[]
   clock: { at: number }
 }
 
@@ -49,11 +73,36 @@ function harness(over: Partial<CopilotRunDeps> = {}): Harness {
   const alive = new Set<string>()
   const chatters = new Map<string, (update: { messages: Array<{ id: string; role: 'you' | 'agent'; text: string; at: number }>; reset: boolean }) => void>()
   const clock = { at: 1_000 }
-  const grants = new CopilotGrants(dir)
+  const links = new CopilotLinks(dir)
+  const questions: ConsentRequest[] = []
+  const answered: Array<{ id: string; approved: boolean; by: string }> = []
+  const withdrawn: string[] = []
   let next = 0
 
   const deps: CopilotRunDeps = {
-    grants,
+    links,
+    consent: () => ({
+      list: () => questions,
+      respond: (id, approved, by) => {
+        const at = questions.findIndex((q) => q.id === id)
+        // The broker's own rule, reproduced because this fake stands in for it:
+        // the desktop may answer anything, and a device may answer only what it
+        // raised. A permissive fake here would make every ownership assertion in
+        // this file pass against a broker that had lost the rule.
+        if (at < 0) return false
+        if (by !== 'window' && by !== questions[at].origin) return false
+        answered.push({ id, approved, by })
+        questions.splice(at, 1)
+        return true
+      },
+      callerGone: (surface) => {
+        for (let i = questions.length - 1; i >= 0; i -= 1) {
+          if (questions[i].origin !== surface) continue
+          withdrawn.push(questions[i].id)
+          questions.splice(i, 1)
+        }
+      },
+    }),
     callers: {
       set: (token, grant) => {
         tokens.set(token, grant)
@@ -80,7 +129,6 @@ function harness(over: Partial<CopilotRunDeps> = {}): Harness {
     cost: () => ({ tools: 11, turnTokens: 900 }),
     sessions: () => [],
     log: () => ({ rows: [], more: false }),
-    pending: () => [],
     chat: (sessionId, onUpdate) => {
       chatters.set(sessionId, onUpdate)
       return () => chatters.delete(sessionId)
@@ -91,7 +139,15 @@ function harness(over: Partial<CopilotRunDeps> = {}): Harness {
 
   return {
     runs: new CopilotRuns(deps),
-    grants,
+    links,
+    connect: async (deviceId, tiers) => {
+      const offer = links.offer(tiers)
+      const outcome = await links.redeem(offer.code, deviceId)
+      expect(outcome.ok, 'the fixture failed to connect a device').toBe(true)
+    },
+    questions,
+    answered,
+    withdrawn,
     tokens,
     spawned,
     stopped,
@@ -106,10 +162,18 @@ function harness(over: Partial<CopilotRunDeps> = {}): Harness {
 }
 
 /** A sink that records what one connection was sent. */
-function recorder(): { sink: CopilotSink; chats: Array<{ run: string; texts: string[]; reset: boolean }>; states: number } & {
+function recorder(): {
+  sink: CopilotSink
+  chats: Array<{ run: string; texts: string[]; reset: boolean }>
+  asked: CopilotConsentQuestion[]
+  settled: CopilotSettledRow[]
+  pending: CopilotPendingRow[][]
   states: number
 } {
   const chats: Array<{ run: string; texts: string[]; reset: boolean }> = []
+  const asked: CopilotConsentQuestion[] = []
+  const settled: CopilotSettledRow[] = []
+  const pending: CopilotPendingRow[][] = []
   const box = { states: 0 }
   const sink: CopilotSink = {
     state: () => {
@@ -118,9 +182,11 @@ function recorder(): { sink: CopilotSink; chats: Array<{ run: string; texts: str
     chat: (run, messages, reset) => chats.push({ run, texts: messages.map((m) => m.text), reset }),
     tool: () => {},
     sessions: () => {},
-    pending: () => {},
+    pending: (questions) => pending.push(questions),
+    ask: (question) => asked.push(question),
+    settled: (row) => settled.push(row),
   }
-  return Object.assign(box, { sink, chats })
+  return Object.assign(box, { sink, chats, asked, settled, pending })
 }
 
 beforeEach(() => {
@@ -141,7 +207,7 @@ afterEach(() => {
 describe('the token is the caller, and it lives exactly as long as the run', () => {
   it('registers one token per run, re-reading the grant rather than copying it', async () => {
     const h = harness()
-    h.grants.set('phone-1', { read: true, act: true })
+    await h.connect('phone-1', { read: true, act: true })
 
     await h.runs.start('phone-1')
     expect(h.tokens.size).toBe(1)
@@ -155,17 +221,53 @@ describe('the token is the caller, and it lives exactly as long as the run', () 
 
     // The property the whole design rests on: the untick lands on the *next*
     // tool call, with no restart, no reconnect and no message from the phone.
-    h.grants.set('phone-1', { read: true })
+    await h.connect('phone-1', { read: true })
     expect(entry.caller().tiers.act).toBe(false)
   })
 
-  it('never registers a token carrying alter, whatever the store is told', async () => {
+  /**
+   * The token carries `alter` when the connection was given it — and carries it
+   * *live*.
+   *
+   * This assertion is the inverse of the one it replaced. That one proved the
+   * token could never carry `alter` whatever the store said, because `alter` was
+   * not remotely grantable; the reasoning was that the tier's safety property is
+   * a human at the machine saying yes and the party holding the phone is not
+   * that human. What changed is what stands behind the tier — a separate copilot
+   * connection rather than a checkbox — not the property. See `copilot-link.ts`.
+   *
+   * The second half is the part worth keeping either way: the tier is re-read
+   * per call, so taking `alter` away in Settings lands on the next tool call
+   * rather than on the next reconnect. That is the property a snapshot would
+   * have lost, and it is what makes the panel a control rather than a label.
+   */
+  it('registers a token that carries alter, and gives it up on the next call', async () => {
     const h = harness()
-    h.grants.set('phone-1', { read: true, act: true, alter: true })
+    await h.connect('phone-1', { read: true, act: true, alter: true })
 
     await h.runs.start('phone-1')
     const [entry] = [...h.tokens.values()]
+    expect(entry.caller().tiers.alter).toBe(true)
+
+    h.links.set('phone-1', { read: true, act: true })
     expect(entry.caller().tiers.alter).toBe(false)
+    expect(entry.caller().tiers.act).toBe(true)
+  })
+
+  /**
+   * And a device with no copilot connection carries nothing, whatever the panel
+   * was told.
+   *
+   * `set()` refuses to create a record. Without that line the settings channel
+   * would be a second door onto copilot access and the separate connection would
+   * be decoration — so this is the assertion that keeps the door shut.
+   */
+  it('cannot be granted anything by a settings write alone', async () => {
+    const h = harness()
+    h.links.set('phone-2', { read: true, act: true, alter: true })
+
+    expect(h.links.linked('phone-2')).toBe(false)
+    expect(h.runs.granted('phone-2')).toEqual({ read: false, act: false, alter: false })
   })
 
   /**
@@ -178,7 +280,7 @@ describe('the token is the caller, and it lives exactly as long as the run', () 
    */
   it('drops the token, aborts in-flight calls and stops the run when act is revoked', async () => {
     const h = harness()
-    h.grants.set('phone-1', { read: true, act: true })
+    await h.connect('phone-1', { read: true, act: true })
     await h.runs.start('phone-1')
 
     const [entry] = [...h.tokens.values()]
@@ -187,7 +289,7 @@ describe('the token is the caller, and it lives exactly as long as the run', () 
     const config = join(dir, 'copilot', runConfigName('phone-1'))
     expect(existsSync(config)).toBe(true)
 
-    h.grants.set('phone-1', { read: true })
+    await h.connect('phone-1', { read: true })
     h.runs.revoked('phone-1')
 
     expect(h.tokens.size).toBe(0)
@@ -206,10 +308,10 @@ describe('the token is the caller, and it lives exactly as long as the run', () 
    */
   it('keeps the run when only read was taken away', async () => {
     const h = harness()
-    h.grants.set('phone-1', { read: true, act: true })
+    await h.connect('phone-1', { read: true, act: true })
     await h.runs.start('phone-1')
 
-    h.grants.set('phone-1', { act: true })
+    await h.connect('phone-1', { act: true })
     h.runs.revoked('phone-1')
 
     expect(h.tokens.size).toBe(1)
@@ -218,7 +320,7 @@ describe('the token is the caller, and it lives exactly as long as the run', () 
 
   it('writes the token into a config file only this account can read, and nowhere else', async () => {
     const h = harness()
-    h.grants.set('phone-1', { read: true, act: true })
+    await h.connect('phone-1', { read: true, act: true })
     await h.runs.start('phone-1')
 
     const config = join(dir, 'copilot', runConfigName('phone-1'))
@@ -240,7 +342,7 @@ describe('the token is the caller, and it lives exactly as long as the run', () 
         throw new Error('claude is not installed')
       },
     })
-    h.grants.set('phone-1', { read: true, act: true })
+    await h.connect('phone-1', { read: true, act: true })
 
     const outcome = await h.runs.start('phone-1')
     expect(outcome.ok).toBe(false)
@@ -257,7 +359,7 @@ describe('the token is the caller, and it lives exactly as long as the run', () 
 describe('a run belongs to one device and to nothing else', () => {
   it('answers a second start with the run that already exists', async () => {
     const h = harness()
-    h.grants.set('phone-1', { read: true, act: true })
+    await h.connect('phone-1', { read: true, act: true })
 
     await h.runs.start('phone-1')
     await h.runs.start('phone-1')
@@ -268,8 +370,8 @@ describe('a run belongs to one device and to nothing else', () => {
 
   it('gives two devices two runs, two tokens and two conversations', async () => {
     const h = harness()
-    h.grants.set('phone-1', { read: true, act: true })
-    h.grants.set('tablet', { read: true, act: true })
+    await h.connect('phone-1', { read: true, act: true })
+    await h.connect('tablet', { read: true, act: true })
 
     await h.runs.start('phone-1')
     await h.runs.start('tablet')
@@ -287,7 +389,7 @@ describe('a run belongs to one device and to nothing else', () => {
    */
   it('refuses to interrupt or stop a run this device does not own', async () => {
     const h = harness()
-    h.grants.set('phone-1', { read: true, act: true })
+    await h.connect('phone-1', { read: true, act: true })
     await h.runs.start('phone-1')
 
     expect(h.runs.cancel('tablet').ok).toBe(false)
@@ -308,7 +410,7 @@ describe('a run belongs to one device and to nothing else', () => {
    */
   it('names its run sessions as hidden, and stops naming them when they end', async () => {
     const h = harness()
-    h.grants.set('phone-1', { read: true, act: true })
+    await h.connect('phone-1', { read: true, act: true })
     await h.runs.start('phone-1')
 
     expect(h.runs.isRunSession('run-1')).toBe(true)
@@ -330,7 +432,7 @@ describe('a run belongs to one device and to nothing else', () => {
    */
   it('puts the run in the register the session fanout consults', async () => {
     const h = harness()
-    h.grants.set('phone-1', { read: true, act: true })
+    await h.connect('phone-1', { read: true, act: true })
     await h.runs.start('phone-1')
 
     expect(isHiddenSession('run-1')).toBe(true)
@@ -342,8 +444,8 @@ describe('a run belongs to one device and to nothing else', () => {
 
   it('releases every run’s id when the app quits', async () => {
     const h = harness()
-    h.grants.set('phone-1', { read: true, act: true })
-    h.grants.set('tablet', { read: true, act: true })
+    await h.connect('phone-1', { read: true, act: true })
+    await h.connect('tablet', { read: true, act: true })
     await h.runs.start('phone-1')
     await h.runs.start('tablet')
     expect(isHiddenSession('run-1') && isHiddenSession('run-2')).toBe(true)
@@ -363,7 +465,7 @@ describe('a run belongs to one device and to nothing else', () => {
    */
   it('releases the id when a run times out rather than being stopped', async () => {
     const h = harness({ graceMs: 60_000 })
-    h.grants.set('phone-1', { read: true, act: true })
+    await h.connect('phone-1', { read: true, act: true })
     await h.runs.start('phone-1')
     expect(isHiddenSession('run-1')).toBe(true)
 
@@ -378,7 +480,7 @@ describe('a run belongs to one device and to nothing else', () => {
 describe('a run survives a dropped socket for the grace window and no longer', () => {
   it('keeps the run alive while a watcher is attached', async () => {
     const h = harness({ graceMs: 60_000 })
-    h.grants.set('phone-1', { read: true, act: true })
+    await h.connect('phone-1', { read: true, act: true })
     const watcher = recorder()
 
     h.runs.watch('phone-1', watcher.sink)
@@ -391,7 +493,7 @@ describe('a run survives a dropped socket for the grace window and no longer', (
 
   it('stops the run once the window passes with nobody watching', async () => {
     const h = harness({ graceMs: 60_000 })
-    h.grants.set('phone-1', { read: true, act: true })
+    await h.connect('phone-1', { read: true, act: true })
     const watcher = recorder()
 
     const unwatch = h.runs.watch('phone-1', watcher.sink)
@@ -413,7 +515,7 @@ describe('a run survives a dropped socket for the grace window and no longer', (
    */
   it('only starts the countdown when the last watcher of a device leaves', async () => {
     const h = harness({ graceMs: 60_000 })
-    h.grants.set('phone-1', { read: true, act: true })
+    await h.connect('phone-1', { read: true, act: true })
     const first = recorder()
     const second = recorder()
 
@@ -429,7 +531,7 @@ describe('a run survives a dropped socket for the grace window and no longer', (
   /** A reconnect inside the window cancels the countdown and replays. */
   it('gives a reconnecting phone its run back, with a reset', async () => {
     const h = harness({ graceMs: 60_000 })
-    h.grants.set('phone-1', { read: true, act: true })
+    await h.connect('phone-1', { read: true, act: true })
     const first = recorder()
 
     const unwatch = h.runs.watch('phone-1', first.sink)
@@ -448,7 +550,7 @@ describe('a run survives a dropped socket for the grace window and no longer', (
   /** A run whose process died on its own is not a run. */
   it('forgets a run whose pty exited, so the next start spawns a fresh one', async () => {
     const h = harness()
-    h.grants.set('phone-1', { read: true, act: true })
+    await h.connect('phone-1', { read: true, act: true })
     await h.runs.start('phone-1')
 
     h.alive.delete('run-1')
@@ -465,8 +567,8 @@ describe('a run survives a dropped socket for the grace window and no longer', (
 describe('the conversation is parsed messages, and only ever this device’s', () => {
   it('pushes a run’s messages to that device’s watchers and to no others', async () => {
     const h = harness()
-    h.grants.set('phone-1', { read: true, act: true })
-    h.grants.set('tablet', { read: true, act: true })
+    await h.connect('phone-1', { read: true, act: true })
+    await h.connect('tablet', { read: true, act: true })
     const mine = recorder()
     const theirs = recorder()
     h.runs.watch('phone-1', mine.sink)
@@ -485,7 +587,7 @@ describe('the conversation is parsed messages, and only ever this device’s', (
 
   it('cuts an over-long bubble with a flag rather than chunking it', async () => {
     const h = harness()
-    h.grants.set('phone-1', { read: true, act: true })
+    await h.connect('phone-1', { read: true, act: true })
     const watcher = recorder()
     h.runs.watch('phone-1', watcher.sink)
     await h.runs.start('phone-1')
@@ -499,7 +601,7 @@ describe('the conversation is parsed messages, and only ever this device’s', (
 
   it('drops an update from a run that has already ended', async () => {
     const h = harness()
-    h.grants.set('phone-1', { read: true, act: true })
+    await h.connect('phone-1', { read: true, act: true })
     const watcher = recorder()
     h.runs.watch('phone-1', watcher.sink)
     await h.runs.start('phone-1')
@@ -517,15 +619,15 @@ describe('the conversation is parsed messages, and only ever this device’s', (
 describe('the state frame and the caps', () => {
   it('reports the desk and this device’s own run as separate facts', async () => {
     const h = harness()
-    h.grants.set('phone-1', { read: true })
+    await h.connect('phone-1', { read: true })
 
     const idle = h.runs.state('phone-1')
     expect(idle.desk).toBe('running')
     expect(idle.run).toBeNull()
-    expect(idle.grant).toEqual({ read: true, act: false })
+    expect(idle.grant).toEqual({ read: true, act: false, alter: false })
     expect(idle.tools).toBe(11)
 
-    h.grants.set('phone-1', { read: true, act: true })
+    await h.connect('phone-1', { read: true, act: true })
     await h.runs.start('phone-1')
     expect(h.runs.state('phone-1').run).toBe('run-1')
     // Still running at the desk. A phone that drew its Start button off the
@@ -533,9 +635,9 @@ describe('the state frame and the caps', () => {
     expect(h.runs.state('phone-1').desk).toBe('running')
   })
 
-  it('says why a run cannot start rather than offering a button that fails', () => {
+  it('says why a run cannot start rather than offering a button that fails', async () => {
     const h = harness({ endpoint: () => null })
-    h.grants.set('phone-1', { read: true, act: true })
+    await h.connect('phone-1', { read: true, act: true })
 
     const state = h.runs.state('phone-1')
     expect(state.available).toBe(false)
@@ -544,7 +646,7 @@ describe('the state frame and the caps', () => {
 
   it('refuses to start when there is no tool surface to hand it', async () => {
     const h = harness({ endpoint: () => null })
-    h.grants.set('phone-1', { read: true, act: true })
+    await h.connect('phone-1', { read: true, act: true })
 
     const outcome = await h.runs.start('phone-1')
     expect(outcome.ok).toBe(false)
@@ -569,7 +671,7 @@ describe('the state frame and the caps', () => {
 
   it('starts a run for a say that arrives without one, so one intention is one step', async () => {
     const h = harness()
-    h.grants.set('phone-1', { read: true, act: true })
+    await h.connect('phone-1', { read: true, act: true })
 
     const outcome = await h.runs.say('phone-1', 'which session is stuck?')
     expect(outcome.ok).toBe(true)
@@ -579,8 +681,8 @@ describe('the state frame and the caps', () => {
 
   it('stops every run when the app quits', async () => {
     const h = harness()
-    h.grants.set('phone-1', { read: true, act: true })
-    h.grants.set('tablet', { read: true, act: true })
+    await h.connect('phone-1', { read: true, act: true })
+    await h.connect('tablet', { read: true, act: true })
     await h.runs.start('phone-1')
     await h.runs.start('tablet')
 

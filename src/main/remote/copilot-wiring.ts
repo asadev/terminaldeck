@@ -6,10 +6,11 @@
  * `CopilotRuns` takes every dependency by injection, deliberately, so that the
  * grace window and the revocation ordering can be driven against a fake clock
  * with no Electron in the room. The price of that is an assembly step, and the
- * assembly is not trivial: four of the deps are *translations* — an `ActionRow`
- * into a `CopilotActionRow`, a `ConsentRequest` into a `CopilotPendingRow`, a
- * `SessionMeta` into a `CopilotSessionRow`, a transcript file into a stream of
- * chat messages — and a translation is code, with decisions in it.
+ * assembly is not trivial: three of the deps are *translations* — an `ActionRow`
+ * into a `CopilotActionRow`, a `SessionMeta` into a `CopilotSessionRow`, a
+ * transcript file into a stream of chat messages — and a translation is code,
+ * with decisions in it. The fourth, a `ConsentRequest` into the two shapes a
+ * device reads it as, moved to `copilot-consent.ts`; see below.
  *
  * Putting them in `index.ts` would bury those decisions in the middle of a file
  * that is already the longest in the app, and it would make them untestable:
@@ -38,14 +39,13 @@
 
 import { watch, type FSWatcher } from 'node:fs'
 import type { ActionRow } from '../deck-control/action-log'
-import type { ConsentRequest } from '../deck-control/consent'
 import type { CreateSessionInput, SessionMeta } from '../../shared/types'
 import { buildRecordsFence } from '../confine/records'
 import type { SpawnFence } from '../copilot-session'
 import { currentPlatform } from '../platform/host'
 import { getState as profilesState, resolveProfile } from '../profiles'
 import { ChatReader, newestChatTranscript } from '../chat-transcript'
-import { MAX_COPILOT_LOG_ROWS, type CopilotActionRow, type CopilotChatMessage, type CopilotPendingRow, type CopilotSessionRow } from './protocol'
+import { MAX_COPILOT_LOG_ROWS, type CopilotActionRow, type CopilotChatMessage, type CopilotSessionRow } from './protocol'
 import type { CopilotChatUpdate } from './copilot-runs'
 
 /* ------------------------------------------------------------ translations */
@@ -96,25 +96,18 @@ export function toCopilotRow(row: ActionRow): CopilotActionRow {
   }
 }
 
-/**
- * One waiting confirmation, as a phone *watches* it.
+/*
+ * `toPendingRow` used to live here and now lives in `copilot-consent.ts`,
+ * beside `toConsentQuestion`, because a device can answer a confirmation now and
+ * the two translations have to be read together: one deliberately omits the
+ * arguments and the other deliberately carries them. Keeping them apart is how
+ * the wrong one gets used.
  *
- * `args` is left out again, and here for a second reason on top of the first:
- * the arguments of a pending alter call are the most sensitive thing in this
- * whole surface — a settings key and its new value, a session's id and the text
- * about to be typed into it — and the phone has no decision to make with them
- * because it cannot answer. It gets the summary the desktop composed and the
- * expiry, which is exactly enough to say *go and look*.
+ * It also had to move for a mechanical reason. `copilot-runs.ts` is exercised
+ * with no Electron in the room, and this file imports the profile system, the
+ * records fence and the transcript reader — so a run manager that needed a
+ * consent translation would have dragged all of that behind it.
  */
-export function toPendingRow(request: ConsentRequest): CopilotPendingRow {
-  return {
-    id: request.id,
-    tool: request.tool,
-    summary: request.summary,
-    requestedAt: request.requestedAt,
-    expiresAt: request.expiresAt,
-  }
-}
 
 /**
  * The sessions the copilot started, and only those.

@@ -8,7 +8,6 @@ import {
   nativeTheme,
   powerMonitor,
   session,
-  shell,
 } from 'electron'
 import { BRAND } from '../shared/brand'
 import type { CreateSessionInput, SessionMeta } from '../shared/types'
@@ -46,13 +45,12 @@ import { registerUpdateIpc } from './updates/updater'
 import { createManualStrategy } from './updates/manual-strategy'
 import { registerTailnetIpc } from './remote/tailnet'
 import { registerRemoteIpc } from './remote/server'
-import { CopilotGrants } from './remote/copilot-grants'
+import { CopilotLinks } from './remote/copilot-link'
 import { CopilotRuns } from './remote/copilot-runs'
 import {
   startCopilotRun,
   tailForPhone,
   toCopilotSessions,
-  toPendingRow,
   watchRunChat,
 } from './remote/copilot-wiring'
 import { registerMachinesIpc } from './remote/machines/ipc'
@@ -80,6 +78,9 @@ import { defaultContext, registerHooksIpc, syncInstalledHooks } from './hooks'
 import { registerHookServer, stopHookServer } from './hook-server'
 import { registerMcpIpc } from './mcp-client'
 import { registerBrowserIpc } from './browser-tab'
+import { openAppLink, registerLinkIpc } from './link-open'
+import { browserDrive, registerBrowserDriveIpc } from './browser-drive-ipc'
+import { browserTools } from './deck-control/browser-tools'
 import { registerChromeImportIpc } from './chrome-import'
 import { registerPrerequisitesIpc } from './prerequisites'
 import { registerAttachOutsideIpc } from './attach-outside'
@@ -640,9 +641,26 @@ function createWindow(): void {
     )
   }
 
-  // External links open in the real browser, never inside the app shell.
+  /*
+   * A link this app's own UI asked to open.
+   *
+   * Deny is still the answer for a *window* — nothing in this app should ever
+   * get a bare Chromium window, with no toolbar and none of this app's chrome
+   * on it. What changed is where the URL goes afterwards. It used to go
+   * straight to `shell.openExternal`, so pressing a repository, a pull request
+   * or an issue in the GitHub panel launched Chrome while the app's own browser
+   * sat one tab away — *"currently it's opening a separate window — I want it
+   * to use the same window inside Terminal Deck for browser"*, 2026-08-17.
+   *
+   * `openAppLink` makes that decision in one place for every link in the
+   * renderer, because `window.open` is the only door out of it: http(s) becomes
+   * a tab in the workspace strip, and a `mailto:` or a `file://` reveal — the
+   * things this app genuinely cannot render — still goes to the machine. See
+   * `link-open.ts`, which also explains why a guest page gets a stricter answer
+   * than this one.
+   */
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    void shell.openExternal(url)
+    if (mainWindow) openAppLink(mainWindow.webContents, url)
     return { action: 'deny' }
   })
 
@@ -825,6 +843,19 @@ function reportRestore(decisions: readonly RestoreDecision[]): void {
       logger.warn('restore', `did not come back: ${decision.reason}`, detail)
     }
   }
+}
+
+/**
+ * The copilot's browser tools, or none of them.
+ *
+ * Empty when the drive was never registered, which cannot happen through the
+ * ordinary boot path and is worth being explicit about anyway: a catalogue
+ * missing five tools is a thing the copilot reports honestly when asked what
+ * it can do, and a `!` here would be a crash at launch instead.
+ */
+function browserDriveTools(): ReturnType<typeof browserTools> {
+  const drive = browserDrive()
+  return drive === null ? [] : browserTools(drive)
 }
 
 function registerIpc(): void {
@@ -1030,7 +1061,7 @@ function registerIpc(): void {
   /*
    * Remote copilot access, assembled — the store, and the runs it authorises.
    *
-   * One `CopilotGrants` for the whole process, handed to both halves. The panel
+   * One `CopilotLinks` for the whole process, handed to both halves. The panel
    * in Settings edits it and the run manager enforces it, and a second instance
    * would give the panel a store that writes the same file and holds a different
    * copy of it in memory — the same rule `core.grants` follows one field down in
@@ -1049,9 +1080,18 @@ function registerIpc(): void {
    * exactly that, in a sentence, instead of being handed a Start button that
    * spawns an agent with nothing behind it.
    */
-  const copilotGrants = new CopilotGrants(remoteStorageDir())
+  const copilotLinks = new CopilotLinks(remoteStorageDir())
   copilotRuns = new CopilotRuns({
-    grants: copilotGrants,
+    links: copilotLinks,
+    /*
+     * The confirmation gate, asked for per call rather than captured.
+     *
+     * `deck-control` starts asynchronously and can fail to start at all, so
+     * `deckControl` is null at this line and may stay null. Capturing the broker
+     * here would capture null forever, and a device would be told there is
+     * nothing waiting no matter how many dialogs were on screen.
+     */
+    consent: () => deckControl?.consent ?? null,
     /*
      * Where a run's token is registered, and dropped.
      *
@@ -1142,7 +1182,6 @@ function registerIpc(): void {
     },
     sessions: () => toCopilotSessions(ptys.list(), (id) => liveStatus.get(id)?.status ?? 'unknown'),
     log: (options) => tailForPhone(deckControl?.log.tail(2000) ?? [], options),
-    pending: () => (deckControl?.consent.list() ?? []).map(toPendingRow),
     /*
      * The run's conversation, read from the transcript rather than the pty.
      *
@@ -1212,12 +1251,13 @@ function registerIpc(): void {
      * `unauthorized` to every frame it sends.
      *
      * Both fields, and the same store behind them: this one is the *enforcing*
-     * side, `copilotGrants` is the *editing* side that the settings panel
-     * writes through. Every device is off in it until somebody ticks a box on
-     * this machine.
+     * side, `copilotLinks` is the *editing* side that the settings panel
+     * writes through. Every device is absent from it until somebody mints a
+     * connect code on this machine and it is redeemed — the panel cannot create
+     * a record, only edit one that exists.
      */
     copilot: copilotRuns,
-    copilotGrants,
+    copilotLinks,
     // Where a photo or a file sent from a phone lands. The user's downloads
     // folder, in a folder named after the app — somewhere a person already looks,
     // rather than application support, which they never do and which an
@@ -1291,7 +1331,34 @@ function registerIpc(): void {
    * `confine/records.ts`.
    */
   registerCopilotIpc(ipcMain, {
-    startSession,
+    /**
+     * The same `startSession` everything else uses — announced, which it was
+     * not.
+     *
+     * `session:created` is how a window learns about a session it did not ask
+     * for through `session:create`, and the copilot has always been exactly
+     * that: the renderer asks `copilot:ensure`, which answers with a
+     * `CopilotState`, not with a `SessionMeta`. So the window knew the copilot's
+     * *id* and nothing else about it — no title, no status, no account, no
+     * `createdAt`. That did not matter while the copilot was a page that mounted
+     * a terminal by id; it matters now that it is a window, because a pill needs
+     * a status dot, a bar needs an account, and the control cluster is resolved
+     * from the session record.
+     *
+     * The channel's own rule is kept, not bent: it is not fired for a session
+     * the renderer asked for *and is about to be handed the meta of*, because a
+     * consumer adding a tab on both would show two. Nothing here hands the meta
+     * back to the renderer, so there is no second arrival to double up with.
+     *
+     * Announced after the spawn resolves and only on success, so a refused start
+     * — no Claude Code on this machine — reaches the window as the refusal it
+     * is, rather than as a tab for a session that does not exist.
+     */
+    startSession: async (...args) => {
+      const meta = await startSession(...args)
+      announceSession(meta)
+      return meta
+    },
     isAlive: (id) => ptys.list().some((meta) => meta.id === id && meta.exitCode === null),
     stop: (id) => ptys.kill(id),
     userData: () => app.getPath('userData'),
@@ -1330,6 +1397,21 @@ function registerIpc(): void {
   registerHooksIpc(ipcMain)
   registerMcpIpc(ipcMain)
   registerBrowserIpc(ipcMain)
+  // Beside the browser, because that is where a link now lands. The two
+  // channels are the explicit way *out* — `link:system` and the context menu —
+  // which only exists because in-app became the default.
+  registerLinkIpc(ipcMain)
+  /*
+   * The copilot's hands on the browser.
+   *
+   * Registered here, beside the browser itself and before `deck-control`,
+   * because the five tools are closures over the object this returns — a drive
+   * created lazily when somebody first asks for it would be a drive whose
+   * channels are claimed after the renderer has already subscribed to them.
+   */
+  registerBrowserDriveIpc(ipcMain, {
+    send: (channel, ...args) => send(channel, ...args),
+  })
   registerChromeImportIpc(ipcMain)
   registerPrerequisitesIpc(ipcMain)
   /*
@@ -1537,6 +1619,22 @@ app.whenReady().then(() => {
   void registerDeckControlIpc(ipcMain, {
     ptys,
     /*
+     * The browser tools, contributed rather than declared.
+     *
+     * They close over the drive built above, and `buildCatalogue()` takes no
+     * arguments — but the reason they go through `extraTools` rather than
+     * beside the dispatcher is the one `control.ts` gives in its own header:
+     * everything that wants to give the copilot a capability comes through the
+     * one door, so it is tiered, prechecked, escalated, budgeted, gated and
+     * logged like the fourteen that were always there.
+     */
+    // `registerIpc()` has already run — it is a few lines above this whole
+    // block — so the drive exists. A conditional rather than a non-null
+    // assertion because a wiring order that changed underneath this should
+    // cost the copilot its browser tools, visibly, in a catalogue a person can
+    // read, rather than take the launch down.
+    extraTools: browserDriveTools(),
+    /*
      * The one session starter, shared with the window and with a paired phone —
      * with the announcement the window needs wrapped around it.
      *
@@ -1568,6 +1666,28 @@ app.whenReady().then(() => {
      * answer is known.
      */
     isApprover: (contents) => mainWindow !== null && contents === mainWindow.webContents,
+    /*
+     * The second surface a confirmation can appear on, and be answered from.
+     *
+     * A connected device runs a copilot of its own and may answer that run's
+     * questions — `COPILOT-REMOTE.md` §4, revised. What makes that honest is not
+     * that the device is trusted, it is that connecting the copilot is a
+     * *separate* authorisation from pairing for terminals: a phone that can open
+     * ten terminals here has no copilot reach at all until somebody at this
+     * machine mints a connect code for it.
+     *
+     * A closure over `copilotRuns` rather than the object, and the reason is the
+     * same one every other late-resolved dependency in this file has: this
+     * registration is a `void`ed promise, and the run manager is assembled above
+     * it but reassigned to a module-level binding. Reading it per question also
+     * means a build that never assembled one — the headless daemon — delivers to
+     * the window and nowhere else, which is exactly what it did before this
+     * existed.
+     */
+    remoteApprover: {
+      ask: (request) => copilotRuns?.ask(request) ?? false,
+      settled: (id, outcome) => copilotRuns?.settled(id, outcome),
+    },
     broadcast: (channel, ...args) => send(channel, ...args),
   })
     .then((handle) => {

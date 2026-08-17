@@ -144,7 +144,7 @@ const run = promisify(execFile)
  * The things the fence is around, as absolute paths.
  *
  * Composed here rather than imported from `routines/store.ts`,
- * `copilot-home.ts`, `remote/copilot-grants.ts` and `remote/device-auth.ts` —
+ * `copilot-home.ts`, `remote/copilot-link.ts` and `remote/device-auth.ts` —
  * which is the wrong way round and is deliberate. Those modules own where their
  * files live; this one has to name the same places, and an `import` chain from a
  * confinement module into the routine engine, or into the store that holds the
@@ -160,22 +160,33 @@ export interface RecordsFencePaths {
   /** `<userData>/copilot-log` — `actions.jsonl` and its rolled generation. */
   log: string
   /**
-   * `<userData>/remote/remote-copilot.json` — which paired devices may drive
-   * the copilot, and how far.
+   * `<userData>/remote/copilot-link.json` — the copilot connections: which
+   * devices hold one, what each may do, and the hash of each credential.
    *
    * The newest of the five and the one whose absence would have been the
    * strangest. While the copilot had no remote surface this file decided
-   * nothing, so leaving it writable cost nothing. The moment a phone can be
-   * granted `read` or `act`, it becomes **the store that holds the permission,
-   * writable by the party the permission is about** — which is the same
-   * category of mistake as an audited process holding the pen over its own
-   * audit log, one level up.
+   * nothing, so leaving it writable cost nothing. The moment a device can be
+   * connected, it becomes **the store that holds the permission, writable by the
+   * party the permission is about** — the same category of mistake as an audited
+   * process holding the pen over its own audit log, one level up.
    *
-   * The damage was bounded even without this, and the bound is worth naming so
-   * nobody reads the fence as the only thing standing there: `copilotGrantFrom`
-   * scrubs `alter` on every read, so the copilot could not write itself a
-   * remotely-grantable alter tier however it edited the file. What it could do
-   * is grant `act` to a device that already exists — which is quite enough.
+   * The bound is worth naming so nobody reads the fence as the only thing
+   * standing there, and it moved when the store did. It used to be that
+   * `copilotGrantFrom` scrubbed `alter` on every read, so the copilot could not
+   * write itself a remotely-grantable alter tier however it edited the file.
+   * `alter` is grantable now, and what bounds the damage instead is that
+   * `CopilotLinks.load` drops any record with **no credential**: the copilot
+   * cannot mint a connection, because it cannot produce a secret whose scrypt
+   * hash it would also have to write. What it could do without this fence is
+   * raise the tiers of a connection that already exists — turning a device
+   * somebody connected read-only into one that can answer confirmations, which
+   * is quite enough.
+   *
+   * The name changed with the file. It was `remote-copilot.json` while copilot
+   * access was a per-device grant; it is `copilot-link.json` now that it is a
+   * separate connection with a credential in it. A fence naming the old path
+   * would refuse nothing at all, silently — the failure `resolveRecordsPaths`
+   * warns about two paragraphs down, arriving by a different route.
    */
   remoteCopilot: string
   /**
@@ -239,7 +250,7 @@ export function recordsFencePaths(
     routines: resolver.real(join(root, 'routines')),
     routineState: resolver.real(join(root, 'routine-state.json')),
     log: resolver.real(join(root, 'copilot-log')),
-    remoteCopilot: resolver.real(join(remote, 'remote-copilot.json')),
+    remoteCopilot: resolver.real(join(remote, 'copilot-link.json')),
     remoteAuth: resolver.real(join(remote, 'remote-auth.json')),
   }
 }
@@ -358,11 +369,14 @@ export function recordsFenceProfile(paths: RecordsFencePaths): string {
     '; it, and `log.note` is how it adds a line of its own.',
     `(deny file-read* file-write* (subpath ${seatbeltString(paths.log)}))`,
     '',
-    '; Which paired devices may drive the copilot, and how far. Writable, it is',
-    '; the store that holds a permission *about this process*, editable by this',
-    '; process — the audit-log argument one level up. `copilotGrantFrom` already',
-    '; scrubs `alter` on read, so the worst case is bounded to granting `act` to',
-    '; a device that exists, which is quite enough.',
+    '; The copilot connections, and what each may do. Writable, it is the store',
+    '; that holds a permission *about this process*, editable by this process —',
+    '; the audit-log argument one level up. A connection cannot be minted by',
+    '; editing it, because a record with no credential is dropped on read and',
+    '; the credential is a scrypt hash of a secret this process never sees. What',
+    '; an edit could do is raise the tiers of a connection that exists, turning',
+    '; a device somebody connected read-only into one that answers',
+    '; confirmations, which is quite enough.',
     ';',
     '; Reading stays allowed, like the routines and unlike the log. The copilot',
     '; can already be told which devices hold what — a refusal that only stops it',

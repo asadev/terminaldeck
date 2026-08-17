@@ -49,10 +49,11 @@ import {
   writeSync,
 } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, win32 } from 'node:path'
 import type { SessionStatus } from '../shared/types'
 import { BRAND } from '../shared/brand'
 import { currentHookEndpoint, type HookEndpoint } from './hook-server'
+import { currentPlatform, isWindows, type Env, type Platform } from './platform/host'
 
 /* ------------------------------------------------------------------ types -- */
 
@@ -109,6 +110,18 @@ export interface HookContext {
   backupDir: string
   /** Where hooks should call back to, or null when the server is not up. */
   endpoint: HookEndpoint | null
+  /**
+   * Which platform's command to write and to compare against. Defaults to this
+   * machine's.
+   *
+   * A parameter for the reason `platform/host.ts` argues: CI here is macOS-only,
+   * so the Windows form of the command would otherwise be a branch nothing in
+   * this suite can reach — which is precisely how it came to say, in a comment,
+   * that no Windows form existed.
+   */
+  platform?: Platform
+  /** Read for `SystemRoot`. Defaults to `process.env`, injected for the same reason. */
+  env?: Env
 }
 
 /* -------------------------------------------------------------- providers -- */
@@ -267,6 +280,28 @@ const FOREIGN_MARKER_RE = /#\s*([a-z][a-z0-9_-]*)-hook\b/i
 const CURL = '/usr/bin/curl'
 
 /**
+ * Windows PowerShell by absolute path, for the same reason and one more.
+ *
+ * `PATH` on Windows routinely contains directories the user — or anything
+ * running as the user — can write to, and this string is executed by their
+ * shell on every tool call. Resolving it through `PATH` would let whatever put
+ * a `powershell.exe` in a writable directory run once per hook.
+ * `remote/secret-file.ts` addresses `icacls` the same way, for the same reason.
+ *
+ * `win32.join`, not the host's, so a Mac asking for the Windows answer gets the
+ * Windows answer.
+ */
+export function powershellPath(env: Env): string {
+  return win32.join(
+    env.SystemRoot ?? 'C:\\Windows',
+    'System32',
+    'WindowsPowerShell',
+    'v1.0',
+    'powershell.exe',
+  )
+}
+
+/**
  * Single-quote a value for the shell that will run this command.
  *
  * Today every interpolated value is provably tame — the token is 48 hex
@@ -329,26 +364,70 @@ function shellQuote(value: string): string {
  * with a 200 KB payload, because it is exactly the kind of detail that is
  * obvious once it breaks somebody's session and invisible until then.
  *
- * ## POSIX-only, and there is no Windows form of it yet
+ * ## Windows: the same sentence, a different program
  *
- * Every piece of this is POSIX shell: an absolute `/usr/bin/curl`, `|| true`,
- * single-quoted arguments, `$VAR` expansion and a trailing `#` comment. None of
- * it is `cmd.exe` syntax, and `/usr/bin/curl` is not a path Windows has —
- * `curl.exe` ships in System32 there instead. So on Windows this writes a
- * command into the user's config that their CLI cannot run.
+ * This used to say there was no Windows form, and that writing one meant
+ * knowing which shell a provider CLI hands a hook command to there — which
+ * nothing here had watched one do. It has now been watched. Claude Code 2.1.233
+ * on Windows 11 runs a hook command through **`/usr/bin/bash`**: a settings
+ * file carrying a `cmd.exe`-shaped command came back as
+ * `/usr/bin/bash: line 1: C:WindowsSystem32...powershell.exe: command not
+ * found`, which is a POSIX shell eating the backslashes as escapes. So the
+ * shell is the same shell, and everything that was called out as POSIX-only —
+ * `|| true`, `2>/dev/null`, single-quoted arguments, the trailing `#` comment —
+ * is exactly right there too. Measured in Git Bash on that machine: a
+ * single-quoted `'C:\…\powershell.exe'` runs, `-File 'C:\…\hook-post.ps1'`
+ * runs, and stdin arrives intact.
  *
- * That is a live gap, not a theory: it is what the three integration cases in
- * `hooks.test.ts` are skipped over. It is left rather than guessed at because
- * writing a `cmd.exe` form means knowing which shell each provider CLI actually
- * hands a hook command to on Windows, and nothing here has watched one do it.
- * Everything else in this module — the file handling, the ownership marker, the
- * round trip — is platform-neutral and is exercised on both.
+ * What changes is the *program*, because `curl` cannot reach the endpoint on
+ * Windows however it is spelled — {@link hookClientPath} has the measurement.
+ * So Windows runs the client script the endpoint writes beside its config,
+ * and the command is the same three stable things: an absolute program, the
+ * config path, and no secret.
+ *
+ * Two smaller differences fall out of it:
+ *
+ *  - **No `$VAR` for the session id.** The client is ours, so it reads the
+ *    environment variable itself. One less thing for a shell to expand.
+ *  - **No `-o /dev/null` or timeouts.** The client answers for its own
+ *    behaviour: it drops the response, gives the pipe one second to connect,
+ *    and exits 0 whatever happens.
+ *
+ * The one thing this does *not* claim is Codex and Gemini on Windows. Neither
+ * is installed on the Windows machine available here, so which shell they use
+ * is unmeasured; what they get is the shell Claude was measured using, which is
+ * a far better guess than the POSIX command that could not run at all.
  */
 export function hookCommand(
   provider: HookProviderId,
   event: string,
   endpoint: HookEndpoint,
+  platform: Platform = currentPlatform(),
+  env: Env = process.env,
 ): string {
+  if (isWindows(platform) && endpoint.clientPath) {
+    return [
+      shellQuote(powershellPath(env)),
+      // No profile and no execution policy of the machine's: `Restricted` is
+      // the default and is what the Windows machine this was measured on has,
+      // so without `Bypass` every hook is "running scripts is disabled on this
+      // system". The script is one this app wrote into its own data directory a
+      // moment ago, not something the user is being asked to trust.
+      '-NoProfile',
+      '-NonInteractive',
+      '-ExecutionPolicy Bypass',
+      `-File ${shellQuote(endpoint.clientPath)}`,
+      // This run's token is on the far side of this one stable path, exactly as
+      // `-K` puts it on the far side of one on POSIX.
+      shellQuote(endpoint.configPath),
+      provider,
+      event,
+      '2>/dev/null',
+      '|| true',
+      HOOK_MARKER,
+    ].join(' ')
+  }
+
   // `localhost` is a placeholder the socket makes meaningless — curl needs a
   // host to build a request line and a Host header, and connects to the path
   // from the config file instead of resolving this. The path segments are what
@@ -628,8 +707,17 @@ function surveyForeign(hooks: Record<string, unknown>): { count: number; owners:
 }
 
 /** The entry we install for one event. */
-function buildEntry(spec: HookProviderSpec, event: string, endpoint: HookEndpoint): HookEntry {
-  const entry: HookEntry = { type: 'command', command: hookCommand(spec.id, event, endpoint) }
+function buildEntry(
+  spec: HookProviderSpec,
+  event: string,
+  endpoint: HookEndpoint,
+  platform: Platform,
+  env: Env,
+): HookEntry {
+  const entry: HookEntry = {
+    type: 'command',
+    command: hookCommand(spec.id, event, endpoint, platform, env),
+  }
   if (spec.timeout) entry[spec.timeout.key] = spec.timeout.value
   if (spec.supportsName) {
     entry.name = `${BRAND.id}-hook`
@@ -650,6 +738,8 @@ export function applyInstall(
   data: Record<string, unknown>,
   spec: HookProviderSpec,
   endpoint: HookEndpoint,
+  platform: Platform = currentPlatform(),
+  env: Env = process.env,
 ): Record<string, unknown> {
   const hooks = hooksObject(data)
   const next: Record<string, unknown> = { ...hooks }
@@ -671,7 +761,7 @@ export function applyInstall(
       throw new SettingsError(`has a \`hooks.${event}\` that is not an array, so it was left untouched`)
     }
     const groups = Array.isArray(existing) ? [...existing] : []
-    groups.push({ matcher: '', hooks: [buildEntry(spec, event, endpoint)] })
+    groups.push({ matcher: '', hooks: [buildEntry(spec, event, endpoint, platform, env)] })
     next[event] = groups
   }
 
@@ -810,7 +900,15 @@ export function readStatus(context: HookContext, id: HookProviderId): HookProvid
       missing.push(event)
       continue
     }
-    const expected = context.endpoint ? hookCommand(spec.id, event, context.endpoint) : null
+    const expected = context.endpoint
+      ? hookCommand(
+          spec.id,
+          event,
+          context.endpoint,
+          context.platform ?? currentPlatform(),
+          context.env ?? process.env,
+        )
+      : null
     const current = entries.some((entry) => expected !== null && entry.command === expected)
     if (current) installed.push(event)
     else stale.push(event)
@@ -900,7 +998,13 @@ export function installHooks(context: HookContext, id: HookProviderId): HookWrit
 
   let next: Record<string, unknown>
   try {
-    next = applyInstall(settings.data, spec, context.endpoint)
+    next = applyInstall(
+      settings.data,
+      spec,
+      context.endpoint,
+      context.platform ?? currentPlatform(),
+      context.env ?? process.env,
+    )
   } catch (error) {
     const detail = error instanceof SettingsError ? error.message : String(error)
     return { ok: false, message: `${file} ${detail}`, status: readStatus(context, id) }

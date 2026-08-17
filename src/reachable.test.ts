@@ -140,13 +140,15 @@ const KNOWN_UNREACHABLE: Record<string, string> = {
   // nothing a phone can do".
   //
   // What makes them reachable now is not a switch. `src/main/index.ts`
-  // constructs one `CopilotGrants` and one `CopilotRuns` over it and hands the
-  // run manager to `registerRemoteIpc`, which is what makes `server.ts`
-  // advertise the `copilot` capability at all; the ten `copilot.*` frames reach
-  // real handlers; `remoteCopilotCaller` is the caller function on every run's
-  // token, so `DeckControl.call` checks each tool call against that device's
-  // grant as it is dispatched. The panel came last, in the order §6 of
-  // COPILOT-REMOTE.md insists on: it changes something before it exists.
+  // constructs one `CopilotLinks` — `copilot-grants.ts` was replaced by
+  // `copilot-link.ts` when copilot access became a separate connection with its
+  // own code and credential — and one `CopilotRuns` over it, and hands the run
+  // manager to `registerRemoteIpc`, which is what makes `server.ts` advertise
+  // the `copilot` capability at all; the `copilot.*` frames reach real handlers;
+  // `remoteCopilotCaller` is the caller function on every run's token, so
+  // `DeckControl.call` checks each tool call against that device's grant as it
+  // is dispatched. The panel came last, in the order §6 of COPILOT-REMOTE.md
+  // insists on: it changes something before it exists.
   //
   // Deleted rather than reworded, per the note about `confine/appcontainer.ts`
   // above: an entry that outlives its reason is documentation asserting the
@@ -172,51 +174,27 @@ const KNOWN_UNREACHABLE: Record<string, string> = {
     '`pwa/tests/upload.test.ts` asserts that exact path, and a stale allowlist is a red Vercel ' +
     'deploy rather than a failing test here. Renaming it is a three-file change to make on a ' +
     'day when nothing is shipping.',
-  ...unreachable(
-    [
-      'src/renderer/copilot/driving/estimate.ts',
-      'src/renderer/copilot/driving/pacer.ts',
-      'src/renderer/copilot/driving/interruption.ts',
-      'src/renderer/copilot/driving/usePacer.ts',
-      'src/renderer/copilot/driving/PaceControls.tsx',
-    ],
-    'the pacing engine for driving mode, built ahead of the feature it paces and honestly ' +
-      'unwired rather than pretending otherwise. DRIVING-MODE.md §9 splits driving into five ' +
-      'phases and puts the player first *because* it can be finished and proved on its own: ' +
-      'these five modules are a reading-time estimate, a playhead reducer, an interruption ' +
-      'watch, a frame loop and a transport, and between them they answer the one part Asad ' +
-      'flagged himself — "it might be too speedy… some people are slower, some are faster". ' +
-      'They are pure and complete: 100 tests beside them exercise every transition against a ' +
-      'fake clock, including the ones no screenshot can show, such as a tour refusing to ' +
-      'advance while a pane is mid-scroll and refusing to credit an hour of sleep as reading ' +
-      'time. What does not exist yet is the thing they would pace — there is no TourPlan, no ' +
-      'highlight, no dim and no `tour.play` tool — so there is deliberately nothing to reach ' +
-      'them from. ' +
-      'The wrong fix is to reach them from the UI early. A transport bar wired into the ' +
-      'sidebar with no tour behind it would be a control that visibly does nothing, which is ' +
-      'the exact defect the rest of this file exists to catch, and a worse one than a dead ' +
-      'font size because it would be four dead buttons in the chrome. ' +
-      'Wiring, when phases 2 and 3 land, is: render `PaceTransport` in the driving panel and ' +
-      '`ReadingSpeedControl` in Settings → Copilot; construct `browserPaceEngine` when a tour ' +
-      'starts and `attachInterruption` beside it with `isPaceControlTarget` and ' +
-      '`isTransportKey`; dispatch `arrive` when the box is drawn, `moved` from the driven ' +
-      "pane's own scroll, and `hover` from the highlight's pointer events. That is one import " +
-      'each and no assembly, which is why the seam is shaped this way rather than left as a ' +
-      'hook to be written later.',
-  ),
-}
-
-/**
- * A run of modules that share one reason, spelled once.
- *
- * The entries above each carry their own paragraph because each is unreachable
- * for its own reason. A feature built as a set of pure modules ahead of the
- * thing that will use them is one reason covering several files, and copying
- * the paragraph five times would make the next reader diff five paragraphs to
- * find out whether they still say the same thing.
- */
-function unreachable(files: readonly string[], why: string): Record<string, string> {
-  return Object.fromEntries(files.map((file) => [file, why]))
+  // The five pacing modules — `estimate.ts`, `pacer.ts`, `interruption.ts`,
+  // `usePacer.ts` and `PaceControls.tsx` — were listed here and are not any
+  // more, because the thing they pace exists now. The entry said, correctly at
+  // the time, that they were "built ahead of the feature they pace and honestly
+  // unwired rather than pretending otherwise", and it warned in those words that
+  // the wrong fix would be to reach them from the UI early: "a transport bar
+  // wired into the sidebar with no tour behind it would be a control that
+  // visibly does nothing".
+  //
+  // What reaches them now is not a bar. `main.tsx` renders `DriveHost`, which
+  // listens on `deck-control:tour` for a plan the main process has already
+  // validated; `tour-player.ts` constructs `browserPaceEngine` and
+  // `attachInterruption` when one arrives, dispatches `arrive` the moment the
+  // overlay reports a box drawn, and `DrivePanel.tsx` renders `PaceTransport`
+  // in the rail's own column. The tool that produces a plan is `tour.play`,
+  // contributed to the catalogue through `extraTools` — so the path from a
+  // person asking a question to these modules ticking is a real one, end to end.
+  //
+  // Deleted rather than reworded, per the note about `confine/appcontainer.ts`
+  // above: an entry that outlives its reason is documentation asserting the
+  // opposite of the code.
 }
 
 /** Mirrors the tsconfig path aliases; anything bare is a package, not ours. */

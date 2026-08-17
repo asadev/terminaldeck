@@ -79,8 +79,12 @@ export const SECTIONS: ReadonlyArray<{ id: HelpSectionId; label: string; hint: s
 
 /** One line each, in the user's terms rather than the module's. */
 export const PANEL_HELP: Record<PanelId, string> = {
-  copilot:
-    'An assistant for this deck, pinned at the top of the sidebar. It is a real session in a folder of its own, with its own memory and its own login — so it starts signed out, on its own terminal, and signs itself in once. Ask it which of your sessions needs you, to review a diff before it lands, or to turn a rough ask into a prompt worth giving a sub-session. Anything it does that changes your settings or touches a session you started asks you first.',
+  // No `copilot` line. The copilot is not a view any more — it is a window,
+  // with a pill in the tab strip and the same toolbar every session has —
+  // so it is written out by hand in `HELP_TOPICS` below rather than generated
+  // from a panel entry that no longer exists, exactly like Alerts. `PANEL_HELP`
+  // is keyed by `PanelId`, so leaving the line here would not compile, which is
+  // the check working.
   overview: 'A dashboard for the open project: sessions, token usage, git state and readiness in one place. Widgets can be rearranged.',
   files: 'The project tree, with anything your ignore rules exclude hidden. Open a file to read it beside the session.',
   artifacts: 'Every file your agents wrote or changed here, with the diff of each change. Searching past transcripts moved to the command palette — type ? in it.',
@@ -349,6 +353,26 @@ export const HELP_TOPICS: HelpTopic[] = [
    * because the entry went would be the app quietly forgetting how to explain
    * one of its own features.
    */
+  /*
+   * The copilot, written out for the same reason and since the same day.
+   *
+   * It is a window rather than a view — it always was a real session, and on
+   * 2026-08-17 it stopped pretending to be a page as well — so there is no
+   * `PanelId` to generate this from. Somebody looking for it will look in "The
+   * views" all the same, because to a reader it is one of the app's surfaces.
+   */
+  {
+    id: 'panel-copilot',
+    section: 'panels',
+    title: 'Copilot',
+    keywords: ['copilot', 'assistant', 'agent', 'routines'],
+    blocks: [
+      {
+        kind: 'text',
+        text: 'An assistant for this deck, pinned at the top of the sidebar. It is a real session — it opens as a window like any other, with a pill in the tab strip, its own account, and the same model, effort, fast-mode and connector controls in the bar. It runs in a folder of its own, with its own memory, as one of the accounts you have already signed in. Ask it which of your sessions needs you, to review a diff before it lands, or to turn a rough ask into a prompt worth giving a sub-session. Anything it does that changes your settings or touches a session you started asks you first.',
+      },
+    ],
+  },
   {
     id: 'panel-alerts',
     section: 'panels',

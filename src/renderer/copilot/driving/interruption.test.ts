@@ -76,7 +76,12 @@ interface Harness {
   stop(): void
 }
 
-function harness(overrides: { isOwnControl?: (target: unknown) => boolean } = {}): Harness {
+function harness(
+  overrides: {
+    isOwnControl?: (target: unknown) => boolean
+    hasSelection?: () => boolean
+  } = {},
+): Harness {
   const win = new FakeSource()
   const doc = new FakeSource()
   const state: Harness = {
@@ -95,12 +100,75 @@ function harness(overrides: { isOwnControl?: (target: unknown) => boolean } = {}
     isOwnControl: overrides.isOwnControl ?? (() => false),
     isCommandKey: isTransportKey,
     isHidden: () => state.hidden,
+    ...(overrides.hasSelection === undefined ? {} : { hasSelection: overrides.hasSelection }),
     onInterrupt: (reason, at) => state.interruptions.push({ reason, at }),
     onSurfaceMoved: (at) => state.moves.push(at),
   })
   state.stop = watch.stop
   return state
 }
+
+/* ------------------------------------------------- two measured defects -- */
+
+/**
+ * Both of these were found by driving a real tour on a real window, and both
+ * made the whole feature look broken on its first frame: the bar read *"Paused —
+ * you selected some text"* and then *"Paused — you left the window"* about a
+ * window that was plainly in front, before a single box had been drawn.
+ *
+ * Neither is visible in a diff and neither would ever fail a typecheck. They are
+ * the same shape of mistake twice — an event that is *nearly* the thing you want
+ * — and they are pinned separately because the two fixes are unrelated.
+ */
+describe('an event that is nearly the thing, but is not', () => {
+  it('does not read a collapsed selection as somebody selecting text', () => {
+    /*
+     * `selectionchange` says a selection *changed*, not that a person made one.
+     * Moving keyboard focus collapses the document selection and fires it — and
+     * the driving panel takes focus the moment it opens, so that Space is the
+     * pause key rather than a space typed into whichever pty had the keyboard.
+     */
+    const rig = harness({ hasSelection: () => false })
+    rig.document.fire('selectionchange')
+    expect(rig.interruptions).toHaveLength(0)
+  })
+
+  it('still pauses for a real selection', () => {
+    const rig = harness({ hasSelection: () => true })
+    rig.document.fire('selectionchange')
+    expect(rig.interruptions[0].reason).toBe('selected')
+  })
+
+  it('pauses when it cannot tell, because the cost of a spare pause is one key', () => {
+    const rig = harness()
+    rig.document.fire('selectionchange')
+    expect(rig.interruptions[0].reason).toBe('selected')
+  })
+
+  it('does not read an element losing focus as the reader leaving the window', () => {
+    /*
+     * `blur` does not bubble, which is why every listener here is registered in
+     * the capture phase — and capture is what made this wrong: a capture-phase
+     * listener on `window` sees the blur of every descendant on its way down. An
+     * xterm textarea losing focus is not a person leaving.
+     */
+    const rig = harness()
+    rig.window.fire('blur', { target: { id: 'a textarea' } })
+    expect(rig.interruptions).toHaveLength(0)
+  })
+
+  it('pauses when the window itself blurs', () => {
+    const rig = harness()
+    rig.window.fire('blur', { target: rig.window })
+    expect(rig.interruptions[0].reason).toBe('left-window')
+  })
+
+  it('pauses on a blur with no target, so the watch stays drivable without a DOM', () => {
+    const rig = harness()
+    rig.window.fire('blur')
+    expect(rig.interruptions[0].reason).toBe('left-window')
+  })
+})
 
 /* -------------------------------------------------------------- the set -- */
 

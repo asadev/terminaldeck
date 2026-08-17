@@ -36,8 +36,21 @@ import { resetHomeScopes } from './transcript'
 
 const windows = process.platform === 'win32'
 const COMMAND = windows ? 'cmd.exe' : '/bin/sh'
-/** Long enough to still be running for the length of a test, and nothing else. */
-const ARGS = windows ? ['/c', 'timeout', '/t', '30'] : ['-c', 'sleep 30']
+/**
+ * A process that stays running for the length of a test *and echoes*.
+ *
+ * The echo is not incidental — it is the entire instrument. The control case
+ * below writes at a session and waits for the characters to come back out
+ * through the same data callback the window draws from; without an echo the
+ * copilot's silence is indistinguishable from a test that types nowhere at all.
+ *
+ * `cmd.exe /c timeout /t 30` was here and it does neither: `timeout` reads raw
+ * keypresses rather than a line, so it echoes nothing and exits on the first
+ * character written at it. An interactive `cmd.exe` is a console application
+ * with `ENABLE_ECHO_INPUT` on, which is what a person actually types into and
+ * therefore what this should be measuring against.
+ */
+const ARGS = windows ? [] : ['-c', 'sleep 30']
 
 let dir = ''
 let core: HostCore
@@ -67,7 +80,18 @@ afterEach(async () => {
   resetCopilot()
   resetHomeScopes()
   resetPaths()
-  rmSync(dir, { recursive: true, force: true })
+  /*
+   * Retried, because Windows will not delete a directory anything still holds.
+   *
+   * `drain()` waits for the pty processes to exit; it cannot wait for the
+   * console host behind them to let go of the working directory, which is a
+   * moment later and is not observable from here. That showed up as `EBUSY:
+   * resource busy or locked, rmdir …\copilot` failing a test whose assertions
+   * had all passed — a teardown reported as a result. `maxRetries` is Node's
+   * own answer to exactly this, and it is a no-op on POSIX where the unlink
+   * succeeds first time.
+   */
+  rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
 })
 
 /**

@@ -69,6 +69,7 @@ function surface(): DeckSurface {
         killed.push(id)
       },
       screen: async () => 'a rendered screen',
+      scrollback: () => 'the raw bytes a session has printed',
     },
     startSession: async (input) => {
       const meta: SessionMeta = {
@@ -346,9 +347,24 @@ describe('transcripts', () => {
     )
 
     const messages = await surface().readTranscriptFrom(path, 0)
+    /*
+     * The `id` is the reader's own — `${role}:${the transcript's message id}` —
+     * and it is asserted rather than ignored because it is the only handle
+     * anything downstream has on a specific message. Driving mode cites a
+     * message by it, and `ChatView` writes the same string on every bubble as
+     * `data-drive-anchor`; a reader that quietly stopped carrying it would leave
+     * the copilot able to read a message and unable to point at it.
+     */
     expect(messages).toEqual([
-      { role: 'you', at: Date.parse('2026-08-17T09:00:00.000Z'), text: 'run the tests', truncated: false },
       {
+        id: 'you:p1',
+        role: 'you',
+        at: Date.parse('2026-08-17T09:00:00.000Z'),
+        text: 'run the tests',
+        truncated: false,
+      },
+      {
+        id: 'agent:m1',
         role: 'agent',
         at: Date.parse('2026-08-17T09:00:01.000Z'),
         text: 'running them now',

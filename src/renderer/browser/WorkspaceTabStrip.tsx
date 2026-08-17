@@ -15,6 +15,7 @@ import {
   readTabDrag,
   startTabDrag,
   STRIP_LABEL_BUDGET,
+  tabIcon,
   tabIdentities,
   tabTooltip,
   type WorkspaceTab,
@@ -613,7 +614,11 @@ export function WorkspaceTabStrip({
                     strokeLinejoin="round"
                     aria-hidden="true"
                   >
-                    <path d={KIND_ICON[tab.kind]} />
+                    {/* Its kind's mark, except for the copilot — the only
+                        window in here there is exactly one of, which keeps the
+                        compass it wears in the rail so the row and the pill are
+                        recognisably one thing. See `tabIcon`. */}
+                    <path d={tabIcon(tab)} />
                   </svg>
                   {/* The app's own status dot, not a second one drawn here: it owns
                       the colour, the fill and — the part that matters — the words a

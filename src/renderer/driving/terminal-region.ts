@@ -1,3 +1,4 @@
+import { NEEDLE_CHARS, needleOf, normalizeLine } from '../../shared/quote-match'
 import { clipRect, type ClippedRect, type Rect } from './geometry'
 
 /**
@@ -208,42 +209,26 @@ export const SEARCH_BACK = 4000
  */
 export const MAX_REGION_LINES = 40
 
-/** How many printable characters of the first quoted line are matched on. */
-export const NEEDLE_CHARS = 64
-
-/**
- * A line of terminal output, reduced to what is worth comparing.
+/*
+ * The comparison itself is not defined here any more, and moving it was not
+ * tidying.
  *
- * Three normalisations, each for a fault seen in real agent output:
+ * `normalizeLine` and `needleOf` used to live in this file, which was the right
+ * home while the renderer was the only thing asking the question. It is not any
+ * more: `deck-control/tour.ts` runs the *same* check in the main process,
+ * against the retained pty scrollback, before a plan is ever allowed near a
+ * window. That is the gate that stops a fabricated quote reaching the screen;
+ * this file is what decides where the box goes once one has passed it.
  *
- * - **Control characters go.** `translateToString` hands back the cells, but a
- *   quote that travelled through a transcript, an MCP payload and a JSON
- *   round-trip can carry stray C0/C1 bytes that were never on screen.
- * - **Runs of whitespace collapse to one space.** A terminal pads to the column
- *   width with spaces, so a line that reads `done` is really `done` followed by
- *   105 blanks; and an agent CLI re-renders the same line with different
- *   padding as its spinner column changes width.
- * - **Ends are trimmed.** Same reason, at both ends: box-drawing TUIs indent.
- *
- * Case is deliberately **not** folded. Terminal output is case-significant —
- * `ERROR` and `error` are different events — and the quote came from this same
- * buffer, so there is nothing to be tolerant of.
+ * Two copies of "is this string in that text" would agree right up until the day
+ * one of them learned about a control character the other did not, and then a
+ * stop would pass the gate and fail to draw — a hole in a tour with nothing to
+ * blame it on. So there is one copy, in `shared/quote-match.ts`, and both sides
+ * import it. They are re-exported from here because this module's own callers
+ * ask this file for them, and consolidating the check was not meant to be a
+ * rename.
  */
-export function normalizeLine(text: string): string {
-  return text
-    .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-}
-
-/** The first non-empty normalised line of a quote, cut to the needle length. */
-export function needleOf(quote: string): string {
-  for (const line of quote.split('\n')) {
-    const clean = normalizeLine(line)
-    if (clean !== '') return clean.slice(0, NEEDLE_CHARS)
-  }
-  return ''
-}
+export { NEEDLE_CHARS, needleOf, normalizeLine }
 
 /**
  * Read access to a terminal buffer, by absolute line.

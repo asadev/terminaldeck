@@ -84,6 +84,7 @@ function surfaceOver(core: HostCore, root: string): DeckSurface {
     writeToSession: (id, data) => core.ptys.write(id, data),
     killSession: (id) => core.ptys.kill(id),
     sessionScreen: (id) => core.ptys.screen(id),
+    sessionScrollback: (id) => core.ptys.scrollback(id),
     listProjects: () => [],
     appStateRoot: () => root,
     copilotRoot: () => copilotPaths(root).root,

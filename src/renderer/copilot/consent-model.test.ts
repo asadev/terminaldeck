@@ -62,7 +62,38 @@ describe('reading a settled push', () => {
   it('carries the reason so the window can say what happened', () => {
     expect(
       readConsentSettled({ id: 'q1', outcome: { granted: false, reason: 'timeout', by: null, at: 5 } }),
-    ).toEqual({ id: 'q1', granted: false, reason: 'timeout' })
+    ).toEqual({ id: 'q1', granted: false, reason: 'timeout', by: null })
+  })
+
+  /**
+   * `by` is read, because this dialog is no longer the only surface that can
+   * answer.
+   *
+   * A device with its own copilot connection can answer its own run's question,
+   * and first answer wins — so this window can be closed by an answer nobody in
+   * front of it gave. Without this field the dialog would simply vanish, which
+   * teaches a person that the app does things behind their back.
+   */
+  it('carries the surface that answered it', () => {
+    expect(
+      readConsentSettled({
+        id: 'q1',
+        outcome: { granted: true, by: 'device:phone-1', at: 5 },
+      }),
+    ).toEqual({ id: 'q1', granted: true, reason: null, by: 'device:phone-1' })
+  })
+
+  it('says where a question was answered, allowed or refused', () => {
+    expect(
+      settledSentence({ id: 'q1', granted: true, reason: null, by: 'device:phone-1' }),
+    ).toBe('Allowed on a connected device.')
+    expect(
+      settledSentence({ id: 'q1', granted: false, reason: 'declined', by: 'device:phone-1' }),
+    ).toBe('Refused on a connected device.')
+    // Answered here, by the person looking at it: repeating it back would be the
+    // app narrating the button they just pressed.
+    expect(settledSentence({ id: 'q1', granted: true, reason: null, by: 'window' })).toBeNull()
+    expect(settledSentence({ id: 'q1', granted: false, reason: 'declined', by: 'window' })).toBeNull()
   })
 
   it('treats anything other than a literal true as not granted', () => {
@@ -120,12 +151,12 @@ describe('what happens if you say nothing', () => {
 
 describe('what to say when a question closes on its own', () => {
   it('explains a timeout', () => {
-    expect(settledSentence({ id: 'q1', granted: false, reason: 'timeout' })).toContain('in time')
+    expect(settledSentence({ id: 'q1', granted: false, reason: 'timeout', by: null })).toContain('in time')
   })
 
   it('says nothing about a button the person has just pressed', () => {
-    expect(settledSentence({ id: 'q1', granted: false, reason: 'declined' })).toBeNull()
-    expect(settledSentence({ id: 'q1', granted: true, reason: null })).toBeNull()
+    expect(settledSentence({ id: 'q1', granted: false, reason: 'declined', by: 'window' })).toBeNull()
+    expect(settledSentence({ id: 'q1', granted: true, reason: null, by: 'window' })).toBeNull()
   })
 })
 

@@ -21,16 +21,75 @@ everything below:
 > separately connect, because we don't want to give this copilot to others to
 > see how we use it. This will be only ours."*
 
-The answer in one paragraph: a paired device gets copilot access as a **separate
-per-tier grant, off by default**, already modelled in
-`src/main/remote/copilot-grants.ts`. The phone talks to a **copilot run of its
-own** — same folder, same `CLAUDE.md`, same `memory/`, same action log, same
-tools — rather than typing at the copilot's keyboard. The wire carries
-*sentences*, never tool names, so there is no frame a phone can construct that
-names an alter-tier tool. Enforcement stays exactly where it already is:
-`DeckControl.call`, on the desktop, at the point the tool is dispatched. And the
-alter tier stays a desk activity, because the party being confirmed cannot be the
-party that confirms.
+The answer in one paragraph: a paired device gets copilot access through a
+**separate connection** — its own six-digit code minted at the desktop, its own
+credential, its own record in `src/main/remote/copilot-link.ts` — off by default,
+and pairing a device for terminals grants none of it. The device talks to a
+**copilot run of its own** — same folder, same `CLAUDE.md`, same `memory/`, same
+action log, same tools — rather than typing at the copilot's keyboard. The wire
+carries *sentences*, never tool names, so there is no frame a device can
+construct that names a tool at all. Enforcement stays exactly where it already
+is: `DeckControl.call`, on the desktop, at the point the tool is dispatched. And
+a connected device may hold all three tiers, including `alter`, and answer its
+own run's confirmations — because the second factor behind that tier is the
+separate authorisation, not the geography of the desk.
+
+---
+
+## REVISED, 2026-08-17 — read this before §4
+
+Asad, having read the argument in §4 that a phone must never answer a
+confirmation:
+
+> *"Phones will have full control over copilot, same as the actual machine app.
+> But connecting copilot will be a separate connection than the sessions."*
+
+**What this file said, and why it said it.** §4.1 and §4.5 argued at length that
+the `alter` tier could not be granted to a device:
+
+> *The alter tier's entire safety property is a human at the machine says yes. A
+> dialog that appears on the device that raised the request is answered by the
+> party being confirmed. If holding the phone is sufficient to approve what the
+> phone asked for, then the phone holds `alter` and the grant was a ceremony.*
+
+That argument is good and it is preserved verbatim, in this file and in
+`copilot-link.ts`, because the next person to read it needs to find out why it
+was superseded rather than wonder whether it was forgotten.
+
+**Why it does not survive his answer.** The argument assumed the second factor
+behind `alter` was *geography* — that being at the desk is what made a yes
+meaningful. It is not, and it never was: somebody who walks away from an unlocked
+Mac has taken their geography with them, and the desktop dialog would still be
+answerable by whoever wandered past. What actually made it meaningful is that
+**reaching the dialog required an authorisation the requesting party did not
+already hold.**
+
+So the factor moves rather than disappears. Copilot access is no longer a tick
+box beside an already-paired device; it is a **separate act of authorisation**,
+performed at this machine, producing a credential that has nothing to do with the
+one that opens a session channel. A device paired to run ten terminals has no
+copilot reach whatsoever — not a tab, not a frame, not a refusal whose shape it
+could measure — until somebody mints a connect code for it and it is redeemed.
+*Have deliberately authorised this specific device for the copilot* is a real
+boundary, it is checkable, and it is the one thing the device cannot grant
+itself.
+
+**What changed, concretely:**
+
+| Was | Is | Where |
+|---|---|---|
+| A per-device grant riding the session channel | A separate connection: own code, own credential, own record, own revoke | `remote/copilot-link.ts`, §6 |
+| `REMOTE_GRANTABLE_TIERS = ['read','act']`, `set()` clamps `alter`, `load()` scrubs it | All three tiers grantable; the clamp and the scrub are gone | `remote/copilot-link.ts` |
+| `copilot.pending` watch-only, no Allow, no Refuse | `copilot.ask` / `copilot.answer` / `copilot.settled`; first answer wins | §4, `protocol.ts` |
+| Nothing distinguishes a grant from a connection in the panel | Connect / Disconnect, and the boxes only exist once connected | `renderer/remote/DeviceCopilot.tsx` |
+
+**What did not change, and is pinned by tests that fail if it does:** the
+copilot's pty stays off the session fanout (`copilot-off-the-network.test.ts`);
+routines and the action log stay outside the copilot's writable reach
+(`copilot-writable-boundary.test.ts`, `copilot-log-boundary.test.ts`,
+`copilot-transcript-forgery.test.ts`); enforcement stays on the desktop at the
+point the tool is invoked (`copilot-enforcement.test.ts`); and every device still
+gets a run of its own, because the shared-conversation version cannot be secured.
 
 ---
 
@@ -124,6 +183,21 @@ device credential it does not know because `device-auth.ts` stores scrypt hashes
 It could still grant `act` to a device that exists. Both files join the fence
 before the grant panel ships, with the same fail-open-and-say-so behaviour the
 existing three have on Windows and Linux.
+
+> **Done, and the bound moved. 2026-08-17.** Both files are in the fence —
+> `confine/records.ts`, `paths.remoteCopilot` and `paths.remoteAuth`. Two
+> corrections to the paragraph above. The store is now
+> `<userData>/remote/copilot-link.json` rather than `remote-copilot.json`, and
+> the fence went on naming the old path for a while after the rename because
+> nothing pinned the spelling — a Seatbelt rule over a path nothing writes
+> refuses nothing, silently. `copilot-link.test.ts` now calls
+> `recordsFenceAgrees` from the side that owns the path, which is what that
+> function exists for. And `alter` is no longer scrubbed, so the bound is a
+> different one: `CopilotLinks.load` drops any record with **no credential**, so
+> the copilot cannot mint a connection — it would have to produce a secret whose
+> scrypt hash it also wrote. What an edit could still do is raise the tiers of a
+> connection that already exists, turning a device somebody connected read-only
+> into one that answers confirmations. Which is why the fence is not optional.
 
 ### 0.4 The budgets are per-process, not per-caller
 
@@ -247,30 +321,53 @@ outlive the thing it advertises.
 
 Per-device, in `welcome` and in its own push frame:
 
-    | { t: 'welcome'; …; copilot?: { read: boolean; act: boolean } }
-    | { t: 'copilot.grant'; grant: { read: boolean; act: boolean } }
+    | { t: 'welcome'; …; copilot?: CopilotLinkWire }
+    | { t: 'copilot.grant'; link: CopilotLinkWire }
 
-Absent means no access, which is also what `{read:false, act:false}` means; both
-are sent as the object so a client has one thing to read. `alter` is **not on the
-wire at all** — not as `false`, not as anything. `copilot-grants.ts` makes the
-same choice for the file and gives the reason: a stored `"alter": false` reads to
-somebody looking at it like a switch that could be turned on.
+    interface CopilotLinkWire {
+      linked: boolean            // this desktop holds a copilot record for you
+      open: boolean              // *this socket* has presented the credential
+      grant: { read: boolean; act: boolean; alter: boolean }
+    }
 
-`copilot.grant` is pushed the moment the panel changes, so a revoked phone's
-Copilot tab goes away without a reconnect. The *rule* is already live without it,
-because the grant is read per call (§3), which is what makes the push honest
-rather than load-bearing.
+Three facts rather than one, because a client has three screens to draw and
+folding them together makes one of them wrong: *ask the person for a code*,
+*send the credential you already have*, and *you are in, here is what you may
+do*. **`open` is false on every `welcome`, always** — a session channel does not
+carry the copilot by existing, which is the whole difference between this design
+and the per-device grant it replaced.
+
+`alter` **is** on the wire, and used to be deliberately absent — see the revision
+note at the top. Its absence was three independent refusals guarding a tier whose
+safety property was *a human at the machine says yes*; that property is now
+guarded by the connection instead.
+
+`copilot.grant` is pushed the moment the panel changes, so a disconnected
+device's Copilot tab goes away without a reconnect. The *rule* is already live
+without it, because the store is read per frame and per call (§3), which is what
+makes the push honest rather than load-bearing.
 
 ### Client → desktop
 
+Three frames carry **no tier** and cannot: they *are* the authorisation, and a
+device with no copilot connection has no tiers, so requiring one to send the
+frame that establishes the connection would mean no device could ever connect.
+`COPILOT_UNTIERED_FRAMES` names them so the set is checkable, and
+`copilot-frames.test.ts` asserts the two lists together cover every `copilot.*`
+client verb — a verb added to neither fails the suite.
+
 | Frame | Tier | What it is |
 |---|---|---|
+| `{ t: 'copilot.connect'; code }` | — | Redeem a connect code minted at the desktop. Answered once with `copilot.linked` carrying the credential; it is never sent again, because the desktop keeps a scrypt hash. Opens this socket as well: it has just proved it holds a code minted seconds ago, which is a stronger claim than the credential it is about to be given. |
+| `{ t: 'copilot.hello'; credential }` | — | Open the copilot connection on this socket. Required after every reconnect. |
+| `{ t: 'copilot.bye' }` | — | Close it on this socket. The credential and the record survive — this is the connection ending, not the authorisation. |
+| `{ t: 'copilot.answer'; id; approved }` | alter | Answer a confirmation. §4. |
 | `{ t: 'copilot.attach' }` | read | Subscribe this connection to the copilot surface and replay what exists. Answered with `copilot.state`, then `copilot.chat` with `reset: true`. Starts nothing. |
 | `{ t: 'copilot.detach' }` | read | Stop the stream. The run keeps going; see the grace window. |
 | `{ t: 'copilot.state' }` | read | What the copilot is: running or not, which profile, signed in or not, what the catalogue costs per turn, how many confirmations are waiting at the desk. |
 | `{ t: 'copilot.sessions' }` | read | The sessions the copilot started — `origin: 'copilot'`, with `originRunId` so each links back to the turn that made it. |
 | `{ t: 'copilot.log'; limit?: number; before?: string }` | read | The tail of `actions.jsonl`, scrubbed, newest last. `before` is a row id, for paging back. |
-| `{ t: 'copilot.pending' }` | read | Confirmations waiting **at the desk**, with their summary and expiry. Watch-only; see §4. |
+| `{ t: 'copilot.pending' }` | read | Every waiting confirmation, with its summary, expiry and `mine` — whether **this** connection may answer it. No arguments; see §4. |
 | `{ t: 'copilot.start' }` | act | Start this device's run. It spends money, so it is not folded into `attach`. |
 | `{ t: 'copilot.say'; text: string }` | act | Say something to it. |
 | `{ t: 'copilot.cancel' }` | act | Interrupt the current turn of **this device's own run**. |
@@ -294,7 +391,10 @@ one to ship first.
 | `{ t: 'copilot.sessions'; sessions: … }` | Answer, and pushed when the set changes. |
 | `{ t: 'copilot.log'; rows: ActionRow[]; more: boolean }` | Answer only. `more` says the tail was bounded, in the same spirit `ToolTrail.partial` reports its own window. |
 | `{ t: 'copilot.pending'; questions: … }` | Answer, and pushed when the pending set changes. |
-| `{ t: 'copilot.grant'; grant: … }` | Above. |
+| `{ t: 'copilot.grant'; link: … }` | Above. |
+| `{ t: 'copilot.linked'; credential; link }` | Answer to `copilot.connect`, sent exactly once. The client stores the credential where it stores its pairing credential and with the same care; the two are worth the same. |
+| `{ t: 'copilot.ask'; question }` | A confirmation **this** connection may answer, with the tool, the tier, the desktop's own summary, the origin, the countdown and **every argument verbatim**. Sent only to the surface that owns the run that raised it. |
+| `{ t: 'copilot.settled'; settled }` | A question closed, and `by` — where it was answered. Sent to every connection that was told about it, including the one that answered. |
 
 Refusals reuse the existing `error` frame: `unauthorized` for a verb this device's
 grant does not cover, `unavailable` for a copilot that cannot start (no CLI, not
@@ -317,21 +417,26 @@ rule makes that free.
 ### The rule that makes §3 work: **no tool name ever appears on the wire**
 
 There is no `copilot.tool.call`, no `copilot.run`, no argument object, no tool id
-in any client frame. The phone sends prose. Tool calls are made by a CLI process
+in any client frame. The device sends prose. Tool calls are made by a CLI process
 on the desktop, over loopback, authenticated by a bearer token it holds and the
-phone does not.
+device does not.
 
-This is the strongest form of the property the brief asks for — *a phone that has
-not been granted alter must not be able to reach an alter tool by any frame it
-can construct* — because the set of frames it can construct contains no tool at
-all. Every other design has to enumerate and deny; this one has nothing to
-enumerate.
+The property this used to buy was *a phone that has not been granted alter cannot
+reach an alter tool by any frame it can construct*, and it bought it by there
+being no tool to name. `alter` is grantable now, and the property is unchanged
+and still worth exactly as much: a device holding every tier still **cannot name
+a call**. It can say a sentence, and it can decide about a call the desktop
+composed — `copilot.answer` carries a question id and a boolean, and the tool,
+the arguments and the effect were all decided on this machine before anybody was
+asked anything. Every other design has to enumerate and deny; this one has
+nothing to enumerate.
 
 It is also the rule that will be under pressure. The first person who wants
 `copilot.tool` for a nice phone UI ("tap to re-run that") should be pointed here.
 
 ### Deliberately absent
 
+- **A tool name, in any direction a client can send.** Above.
 - **The desktop copilot's conversation.** A `read` phone sees what the copilot
   *did* — state, tool rows, sessions, log — and its own run's chat. It does not
   get the text of the conversation happening at the desk. That conversation is
@@ -422,37 +527,75 @@ exactly one import rather than a hand-assembled `Caller` with `ALL_TIERS` in it.
 Honour that: when this lands, the entry comes out of `KNOWN_UNREACHABLE`, and if
 it cannot come out, the transport is not finished.
 
-### Revocation
+### Revocation — and the two things that are revoked separately
 
-Unticking a grant, or revoking the device, must do four things in this order:
+**Revoking the copilot and revoking the pairing are two acts, and neither implies
+the other.** Disconnecting the copilot — `CopilotLinks.disconnect`, the button in
+Settings — drops the record and the credential with it, and touches nothing in
+`remote-auth.json`: the device keeps every terminal it was paired for. That is
+the property `server.test.ts` asserts on both sides, and it is the whole point of
+the two authorisations being separate acts.
 
-1. Write the store (`set` / `forget`). Everything else is downstream of the disk,
-   for the reason `commit()` gives — a permission that reverts *up* at the next
-   launch is worse than one that reverts down.
-2. Drop that run's token from the table. In-flight tool calls abort with
+The other direction is not symmetric and should not be. Revoking the *device*
+also drops its copilot record, because revocation in `device-auth.ts` is
+permanent and a returning phone pairs again with a **new** device id — so the
+record could never be opened by anything, and keeping it would leave a credential
+in a file with nobody's name against it. That is garbage collection, not a
+cascade.
+
+Either one, and unticking a tier, must do five things in this order:
+
+1. Write the store (`set` / `disconnect` / `forget`). Everything else is
+   downstream of the disk, for the reason `commit()` gives — a permission that
+   reverts *up* at the next launch is worse than one that reverts down.
+2. Withdraw every confirmation that device raised, as `caller-gone`. A device
+   whose access just changed must not be left holding a dialog it may no longer
+   answer.
+3. Drop that run's token from the table. In-flight tool calls abort with
    `caller-gone`; the signal for that is held per token entry (§4).
-3. Stop the run.
-4. Push `copilot.grant` to every live connection of that device.
+4. Stop the run.
+5. Close the copilot connection on every live socket of that device, and push
+   `copilot.grant` to each — with `linked: false` when the record has gone, so
+   the refusal a device gets next says *this device is not connected* rather than
+   *you do not have enough access*. Two different sentences with two different
+   remedies, and the second would send somebody looking for a checkbox that is no
+   longer the obstacle.
 
-Step 1 alone is already sufficient for correctness, because the grant is read per
-call. Steps 2–4 are what stop a revoked phone from watching a conversation it can
-no longer influence.
+Step 1 alone is already sufficient for correctness, because the store is read per
+frame and per call. Steps 2–5 are what stop a disconnected device from watching a
+conversation it can no longer influence, or answering a question it can no longer
+be trusted with.
 
 ### Proof obligations
 
 Written as tests, because this repository's convention is that a rule with no
 test is a comment:
 
+- **A paired device with no copilot connection reaches nothing.** Every tool,
+  *including the read ones*, is `not-granted` for a device that has never
+  redeemed a code — and every `copilot.*` frame, including the read-tier ones, is
+  refused over a real socket. `copilot-enforcement.test.ts` and
+  `server.test.ts`. This is the headline obligation of the revision.
+- **The panel is not a second door.** `CopilotLinks.set` refuses to create a
+  record, so no settings write can give copilot access to an unconnected device.
+  `copilot-link.test.ts`, `copilot-runs.test.ts`.
 - **Table-driven over the whole catalogue.** For a caller with `{read:true}`,
   every `act` and `alter` tool in `buildCatalogue()` returns `not-granted`. Driving
   it off the catalogue rather than a list means a tool added next month is covered
-  the day it is added.
+  the day it is added. And the inverse: a connection holding `alter` reaches an
+  alter tool *through the gate*, so the file distinguishes "the boundary holds"
+  from "the feature is broken".
 - **Escalation.** `sessions.send` with `act` granted: allowed against a session
   the run started, `not-granted` against one it did not.
 - **Hidden pty.** The copilot session id and every run id are absent from
   `SessionFanout.list()`, and `attach` returns null for them.
-- **Revocation without restart.** After `grants.forget(device)`, the very next
-  MCP call on that run's live token is `not-granted`.
+- **Revocation without restart.** After `links.disconnect(device)`, the very next
+  MCP call on that run's live token is `not-granted`, and the very next frame on
+  its live socket is refused.
+- **A frame a device should not be able to send.** A connected device holding
+  `alter` answering *another* device's question is refused, and told the same
+  thing a settled question would tell it. `copilot-answer.test.ts`,
+  `server.test.ts`.
 - **No tool names on the wire.** A corpus test over `protocol.ts` asserting that
   no `ClientMessage` variant carries a field whose value is a tool id — the same
   shape `wire-wording.test.ts` and `reachable.test.ts` already use to pin a
@@ -460,200 +603,241 @@ test is a comment:
 
 ---
 
-## 4. Consent from the phone
+## 4. Consent from a connected device
 
-The hard one, and the answer has three parts because there are three different
-questions hiding in it.
+**Rewritten 2026-08-17.** What this section used to say is at the end of it,
+under §4.8, unedited — the argument was good, and a file that quietly deletes the
+reasoning it superseded leaves the next person to rediscover it from scratch.
 
-### 4.1 A phone-originated alter request does not exist, and that is the answer
+The hard one, and the answer has four parts because there are four different
+questions hiding in it: who may be asked, who may answer *which* question, what
+they have to be shown in order to answer honestly, and what happens when nobody
+answers at all.
 
-`REMOTE_GRANTABLE_TIERS` is `['read', 'act']`. `set()` clamps `alter` to false and
-`load()` scrubs it out of a hand-edited file. So a phone-originated call at the
-alter tier is refused at the tier check — before the budget, before the precheck,
-before the broker, before any window is asked anything.
+### 4.1 A device-originated alter request now exists, and the dialog goes to it
 
-**Where does the prompt appear when the request came from a phone? Nowhere,
-because there is no prompt.** The phone gets `not-granted`, and the sentence
-`notGrantedSentence` composes is already the right one — it names the tier, says
-what the caller can still do, says *"this cannot be granted from here — it is a
-switch on the desktop, in Settings"*, and tells the model not to retry.
+`REMOTE_GRANTABLE_TIERS` is `['read', 'act', 'alter']`. The clamp in `set()` and
+the scrub in `load()` are gone.
 
-That is not a dodge, it is the design. Restating the argument in
-`copilot-grants.ts` in the terms of this document: the alter tier's entire safety
-property is *a human at the machine says yes*. A dialog that appears on the
-device that raised the request is answered by the party being confirmed. If
-holding the phone is sufficient to approve what the phone asked for, then the
-phone holds `alter` and the grant was a ceremony.
+**Where does the prompt appear when the request came from a device? On that
+device, and on the desktop, at the same time.** `DeckControl.call` reaches the
+broker with `origin: 'device:<id>'`; `deck-control/index.ts` fans the question
+out to both surfaces; first answer wins.
 
-### 4.2 What if the desktop *also* has somebody at it?
+What makes this honest rather than a ceremony is not that the device is trusted.
+It is that **connecting the copilot is a separate act of authorisation from
+pairing for sessions**. The old argument — *a dialog answered on the device that
+raised the request is answered by the party being confirmed* — assumed the second
+factor was being at the desk. It was not: it was holding an authorisation you did
+not already have. That authorisation is now the copilot connection, and a device
+paired to run terminals holds none of it.
 
-In v1, no race exists, because the phone is not an approver. A desktop-originated
-alter call draws the desktop dialog exactly as it does today.
+The tier is still a tier. A person can connect a device read-only, or connect it
+to work but not to change things. Three checkboxes, and the third one's label
+says exactly what ticking it moves: *the confirmation appears on that device, and
+whoever is holding it answers.*
 
-What the phone gets is `copilot.pending`: it can *see* that a question is waiting
-at the desk, with the summary the desktop composed and the countdown from
-`ConsentRequest.expiresAt`. That is a real answer to the brief's *"the desktop
-dialog is on a screen nobody is looking at"* — the phone's job is to tell you to
-go look, not to answer for you. It is cheap, it adds no trust, and it turns a
-silent two-minute timeout into something you knew about.
+### 4.2 The race, and the rule that is not obvious
 
-`copilot.pending` is watch-only and must stay that way. No Allow, no Refuse, no
-"nudge", no snooze.
+Both surfaces are asked, so both can answer, and the machinery for that already
+existed:
 
-If phone-side answering is ever built (§4.6), the race is already solved by
-machinery that exists: `respond()` returns false for an id that has been settled,
-`ConsentBrokerOptions.settled` already notifies every surface when a question
-closes, and `ConsentGranted.by` is already a string — `'window'` today,
-`'device:<id>'` then. First answer wins, the other surface withdraws the dialog
-saying where it was answered, and the log records which.
+- `respond()` returns false for an id that has been settled, so the race needs no
+  lock — it needs both surfaces to have been asked.
+- `ConsentBrokerOptions.settled` notifies every surface when a question closes.
+- `ConsentGranted.by` is a string: `'window'` for the desktop, `device:<id>` for
+  a connection.
 
-One rule that would not be obvious: **a question may only be answered by the
-surface that owns the run that raised it, or by the desktop.** Otherwise phone A
-approves phone B's action, which is a permission model with a shared password.
+First answer wins. The other surface **withdraws its dialog saying where it was
+answered** — `copilot.settled` carries `by`, and `settledSentence` on the desktop
+says *Allowed on a connected device*. A dialog that vanishes on its own teaches a
+person that the app does things behind their back. And the log records which:
+`confirmed.by` is `device:<id>`, and `detailFor` writes *— allowed on a connected
+device* rather than *— allowed by the person*. Those must never read the same.
 
-### 4.3 Is a phone-originated request attended? Yes, and the flag should say so
+**The rule that is not obvious, and is enforced:** a question may only be
+answered by the surface that owns the run that raised it, or by the desktop.
+Otherwise device A approves device B's action, which is a permission model with a
+shared password. It lives in `ConsentBroker.respond`, with the question, not in
+the transport — *a rule enforced in one transport is a rule the next transport
+does not have*. A device that tries gets `accepted: false`, which is the same
+answer a settled question gets, so probing for another device's question ids
+learns nothing.
+
+The desktop is exempt from the ownership rule because the desktop is the machine:
+somebody standing at it can already do by hand whatever they would be approving.
+
+### 4.3 What a device must be shown, or the gate is worse than nothing
+
+This is where it goes wrong in practice. **A consent prompt without enough
+context becomes a reflex Yes, and a gate that is always answered yes is worse
+than no gate, because it looks like protection.**
+
+So there are two shapes on the wire and the difference between them is the whole
+of this subsection:
+
+- `CopilotPendingRow` — *something needs attention*. Goes to every watching
+  connection. The tool, the desktop's own one-line summary, the countdown, and
+  `mine`. **No arguments**: a device that cannot answer has no decision to make
+  with somebody's settings patch or the text about to be typed into their
+  terminal.
+- `CopilotConsentQuestion` — *decide*. Goes only to the surface that raised it.
+  What is being asked, by whom (`origin`), **with what arguments** — every one of
+  them, verbatim, in the tool's own order — and what happens if you say nothing.
+
+Nothing is re-composed on the client. `summary` is written by the tool that is
+about to run, by the code that knows what it will do; a client that wrote its own
+sentence would be describing an action it did not implement, and the first time
+the two drifted somebody would approve one thing having read another.
+
+**Refusing must be at least as easy as accepting.** Not Allow under the thumb and
+Refuse in a corner. This is a constraint on every client and it is the one most
+likely to be lost to a layout that looks tidy: the destructive-looking button is
+the safe one here, and a design that makes the safe answer the harder gesture has
+inverted the gate. The desktop's own dialog obeys it and the iOS client must.
+
+And the expiry is on the wire so the device counts down exactly as the dialog
+does. **Two minutes, not extended for a phone.** The temptation to make it five
+for *she has to unlock her phone* is refused: a longer window is how you get an
+approval six minutes later from somebody who has forgotten what they were
+approving, against a turn that has already moved on.
+
+### 4.4 Is a device-originated request attended? Yes, and the flag says so
 
 `attended` in `control.ts` means one thing: *is there a human who could be asked
 right now.* A routine at 03:00: no, and `not-permitted-unattended` exists because
 telling it otherwise made OpenClaw's heartbeat spend turns generating apologies.
 
-A phone-originated turn is attended by that definition, and by a wider margin
-than most desktop turns. There is demonstrably a person — they sent a message
-seconds ago — holding a device that can display a prompt and take a tap. A
-desktop turn where the app is open and the person went for coffee is *less*
-attended and is marked `attended: true` today.
+A device-originated turn is attended by that definition and by a wider margin
+than most desktop turns: there is demonstrably a person, they sent a message
+seconds ago, and they are holding a device that can display a prompt and take a
+tap. A desktop turn where the app is open and the person went for coffee is
+*less* attended and is marked `attended: true` today.
 
-So the flag is true. Two consequences worth stating because they look like
-contradictions and are not:
+The flag was already true. What changed is that it is now **observable** — before
+this revision every alter call from a device was refused one check earlier, so
+nothing read it. Marking it correctly then, when nothing read it, is why nothing
+had to be repaired now.
 
-**Attended and refused are compatible.** The phone gets `not-granted`, not
-`not-permitted-unattended`, and the two sentences are different on purpose.
-`not-granted` says *a person could authorise this, at the desk, by changing a
-switch.* `not-permitted-unattended` says *nobody can authorise this, ever, for
-this kind of run.* Getting them backwards would send the model looking for a
-workaround in one case and make the person walk to their desk for nothing in the
-other. The ordering in `control.ts` already produces the right one: the tier check
-runs first, so `not-granted` wins.
+### 4.5 Nobody answers: every way that happens, and it is always a refusal
 
-**The flag is currently unobservable for a remote caller, and should still be
-true.** Every alter call from a phone is refused one check earlier, so nothing
-reads `attended` on that path. Setting it to `false` because it happens not to
-matter would be a lie parked in the code waiting for the day a fourth tier, or a
-downward escalation, makes it matter. Mark what is true.
+- **Timeout.** Two minutes, then `timeout`. Unchanged.
+- **The device's copilot connection drops mid-prompt.** Refused at once, with
+  `caller-gone`. Not left for the desktop to answer, even though the desktop may
+  answer anything: the run that asked is about to be reaped, the person who asked
+  is gone, and an approval landing afterwards is a change nobody is waiting for.
+  `server.ts` calls `CopilotRemote.closed` when the **last** open copilot
+  connection of that device goes — a phone with the app open in two places has
+  not stopped watching because one of them closed.
+- **A call in flight from the device's run.** The run's tool calls carry an
+  `AbortSignal` held on the token-table entry; dropping the grant aborts it and
+  the broker resolves `caller-gone`.
+- **Nobody could be asked at all.** `ask` returns false when no approver saw it —
+  no window attached, and no connection holding `alter` — and the broker answers
+  `no-approver` immediately rather than holding a tool call open for two minutes
+  on a dialog that was never drawn.
+- **The window goes.** `approverGone()`, unchanged: everything outstanding is
+  refused. `callerGone(surface)` is the narrower device version and deliberately
+  throws if handed `'window'`, because a silent alias is how somebody ends up
+  refusing every device's question because a renderer reloaded.
+- **A question the device was merely watching.** Nothing is refused. It was never
+  an approver for that one.
 
-### 4.4 The phone goes offline mid-call
+### 4.6 If push is ever added
 
-Default to refusal, and there are two cases.
+There is no APNs in this product — `ios/TerminalDeck/App/SessionAlerts.swift`
+says so plainly — so an alert can only be raised while the app is running. That
+is a real limitation on this feature: a confirmation lives 120 seconds, and a
+device that is not already open and in someone's hand cannot be asked.
 
-**A call in flight from the phone's run.** The run's tool calls are dispatched
-with an `AbortSignal` held on the token-table entry. The relay channel closing
-aborts it, `ConsentBroker` resolves any question on it as `caller-gone`, and
-`control.ts` records a refusal. `caller-gone` already exists for precisely this —
-its comment describes the hole it closes: *"if that timeout fires first the client
-stops listening — and if the person then clicked Allow, the change would land
-while the model had already been told the call failed."* The same hole, one
-transport further out.
+If push is ever added, two constraints, both non-negotiable:
 
-**A question the phone was merely watching.** Nothing is refused. The desktop is
-still there and still owns the answer. The phone's disappearance removes a
-watcher, not an approver.
+1. **The payload carries nothing.** It goes through Apple's servers in
+   plaintext-to-them, so no summary, no tool name, no session title. *Something
+   needs you.* This is the single most likely way the sealing property in §7 gets
+   lost, because a useful notification is exactly a notification that says what
+   happened.
+2. **It carries no actions.** A lock-screen Allow that approves without the
+   request being read is a gate that is always answered yes wearing the
+   appearance of protection. The app is foregrounded, the full request is
+   displayed — summary, every argument verbatim, the countdown — and the answer
+   happens there.
 
-If phone-answering is ever built, this becomes the interesting case and the rule
-is: `approverGone()` fires when the set of live approvers becomes **empty**, not
-when any one of them leaves. The broker currently has one approver and refuses
-everything the moment it goes; that generalises to a count, and the failure
-direction is unchanged — no approvers means immediate `approver-gone`, never a
-question sitting on a screen that does not exist.
+A device unlock (`LAContext` / `BiometricPrompt`) in front of Allow is worth
+having and defeats a found phone and nothing else; the client should say that
+rather than implying more. Refuse must not require it.
 
-**The timeout does not get extended for a phone.** Two minutes is right and the
-temptation to make it five for "she has to unlock her phone" should be refused: a
-longer window is how you get an approval six minutes later from somebody who has
-forgotten what they were approving, against a turn that has already moved on. The
-`expiresAt` is on the wire so the phone can count down exactly as the desktop
-dialog does.
+### 4.7 The real defence is still that alter is rare
 
-### 4.5 It must not become a rubber stamp
+If he finds himself approving things from a phone several times a week, the tier
+boundary is wrong and the fix is to look at which tool keeps asking — not to make
+the approval gesture smaller. The pending cap stays at three, and three prompts
+inside a minute should be reported to the device as *the copilot is looping*
+rather than drawn as three dialogs.
 
-This is the reason there is no Allow button on the phone in v1, and the reasoning
-is not squeamishness — it is that the mechanism to make one safe does not exist in
-this product.
+And `consent.ts`'s **report and offer** pattern is still worth building beside
+this rather than instead of it: a device-originated refusal is already a row in
+`actions.jsonl` with the tool, the scrubbed arguments and the summary, so the
+Activity pane can grow an *asked from a device, needs you* filter with an Allow
+button that runs the call locally. That costs no new frames and puts some
+decisions in front of somebody at the machine that owns the risk.
 
-**There is no push.** `ios/TerminalDeck/App/SessionAlerts.swift` states it
-plainly: *"It is not a push notification service… there is no APNs certificate in
-this product and no server holding one. So an alert can only be raised while the
-app is running."* A confirmation lives 120 seconds. A phone that is not already
-open, connected and in someone's hand cannot be asked. So a phone Allow button
-would work in exactly one situation — the person is already staring at the app —
-and in that situation nothing was gained over walking to the desk, while
-everything about the trust model changed.
+### 4.8 What this section said before, unedited
 
-**A lock-screen Allow is worse than no gate.** The brief says it and it is right.
-A notification action that approves without the request being read is a gate that
-is always answered yes, wearing the appearance of protection. If push is ever
-added, its payload must be contentless and it must carry **no actions** — it says
-*something needs you*, and the answering happens in the foregrounded app.
+Kept because the argument is good, because the code it describes is what the
+tests were written against, and because somebody will one day propose exactly it
+again. The two paragraphs that matter:
 
-**The real defence is that alter is rare.** If he finds himself wanting to approve
-things from a phone several times a week, the tier boundary is wrong and the fix
-is to look at which tool keeps asking — not to move the approval surface closer to
-his thumb.
+> **4.1 A phone-originated alter request does not exist, and that is the answer.**
+> `REMOTE_GRANTABLE_TIERS` is `['read', 'act']`. `set()` clamps `alter` to false
+> and `load()` scrubs it out of a hand-edited file. So a phone-originated call at
+> the alter tier is refused at the tier check — before the budget, before the
+> precheck, before the broker, before any window is asked anything.
+>
+> Where does the prompt appear when the request came from a phone? Nowhere,
+> because there is no prompt. […] That is not a dodge, it is the design. The
+> alter tier's entire safety property is *a human at the machine says yes*. A
+> dialog that appears on the device that raised the request is answered by the
+> party being confirmed. If holding the phone is sufficient to approve what the
+> phone asked for, then the phone holds `alter` and the grant was a ceremony.
 
-### 4.6 If he wants it anyway
+> **4.5 It must not become a rubber stamp.** […] There is no push. A confirmation
+> lives 120 seconds. A phone that is not already open, connected and in someone's
+> hand cannot be asked. So a phone Allow button would work in exactly one
+> situation — the person is already staring at the app — and in that situation
+> nothing was gained over walking to the desk, while everything about the trust
+> model changed.
 
-Then it is not "consent from the phone", it is a third grantable tier, and it must
-be named as one — a switch that reads *"This phone can change settings and stop
-your sessions, after confirming on the phone"*. Six constraints, all of them
-non-optional:
-
-1. `REMOTE_GRANTABLE_TIERS` grows to include `alter`, and every argument in
-   `copilot-grants.ts`'s header is revised rather than left contradicting the
-   code. A file that argues for a rule the code no longer holds is worse than no
-   comment.
-2. Off by default, per device, and never inherited from `act`.
-3. The Allow control requires a device unlock (`LAContext` / `BiometricPrompt`)
-   every time. Refuse does not. This defeats a found phone and nothing else, and
-   the panel should say so rather than implying more.
-4. Never answerable from a notification. The app must be foregrounded and the
-   full request — summary, every argument verbatim, the countdown — displayed,
-   built from the desktop's own strings and never re-composed on the client.
-5. `confirmed.by` records `device:<id>` and the Activity pane shows those rows
-   differently. *Allowed on a phone* and *allowed by the person at the machine*
-   must never read the same.
-6. The pending cap stays at three, and three prompts inside a minute is reported
-   to the phone as *the copilot is looping* rather than drawn as three dialogs.
-
-### 4.7 What to build instead, and it is cheap
-
-`consent.ts` already argues the pattern for routines: **report and offer.** Apply
-it here and it costs no new frames at all.
-
-A phone-originated alter refusal is already a row in `actions.jsonl` carrying the
-tool, the scrubbed arguments, the summary sentence the tool composed, and
-`refusal: 'not-granted'`. So: the copilot answers the phone with *"I would have
-changed X — it needs you at the Mac"*, and the desktop's Activity pane grows one
-filter, **asked from a device, needs you**, with the tool's own summary and an
-Allow button that runs the call locally with the local caller.
-
-That gets most of the value of remote approval, puts the decision in front of a
-person who is awake and at the machine that owns the risk, and adds no trust
-surface whatsoever. The one honest risk is that the list becomes a nag nobody
-clears — so it holds a bounded number of rows, they expire, and expiry is not an
-error.
+The first is superseded by the separate connection; the second is *not*
+superseded and is why §4.6 exists. The push limitation is real, and it means this
+feature is worth exactly what it is worth when somebody is already holding the
+device — which, for a person who reaches for their phone to check on a build, is
+most of the time it matters.
 
 ---
 
-## 5. What the phone must never do, however it is granted
+## 5. What a connected device must never do, however it is granted
 
-Eleven, each with the argument.
+Eleven, each with the argument. Two of them were revised on 2026-08-17 and are
+marked; the other nine are unchanged and are pinned by tests.
 
 **1. Name a tool.** §2. It is the property that makes the enforcement airtight
 rather than exhaustive, and the first convenience feature that breaks it —
 "tap to re-run" — breaks all of it.
 
-**2. Hold `alter` (v1).** §4. A standing grant of alter is a durable power that
-survives the device being lost, stolen, handed over, or restored from a backup
-onto someone else's hardware. A per-call confirmation is a live act by a present
-human. Conflating them is how a permission becomes a setting.
+**2. ~~Hold `alter` (v1).~~ REVISED — hold `alter` without a separate
+connection.** §4. The original rule read: *a standing grant of alter is a durable
+power that survives the device being lost, stolen, handed over, or restored from
+a backup onto someone else's hardware; a per-call confirmation is a live act by a
+present human; conflating them is how a permission becomes a setting.*
+
+That is still true of the *grant*, and the answer to it is that a device holding
+`alter` does not skip the confirmation — it **receives** it. Nothing is
+pre-authorised: every alter call still draws a question, still expires into a
+refusal, still writes a row naming who answered. What the tier decides is which
+screen the question appears on. And the durable half of the objection — lost,
+stolen, restored from a backup — is answered by the connection being separately
+revocable, immediately, from the machine, without unpairing the device.
 
 **3. Attach to any copilot pty, including its own run's.** The phone gets parsed
 `ChatMessage`s, never bytes. Raw pty access is a keyboard, and a keyboard on a
@@ -661,7 +845,12 @@ Claude CLI with Bash is the whole machine — every tier check in this document 
 above that layer, not below it. It is also why §0.1 is blocking rather than
 tidying.
 
-**4. Answer an alter confirmation.** §4.
+**4. ~~Answer an alter confirmation.~~ REVISED — answer *another surface's*
+confirmation.** §4.2. A connected device holding `alter` answers its own run's
+questions and nothing else. The desktop answers anything, because somebody
+standing at the machine can already do by hand whatever they would be approving.
+Device A approving device B's action is a permission model with a shared
+password, and it is refused inside the broker rather than in the transport.
 
 **5. Write the copilot's instructions or its memory.** `CLAUDE.md` is the
 copilot's standing policy and `memory/MEMORY.md` is injected into every turn, so
@@ -691,11 +880,14 @@ by construction. The token and the path never leave the main process — the sam
 rule `deck-control:status` already keeps for the renderer, and a renderer is a
 much friendlier place than a phone.
 
-**9. Change any grant, by any path.** Three doors, all shut: `settings.write`
-refuses the `remote.` and `copilot.` prefixes; the copilot's own `Write` tool is
-kept off `remote-copilot.json` and `remote-auth.json` by the records fence (§0.3);
-and there is no frame that edits a grant. The panel on the desktop is the only
-door, which is what `notGrantedSentence` already tells the model.
+**9. Change any grant or make itself a connection, by any path.** Four doors, all
+shut: `settings.write` refuses the `remote.` and `copilot.` prefixes; the
+copilot's own `Write` tool is kept off `copilot-link.json` and `remote-auth.json`
+by the records fence (§0.3); `CopilotLinks.set` refuses to *create* a record, so
+the settings channel cannot connect a device; and `load()` drops any record with
+no credential, so a hand-edited file cannot invent a connection either. Minting a
+code is the only door and it is on the desktop, which is what
+`notGrantedSentence` already tells the model.
 
 **10. Cause a routine to be created, edited or fired.** `routines.create` is
 alter, so it is refused for a remote caller by the tier check — but state it
@@ -705,22 +897,71 @@ trigger, at a distance, which `COPILOT-CAPABILITIES.md` §3.2 rule 3 refuses
 outright and Goose blocks as a class. The fence and the tier are two independent
 reasons and both should hold.
 
-**11. See or speak into another device's run.** Runs are keyed by device. Two
-phones are two conversations. Anything else makes a grant to one device a grant to
-every device that comes after it.
+**11. See or speak into another device's run, or read another device's pending
+question in full.** Runs are keyed by device. Two devices are two conversations.
+A question raised by one reaches the other as a watch row — the tool, the
+summary, the countdown, `mine: false` — and never as a `copilot.ask` with the
+arguments in it. Anything else makes a grant to one device a grant to every
+device that comes after it.
+
+**12. Reach the copilot at all without a connection.** New, and it is the one
+that subsumes half the list. A device that has been paired, approved and given
+folders gets `unauthorized` for every `copilot.*` frame — including the read-tier
+ones — until it has redeemed a connect code minted at this machine. There is no
+frame it can send that measures anything about the copilot: not whether one is
+running, not how many confirmations are waiting, not whether a grant it does not
+have would have been enough.
 
 ---
 
-## 6. Pairing
+## 6. Connecting, and the panel
 
-Copilot access is a **separate, off-by-default capability on an already-paired
-device**. Pairing is unchanged; nothing about this feature touches
-`device-auth.ts`, the short code, or the rendezvous.
+**Revised 2026-08-17.** Copilot access used to be *a separate, off-by-default
+capability on an already-paired device* — a checkbox. It is a **separate
+connection**: its own six-digit code, its own credential, its own record, its own
+revoke. Pairing is still unchanged; nothing here touches `device-auth.ts`, the
+short code it mints, or the rendezvous. What is new sits beside them and borrows
+their shape.
 
-### Where it lives
+### The ceremony
+
+1. Somebody at this machine opens Settings → Remote, finds the device, and
+   presses **Connect the copilot…**. That mints a six-digit code — sixty seconds,
+   single use, five wrong guesses and the code itself is dead — and decides there
+   and then what it grants. All three tiers by default, which is what *"full
+   control over copilot, same as the actual machine app"* means; the checkboxes
+   that appear afterwards are how it is narrowed.
+2. The code is read out and typed into the device, which sends `copilot.connect`
+   on its **already-authenticated sealed channel** — so the device id is a fact
+   rather than a claim, and the code is the second thing being proved.
+3. The desktop answers `copilot.linked` once, with a 32-byte credential stored
+   here as a scrypt hash. There is no path that shows it again: a device that
+   loses it asks for a new code, which is right, because minting one is a
+   deliberate act at the machine and re-issuing on request would not be.
+4. Every socket that device opens from then on sends `copilot.hello` with that
+   credential before any `copilot.*` verb is served. **On every reconnect.** A
+   session channel does not carry the copilot by existing.
+
+The tiers travel with the *code* rather than being ticked afterwards, and that is
+the whole ceremony: the person minting it is standing here, looking at a screen
+that says what they are about to hand over. A code that granted nothing and left
+the tiers to a later click would make connecting and authorising two separate
+moments, and the second one is the one people skip.
+
+### Why the credential carries no device id
+
+`device-auth.ts` mints `"<id>.<secret>"` because a session credential arrives on
+an anonymous socket and has to say who it is. This one arrives on a socket that
+has already proved which device it is, so an id would be a field nobody reads.
+Leaving it out buys a property worth having: a copilot credential is useless on
+any socket that is not that device's, so a leaked one is not a bearer token for
+the copilot — it is half of a pair, and the other half is the device's session
+credential and its static key.
+
+### Where the panel lives
 
 Settings → Remote, on the device card, directly under the folder list —
-`RemoteSection` → a new `DeviceCopilot`, built the same way `DeviceFolders` is,
+`RemoteSection` → `DeviceCopilot`, built the same way `DeviceFolders` is,
 including the split between the view and the fetching so it can be rendered in
 every state under `renderToStaticMarkup`.
 
@@ -728,46 +969,55 @@ Same card as the folders, deliberately. Both answer *what may this device do
 here*, and somebody deciding about a phone should see both answers at once rather
 than finding the second one under a different heading a month later.
 
-### What the control is
+### What the controls are
 
-Not a switch. Two checkboxes, labelled in outcomes rather than tier names:
+For a device with **no connection**: a Connect button, a sentence saying what
+connecting will hand over, and **nothing tickable**. That is the assertion that
+replaced the permanently-disabled third row this section used to specify, and it
+defends the same property — a control must never suggest a permission the store
+would not grant. `CopilotLinks.set` refuses to create a record, so a checkbox
+here would be a switch that changes nothing.
+
+For a **connected** device: three checkboxes, labelled in outcomes rather than
+tier names, and a quiet Disconnect.
 
 - ☐ **Watch the copilot** — see what it is doing, what it started, and what it
-  was refused. (`read`)
+  was refused. It cannot make it do anything. (`read`)
 - ☐ **Ask it to work** — talk to it, and let it start and steer sessions on your
-  behalf. This spends money. (`act`)
+  behalf. **This spends money.** (`act`)
+- ☐ **Change settings and stop your sessions** — every change is still confirmed
+  one at a time, but the confirmation appears *on that device* and whoever is
+  holding it answers. Leave it off to keep those confirmations at this Mac.
+  (`alter`)
 
-and a third row that is present, disabled, and reads:
-
-- ⊘ **Change settings and stop your sessions** — only at this Mac.
-
-That row exists so the absence of `alter` is *visible*. `copilot-grants.ts` keeps
-the `alter` field in its type for the analogous reason — a refusal that can be
-pointed at is checkable, an absence is not — and a person who cannot see that the
-tier exists will assume the two boxes are everything there is.
+The third label is the important one and it took three drafts. It does not say
+"grants alter" and it does not say "full control": what ticking it changes is
+which screen the question is drawn on and which thumb answers it, and a person
+who has not been told that has not been told what they are agreeing to.
 
 ### Defaults, preconditions, revocation
 
-- **Default off, for every device, including every device paired before this
-  existed.** `granted()` already returns `NO_TIERS` for an unknown device and the
+- **No connection, for every device, including every device paired before this
+  existed.** `granted()` returns `NO_TIERS` for a device with no record and the
   header explains why this file does not inherit `folder-grants.ts`'s fallback:
   nobody has ever had remote copilot access, so nobody can lose it.
-- **Preconditions to even draw the control:** the device is `approved`, and it has
-  a key fingerprint. A device paired before sealed channels has no static key, so
-  it cannot open a sealed channel at all — offering it a copilot grant would be a
-  switch with nothing behind it.
-- **Revocation** is unticking, or revoking the device. `forget()` is already
-  called on revoke. The four steps are in §3, and the one that matters is that the
-  grant is read per call, so an untick lands on the next tool call rather than the
-  next reconnect.
+- **Preconditions to draw the control:** the device is `approved`, and it has a
+  key fingerprint. A device paired before sealed channels has no static key, so
+  it cannot open a sealed channel at all — offering it a Connect button would be
+  a control with nothing behind it.
+- **Disconnecting** drops the record and the credential with it, immediately, and
+  leaves the pairing alone. Unticking every box is *not* the same thing: an
+  all-false record still holds a working credential, so the device can still open
+  a connection and be refused everything. Both states are real and the panel shows
+  them differently, because only one of them has something to revoke.
 - **A paired desktop is a device too.** `machines/guest.ts` pairs Macs and Windows
   boxes to each other and they hold device ids like any phone. Same panel, same
   default, no exception — a desktop guest is somebody else's machine.
 
 ### Do not build this panel before the transport
 
-`reachable.test.ts` already warns about exactly this, in the entry for
-`copilot-grants.ts`:
+`reachable.test.ts` warned about exactly this, and the warning is now a matter of
+record rather than a prediction:
 
 > *"The wrong fix would be to reach it from the UI. A switch in the devices panel
 > granting a phone read or act would be a permission control that changes nothing
@@ -775,7 +1025,9 @@ tier exists will assume the two boxes are everything there is.
 > and a worse instance of it than a dead font size, because a person who granted
 > it would believe they had."*
 
-The panel lands with the frames or after them, never before.
+The panel lands with the frames or after them, never before. `CopilotLinks.set`
+refusing to create a record is the same warning enforced in the store rather than
+remembered.
 
 ---
 
@@ -833,44 +1085,99 @@ down, not one to pretend away.
 
 ## 8. Order, and what I would not build
 
-The iOS release is being held for this. The honest sequencing:
+**Revised 2026-08-17.** Steps 1–6 have all landed on the desktop, and the
+sequencing question the section closed with was answered by him rather than by
+shipping: `read` alone is not what he meant.
 
-1. **§0.1, on the desktop, now.** It is a live hole and it is fixed by a
-   predicate on `SessionFanout`. It does not need a phone build and it should not
-   wait for one.
-2. **§0.3 (fence the two remote stores) and §0.2 (`ToolContext.caller`).** Both
-   small, both prerequisites, neither visible.
-3. **The `copilot` capability, the grant in `welcome`, the token table, and the
-   read-tier frames only** — `attach`, `state`, `sessions`, `log`, `pending`,
-   and the `chat`/`tool` pushes for a run that only the desktop can start. A
-   watching phone, and nothing it can do.
-4. **Ship that, and use it for a week.** This is the same argument
-   `COPILOT-DESIGN.md` made for phasing remote last, applied one level down: the
-   act tier should be built against a read tier that has been lived with, not
-   alongside it. It is also a genuinely good iOS release on its own — *"what is my
-   copilot doing"* on a phone is the feature, and it carries no new risk.
-5. **Then the act tier**: `start`, `say`, `cancel`, `stop`, per-device runs, the
-   narrowed `sessions.start`, per-caller budgets (§0.4).
-6. **Then the grant panel**, and only then — see §6.
+Where it stands:
+
+1. ✅ **§0.1** — the copilot's pty is off the session fanout, pinned by
+   `copilot-off-the-network.test.ts` against the real core and four cases in
+   `server.test.ts`.
+2. ✅ **§0.3 and §0.2** — both remote stores are in the records fence and
+   `ToolContext` carries the caller.
+3. ✅ **The capability, the link in `welcome`, the token table, the read frames.**
+4. ✅ **The act tier** — `start`, `say`, `cancel`, `stop`, per-device runs.
+5. ✅ **The separate connection** — `copilot.connect` / `hello` / `bye`,
+   `copilot-link.ts`, and every `copilot.*` frame gated on it.
+6. ✅ **Consent from a device** — `copilot.ask` / `answer` / `settled`, the
+   ownership rule in the broker, the log row that says where it was answered.
+7. ✅ **The panel** — Connect, three tiers, Disconnect.
+
+**Left, and it is the iOS client.** Everything above is desktop-side and is
+exercised over a real socket by `server.test.ts`; none of it is reachable from a
+phone until the client speaks the four new frames. See the report at the end of
+this section.
+
+Still owed on the desktop: per-caller budgets (§0.4), which are a fairness
+property rather than a security one and are three lines.
 
 ### What I would not build
 
-- **Phone-side alter approval**, for the reasons in §4.5. If it is built anyway,
-  build it as a third grantable tier with §4.6's six constraints, and call it what
-  it is on the switch.
-- **`copilot.tool` as a client verb.** Ever. §2.
-- **Memory or instruction editing from a phone.** §5.5.
-- **A separate memory for the phone's run.** §1. Two memories is two copilots.
-- **Routines from a phone.** §5.10.
+- **`copilot.tool` as a client verb.** Ever. §2. It is the one convenience that
+  trades the whole enforcement property for a gesture.
+- **A push notification carrying content, or one carrying actions.** §4.6.
+- **A raw pty for the copilot connection.** §5.3. *Full control over copilot*
+  means its chat, its tools and its confirmations — things that go through the
+  gate, the budgets and the action log. A pty goes through none of them: it is
+  *underneath* the permission model, not the top of it, so handing one over would
+  not be granting the highest tier, it would be leaving the building. **Whether
+  the copilot connection should also offer its own terminal is a separate
+  question and it is not answered here** — it is reported, not decided.
+- **Memory or instruction editing from a device.** §5.5.
+- **A separate memory for a device's run.** §1. Two memories is two copilots.
+- **Routines from a device.** §5.10.
 - **The shared-conversation design (§1a).** It is the one that sounds like what he
-  asked for and it is the one that cannot be secured, because it has no way to
-  tell whose sentence caused which tool call.
+  asked for and it is the one that cannot be secured, because turn boundaries in
+  a pty are inferred rather than known, so it has no way to tell whose sentence
+  caused which tool call.
 
-### The one thing worth asking him before step 5
+### What the iOS client needs now
 
-Whether `read` alone is enough for the phone he pictured. The read tier is a
-watching grant — it shows the fleet, the log, the sessions, the refusals — and it
-carries no new trust at all. If what he meant by *"control the copilot from the
-phone"* is mostly *"see what it is doing while I am away from the desk"*, then
-step 3 is the whole feature, the release stops being held on the hardest part of
-the product, and the act tier can be built at its own pace against something real.
+The desktop is finished; the phone is not. In the order a client should build
+them:
+
+1. **Store a second credential.** Keychain, beside the pairing one, with the same
+   protection class. `copilot.linked` delivers it exactly once and there is no
+   way to ask for it again — a client that loses it must show the Connect screen
+   rather than silently failing every copilot frame.
+2. **A Connect screen.** Six digits, numeric keypad, sent as `copilot.connect`.
+   Drawn when `welcome.copilot.linked` is false. The error sentences come from
+   the desktop and are already written for a person; do not re-compose them.
+   **Normalise before sending** — `shared/short-code.ts`'s `normaliseCode`, the
+   same function the pairing screen already uses. The desktop hashes the string
+   it is given and does not strip separators, exactly as `device-auth.ts` does
+   not, so a code sent as `481 902` is simply wrong. That split is deliberate:
+   one place decides what a code looks like, and it is the client, because the
+   client is where somebody typed it.
+3. **`copilot.hello` on every connect and reconnect**, before any other
+   `copilot.*` frame, and a Copilot tab that stays dark until `copilot.grant`
+   arrives with `open: true`. `welcome.copilot.open` is *always* false — a client
+   that treats it as "already in" will send frames that are refused.
+4. **Draw controls off `grant`, not off the capability.** `read` → the state, the
+   sessions, the log, the pending list. `act` → Start, the message box, Cancel,
+   Stop. `alter` → the Allow/Refuse pair on `copilot.ask`.
+5. **The consent sheet, and it is the part worth the most care.** On
+   `copilot.ask`: the tool, the desktop's summary, **every argument verbatim**,
+   the origin, and a live countdown that says the question expires into a
+   *refusal*. On `copilot.settled` for the same id: withdraw it, saying where it
+   was answered (`by`).
+   - **Refusing must be at least as easy as accepting.** Not Allow under the
+     thumb and Refuse in a corner. The safe answer must not be the harder
+     gesture.
+   - Optionally a device unlock in front of Allow, never in front of Refuse, and
+     the sheet should say it defeats a found phone and nothing more.
+   - Never answer from a notification, and there is no notification to answer
+     from: there is no APNs in this product.
+6. **`copilot.pending` with `mine`.** Rows with `mine: false` are a *go and look*
+   notice and must draw no Allow button — one is always refused, and a control
+   that is always refused is the defect this repository has paid for twice.
+7. **`copilot.bye`** when a person leaves the Copilot tab on a shared device.
+8. **`ios/Harness/host-standin.ts` gained `--copilot alter`.** It accepts any
+   `copilot.hello` — it is a client harness, not a security model — but it
+   reproduces the shape: `open` is false on every welcome, so a client that skips
+   the hello sees nothing. It does not yet serve `copilot.connect`,
+   `copilot.ask`, `copilot.answer` or `copilot.settled`; whoever builds the
+   client should add those to the stand-in in the same pass, because a client
+   that has only ever been driven against a permissive host is the failure that
+   file exists to catch.

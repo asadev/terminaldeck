@@ -186,6 +186,27 @@ export type RefusalReason =
   | 'not-permitted-unattended'
   /** The copilot is calling faster than the budget allows. */
   | 'rate-limited'
+  /**
+   * A tool that changes something, asked for while the copilot is driving the
+   * screen.
+   *
+   * The only refusal here that means *later* rather than *no*, and the only one
+   * whose reason is about the person rather than about permission. While a tour
+   * plays, the screen is moving on its own: sessions come to the front, boxes
+   * appear, everything else dims. **In that window the user's model of cause and
+   * effect is suspended.** A session that goes quiet mid-tour is one they cannot
+   * attribute — was that the tour, the copilot, or the session finishing? — and
+   * the answer arriving in an action log afterwards is not the same as knowing
+   * at the time.
+   *
+   * So `sessions.send`, `sessions.start`, `sessions.stop`, `settings.write` and
+   * the routine tools are refused for the length of a tour, and the gate lifts
+   * the frame it stops. `control.ts` holds the list and the sentence, which
+   * tells the model to wait rather than to retry — an agent that reads a refusal
+   * as transient will spend the whole tour looping, and arrive at the end with
+   * its change budget gone.
+   */
+  | 'not-permitted-while-driving'
   /** The tool exists but this argument is out of bounds for it. */
   | 'not-permitted'
   /**
@@ -256,6 +277,24 @@ export interface SettingsSnapshot {
 
 /** One message of a conversation, trimmed for a tool result. */
 export interface TranscriptMessage {
+  /**
+   * `ChatMessage.id` — the reader's own, unchanged.
+   *
+   * This field was missing, and its absence had a cost worth recording because
+   * it is invisible from inside this file. `ChatView` draws every bubble with
+   * `data-drive-anchor="message:<id>"`, and driving mode points at a bubble by
+   * that id — so the copilot could *read* a message through `sessions.transcript`
+   * and had no way to **cite** it. Every `message` stop in a tour would have been
+   * a guess at a string it had never been shown.
+   *
+   * It is the reader's id rather than one minted here, and that is the whole
+   * point: `chat-transcript.ts` builds it as `` `${role}:${groupKey}` `` and its
+   * comment says it is "stable across reads, so an appended-to message replaces
+   * rather than duplicates". A second identifier invented at this boundary would
+   * be stable across nothing, and would name a message the window has never
+   * heard of.
+   */
+  id: string
   role: 'you' | 'agent'
   at: number
   text: string
@@ -409,6 +448,29 @@ export interface DeckSurface {
   killSession(id: string): void
   /** The settled screen of a session, for a provider that writes no transcript. */
   sessionScreen(id: string): Promise<string | null>
+  /**
+   * Everything this app still holds of what a session's process has printed.
+   *
+   * Raw pty bytes, escape sequences and all, capped at `SCROLLBACK_LIMIT` (4 000
+   * chunks) in `pty-manager.ts`. Not for showing anybody — {@link sessionScreen}
+   * is the settled, readable form and is what a tool result carries.
+   *
+   * This exists for exactly one job: verifying that a tour stop's `quote` was
+   * genuinely on that terminal. {@link sessionScreen} cannot answer it, because
+   * it is the *current viewport* — about fifty lines — and almost everything
+   * worth stopping on has scrolled past by the time somebody asks what happened
+   * overnight. Checking against the viewport alone would drop nearly every
+   * honest stop, which is a verification rule that fails in the direction of
+   * "the tour is empty" rather than "the tour is checked".
+   *
+   * The window is the same one the renderer searches. `terminal-region.ts` caps
+   * its own backwards scan at 4 000 lines and says why in those words: *"beyond
+   * the main process's retention there is nothing the copilot could have read in
+   * order to quote it, so searching further can only find a coincidence."* So
+   * this is not a wider door than the copilot already has; it is the same door,
+   * asked a yes/no question.
+   */
+  sessionScrollback(id: string): string
 
   /* --- projects ---------------------------------------------------------- */
   listProjects(): Array<{ path: string; provider?: ProviderId; lastOpenedAt: number }>

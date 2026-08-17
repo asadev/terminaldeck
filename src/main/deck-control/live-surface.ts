@@ -44,7 +44,7 @@ import type {
  */
 export interface LiveSurfaceDeps {
   /** The live terminal processes. Same object the window's session channels use. */
-  ptys: Pick<PtyManager, 'list' | 'write' | 'kill' | 'screen'>
+  ptys: Pick<PtyManager, 'list' | 'write' | 'kill' | 'screen' | 'scrollback'>
   /**
    * The one function that starts a session, for a window, for a phone, and now
    * for the copilot. Pass `core.startSession` — never a second spawner.
@@ -123,6 +123,17 @@ export function createLiveSurface(deps: LiveSurfaceDeps): DeckSurface {
     killSession: (id) => deps.ptys.kill(id),
 
     sessionScreen: (id) => deps.ptys.screen(id),
+
+    /*
+     * The retained bytes, not the settled screen, and not for reading.
+     *
+     * `PtyManager.scrollback` is the same string the window is handed when a
+     * terminal is re-attached, so this is not a new capability — it is the one
+     * the renderer already has, reached from the side of the bridge that has to
+     * check a quote before a window is ever told about it. See
+     * `DeckSurface.sessionScrollback` for why the settled screen is not enough.
+     */
+    sessionScrollback: (id) => deps.ptys.scrollback(id),
 
     listProjects: () => store().getProjects(),
 
@@ -229,6 +240,10 @@ export function createLiveSurface(deps: LiveSurfaceDeps): DeckSurface {
     readTranscriptFrom: async (path, from): Promise<TranscriptMessage[]> => {
       const messages = await readChatTail(path, from)
       return messages.map((message) => ({
+        // The reader's own id, carried rather than dropped. It is what
+        // `ChatView` writes on every bubble as `data-drive-anchor`, so it is
+        // the only thing that lets the copilot cite a message it has read.
+        id: message.id,
         role: message.role,
         at: message.at,
         text: message.text,

@@ -104,16 +104,35 @@ describe('the memory listing', () => {
   it('lists the index and the facts, newest first, with their front matter', () => {
     const paths = copilotPaths(dir)
     scaffoldCopilotHome(paths)
+    /*
+     * All three times are set rather than two, and the third one is why this
+     * failed on Windows and only sometimes.
+     *
+     * `MEMORY.md` is written by the scaffolder and `uses_pnpm.md` a line later,
+     * so the gap between them is whatever the run happened to take — often
+     * nothing the filesystem can represent. On macOS that was reliably enough
+     * to order them; on Windows the two landed on the same stamp and the sort
+     * fell back to whatever `readdir` returned, which put `MEMORY.md` first on
+     * one run of the release job and not on the next. A flake in a release gate
+     * is worse than a failure, because it teaches whoever is watching to press
+     * the button again.
+     *
+     * So each file is given a time a minute apart. "Newest first" is then an
+     * assertion about the sort rather than about how fast the machine is.
+     */
+    const newer = join(paths.memory, 'uses_pnpm.md')
     writeFileSync(
-      join(paths.memory, 'uses_pnpm.md'),
+      newer,
       '---\ndescription: "builds with pnpm"\ntype: convention\nscope: global\nverified: 2026-08-17\n---\n\nbody\n',
     )
-    // Made distinctly older, so "newest first" is an assertion rather than a
-    // coincidence of two files written in the same millisecond.
     const older = join(paths.memory, 'no_redis.md')
     writeFileSync(older, '---\ndescription: "decided against Redis"\ntype: decision\n---\n')
-    const past = new Date(Date.now() - 60_000)
-    utimesSync(older, past, past)
+
+    const now = Date.now()
+    const at = (msAgo: number): Date => new Date(now - msAgo)
+    utimesSync(newer, at(0), at(0))
+    utimesSync(join(paths.memory, 'MEMORY.md'), at(60_000), at(60_000))
+    utimesSync(older, at(120_000), at(120_000))
 
     const report = readMemory(paths)
     expect(report.exists).toBe(true)

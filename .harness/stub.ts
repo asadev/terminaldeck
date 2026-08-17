@@ -105,13 +105,22 @@ const remote = {
 }
 
 /**
- * Which devices may reach the copilot. Starts empty, which is the real default.
+ * Which devices are connected to the copilot. Starts empty, which is the real
+ * default: pairing a device for terminals gives it no copilot access at all.
  *
- * `DeviceCopilotGrant[]`, exactly as `remote:copilot` answers: nobody has ever
- * had this access, so a harness that opened with a device already granted would
- * be showing a state no real machine starts in.
+ * `CopilotLink[]`, exactly as `remote:copilot` answers: nobody has ever had this
+ * access, so a harness that opened with a device already connected would be
+ * showing a state no real machine starts in.
  */
-const copilotGrants: Array<{ deviceId: string; tiers: { read: boolean; act: boolean; alter: boolean } }> = []
+/** Who is listening for a device connecting. See `onDeviceCopilotChanged`. */
+const copilotWatchers = new Set<(links: unknown) => void>()
+
+const copilotLinks: Array<{
+  deviceId: string
+  tiers: { read: boolean; act: boolean; alter: boolean }
+  connectedAt: number
+  lastSeenAt: number | null
+}> = []
 
 /** `RemoteStatus`, rebuilt each read so the buttons above are visible in it. */
 const remoteState = () => ({
@@ -264,6 +273,19 @@ const api: Record<string, unknown> = new Proxy(
       return () => sessionCreatedListeners.delete(cb)
     },
     onCostUpdate: noop, onGitStatus: noop, onBrowserState: noop, onBrowserElement: noop,
+    /*
+     * Links. `onOpenLinkTab` is an `on*`, so it returns an unsubscribe like
+     * every other one — the stub disagreeing with the preload about that shape
+     * has invented three bugs that did not exist.
+     *
+     * The other two answer *false* rather than true: there is no main process
+     * out here, so nothing was opened and nothing was popped, and a stub that
+     * claimed otherwise would hide a UI that only looks right because it
+     * believes a lie.
+     */
+    onOpenLinkTab: noop,
+    openLinkExternally: async () => false,
+    showLinkMenu: async () => false,
     // A couple of real-looking dev servers, so the browser start page has
     // something to render in the harness.
     devPorts: async () => [
@@ -334,24 +356,76 @@ const api: Record<string, unknown> = new Proxy(
       return remote.connections
     },
     /*
-     * Copilot grants, mutable for the same reason the approve/revoke stubs are.
+     * Copilot connections, mutable for the same reason the approve/revoke stubs
+     * are.
      *
-     * A stub that answered with a fixed list would make every checkbox on the
-     * panel look broken in the harness — ticked, and the row unchanged — which
-     * is precisely the symptom this panel exists to make impossible. It also
-     * models the two rules that matter: a device with nothing granted does not
-     * appear in the reply at all, and `alter` is dropped whatever arrives.
+     * A stub that answered with a fixed list would make every control on the
+     * panel look broken in the harness — pressed, and the row unchanged — which
+     * is precisely the symptom this panel exists to make impossible. It models
+     * the three rules that matter now that copilot access is a **separate
+     * connection** rather than a checkbox:
+     *
+     *  - `setDeviceCopilot` **cannot create** a record. A device with no
+     *    connection is granted nothing by ticking a box, because the box is not
+     *    the authorisation.
+     *  - a connection with every tier unticked is still a connection, and still
+     *    appears — it holds a credential, and only one of "no connection" and
+     *    "connected, allowed nothing" has something to revoke.
+     *  - `alter` is stored, because it is grantable.
      */
-    listDeviceCopilot: async () => copilotGrants,
+    listDeviceCopilot: async () => copilotLinks,
     setDeviceCopilot: async (deviceId: string, tiers: Record<string, boolean>) => {
-      const read = tiers.read === true
-      const act = tiers.act === true
-      const at = copilotGrants.findIndex((row) => row.deviceId === deviceId)
-      if (at >= 0) copilotGrants.splice(at, 1)
-      // Nothing granted is no row, matching the store: absence and refusal are
-      // the same fact here, unlike the folder list where they are not.
-      if (read || act) copilotGrants.push({ deviceId, tiers: { read, act, alter: false } })
-      return copilotGrants
+      const row = copilotLinks.find((entry) => entry.deviceId === deviceId)
+      if (row) {
+        row.tiers = { read: tiers.read === true, act: tiers.act === true, alter: tiers.alter === true }
+      }
+      return copilotLinks
+    },
+    copilotConnectCode: async (tiers: Record<string, boolean>) => {
+      /*
+       * The harness has no device on the other end to type it into, so the code
+       * is minted *and redeemed* here — otherwise the panel would show a code
+       * that nothing could ever use and the connected state would be
+       * unreachable in the one place the UI is actually looked at.
+       *
+       * The code itself is real-shaped: six digits, and it is what the panel
+       * draws. `.harness/stub.ts` must mirror the preload's shapes, not its
+       * security model.
+       */
+      const code = String(Math.floor(Math.random() * 1_000_000)).padStart(6, '0')
+      const deviceId = remote.devices.find((device) => device.status === 'approved')?.id ?? 'dev-phone'
+      if (!copilotLinks.some((row) => row.deviceId === deviceId)) {
+        copilotLinks.push({
+          deviceId,
+          tiers: { read: tiers.read === true, act: tiers.act === true, alter: tiers.alter === true },
+          connectedAt: Date.now(),
+          lastSeenAt: null,
+        })
+      }
+      // A beat later, the way a person typing a code into a phone in the next
+      // room is a beat later. Firing synchronously would hide the state the
+      // harness exists to show: a code on screen, and then a connection.
+      setTimeout(() => {
+        for (const watcher of copilotWatchers) watcher(copilotLinks)
+      }, 2_000)
+      return { code, expiresAt: Date.now() + 60_000, tiers }
+    },
+    disconnectDeviceCopilot: async (deviceId: string) => {
+      const at = copilotLinks.findIndex((row) => row.deviceId === deviceId)
+      if (at >= 0) copilotLinks.splice(at, 1)
+      return copilotLinks
+    },
+    /*
+     * The push a real device's redemption causes, fired from the stub's own
+     * `copilotConnectCode` a beat later.
+     *
+     * `on*` returns an unsubscribe, like every other subscription on this
+     * bridge. A stub that returned a promise here would draw a panel that never
+     * updates and hide the one state transition worth looking at.
+     */
+    onDeviceCopilotChanged: (cb: (links: unknown) => void) => {
+      copilotWatchers.add(cb)
+      return () => copilotWatchers.delete(cb)
     },
     onRemoteConnections: noop,
     tailnetStatus: async () => ({

@@ -454,6 +454,18 @@ const SECRET_WRITERS = [
    * the guard was sound and the list was a file short.
    */
   'src/main/deck-control/index.ts',
+  /*
+   * The eighth, added the same way and for the same reason.
+   *
+   * `hook-endpoint.conf` holds the per-run token every provider hook presents,
+   * and it was written with a `writeFileSync` and a `chmod` — the pair that is
+   * exactly right on POSIX and does nothing at all on Windows. It had an
+   * excuse the others did not: for as long as the endpoint was a unix socket
+   * there *was* no Windows, so the file only ever existed on a platform where
+   * the mode was real. Giving the endpoint a named pipe gave the token file a
+   * Windows to be exposed on, and the list would have been a file short again.
+   */
+  'src/main/hook-server.ts',
 ]
 
 /** Anything that puts bytes on disk without going through the door. */
@@ -546,13 +558,36 @@ describe.skipIf(process.platform !== 'win32')('on Windows, against the real icac
     expect(entries[0].toLowerCase()).toContain(userInfo().username.toLowerCase())
     expect(entries[0]).toContain('(F)')
 
-    // And the folder, which is what makes the *next* file born protected —
-    // including the temp file this write used and the `.corrupt-*` copies
-    // `machines.json` quarantines.
+    /*
+     * And the folder, which is what makes the *next* file born protected —
+     * including the temp file this write used and the `.corrupt-*` copies
+     * `machines.json` quarantines.
+     *
+     * Two claims, not three, and the missing one is deliberate. This used to
+     * also assert the folder ends with exactly *one* entry, and that is not
+     * something `icacls` can be asked for: `/inheritance:r` removes inherited
+     * entries and `/grant:r` replaces the named principal's, and neither of
+     * them touches an **explicit** entry belonging to somebody else. On a
+     * machine whose temp folder has no inheritable entries to pass down — a
+     * GitHub Windows runner is exactly that — a new directory is born instead
+     * with the creating token's default DACL, three explicit entries: this
+     * account, `SYSTEM` and `BUILTIN\Administrators`. Those two survive, and
+     * the length assertion failed the Windows job on a difference that is not
+     * an exposure: both of them already read every file on the machine, which
+     * this module's header says out loud where it declines to claim otherwise.
+     *
+     * What the folder must still be is free of anything inherited, because
+     * that is where a grant to `Users` or to another account comes from — and
+     * it is what the case below proves against an exposure it creates itself
+     * rather than one it hopes the temp folder supplies.
+     */
     const folder = entriesOf(dir)
-    expect(folder).toHaveLength(1)
-    expect(folder[0]).not.toContain('(I)')
-    expect(folder[0]).toContain('(OI)(CI)')
+    expect(folder.some((entry) => entry.includes('(I)'))).toBe(false)
+    const mine = folder.find((entry) =>
+      entry.toLowerCase().includes(userInfo().username.toLowerCase()),
+    )
+    expect(mine).toContain('(OI)(CI)')
+    expect(mine).toContain('(F)')
   })
 
   it('rewrites without collecting a second entry, however many times it runs', () => {
@@ -572,8 +607,34 @@ describe.skipIf(process.platform !== 'win32')('on Windows, against the real icac
   it('protects a file an older version of this app left unlocked', () => {
     const dir = tempDir()
     const file = join(dir, 'auth.json')
-    // Written the way the app used to write it, so what is being repaired is a
-    // genuinely inherited ACL rather than one this test set up.
+
+    /*
+     * The exposure is created here rather than hoped for, and that is the
+     * difference between this case proving something and this case being a
+     * coincidence.
+     *
+     * It used to write the file and then assert that it had an inherited entry
+     * — true on an ordinary PC, where the profile folder passes entries down,
+     * and false on a machine whose temp folder has none to pass. A GitHub
+     * Windows runner is the second kind, so the precondition failed and the
+     * repair below was never exercised at all on the one platform where the
+     * repair is the entire point.
+     *
+     * So the parent is given an inheritable read for `BUILTIN\Users` — by SID,
+     * because every account name `icacls` prints is localised and `S-1-5-32-545`
+     * is the same on every Windows in every language. That is the real shape of
+     * what this repairs: a folder that hands read access to the rest of the
+     * machine, and a credential written into it by a version of this app that
+     * did not know to say otherwise.
+     */
+    const grant = spawnSync(icaclsPath(process.env), [
+      dir,
+      '/grant:r',
+      '*S-1-5-32-545:(OI)(CI)(R)',
+    ])
+    expect(grant.status, String(grant.stderr)).toBe(0)
+
+    // Written the way the app used to write it: a mode, which is nothing here.
     writeFileSync(file, '{"token":"ghu_x"}', { encoding: 'utf8', mode: 0o600 })
     expect(entriesOf(file).some((entry) => entry.includes('(I)'))).toBe(true)
 
@@ -581,7 +642,10 @@ describe.skipIf(process.platform !== 'win32')('on Windows, against the real icac
 
     const entries = entriesOf(file)
     expect(entries).toHaveLength(1)
+    // Nothing inherited is left, so the grant to `Users` above is gone with it —
+    // an inherited entry is the only way it could have reached this file.
     expect(entries[0]).not.toContain('(I)')
+    expect(entries[0].toLowerCase()).toContain(userInfo().username.toLowerCase())
     expect(readFileSync(file, 'utf8')).toBe('{"token":"ghu_x"}')
   })
 

@@ -53,7 +53,7 @@ import {
   type ToolContext,
   type ToolSpec,
 } from './catalogue'
-import type { ConsentBroker } from './consent'
+import { WINDOW_SURFACE, deviceSurface, type ConsentBroker } from './consent'
 import {
   LOCAL_CALLER,
   Refused,
@@ -222,16 +222,70 @@ export interface DeckControlOptions {
    * `catalogue.ts`. What it may not do is collide with them; `DeckControl`
    * refuses a duplicate id rather than letting one shadow the other.
    *
-   * Nothing passes this today. The routine engine landing in parallel is the
-   * obvious first caller — `RoutineApi` already annotates each of its methods
-   * with the tier it wants — and it should reach the copilot through here
-   * rather than beside it.
+   * `tour.play` is the first thing that passes it — `deck-control/index.ts`
+   * builds a `TourStage` and hands `tourTool(stage)` in here rather than adding
+   * a fifteenth entry to `catalogue.ts`, because the tool is a closure over that
+   * stage and a catalogue built by a parameterless function has nowhere to put
+   * one. The routine engine is the obvious next caller: `RoutineApi` already
+   * annotates each of its methods with the tier it wants, and it should reach
+   * the copilot through here rather than beside it.
    */
   extraTools?: readonly ToolSpec[]
   budgets?: Partial<Budgets>
   now?: () => number
+  /**
+   * Is the copilot driving the screen right now?
+   *
+   * A function rather than a boolean because it is asked per call and the answer
+   * changes several times a minute while a tour plays. Absent means "this
+   * assembly has no driving mode", which answers no — a host with no window to
+   * drive cannot be mid-tour.
+   *
+   * See the gate in {@link DeckControl.call} for why this exists at all. The
+   * short version: while driving, the person's model of cause and effect is
+   * suspended, so a change made in that window is one they cannot attribute.
+   */
+  driving?(): boolean
   /** Called with every row as it is written, for the Activity pane. */
   onRow?(row: ActionRow): void
+}
+
+/**
+ * Tools that may not run while a tour is playing.
+ *
+ * Named rather than derived from the tier, and the difference matters. `read` is
+ * fine while driving — answering "what is that session doing" changes nothing
+ * about the screen — and it is not the tier that makes a call dangerous here, it
+ * is whether the person could tell afterwards that it happened.
+ *
+ * The argument for this being a mechanism and not a sentence in an instruction
+ * file: **while driving, the user's model of cause and effect is suspended.**
+ * Things are moving that they did not do. Anything the copilot changes in that
+ * window is a change they cannot attribute — they will not know whether the
+ * session that just went quiet did so because of the tour, because of the
+ * copilot, or on its own. `COPILOT-CAPABILITIES.md` §3.2 item 9 says the same
+ * about delegation in general, and gives the same reason for enforcing it in
+ * tool policy: the prose version was tried twice and broken both times.
+ *
+ * Matched by prefix as well as by exact id, so a `routines.*` tool added later
+ * is covered on the day it lands rather than on the day somebody remembers this
+ * list. `tour.play` itself is on it: two tours on one screen is not a state a
+ * person can watch, and the stage refuses it anyway — this is the outer of the
+ * two, so the refusal reads as a rule rather than as a race.
+ */
+export const NOT_WHILE_DRIVING: readonly string[] = [
+  'sessions.send',
+  'sessions.start',
+  'sessions.stop',
+  'settings.write',
+  'tour.play',
+  'routines.',
+]
+
+export function refusedWhileDriving(toolId: string): boolean {
+  return NOT_WHILE_DRIVING.some((entry) =>
+    entry.endsWith('.') ? toolId.startsWith(entry) : toolId === entry,
+  )
 }
 
 export class DeckControl {
@@ -280,9 +334,18 @@ export class DeckControl {
     return [...this.started]
   }
 
-  private context(callId: string, caller: Caller): ToolContext {
+  private context(callId: string, caller: Caller, attended: boolean): ToolContext {
     return {
       surface: this.options.surface,
+      /*
+       * Passed down, not kept private, and only one tool reads it: `tour.play`.
+       *
+       * The dispatcher's own use of `attended` is the alter-tier refusal below —
+       * "there is nobody who could answer a dialog". A tool can need the same
+       * fact for a different reason, and driving does: it needs somebody to
+       * *watch*, not somebody to approve. See `ToolContext.attended`.
+       */
+      attended,
       /*
        * Handed down rather than kept to this class, and the split is stated on
        * `ToolContext.caller`: the *tier* is checked here and nowhere else, and
@@ -358,7 +421,16 @@ export class DeckControl {
       typeof rawArgs === 'object' && rawArgs !== null && !Array.isArray(rawArgs)
         ? (rawArgs as Record<string, unknown>)
         : {}
-    const scrubbed = scrubArgs(args)
+    /*
+     * What gets written down, and what a person is shown in a dialog.
+     *
+     * A `let` rather than a `const` because the tool's own {@link
+     * ToolSpec.redactArgs} runs over it once the tool is known, a few lines
+     * below — and `record` is a closure over this binding rather than over its
+     * value, so a call that never resolves to a tool still logs the key-name
+     * pass and nothing is left un-scrubbed on any path.
+     */
+    let scrubbed = scrubArgs(args)
 
     /*
      * Compose the row, write it, hand back the result.
@@ -435,7 +507,30 @@ export class DeckControl {
       })
     }
 
-    const context = this.context(id, caller)
+    const context = this.context(id, caller, attended)
+
+    /*
+     * The tool's own redaction, then the key-name pass, in that order.
+     *
+     * `scrubArgs` matches key *names* — `token`, `password`, `cookie` — which
+     * is right for a tool whose secrets are named like secrets and useless for
+     * one whose argument is called `value` and happens to be what somebody
+     * typed into a website. `browser.step` is the first of those; see
+     * {@link ToolSpec.redactArgs}.
+     *
+     * Wrapped, because this is the last thing between an argument and a file on
+     * disk. A tool whose redaction threw would otherwise take the whole call
+     * down *before* the row was written, which is the one failure mode an audit
+     * log may not have — so a throw here falls back to the un-redacted
+     * key-name pass and says so loudly, rather than losing the row.
+     */
+    if (spec.redactArgs) {
+      try {
+        scrubbed = scrubArgs(spec.redactArgs(args))
+      } catch (error) {
+        console.error(`[deck-control] ${spec.id}'s redactArgs threw; logging the plain scrub:`, error)
+      }
+    }
 
     /*
      * The sentence a person reads, built once and reused.
@@ -510,6 +605,31 @@ export class DeckControl {
         result: null,
         error: notGrantedSentence(caller, spec.id, tier),
         refusal: 'not-granted',
+        value: null,
+      })
+    }
+
+    /* --- is a tour on the screen right now? ------------------------------- */
+    /*
+     * Second, straight after the grant and ahead of the budgets, and the
+     * position is the same argument the grant's is: this call could never have
+     * happened, so it must not spend one of the five session starts the copilot
+     * gets in ten minutes. Unlike the grant, the answer *does* change — the gate
+     * is lifted the frame the tour stops — which is exactly why the sentence
+     * below says to wait rather than to give up.
+     *
+     * Ahead of the precheck too, deliberately. A refused-while-driving call has
+     * not been examined and does not need to be: whatever its arguments are, it
+     * is not happening now.
+     */
+    if (refusedWhileDriving(spec.id) && this.options.driving?.() === true) {
+      return record({
+        ...common,
+        outcome: 'refused',
+        confirmed: unconfirmed(tier === 'alter', 'not-permitted-while-driving'),
+        result: null,
+        error: refusalSentence('not-permitted-while-driving', spec.id),
+        refusal: 'not-permitted-while-driving',
         value: null,
       })
     }
@@ -618,6 +738,22 @@ export class DeckControl {
         summary,
         args: scrubbed,
         ...(signal === undefined ? {} : { signal }),
+        /*
+         * Which surface may answer this, besides the desktop.
+         *
+         * Composed here because this is the only place that holds both the
+         * caller and the question. A remote caller's own copilot connection may
+         * answer its own run's question and no other device's —
+         * `ConsentRequest.origin` carries the rule and `consent.ts` enforces it.
+         *
+         * Note what this is *not*: it is not a second tier check. The tier check
+         * ran above and this call would not have been reached without `alter`.
+         * This decides who gets a dialog, not who is allowed to act.
+         */
+        origin:
+          caller.kind === 'remote' && caller.deviceId !== undefined
+            ? deviceSurface(caller.deviceId)
+            : WINDOW_SURFACE,
       })
       if (!outcome.granted) {
         return record({
@@ -705,6 +841,14 @@ function unconfirmed(required: boolean, reason: RefusalReason | null = null): Co
  * spelled out rather than left to a boolean column, because the single most
  * important thing this file has to communicate at a glance is which rows a
  * human said yes to.
+ *
+ * **And *where* they said it.** A confirmation answered on a paired device is
+ * not the same event as one answered at this machine, and the two must never
+ * read the same in a log somebody is scanning for the row they do not recognise.
+ * `confirmed.by` already carries `device:<id>`; this turns it into the one word
+ * that changes what a person concludes. The id itself is deliberately not in the
+ * sentence — it is in the row, where a pane can resolve it to a device name, and
+ * an opaque identifier in a log line is noise rather than information.
  */
 function detailFor(
   summary: string,
@@ -713,7 +857,10 @@ function detailFor(
   error: string | null,
 ): string {
   if (outcome === 'ok') {
-    return confirmed.granted ? `${summary} — allowed by the person` : `${summary} — done`
+    if (!confirmed.granted) return `${summary} — done`
+    return confirmed.by?.startsWith('device:') === true
+      ? `${summary} — allowed on a connected device`
+      : `${summary} — allowed by the person`
   }
   if (outcome === 'refused') {
     return `${summary} — refused${confirmed.reason ? ` (${confirmed.reason})` : ''}`
@@ -786,5 +933,18 @@ function refusalSentence(reason: RefusalReason, tool: string): string {
       // an agent told only "refused" will spend the rest of it trying variations
       // — which is precisely what OpenClaw's heartbeat did.
       return `${tool} needs a person to confirm it, and this run is a routine with nobody at the machine, so it cannot be confirmed at all. Do not retry it and do not look for another way to do it. Say in your report what you would have done and why, and leave the decision to them.`
+    case 'not-permitted-while-driving':
+      /*
+       * The one refusal in this switch that means "later", and it has to say so
+       * precisely or it produces the worst possible behaviour: a model that
+       * retries in a loop for the whole length of a tour, spending the change
+       * budget it will need the moment the tour ends.
+       *
+       * It also says *why* rather than only *no*, because the reason is the
+       * thing that makes the rule make sense to whoever reads the transcript
+       * afterwards — the person is watching the screen move, and a change made
+       * underneath that is a change they cannot attribute to anything.
+       */
+      return `${tool} cannot run while a tour is playing on their screen. Things are moving that they did not do, so anything you changed now is a change they could not attribute to you or to the tour. Nothing was changed. Wait until the tour ends and ask again then — say what you are waiting to do, if it matters.`
   }
 }

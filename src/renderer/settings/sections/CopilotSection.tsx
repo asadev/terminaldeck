@@ -2,6 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { BRAND } from '../../../shared/brand'
 import { Button, Info, MoreBody, Notice, SectionHead, Switch, useMore } from '../controls'
 import { errorText } from '../settings-bridge'
+import { ReadingSpeedControl } from '../../copilot/driving/PaceControls'
+import { DEFAULT_SPEED, type ReadingSpeed } from '../../copilot/driving/estimate'
+import { loadSpeed, saveSpeed } from '../../copilot/driving/reading-speed'
+import { TourRecap } from '../../copilot/driving/TourRecap'
 import { FileEditor } from './CopilotEditor'
 import {
   resolveCopilotBridge,
@@ -376,6 +380,8 @@ export function CopilotSection() {
 
       <ActionsGroup actions={actions} loading={loading} onReveal={reveal} />
 
+      <DrivingGroup />
+
       <ReachGroup state={state} />
 
       <RoutinesGroup
@@ -393,6 +399,83 @@ export function CopilotSection() {
 }
 
 const BLURB = 'The one agent that can see every session — and every file it reads, remembers and writes.'
+
+/* -------------------------------------------------------------- driving -- */
+
+/**
+ * How fast a tour goes, which is the one part of driving mode that belongs to
+ * the reader rather than to the copilot.
+ *
+ * The control itself is `ReadingSpeedControl`, and every option in it says how
+ * long a real paragraph gets at that pace — computed by `estimate.ts` from
+ * `SAMPLE_PARAGRAPH` rather than written into the label, so it cannot survive a
+ * change to the model that makes it false.
+ *
+ * It is here rather than in `settings-schema.ts` for a mechanical reason, not a
+ * stylistic one: `SettingsWindow.tsx` maps the `copilot` section to this
+ * component, which renders none of the schema's rows, so a setting declared into
+ * that section would be declared and drawn nowhere. `estimate.ts` carries the
+ * rest of the argument, including why five names beat a words-a-minute spinner.
+ *
+ * **The copilot cannot change it.** `WRITABLE_PREFERENCES` is a short allowlist
+ * and this key is not on it, so `settings.write` refuses it with no new work.
+ * The reader's pace is the reader's.
+ */
+function DrivingGroup() {
+  const [speed, setSpeed] = useState<ReadingSpeed>(DEFAULT_SPEED)
+
+  useEffect(() => {
+    let live = true
+    void loadSpeed().then((stored) => {
+      if (live) setSpeed(stored)
+    })
+    return () => {
+      live = false
+    }
+  }, [])
+
+  const store = (next: ReadingSpeed): void => {
+    setSpeed(next)
+    void saveSpeed(next)
+  }
+
+  return (
+    <Block
+      title="Reading pace"
+      says="How long a tour waits on each stop before it moves on."
+      more={
+        'A tour never waits on this alone. Anything you do — scrolling, clicking, typing, ' +
+        'leaving the window — pauses it where it is; resting the pointer on the box stops the ' +
+        'clock; and the right arrow moves on immediately. This is only where it starts from, ' +
+        'and the app corrects it from how you actually read. The sentence below is what it has ' +
+        'measured, and Reset throws that away without changing your choice.'
+      }
+    >
+      <ReadingSpeedControl
+        speed={speed}
+        onPick={(pace) => store({ pace, scale: speed.scale })}
+        onForget={() => store({ pace: speed.pace, scale: 1 })}
+      />
+      {/*
+        The tours themselves, listed here as well as beside the conversation.
+
+        `DRIVING-MODE.md` §6 asks for both and they answer different questions.
+        The card in the copilot's own pane is *"read it from here instead of
+        going back to the sessions"* — it belongs next to the turn that produced
+        it. This is the other half of the same section: **"Settings → Copilot
+        lists them and can delete them, in the same pane that already lists
+        memory and the action log."** It is the pane a person opens to see
+        everything this app is keeping *about* the copilot, and a record written
+        outside the copilot's reach is exactly that.
+
+        One component rather than two views of one list, because the second copy
+        is the one that drifts — and because the interesting content is the same
+        content: the quotes, the drops, and how far it got.
+      */}
+      <TourRecap limit={3} />
+    </Block>
+  )
+}
 
 /* ---------------------------------------------------------- shared props -- */
 

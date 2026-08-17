@@ -203,6 +203,29 @@ This layers **on top of** the separate-copilot-connection work, which is the
 mechanism and is needed either way. What changes is the pairing flow and the
 defaults, not the enforcement.
 
+**Decided 2026-08-17.** *"When they connect for someone else, copilot is not an
+option to give at all."* So it is not a grant defaulted off — it is **absent**.
+A guest is never offered it, and the pairing flow never mentions it as a thing
+withheld. An unchecked box still advertises the feature and invites the ask.
+
+**The words, settled: "My device" and "Guest."** He asked for better ones than
+"my device / someone else" and said to keep those if they were best. They are
+not, quite:
+
+> **My device** — Full access. It's you at another keyboard.
+> **Guest** — You choose what they can reach. The copilot is never shared.
+
+"Guest" earns its place where "someone else" does not. It is already understood
+— guest Wi-Fi, guest user — so it carries *limited, and not you* without a
+sentence of explanation, and it survives every derived label: "Guest folders",
+"Remove guest", "2 guests". "Someone else's folders" and "revoke someone else"
+do not read.
+
+That second sentence is load-bearing and must ship with it. Without a line
+saying the copilot is never shared, its absence from the guest flow reads as a
+missing feature rather than a decision, and somebody will file it as a bug or
+"fix" it.
+
 Open, and worth his answer when it is built: can a device be changed from one
 kind to the other afterwards, or does that mean re-pairing? Re-pairing is safer
 and is probably right — a device that was a guest becoming an owner by a toggle

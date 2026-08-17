@@ -96,6 +96,24 @@ export interface InterruptionOptions {
   isCommandKey(key: string): boolean
   /** Read when `visibilitychange` fires, because the event carries no state. */
   isHidden?(): boolean
+  /**
+   * Is there actually a selection, read when `selectionchange` fires?
+   *
+   * The event says a selection *changed*, which is not the same as a person
+   * having selected something — and the difference was a defect that made the
+   * whole feature look broken on the first frame. Moving keyboard focus
+   * collapses the document selection and fires this; the driving panel takes
+   * focus the moment it opens (so that Space is the pause key rather than a
+   * space typed into somebody's terminal); so every tour paused itself before it
+   * had drawn a single box, with the bar reading *"Paused — you selected some
+   * text"* about a selection that did not exist.
+   *
+   * A collapsed selection is not reading with a finger on the page. Absent means
+   * "cannot tell", which is treated as a real selection — the safe direction,
+   * because the cost of a pause nobody asked for is one keypress and the cost of
+   * ignoring one they did is the tour moving while they are reading.
+   */
+  hasSelection?(): boolean
   onInterrupt(reason: PauseReason, at: number): void
   /** The driven surface moved. Blocks advancing until it settles; never pauses. */
   onSurfaceMoved(at: number): void
@@ -165,6 +183,28 @@ export function watchForInterruption(options: InterruptionOptions): Interruption
       if (type === 'keydown' && typeof event.key === 'string' && options.isCommandKey(event.key)) {
         return
       }
+      /*
+       * Only the *window's* blur means the reader left the window.
+       *
+       * `blur` does not bubble, which is exactly why every other listener here
+       * is registered with `capture: true` — and capture is what made this
+       * wrong. A capture-phase listener on `window` sees the blur of every
+       * descendant on its way down, so an element merely losing focus inside a
+       * window that never lost focus arrived here as "you left".
+       *
+       * That was not theoretical. The driving panel takes focus the moment it
+       * opens, so that Space is the pause key rather than a space typed into
+       * whichever pty had the keyboard; that blurs the terminal's textarea;
+       * and every tour paused itself on its first frame with the bar reading
+       * *"Paused — you left the window"* while the window was plainly in front.
+       *
+       * A target of `undefined` still counts, so the watch stays drivable from a
+       * plain object with no DOM — which is how every timing rule in this
+       * feature is tested.
+       */
+      if (type === 'blur' && event.target !== undefined && event.target !== options.window) {
+        return
+      }
       // A wheel event is both facts at once: a person did something, and the
       // screen is now moving. Reporting only the pause would let the tour
       // advance the moment it resumed, mid-fling.
@@ -185,7 +225,13 @@ export function watchForInterruption(options: InterruptionOptions): Interruption
     // interruption with no pointer or key of its own on a trackpad — a
     // click-drag fires `pointerdown` first, but extending a selection with
     // shift-click or a double-click's word grab can land here first.
+    //
+    // A *collapsed* selection is not that, and the event does not distinguish
+    // them: a focus change collapses the selection and fires this. See
+    // `hasSelection`, which exists because the panel taking focus was making
+    // every tour pause on its own first frame.
     listen(doc, 'selectionchange', () => {
+      if (options.hasSelection?.() === false) return
       options.onInterrupt('selected', options.now())
     })
 

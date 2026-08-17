@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process'
 import {
   chmodSync,
+  existsSync,
   lstatSync,
   mkdirSync,
   readFileSync,
@@ -14,7 +15,15 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { BRAND } from '../shared/brand'
-import { startHookServer, stopHookServer, type HookEvent } from './hook-server'
+import {
+  hookAddress,
+  hookClientPath,
+  hookConfigPath,
+  startHookServer,
+  stopHookServer,
+  windowsClientScript,
+  type HookEvent,
+} from './hook-server'
 import {
   HOOK_MARKER,
   HOOK_PROVIDERS,
@@ -26,6 +35,7 @@ import {
   installHooks,
   isOurs,
   ownerOf,
+  powershellPath,
   readStatus,
   removeHooks,
   syncInstalledHooks,
@@ -47,23 +57,39 @@ import {
  */
 
 /**
- * Two POSIX facts this file leans on, and what each means off POSIX.
+ * The one POSIX fact this file still leans on, and what it means off POSIX.
  *
  * **File modes.** Windows has no mode bits behind `chmod` — a file written
  * 0o600 reads back as 0o666 there, synthesised from the read-only attribute
  * (measured on Windows 11). "Stays 0600" is a claim that cannot be made or
  * broken on that platform, so it is skipped rather than softened.
  *
- * **A shell to run the hook in.** The command this module writes is POSIX
- * through and through: `/usr/bin/curl`, `|| true`, single-quoted arguments and
- * a trailing `#` comment, none of which is `cmd.exe` syntax. There is no
- * Windows form of it yet, and no `/bin/sh` to run the POSIX one with —
- * `spawn('/bin/sh')` fails ENOENT there, which is exactly how these three
- * cases failed. Running them under Git Bash instead would prove something
+ * The second one used to be *a shell to run the hook in*, and it is gone. This
+ * file said that running the hook command under Git Bash "would prove something
  * about Git Bash; it would not prove anything about the shell a provider CLI
- * actually uses on Windows. See the note in `hooks.ts`.
+ * actually uses on Windows" — which was the right caution and was answered by
+ * measuring instead of assuming. Claude Code 2.1.233 on Windows 11 hands a hook
+ * command to `/usr/bin/bash`, in its own words, in its own error message. Git
+ * Bash *is* the shell a provider CLI uses there, so the three round-trip cases
+ * below run on Windows against the real endpoint, the real client and the real
+ * shell. `hooks.ts` carries the measurement.
  */
 const ON_WINDOWS = process.platform === 'win32'
+
+/**
+ * The shell a hook command is actually run by, per platform.
+ *
+ * `CLAUDE_CODE_GIT_BASH_PATH` first because that is the variable Claude Code
+ * itself reads when Git is somewhere unusual; then the default install path;
+ * then the bare name, for a machine that has put Git's `bin` on `PATH`.
+ */
+function hookShell(): string {
+  if (!ON_WINDOWS) return '/bin/sh'
+  const declared = process.env.CLAUDE_CODE_GIT_BASH_PATH
+  if (declared && existsSync(declared)) return declared
+  const standard = 'C:\\Program Files\\Git\\bin\\bash.exe'
+  return existsSync(standard) ? standard : 'bash.exe'
+}
 
 let root: string
 let context: HookContext
@@ -77,17 +103,36 @@ let context: HookContext
  * the command, and one of the tests below asserts exactly that.
  */
 const ENDPOINT = {
-  socketPath: '/tmp/terminaldeck-test/hook.sock',
-  configPath: '/tmp/terminaldeck-test/hook-endpoint.conf',
+  socketPath: '/tmp/terminaldeck-test/hook/hook.sock',
+  configPath: '/tmp/terminaldeck-test/hook/hook-endpoint.conf',
+  clientPath: null,
   token: 'a'.repeat(48),
 }
 
 /** An install written by another copy of the app — a different data directory. */
 const OTHER_COPY = {
-  socketPath: '/tmp/terminaldeck-other/hook.sock',
-  configPath: '/tmp/terminaldeck-other/hook-endpoint.conf',
+  socketPath: '/tmp/terminaldeck-other/hook/hook.sock',
+  configPath: '/tmp/terminaldeck-other/hook/hook-endpoint.conf',
+  clientPath: null,
   token: 'old',
 }
+
+/**
+ * The same install, as Windows spells it.
+ *
+ * Pinned from whichever machine this runs on, which is the point: the Windows
+ * command was written on a Mac and every assertion about it below is reachable
+ * from a Mac. `platform` is a parameter for exactly this reason.
+ */
+const WINDOWS_ENDPOINT = {
+  socketPath: '\\\\.\\pipe\\terminaldeck-hook-0123456789abcdef',
+  configPath: 'C:\\Users\\asad\\AppData\\Roaming\\terminaldeck\\hook\\hook-endpoint.json',
+  clientPath: 'C:\\Users\\asad\\AppData\\Roaming\\terminaldeck\\hook\\hook-post.ps1',
+  token: 'a'.repeat(48),
+}
+
+/** A machine whose Windows is not on C:, so `SystemRoot` is not decoration. */
+const WINDOWS_ENV = { SystemRoot: 'D:\\Windows' }
 
 /**
  * A short, fixed-width unique suffix.
@@ -193,7 +238,7 @@ describe('ownership', () => {
   })
 
   it('builds a command that consumes stdin, tags itself and cannot fail the session', () => {
-    const command = hookCommand('claude', 'Stop', ENDPOINT)
+    const command = hookCommand('claude', 'Stop', ENDPOINT, 'darwin')
     expect(command).toContain('--data-binary @-')
     expect(command).toContain('http://localhost/hook/claude/Stop')
     expect(command).toContain('|| true')
@@ -211,12 +256,60 @@ describe('ownership', () => {
    * across two endpoints that differ only in their tokens.
    */
   it('is identical for two runs of the same install, and carries no token', () => {
-    const laterRun = { ...ENDPOINT, token: 'b'.repeat(48) }
-    expect(hookCommand('claude', 'Stop', laterRun)).toBe(hookCommand('claude', 'Stop', ENDPOINT))
-    expect(hookCommand('claude', 'Stop', ENDPOINT)).not.toContain(ENDPOINT.token)
-    // The token is read from here at call time instead, so it never lands in a
-    // provider config — two of the three are mode 0644.
-    expect(hookCommand('claude', 'Stop', ENDPOINT)).toContain(`-K '${ENDPOINT.configPath}'`)
+    for (const [endpoint, env] of [
+      [ENDPOINT, process.env],
+      [WINDOWS_ENDPOINT, WINDOWS_ENV],
+    ] as const) {
+      const platform = endpoint === ENDPOINT ? 'darwin' : 'win32'
+      const laterRun = { ...endpoint, token: 'b'.repeat(48) }
+      expect(hookCommand('claude', 'Stop', laterRun, platform, env)).toBe(
+        hookCommand('claude', 'Stop', endpoint, platform, env),
+      )
+      expect(hookCommand('claude', 'Stop', endpoint, platform, env)).not.toContain(endpoint.token)
+      // The token is read from the config file at call time instead, so it never
+      // lands in a provider config — two of the three are mode 0644.
+      expect(hookCommand('claude', 'Stop', endpoint, platform, env)).toContain(endpoint.configPath)
+    }
+    expect(hookCommand('claude', 'Stop', ENDPOINT, 'darwin')).toContain(
+      `-K '${ENDPOINT.configPath}'`,
+    )
+  })
+
+  /**
+   * The Windows command, asserted from whichever machine this runs on.
+   *
+   * Every claim here is one the POSIX form makes too, restated for the shape
+   * that replaces it: an absolute program rather than one found on `PATH`, the
+   * stable config path rather than the token, the marker last, and an exit
+   * status a session can survive.
+   */
+  it('runs the app’s own client on Windows, by absolute path and with no secret', () => {
+    const command = hookCommand('claude', 'PostToolUse', WINDOWS_ENDPOINT, 'win32', WINDOWS_ENV)
+
+    // `PATH` on Windows routinely contains directories the user can write to,
+    // and this string runs on every tool call.
+    expect(command.startsWith(`'${powershellPath(WINDOWS_ENV)}'`)).toBe(true)
+    expect(command).toContain("'D:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe'")
+    // `Restricted` is the default execution policy and is what the Windows
+    // machine this was measured on has; without this every hook is a refusal.
+    expect(command).toContain('-ExecutionPolicy Bypass')
+    expect(command).toContain(`-File '${WINDOWS_ENDPOINT.clientPath}'`)
+    expect(command).toContain(`'${WINDOWS_ENDPOINT.configPath}'`)
+    expect(command).toContain(' claude PostToolUse ')
+    expect(command).not.toContain(WINDOWS_ENDPOINT.token)
+    // The pipe name is not in the command either: it moves with the data
+    // directory, and the command may not carry anything that can move.
+    expect(command).not.toContain(WINDOWS_ENDPOINT.socketPath)
+    expect(command).toContain('|| true')
+    expect(command.endsWith(HOOK_MARKER)).toBe(true)
+  })
+
+  it('never writes the POSIX command on Windows, whatever the endpoint says', () => {
+    // The failure this guards is silent: a Windows install whose hooks are all
+    // `/usr/bin/curl`, which is not a path Windows has, firing into nothing.
+    const command = hookCommand('claude', 'Stop', WINDOWS_ENDPOINT, 'win32', WINDOWS_ENV)
+    expect(command).not.toContain('/usr/bin/curl')
+    expect(command).not.toContain('--unix-socket')
   })
 
   /**
@@ -226,10 +319,12 @@ describe('ownership', () => {
    * the failure would be silent and total.
    */
   it.skipIf(ON_WINDOWS)('cannot be broken out of by a value that carries a quote', async () => {
-    const command = hookCommand('claude', 'Stop', {
-      ...ENDPOINT,
-      configPath: "/tmp/x'; touch /tmp/terminaldeck-hook-injection; echo '",
-    })
+    const command = hookCommand(
+      'claude',
+      'Stop',
+      { ...ENDPOINT, configPath: "/tmp/x'; touch /tmp/terminaldeck-hook-injection; echo '" },
+      'darwin',
+    )
     // The probe goes on its own line: the command ends with a shell comment, so
     // anything appended after it on the same line is never reached.
     const child = spawn('/bin/sh', ['-c', `${command}\necho DONE`], { stdio: ['pipe', 'pipe', 'pipe'] })
@@ -583,6 +678,44 @@ describe('readStatus', () => {
     expect(status.fileExists).toBe(false)
     expect(status.message).toContain('does not exist yet')
   })
+
+  /**
+   * The whole install/read cycle in the Windows spelling, from whichever
+   * machine this runs on.
+   *
+   * Everything here is file work and string comparison — no socket, no shell —
+   * so it is reachable from a Mac, which is where the Windows command was
+   * written. What it pins is the pair that has to agree: `installHooks` writes
+   * the PowerShell command and `readStatus` recognises the same string as this
+   * run's. If either half were to keep the POSIX form the answer would be
+   * `stale` forever, which is precisely the failure this module was rebuilt to
+   * end — arriving on the platform nobody was looking at.
+   */
+  it('installs and re-reads the Windows command as this run’s own', () => {
+    const windows: HookContext = {
+      ...context,
+      endpoint: WINDOWS_ENDPOINT,
+      platform: 'win32',
+      env: WINDOWS_ENV,
+    }
+    writeClaude()
+    expect(installHooks(windows, 'claude').ok).toBe(true)
+
+    const written = readFileSync(join(root, '.claude', 'settings.json'), 'utf8')
+    expect(written).toContain('powershell.exe')
+    expect(written).not.toContain('/usr/bin/curl')
+
+    expect(readStatus(windows, 'claude').state).toBe('complete')
+    // And a later run of the same install, with a different token, is still
+    // this run's — the indirection through the config file is what does it.
+    const later = { ...windows, endpoint: { ...WINDOWS_ENDPOINT, token: 'd'.repeat(48) } }
+    expect(readStatus(later, 'claude').state).toBe('complete')
+    // While the POSIX reader sees a file that is not its own, which is what
+    // stops the two spellings being mistaken for each other.
+    expect(readStatus({ ...windows, platform: 'darwin', endpoint: ENDPOINT }, 'claude').state).toBe(
+      'stale',
+    )
+  })
 })
 
 /* ------------------------------------------------------------ integration -- */
@@ -594,13 +727,18 @@ describe('the command we write actually works', () => {
    * The command is a string that a shell we do not control will run, and every
    * bug it can have — a quoting mistake, a curl flag that does not exist, a
    * failure to read stdin — is invisible to a test that only inspects the
-   * string. So run the real thing through /bin/sh against the real endpoint,
-   * exactly the way a provider CLI does: payload on stdin, session id in the
-   * environment.
+   * string. So run the real thing through the real shell against the real
+   * endpoint, exactly the way a provider CLI does: payload on stdin, session id
+   * in the environment.
+   *
+   * On Windows that shell is Git Bash, because that is what Claude Code uses —
+   * measured, not assumed; see the header. The endpoint is a named pipe, the
+   * client is the PowerShell script the server wrote a moment ago, and none of
+   * those three is stood in for.
    */
   /** Run a hook command the way a provider CLI does: stdin in, env set. */
   async function runHook(command: string, payload: string): Promise<{ code: number; stderr: string }> {
-    const child = spawn('/bin/sh', ['-c', command], {
+    const child = spawn(hookShell(), ['-c', command], {
       env: { ...process.env, [BRAND.sessionEnvVar]: 'session-from-env' },
       stdio: ['pipe', 'pipe', 'pipe'],
     })
@@ -613,7 +751,7 @@ describe('the command we write actually works', () => {
     return { code, stderr }
   }
 
-  it.skipIf(ON_WINDOWS)('posts stdin to the endpoint when run through a shell', async () => {
+  it('posts stdin to the endpoint when run through a shell', async () => {
     const seen: HookEvent[] = []
     const endpoint = await startHookServer({ dir: root, onEvent: (event) => seen.push(event) })
     const command = hookCommand('claude', 'PostToolUse', endpoint)
@@ -643,7 +781,7 @@ describe('the command we write actually works', () => {
    * this test could not pass at all: the command carried a port from the first
    * run, and after the restart that port belonged to nobody.
    */
-  it.skipIf(ON_WINDOWS)('still reaches the endpoint after a restart, unchanged', async () => {
+  it('still reaches the endpoint after a restart, unchanged', async () => {
     const first: HookEvent[] = []
     const before = await startHookServer({ dir: root, onEvent: (event) => first.push(event) })
     const command = hookCommand('claude', 'Stop', before)
@@ -667,15 +805,30 @@ describe('the command we write actually works', () => {
     expect(second[0]).toMatchObject({ provider: 'claude', event: 'Stop', cliSessionId: 'second' })
   })
 
-  it.skipIf(ON_WINDOWS)('exits cleanly and silently when the app is not listening', async () => {
-    // Nothing has ever run here, so neither the socket nor the config exists —
-    // which is exactly the state a quit app leaves behind.
-    const command = hookCommand('claude', 'Stop', {
-      socketPath: join(root, 'never', 'hook.sock'),
-      configPath: join(root, 'never', 'hook-endpoint.conf'),
+  it('exits cleanly and silently when the app is not listening', async () => {
+    /*
+     * The state a quit app leaves behind, built the way the app builds it: the
+     * endpoint's own addresses for a directory nothing has ever run in, so
+     * neither the config nor the socket exists.
+     *
+     * On Windows the client script does not exist either, which is *not* the
+     * shape a real quit leaves — `stopHookServer` keeps the script precisely so
+     * this case stays silent — so it is written out first. Asserting silence
+     * against a missing script would be asserting it against the one thing this
+     * module goes out of its way to avoid.
+     */
+    const missing = join(root, 'never')
+    const endpoint = {
+      socketPath: hookAddress(missing),
+      configPath: hookConfigPath(missing),
+      clientPath: hookClientPath(missing),
       token: 'x',
-    })
-    const run = await runHook(command, '{}')
+    }
+    if (endpoint.clientPath) {
+      mkdirSync(join(missing, 'hook'), { recursive: true })
+      writeFileSync(endpoint.clientPath, windowsClientScript())
+    }
+    const run = await runHook(hookCommand('claude', 'Stop', endpoint), '{}')
 
     expect(run.code).toBe(0)
     // Anything on stderr becomes hook-failure noise in the user's session.

@@ -127,20 +127,27 @@ interface Props {
    * What this window knows about the copilot, for the pinned row at the top.
    *
    * Optional, and absent is a real state rather than a missing prop: the row is
-   * still drawn and still opens the page — it simply carries no status dot and
+   * still drawn and still opens the window — it simply carries no status dot and
    * makes no claim. That is what a `Sidebar` mounted on its own in a test or in
    * `.harness/` should show, for the same reason `panels` defaults to all of
    * them: the component is the window's inventory, and rendering it bare should
    * show the app rather than a subset of it.
+   *
+   * `active` is whether the copilot's own window is the one on screen. It is
+   * asked of the caller rather than derived from `activeTabId`, because the
+   * copilot's tab is deliberately not in the `tabs` this component draws — see
+   * the filter in the body.
    */
-  copilot?: { stage: CopilotStage; state: CopilotStateView | null } | null
+  copilot?: { stage: CopilotStage; state: CopilotStateView | null; active?: boolean } | null
   /**
-   * Open the copilot's page, optionally landing on one turn of its action log.
+   * Open the copilot's window, optionally landing on one turn of its action log.
    *
    * The `focus` argument is what makes the copilot-sessions group's "why does
-   * this exist" a real link rather than a heading: it is the id of the turn
-   * that started the session, and it travels through the same `showPanel(id,
-   * focus)` every dashboard tile uses to land on the thing it counted.
+   * this exist" a real link rather than a heading: it is the id of the turn that
+   * started the session, and it now travels into the copilot's own window, which
+   * draws that row above its conversation. It used to travel to a page through
+   * `showPanel(id, focus)`; the destination moved when the copilot stopped being
+   * a page, and the link did not have to.
    */
   onOpenCopilot?(focus?: string | null): void
   onSelectTab(id: string): void
@@ -451,7 +458,25 @@ export function Sidebar({
       return next
     })
 
-  const browserTabs = tabs.filter((tab) => tab.kind === 'browser')
+  /**
+   * Everything open — minus the copilot itself.
+   *
+   * The copilot became a window on 2026-08-17, which means it is in `tabs` like
+   * every other session: a pill in the strip, a terminal in the pane, the full
+   * control cluster in the bar. What it must not become is a *row down here*,
+   * because it already has one — the pinned entry at the top, which is where
+   * Asad asked for it and which is the only place a singleton belongs. Drawn
+   * both ways it would be the same session listed twice in one rail, once at the
+   * very top and once under a project heading for its own home folder, three
+   * centimetres apart.
+   *
+   * By `isCopilot` rather than by folder, because that flag is the fact — see
+   * `WorkspaceTab.isCopilot`, which also explains why it is not the same
+   * question as `origin === 'copilot'` immediately below.
+   */
+  const listed = tabs.filter((tab) => !tab.isCopilot)
+
+  const browserTabs = listed.filter((tab) => tab.kind === 'browser')
 
   /**
    * Yours, and the copilot's, split once.
@@ -468,7 +493,7 @@ export function Sidebar({
    * to partition: a session in neither is a row missing from the rail, and one
    * in both is a row drawn twice. See `copilot/session-origin.ts`.
    */
-  const { mine: ownTabs, copilot: copilotTabs } = partitionByOrigin(tabs)
+  const { mine: ownTabs, copilot: copilotTabs } = partitionByOrigin(listed)
 
   const sessionsIn = (path: string) =>
     ownTabs.filter((tab) => tab.kind === 'session' && tab.projectPath === path)
@@ -531,8 +556,11 @@ export function Sidebar({
    * into the row's tooltip, because the name is the thing the row exists to
    * carry and the account is the thing that gives.
    */
-  const namesAccounts = accountsWorthShowing(tabs)
-  const showAccounts = accountsWorthShowing(tabs, width)
+  // Asked of the rows this rail actually draws. The copilot has an account like
+  // any session, but it is not one of these rows — counting it would let it be
+  // the second account that puts a caption on every other row in the list.
+  const namesAccounts = accountsWorthShowing(listed)
+  const showAccounts = accountsWorthShowing(listed, width)
 
   /**
    * The sign-in answers this window has already read, and not one probe more.
@@ -998,28 +1026,27 @@ export function Sidebar({
         {/*
           The pinned block, above the views and above what you have open.
 
-          `pinned` is not in `PANEL_GROUPS`, so the loop below never draws it —
-          that array is the list of *labelled* runs, and this one has no label
-          on purpose. It is placed by hand, here, which is what `panels.ts` says
-          a group outside that array means.
+          Placed by hand rather than looped out of `panels`, and that is the
+          shape of the 2026-08-17 change: the copilot is not a view any more, so
+          there is no `PanelSpec` to find here. It is a **window** — a pill in
+          the strip, its own toolbar, its own account chip — and this row is how
+          you reach it, exactly as the session rows below are how you reach
+          those. Its name and glyph come from `copilot/identity.ts`, which is
+          where they went when they left `panels.ts`.
+
+          `onOpenCopilot`, not `onSelectPanel`: there is nowhere to navigate to.
+          The same handler serves the "why does this exist" links further down,
+          which pass the turn they want the window to land on. Drawn whether or
+          not the window supplied one — the row is part of the app's inventory
+          and a rail rendered bare should show the app rather than a subset of
+          it, which is the same argument `panels` and `copilot` both default on.
         */}
-        {panels
-          .filter((panel) => panel.group === 'pinned')
-          .map((spec) => (
-            <CopilotEntry
-              key={spec.id}
-              spec={spec}
-              stage={copilot?.stage ?? null}
-              state={copilot?.state ?? null}
-              active={activePanel === spec.id}
-              // `onSelectPanel`, not a route of its own: the copilot is one of
-              // the window's views, so opening it is the same navigation every
-              // other row performs and it lands in the same place after a
-              // relaunch. `onOpenCopilot` exists for the one caller that needs
-              // to land on a *turn*, which is a row below, not this one.
-              onOpen={() => onSelectPanel(spec.id)}
-            />
-          ))}
+        <CopilotEntry
+          stage={copilot?.stage ?? null}
+          state={copilot?.state ?? null}
+          active={copilot?.active ?? false}
+          onOpen={() => onOpenCopilot?.()}
+        />
 
         {PANEL_GROUPS.map((group) => {
           const inGroup = panels.filter((panel) => panel.group === group.id)

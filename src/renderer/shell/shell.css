@@ -1963,10 +1963,22 @@
   keep flowing from the top, and centring the stack there would push the intro
   down to meet it.
 */
+/*
+  `.panes` is in this list since 2026-08-17, when the window learned to be
+  genuinely empty.
+
+  Closing every tab in the strip leaves the whole workspace showing this one
+  blank — the same "Nothing in this pane yet" a split pane shows, because it is
+  the same situation — and without a rule here it sat jammed against the strip
+  at the top of a very large ocean, which reads as a page that failed to load
+  rather than as a window somebody deliberately emptied. Seen on screen, in the
+  running app, which is the only way it could have been.
+*/
 .panel-page:has(> .page-blank:only-child),
 .panel-page:has(> .page-blank-line[data-page]:only-child),
 .pane-cell-body:has(> .page-blank:only-child),
-.pane-cell-body:has(> .page-blank-line[data-page]:only-child) {
+.pane-cell-body:has(> .page-blank-line[data-page]:only-child),
+.panes:has(> .page-blank:only-child) {
   display: flex;
   flex-direction: column;
   justify-content: center;

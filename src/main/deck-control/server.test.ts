@@ -63,6 +63,7 @@ function fake(): Fake {
     },
     killSession: () => undefined,
     sessionScreen: async () => '',
+    sessionScrollback: () => '',
     listProjects: () => [{ path: '/work/api', lastOpenedAt: 1 }],
     gitStatus: async (cwd) => ({ repo: true, cwd }),
     alerts: async () => ({ alerts: [] }),

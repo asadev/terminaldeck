@@ -1,4 +1,5 @@
 import type { ProviderId, SessionStatus } from '@shared/types'
+import { COPILOT_ICON, COPILOT_NAME } from '../copilot/identity'
 import { distinguishingIdLength, folderName, shortSessionId } from '../session-title'
 
 /**
@@ -60,6 +61,40 @@ export interface WorkspaceTab {
   origin?: string
   /** The action-log row of the copilot turn that started it, when one did. */
   originRunId?: string
+  /**
+   * True on the **copilot's own session**, and on nothing else.
+   *
+   * Not the same fact as `origin === 'copilot'` above, and the two are one
+   * letter apart in conversation, so: `origin` says *the copilot started this
+   * session*, and this says *this session **is** the copilot*. A session the
+   * copilot started has `origin` and not this; the copilot has this and not
+   * `origin`, because nobody started it on the copilot's behalf.
+   *
+   * `kind` stays `'session'`, deliberately. The copilot is a real session — a
+   * pty, a transcript, a folder, an account — and every place in this window
+   * that asks `kind === 'session'` is asking a question the copilot's answer to
+   * is yes: draw a status dot, carry the control cluster, mount a terminal, put
+   * it in a pane. A third `TabKind` would have made every one of those read
+   * "session or copilot", which is the shape of a bug per site rather than a
+   * decision in one place. What this flag is for is the handful of things that
+   * are genuinely different: it is called Copilot rather than "Session 3", it
+   * wears its own glyph, it is not listed in the rail (the pinned row is its
+   * home), its folder is not a project you work in, and ⌘W puts it away instead
+   * of ending it.
+   */
+  isCopilot?: true
+  /**
+   * Browsers only — where the page opens, when something named a destination.
+   *
+   * Empty for the globe, which goes to the start page, and set when a *link*
+   * asked for this tab: a repository in the GitHub panel, or a `target="_blank"`
+   * inside a page. It is read once, at mount, and never again — the address
+   * after that belongs to the page and lives in the main process, and a second
+   * copy here would be a URL bar and a tab label that could disagree about
+   * where you are. `label` is what the strip draws, and the page renames it as
+   * soon as it has a title of its own.
+   */
+  url?: string
   /** True for tabs the user can close. */
   closable: boolean
 }
@@ -150,6 +185,20 @@ export const KIND_ICON: Record<TabKind, string> = {
 }
 
 /**
+ * The glyph a tab wears — its kind's, except for the one tab that has its own.
+ *
+ * The copilot keeps the compass it wears in the rail. It is a session and gets
+ * everything a session gets, but it is also the only one of its kind in the
+ * window, and a pill drawn with the same `>_` as the four beside it would be
+ * asking the reader to find it by name. The mark is the same one the pinned row
+ * uses, from the same constant, so the row and the pill are recognisably the
+ * same thing — which is the whole reason `identity.ts` exists.
+ */
+export function tabIcon(tab: WorkspaceTab): string {
+  return tab.isCopilot ? COPILOT_ICON : KIND_ICON[tab.kind]
+}
+
+/**
  * What to call a session on screen.
  *
  * A session starts out titled after the folder it runs in, and it is listed
@@ -180,6 +229,21 @@ export function sessionLabel(title: string, index: number, folderName?: string):
  * numbering cannot drift.
  */
 export function tabLabel(tab: WorkspaceTab, tabs: readonly WorkspaceTab[]): string {
+  /*
+   * The copilot is called Copilot, wherever it is drawn.
+   *
+   * It is a session, so without this it would be numbered like one — and its
+   * title is the name of its own folder, which is exactly the case
+   * {@link sessionLabel} turns into `Session N`. So the pinned row in the rail
+   * would say "Copilot" and the pill three centimetres above it would say
+   * "Session 4", for the same window. One thing wearing two names in two places
+   * on one screen is the defect {@link tabIdentities} exists to prevent between
+   * two *different* tabs; it would be worse coming from one.
+   *
+   * Above the `kind` test rather than below it, because the answer does not
+   * depend on what else is open — there is exactly one copilot.
+   */
+  if (tab.isCopilot) return COPILOT_NAME
   if (tab.kind !== 'session') return tab.label
   const siblings = tabs.filter(
     (other) => other.kind === 'session' && other.projectPath === tab.projectPath,

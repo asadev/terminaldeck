@@ -114,19 +114,88 @@
   line-height: var(--lh-body);
 }
 
-/* ---------------------------------------------------- the row that is off -- */
+/* ------------------------------------------------------- connect and code -- */
 
 /*
-   Dimmed, not hidden, and not struck through.
+   The connect step, for a device that has none.
 
-   This row is the only thing on the screen that says the third tier exists at
-   all. It has to read as *present and unavailable* rather than as *broken* or
-   as *coming soon* — so it keeps its full layout and loses only contrast, the
-   same way any disabled control in this window does. A person has to be able to
-   point at it.
+   A button and a sentence, laid out as one block with the same spacing the tier
+   rows use, so a device that is connected and one that is not read as two states
+   of one row rather than as two different panels. `.dc-tier-off` used to live
+   here — a permanently disabled third checkbox, whose job was to make the
+   absence of the alter tier visible. The tier is grantable now that connecting
+   the copilot is its own authorisation, so the row it explained is an ordinary
+   checkbox and the rule it stated has moved to that checkbox's own blurb.
 */
-.dc-tier-off {
+.dc-connect,
+.dc-actions {
+  margin-top: var(--sp-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  align-items: flex-start;
+}
+
+.dc-button {
+  font: inherit;
+  font-size: var(--t-body);
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+  border: none;
+  border-radius: var(--radius-md);
+  padding: var(--sp-1) var(--sp-3);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+.dc-button:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.dc-button:disabled {
   opacity: 0.55;
+  cursor: default;
+}
+
+/* Quiet, because disconnecting is not the thing a person came here to do and a
+   destructive control drawn as prominently as the ordinary one is a control
+   people press by accident. It is not hidden either: it is the only way to take
+   copilot access away, and a revocation that is hard to find is a revocation
+   that does not happen. */
+.dc-button-quiet {
+  background: transparent;
+  color: var(--text-secondary);
+  padding-left: 0;
+}
+
+.dc-button-quiet:hover:not(:disabled) {
+  background: transparent;
+  color: var(--status-error);
+}
+
+/*
+   The code itself: read off this screen and typed into a phone.
+
+   Tabular figures and wide tracking, because the failure this styling exists to
+   prevent is somebody misreading a digit while reading it out loud. The grouping
+   is `formatCode`'s decision and not this file's — it is an identity function
+   today, so the tracking is what does the separating, and if that function ever
+   inserts a space this rule keeps working.
+*/
+.dc-code {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--t-title-2);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.12em;
+  color: var(--text-primary);
+}
+
+.dc-code-note {
+  margin: 0;
+  font-size: var(--t-caption);
+  color: var(--text-secondary);
+  line-height: var(--lh-body);
 }
 
 /* ---------------------------------------------------------- no static key -- */

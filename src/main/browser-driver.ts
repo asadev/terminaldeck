@@ -1,0 +1,1333 @@
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { app, nativeImage, type WebContents } from 'electron'
+import { screenCommand, type DriveState } from './browser-cdp'
+import {
+  DispatchRing,
+  EMPTY_DRIVE_STATUS,
+  HANDOVER_WINDOW_MS,
+  isTakeoverCandidate,
+  nextDriveState,
+  sanitizeHandoverPrompt,
+  type DriveStatus,
+  type HandoverOutcome,
+} from './browser-drive'
+import {
+  looksSecret,
+  OUTLINE_SCRIPT,
+  PROBE_SCRIPT,
+  SCROLL_SCRIPT,
+  SECRET_RECTS_SCRIPT,
+  SELECT_SCRIPT,
+  TEXT_SCRIPT,
+  withArgs,
+} from './browser-drive-script'
+import { copilotPaths } from './copilot-home'
+import { normalizeUrl, shortLabel } from './browser-url'
+import { onWebContentsDestroyed } from './web-contents-teardown'
+
+/**
+ * The engine: one page, driven properly.
+ *
+ * ## Why this is not Playwright, and what that cost
+ *
+ * The design document's first recommendation was to run real Playwright inside
+ * the main process and reach the app's own tabs through a hand-rolled
+ * browser-level CDP endpoint. That was the right thing to *evaluate*, and it
+ * was evaluated first, because the whole of §1 turns on it. It is not what
+ * shipped, and the reason is worth stating rather than discovering:
+ *
+ *  - Playwright's public API takes a **CDP endpoint URL**. There is no
+ *    message-passing transport in `playwright-core`'s connect options, so
+ *    using it at all means standing up a listening socket — and §2.1's whole
+ *    argument is that this app must not open one, because loopback is not a
+ *    user boundary on a shared machine and every other local surface here is a
+ *    0600 token file.
+ *  - It is not in this repository's dependencies, and adding it means adding a
+ *    third-party runtime to an Electron app that ships signed to strangers,
+ *    pinned against Chromium 146, for an engine whose output the agent cannot
+ *    tell apart from this one — because the tool schemas are identical either
+ *    way. That is the entire reason the design put the seam at the tools.
+ *
+ * So this is the fallback the design named, built to the standard it set: *one
+ * honest actionability loop and a fixed retry budget*. What was given up is
+ * real: Playwright's selector engines, frame traversal, and its far more
+ * thoroughly exercised waiting. What was kept is the part that was actually
+ * broken — see {@link waitForActionable}, which is the reason "it goes back
+ * many times" happens and the reason it should stop.
+ *
+ * ## What a click actually is
+ *
+ * Not one operation. Asad's complaint — *"this Chromium with Playwright is not
+ * that stable, it goes back many times, turns off"* — is mostly this: a driver
+ * that resolves a selector and dispatches immediately will click the spinner
+ * overlay, or the button one frame before it finishes moving, and report
+ * success. So a click here is:
+ *
+ *   resolve → attached → scrolled into view → visible → box stable across two
+ *   animation frames → enabled → hit-test at the point the click will land →
+ *   dispatch
+ *
+ * and the whole chain retries when any step invalidates, until a deadline. The
+ * hit test is the one that catches the overlay: the script asks the document
+ * what is actually at the centre point, and if that node is neither the target
+ * nor inside it, the click is not sent.
+ *
+ * ## Where the protocol is used, and where it is not
+ *
+ * Only for **input**, and the reason is a single measured API difference:
+ * `webContents.sendInputEvent()` requires the window to be focused
+ * (`electron.d.ts:18068`) and CDP `Input.*` does not. Verified here with the
+ * window explicitly blurred — `win.isFocused() === false` — after which
+ * `Input.insertText` filled a field and two `Input.dispatchMouseEvent`s ran a
+ * button's click handler. That is what makes "watch it work, then go and do
+ * something else" possible, and it is why the driver is CDP-shaped at all.
+ *
+ * Everything else deliberately avoids the protocol:
+ *
+ *  - **Reading** goes through `executeJavaScriptInIsolatedWorld` with scripts
+ *    from `browser-drive-script.ts`, so `Runtime.evaluate` is not merely denied
+ *    at the gate — it is not needed, which is a stronger statement.
+ *  - **Navigating** goes through `webContents.loadURL` after `normalizeUrl`,
+ *    because `Page.navigate` bypasses the `will-navigate` guard entirely. That
+ *    was measured, not assumed: a CDP navigate to `file:///etc/passwd` landed,
+ *    with a `preventDefault()`-ing `will-navigate` handler installed. See the
+ *    header of `browser-cdp.ts`.
+ *  - **Screenshots** go through `webContents.capturePage()`, because
+ *    `Page.captureScreenshot` was measured to *never resolve* on a view that is
+ *    not composited, where `capturePage()` returned a correct image in the same
+ *    state. A call that hangs forever is the worst possible shape for a feature
+ *    whose complaint is instability.
+ */
+
+/* ------------------------------------------------------------- constants -- */
+
+/**
+ * The isolated world the drive's scripts run in.
+ *
+ * A fixed, arbitrary, high number so it cannot collide with world 0 (the page)
+ * or with world 1, which is where a preload script's isolated context lives.
+ * The guest preload in `browser-preload.ts` runs in that one; sharing a world
+ * with it would mean the drive's helpers and the inspector's could see each
+ * other's variables, and a name collision would be a bug nobody could
+ * reproduce.
+ */
+const DRIVE_WORLD = 31_017
+
+/** Longest an actionability wait runs before the step is refused. */
+export const DEFAULT_ACTION_TIMEOUT_MS = 10_000
+export const MAX_ACTION_TIMEOUT_MS = 30_000
+
+/** Longest `browser.open` waits for a page to stop loading. */
+export const DEFAULT_SETTLE_MS = 15_000
+
+/** How long the box must hold still. Two frames at 60 Hz, with slack. */
+const STABLE_FRAME_MS = 40
+
+/** Longest text one `type` step will enter. A field, not a document. */
+export const MAX_TYPE_CHARS = 2_000
+
+/** Above this, typing switches from per-key events to one insert. */
+const PER_KEY_LIMIT = 200
+
+/** Longest selector accepted from a tool. */
+export const MAX_SELECTOR_CHARS = 400
+
+/** Keys `press` accepts, and what to send for each. */
+const PRESS_KEYS: Record<string, { key: string; code: string; vk: number; text?: string }> = {
+  Enter: { key: 'Enter', code: 'Enter', vk: 13, text: '\r' },
+  Tab: { key: 'Tab', code: 'Tab', vk: 9, text: '\t' },
+  Escape: { key: 'Escape', code: 'Escape', vk: 27 },
+  Backspace: { key: 'Backspace', code: 'Backspace', vk: 8 },
+  Delete: { key: 'Delete', code: 'Delete', vk: 46 },
+  ArrowDown: { key: 'ArrowDown', code: 'ArrowDown', vk: 40 },
+  ArrowUp: { key: 'ArrowUp', code: 'ArrowUp', vk: 38 },
+  ArrowLeft: { key: 'ArrowLeft', code: 'ArrowLeft', vk: 37 },
+  ArrowRight: { key: 'ArrowRight', code: 'ArrowRight', vk: 39 },
+}
+
+export const PRESSABLE_KEYS = Object.keys(PRESS_KEYS)
+
+/* ------------------------------------------------------------------ types -- */
+
+/** Something a rule refused, as distinct from something that broke. */
+export class DriveRefused extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'DriveRefused'
+  }
+}
+
+export interface OutlineElement {
+  kind: 'link' | 'button' | 'field'
+  tag: string
+  type: string
+  label: string
+  selector: string
+  secret: boolean
+  enabled: boolean
+  value?: string
+}
+
+export interface ProbeResult {
+  found: boolean
+  count: number
+  invalid?: boolean
+  tag?: string
+  type?: string
+  label?: string
+  secret?: boolean
+  visible?: boolean
+  enabled?: boolean
+  editable?: boolean
+  checked?: boolean
+  rect?: { x: number; y: number; width: number; height: number } | null
+  hit?: boolean
+  hitNode?: string | null
+  readyState?: string
+}
+
+export type StepVerb = 'click' | 'type' | 'select' | 'check' | 'press' | 'submit'
+
+/* -------------------------------------------------------------- the drive -- */
+
+/**
+ * What the drive needs from the rest of the app, and no more.
+ *
+ * An interface rather than direct imports, for the reason `deck-control`'s
+ * `DeckSurface` gives at length: the piece that must be exercisable is the
+ * piece that decides whether a dangerous call happens, and that piece cannot be
+ * exercisable if it constructs its own Electron objects.
+ */
+export interface DriveHost {
+  /**
+   * Ask the window to open a browser tab for the agent, and tell us its id.
+   *
+   * Goes to the renderer rather than being done here, and that is a decision
+   * rather than an accident. A `WebContentsView` created in the main process
+   * would not be in the tab strip, would not be positioned by the workspace's
+   * layout, and would therefore be a page that exists, is doing things, and
+   * cannot be found — the exact object `catalogue.ts` already refuses for
+   * sessions, in its own words *"a tab you did not open and cannot account for
+   * is the thing this app must not produce"*.
+   *
+   * Null when there is no browser workspace open to ask. The tool says so; it
+   * does not invent a tab.
+   */
+  openTab(input: { url: string; isolate: boolean }): Promise<string | null>
+  /** The live contents of a tab this app opened, or null once it has gone. */
+  contentsFor(tabId: string): WebContents | null
+  /** Tell the window the drive's state changed, so the banner can redraw. */
+  publish(status: DriveStatus): void
+  /** Epoch ms. Injected so a test can freeze it. */
+  now(): number
+}
+
+export class BrowserDrive {
+  private state: DriveState = 'idle'
+  private tabId: string | null = null
+  private ring = new DispatchRing()
+  private step = ''
+  private prompt = ''
+  /** Resolves the tool call that is currently blocked on the person. */
+  private waiting: ((outcome: HandoverOutcome) => void) | null = null
+  /** The origin the person has already agreed the copilot may drive. */
+  private grantedOrigin: string | null = null
+  /**
+   * Selectors the page has said are password, one-time-code or file fields.
+   *
+   * Read synchronously by `browser.step`'s precheck. See {@link knownSecret}
+   * for why a cache and not a question, and why it is never emptied except
+   * when the tab goes somewhere else.
+   */
+  private secretSelectors = new Set<string>()
+  private attached = false
+  private watched = new WeakSet<WebContents>()
+
+  constructor(private readonly host: DriveHost) {}
+
+  /* ---------------------------------------------------------- what it is -- */
+
+  status(): DriveStatus {
+    const wc = this.contents()
+    return {
+      state: this.state,
+      tabId: this.tabId,
+      step: this.step,
+      prompt: this.prompt,
+      url: wc ? wc.getURL() : '',
+    }
+  }
+
+  /**
+   * The origin of the page the agent is on, or null.
+   *
+   * Read from the WebContents rather than from anything the model said, which
+   * is what makes the escalation in `browser-tools.ts` sound: the grant lapses
+   * the moment the tab's origin changes, *including* by a link click or a
+   * server redirect, and that is a main-process fact needing nobody's
+   * cooperation.
+   */
+  origin(): string | null {
+    const wc = this.contents()
+    if (!wc) return null
+    try {
+      return new URL(wc.getURL()).origin
+    } catch {
+      return null
+    }
+  }
+
+  /** Has the person already allowed driving on this origin during this drive? */
+  originGranted(origin: string): boolean {
+    return this.grantedOrigin !== null && this.grantedOrigin === origin
+  }
+
+  /**
+   * Is this selector one the page has already told us is a secret field?
+   *
+   * Exists for one reason, and it is an ordering reason rather than a
+   * performance one. `browser.step` refuses to type into a password field, and
+   * that refusal used to live in {@link act} — which runs *after* the
+   * confirmation gate. So driving a login form put a dialog on screen reading
+   * "Type 21 characters into #wpPassword1", the person clicked Allow, and only
+   * then was it refused. Photographed on 2026-08-17, on a real Wikipedia login
+   * page.
+   *
+   * `control.ts` is explicit about why that shape is wrong: *"a rule the person
+   * is asked about is not a rule"*. They answer it in the same shape as the
+   * harmless ones they approved earlier, and a refusal that arrives after a yes
+   * has already trained them to click yes. The same bug was found once before
+   * in this codebase, in `settings.write`, and pinned by `control.test.ts`.
+   *
+   * So the answer has to be available to a **synchronous** `precheck`, and the
+   * page cannot be asked synchronously. This is what the last read of the page
+   * already knew. It is populated by every `outline` and every `probe`, which
+   * between them cover the path any sensible flow takes — the tool descriptions
+   * tell the model to read the page before acting on it, and a selector it
+   * invented without reading is one it is about to be told does not exist.
+   *
+   * A miss is not a hole: {@link type} still refuses, by the same sentence, on
+   * the far side of the gate. This moves the common case to the right side of
+   * it.
+   */
+  knownSecret(selector: string): boolean {
+    return this.secretSelectors.has(selector.trim())
+  }
+
+  private noteSecret(selector: string, secret: boolean): void {
+    const key = selector.trim()
+    if (key === '') return
+    if (secret) this.secretSelectors.add(key)
+    // Never removed on `false`. A page that re-renders a password box as a text
+    // input mid-flow is a page doing something strange, and forgetting is the
+    // direction that ends with a password typed into it.
+  }
+
+  noteOriginGranted(origin: string): void {
+    this.grantedOrigin = origin
+  }
+
+  private contents(): WebContents | null {
+    if (this.tabId === null) return null
+    const wc = this.host.contentsFor(this.tabId)
+    if (!wc || wc.isDestroyed()) return null
+    return wc
+  }
+
+  private publish(): void {
+    this.host.publish(this.status())
+  }
+
+  private move(kind: 'claimed' | 'handover' | 'resumed' | 'released'): void {
+    const before = this.state
+    this.state = nextDriveState(this.state, { kind })
+    if (before !== this.state) this.publish()
+  }
+
+  /* -------------------------------------------------------------- the tab -- */
+
+  /**
+   * Point the agent's one tab at a URL, creating it if there is none.
+   *
+   * **There is no `tabId` argument anywhere in this class**, and that is worth
+   * more than it looks. The agent has exactly one tab, the one this gave it,
+   * and calling `open` again navigates that same tab. It removes an entire
+   * class of "drove the wrong tab" failure, it removes "a scrape hijacked the
+   * page I was reading" completely, and it is what makes reading safe at the
+   * `read` tier: the agent can only read pages it navigated to itself, so a
+   * read discloses nothing it did not already know.
+   */
+  async open(input: { url: string; isolate: boolean; settleMs?: number }): Promise<{
+    url: string
+    title: string
+    settled: boolean
+    created: boolean
+  }> {
+    this.refuseWhileHuman()
+    const normalized = normalizeUrl(input.url)
+    if (!normalized.ok) throw new DriveRefused(normalized.reason)
+
+    let created = false
+    let wc = this.contents()
+    if (!wc) {
+      const id = await this.host.openTab({ url: normalized.url, isolate: input.isolate })
+      if (id === null) {
+        throw new DriveRefused(
+          'there is no browser open in this window to drive. Ask the person to open a browser tab ' +
+            '(New browser tab in the sidebar), then try again — a page that is not in the tab strip is a ' +
+            'page they cannot see or close, and this app does not make those.',
+        )
+      }
+      this.tabId = id
+      created = true
+      wc = this.contents()
+      if (!wc) throw new DriveRefused('the browser tab went away before it could be driven')
+    } else {
+      // The tab already exists, so this is a navigation rather than an open.
+      // Through `loadURL` and not `Page.navigate`: see the class header.
+      await wc.loadURL(normalized.url).catch(() => undefined)
+    }
+
+    this.watch(wc)
+    this.move('claimed')
+    await this.attach(wc)
+
+    const settled = await this.waitForSettled(wc, input.settleMs ?? DEFAULT_SETTLE_MS)
+    /*
+     * A fresh page is a fresh permission question.
+     *
+     * The origin grant is cleared on every open rather than compared, because
+     * "same origin as last time" is a comparison somebody has to remember to
+     * write and this is a line somebody cannot forget. Re-granting costs one
+     * dialog on a site he has already allowed; forgetting to clear it costs a
+     * confirmation that was answered about a different website.
+     */
+    const origin = this.origin()
+    if (origin !== this.grantedOrigin) this.grantedOrigin = null
+    // Selectors belong to a document. Carrying them across a navigation would
+    // mean refusing to type into a field on the new page because the old one
+    // had a password box with the same id — which is a refusal nobody could
+    // explain.
+    if (created || origin !== null) this.secretSelectors.clear()
+    this.setStep('')
+    return { url: wc.getURL(), title: wc.getTitle(), settled, created }
+  }
+
+  /** The person closed the tab, or it died. Ends the drive; never re-arms. */
+  release(): void {
+    this.detach()
+    this.tabId = null
+    this.step = ''
+    this.prompt = ''
+    this.grantedOrigin = null
+    this.secretSelectors.clear()
+    this.ring.clear()
+    const waiting = this.waiting
+    this.waiting = null
+    waiting?.('drive-ended')
+    this.move('released')
+  }
+
+  /* ------------------------------------------------------------- the wire -- */
+
+  private async attach(wc: WebContents): Promise<void> {
+    if (this.attached && wc.debugger.isAttached()) return
+    try {
+      if (!wc.debugger.isAttached()) wc.debugger.attach('1.3')
+      this.attached = true
+    } catch (error) {
+      throw new Error(
+        `could not attach to the page: ${error instanceof Error ? error.message : String(error)}`,
+      )
+    }
+    /*
+     * `Page.enable` on a WebContentsView that has never held a document hangs
+     * and never answers. That is measured, and it cost the first spike written
+     * against this: it deadlocked on this exact line with no error anywhere.
+     * `browser-tab.ts` loads `about:blank` into every view it creates, so by
+     * the time the drive gets here there is always a document — but the
+     * `catch` stays, because a hang here would look exactly like a slow site
+     * and nobody would ever find it.
+     */
+    await this.send(wc, 'Page.enable').catch(() => undefined)
+    await this.send(wc, 'Runtime.enable').catch(() => undefined)
+  }
+
+  private detach(): void {
+    const wc = this.contents()
+    this.attached = false
+    if (!wc) return
+    try {
+      if (wc.debugger.isAttached()) wc.debugger.detach()
+    } catch {
+      // Already gone, or never attached. Either way there is nothing holding.
+    }
+  }
+
+  /**
+   * The only place a debugger command is sent.
+   *
+   * Screened first, always, by `browser-cdp.ts` — which is a pure function over
+   * the method name and the state, so the rule can be read and tested without
+   * an app. A caller that wanted to skip it would have to write a second
+   * `sendCommand` call, which is a thing a reviewer can grep for.
+   */
+  private async send(
+    wc: WebContents,
+    method: string,
+    params: Record<string, unknown> = {},
+  ): Promise<Record<string, unknown>> {
+    const verdict = screenCommand({ state: this.state, method, params })
+    if (!verdict.ok) throw new DriveRefused(verdict.reason)
+    const result = (await wc.debugger.sendCommand(method, params)) as unknown
+    return typeof result === 'object' && result !== null ? (result as Record<string, unknown>) : {}
+  }
+
+  /** Announce and send an input event, so the takeover watcher can claim it. */
+  private async input(
+    wc: WebContents,
+    method: string,
+    params: Record<string, unknown>,
+    observedType: string,
+  ): Promise<void> {
+    this.ring.announce(observedType, this.host.now())
+    await this.send(wc, method, params)
+  }
+
+  /* --------------------------------------------------------- the takeover -- */
+
+  /**
+   * Watch a tab for the person putting their hands on it.
+   *
+   * Registered once per WebContents. The teardown goes through
+   * `web-contents-teardown.ts` for the reason that module exists: eleven
+   * modules each being individually careful still produced a
+   * `MaxListenersExceededWarning`, and a twelfth being careful would not have
+   * helped.
+   */
+  private watch(wc: WebContents): void {
+    onWebContentsDestroyed(wc, 'browser-drive', () => {
+      if (this.contents() === null) this.release()
+    })
+    if (this.watched.has(wc)) return
+    this.watched.add(wc)
+
+    wc.on('input-event', (_event, input: { type: string }) => {
+      if (this.state !== 'agent') return
+      if (!isTakeoverCandidate(input.type)) return
+      if (this.ring.claim(input.type, this.host.now())) return
+      /*
+       * Not ours, so it is his — and the direction of that guess is the point.
+       * Mis-reading a synthetic event as human parks the drive and costs a
+       * retry. Mis-reading a keystroke of his as synthetic means the agent
+       * keeps typing into a form while he is filling it in. Park.
+       *
+       * Logged with the event type because this is the one decision in the
+       * feature made by a heuristic, and "the drive keeps stopping for no
+       * reason" is unanswerable without knowing which event did it. It fires
+       * at most once per drive, so it is not noise.
+       */
+      console.log(`[browser-drive] parked: an unclaimed ${input.type} arrived, so the person has the page`)
+      this.prompt = 'You took over this page. The copilot has stopped.'
+      this.move('handover')
+    })
+
+    /*
+     * A reload of the *app* destroys every browser tab — `hostDocumentReplaced`
+     * in `browser-tab.ts` is deliberate about it — and that ends any drive
+     * instantly. The drive must not try to survive it: it ends, and the agent
+     * is told why. A drive that re-armed itself after a reload would be a page
+     * that starts moving on its own, which `DRIVING-MODE.md` §8 names as the
+     * single behaviour that would make somebody uninstall.
+     */
+    wc.on('render-process-gone', () => this.release())
+    wc.debugger.on('detach', () => {
+      this.attached = false
+    })
+  }
+
+  /* -------------------------------------------------------------- reading -- */
+
+  /**
+   * Run one of this repository's own scripts in the page's isolated world.
+   *
+   * The only argument a caller may contribute is a JSON value, and the only
+   * JSON value any tool contributes is a selector string. There is no path from
+   * a model's text to a page's JavaScript — see `browser-drive-script.ts`.
+   */
+  private async run<T>(script: string, args: unknown): Promise<T> {
+    const wc = this.contents()
+    if (!wc) throw new DriveRefused('the page this was driving has gone')
+    /*
+     * The baton is checked here as well as in `send`, because reading does not
+     * go through the debugger at all. Without this line the whole of §3's
+     * password guarantee would have a hole the width of `browser.read`: the
+     * protocol channel would be shut during a handover and the isolated world
+     * would still answer.
+     */
+    if (this.state !== 'agent') {
+      throw new DriveRefused(
+        this.state === 'human'
+          ? 'the person is using this page right now, so it cannot be read. Wait for them to hand it back.'
+          : 'nothing is being driven, so there is no page to read',
+      )
+    }
+    return (await wc.executeJavaScriptInIsolatedWorld(DRIVE_WORLD, [
+      { code: withArgs(script, args) },
+    ])) as T
+  }
+
+  async outline(limit: number): Promise<{
+    url: string
+    title: string
+    elements: OutlineElement[]
+    matched: number
+    truncated: boolean
+  }> {
+    const raw = await this.run<{
+      url: string
+      title: string
+      elements: OutlineElement[]
+      matched: number
+      truncated: boolean
+    }>(OUTLINE_SCRIPT, { limit })
+    const elements = (raw.elements ?? []).map((element) =>
+      element.secret || looksSecret({ type: element.type })
+        ? { ...element, secret: true, value: undefined }
+        : element,
+    )
+    for (const element of elements) this.noteSecret(element.selector, element.secret)
+    return {
+      url: String(raw.url ?? ''),
+      title: String(raw.title ?? ''),
+      // Belt and braces over the page's own answer. The script never puts a
+      // value on a secret field; this drops one if a future edit ever does.
+      elements,
+      matched: Number(raw.matched ?? 0),
+      truncated: raw.truncated === true,
+    }
+  }
+
+  async probe(selector: string): Promise<ProbeResult> {
+    const result = await this.run<ProbeResult>(PROBE_SCRIPT, { selector })
+    if (result.found) {
+      this.noteSecret(selector, result.secret === true || looksSecret({ type: result.type }))
+    }
+    return result
+  }
+
+  /**
+   * Block until something appears, or say plainly that it never did.
+   *
+   * This is what stops a model polling, and polling is not a style problem: the
+   * global budget in `control.ts` is 240 calls a minute, and a model asking
+   * "is it there yet" in a loop spends that in fifteen seconds — after which
+   * the *person's* copilot is rate-limited too. One call that waits costs one
+   * slot.
+   *
+   * Deliberately weaker than the actionability wait: this only asks whether the
+   * element exists and is visible, because "wait for the results to appear" is
+   * a question about the page arriving and not about a click being safe. The
+   * strict version runs inside `act`, where it belongs.
+   */
+  async waitFor(selector: string, timeoutMs: number): Promise<ProbeResult> {
+    const deadline = this.host.now() + timeoutMs
+    for (;;) {
+      const probe = await this.probe(selector)
+      if (probe.invalid === true) {
+        throw new DriveRefused(`that is not a valid CSS selector: ${selector}`)
+      }
+      if (probe.found && probe.visible) return probe
+      if (this.host.now() >= deadline) {
+        throw new DriveRefused(
+          `waited ${timeoutMs}ms and ${selector} never appeared. Read the page without waitFor to see ` +
+            'what is actually there.',
+        )
+      }
+      await sleep(80)
+    }
+  }
+
+  async textAt(selector: string | null, limit: number): Promise<{
+    found: boolean
+    secret: boolean
+    text: string
+    truncated: boolean
+  }> {
+    const raw = await this.run<{
+      found: boolean
+      secret?: boolean
+      text?: string
+      truncated?: boolean
+    }>(TEXT_SCRIPT, { selector: selector ?? '', limit })
+    return {
+      found: raw.found === true,
+      secret: raw.secret === true,
+      text: raw.secret === true ? '' : String(raw.text ?? ''),
+      truncated: raw.truncated === true,
+    }
+  }
+
+  /* ------------------------------------------------------- actionability -- */
+
+  /**
+   * Wait until the element is genuinely ready to be acted on, or give up.
+   *
+   * This is the whole of what a hand-rolled driver usually gets wrong, and the
+   * reason `DRIVABLE-BROWSER.md` §1 argued for Playwright. Every clause below
+   * is a real failure with a name:
+   *
+   *  - **not attached yet** — the page is still rendering. Retry; the element
+   *    arriving late is the ordinary case, not an error.
+   *  - **invalid selector** — never becomes true, so it is refused immediately
+   *    rather than retried until the timeout. A typo must not cost ten seconds.
+   *  - **not visible** — zero-sized, `display: none`, fully transparent.
+   *  - **not stable** — the box moved between two samples. This is the animated
+   *    button: click it mid-transition and the event lands where it *was*.
+   *  - **not enabled** — `disabled`, `aria-disabled`, or inside a disabled
+   *    fieldset.
+   *  - **not hit** — something else is painted at the point the click would
+   *    land. The cookie banner, the modal backdrop, the loading overlay. This
+   *    is the clause that turns "clicked Sign in" from a claim into a fact.
+   *
+   * It scrolls once, at the start, and then re-probes — so the coordinates
+   * returned are read after the movement, not before it.
+   */
+  private async waitForActionable(
+    selector: string,
+    timeoutMs: number,
+    options: { needsHit: boolean } = { needsHit: true },
+  ): Promise<ProbeResult & { rect: { x: number; y: number; width: number; height: number } }> {
+    const deadline = this.host.now() + timeoutMs
+    let last = 'the element was never found'
+    let scrolled = false
+    let previous: { x: number; y: number; width: number; height: number } | null = null
+    let previousAt = 0
+
+    for (;;) {
+      const probe = await this.probe(selector)
+
+      if (probe.invalid === true) {
+        throw new DriveRefused(
+          `that is not a valid CSS selector, so no amount of waiting will find it: ${selector}`,
+        )
+      }
+
+      if (!probe.found) {
+        last = 'no element on the page matched that selector'
+      } else {
+        if (!scrolled) {
+          scrolled = true
+          await this.run(SCROLL_SCRIPT, { selector }).catch(() => undefined)
+          previous = null
+          continue
+        }
+        const rect = probe.rect ?? null
+        if (!probe.visible || rect === null) {
+          last = 'the element is on the page but not visible'
+        } else if (!probe.enabled) {
+          last = 'the element is visible but disabled'
+        } else if (
+          previous === null ||
+          previous.x !== rect.x ||
+          previous.y !== rect.y ||
+          previous.width !== rect.width ||
+          previous.height !== rect.height
+        ) {
+          /*
+           * The box moved, so this sample starts the clock again. Two matching
+           * samples at least a frame apart is the cheapest honest definition of
+           * "it has stopped moving" — one sample proves nothing, and watching
+           * for an animation to end means knowing which animation.
+           */
+          previous = rect
+          previousAt = this.host.now()
+          last = 'the element is still moving'
+        } else if (this.host.now() - previousAt < STABLE_FRAME_MS) {
+          last = 'the element is still moving'
+        } else if (options.needsHit && probe.hit !== true) {
+          last = `something else is on top of it${probe.hitNode ? ` (${probe.hitNode})` : ''}`
+        } else {
+          return { ...probe, rect }
+        }
+      }
+
+      if (this.host.now() >= deadline) {
+        throw new DriveRefused(
+          `gave up waiting for ${selector} after ${timeoutMs}ms: ${last}. Call browser.read to see ` +
+            'what is actually on the page rather than trying the same selector again.',
+        )
+      }
+      await sleep(60)
+    }
+  }
+
+  /* --------------------------------------------------------------- acting -- */
+
+  /**
+   * One interaction with the page.
+   *
+   * The verb set is `StepKind` from `browser-steps.ts` — the same closed set
+   * the flow recorder already emits — rather than a set invented here. That is
+   * on purpose: a recorded flow and a driven flow speak one vocabulary with no
+   * translation layer between them, which is what makes replaying a recording
+   * a small feature later rather than a second driver.
+   */
+  async act(input: {
+    verb: StepVerb
+    selector: string
+    value?: string
+    key?: string
+    timeoutMs?: number
+  }): Promise<{ verb: StepVerb; selector: string; label: string; url: string }> {
+    this.refuseWhileHuman()
+    const wc = this.contents()
+    if (!wc) throw new DriveRefused('there is no page being driven; call browser.open first')
+
+    const selector = input.selector.trim()
+    if (selector.length === 0) throw new DriveRefused('a step needs a selector')
+    if (selector.length > MAX_SELECTOR_CHARS) {
+      throw new DriveRefused(`that selector is longer than ${MAX_SELECTOR_CHARS} characters`)
+    }
+    const timeoutMs = Math.min(
+      Math.max(input.timeoutMs ?? DEFAULT_ACTION_TIMEOUT_MS, 500),
+      MAX_ACTION_TIMEOUT_MS,
+    )
+
+    // A `select` sets a value through a script and never dispatches a click, so
+    // it does not need the point it would have clicked to be reachable.
+    const needsHit = input.verb !== 'select'
+    const target = await this.waitForActionable(selector, timeoutMs, { needsHit })
+    const label = typeof target.label === 'string' ? target.label : ''
+    this.setStep(describeStep(input.verb, label, selector))
+
+    try {
+      switch (input.verb) {
+        case 'click':
+          await this.clickAt(wc, target.rect)
+          break
+        case 'check':
+          await this.check(wc, target, input.value)
+          break
+        case 'type':
+          await this.type(wc, target, selector, input.value ?? '')
+          break
+        case 'select':
+          await this.select(selector, input.value ?? '')
+          break
+        case 'press':
+          await this.press(wc, target, input.key ?? 'Enter')
+          break
+        case 'submit':
+          await this.clickAt(wc, target.rect)
+          await this.press(wc, target, 'Enter')
+          break
+      }
+    } finally {
+      this.setStep('')
+    }
+
+    return { verb: input.verb, selector, label, url: wc.getURL() }
+  }
+
+  private async clickAt(
+    wc: WebContents,
+    rect: { x: number; y: number; width: number; height: number },
+  ): Promise<void> {
+    const x = Math.round(rect.x + rect.width / 2)
+    const y = Math.round(rect.y + rect.height / 2)
+    // A move first, because a page whose button only styles itself on hover
+    // will also only bind its handler on hover, and this costs one message.
+    await this.input(wc, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'none', buttons: 0 }, 'mouseMove')
+    await this.input(wc, 'Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1, buttons: 1 }, 'mouseDown')
+    await this.input(wc, 'Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1, buttons: 0 }, 'mouseUp')
+  }
+
+  private async check(wc: WebContents, target: ProbeResult, value: string | undefined): Promise<void> {
+    const wanted = value === undefined || value === '' ? true : value !== 'false'
+    if (target.checked === wanted) return
+    await this.clickAt(wc, target.rect as { x: number; y: number; width: number; height: number })
+  }
+
+  /**
+   * Type into a field — and refuse, always, to type into a secret one.
+   *
+   * Not "should not": refused, by name, with the handover named as the way. The
+   * agent therefore cannot type a credential even in the case where it somehow
+   * has one, which makes {@link handover} the *only* path a password can take
+   * — which is exactly the arrangement Asad described.
+   *
+   * The check is on the *probe's* answer, which came from
+   * `browser-drive-script.ts`'s predicate, and then again on the shape of the
+   * field here. Two implementations of one rule, deliberately, because they run
+   * on opposite sides of a trust boundary.
+   */
+  private async type(
+    wc: WebContents,
+    target: ProbeResult,
+    selector: string,
+    value: string,
+  ): Promise<void> {
+    if (target.secret === true || looksSecret({ type: target.type })) {
+      throw new DriveRefused(
+        `${selector} is a password, one-time-code or file field. Nothing will be typed into it. Call ` +
+          'browser.handover with a sentence saying what the person should fill in, and they will do it ' +
+          'themselves — you will not see what they type, and neither will the log.',
+      )
+    }
+    if (target.editable !== true) {
+      throw new DriveRefused(`${selector} is not a field that can be typed into`)
+    }
+    if (value.length > MAX_TYPE_CHARS) {
+      throw new DriveRefused(`that is longer than the ${MAX_TYPE_CHARS} characters a step will type`)
+    }
+
+    // Focus it, and clear whatever is in it. Select-all then type replaces,
+    // which is what a person does and what a form expects; appending to a
+    // pre-filled field is the commonest way a driven login ends up with the
+    // email address typed twice.
+    await this.clickAt(wc, target.rect as { x: number; y: number; width: number; height: number })
+    const selectAll = process.platform === 'darwin' ? 4 : 2
+    await this.input(wc, 'Input.dispatchKeyEvent', { type: 'rawKeyDown', modifiers: selectAll, key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, nativeVirtualKeyCode: 65 }, 'rawKeyDown')
+    await this.input(wc, 'Input.dispatchKeyEvent', { type: 'keyUp', modifiers: selectAll, key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, nativeVirtualKeyCode: 65 }, 'keyUp')
+
+    if (value.length === 0) {
+      await this.input(wc, 'Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Delete', code: 'Delete', windowsVirtualKeyCode: 46, nativeVirtualKeyCode: 46 }, 'rawKeyDown')
+      await this.input(wc, 'Input.dispatchKeyEvent', { type: 'keyUp', key: 'Delete', code: 'Delete', windowsVirtualKeyCode: 46, nativeVirtualKeyCode: 46 }, 'keyUp')
+      return
+    }
+
+    /*
+     * Per-character key events for anything short, one insert for anything
+     * long, and the split is not an optimisation.
+     *
+     * `Input.insertText` goes through the editing pipeline and fires `input`,
+     * which is enough for React's controlled inputs and for most forms. It does
+     * *not* fire `keydown`, and a search box that opens its suggestion list on
+     * `keydown` will sit there looking broken. Per-character events fire the
+     * whole sequence, at the cost of three protocol messages per character —
+     * which is fine for a password-length string and not fine for a paragraph.
+     */
+    if (value.length <= PER_KEY_LIMIT) {
+      for (const char of value) {
+        await this.input(wc, 'Input.dispatchKeyEvent', { type: 'keyDown', text: char, unmodifiedText: char, key: char }, 'keyDown')
+        await this.input(wc, 'Input.dispatchKeyEvent', { type: 'keyUp', key: char }, 'keyUp')
+      }
+      return
+    }
+    await this.input(wc, 'Input.insertText', { text: value }, 'char')
+  }
+
+  private async select(selector: string, value: string): Promise<void> {
+    const result = await this.run<{ ok: boolean; reason?: string; value?: string }>(SELECT_SCRIPT, {
+      selector,
+      value,
+    })
+    if (result.ok !== true) {
+      throw new DriveRefused(result.reason ?? 'that option could not be chosen')
+    }
+  }
+
+  private async press(wc: WebContents, target: ProbeResult, key: string): Promise<void> {
+    const spec = PRESS_KEYS[key]
+    if (!spec) {
+      throw new DriveRefused(
+        `${key} is not a key this can press. The ones it can are: ${PRESSABLE_KEYS.join(', ')}.`,
+      )
+    }
+    // Aim the key at the element by focusing it first, unless the caller is
+    // pressing into whatever already has focus after a `type`.
+    if (target.rect && target.editable !== true) {
+      await this.clickAt(wc, target.rect)
+    }
+    const base = {
+      key: spec.key,
+      code: spec.code,
+      windowsVirtualKeyCode: spec.vk,
+      nativeVirtualKeyCode: spec.vk,
+    }
+    await this.input(wc, 'Input.dispatchKeyEvent', { ...base, type: 'rawKeyDown' }, 'rawKeyDown')
+    if (spec.text !== undefined) {
+      await this.input(wc, 'Input.dispatchKeyEvent', { type: 'char', text: spec.text }, 'char')
+    }
+    await this.input(wc, 'Input.dispatchKeyEvent', { ...base, type: 'keyUp' }, 'keyUp')
+  }
+
+  /* ---------------------------------------------------------- screenshots -- */
+
+  /**
+   * A picture of the page, with every secret field painted out before the file
+   * exists.
+   *
+   * The masking happens on the raw bitmap in this process, between
+   * `capturePage()` and `toPNG()`, so there is never a moment at which an
+   * unmasked PNG is on disk or in a buffer anything else can read. That matters
+   * even though the agent is shut out during a handover: a password manager
+   * leaves the dots, a one-time-code field shows its digits in clear, and a
+   * "show password" toggle shows the password — all three survive the person
+   * handing the page back.
+   *
+   * The path is returned, never the bytes. An image in a tool result is
+   * thousands of tokens and this app has a viewer for files.
+   */
+  async screenshot(): Promise<{ path: string; width: number; height: number; masked: number }> {
+    this.refuseWhileHuman()
+    const wc = this.contents()
+    if (!wc) throw new DriveRefused('there is no page being driven; call browser.open first')
+
+    const secrets = await this.run<{
+      rects: Array<{ x: number; y: number; width: number; height: number }>
+      viewport: { width: number; height: number }
+    }>(SECRET_RECTS_SCRIPT, {}).catch(() => null)
+    if (secrets === null) {
+      // The page could not be asked where its password fields are, so there is
+      // no way to know whether this picture has one in it. Refusing is the only
+      // honest answer: a screenshot that never appears is a bug report, and one
+      // that appears with a password in it is not noticed at all.
+      throw new Error('the page could not be asked where its password fields are, so no picture was taken')
+    }
+
+    let image
+    try {
+      image = await wc.capturePage()
+    } catch (error) {
+      throw new Error(
+        `the page could not be photographed: ${error instanceof Error ? error.message : String(error)}`,
+      )
+    }
+    const size = image.getSize()
+    if (size.width === 0 || size.height === 0) {
+      throw new Error('the page could not be photographed: it has no visible surface right now')
+    }
+
+    const masked = maskRects(image, secrets.rects ?? [], secrets.viewport)
+    const dir = join(copilotPaths(app.getPath('userData')).root, 'screenshots')
+    mkdirSync(dir, { recursive: true })
+    const path = join(dir, `page-${Date.now()}.png`)
+    writeFileSync(path, masked.png)
+    return { path, width: size.width, height: size.height, masked: masked.painted }
+  }
+
+  /* ------------------------------------------------------------- handover -- */
+
+  /**
+   * Give the page to the person, and wait.
+   *
+   * Flips the baton to `human`, at which point **every** command and every read
+   * is refused at the mechanism rather than declined by a policy — see
+   * `screenCommand` and {@link run}. Then it blocks, for a bounded window, and
+   * reports honestly whether the person answered.
+   *
+   * The state outlives the call on purpose. Signing into an Apple ID with a
+   * code on a phone takes longer than any tool timeout worth having, so the
+   * banner stays up and the baton stays with him for as long as it takes, while
+   * the tool call is a window onto that. `still-waiting` is not a failure and
+   * the tool's description says so in those words.
+   */
+  async handover(prompt: string, windowMs = HANDOVER_WINDOW_MS): Promise<{
+    outcome: HandoverOutcome
+    waitedMs: number
+    url: string
+    title: string
+  }> {
+    const wc = this.contents()
+    if (!wc) throw new DriveRefused('there is no page being driven; call browser.open first')
+    const startedAt = this.host.now()
+
+    if (this.state !== 'human') {
+      this.prompt = sanitizeHandoverPrompt(prompt) || 'The copilot needs you to do something on this page.'
+      this.move('handover')
+    }
+
+    /*
+     * One waiter. A second `browser.handover` while one is already blocked
+     * replaces the first — the copilot is a single session, so two calls in
+     * flight means the first one's client has already stopped listening, and
+     * leaving it attached would resolve a promise nobody reads while the live
+     * call waited for a second answer that is never coming.
+     */
+    this.waiting?.('still-waiting')
+
+    const outcome = await new Promise<HandoverOutcome>((resolve) => {
+      let settled = false
+      const finish = (value: HandoverOutcome): void => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        if (this.waiting === finish) this.waiting = null
+        resolve(value)
+      }
+      const timer = setTimeout(() => finish('still-waiting'), windowMs)
+      // Vitest holds the loop open for a pending timer, and this one is 90
+      // seconds; the same `unref` `consent.ts` uses, for the same reason.
+      timer.unref?.()
+      this.waiting = finish
+    })
+
+    const live = this.contents()
+    return {
+      outcome,
+      waitedMs: this.host.now() - startedAt,
+      url: live ? live.getURL() : '',
+      title: live ? live.getTitle() : '',
+    }
+  }
+
+  /**
+   * The person answered the banner.
+   *
+   * `resume(true)` is "done, carry on" and `resume(false)` is "stop, I'll take
+   * it from here" — a refusal to the agent, not a resume, which is why the
+   * second one ends the drive rather than returning the baton.
+   *
+   * There is deliberately **no keyboard shortcut** for either.
+   * `DRIVING-MODE.md` gives Space to a tour because a tour is passive; a
+   * handover is somebody typing a password, and a keystroke is precisely what
+   * gets hit by accident in the middle of one.
+   */
+  resume(carryOn: boolean): void {
+    if (this.state !== 'human') return
+    this.prompt = ''
+    if (carryOn) {
+      this.move('resumed')
+      this.waiting?.('resumed')
+      this.waiting = null
+      return
+    }
+    const waiting = this.waiting
+    this.waiting = null
+    waiting?.('stopped')
+    this.release()
+  }
+
+  /* --------------------------------------------------------------- shared -- */
+
+  private setStep(step: string): void {
+    if (this.step === step) return
+    this.step = step
+    this.publish()
+  }
+
+  private refuseWhileHuman(): void {
+    if (this.state !== 'human') return
+    throw new DriveRefused(
+      'the person has this page right now. Wait — call browser.handover again to keep waiting, or say ' +
+        'something to them. Do not try another way round.',
+    )
+  }
+
+  /**
+   * Has the page stopped loading?
+   *
+   * Answered from the WebContents rather than from a sleep, because the app
+   * already knows: `wireGuestEvents` wires `did-stop-loading` and
+   * `did-fail-load` per tab, so "has this settled" is a main-process fact. A
+   * driver that slept instead would be a driver whose timing is a guess, and
+   * guessed timing is exactly the flakiness this feature exists to remove.
+   *
+   * Returns false rather than throwing on a timeout: a page that is still
+   * streaming is usually usable, and the tool reports `settled: false` so the
+   * model can decide rather than being told the open failed.
+   */
+  private async waitForSettled(wc: WebContents, timeoutMs: number): Promise<boolean> {
+    if (!wc.isLoading()) return true
+    return new Promise<boolean>((resolve) => {
+      let done = false
+      const finish = (value: boolean): void => {
+        if (done) return
+        done = true
+        clearTimeout(timer)
+        wc.off('did-stop-loading', onStop)
+        wc.off('did-fail-load', onStop)
+        resolve(value)
+      }
+      const onStop = (): void => finish(true)
+      const timer = setTimeout(() => finish(false), timeoutMs)
+      timer.unref?.()
+      wc.on('did-stop-loading', onStop)
+      wc.on('did-fail-load', onStop)
+    })
+  }
+}
+
+/* ---------------------------------------------------------------- helpers -- */
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms)
+    timer.unref?.()
+  })
+}
+
+/**
+ * The present-tense sentence in the toolbar chip.
+ *
+ * The only feedback a driven click has. CDP input does not move the OS pointer
+ * and nothing HTML can be drawn over a `WebContentsView`, so there is no cursor
+ * to watch — a driven click simply happens, and this is what says it happened.
+ * Injecting a synthetic cursor into the page was considered and rejected: an
+ * isolated world shares the DOM, so it *could*, but adding an element to a page
+ * you are also scraping pollutes the thing you came for.
+ */
+export function describeStep(verb: StepVerb, label: string, selector: string): string {
+  const name = label.trim() === '' ? selector : `“${label.trim().slice(0, 40)}”`
+  switch (verb) {
+    case 'click':
+      return `clicking ${name}`
+    case 'type':
+      return `typing into ${name}`
+    case 'select':
+      return `choosing in ${name}`
+    case 'check':
+      return `ticking ${name}`
+    case 'press':
+      return `pressing a key in ${name}`
+    case 'submit':
+      return `submitting ${name}`
+  }
+}
+
+/**
+ * Paint solid rectangles over a captured image, in place, on its raw bitmap.
+ *
+ * On the bitmap rather than by re-encoding through a drawing library, because
+ * this repository has no drawing library in the main process and adding one to
+ * hide a password would be a strange trade. `toBitmap()` hands back BGRA at the
+ * image's device resolution; the rectangles arrive in CSS pixels, so they are
+ * scaled by the ratio the buffer itself implies rather than by a device pixel
+ * ratio read from the page — a page can lie about `devicePixelRatio`, and the
+ * buffer cannot lie about its own length.
+ */
+export function maskRects(
+  image: Electron.NativeImage,
+  rects: ReadonlyArray<{ x: number; y: number; width: number; height: number }>,
+  viewport: { width: number; height: number },
+): { png: Buffer; painted: number } {
+  if (rects.length === 0) return { png: image.toPNG(), painted: 0 }
+
+  const size = image.getSize()
+  const bitmap = image.toBitmap()
+  const shape = bitmapShape(size, bitmap.length, viewport)
+  if (shape === null) return { png: image.toPNG(), painted: 0 }
+
+  const painted = paintMasks(bitmap, shape, rects)
+  const rebuilt = nativeImage.createFromBitmap(bitmap, {
+    width: shape.pixelWidth,
+    height: shape.pixelHeight,
+    scaleFactor: shape.scale,
+  })
+  return { png: rebuilt.toPNG(), painted }
+}
+
+export interface BitmapShape {
+  pixelWidth: number
+  pixelHeight: number
+  /**
+   * Device pixels per **CSS** pixel — the number that puts a mask on the
+   * password field rather than a hundred pixels above it.
+   *
+   * This was wrong once, and the picture is what caught it. The first version
+   * derived the scale from the buffer's own length against
+   * `NativeImage.getSize()`, which is self-consistent and answers a different
+   * question: those two are both in device pixels, so the ratio is always 1 and
+   * the rectangles — which come from `getBoundingClientRect` and are in CSS
+   * pixels — were used unscaled. On a Retina page the mask landed at half the
+   * offset and half the size: a grey bar above the form, and a perfectly
+   * legible password box below it, in an image that *looked* redacted.
+   */
+  scale: number
+  /** What the image is scaled against. Reported so a caller can log it. */
+  viewport: { width: number; height: number }
+}
+
+/**
+ * How big the raw buffer actually is, in device pixels.
+ *
+ * Derived from the buffer's own length rather than from a device pixel ratio
+ * read out of the page, because the page can lie about `devicePixelRatio` and
+ * the buffer cannot lie about how long it is. A mismatch throws rather than
+ * falling back: returning the unmasked image is the single outcome this whole
+ * path exists to prevent, so refusing the picture is the safe direction.
+ *
+ * Null when the image is empty, which is a caller's problem rather than a
+ * masking failure.
+ */
+export function bitmapShape(
+  size: { width: number; height: number },
+  bytes: number,
+  viewport: { width: number; height: number },
+): BitmapShape | null {
+  const pixels = bytes / 4
+  if (size.width <= 0 || size.height <= 0 || pixels <= 0) return null
+
+  /*
+   * How many bytes the buffer really holds, against the size the image claims.
+   *
+   * These are both device measurements, so the ratio is normally 1 — but it is
+   * checked rather than assumed, because an image whose buffer is not
+   * width×height×4 is one this arithmetic cannot index safely, and indexing it
+   * wrongly writes grey pixels somewhere other than over the password.
+   */
+  const buffered = Math.sqrt(pixels / (size.width * size.height))
+  if (!Number.isFinite(buffered) || buffered <= 0) return null
+  const pixelWidth = Math.round(size.width * buffered)
+  const pixelHeight = Math.round(size.height * buffered)
+  if (pixelWidth * pixelHeight * 4 !== bytes) {
+    throw new Error('the screenshot could not be masked, so it was not written')
+  }
+
+  /*
+   * And the number that matters: device pixels per CSS pixel.
+   *
+   * Refused rather than guessed when the page could not report its viewport. A
+   * default of 1 would be right on some machines and would silently mis-place
+   * every mask on a Retina display, which is the failure this whole function
+   * exists to prevent. The clamp catches a viewport that is absurd relative to
+   * the image — a page mid-resize, or a lying number — for the same reason.
+   */
+  if (!Number.isFinite(viewport.width) || viewport.width <= 0) {
+    throw new Error('the screenshot could not be masked, so it was not written')
+  }
+  const scale = pixelWidth / viewport.width
+  if (!Number.isFinite(scale) || scale < 0.25 || scale > 8) {
+    throw new Error('the screenshot could not be masked, so it was not written')
+  }
+  return { pixelWidth, pixelHeight, scale, viewport }
+}
+
+/**
+ * Paint over the rectangles, in place, and say how many landed.
+ *
+ * Pure over a buffer so it can be driven from a test with a sentinel colour and
+ * no Electron — which matters, because "the password was still in the PNG" is
+ * not a defect anybody would notice by looking.
+ */
+export function paintMasks(
+  bitmap: Buffer,
+  shape: BitmapShape,
+  rects: ReadonlyArray<{ x: number; y: number; width: number; height: number }>,
+): number {
+  let painted = 0
+  for (const rect of rects) {
+    const left = Math.max(0, Math.floor(rect.x * shape.scale))
+    const top = Math.max(0, Math.floor(rect.y * shape.scale))
+    const right = Math.min(shape.pixelWidth, Math.ceil((rect.x + rect.width) * shape.scale))
+    const bottom = Math.min(shape.pixelHeight, Math.ceil((rect.y + rect.height) * shape.scale))
+    if (right <= left || bottom <= top) continue
+    painted++
+    for (let y = top; y < bottom; y++) {
+      const rowStart = (y * shape.pixelWidth + left) * 4
+      const rowEnd = (y * shape.pixelWidth + right) * 4
+      // Opaque mid-grey, in BGRA order. Not black: a black rectangle on a dark
+      // page is invisible, and the point of the mask is that a person looking
+      // at the picture can see that something was hidden there.
+      bitmap.fill(0x80, rowStart, rowEnd)
+      for (let i = rowStart + 3; i < rowEnd; i += 4) bitmap[i] = 0xff
+    }
+  }
+  return painted
+}
+
+/** The empty status, re-exported so a caller need not import two modules. */
+export { EMPTY_DRIVE_STATUS, shortLabel }
