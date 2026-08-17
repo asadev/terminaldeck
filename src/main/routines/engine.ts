@@ -459,6 +459,22 @@ export function within(folder: string, child: string): boolean {
 
 /* -------------------------------------------------------------- the engine */
 
+/**
+ * The separator inside an idle-timer key, spelled as an escape.
+ *
+ * NUL is right for the job: it cannot appear in a routine id or a session
+ * id, so no two pairs can be made to collide by the joining itself. Typing
+ * the raw byte is what is wrong, and it is wrong in a way that hides: one
+ * NUL makes `file`(1) call this source `data` and makes `grep`(1) treat it
+ * as binary and match it silently, so a search for anything declared here
+ * comes back empty and reads as "it lives somewhere else".
+ *
+ * `src/encoding.test.ts` fails the build on a NUL in any tracked source.
+ * It caught this one at the release gate — but only after `git add` made
+ * the file tracked, which is the gap worth knowing about.
+ */
+const KEY_SEP = '\u0000'
+
 export class RoutineEngine {
   private readonly store: RoutineStore
   private readonly runtime: RuntimeState
@@ -757,7 +773,7 @@ export class RoutineEngine {
     if (entry.quietTimer !== null) this.clearTimer(entry.quietTimer)
     entry.quietTimer = null
     for (const [key, handle] of this.idleTimers) {
-      if (!key.startsWith(`${entry.id} `)) continue
+      if (!key.startsWith(`${entry.id}${KEY_SEP}`)) continue
       this.clearTimer(handle)
       this.idleTimers.delete(key)
     }
@@ -808,7 +824,7 @@ export class RoutineEngine {
       if (!entry.armed || routine === null) continue
       for (const trigger of routine.triggers) {
         if (trigger.kind !== 'session-idle') continue
-        const key = `${entry.id} ${sessionId}`
+        const key = `${entry.id}${KEY_SEP}${sessionId}`
         const existing = this.idleTimers.get(key)
         if (existing !== undefined) {
           this.clearTimer(existing)
@@ -840,7 +856,7 @@ export class RoutineEngine {
     const chain = this.chainForSession(sessionId)
 
     for (const [key, handle] of this.idleTimers) {
-      if (!key.endsWith(` ${sessionId}`)) continue
+      if (!key.endsWith(`${KEY_SEP}${sessionId}`)) continue
       this.clearTimer(handle)
       this.idleTimers.delete(key)
     }

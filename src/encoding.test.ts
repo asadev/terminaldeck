@@ -81,16 +81,29 @@ const SOURCE_EXTENSIONS = new Set([
 ])
 
 /**
- * Tracked source files, by path.
+ * Source files git can see, by path — tracked *and* not-yet-added.
  *
  * `git ls-files` rather than a directory walk, because it already excludes
  * `node_modules/`, `out/` and everything else gitignored — the places where
  * genuinely binary files are normal and none of this applies. `-z` because a
  * newline is a legal character in a path and splitting on one would invent
  * filenames that do not exist.
+ *
+ * `--others --exclude-standard` is the half this originally missed, and the
+ * omission had teeth. Listing only tracked files means a **brand-new** file is
+ * invisible to this test until somebody runs `git add`, which is exactly when a
+ * new file is least reviewed and most likely to have been written by a tool.
+ * Three files reached the release gate that way on 2026-08-17 — a clipboard
+ * fixture, a sanitiser test and a routine key separator — each carrying a raw
+ * NUL, each passing a full green suite the evening before, and all three
+ * appearing the instant they were staged. A guard that only inspects what is
+ * already committed cannot catch the commit that introduces the problem.
+ *
+ * `--exclude-standard` keeps gitignore honoured, so this widens the net to
+ * untracked working files without dragging in build output.
  */
 function trackedSourceFiles(): string[] {
-  const raw = execFileSync('git', ['ls-files', '-z'], {
+  const raw = execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], {
     cwd: process.cwd(),
     encoding: 'utf8',
     maxBuffer: 32 * 1024 * 1024,
