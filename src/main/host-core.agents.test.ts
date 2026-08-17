@@ -84,16 +84,41 @@ afterAll(async () => {
    *
    * `maxRetries` rather than a sleep because Node implements exactly this: it
    * retries `EBUSY`, `EMFILE`, `ENFILE`, `ENOTEMPTY` and `EPERM` on Windows and
-   * nothing on POSIX. And retries rather than a `try`/`catch`, because a
-   * directory that is *still* locked after two seconds is a process this test
-   * failed to kill, which is worth failing over — the whole reason
-   * `killAll`/`drain` are above.
+   * nothing on POSIX.
    *
-   * This only became reachable when the fixture started working on Windows: for
-   * as long as `agents.add` refused every path on that platform, no session ever
-   * started here and there was nothing holding the folder.
+   * ## Why a residual failure is reported and not thrown
+   *
+   * This block used to end by letting `rmSync` throw, arguing that a directory
+   * still locked after two seconds is a process this test failed to kill. That
+   * is the right instinct pointed at the wrong evidence, and it cost a release
+   * build on 2026-08-17: **9136 tests passed and the run failed on `EBUSY`
+   * rmdir'ing a temp folder**, after twenty retries, on a shared runner.
+   *
+   * The claim worth defending is *the process is dead*, and it is already
+   * proved directly, one line above: `drain()` resolves when the pty reports
+   * exit. What remains after that is ConPTY's helper closing on its own
+   * schedule and the kernel dropping its last reference — neither of which this
+   * test can hurry, and neither of which says anything about a leak. Inferring
+   * "a process escaped" from "Windows had not let go within two seconds on a
+   * machine running four jobs" is inferring the wrong thing from a clock.
+   *
+   * So the retries stay and get real headroom, and what is left is written to
+   * the log rather than thrown. The directory is in `%TEMP%`, which the OS
+   * cleans; a stray one there is untidy, not wrong. If a genuinely un-killed
+   * process is ever the cause, `drain()` is where that has to fail, because
+   * that is the assertion that actually knows.
    */
-  rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+  try {
+    rmSync(dir, { recursive: true, force: true, maxRetries: 40, retryDelay: 250 })
+  } catch (error) {
+    // Never on POSIX: an unlinked directory is unlinked, so a failure here
+    // would be a real one and is still surfaced.
+    if (process.platform !== 'win32') throw error
+    console.warn(
+      `[host-core.agents.test] Windows still held ${dir} after the shell exited; ` +
+        `leaving it for the OS to clean. ${String(error)}`,
+    )
+  }
 })
 
 describe('starting a session on an agent somebody added', () => {
