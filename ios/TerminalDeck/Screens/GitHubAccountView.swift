@@ -12,13 +12,22 @@
  * What is left is one line saying what connecting is *for*, which is a fact
  * about behaviour rather than a claim about safety, and then the controls.
  *
- * ## Why the borrowed OAuth client is named out loud
+ * ## The sign-in does not belong to this screen
  *
- * GitHub's consent page will say "GitHub CLI" rather than this product's name,
- * because this project has not registered an application of its own yet. A
- * person who taps Sign in and lands on a page bearing somebody else's name will
- * — correctly — think something is wrong. So it is said before the tap rather
- * than discovered after it. See `GitHubSignIn`.
+ * `signIn` is read off the model rather than built here, and that is the fix for
+ * the fault he recorded rather than a tidy-up. A device flow lasts as long as
+ * somebody takes to type a code into a browser in another app; when it was this
+ * screen's `@State`, pressing **Done** — the obvious thing to do on coming back
+ * to a screen that has not caught up yet — tore the flow down one poll short of
+ * the token, and reopening the screen offered to start again. See `DeckModel`.
+ *
+ * ## Signing in is half of it
+ *
+ * The registration is a **GitHub App** now, so a token only reaches repositories
+ * the app is installed on and the person chooses those on GitHub's install
+ * screen. That screen is the entire reason for the move off OAuth — it is where
+ * "only these repositories" is said — so the link to it is on this screen rather
+ * than left for somebody to discover after a push is refused.
  */
 
 import SwiftUI
@@ -27,17 +36,14 @@ struct GitHubAccountView: View {
     let model: DeckModel
     let dismiss: () -> Void
 
-    @State private var signIn: GitHubSignIn
     @State private var showingTokenField = false
     @State private var typedToken = ""
 
     @Environment(\.openURL) private var openURL
 
-    init(model: DeckModel, dismiss: @escaping () -> Void) {
-        self.model = model
-        self.dismiss = dismiss
-        _signIn = State(initialValue: model.makeGitHubSignIn())
-    }
+    /// Read through, never stored. The flow belongs to the model — see the
+    /// header — and a `@State` copy here is precisely the bug that was fixed.
+    private var signIn: GitHubSignIn { model.gitHubSignIn }
 
     var body: some View {
         NavigationStack {
@@ -68,9 +74,11 @@ struct GitHubAccountView: View {
         }
         .tint(Theme.accent)
         .preferredColorScheme(.dark)
-        // A poll that outlives the screen would wake the radio every five
-        // seconds for a code nobody is going to type.
-        .onDisappear { signIn.cancel() }
+        // Nothing is cancelled on the way out, deliberately. Closing this sheet
+        // used to end a sign-in that was seconds from finishing — see the
+        // header, and `GitHubSignIn.cancel`. The flow belongs to the model, ends
+        // by itself when GitHub's code expires, and has a Cancel button of its
+        // own for somebody who has actually changed their mind.
     }
 
     // MARK: - Connected
@@ -87,6 +95,32 @@ struct GitHubAccountView: View {
                 .foregroundStyle(Theme.secondary)
                 .padding(.top, 6)
 
+            /*
+             * The half a sign-in does not do.
+             *
+             * A GitHub App's token reaches the repositories the app is installed
+             * on and no others, so an account connected here can still be
+             * refused by `git` — and the refusal happens on somebody else's
+             * machine, in a push, which is the worst place to discover it. Only
+             * on a `signIn` account: a pasted personal access token carries its
+             * own repository list and this link would be about nothing.
+             */
+            if account.source == .signIn {
+                Button {
+                    openURL(gitHubInstallURL)
+                } label: {
+                    Text("Choose repositories on GitHub")
+                        .font(.system(size: 15))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 8)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Theme.accent)
+                .padding(.top, 14)
+                .accessibilityIdentifier("github.chooseRepos")
+            }
+
             Button {
                 model.disconnectGitHub()
             } label: {
@@ -94,6 +128,10 @@ struct GitHubAccountView: View {
                     .font(.system(size: 16, weight: .medium))
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 13)
+                    // See `waiting`: a plain button is only as tappable as the
+                    // shape of its label, and a `Text` centred in a full-width
+                    // frame is a word in the middle of a dead pill.
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .foregroundStyle(Theme.critical)
@@ -149,6 +187,9 @@ struct GitHubAccountView: View {
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 13)
+            // See `waiting`. This one worked more often only because its label
+            // is longer, not because it was any more of a button.
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .foregroundStyle(Theme.onAccent)
@@ -158,13 +199,11 @@ struct GitHubAccountView: View {
         .padding(.top, 24)
         .accessibilityIdentifier("github.signIn")
 
-        if gitHubClientIsBorrowed {
-            Text("GitHub will name the sign-in “GitHub CLI”. This app has not registered one of its own yet.")
-                .font(.system(size: 12))
-                .foregroundStyle(Theme.faint)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.top, 10)
-        }
+        Text("You choose which repositories Terminal Deck may touch, on GitHub, when you install it.")
+            .font(.system(size: 12))
+            .foregroundStyle(Theme.faint)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.top, 10)
 
         if showingTokenField {
             VStack(alignment: .leading, spacing: 12) {
@@ -189,6 +228,7 @@ struct GitHubAccountView: View {
                         .font(.system(size: 16, weight: .medium))
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(Theme.primary)
@@ -214,12 +254,30 @@ struct GitHubAccountView: View {
                 .textSelection(.enabled)
                 .accessibilityIdentifier("github.userCode")
 
-            Text("Enter this on GitHub, then come back. This screen finishes on its own.")
+            Text("Enter this on GitHub, then come back. It finishes on its own — closing this screen does not stop it.")
                 .font(.system(size: 14))
                 .foregroundStyle(Theme.secondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, 10)
 
+            /*
+             * The button he tapped seven times.
+             *
+             * `.contentShape(Rectangle())` is the whole of it, and it is not
+             * defensive. `.buttonStyle(.plain)` makes the *label* the target,
+             * and this label is a `Text` centred inside `.frame(maxWidth:
+             * .infinity)` — a frame is a layout container, not a surface, so
+             * only the drawn word takes a touch. The blue pill is painted by a
+             * `.background` on the button, three hundred points wide; the word
+             * "Open GitHub" in the middle of it is about a hundred. Two thirds
+             * of what looks like a button was not one, and a thumb aimed at a
+             * pill lands off the word more often than on it — which is exactly
+             * "I clicked, nothing happened… now I click a lot and one action
+             * happened". A content shape makes the whole frame the target.
+             *
+             * The same trap is under every `.buttonStyle(.plain)` on this screen
+             * and each one is fixed the same way.
+             */
             Button {
                 openURL(verificationURI)
             } label: {
@@ -227,6 +285,7 @@ struct GitHubAccountView: View {
                     .font(.system(size: 17, weight: .semibold))
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 13)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .foregroundStyle(Theme.onAccent)

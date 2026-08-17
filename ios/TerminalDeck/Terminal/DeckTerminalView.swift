@@ -47,7 +47,38 @@ import SwiftTerm
 import UIKit
 
 @MainActor
-final class DeckTerminalView: TerminalView {
+class DeckTerminalView: TerminalView {
+
+    /**
+     * Roughly how far a finger travels before `UIScrollView` claims it.
+     *
+     * UIKit does not publish the number and there is no API for it; it is about
+     * ten points and has been for as long as anyone has measured it. It is named
+     * here because one thing in this app has to be **strictly smaller** than it —
+     * `TerminalGestures.selectionSlop` — and a relationship between two numbers
+     * that only exists in somebody's head is a relationship that gets broken by
+     * the next person to tidy a constant. `TerminalGesturesTests` asserts it.
+     */
+    static let scrollSlop: CGFloat = 10
+
+    /**
+     * Whether the content is already moving under the finger.
+     *
+     * A selection may not start on a terminal that is scrolling. Both halves
+     * matter and each one is a gesture that was going wrong: `isDragging` is the
+     * slow scroll that paused — the finger crept a few points, the scroll view
+     * took the pan, and then it stopped moving for half a second while he read
+     * — and `isDecelerating` is the finger put down to stop a flick, which on
+     * every other iOS surface means *stop*, not *select this line*.
+     *
+     * Computed rather than stored, and not `final`, for one reason: neither
+     * `isDragging` nor `isDecelerating` can be set. Only UIKit's own touch
+     * delivery makes them true, so a unit test can ask the delegate the question
+     * but cannot create the state to ask it in — and it is answered by
+     * overriding this in a subclass. The gesture itself is proved for real in
+     * `TerminalScrollUITests`, with a finger.
+     */
+    var isScrolling: Bool { isDragging || isDecelerating }
 
     /// Recognisers this app installed, by identity. Ours are exempt from the
     /// refusal below; everything else on this view came from the library.

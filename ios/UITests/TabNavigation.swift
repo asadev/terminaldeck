@@ -3,8 +3,13 @@
  *
  * They used to live in the session list's `…` menu — pair another machine,
  * rename this one, forget it, the GitHub account, the alert switches, seven items
- * deep in a corner. They are now two tabs, `Machines` and `Settings`, and the
- * reasoning is in `DeckTabs.swift`.
+ * deep in a corner. They became two tabs; the machines have since moved again,
+ * into a row on Settings, and the localhost list has become a tab of its own. The
+ * reasoning for all of it is in `DeckTabs.swift` and `DeckModel.Tab`.
+ *
+ * That second move is exactly why this file exists, and it paid for itself: six
+ * suites call `openMachinesTab()` and not one of them had to change when the
+ * Machines tab stopped being a tab.
  *
  * Six suites reached for those menu items, in eight places, mostly as teardown.
  * This file is the seam so that the *next* change to the navigation is one edit
@@ -46,18 +51,60 @@ extension XCUIApplication {
         if anywhere.waitForExistence(timeout: 5) { anywhere.tap() }
     }
 
-    /// The Machines tab, and proof it arrived.
+    /**
+     * The machines, and proof they arrived.
+     *
+     * **No longer a tab.** It is a row inside Settings — *"maybe this machines
+     * thing can go inside the settings this page overall… Here we can have a
+     * section, we click and we reach to this page"* — so this is two taps now.
+     * The name is unchanged on purpose: six suites call it, they care about
+     * arriving rather than about how, and this file exists precisely so that a
+     * move like this one is one edit instead of eight.
+     *
+     * A pop first, because Settings keeps its stack across tab switches: a case
+     * that left the machines pushed would find the row it is about to tap
+     * already off screen behind them.
+     */
     @discardableResult
     func openMachinesTab() -> Bool {
-        openTab("Machines")
+        guard openSettingsTab() else { return false }
+        let row = buttons["settings.machines"]
+        guard row.waitForExistence(timeout: 10) else { return false }
+        row.tap()
         return buttons["machines.add"].waitForExistence(timeout: 10)
     }
 
-    /// The Settings tab, and proof it arrived.
+    /**
+     * The Settings tab, and proof it arrived.
+     *
+     * Settings has a navigation stack of its own now, so arriving at the tab is
+     * not the same as arriving at the *screen*: the machines may still be pushed
+     * from earlier in the same case. `settings.github` is the proof, and the pop
+     * is what makes it true.
+     *
+     * The first probe is short and the second is not, on purpose. When the root
+     * is already showing, `waitForExistence` returns the moment it sees the row —
+     * the timeout is only ever paid when something *is* pushed, and
+     * `forgetEveryMachine` walks this loop six times. A false negative here costs
+     * a tap on a navigation bar that has no back button, which does nothing.
+     */
     @discardableResult
     func openSettingsTab() -> Bool {
         openTab("Settings")
+        if buttons["settings.github"].waitForExistence(timeout: 4) { return true }
+        // Something is pushed over it. One Back is enough — Settings is one deep.
+        let back = navigationBars.buttons.element(boundBy: 0)
+        if back.exists { back.tap() }
         return buttons["settings.github"].waitForExistence(timeout: 10)
+    }
+
+    /// The Localhost tab, and proof it arrived. There is no row that is always
+    /// present — a machine serving nothing has none — so the proof is the tab's
+    /// own refresh control, which is on the screen in every state.
+    @discardableResult
+    func openLocalhostTab() -> Bool {
+        openTab("Localhost")
+        return buttons["localhost.refresh"].waitForExistence(timeout: 10)
     }
 
     /// Back to the sessions, which is where every other suite expects to be.

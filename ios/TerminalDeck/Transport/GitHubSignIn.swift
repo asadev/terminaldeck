@@ -15,20 +15,26 @@
  * exactly this and the two agree on the client id on purpose — one registration
  * for one product.
  *
- * ### The OAuth client is borrowed, and the sign-in screen says so
+ * ### It is the product's own GitHub App, the same one the desktop signs into
  *
- * The id below is the GitHub CLI's: a public identifier printed in an
- * open-source binary, with no client secret involved because the device flow has
- * none by design. This project has not registered an application of its own yet,
- * and `github-auth.ts` verified this constant against the live endpoint rather
- * than copying it from memory — a wrong client id does not fail loudly, it
- * answers `{"error":"Not Found"}` with no hint that the id is the problem.
+ * Until this build the id below was the **GitHub CLI's** OAuth client, borrowed
+ * because this project had no registration of its own, and the screen carried a
+ * line apologising that GitHub would name the sign-in "GitHub CLI". Two things
+ * were wrong with that and only one of them was cosmetic: an OAuth app's `repo`
+ * scope is a single all-or-nothing grant over **every** private repository the
+ * account can reach, write included, with no way to choose. `src/main/github-app.ts`
+ * has the whole argument.
  *
- * What it costs is honesty about identity: GitHub's consent page will say
- * "GitHub CLI", not this app's name. That is not something to hide behind a
- * spinner, so `borrowedClient` is part of the state and the screen prints a line
- * about it. Registering an application and changing the constant makes both the
- * caveat and the sentence disappear on their own.
+ * The desktop registered a GitHub App on 2026-08-16 and moved to it, and this is
+ * the phone catching up to the same registration: same client id, same endpoints,
+ * and **no `scope` parameter** — an App's permissions come from its registration
+ * and the repositories it can touch are chosen by the person at install time, so
+ * there is nothing for a scope string to say and sending one asks GitHub to
+ * reconcile two permission models in one request.
+ *
+ * The consequence worth knowing about: a user-to-server token only reaches
+ * repositories the App is **installed** on. Signing in is therefore half of it,
+ * and `GitHubAccountView` links to the install page for the other half.
  *
  * ## Paste a token
  *
@@ -111,28 +117,28 @@ enum GitHubEndpoints {
 }
 
 /**
- * The GitHub CLI's public device-flow client id.
+ * Terminal Deck's own GitHub App, the registration the desktop signs into.
  *
- * Shared with `github-auth.ts`, where it is documented at length and where it
- * was checked against the live endpoint on 2026-08-15. See the header for what
- * borrowing it costs and how to stop.
- */
-private let clientID = "178c6fc778ccc68e1d6a"
-
-/// Whether the id above is still somebody else's. Read by the screen, which
-/// says so rather than letting the consent page be a surprise.
-let gitHubClientIsBorrowed = true
-
-/**
- * What this app asks for, and nothing else.
+ * The same constant as `GITHUB_APP.clientId` in `src/main/github-app.ts`, which
+ * documents the registration at length and records the live request it was
+ * verified with on 2026-08-16. A client id is not a secret — it ships in every
+ * copy of both apps and travels in the clear on the first leg of the device
+ * flow, which is the whole reason the flow needs no client secret.
  *
- * `repo` alone. The desktop asks for `read:org` and `notifications` as well
- * because it draws pull request lists and a notification badge; this app does
- * one thing with a token — hand it to a `git` process that is fetching or
- * pushing — and every extra scope is something a person has to agree to hand
- * over for a feature that is not there.
+ * A wrong id does not fail loudly. GitHub answers `404 {"error":"Not Found"}`,
+ * which is indistinguishable from an outage and from an App with **Enable
+ * Device Flow** unticked, so this is copied rather than remembered.
  */
-private let scopes = "repo"
+private let clientID = "Iv23limkNV4N6mChRl60"
+
+/// The App's URL slug, used for the one link that finishes the job: choosing
+/// which repositories it may touch. `GITHUB_APP.slug` on the desktop.
+private let appSlug = "terminal-deck"
+
+/// Where a person chooses the repositories this app may reach. Signing in gets
+/// a token; this is what gives it anything to reach. `appInstallUrl` on the
+/// desktop builds the same address.
+let gitHubInstallURL = URL(string: "https://github.com/apps/\(appSlug)/installations/new")!
 
 @MainActor
 @Observable
@@ -172,12 +178,32 @@ final class GitHubSignIn {
 
     private let accounts: GitHubAccountStore
     private let fetch: GitHubFetch
-    /// Cancels the poll when the screen goes or the user backs out.
+    /// The clock, injected so the expiry and the poll spacing can be exercised
+    /// without a test that waits fifteen minutes to prove one branch.
+    private let clock: () -> Date
+    /// Cancels the poll when the user backs out. **Not** when the sheet closes —
+    /// see `cancel()`.
     private var poll: Task<Void, Never>?
 
-    init(accounts: GitHubAccountStore, fetch: @escaping GitHubFetch = GitHubSignIn.urlSessionFetch) {
+    /// When the token endpoint was last asked. Read by `cameToTheFront`, which
+    /// must not turn a return from Safari into a request GitHub rate-limits.
+    private var lastPolled: Date?
+
+    /// The interval GitHub asked for, once it has said. Its own property rather
+    /// than a read of the in-flight `DeviceCode` because `cameToTheFront` is
+    /// called from outside the flow and has no other way to see it.
+    private var pollGap: TimeInterval = 5
+
+    /// Resumed to cut a wait short. Nil unless a poll is sitting between two
+    /// requests. See `waitBeforePolling`.
+    private var waking: CheckedContinuation<Void, Never>?
+
+    init(accounts: GitHubAccountStore,
+         fetch: @escaping GitHubFetch = GitHubSignIn.urlSessionFetch,
+         clock: @escaping () -> Date = Date.init) {
         self.accounts = accounts
         self.fetch = fetch
+        self.clock = clock
     }
 
     static let urlSessionFetch: GitHubFetch = { request in
@@ -214,13 +240,90 @@ final class GitHubSignIn {
         }
     }
 
-    /// Stop polling and go back to the start. Called when the sheet closes, so a
-    /// task does not keep waking the radio every five seconds for a code nobody
-    /// is going to enter.
+    /**
+     * Stop polling and go back to the start.
+     *
+     * Called by the **Cancel** button, and by nothing else. It used to be called
+     * from the sheet's `onDisappear` as well — a poll that outlives the screen
+     * wakes the radio every five seconds, which is a real cost — and that is the
+     * single most expensive line this file has had. The sequence he recorded:
+     * finish the sign-in on github.com, come back, find the code still on
+     * screen because the next poll is up to five seconds away, press **Done** to
+     * get rid of it — and Done tore down the sheet, which cancelled the flow one
+     * request short of the token. Reopening the screen then showed the sign-in
+     * button again, which reads exactly like *"OK it's done, but on the
+     * application it's not."*
+     *
+     * The flow now belongs to `DeckModel` and outlives the sheet. It ends by
+     * itself: on the token, on a refusal, or when GitHub's code expires — a
+     * bounded fifteen minutes, not forever.
+     *
+     * The continuation is resumed before the task is cancelled. A task suspended
+     * in `withCheckedContinuation` is not woken by cancellation, so cancelling
+     * without this leaves it parked for the lifetime of the app.
+     */
     func cancel() {
+        wake()
         poll?.cancel()
         poll = nil
+        lastPolled = nil
         phase = .idle
+    }
+
+    /**
+     * The app came back to the front — poll now, rather than sitting out the
+     * rest of a five-second sleep.
+     *
+     * This is the moment the sign-in almost always completes: he has just been
+     * on github.com typing the code, and the app was suspended the whole time.
+     * Waiting out the remainder of the interval is up to five seconds of a
+     * screen that still says "enter this code" *after* the code has been
+     * entered, which is exactly long enough for somebody to conclude it did not
+     * work and press Done.
+     *
+     * Guarded by the interval GitHub named. Asking again inside it is what
+     * `slow_down` is for, and a person switching apps a few times in a row would
+     * otherwise walk the flow straight into a rate limit.
+     */
+    func cameToTheFront() {
+        guard case .waiting = phase else { return }
+        if let lastPolled, clock().timeIntervalSince(lastPolled) < pollGap { return }
+        wake()
+    }
+
+    /// Cut the current wait short, if there is one. Idempotent: the continuation
+    /// is taken before it is resumed, so a second call finds nothing to do
+    /// rather than resuming twice, which traps.
+    private func wake() {
+        let continuation = waking
+        waking = nil
+        continuation?.resume()
+    }
+
+    /**
+     * Wait out the poll interval — or until somebody wakes us.
+     *
+     * A plain `Task.sleep` cannot be shortened, and shortening it is the whole
+     * point: see `cameToTheFront`. So the sleep runs in a side task whose only
+     * job is to resume the continuation this one is parked on, and either the
+     * clock or the app coming forward gets there first.
+     */
+    private func waitBeforePolling(_ seconds: TimeInterval) async throws {
+        // Whatever was parked here is released before a second one is stored. A
+        // `CheckedContinuation` that is overwritten is never resumed, and the
+        // task waiting on it is suspended for the lifetime of the process — a
+        // leak that leaves no trace to find it by.
+        wake()
+        let timer = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(seconds))
+            guard !Task.isCancelled else { return }
+            self?.wake()
+        }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            waking = continuation
+        }
+        timer.cancel()
+        try Task.checkCancellation()
     }
 
     // MARK: - Paste a token
@@ -264,7 +367,10 @@ final class GitHubSignIn {
     }
 
     private func requestDeviceCode() async throws -> DeviceCode {
-        let body = form(["client_id": clientID, "scope": scopes])
+        // No `scope`. See the header: a GitHub App's permissions live in its
+        // registration, and sending a scope with an App client id is a request
+        // GitHub answers with the same anonymous 404 a wrong id gets.
+        let body = form(["client_id": clientID])
         let json = try await postJSON(GitHubEndpoints.deviceCode, body: body)
         guard let deviceCode = json["device_code"] as? String,
               let userCode = json["user_code"] as? String,
@@ -277,14 +383,17 @@ final class GitHubSignIn {
         // browser had opened.
         let interval = max((json["interval"] as? NSNumber)?.doubleValue ?? 5, 5)
         let lifetime = max((json["expires_in"] as? NSNumber)?.doubleValue ?? 900, 60)
+        // Kept where `cameToTheFront` can read it: that runs outside the flow
+        // and has no other way to know how long GitHub asked to be left alone.
+        pollGap = interval
         return DeviceCode(deviceCode: deviceCode, userCode: userCode, verificationURI: url,
-                          interval: interval, expiresAt: Date().addingTimeInterval(lifetime))
+                          interval: interval, expiresAt: clock().addingTimeInterval(lifetime))
     }
 
     private func awaitToken(_ code: DeviceCode) async throws -> String {
         var wait = code.interval
-        while Date() < code.expiresAt {
-            try await Task.sleep(for: .seconds(wait))
+        while clock() < code.expiresAt {
+            try await waitBeforePolling(wait)
             try Task.checkCancellation()
 
             let body = form([
@@ -292,6 +401,7 @@ final class GitHubSignIn {
                 "device_code": code.deviceCode,
                 "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
             ])
+            lastPolled = clock()
             let json = try await postJSON(GitHubEndpoints.accessToken, body: body)
             if let token = json["access_token"] as? String, !token.isEmpty { return token }
 
@@ -300,8 +410,11 @@ final class GitHubSignIn {
                 continue
             case "slow_down":
                 // GitHub's own instruction, and ignoring it gets the flow
-                // rate-limited rather than merely slowed.
+                // rate-limited rather than merely slowed. Copied onto `pollGap`
+                // as well, or `cameToTheFront` would keep cutting the longer
+                // wait short with the old number and walk straight back into it.
                 wait += 5
+                pollGap = wait
             case "expired_token":
                 throw GitHubSignInError.sentence("That code expired. Start again.")
             case "access_denied":

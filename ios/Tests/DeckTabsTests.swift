@@ -1,22 +1,28 @@
 /**
- * The tab bar, and the three things about it that a screenshot would not catch.
+ * The tab bar, and the things about it that a screenshot would not catch.
  *
  * Most of `DeckTabs` is layout, and layout is checked by looking at it. What is
- * checked here is the state underneath, because all three of these have the same
- * failure shape — a tap that appears to do nothing — and all three are invisible
+ * checked here is the state underneath, because every one of these has the same
+ * failure shape — a tap that appears to do nothing — and every one is invisible
  * in a code review:
  *
- *  1. **A session opened from anywhere lands on the tab that can show it.** A
- *     notification tap, a deep link and the Machines tab can all ask for a
- *     session while another tab is on screen. The route is pushed onto the
- *     Sessions stack; without moving the selection it is pushed somewhere nobody
- *     is looking.
- *  2. **Rename names a machine.** The Machines tab renames a row, and a row is
+ *  1. **Which tabs there are.** Sessions, Localhost, Settings. Both halves of
+ *     that changed in one recording: the localhost list came off the session
+ *     list and became a tab, and the Machines tab went inside Settings. The two
+ *     are easy to half-do — a `Tab` case with no tab drawn for it, or a tab drawn
+ *     for a case nothing selects — and neither half fails anything else.
+ *  2. **A session opened from anywhere lands on the tab that can show it.** A
+ *     notification tap, a deep link and a dev-server row on the Localhost tab can
+ *     all ask for a session while another tab is on screen. The route is pushed
+ *     onto the Sessions stack; without moving the selection it is pushed
+ *     somewhere nobody is looking.
+ *  3. **Machines is reachable, and reaching it twice does not stack it.**
+ *  4. **Rename names a machine.** The Machines screen renames a row, and a row is
  *     very often not the machine on screen. This used to take no argument at all
- *     and always meant "the current one", which on the new screen would rename
- *     the wrong computer — the sort of thing found a week later by somebody
- *     tapping "Work PC" and getting their Mac.
- *  3. **Cancel forgets which row it was.** A stale id left behind is a Save on
+ *     and always meant "the current one", which on that screen would rename the
+ *     wrong computer — the sort of thing found a week later by somebody tapping
+ *     "Work PC" and getting their Mac.
+ *  5. **Cancel forgets which row it was.** A stale id left behind is a Save on
  *     the next rename landing on the machine somebody cancelled out of.
  */
 
@@ -81,7 +87,25 @@ final class DeckTabsTests: XCTestCase {
                          nickname: nickname)
     }
 
-    // MARK: - Which tab
+    // MARK: - Which tabs there are
+
+    /**
+     * Three tabs, and which three.
+     *
+     * Enumerated rather than asserted one at a time, so that adding a fourth
+     * without drawing it — or drawing one nothing can select — is a failure here
+     * rather than a tab bar somebody notices on a phone.
+     *
+     * Both changes in this list are his, from one recording, and they pull in
+     * opposite directions if you take them literally: *"let's bring four icons in
+     * the pill"* while adding Localhost to the three that existed, and then
+     * *"maybe this machines thing can go inside the settings this page overall…
+     * This is a better design"* a minute later. Only one of those can be built.
+     * The second is the one he called better, and it is the one here.
+     */
+    func testTheTabsAreSessionsLocalhostAndSettings() {
+        XCTAssertEqual(DeckModel.Tab.allCases, [.sessions, .localhost, .settings])
+    }
 
     /// The app opens on the sessions, which is what it is for.
     func testTheAppStartsOnSessions() {
@@ -105,17 +129,134 @@ final class DeckTabsTests: XCTestCase {
                        .session(host: Self.macId, id: "01J8ZC4T9K5Q2V7XW3NHRF6MBD"))
     }
 
+    /**
+     * And from the Localhost tab in particular, which is the new way to arrive
+     * here.
+     *
+     * A dev-server row offers the session its server is running in, and that row
+     * is on the Localhost tab now rather than on the session list. So this is a
+     * tap on one tab asking for a screen on another — the case the rule above was
+     * written for, arriving from a place that did not exist when it was written.
+     */
+    func testOpeningASessionFromTheLocalhostTabSwitchesToSessions() {
+        model.tab = .localhost
+        model.open(session: "01J8ZC4T9K5Q2V7XW3NHRF6MBD", on: Self.macId)
+
+        XCTAssertEqual(model.tab, .sessions)
+        XCTAssertEqual(model.route.last,
+                       .session(host: Self.macId, id: "01J8ZC4T9K5Q2V7XW3NHRF6MBD"))
+    }
+
     /// A session id that is not one is refused, and refusing it must not drag the
     /// person off the tab they were on to show them nothing. (A space, because
     /// `SessionID` allows hyphens and underscores — "not-a-session-id" is a
     /// perfectly well-formed id and would have made this test pass for the wrong
     /// reason.)
     func testAnInvalidSessionLinkChangesNothing() {
-        model.tab = .machines
+        model.tab = .localhost
         model.open(session: "not a session id", on: Self.macId)
 
-        XCTAssertEqual(model.tab, .machines)
+        XCTAssertEqual(model.tab, .localhost)
         XCTAssertTrue(model.route.isEmpty)
+    }
+
+    // MARK: - Machines, inside Settings
+
+    /**
+     * The machines are reachable, and reaching them puts the person on the tab
+     * whose stack they are pushed onto.
+     *
+     * The same failure shape as a session opened from the wrong tab, one screen
+     * over: a route appended to the Settings stack while Sessions is on screen is
+     * a screen pushed behind somebody's back.
+     */
+    func testShowingTheMachinesLandsOnSettings() {
+        model.tab = .sessions
+        model.showMachines()
+
+        XCTAssertEqual(model.tab, .settings)
+        XCTAssertEqual(model.settingsRoute, [.machines])
+    }
+
+    /// Asking twice does not stack two copies of the screen, which would need two
+    /// taps of Back to leave.
+    func testShowingTheMachinesTwiceDoesNotStackThem() {
+        model.showMachines()
+        model.showMachines()
+
+        XCTAssertEqual(model.settingsRoute, [.machines])
+    }
+
+    /// The two stacks are two stacks. A session must not appear under the gear
+    /// icon, and the machines must not appear under the terminal one.
+    func testTheSettingsStackAndTheSessionStackAreSeparate() {
+        model.showMachines()
+        model.open(session: "01J8ZC4T9K5Q2V7XW3NHRF6MBD", on: Self.macId)
+
+        XCTAssertEqual(model.tab, .sessions)
+        XCTAssertEqual(model.route.count, 1, "the session is on the Sessions stack")
+        XCTAssertEqual(model.settingsRoute, [.machines],
+                       "and Settings still has the machines where it left them")
+    }
+
+    // MARK: - What is on top of each tab
+
+    /**
+     * The tab bar's other half.
+     *
+     * `DeckChromeTests` pins *whether a surface keeps the bar*. This pins *which
+     * surface a tab is showing*, and both have to be right: a pushed terminal
+     * still reported as `.sessions` gets a correct answer about the wrong screen
+     * — which is a pill over a terminal again, with every other test green.
+     *
+     * It is worth a test rather than being obvious because the third one is not
+     * a path at all. The localhost page is `@State` inside `LocalhostListView`,
+     * so this end of it is a flag the browser sets, and a flag can be left set.
+     */
+    func testEachTabReportsWhatIsOnTopOfIt() {
+        XCTAssertEqual(model.sessionsSurface, .sessions)
+        XCTAssertEqual(model.localhostSurface, .localhost)
+        XCTAssertEqual(model.settingsSurface, .settings)
+
+        model.open(session: "01J8ZC4T9K5Q2V7XW3NHRF6MBD", on: Self.macId)
+        XCTAssertEqual(model.sessionsSurface, .session, "a terminal is pushed on Sessions")
+
+        model.localhostPageIsOpen = true
+        XCTAssertEqual(model.localhostSurface, .localhostPage)
+
+        model.showMachines()
+        XCTAssertEqual(model.settingsSurface, .machines)
+    }
+
+    /// And each of them goes back when what was on top of it does. A bar that
+    /// stayed hidden after the screen it was hidden for had gone would strand
+    /// somebody on one tab.
+    func testEachTabGoesBackToItselfWhenTheDetailIsPopped() {
+        model.open(session: "01J8ZC4T9K5Q2V7XW3NHRF6MBD", on: Self.macId)
+        model.localhostPageIsOpen = true
+        model.showMachines()
+
+        model.route.removeAll()
+        model.localhostPageIsOpen = false
+        model.settingsRoute.removeAll()
+
+        XCTAssertEqual(model.sessionsSurface, .sessions)
+        XCTAssertEqual(model.localhostSurface, .localhost)
+        XCTAssertEqual(model.settingsSurface, .settings)
+    }
+
+    /// The two hidden surfaces are hidden and the rest are not, joined up: this
+    /// is the sentence he said, expressed against the model rather than against
+    /// the enum.
+    func testTheBarIsHiddenExactlyInsideASessionAndInsideAPage() {
+        model.open(session: "01J8ZC4T9K5Q2V7XW3NHRF6MBD", on: Self.macId)
+        model.localhostPageIsOpen = true
+        model.showMachines()
+
+        XCTAssertFalse(DeckChrome.showsTabBar(on: model.sessionsSurface))
+        XCTAssertFalse(DeckChrome.showsTabBar(on: model.localhostSurface))
+        XCTAssertTrue(DeckChrome.showsTabBar(on: model.settingsSurface),
+                      "Machines keeps the bar — it is one of the three he named")
     }
 
     // MARK: - Renaming a row

@@ -13,29 +13,32 @@
  * which is where features go to be undiscovered. Nine items in one menu is not a
  * menu, it is a drawer.
  *
- * ## Why three tabs and not five
+ * ## Which three, and why Machines is not one of them any more
  *
- * Because there are three things, and inventing a fourth would mean shipping a
- * tab that leads to a placeholder. The desktop's sidebar has ten entries and most
- * of them are a file tree, a diff, a search box or a browser — surfaces that are
- * not written for a phone and would not be honest as an empty screen with an
- * icon on it. He was clear about this on the desktop in the same recording:
- * *"I don't see any kind of files here"*, *"also looking empty"*, *"I don't know
- * what I can search here"*. Copying those onto a phone would be copying the
- * complaint.
+ * | Tab | What is on it |
+ * |---|---|
+ * | **Sessions** | the machine's sessions, and nothing else |
+ * | **Localhost** | its dev servers, and every port it is already serving |
+ * | **Settings** | machines, GitHub, alerts, terminal text size, what the app is |
  *
- * What is here is what the app can actually do:
+ * Two of those moved in the same recording and the reasoning for both is on
+ * `DeckModel.Tab`. In short: the localhost list was a second list underneath the
+ * sessions — *"no separate two lists already here"* — and is now the subject of
+ * its own tab; the Machines screen is *"a section, we click and we reach to this
+ * page"* inside Settings, because pairing a machine is something done once and
+ * a bottom tab is for the screens somebody moves between all day.
  *
- * | Tab | What is on it | Was |
- * |---|---|---|
- * | **Sessions** | the machine's sessions, and its dev servers | the whole app |
- * | **Machines** | every paired machine, live, with rename / forget / pair | four items in the overflow menu |
- * | **Settings** | GitHub, alerts, terminal text size, what the app is | three more items in the same menu |
+ * The count is a consequence rather than a target. He asked for *"four icons in
+ * the pill"* while adding Localhost to the three that existed, and then moved
+ * Machines off the bar a minute later — the two cannot both be built, and the
+ * second was the one he called *"a better design"*.
  *
- * The localhost list stays on Sessions rather than becoming a fourth tab. It is
- * *what is running on this machine* — the same question the session list asks —
- * and it is empty on a machine that is not serving anything, which would make the
- * tab bar's fourth item lead to nothing most of the time.
+ * What is **not** here is anything the phone cannot do. The desktop's sidebar has
+ * ten entries and most of them are a file tree, a diff, a search box or a
+ * browser — surfaces that would be an empty screen with an icon on it. He was
+ * clear about that on the desktop in the same recording: *"I don't see any kind
+ * of files here"*, *"also looking empty"*, *"I don't know what I can search
+ * here"*. Copying those onto a phone would be copying the complaint.
  *
  * ## The tab bar is the system's
  *
@@ -72,18 +75,58 @@ struct DeckTabs: View {
                         }
                     }
             }
+            /*
+             * The bar's visibility is stated **here**, not on the screen that
+             * wants it hidden.
+             *
+             * `.toolbar(.hidden, for: .tabBar)` written on `TerminalScreen` — the
+             * documented way, and the way this was first built — did nothing at
+             * all: on iOS 26.5 the pill stayed drawn over the bottom three rows
+             * of a live terminal, which is precisely the frame he complained
+             * about. The bar is a floating pill belonging to the `TabView` on
+             * that release, and this is the level it listens at. `DeckChrome`
+             * holds the rule; each tab only has to say what is on top of it.
+             */
+            .toolbar(DeckChrome.tabBar(on: model.sessionsSurface), for: .tabBar)
             .tabItem { Label("Sessions", systemImage: "terminal") }
             .tag(DeckModel.Tab.sessions)
 
+            /*
+             * Its own stack, so the page opens with a push.
+             *
+             * The page used to be a `fullScreenCover` raised from the session
+             * list, which is exactly what he objected to: *"it should not come
+             * like this up. It should just move like this when we click on
+             * localhost page. It comes like this, which is a bit different,
+             * feels like a browser opens inside. So give it a native feel."* A
+             * cover rises from the bottom edge because it is a modal — a thing
+             * interrupting you. A page from your own machine is not an
+             * interruption, it is where the tap was going.
+             */
             NavigationStack {
-                MachinesView(model: model)
+                LocalhostListView(model: model)
             }
-            .tabItem { Label("Machines", systemImage: "desktopcomputer") }
-            .tag(DeckModel.Tab.machines)
+            // The page is `@State` inside that view rather than a path, so what
+            // is on top of this tab is answered by a flag the browser sets. See
+            // `DeckModel.localhostPageIsOpen`.
+            .toolbar(DeckChrome.tabBar(on: model.localhostSurface), for: .tabBar)
+            .tabItem { Label("Localhost", systemImage: "globe") }
+            .tag(DeckModel.Tab.localhost)
 
-            NavigationStack {
+            NavigationStack(path: $model.settingsRoute) {
                 DeckSettingsView(model: model)
+                    .navigationDestination(for: DeckModel.SettingsRoute.self) { route in
+                        switch route {
+                        case .machines:
+                            MachinesView(model: model)
+                        }
+                    }
             }
+            // Machines keeps the bar — *"Pill should be on here only on the
+            // homepage or machines or settings"* — so this is `.visible` in both
+            // states. Stated rather than omitted so the screen has made the
+            // decision out loud, and so the rule is not "hidden when pushed".
+            .toolbar(DeckChrome.tabBar(on: model.settingsSurface), for: .tabBar)
             .tabItem { Label("Settings", systemImage: "gearshape") }
             .tag(DeckModel.Tab.settings)
         }
@@ -104,6 +147,19 @@ struct DeckTabs: View {
  * shape for. Asad on the desktop's equivalent: *"I am not able to edit the name
  * of this account and I don't know where it belongs to… I should be able to edit
  * the account, delete and add."* Same three verbs, on the phone, in one place.
+ *
+ * ## It is pushed from Settings now, and it keeps the tab bar
+ *
+ * *"maybe this machines thing can go inside the settings this page overall…
+ * Here we can have a section, we click and we reach to this page and we can
+ * connect. This is a better design."* Nothing on the screen changed in the move
+ * — the rows, the menu, the pair button and the sentence at the foot are what
+ * they were, one row further away.
+ *
+ * The tab bar stays over it, because he named this as one of the three places
+ * the bar belongs: *"Pill should be on here only on the homepage or machines or
+ * settings"*. So the rule is not "hidden on anything pushed" — see `DeckChrome`,
+ * and `DeckTabs` above for where it is applied.
  *
  * Every row carries what that machine is doing right now, because every host
  * holds its socket from launch whether or not it is on screen — see
@@ -144,7 +200,7 @@ struct MachinesView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .contentShape(Rectangle())
                     }
-                    .buttonStyle(MachineRowStyle())
+                    .buttonStyle(RowButtonStyle())
                     .padding(.top, 6)
                     .accessibilityIdentifier("machines.add")
 
@@ -312,22 +368,6 @@ private struct MachineRow: View {
     }
 }
 
-/// The card's press state. `.plain` would leave a row that navigates looking
-/// identical before, during and after a press — see `SessionListView`, which
-/// makes the same trade for the same reason.
-private struct MachineRowStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(Color.white.opacity(configuration.isPressed ? 0.06 : 0))
-            }
-            .scaleEffect(configuration.isPressed ? 0.99 : 1)
-            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
-    }
-}
-
 /* -------------------------------------------------------------------------- */
 /* Settings                                                                    */
 /* -------------------------------------------------------------------------- */
@@ -340,13 +380,23 @@ private struct MachineRowStyle: ButtonStyle {
  * exists and a type called `SettingsView` in this module reads as if it might be
  * one; the brand's own prefix is what every other type here would have used.
  *
- * Three rows and a paragraph. Asad on the desktop's settings page, in the same
+ * Four rows and a paragraph. Asad on the desktop's settings page, in the same
  * recording: *"we don't need this much of big descriptions under each. The whole
  * page is going to be used just because of the big descriptions."* So each row is
  * a line, and the only paragraph on the screen is the one that says what alerts
  * genuinely cannot do — which is the one piece of prose in this app that has
  * repeatedly earned its place, because the alternative is somebody waiting two
  * hours for a buzz that was never coming.
+ *
+ * ## Machines is the first row, and it is the fourth
+ *
+ * *"maybe this machines thing can go inside the settings this page overall. How
+ * many machines we pair can go inside the settings actually, yes."* So the row's
+ * value is the count, which is the thing he asked it to say, and it leads the
+ * screen because it is the only row here that opens onto a screen of its own
+ * rather than a switch. It pushes rather than presenting a sheet — the rest of
+ * this app pushes, and a machine list that slid up from the bottom would be the
+ * localhost complaint again one screen over.
  */
 struct DeckSettingsView: View {
     let model: DeckModel
@@ -374,6 +424,25 @@ struct DeckSettingsView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     SettingsGroup {
+                        /*
+                         * A `NavigationLink` rather than a button calling
+                         * `showMachines()`, because this is the ordinary case —
+                         * somebody is on Settings and taps the row, and the link
+                         * pushes onto the stack it is already inside. The method
+                         * exists for the other case, where something that is not
+                         * this screen wants the machines on screen and has to
+                         * move the tab as well.
+                         */
+                        NavigationLink(value: DeckModel.SettingsRoute.machines) {
+                            SettingsRowBody(title: "Machines",
+                                            value: machinesValue,
+                                            icon: "desktopcomputer")
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("settings.machines")
+
+                        SettingsDivider()
+
                         SettingsRow(title: "GitHub",
                                     value: model.gitHubAccount.map { "@\($0.login)" } ?? "Not connected",
                                     icon: "person.crop.circle") {
@@ -489,6 +558,15 @@ struct DeckSettingsView: View {
         }
     }
 
+    /// How many machines this phone is paired with — *"how many machines we pair
+    /// can go inside the settings actually"*, which is the sentence that put this
+    /// row here. The count rather than the current machine's name, because the
+    /// name is already in the title on Sessions and the count is the thing this
+    /// screen is being asked.
+    private var machinesValue: String {
+        model.hosts.count == 1 ? "1 paired" : "\(model.hosts.count) paired"
+    }
+
     /// What the Alerts row says without being opened. A row that always read
     /// "Alerts" would have to be tapped to find out nothing had changed.
     private var alertsValue: String {
@@ -546,8 +624,46 @@ private struct SectionCaption: View {
     }
 }
 
-/// One tappable row: an icon, a title, what it currently is, and a chevron. The
-/// value is the whole point — see `DeckSettingsView.alertsValue`.
+/**
+ * What a settings row looks like: an icon, a title, what it currently is, and a
+ * chevron. The value is the whole point — see `DeckSettingsView.alertsValue`.
+ *
+ * Split out from `SettingsRow` because two rows on this screen do two different
+ * things with the same appearance: most of them raise a sheet and are buttons,
+ * and Machines pushes a screen and is a `NavigationLink`. Drawing the row twice
+ * is how the pushed one ends up two points taller than its neighbours.
+ */
+private struct SettingsRowBody: View {
+    let title: String
+    let value: String
+    let icon: String
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 15))
+                .foregroundStyle(Theme.secondary)
+                .frame(width: 18)
+            Text(title)
+                .font(.system(size: 16))
+                .foregroundStyle(Theme.primary)
+            Spacer(minLength: 8)
+            Text(value)
+                .font(.system(size: 14))
+                .foregroundStyle(Theme.faint)
+                .lineLimit(1)
+            Image(systemName: "chevron.right")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Theme.faint)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 13)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+    }
+}
+
+/// One tappable row that raises something.
 private struct SettingsRow: View {
     let title: String
     let value: String
@@ -556,27 +672,7 @@ private struct SettingsRow: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 12) {
-                Image(systemName: icon)
-                    .font(.system(size: 15))
-                    .foregroundStyle(Theme.secondary)
-                    .frame(width: 18)
-                Text(title)
-                    .font(.system(size: 16))
-                    .foregroundStyle(Theme.primary)
-                Spacer(minLength: 8)
-                Text(value)
-                    .font(.system(size: 14))
-                    .foregroundStyle(Theme.faint)
-                    .lineLimit(1)
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Theme.faint)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 13)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
+            SettingsRowBody(title: title, value: value, icon: icon)
         }
         .buttonStyle(.plain)
     }

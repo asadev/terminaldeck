@@ -5,7 +5,7 @@
  *
  * The third of those three used to be a bare `NavigationStack` over the session
  * list, and everything the app could do that was not "open a session" lived
- * behind a `…` in its corner. It is now `DeckTabs` — Sessions, Machines,
+ * behind a `…` in its corner. It is now `DeckTabs` — Sessions, Localhost,
  * Settings — which is where the reasoning about *which* tabs and *why only
  * three* is written down. The gate above it is unchanged: a phone that is not
  * paired, and a first machine that has not been approved, still take the whole
@@ -71,16 +71,18 @@ struct RootView: View {
             AlertsView(model: model) { model.showingAlerts = false }
         }
         /*
-         * A machine asking this phone for a GitHub login.
+         * A machine asking this phone for a GitHub login. One copy, here.
          *
-         * Armed only while nothing is covering the session list. The localhost
-         * browser is a `fullScreenCover` presented from inside this stack, and a
-         * sheet asked for by an ancestor of a cover has nothing to present from
-         * — so that screen carries its own copy of this modifier and this one
-         * stands down while it is up. Exactly one is armed at a time, which is
-         * what stops the same question being presented twice.
+         * It used to be two, armed one at a time through a `covered` flag,
+         * because the localhost browser was a `fullScreenCover` and a sheet
+         * asked for by an ancestor of a cover has nothing to present from. That
+         * screen is a **push** now — see `LocalhostListView` — and a pushed
+         * screen is inside this hierarchy rather than over it, so this one
+         * presents perfectly well while somebody is looking at a tunnelled page.
+         * The flag, the second modifier and the rule about which was live are
+         * all gone with the cover.
          */
-        .credentialPrompt(model, armed: !model.covered)
+        .credentialPrompt(model)
         /*
          * Naming a machine, presented from here rather than from the list.
          *

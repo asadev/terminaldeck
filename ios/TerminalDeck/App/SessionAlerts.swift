@@ -97,9 +97,22 @@ struct SessionAlert: Equatable {
         }
     }
 
-    /// Groups a session's alerts together in Notification Centre rather than
-    /// stacking four unrelated-looking banners from one machine.
-    var thread: String { "\(hostId).\(sessionId)" }
+    /**
+     * One session, named the same way everywhere.
+     *
+     * It is the notification's `threadIdentifier`, so a machine's alerts group
+     * instead of stacking as four unrelated banners; it is also its *request*
+     * identifier, which is what makes a second alert about the same session
+     * replace the first rather than pile on top of it; and it is the key
+     * `DeckModel` files "when he left this session" under. Three uses, one
+     * spelling — a second one would let two of them disagree about which
+     * session they meant.
+     */
+    var thread: String { Self.thread(hostId: hostId, sessionId: sessionId) }
+
+    static func thread(hostId: String, sessionId: String) -> String {
+        "\(hostId).\(sessionId)"
+    }
 }
 
 /// Whether a batch of changes is news or a catch-up.

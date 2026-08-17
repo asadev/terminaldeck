@@ -109,6 +109,13 @@ final class InspectUITests: XCTestCase {
         try XCTSkipUnless(waitForConnected(timeout: 60), "\(Self.notRunning) (never reached Connected)")
     }
 
+    /// The port rows are on the Localhost tab now rather than under the sessions
+    /// — see `DeckModel.Tab`. Called by each case rather than from `setUp`,
+    /// because one of them starts a session first and that is on the other tab.
+    private func openLocalhost() {
+        XCTAssertTrue(app.openLocalhostTab(), "the Localhost tab should be reachable")
+    }
+
     private static let notRunning =
         "A host and a dev server on \(port) are needed. Start them as described at the top of this "
         + "file and pass TEST_RUNNER_TD_CONTROL."
@@ -165,6 +172,7 @@ final class InspectUITests: XCTestCase {
         // advertises `create`, which the harness does.
         try ensureASessionExists()
 
+        openLocalhost()
         let row = app.buttons["port.\(Self.port)"]
         XCTAssertTrue(row.waitForExistence(timeout: 25),
                       "the dev server on \(Self.port) should be offered without anyone typing a port")
@@ -250,6 +258,7 @@ final class InspectUITests: XCTestCase {
      * again and hope.
      */
     func testWiderSelectsTheEnclosingElement() throws {
+        openLocalhost()
         let row = app.buttons["port.\(Self.port)"]
         XCTAssertTrue(row.waitForExistence(timeout: 25))
         row.tap()
@@ -296,6 +305,7 @@ final class InspectUITests: XCTestCase {
      * on somebody's disk.
      */
     func testInspectingIsOffUntilItIsTurnedOn() throws {
+        openLocalhost()
         let row = app.buttons["port.\(Self.port)"]
         XCTAssertTrue(row.waitForExistence(timeout: 25))
         row.tap()

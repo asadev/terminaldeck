@@ -93,6 +93,11 @@ final class LocalhostUITests: XCTestCase {
         let connected = waitForConnected(timeout: Self.reachable == nil ? 45 : 10)
         Self.reachable = connected
         try XCTSkipUnless(connected, Self.notRunning)
+
+        // The ports are their own tab now rather than a second list under the
+        // sessions — *"Sessions separately and local host separately in the pill
+        // side"*. Every case below starts here.
+        XCTAssertTrue(app.openLocalhostTab(), "the Localhost tab should be reachable")
     }
 
     /// The skip, and it names both halves of the setup — the host *and* the dev
@@ -140,9 +145,28 @@ final class LocalhostUITests: XCTestCase {
         let done = app.buttons["localhost.done"]
         XCTAssertTrue(done.waitForExistence(timeout: 15), "the browser screen should open on the tap")
 
+        /*
+         * The pill is gone in here, and this is the only place it can be
+         * checked.
+         *
+         * *"Pill should be on here only on the homepage or machines or settings,
+         * but not inside the session and not also inside the localhost page."*
+         * `DeckChromeTests` pins the rule; nothing but a running app can say
+         * whether the modifier that enforces it is on the right screen.
+         */
+        XCTAssertFalse(app.tabBars.firstMatch.exists,
+                       "the tab bar must not be drawn over a page from the machine")
+
         let heading = app.staticTexts["Served from the Mac"]
         XCTAssertTrue(heading.waitForExistence(timeout: 30),
                       "the page never rendered — the tunnel did not carry the document")
+
+        // Nowhere to go back to on the first page of a site, so the control says
+        // so by being disabled. The half of "the back button does nothing" that
+        // was always correct and has to stay correct.
+        let back = app.buttons["localhost.back"]
+        XCTAssertTrue(back.exists, "the page's own Back button should be on the header")
+        XCTAssertFalse(back.isEnabled, "one page in, there is no history to go back to")
 
         // A dev server's socket is the difference between a page and a
         // screenshot. Given a little longer than the document, because it opens
@@ -160,6 +184,11 @@ final class LocalhostUITests: XCTestCase {
 
         done.tap()
         XCTAssertTrue(portRow().waitForExistence(timeout: 10), "closing should come back to the list")
+        // And the bar comes back with it. A hidden tab bar that stays hidden
+        // after the screen it belonged to has gone is the other half of the same
+        // bug, and it strands somebody on one tab.
+        XCTAssertTrue(app.tabBars.firstMatch.waitForExistence(timeout: 5),
+                      "the tab bar should be back on the list")
     }
 
     /**

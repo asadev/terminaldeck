@@ -25,6 +25,36 @@
  * both into an agent on the Mac, as **one line**. See `Inspect` for why the line
  * is flattened rather than wrapped, and `InspectScript` for what runs inside the
  * page. It is the desktop's `CapturePanel` feature, from the sofa.
+ *
+ * ## It is pushed, and it wears exactly one bar
+ *
+ * This was a `fullScreenCover` and it rose from the bottom edge. Asad: *"it
+ * should not come like this up. It should just move like this when we click on
+ * localhost page. It comes like this, which is a bit different, feels like a
+ * browser opens inside. So give it a native feel, not like this."* It is a
+ * `navigationDestination` now — see `LocalhostListView` — so it slides in from
+ * the trailing edge and the system's back-swipe pops it.
+ *
+ * Two bars follow from that and both are turned off:
+ *
+ *  - **The tab bar.** *"Pill should be on here… not inside the session and not
+ *    also inside the localhost page."* A page is the whole reason you are here
+ *    and it wants the height; the bar was sitting over the bottom of it pointing
+ *    at somewhere else. That one is **not** turned off here: iOS 26 draws it as
+ *    a floating pill owned by the `TabView` and ignores a `.toolbar` written on
+ *    a pushed screen, so `DeckTabs` states it and this screen only reports that
+ *    it is up — `DeckModel.localhostPageIsOpen`. `DeckChrome` holds the rule.
+ *  - **The navigation bar.** The header below is already a browser's chrome —
+ *    back, reload, where you are, inspect, Done — and he said of the last of
+ *    those *"I think is on its correct place"*. A system bar above it would be
+ *    94 points of chrome in two rows, and a second back button eleven points
+ *    from the first one meaning something different. So this screen keeps its
+ *    own bar and the system's is hidden.
+ *
+ * Losing the system bar does **not** lose the way out. Done pops the stack, and
+ * `allowsBackForwardNavigationGestures` gives the left edge to the *page's*
+ * history, which is what a browser does with that gesture and what the back
+ * button beside reload does with a tap.
  */
 
 import SwiftUI
@@ -66,6 +96,8 @@ struct LocalhostBrowser: View {
             }
         }
         .preferredColorScheme(.dark)
+        // One bar on this screen, and it is the one below. See the header.
+        .toolbar(.hidden, for: .navigationBar)
         // Presented off a flag rather than off the capture itself. `.sheet(item:)`
         // tears the sheet down and builds a new one whenever the identity changes,
         // and Wider/Narrower change the capture on every press — which would make
@@ -102,17 +134,12 @@ struct LocalhostBrowser: View {
             // controller holds the handler. Neither should outlive the screen.
             browser.tearDown()
         }
-        /*
-         * The credential prompt's second home.
-         *
-         * This screen is a `fullScreenCover`, so while it is up the copy of this
-         * modifier on `RootView` has nothing to present from — a sheet asked for
-         * by an ancestor of a cover simply does not appear. `DeckModel.covered`
-         * disarms that one and arms this one, so a machine that asks for a login
-         * while somebody is looking at a tunnelled page still gets an answer
-         * rather than a minute of silence.
-         */
-        .credentialPrompt(model)
+        // No `.credentialPrompt` here any more, and its absence is the point.
+        // This screen used to carry its own copy because a cover has no ancestor
+        // that can present a sheet; a pushed screen is inside the hierarchy
+        // `RootView` presents from, so the one copy up there reaches it. Two
+        // copies of a sheet bound to the same optional is how one question gets
+        // asked twice.
     }
 
     /// Copy, paste and "sent to an agent" are silent by nature; without this the
@@ -131,6 +158,25 @@ struct LocalhostBrowser: View {
     private var header: some View {
         VStack(spacing: 6) {
             HStack(spacing: 12) {
+                /*
+                 * The page's own Back — and it works now.
+                 *
+                 * Asad: *"the back button here doesn't work at all next to
+                 * refresh. So it should be working also."* The button was wired
+                 * to `goBack()` the whole time and the wiring was never the
+                 * problem: `canGoBack` was only ever re-read from the navigation
+                 * delegate, which does not fire for a same-document
+                 * navigation. Every dev server this feature exists to look at is
+                 * a single-page app, every route change in one is `pushState`,
+                 * and so on the pages he was testing this button was permanently
+                 * disabled no matter how far into the site he had clicked. A
+                 * disabled chevron and a dead one look identical.
+                 *
+                 * `BrowserBridge` watches the web view through KVO now, so this
+                 * is live within a frame of the page's own history changing —
+                 * and still genuinely disabled when there is nowhere to go,
+                 * which is the honest state for the first page of a site.
+                 */
                 Button {
                     browser.goBack()
                 } label: {
@@ -139,6 +185,7 @@ struct LocalhostBrowser: View {
                 }
                 .disabled(!browser.canGoBack)
                 .accessibilityLabel("Back")
+                .accessibilityIdentifier("localhost.back")
 
                 Button {
                     browser.reload()
@@ -148,6 +195,7 @@ struct LocalhostBrowser: View {
                 }
                 .disabled(!isLive)
                 .accessibilityLabel(browser.loading ? "Stop loading" : "Reload")
+                .accessibilityIdentifier("localhost.reload")
 
                 VStack(alignment: .leading, spacing: 1) {
                     Text(title)
@@ -309,6 +357,23 @@ struct LocalhostBrowser: View {
  * Held outside the SwiftUI view for the same reason `TerminalBridge` is: a
  * `UIViewRepresentable` is recreated on every state change, and a web view
  * rebuilt mid-load starts the page again from the top.
+ *
+ * ## The navigation delegate is not enough, and that was the Back button bug
+ *
+ * `WKNavigationDelegate` fires for **document** navigations. It does not fire
+ * for a same-document one — a fragment, a `pushState`, a `replaceState` — and
+ * those are not an edge case here, they are the normal case: the whole point of
+ * this screen is looking at a dev server, every modern dev server serves a
+ * single-page app, and every route change in one is `pushState`. Each of those
+ * *does* add an entry to the back-forward list, so `webView.canGoBack` becomes
+ * true — and this object never asked again, so its own `canGoBack` stayed false
+ * and the button stayed disabled however deep into the site you clicked.
+ *
+ * `canGoBack`, `title` and `url` are all KVO-compliant on `WKWebView` and none
+ * of the three is reliably delivered by the delegate for those navigations, so
+ * all three are observed. The delegate callbacks stay: they carry `loading` and
+ * the failures, which KVO does not, and they re-arm the inspect script on a new
+ * document.
  */
 @MainActor
 @Observable
@@ -336,6 +401,17 @@ final class BrowserBridge: NSObject, WKNavigationDelegate {
      * own world neither exists. See the header of `InspectScript`.
      */
     private static let world = WKContentWorld.defaultClient
+
+    /**
+     * The KVO registrations, held so they outlive `init` and die with this
+     * object.
+     *
+     * `NSKeyValueObservation` unregisters itself when it is deallocated, which
+     * is the whole reason this is the modern spelling rather than
+     * `addObserver(_:forKeyPath:…)`: a `WKWebView` outliving an observer that
+     * never removed itself is a crash, not a leak.
+     */
+    private var observations: [NSKeyValueObservation] = []
 
     override init() {
         let configuration = WKWebViewConfiguration()
@@ -369,6 +445,65 @@ final class BrowserBridge: NSObject, WKNavigationDelegate {
         // registering `self` directly is a cycle that keeps a web view, its
         // process and its page alive for the life of the app.
         controller.add(ScriptRelay(self), contentWorld: Self.world, name: InspectScript.messageHandler)
+
+        watchNavigationState()
+    }
+
+    /**
+     * Watch the three things the navigation delegate cannot be trusted for.
+     *
+     * `canGoBack` is the one that was a bug — see the type's header — and
+     * `title` and `url` are here because they go stale in exactly the same
+     * moment and for exactly the same reason: a single-page app that routes with
+     * `pushState` changes all three and tells the delegate nothing, so the
+     * header would keep naming the page somebody left two taps ago.
+     *
+     * **Any of the three re-reads all three**, rather than each observer
+     * updating only its own property. That is deliberate and it is what makes
+     * this robust rather than merely correct-looking: these are three
+     * notifications about one event, WebKit does not promise they arrive
+     * together or in an order, and a `canGoBack` notification that is coalesced
+     * away on some future release would otherwise silently bring back the exact
+     * bug this exists to fix. Re-reading three properties is free; being wrong
+     * about the Back button is what he noticed.
+     *
+     * `[weak self]` in every block. The observations are owned by this object
+     * and observe a view this object owns, so a strong capture would be a cycle
+     * holding a web content process open after the screen has gone.
+     */
+    private func watchNavigationState() {
+        // `.initial` so the properties start out agreeing with a web view that
+        // may already have been handed a page — not the case today, and a
+        // cheaper guarantee than remembering it never will be.
+        let options: NSKeyValueObservingOptions = [.initial, .new]
+        observations = [
+            webView.observe(\.canGoBack, options: options) { [weak self] _, _ in
+                MainActor.assumeIsolated { self?.refreshNavigationState() }
+            },
+            webView.observe(\.title, options: options) { [weak self] _, _ in
+                MainActor.assumeIsolated { self?.refreshNavigationState() }
+            },
+            webView.observe(\.url, options: options) { [weak self] _, _ in
+                MainActor.assumeIsolated { self?.refreshNavigationState() }
+            },
+        ]
+    }
+
+    /**
+     * Copy what the web view currently says into what this screen draws.
+     *
+     * Cheap enough to call on every signal — three property reads and three
+     * assignments, and `@Observable` only publishes the ones that changed.
+     *
+     * The address falls back to what it was rather than to empty: `url` is nil
+     * for the moment between a `stopLoading` and the next load, and a header
+     * that blanked its own address in that window would read as the page having
+     * gone when nothing has happened at all.
+     */
+    private func refreshNavigationState() {
+        canGoBack = webView.canGoBack
+        title = webView.title ?? ""
+        address = webView.url?.absoluteString ?? address
     }
 
     /// Drop the page's only route back into this app. Called when the screen goes.
@@ -377,6 +512,10 @@ final class BrowserBridge: NSObject, WKNavigationDelegate {
         webView.configuration.userContentController
             .removeScriptMessageHandler(forName: InspectScript.messageHandler, contentWorld: Self.world)
         webView.stopLoading()
+        // Before the web view is released rather than after: an observation left
+        // registered against a deallocated object is the classic KVO crash, and
+        // this screen is torn down every time somebody closes a page.
+        observations = []
     }
 
     func load(_ url: URL) {
@@ -506,11 +645,12 @@ final class BrowserBridge: NSObject, WKNavigationDelegate {
         }
     }
 
+    /// The delegate's half: whether a document navigation is in flight. The
+    /// title, the address and `canGoBack` are not touched here any more — they
+    /// are observed, because the delegate is silent for the same-document
+    /// navigations a dev server makes constantly. See the type's header.
     private func sync(loading: Bool) {
         self.loading = loading
-        title = webView.title ?? ""
-        address = webView.url?.absoluteString ?? address
-        canGoBack = webView.canGoBack
     }
 }
 

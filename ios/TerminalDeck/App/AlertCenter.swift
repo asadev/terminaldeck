@@ -132,10 +132,24 @@ final class NotificationAlerts: AlertPresenting {
             content.interruptionLevel = .timeSensitive
         }
 
-        // `trigger: nil` — deliver now. Everything here is a thing that has
-        // already happened; scheduling it would be describing the past in the
-        // future tense.
-        let request = UNNotificationRequest(identifier: UUID().uuidString,
+        /*
+         * The session's own identifier, not a fresh UUID — one live notification
+         * per session, always the latest.
+         *
+         * A UUID made every alert a new row: a session that goes waiting →
+         * working → waiting three times in a morning left three banners in
+         * Notification Centre, two of them describing a state it is no longer
+         * in. `UNUserNotificationCenter` replaces a request whose identifier it
+         * already holds, so reusing the thread makes the newest verdict about a
+         * session *replace* the previous one instead of stacking on it. That is
+         * both the truthful shape — a session has one current state — and half
+         * the answer to *"a lot of notifications"*.
+         *
+         * `trigger: nil` — deliver now. Everything here is a thing that has
+         * already happened; scheduling it would be describing the past in the
+         * future tense.
+         */
+        let request = UNNotificationRequest(identifier: alert.thread,
                                             content: content,
                                             trigger: nil)
         center.add(request)

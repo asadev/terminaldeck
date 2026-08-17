@@ -1,0 +1,376 @@
+/**
+ * The iOS release gate, walked once end to end, with a photograph at every stop.
+ *
+ * `RELEASE-CHECK.md` lists six things about this app that have to be true before
+ * anything ships: three tabs with Machines inside Settings, the tab pill hidden
+ * inside a session and inside a localhost page, a Back button that is live after
+ * a same-document navigation, GitHub sign-in, no notification spam, and a
+ * localhost list that folds, groups and renames. Five of those six had never been
+ * looked at on a screen — the pass that built them was written, reported as
+ * verified, and never compiled. This file is the answer to *"verify in the
+ * simulator, and screenshot"* being a sentence somebody has to be awake for.
+ *
+ * ## Why one case rather than six
+ *
+ * Because the expensive part is not the assertion, it is arriving. Pairing takes
+ * a code the host mints on demand and a device it then approves, and a fresh
+ * `XCUIApplication` per case would pay that four times and hand three of the four
+ * a phone whose state the previous case left behind. The tour is written in the
+ * order a person would walk it — list, machines, localhost, a page, a session —
+ * and each stop asserts what it came for before moving on, so a failure names the
+ * stop rather than "the tour".
+ *
+ * The single-case shape has one real cost and it is worth stating: a failure
+ * stops the walk, so the frames after it are not taken. That is the right trade
+ * here. The frames exist to be *looked at* by somebody deciding whether to ship,
+ * and a set of frames taken after an assertion failed is a set of frames of an
+ * app in a state nobody intended.
+ *
+ * ## What it needs, and why it skips without it
+ *
+ * A real desktop. Not `ios/Harness/run.sh host` — that stand-in answers `list`,
+ * `attach`, `create` and the dev-server verbs and implements **no** `ports` or
+ * `tunnel` handler at all, so the Localhost tab is permanently empty against it
+ * and three of the five stops below would be photographs of an empty screen.
+ * What this needs is the product's own host:
+ *
+ *     HOME=/private/tmp/tdios2 node out/headless/host.mjs &
+ *     ios/Harness/run.sh live folder --state "$HOME/Library/Application Support/terminaldeck" \
+ *         --path /private/tmp/tdios2/work
+ *     node /tmp/pushstate-server.mjs &      # any page whose links are pushState
+ *     TEST_RUNNER_TD_READY_FILE=… TEST_RUNNER_TD_CODE_FILE=… TEST_RUNNER_TD_SHOTS=… \
+ *       xcodebuild test … -only-testing:TerminalDeckUITests/ReleaseShotsUITests
+ *
+ * The ready-file/code-file handshake is `LiveTransferUITests`', for its reason: a
+ * pairing code lives sixty seconds and a Simulator takes longer than that to
+ * build, install and launch, so the code cannot be minted before the run — the
+ * phone says when it is standing at the field and the Mac answers with six
+ * digits.
+ *
+ * Without `TD_READY_FILE` every case skips, which is this target's standing rule.
+ * A suite that goes red on a laptop with nothing listening is a suite that gets
+ * deleted in a week.
+ *
+ * ## The one thing it deliberately does not prove
+ *
+ * That a long press still selects. `TerminalScrollUITests` records the
+ * measurements: XCUITest cannot synthesise a stationary hold longer than about
+ * six tenths of a second, and `TerminalGestures.selectionHold` is 0.7. That
+ * gesture is on `ios/WhatToTest.md` for a person with a real thumb, and writing a
+ * green test for it here by lowering the constant until the tool could reach it
+ * would be testing the tool.
+ */
+
+import XCTest
+
+final class ReleaseShotsUITests: XCTestCase {
+
+    /**
+     * The page the Back-button stop navigates. Any port will do — the number is
+     * read back off the row rather than assumed — but it has to be a page whose
+     * links call `pushState`, because that is the navigation the bug was about.
+     * `.harness/.devsite` is not it: its nav is three real `href`s, which fire
+     * `WKNavigationDelegate` and would have made the button work all along.
+     */
+    private static let pushStatePort = "4321"
+
+    private var app: XCUIApplication!
+
+    private func env(_ name: String) -> String {
+        ProcessInfo.processInfo.environment[name] ?? ""
+    }
+
+    private var readyFile: String { env("TD_READY_FILE") }
+    private var codeFile: String { env("TD_CODE_FILE") }
+    private var shots: String { env("TD_SHOTS") }
+
+    private static let notRunning =
+        "No live desktop. Start out/headless/host.mjs under its own HOME, grant it a folder, "
+        + "and run with TEST_RUNNER_TD_READY_FILE / TD_CODE_FILE set — see this file's header."
+
+    override func setUpWithError() throws {
+        continueAfterFailure = false
+        try XCTSkipIf(readyFile.isEmpty, Self.notRunning)
+
+        app = XCUIApplication()
+        app.launch()
+        try connect()
+    }
+
+    // MARK: - The tour
+
+    func testTheReleaseGateOnARealDesktop() throws {
+        try threeTabsAndMachinesIsNotOneOfThem()
+        try machinesPushesFromSettings()
+        try localhostGroupsAndFolds()
+        try theBackButtonIsLiveAfterAPushState()
+        try aSessionHasNoPillOverItsOutput()
+    }
+
+    /**
+     * Three tabs, and Machines is not among them.
+     *
+     * *"maybe this machines thing can go inside the settings this page overall."*
+     * The assertion that matters is the **absence**: a fourth pill would look
+     * like a design decision rather than a regression, and it is the one thing
+     * here that a screenshot alone cannot settle, because "is that four or is
+     * that three" is exactly the question a small frame answers badly.
+     */
+    private func threeTabsAndMachinesIsNotOneOfThem() throws {
+        let bar = app.tabBars.firstMatch
+        XCTAssertTrue(bar.waitForExistence(timeout: 20), "the tab bar should be on the session list")
+        for name in ["Sessions", "Localhost", "Settings"] {
+            XCTAssertTrue(bar.buttons[name].exists, "\(name) should be a tab")
+        }
+        XCTAssertEqual(bar.buttons.count, 3, "three tabs, no more")
+        XCTAssertFalse(bar.buttons["Machines"].exists, "Machines moved into Settings")
+        capture("01-three-tabs")
+    }
+
+    /**
+     * Machines is a push, and it **keeps** the tab bar.
+     *
+     * The rule in `DeckChrome` is not "hide the bar on anything pushed" — it is
+     * "hide it on a screen that is the whole thing you came for". Machines is a
+     * place you pass through, so it keeps the bar, and a test that only checked
+     * the two screens that lose it would let that half rot.
+     */
+    private func machinesPushesFromSettings() throws {
+        XCTAssertTrue(app.openMachinesTab(), "Settings should hold a Machines row that pushes")
+        XCTAssertTrue(app.navigationBars.buttons.element(boundBy: 0).exists,
+                      "a push, not a sheet — there should be a Back button")
+        XCTAssertTrue(app.tabBars.firstMatch.exists,
+                      "Machines is a place you pass through; it keeps the bar")
+        capture("02-settings-machines-pushed")
+
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.buttons["settings.github"].waitForExistence(timeout: 10),
+                      "Back should return to Settings")
+    }
+
+    /**
+     * The localhost list is grouped, and the noise starts folded.
+     *
+     * Both halves are asserted because either alone is satisfiable by an accident:
+     * a screen with one section is "grouped" and a screen with everything folded
+     * is not a list. What is checked is that there is more than one section and
+     * that at least one of them opens on a tap and says so afterwards — the header
+     * carries its own state in its label, which is what makes the fold readable
+     * from outside the app at all.
+     */
+    private func localhostGroupsAndFolds() throws {
+        XCTAssertTrue(app.openLocalhostTab(), "the Localhost tab should be reachable")
+
+        let headers = app.buttons.matching(
+            NSPredicate(format: "identifier BEGINSWITH 'localhost.section.'"))
+        XCTAssertTrue(headers.firstMatch.waitForExistence(timeout: 30),
+                      "the machine's ports should arrive and be grouped")
+        XCTAssertGreaterThan(headers.count, 1, "one section is not a grouping")
+        capture("03-localhost-grouped")
+
+        let folded = (0 ..< headers.count)
+            .map { headers.element(boundBy: $0) }
+            .first { $0.label.contains("Folded") }
+        let header = try XCTUnwrap(folded, "nothing on this machine landed in a folded group")
+        header.tap()
+        XCTAssertTrue(header.label.contains("Open"), "tapping a folded header should open it")
+        capture("04-localhost-unfolded")
+        header.tap()
+    }
+
+    /**
+     * The Back button, after a navigation WebKit never told its delegate about.
+     *
+     * The whole bug: `canGoBack` was only re-read from `WKNavigationDelegate`
+     * callbacks, and those do not fire for a `pushState` — which is every route
+     * change in every single-page app, i.e. the normal case on a dev server. So
+     * the sequence is the assertion. Disabled on arrival, one tap on a link that
+     * only pushes history, enabled. Checking the end state alone would pass on a
+     * button that had been enabled since the screen opened.
+     *
+     * `BrowserBackTests` pins the same thing against a real `WKWebView` with no
+     * desktop at all. This is here because that one cannot see the button.
+     */
+    private func theBackButtonIsLiveAfterAPushState() throws {
+        let row = app.buttons["port.\(Self.pushStatePort)"]
+        try XCTSkipUnless(row.waitForExistence(timeout: 20),
+                          "nothing is serving a pushState page on \(Self.pushStatePort)")
+        row.tap()
+
+        let back = app.buttons["localhost.back"]
+        XCTAssertTrue(back.waitForExistence(timeout: 60), "the page should open with a Back button")
+        XCTAssertFalse(app.tabBars.firstMatch.exists,
+                       "a page from the machine is the whole thing you came for — no pill")
+        // The page has to be *there* before its state means anything: a web view
+        // reports the address of a load that has only been started.
+        XCTAssertTrue(app.staticTexts["Basket"].waitForExistence(timeout: 30),
+                      "the tunnelled page should render")
+        XCTAssertFalse(back.isEnabled, "nothing has been navigated yet")
+
+        // By prefix: the anchor's label comes out of the document, and the
+        // guillemet in it is one character to WebKit and three to a shell that
+        // wrote the page. Matching the words avoids a query that fails on
+        // punctuation.
+        let link = app.links.matching(NSPredicate(format: "label BEGINSWITH 'Go to Delivery'")).firstMatch
+        XCTAssertTrue(link.waitForExistence(timeout: 15), "the page should offer its pushState link")
+        link.tap()
+        XCTAssertTrue(app.staticTexts["Delivery"].waitForExistence(timeout: 15),
+                      "the link should have changed the route")
+        XCTAssertTrue(back.isEnabled,
+                      "pushState left a history entry — this is the bug he reported")
+        capture("05-back-live-after-pushstate")
+
+        back.tap()
+        XCTAssertTrue(app.staticTexts["Basket"].waitForExistence(timeout: 15),
+                      "Back should actually go back")
+        app.buttons["localhost.done"].tap()
+        XCTAssertTrue(app.buttons["localhost.refresh"].waitForExistence(timeout: 15),
+                      "Done should return to the list")
+    }
+
+    /**
+     * A session, with no pill over the bottom of its output.
+     *
+     * *"when this keyboard is down, see the pill is still there. So inside the
+     * session we don't need the pill."* Two assertions, because his complaint had
+     * two halves and only one of them is about the bar existing: the pill is gone,
+     * **and** the terminal now reaches the bottom of the window rather than
+     * stopping where the pill used to be. A screen that hid the bar and left the
+     * inset behind would satisfy the first and none of the point.
+     *
+     * The keyboard is put away first, deliberately — it is the exact frame he was
+     * looking at when he said it, and it is the state in which the pill used to be
+     * drawn over the last three rows of output.
+     */
+    private func aSessionHasNoPillOverItsOutput() throws {
+        app.openSessionsTab()
+
+        let new = app.buttons["sessions.new"]
+        XCTAssertTrue(new.waitForExistence(timeout: 30),
+                      "the host has granted a folder, so New Session should be offered")
+        new.tap()
+        let inMenu = app.buttons["sessions.newDefault"]
+        if inMenu.waitForExistence(timeout: 4) { inMenu.tap() }
+
+        let terminal = app.descendants(matching: .any)["terminal.view"]
+        XCTAssertTrue(terminal.waitForExistence(timeout: 60), "the session should open its terminal")
+        sleep(4)
+
+        // Enough output to fill the screen, so "reaches the bottom" is a claim
+        // about something visible rather than about an empty view's frame.
+        try type("for i in $(seq 1 60); do echo \"line $i · terminal deck\"; done\n")
+        sleep(3)
+        if app.buttons["keys.dismiss"].exists { app.buttons["keys.dismiss"].tap() }
+        sleep(2)
+
+        XCTAssertFalse(app.tabBars.firstMatch.exists, "the pill should be gone inside a session")
+
+        /*
+         * How close to the bottom is close enough, and why it is a number.
+         *
+         * The floating pill on iOS 26 is about 50 points tall and sits about 20
+         * above the bottom safe-area edge, so a terminal that stopped short of it
+         * would end at least 60 points up. 40 is comfortably below that and
+         * comfortably above the home indicator's own inset, which the terminal
+         * does still respect — the ask was "the output is not covered", not "draw
+         * underneath the system's own affordance".
+         */
+        let window = app.windows.element(boundBy: 0).frame
+        let gap = window.maxY - terminal.frame.maxY
+        XCTAssertLessThan(gap, 40,
+                          "the terminal stops \(gap) points short of the bottom — the pill's inset "
+                          + "is still being reserved")
+        add(XCTAttachment(string: "window \(window)  terminal \(terminal.frame)  gap \(gap)"))
+        capture("06-session-no-pill")
+    }
+
+    // MARK: - Arriving
+
+    /**
+     * Pair if this phone has never seen this host, and come straight up if it has.
+     *
+     * Nothing is unpaired here: a pairing lasts until it is revoked, and a second
+     * run finding the host still trusted is that claim holding rather than a
+     * convenience.
+     */
+    private func connect() throws {
+        let field = app.textFields["pairing.field"]
+        if field.waitForExistence(timeout: 25) {
+            capture("00-pairing")
+            try? "ready\n".write(toFile: readyFile, atomically: true, encoding: .utf8)
+            let code = waitForCode(timeout: 240)
+            XCTAssertEqual(code.count, 6, "the harness never wrote six digits to TD_CODE_FILE")
+            field.tap()
+            field.typeText(code)
+            // No tap on a submit button: the field submits itself on the sixth
+            // digit, which is behaviour worth proving rather than working around.
+        }
+
+        // Long, because a device has to redeem its code, be refused for not being
+        // approved yet, and then be approved on the host before the pill can turn
+        // green. That refusal is the product declining to let anything in on a
+        // code alone.
+        let pill = app.descendants(matching: .any).matching(identifier: "connection.pill").firstMatch
+        let deadline = Date().addingTimeInterval(180)
+        while Date() < deadline {
+            if pill.exists && pill.label.contains("Connected") { return }
+            usleep(500_000)
+        }
+        capture("zz-never-connected")
+        XCTFail("never reached Connected; the pill said \(pill.exists ? pill.label : "nothing")")
+    }
+
+    /// Wait for the Mac to write six digits. A poll, for the reason
+    /// `LiveTransferUITests` gives: there is no event to subscribe to across a
+    /// process boundary that is a file on somebody else's filesystem.
+    private func waitForCode(timeout: TimeInterval) -> String {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if let raw = try? String(contentsOfFile: codeFile, encoding: .utf8) {
+                let digits = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                if digits.count == 6 { return digits }
+            }
+            usleep(400_000)
+        }
+        return ""
+    }
+
+    /// Put text into the session, raising the keyboard if it is down. The
+    /// QuickPath tutorial the system keyboard shows on a fresh Simulator sits
+    /// over the key bar, so it is dismissed the way a person would.
+    private func type(_ text: String) throws {
+        let keyboard = app.buttons["terminal.keyboard"]
+        XCTAssertTrue(keyboard.waitForExistence(timeout: 30), "the terminal toolbar should be up")
+        if !app.keyboards.firstMatch.exists {
+            keyboard.tap()
+            XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 20),
+                          "the keyboard toggle should raise a keyboard")
+        }
+        if app.buttons["Continue"].exists { app.buttons["Continue"].tap() }
+        app.typeText(text)
+    }
+
+    // MARK: - The frames
+
+    /**
+     * A frame, saved where a person can open it.
+     *
+     * Attached to the result bundle *and* written to a directory on the Mac, the
+     * way `LiveTransferUITests` does it: the attachment is tidy and needs
+     * `xcresulttool` to get at, and the file is the one somebody actually looks
+     * at. These frames are the deliverable — the whole reason this suite exists is
+     * that "verified in the simulator" had been claimed about a target that had
+     * never been compiled.
+     */
+    private func capture(_ name: String) {
+        let shot = XCUIScreen.main.screenshot()
+        let attachment = XCTAttachment(screenshot: shot)
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+
+        guard !shots.isEmpty else { return }
+        try? FileManager.default.createDirectory(atPath: shots, withIntermediateDirectories: true)
+        try? shot.pngRepresentation.write(to: URL(fileURLWithPath: "\(shots)/\(name).png"))
+    }
+}

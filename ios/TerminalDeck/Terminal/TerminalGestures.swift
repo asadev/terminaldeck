@@ -17,11 +17,14 @@
  * What is installed is three recognisers, all claimed so the view knows they are
  * this app's rather than the library's:
  *
- *  1. **A long press that selects.** Half a second, then the word under the
- *     finger is selected and dragging extends it a character at a time.
- *     SwiftTerm's own long press is refused; it only opened a menu with a
- *     *Select* item in it, which is a second tap for something the press itself
- *     should have done.
+ *  1. **A long press that selects.** Three quarters of a second of a still
+ *     finger on still content, then the word under it is selected and dragging
+ *     extends it a character at a time. Every clause in that sentence is load
+ *     bearing and each one is a way this gesture stole a scroll — see
+ *     `selectionHold`, `selectionSlop`, and the refusal at the top of
+ *     `gestureRecognizerShouldBegin`. SwiftTerm's own long press is refused; it
+ *     only opened a menu with a *Select* item in it, which is a second tap for
+ *     something the press itself should have done.
  *  2. **A pan that adjusts a selection by its ends.** It begins only when a
  *     selection is on screen and the finger came down within a couple of cells
  *     of one of its ends — anywhere else and the drag is a scroll.
@@ -80,6 +83,51 @@ import UIKit
 @MainActor
 final class TerminalGestures: NSObject, UIGestureRecognizerDelegate {
 
+    /**
+     * How long a finger has to be still before it is selecting rather than
+     * about to scroll.
+     *
+     * Was half a second — `UITextView`'s number — and half a second is not long
+     * enough on a wall of scrollback. Measured in the Simulator against a real
+     * session: a finger held for 0.65 s and then dragged selected eleven lines,
+     * put the callout up and raised the keyboard, and the terminal did not move
+     * a pixel. That is the third recording in a row where Asad has said *"if I
+     * scroll, it's coming blue. It's not scrolling, it's selecting."*
+     *
+     * A person starting a scroll rests the finger for a tenth of a second, maybe
+     * four; a person selecting a word holds it there and waits. Seven tenths is
+     * on the far side of the first and comfortably inside the second, and it is
+     * exactly where SwiftTerm's own press sat before this file replaced it —
+     * this is not a novel number, it is the one the library already chose.
+     *
+     * **Do not raise it past about 0.8 without changing how it is checked.**
+     * XCUITest cannot synthesise a stationary hold longer than roughly six
+     * tenths of a second, whatever duration is requested — bisected: the same
+     * press-and-drag selects with this constant at 0.5 and does not at 0.7, and
+     * asking the tool for 1.1 s or 2.0 s makes no difference. Above 0.8 the
+     * gesture would be far enough from anything a test can produce that nothing
+     * would be checking the selection path at all.
+     */
+    static let selectionHold: TimeInterval = 0.7
+
+    /**
+     * How far the finger may drift and still be pressing rather than dragging.
+     *
+     * **Strictly less than `DeckTerminalView.scrollSlop`**, and that inequality
+     * is the whole point rather than a spare four points. Both numbers used to be
+     * ten, which put the press and the scroll on the same threshold: they reach
+     * the moment of decision on the same touch event and nothing in UIKit says
+     * which is asked first, so the same drag scrolled sometimes and selected
+     * sometimes. Below the scroll's own hysteresis, a finger on its way to a
+     * scroll **fails the press first**, every time — an ordering rather than a
+     * race.
+     *
+     * Not smaller than this. A finger resting on glass wanders two or three
+     * points on its own, and a press that failed on tremor would be a copy
+     * gesture that only works for people with steady hands.
+     */
+    static let selectionSlop: CGFloat = 6
+
     /// Raised when a gesture happened that should put the key grid away and
     /// bring the keyboard back. Tapping into the terminal means "I want to
     /// type", and a grid covering the keyboard is the wrong answer to that.
@@ -135,15 +183,8 @@ final class TerminalGestures: NSObject, UIGestureRecognizerDelegate {
         terminal.panGestureRecognizer.maximumNumberOfTouches = 1
 
         let press = UILongPressGestureRecognizer(target: self, action: #selector(longPress))
-        // Half a second rather than SwiftTerm's 0.7. The press is now doing the
-        // selecting rather than opening a menu, so it is on the critical path of
-        // copying anything at all; 0.5s is what `UITextView` uses.
-        press.minimumPressDuration = 0.5
-        // The scroll view's pan begins the moment the finger moves past its
-        // slop, so a press that has not fired yet cannot block a scroll. This is
-        // what makes the two gestures live together without either being made to
-        // wait for the other.
-        press.allowableMovement = 10
+        press.minimumPressDuration = Self.selectionHold
+        press.allowableMovement = Self.selectionSlop
         press.delegate = self
         install(press)
         selectionPress = press
@@ -265,6 +306,18 @@ final class TerminalGestures: NSObject, UIGestureRecognizerDelegate {
      * terminal juddering.
      */
     func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        /*
+         * Nothing may start a selection on a terminal that is moving.
+         *
+         * The hole the timing above cannot close. A press is only asked whether
+         * it may begin *when its timer fires*, and by then the finger may have
+         * been sitting on content that is scrolling for three quarters of a
+         * second — a slow scroll that paused to read, or a finger put down to
+         * stop a flick. Both of those mean "stop", not "select this line", on
+         * every other surface on the phone; here they both used to turn the
+         * screen blue.
+         */
+        if isSelectionGesture(gestureRecognizer), terminal.isScrolling { return false }
         guard gestureRecognizer === selectionDrag else { return true }
         guard selection.active else { return false }
         let hit = position(of: gestureRecognizer)
@@ -287,10 +340,9 @@ final class TerminalGestures: NSObject, UIGestureRecognizerDelegate {
      * it is wrong in one specific, invisible way: a recogniser that has *already*
      * begun is never asked `gestureRecognizerShouldBegin` again, so the refusals
      * in `DeckTerminalView` only protect the case where the scroll has not
-     * started yet. The other case is real and reachable — `allowableMovement` on
-     * the press is 10 points and a scroll view's own slop is about the same, so a
-     * finger that drifts nine points and then stops for half a second can have
-     * the scroll running when the press fires. Under a blanket `true` both then
+     * started yet. The other case is real and reachable — a finger that drifts
+     * far enough to start the scroll and then holds still can have the scroll
+     * running when the press fires. Under a blanket `true` both then
      * own the finger: the selection grows while the content slides under it,
      * which is the exact ambiguity the whole of `DeckTerminalView`'s header is
      * about, arriving through the one door that file cannot close.

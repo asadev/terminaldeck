@@ -1,10 +1,26 @@
 /**
- * The Sessions tab: what is running on the Mac.
+ * The Sessions tab: the sessions on the machine, and only those.
  *
  * It used to be the whole app, and the `…` in its corner used to be the only way
  * to reach anything that was not a session. It is one of three tabs now and that
  * menu holds two items — see `DeckTabs.swift` for where the other seven went and
  * why there are three tabs rather than five.
+ *
+ * ## What left this screen
+ *
+ * The dev servers and the list of ports the machine is already serving. They were
+ * two more sections under the sessions, they were longer than the sessions on any
+ * real machine, and a heading is not a separation: *"I can already see a big list
+ * of local hosts. So it should not be like that… no separate two lists already
+ * here and no separation here… Sessions separately and local host separately in
+ * the pill side so we know to go to the section."* They are the Localhost tab —
+ * `LocalhostListView` — which also owns the page a tap opens.
+ *
+ * The one thing that had to be checked in the move is the empty state, which
+ * used to count ports and dev servers as *something to show* so that a machine
+ * with no sessions did not draw "No sessions" over the top of a Start button.
+ * With those rows on their own tab there is nothing underneath to be covered, so
+ * the test is the sessions and nothing else again.
  *
  * ## Which buttons exist is decided by the wire, not by the design
  *
@@ -51,10 +67,6 @@ import UIKit
 struct SessionListView: View {
     let model: DeckModel
 
-    /// The tunnel the browser sheet is showing. Set by a tap and by nothing
-    /// else, which is what makes the tap the consent.
-    @State private var browsing: PortTunnel?
-
     /**
      * Which session the details sheet is about, if it is up.
      *
@@ -76,23 +88,19 @@ struct SessionListView: View {
             Theme.background.ignoresSafeArea()
 
             /*
-             * The dev servers count towards "is there anything here".
+             * The sessions, and nothing else.
              *
-             * Without them in this test, the one moment they are most useful is
-             * the one moment they are hidden: a machine whose projects are all
-             * stopped has no sessions and no listening ports, so the screen
-             * would draw "No sessions" over the top of the Start buttons that
-             * are the answer to it.
+             * This used to also count the ports and the dev servers, because
+             * they were drawn on this screen: a machine whose projects were all
+             * stopped had no sessions and no listening ports, and the screen
+             * would have drawn "No sessions" over the top of the Start buttons
+             * that were the answer to it. Those rows are the Localhost tab now,
+             * so there is nothing under this screen for an empty state to hide.
              */
-            if model.sessions.isEmpty && model.ports.isEmpty && model.devServers.isEmpty {
+            if model.sessions.isEmpty {
                 empty
             } else {
                 list
-            }
-        }
-        .fullScreenCover(item: $browsing) { tunnel in
-            LocalhostBrowser(model: model, tunnel: tunnel) {
-                browsing = nil
             }
         }
         /*
@@ -114,14 +122,6 @@ struct SessionListView: View {
                               },
                               dismiss: { detailing = nil })
         }
-        .onChange(of: browsing == nil) { _, dismissed in
-            // Covers the swipe-down as well as the Done button: whichever way
-            // the sheet goes away, the port stops being reachable.
-            if dismissed { model.closeLocalhost() }
-            // And whichever way it goes away, the credential prompt's two
-            // possible homes swap over. See `CredentialPromptHost`.
-            model.covered = !dismissed
-        }
         .navigationTitle(Brand.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -137,9 +137,10 @@ struct SessionListView: View {
                  * Two items, and it used to be nine.
                  *
                  * Everything that was about a *machine* — pair another, rename,
-                 * forget, which endpoint this is — is on the Machines tab, and
-                 * everything that was about the *app* — the GitHub account, the
-                 * alert switches — is on Settings. Neither is repeated here.
+                 * forget, which endpoint this is — is on the Machines screen,
+                 * and everything that was about the *app* — the GitHub account,
+                 * the alert switches — is on Settings, which is also where that
+                 * screen is reached from now. Neither is repeated here.
                  * Asad, on the desktop's equivalent in the same recording:
                  * *"options is having all of the things that we already have
                  * here and there. So let's keep everything separate rather than
@@ -331,18 +332,13 @@ struct SessionListView: View {
 
                 alertsOffer
 
-                // Under the sessions and above the ports, because it is a note
-                // about the sessions. Put at the very bottom it sat under a
-                // screen's worth of localhost rows on a busy machine and read as
-                // a footnote about those instead.
-                //
-                // It stays glued to the sessions now that two sections follow
-                // it rather than one: moved below the dev servers it would read
-                // as a footnote about those, which is the same mistake one
-                // section further down.
+                // Last, and now unambiguously about the list above it. It used
+                // to be followed by the dev servers and the port list, which is
+                // why it was placed *between* the sessions and those rather than
+                // at the foot — a footnote under a screen's worth of localhost
+                // rows reads as a footnote about localhost. With those on their
+                // own tab the foot is the right place again.
                 scopeNote
-                devServers
-                localhost
             }
             .padding(.horizontal, 16)
             .padding(.top, 12)
@@ -443,71 +439,6 @@ struct SessionListView: View {
     }
 
     /**
-     * The machine's projects, and a button that starts the one you want.
-     *
-     * The section the port list could never be. `localhost` below lists what is
-     * *already* listening; this lists what *could* be, which on a machine in
-     * another room is the far more common case — the port is not there because
-     * the dev server is not running. `DevServerSection.swift` holds the row and
-     * the reasoning about its five states.
-     *
-     * Absent when the machine does not offer the capability, and absent when it
-     * does and none of its granted folders has a dev script: a header over no
-     * rows is a promise the machine has not made.
-     *
-     * `canTunnel` is passed through rather than assumed. `devserver` and
-     * `localhost` are separate capabilities and a machine can offer either
-     * without the other, and the row draws a different thing for each — an Open
-     * button when the page can genuinely be put on this phone, the address in
-     * text when it cannot.
-     */
-    @ViewBuilder
-    private var devServers: some View {
-        if model.canUseDevServers && !model.devServers.isEmpty {
-            SectionHeader(text: "Dev servers")
-            ForEach(model.devServers) { report in
-                DevServerRow(report: report,
-                             canTunnel: model.canBrowseLocalhost,
-                             start: { model.startDevServer(in: report.folder) },
-                             // The same door a port row uses, so a dev server
-                             // this phone just started opens exactly the way a
-                             // port that was already up does — and closing the
-                             // page is the same teardown.
-                             openPort: { port in browsing = model.openLocalhost(port: port) },
-                             openSession: { model.open(session: $0) })
-            }
-        }
-    }
-
-    /**
-     * The Mac's dev servers, one tap from being on this phone.
-     *
-     * Absent rather than empty when the desktop does not offer the capability,
-     * and absent when it does and nothing is listening — a header over no rows
-     * is a promise the Mac has not made. Nothing here is typed and nothing is
-     * configured: the desktop already knows what is running, so the phone shows
-     * it and a tap opens it.
-     */
-    @ViewBuilder
-    private var localhost: some View {
-        if model.canBrowseLocalhost && !model.ports.isEmpty {
-            SectionHeader(text: "Running on the \(model.hostPlatform.noun)")
-            ForEach(model.ports) { entry in
-                Button {
-                    // The tap *is* the consent: no sheet asking whether to
-                    // allow it, because nothing was reachable until now and
-                    // closing the page makes it unreachable again.
-                    browsing = model.openLocalhost(port: entry.port)
-                } label: {
-                    PortRow(entry: entry)
-                }
-                .buttonStyle(RowButtonStyle())
-                .accessibilityIdentifier("port.\(entry.port)")
-            }
-        }
-    }
-
-    /**
      * The screen when there is nothing to list — which is the screen people see
      * when something is wrong, and therefore the one the app is judged on.
      *
@@ -596,8 +527,13 @@ struct SessionListView: View {
  * controls that all look inert. This is the smallest honest response: the card
  * lightens and settles back by 1%, fast enough not to be a transition and slow
  * enough to be seen.
+ *
+ * Internal rather than private, and shared by every card in the app — the
+ * sessions, the ports, the dev servers and the machines. It was copied verbatim
+ * onto the Machines screen once already under a second name, which is how two
+ * lists end up pressing differently.
  */
-private struct RowButtonStyle: ButtonStyle {
+struct RowButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
@@ -757,67 +693,11 @@ struct StatusDot: View {
     }
 }
 
-private struct SectionHeader: View {
-    let text: String
-
-    var body: some View {
-        Text(text.uppercased())
-            .font(.system(size: 11, weight: .semibold))
-            .kerning(0.6)
-            .foregroundStyle(Theme.faint)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.leading, 4)
-            .padding(.top, 14)
-            .padding(.bottom, 2)
-    }
-}
-
-/**
- * One listening port.
- *
- * The port number is the identity — it is what the person typed into their
- * terminal and what the URL will say — so it leads. The process name is beside
- * it because "node" and "python3" are how you tell two of them apart, and it is
- * omitted rather than guessed at when the Mac could not name it.
- */
-private struct PortRow: View {
-    let entry: LocalPort
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "globe")
-                .font(.system(size: 15))
-                .foregroundStyle(Theme.secondary)
-                .frame(width: 18)
-
-            VStack(alignment: .leading, spacing: 3) {
-                // Mono because it is data — a port is a number somebody typed
-                // and will type again — and it leads because it is the identity
-                // of the row.
-                Text("localhost:\(String(entry.port))")
-                    .font(.system(size: 15, weight: .medium, design: .monospaced))
-                    .foregroundStyle(Theme.primary)
-                    .lineLimit(1)
-                if !entry.guessed {
-                    Text(entry.process)
-                        .font(.system(size: 12))
-                        .foregroundStyle(Theme.faint)
-                        .lineLimit(1)
-                }
-            }
-
-            Spacer(minLength: 0)
-
-            Image(systemName: "chevron.right")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(Theme.faint)
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 13)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .contentShape(Rectangle())
-    }
-}
+// The `SectionHeader` that used to live here is gone with the two sections it
+// captioned. It only ever labelled "Dev servers" and "Running on the Mac", both
+// of which are the Localhost tab now — and that screen groups its rows with a
+// header that folds, which is a different control rather than this one moved.
+// A section this screen no longer has does not need a caption kept for it.
 
 private struct Chip: View {
     let text: String
@@ -851,9 +731,23 @@ private struct Chip: View {
  * for the machines it has not dialled yet would be reporting the *app's* state
  * instead of the machines', and the point of pairing several is knowing which of
  * them is busy without opening it.
+ *
+ * Internal, because the Localhost tab puts the same control in its own title.
+ * *Which machine's ports are these* is exactly as open a question as which
+ * machine's sessions, and it must not be answered by two controls that can
+ * disagree — one of them showing the connection while the other does not is a
+ * screen where you cannot tell whether the list is current.
+ *
+ * The `Brand.name` fallback with a single machine is written for the session
+ * list, which is the app's first screen. On any other screen it is a title
+ * saying nothing, so the fallback is a parameter.
  */
-private struct HostSwitcher: View {
+struct HostSwitcher: View {
     let model: DeckModel
+    /// What the title says when there is only one machine and a picker would be
+    /// furniture. The product's name on the first screen; the screen's own name
+    /// anywhere else.
+    var singleHostTitle: String = Brand.name
 
     var body: some View {
         if model.hasSeveralHosts {
@@ -879,8 +773,9 @@ private struct HostSwitcher: View {
                 // No "Pair another machine" here any more. This menu answers
                 // *which machine am I typing into*, which is a question worth
                 // one tap from the session list; adding one is management, and
-                // management is the Machines tab. The item was in both places
-                // and that is exactly the shape he objected to.
+                // management is the Machines screen inside Settings. The item
+                // was in both places and that is exactly the shape he objected
+                // to.
             } label: {
                 VStack(spacing: 1) {
                     HStack(spacing: 4) {
@@ -899,7 +794,7 @@ private struct HostSwitcher: View {
             .accessibilityLabel("Machine: \(model.current?.label ?? "none"). \(model.hosts.count) paired.")
         } else {
             VStack(spacing: 1) {
-                Text(Brand.name)
+                Text(singleHostTitle)
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(Theme.primary)
                 ConnectionPill(state: model.connection, showing: model.showsConnectionNotice)

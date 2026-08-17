@@ -310,7 +310,9 @@ final class MultiHostUITests: XCTestCase {
         try pair(freshCode(from: controlA))
         try waitForConnected(timeout: 60)
 
-        XCTAssertTrue(app.openMachinesTab(), "the Machines tab should be reachable")
+        // Settings → Machines. It stopped being a tab; the helper's name did not
+        // change, which is the point of `TabNavigation.swift`.
+        XCTAssertTrue(app.openMachinesTab(), "the Machines screen should be reachable")
         let menu = app.descendants(matching: .any)
             .matching(NSPredicate(format: "identifier BEGINSWITH 'machine.more.'"))
             .firstMatch

@@ -371,6 +371,9 @@ struct TerminalScreen: View {
             // matters: setting the font at all soft-resets the emulator.
             bridge.applyStoredTextSize()
             if find == nil { find = FindSession(terminal: bridge) }
+            // Before the attach, because the attach is what starts the churn
+            // this tells the model to discount. See `DeckModel.watchedGrace`.
+            model.watchingSession(sessionID, on: hostID)
             host?.attach(sessionID)
         }
         .onDisappear {
@@ -383,7 +386,16 @@ struct TerminalScreen: View {
             // held, and a finger would stop driving vim in that session.
             find?.close()
             host?.detach(sessionID)
+            // The moment the grace period is measured from: whatever the desktop
+            // decides about this session in the next few seconds is the tail of
+            // what he was just watching, not news.
+            model.stoppedWatchingSession(sessionID, on: hostID)
         }
+        // No tab bar in here — *"inside the session we don't need the pill"* —
+        // and the modifier that hides it is **not** on this screen. It was, and
+        // it did nothing: on iOS 26.5 the pill stayed drawn over the bottom rows
+        // of a live terminal. `DeckTabs` states it at the `TabView`, which is
+        // what owns the floating bar; `DeckChrome` holds the rule.
     }
 
     // MARK: - Find, share, size

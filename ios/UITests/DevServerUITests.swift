@@ -101,6 +101,10 @@ final class DevServerUITests: XCTestCase {
         let connected = waitForConnected(timeout: Self.reachable == nil ? 45 : 15)
         Self.reachable = connected
         try XCTSkipUnless(connected, Self.notRunning)
+
+        // The dev-server rows are on the Localhost tab now rather than under the
+        // sessions. See `DeckModel.Tab` for why the list moved.
+        XCTAssertTrue(app.openLocalhostTab(), "the Localhost tab should be reachable")
     }
 
     private static let notRunning =

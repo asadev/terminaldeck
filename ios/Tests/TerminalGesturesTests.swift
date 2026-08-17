@@ -237,6 +237,80 @@ final class TerminalGesturesTests: XCTestCase {
         XCTAssertFalse(gestures.gestureRecognizer(drag, shouldBeRequiredToFailBy: press))
     }
 
+    // MARK: - The press may not take a drag away from the scroll
+
+    /**
+     * The press fails before the scroll begins, rather than at the same moment.
+     *
+     * This is the inequality the whole gesture hangs on. Both numbers were ten,
+     * which is `UIScrollView`'s own hysteresis, so a finger crossing that
+     * threshold reached the press's failure and the scroll's start on the *same*
+     * touch event — and nothing in UIKit says which is consulted first. The same
+     * drag scrolled sometimes and selected sometimes, which is worse than either
+     * behaviour chosen on purpose.
+     *
+     * Below the scroll's slop, a finger on its way to a scroll fails the press
+     * first, every time. If somebody ever raises this constant back to ten, this
+     * is what says why they must not.
+     */
+    func testThePressGivesUpBeforeTheScrollTakesOver() {
+        XCTAssertLessThan(TerminalGestures.selectionSlop, DeckTerminalView.scrollSlop,
+                          "a finger heading for a scroll must fail the press before the scroll begins")
+        // …and not so far below it that a resting hand's tremor cancels a
+        // deliberate press.
+        XCTAssertGreaterThanOrEqual(TerminalGestures.selectionSlop, 4)
+    }
+
+    /**
+     * A slow start to a scroll is a scroll.
+     *
+     * Measured, not guessed: in the Simulator against a live session, a finger
+     * held for 0.65 s and then dragged selected eleven lines and put the copy
+     * callout up, and the terminal did not move. Half a second is how long it
+     * takes to *begin* scrolling a wall of text you are reading. The press has to
+     * sit on the far side of that.
+     */
+    func testTheSelectionPressIsLongerThanAHesitation() {
+        XCTAssertGreaterThanOrEqual(TerminalGestures.selectionHold, 0.65,
+                                    "0.5s is a pause before a scroll, not a long press")
+        // And the other end, which is a real constraint rather than symmetry:
+        // XCUITest cannot synthesise a stationary hold much past six tenths of a
+        // second, so a press pushed far above this is one nothing can exercise.
+        // See the constant, and `TerminalScrollUITests`.
+        XCTAssertLessThanOrEqual(TerminalGestures.selectionHold, 0.8,
+                                 "a press this long is one no test can produce")
+    }
+
+    /**
+     * Nothing starts a selection on a terminal that is already moving.
+     *
+     * Two gestures land here and both were turning the screen blue: a slow
+     * scroll that stopped to read, and a finger put down to halt a flick — which
+     * everywhere else on the phone means *stop*.
+     *
+     * Asked through a subclass because `isDragging` and `isDecelerating` cannot
+     * be set: only UIKit's touch delivery makes them true, so the question is
+     * answerable in a unit test and the state is not. The gesture itself is
+     * proved with a finger in `TerminalScrollUITests`.
+     */
+    func testASelectionCannotStartOnMovingContent() throws {
+        final class Moving: DeckTerminalView {
+            var moving = false
+            override var isScrolling: Bool { moving }
+        }
+        let font = UIFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        let view = Moving(frame: CGRect(x: 0, y: 0, width: 390, height: 600), font: font)
+        view.layoutIfNeeded()
+        let gestures = TerminalGestures(terminal: view)
+        let press = try XCTUnwrap(ours(UILongPressGestureRecognizer.self, on: view))
+
+        XCTAssertTrue(gestures.gestureRecognizerShouldBegin(press), "still content: a press is a press")
+
+        view.moving = true
+        XCTAssertFalse(gestures.gestureRecognizerShouldBegin(press),
+                       "a finger on scrolling content means stop, not select")
+    }
+
     /**
      * One finger scrolls, and only one.
      *

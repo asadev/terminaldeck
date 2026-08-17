@@ -168,20 +168,22 @@ struct CredentialPromptView: View {
 /**
  * Put the prompt wherever this is applied.
  *
- * A modifier rather than one `.sheet` on `RootView`, because this app has a
- * `fullScreenCover` — the localhost browser — and a sheet asked for by an
- * ancestor of a cover has nothing to present from. So the modifier goes in two
- * places and exactly one of them is armed at a time; see `DeckModel.covered`.
+ * A modifier rather than a bare `.sheet` on `RootView` only because it is worth
+ * writing the binding and the dismissal rule down once. There is one copy, on
+ * `RootView`.
+ *
+ * There used to be two, with an `armed` flag deciding which was live, because
+ * the localhost browser was a `fullScreenCover` and a sheet asked for by an
+ * ancestor of a cover has nothing to present from. That screen is a push now, so
+ * the second copy and the flag are gone — the note is kept because the trap is
+ * real and would come back with the next `fullScreenCover` anybody adds.
  */
 struct CredentialPromptHost: ViewModifier {
     let model: DeckModel
-    /// False on the screen that is currently underneath a cover, so two copies
-    /// of this cannot both try to present the same question.
-    let armed: Bool
 
     func body(content: Content) -> some View {
         content.sheet(item: Binding(
-            get: { armed ? model.credentialPrompt : nil },
+            get: { model.credentialPrompt },
             // A dismissal that is not one of the three buttons cannot happen —
             // `interactiveDismissDisabled` sees to that — so this setter only
             // ever runs as the sheet closes behind an answer that was already
@@ -200,7 +202,7 @@ struct CredentialPromptHost: ViewModifier {
 }
 
 extension View {
-    func credentialPrompt(_ model: DeckModel, armed: Bool = true) -> some View {
-        modifier(CredentialPromptHost(model: model, armed: armed))
+    func credentialPrompt(_ model: DeckModel) -> some View {
+        modifier(CredentialPromptHost(model: model))
     }
 }

@@ -249,8 +249,22 @@ final class SessionAlertsTests: XCTestCase {
     }
 
 
+    /**
+     * A clock the tests move by hand.
+     *
+     * `DeckModel` measures "how long ago did he leave that session" against it,
+     * and the whole point of injecting one is that the rule can be exercised at
+     * four seconds and at six without either number being real seconds spent by
+     * everybody who ever runs this suite again.
+     */
+    private final class Clock {
+        var now = Date(timeIntervalSince1970: 1_700_000_000)
+        func advance(_ seconds: TimeInterval) { now += seconds }
+    }
+
     private var transport: ScriptedTransport!
     private var presenter: RecordingAlerts!
+    private var clock: Clock!
     private var model: DeckModel!
 
     /*
@@ -267,14 +281,17 @@ final class SessionAlertsTests: XCTestCase {
         AlertSettings.finished = true
         transport = ScriptedTransport()
         presenter = RecordingAlerts()
+        clock = Clock()
         let transport = transport!
+        let clock = clock!
         let macId = Self.macId
         model = DeckModel(credentials: MemoryStore(),
                           device: DeviceDescriptor(name: "iPhone", platform: "iOS 26"),
                           alerts: presenter,
                           lookup: { [weak self] typed in
                               typed == Self.pairingCode ? self?.offer(macId) : nil
-                          }) { _, _, _ in transport }
+                          },
+                          now: { clock.now }) { _, _, _ in transport }
         await model.pairAsync(with: Self.pairingCode)
         model.start()
     }
@@ -314,6 +331,104 @@ final class SessionAlertsTests: XCTestCase {
         transport.status("a", "waiting")
 
         XCTAssertEqual(presenter.presented.count, 1)
+    }
+
+    /*
+     * ------------------------------------------------------------------
+     * Going into a session and coming straight back out
+     * ------------------------------------------------------------------
+     *
+     * Asad, on the phone, three times in a row: *"see, I go inside I come back
+     * it's throwing a new notification. So this is a problem we need to fix. A
+     * lot of notifications."*
+     *
+     * Nothing changed while he was not looking. What changed is that opening the
+     * session sent `attach` with this phone's viewport, the desktop resized the
+     * pty, the agent repainted on SIGWINCH, and `ActivityTracker` called that
+     * `working` and then — 700 ms after the repaint stopped — `waiting`. By the
+     * time that verdict reaches the phone he is back on the list, `route.last`
+     * is no longer the session, and the old `isOnScreen` check says "not on
+     * screen, post it".
+     *
+     * These three pin the rule that replaced it. They are the reason the model
+     * takes a clock.
+     */
+
+    /// In and straight back out: the verdict that arrives a second later is the
+    /// tail of what he was watching, and posts nothing.
+    func testLeavingASessionAndTheVerdictArrivingASecondLaterSaysNothing() {
+        transport.goLive([session("a", "working")])
+        model.open(session: "a", on: Self.macId)
+        model.watchingSession("a", on: Self.macId)
+
+        model.stoppedWatchingSession("a", on: Self.macId)
+        model.route.removeAll()
+        clock.advance(1)
+
+        transport.status("a", "waiting")
+
+        XCTAssertEqual(presenter.presented, [], "the notification was about the screen he just closed")
+    }
+
+    /// …and the same change a minute later is news again. The grace is a grace,
+    /// not a session that has been muted for good.
+    func testTheSameSessionInterruptsOnceTheGraceHasPassed() {
+        transport.goLive([session("a", "working")])
+        model.open(session: "a", on: Self.macId)
+        model.watchingSession("a", on: Self.macId)
+
+        model.stoppedWatchingSession("a", on: Self.macId)
+        model.route.removeAll()
+        clock.advance(DeckModel.watchedGrace + 1)
+
+        transport.status("a", "waiting")
+
+        XCTAssertEqual(presenter.presented.count, 1)
+        XCTAssertEqual(presenter.presented.first?.sessionId, "a")
+    }
+
+    /**
+     * Re-entering resets it, rather than eating into the next grace period.
+     *
+     * The mark is cleared on the way *in*, so a second visit is measured from
+     * when the second visit ended. Without that, going in and out twice in ten
+     * seconds would find the first departure stale and post about the second.
+     */
+    func testReEnteringAndLeavingAgainIsMeasuredFromTheSecondTime() {
+        transport.goLive([session("a", "working")])
+
+        model.open(session: "a", on: Self.macId)
+        model.watchingSession("a", on: Self.macId)
+        model.stoppedWatchingSession("a", on: Self.macId)
+        model.route.removeAll()
+        clock.advance(DeckModel.watchedGrace + 1)
+
+        // Back in, and back out again. The first departure is now ancient.
+        model.open(session: "a", on: Self.macId)
+        model.watchingSession("a", on: Self.macId)
+        model.stoppedWatchingSession("a", on: Self.macId)
+        model.route.removeAll()
+        clock.advance(1)
+
+        transport.status("a", "waiting")
+
+        XCTAssertEqual(presenter.presented, [])
+    }
+
+    /// A machine's alerts replace each other rather than stacking. The identifier
+    /// is the session, so the notification centre holds one row per session
+    /// saying what it is doing now — not four rows, three of them stale.
+    func testASessionsAlertsShareOneIdentifier() {
+        let waiting = SessionAlert(hostId: "mac", hostName: "MacBook", sessionId: "a",
+                                   sessionTitle: "daftar", kind: .needsYou, exitCode: nil)
+        let finished = SessionAlert(hostId: "mac", hostName: "MacBook", sessionId: "a",
+                                    sessionTitle: "daftar", kind: .finished, exitCode: 0)
+        let other = SessionAlert(hostId: "mac", hostName: "MacBook", sessionId: "b",
+                                 sessionTitle: "site", kind: .needsYou, exitCode: nil)
+
+        XCTAssertEqual(waiting.thread, finished.thread, "one live notification per session")
+        XCTAssertNotEqual(waiting.thread, other.thread, "two sessions are two notifications")
+        XCTAssertEqual(waiting.thread, SessionAlert.thread(hostId: "mac", sessionId: "a"))
     }
 
     /// A different session on the same machine still interrupts — it is not the

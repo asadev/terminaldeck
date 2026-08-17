@@ -82,7 +82,16 @@ targets:
         # every build already on Apple's side, which is the only property a
         # build number has to have. Refresh it whenever the marketing version
         # moves; a fixed number here can only ever go stale.
-        CURRENT_PROJECT_VERSION: "2608161932"
+        #
+        # Moved to 2608170733 for the build that carries the three-tab layout,
+        # the Localhost tab, the tab-bar rule and the back-button fix. Note that
+        # the *marketing* version does not move with it, and that is not an
+        # oversight: `preflight.sh` fails the run when MARKETING_VERSION and
+        # package.json disagree — one product, one version number — and the
+        # desktop is still 0.2.0. So this is 0.2.0 build 2608170733, later than
+        # the 2608161932 already on Apple's side, which is the only comparison
+        # App Store Connect makes.
+        CURRENT_PROJECT_VERSION: "2608170733"
         # 1 = iPhone only, and the asymmetry in Apple's rules is the whole
         # reason. A device family can be *added* to a shipped app whenever the
         # layout is ready for it; it cannot be taken away — App Store Connect

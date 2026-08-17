@@ -227,6 +227,115 @@ final class GitHubAccountTests: XCTestCase {
         XCTAssertEqual(store.token(), "gho_flow")
     }
 
+    /**
+     * The phone asks for a sign-in the way the desktop does: the product's own
+     * **GitHub App**, and no `scope`.
+     *
+     * Both halves are the same finding. Until this build the phone borrowed the
+     * GitHub CLI's *OAuth* client id and asked for `scope=repo`, which is a
+     * single all-or-nothing grant over every private repository the account can
+     * reach, write included, on a consent page bearing somebody else's name.
+     * `src/main/github-app.ts` has the argument and the live response this was
+     * checked against; a GitHub App takes its permissions from its registration
+     * and its repositories from the install screen, so a scope has nothing to
+     * say and sending one is a request GitHub answers with an anonymous 404.
+     *
+     * Asserted on the bytes that go out, because that 404 is also what a wrong
+     * client id produces and what a registration with Device Flow unticked
+     * produces — three causes, one reply, none of them named in it. The only
+     * thing this side can pin is what it sent.
+     */
+    func testTheDeviceRequestIsTheAppRegistrationAndCarriesNoScope() async {
+        var sent: String?
+        let signIn = GitHubSignIn(accounts: store) { request in
+            if request.url?.path == "/login/device/code" {
+                sent = String(decoding: request.httpBody ?? Data(), as: UTF8.self)
+            }
+            let body = #"""
+            {"device_code":"dev","user_code":"ABCD-1234",
+             "verification_uri":"https://github.com/login/device","expires_in":900,"interval":5}
+            """#
+            return (Data(body.utf8),
+                    HTTPURLResponse(url: request.url!, statusCode: 200,
+                                    httpVersion: nil, headerFields: nil)!)
+        }
+
+        signIn.start()
+        await settle(signIn) { if case .waiting = signIn.phase { return true } else { return false } }
+
+        let body = try? XCTUnwrap(sent)
+        XCTAssertEqual(body, "client_id=Iv23limkNV4N6mChRl60",
+                       "the App's client id, alone — a scope here is refused as a 404 that names nothing")
+    }
+
+    /**
+     * Coming back from Safari polls straight away instead of sitting out the
+     * rest of the interval.
+     *
+     * The moment somebody returns to this app during a device flow is, almost
+     * always, the moment they finished typing the code — the reason the app was
+     * in the background is that GitHub was in the foreground. Waiting out the
+     * remainder of GitHub's five seconds is five seconds of a screen still
+     * saying "enter this code" *after* it has been entered, which is exactly
+     * long enough to conclude it did not work and press Done. He did.
+     *
+     * The number in the assertion is the point: two seconds is less than the
+     * interval, so this can only pass if the wait was cut short.
+     */
+    func testComingBackToTheAppPollsImmediately() async {
+        let signIn = GitHubSignIn(accounts: store, fetch: scripted([
+            "/login/device/code": (200, #"""
+            {"device_code":"dev","user_code":"ABCD-1234",
+             "verification_uri":"https://github.com/login/device","expires_in":900,"interval":5}
+            """#),
+            "/login/oauth/access_token": (200, #"{"access_token":"gho_flow"}"#),
+            "/user": (200, #"{"login":"asadev"}"#),
+        ]))
+
+        signIn.start()
+        await settle(signIn) { if case .waiting = signIn.phase { return true } else { return false } }
+
+        signIn.cameToTheFront()
+
+        await settle(signIn, seconds: 2) { self.store.account != nil }
+        XCTAssertEqual(store.account?.login, "asadev",
+                       "the sign-in should have finished on the way back, not five seconds later")
+    }
+
+    /// …but not so eagerly that switching apps twice in a row walks the flow
+    /// into GitHub's rate limiter. The interval it named is a floor.
+    func testComingBackTwiceDoesNotAskTwiceInsideTheInterval() async {
+        var polls = 0
+        let signIn = GitHubSignIn(accounts: store) { request in
+            let path = request.url?.path ?? ""
+            var body = #"{"login":"asadev"}"#
+            if path == "/login/device/code" {
+                body = #"""
+                {"device_code":"dev","user_code":"ABCD-1234",
+                 "verification_uri":"https://github.com/login/device","expires_in":900,"interval":5}
+                """#
+            } else if path == "/login/oauth/access_token" {
+                polls += 1
+                body = #"{"error":"authorization_pending"}"#
+            }
+            return (Data(body.utf8),
+                    HTTPURLResponse(url: request.url!, statusCode: 200,
+                                    httpVersion: nil, headerFields: nil)!)
+        }
+
+        signIn.start()
+        await settle(signIn) { if case .waiting = signIn.phase { return true } else { return false } }
+
+        signIn.cameToTheFront()
+        await settle(signIn, seconds: 2) { polls >= 1 }
+        signIn.cameToTheFront()
+        signIn.cameToTheFront()
+        try? await Task.sleep(for: .milliseconds(500))
+
+        XCTAssertEqual(polls, 1, "GitHub's interval is a floor, not a suggestion")
+        signIn.cancel()
+    }
+
     func testCancellingTheFlowStopsTheDeviceCodeBeingUsed() async {
         let signIn = GitHubSignIn(accounts: store, fetch: scripted([
             "/login/device/code": (200, #"""

@@ -28,7 +28,7 @@ this session" is not a detail.
 | Key bar + key grid, copy/paste, automatic reconnect | done |
 | `StubTransport` | **deleted** — the real one works |
 | Release pipeline, icon, signing | done; `preflight.sh` passes every check |
-| TestFlight | **live** — 0.1.8 build `2608151610`, VALID, on the internal group |
+| TestFlight | **live** — 0.2.0 build `2608161932`, uploaded 16 Aug 19:36, on the internal group. The tree is ahead of it: this commit is 0.2.0 build `2608170733` and has not been archived or uploaded. |
 | App Store submission | **not started** and not close — a reviewer has no machine to pair with, see [`APPSTORE.md`](../APPSTORE.md) |
 
 ### What has actually been run, and against what
@@ -97,15 +97,46 @@ Three things from the screen recording of 2026-08-16, all of them his and two of
 them asked for twice.
 
 **A bottom tab bar.** *"we need to give a proper menu … maybe we can have some
-tab bar, and down here like a pill."* **Sessions**, **Machines**, **Settings** —
-and no fourth, because there is no fourth thing this app can do. The desktop's
-sidebar has ten entries and most of them are a file tree, a diff or a search box;
-a tab leading to any of those on a phone would lead to a placeholder, which is
-the complaint rather than the fix. What moved is everything that was buried in
-the session list's `…`: pair, rename, forget and which endpoint a machine is, to
-Machines; the GitHub account, the alert switches and the terminal's text size, to
-Settings. Nothing is in two places. That menu now holds Refresh and Reconnect,
-which are the only two things in it that act on the list. `DeckTabs.swift`.
+tab bar, and down here like a pill."* **Sessions**, **Localhost**, **Settings**.
+What moved is everything that was buried in the session list's `…`: the GitHub
+account, the alert switches and the terminal's text size to Settings, and pair,
+rename, forget and which endpoint a machine is to Machines. Nothing is in two
+places. That menu now holds Refresh and Reconnect, which are the only two things
+in it that act on the list. `DeckTabs.swift`.
+
+Two of those three moved again after the phone recording of the same day, and
+both are in `DeckModel.Tab`:
+
+- **Localhost is a tab.** The ports were a second list under the sessions —
+  *"I can already see a big list of local hosts… no separate two lists already
+  here and no separation here… Sessions separately and local host separately in
+  the pill side so we know to go to the section."*
+- **Machines is a row inside Settings**, not a tab — *"maybe this machines thing
+  can go inside the settings this page overall… Here we can have a section, we
+  click and we reach to this page and we can connect. This is a better design."*
+  He also asked for *"four icons in the pill"* a minute earlier, while adding
+  Localhost to the three that existed. Only one of the two can be built; the
+  later one is the one he called better.
+
+There is still no tab for a file tree, a diff or a search box. The desktop's
+sidebar has ten entries and most of them are surfaces that would be a
+placeholder on a phone, which is the complaint rather than the fix.
+
+**The tab bar is not on every screen.** *"inside the session we don't need the
+pill. Pill should be on here only on the homepage or machines or settings, but
+not inside the session and not also inside the localhost page."* The rule is one
+switch in `DeckChrome.swift` and the screens read it, so it cannot drift screen
+by screen; `DeckChromeTests` walks every case. Note it is **not** "hidden on
+anything pushed" — Machines is pushed and keeps the bar.
+
+**The localhost page is pushed, not raised.** *"it should not come like this up…
+feels like a browser opens inside. So give it a native feel, not like this."* It
+was a `fullScreenCover`; it is a `navigationDestination` now, which also let the
+credential prompt drop back to one copy on `RootView`. Its own **Back** button
+works: `canGoBack` was only ever read from the navigation delegate, which is
+silent for the `pushState` every single-page app routes with, so on the pages
+this feature exists for it was permanently disabled. `BrowserBridge` observes the
+web view through KVO — `BrowserBackTests`.
 
 **The connection is only mentioned when it is in the way.** *"when we just open
 the application, it shows connecting … let it give a few seconds; after five

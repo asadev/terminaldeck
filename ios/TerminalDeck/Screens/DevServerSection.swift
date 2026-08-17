@@ -66,6 +66,16 @@ import SwiftUI
 struct DevServerRow: View {
     let report: DevServerReport
     /**
+     * What this phone calls it, if anybody has said, instead of the folder's own
+     * name.
+     *
+     * Only ever set on the localhost screen, where the port a `ready` server is
+     * on may have been named — see `PortBook`. Nil everywhere else, which is the
+     * normal state: the folder's last path component is what a person calls the
+     * project and it comes from the machine rather than from a preference.
+     */
+    var name: String?
+    /**
      * Whether this machine will also put a port on the phone.
      *
      * `devserver` and `localhost` are separate capabilities and genuinely come
@@ -113,7 +123,7 @@ struct DevServerRow: View {
                     .padding(.top, 1)
 
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(Self.folderName(report.folder))
+                    Text(name ?? Self.folderName(report.folder))
                         .font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(Theme.primary)
                         .lineLimit(1)
@@ -242,7 +252,7 @@ struct DevServerRow: View {
                         .frame(width: 44, height: 44)
                         .contentShape(Rectangle())
                 }
-                .accessibilityLabel("Open the session running \(Self.folderName(report.folder))")
+                .accessibilityLabel("Open the session running \(name ?? Self.folderName(report.folder))")
                 .accessibilityIdentifier("devserver.session.\(report.folder)")
                 .padding(.trailing, 4)
             }

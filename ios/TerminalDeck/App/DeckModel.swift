@@ -49,8 +49,19 @@ final class DeckModel {
     /// Which machine the screens are showing. Nil only when nothing is paired.
     private(set) var currentHostId: String?
 
-    /// The navigation stack. `RootView` binds to it, and a deep link pushes onto it.
+    /// The Sessions tab's navigation stack. `DeckTabs` binds to it, and a deep
+    /// link pushes onto it.
     var route: [Route] = []
+
+    /**
+     * The Settings tab's navigation stack.
+     *
+     * Its own array rather than a second case on `Route`, because the two stacks
+     * are two stacks: a session pushed onto Settings would be a terminal under a
+     * gear icon, and the Machines screen pushed onto Sessions would be the thing
+     * that was just moved out of there. One tab, one path.
+     */
+    var settingsRoute: [SettingsRoute] = []
 
     /**
      * Which tab is on screen.
@@ -66,18 +77,86 @@ final class DeckModel {
     /**
      * The three surfaces this phone genuinely has.
      *
-     * Deliberately three, and the omissions are the design. The desktop's
-     * sidebar has ten entries; most of them are a file tree, a diff view or a
-     * search box, and a tab leading to any of those on a phone would be a tab
-     * leading to a placeholder — which is worse than not having the tab, because
-     * it is a promise the app cannot keep. What is here is what is written and
-     * proved: the sessions on a machine, the machines themselves, and the two
-     * app-wide settings that already exist behind a menu nobody finds.
+     * ## Localhost is a tab; Machines is not, any more
+     *
+     * Both changes are his, from the same recording, and they are the same
+     * change: *what is running on the machine* is a subject in its own right and
+     * *which machines am I paired with* is not.
+     *
+     * On the first — *"I can already see a big list of local hosts. So it should
+     * not be like that… no separate two lists already here and no separation
+     * here… Sessions separately and local host separately in the pill side so we
+     * know to go to the section."* The session list carried a screen's worth of
+     * ports underneath the sessions, which made the first screen of the app two
+     * lists with a heading between them and made the ports themselves feel like
+     * a footnote. They are a tab.
+     *
+     * On the second — *"maybe this machines thing can go inside the settings this
+     * page overall. How many machines we pair can go inside the settings
+     * actually, yes. Here we can have a section, we click and we reach to this
+     * page and we can connect. This is a better design."* Pairing is something
+     * done once per machine; a bottom tab is for the surfaces somebody moves
+     * between all day. The screen itself is unchanged and lost nothing — it is
+     * one row further away, and the fast thing people actually do with several
+     * machines, *switch to one*, was never on that screen anyway. It is the
+     * switcher in the title.
+     *
+     * `CaseIterable` so `DeckTabsTests` can enumerate this rather than assert
+     * the two cases somebody happened to think of.
      */
-    enum Tab: Hashable {
+    enum Tab: Hashable, CaseIterable {
         case sessions
-        case machines
+        case localhost
         case settings
+    }
+
+    /// What can be pushed onto Settings. One thing, and it is the screen that
+    /// used to be a tab.
+    enum SettingsRoute: Hashable {
+        case machines
+    }
+
+    /**
+     * Whether a page from the machine is pushed on the Localhost tab.
+     *
+     * On the model rather than in the view that pushes it, and it exists for
+     * exactly one reader: the tab bar. iOS 26 draws that bar as a floating pill
+     * owned by the `TabView`, and `.toolbar(.hidden, for: .tabBar)` written on
+     * the pushed screen does nothing — measured, in a screenshot. So `DeckTabs`
+     * states the visibility per tab and has to know what is on top of each one.
+     * The Sessions and Settings tabs answer that from their own paths; the
+     * localhost page is `@State` inside `LocalhostListView`, so it says here.
+     *
+     * See `DeckChrome`, which holds the rule and the sentence it comes from.
+     */
+    var localhostPageIsOpen = false
+
+    /**
+     * What is on top of each tab, as the tab bar sees it.
+     *
+     * Here rather than inline in `DeckTabs` because this is the half of the
+     * tab-bar rule that can be checked without a simulator: `DeckChrome` decides
+     * *whether a surface keeps the bar* and these decide *which surface a tab is
+     * showing*. Get the second wrong — a pushed terminal still reported as
+     * `.sessions` — and the first is answered correctly about the wrong screen,
+     * which is a bar over a terminal again with every test still green.
+     * `DeckTabsTests` walks all three.
+     */
+    var sessionsSurface: DeckSurface { route.isEmpty ? .sessions : .session }
+    var localhostSurface: DeckSurface { localhostPageIsOpen ? .localhostPage : .localhost }
+    var settingsSurface: DeckSurface { settingsRoute.isEmpty ? .settings : .machines }
+
+    /**
+     * Show the paired machines.
+     *
+     * A method rather than a `NavigationLink` at the call site, because it is
+     * also the answer to "take me to the machines" from somewhere that is not
+     * Settings — and because a link alone could push the screen onto a tab
+     * nobody is looking at. Idempotent: asking twice does not stack two copies.
+     */
+    func showMachines() {
+        tab = .settings
+        if settingsRoute.last != .machines { settingsRoute.append(.machines) }
     }
 
     /// Whether the "pair another machine" sheet is up. A flag rather than a
@@ -186,6 +265,46 @@ final class DeckModel {
     private let watcher = SessionAlerts()
     private let alerts: AlertPresenting
 
+    /**
+     * The clock the alert rules are measured against.
+     *
+     * Injected for the same reason `ConnectionNotice` injects one: the rule
+     * below is "how long ago did he leave that session", and a test that proved
+     * it by sleeping would either be slow or be proving a different number.
+     */
+    private let now: () -> Date
+
+    /**
+     * When each session's screen was last left, keyed the way an alert is
+     * threaded — machine and session together, because session ids are unique
+     * per machine and nothing makes them unique across them.
+     *
+     * Written on the way out of a terminal, cleared on the way in. Read by
+     * `isBeingWatched`.
+     */
+    private var leftSessionAt: [String: Date] = [:]
+
+    /**
+     * How long after leaving a session its status changes are still his own
+     * doing rather than news.
+     *
+     * Five seconds, and the number is not taste. Opening a session sends
+     * `attach` carrying this phone's viewport, the desktop resizes the pty, and
+     * every full-screen agent CLI repaints on SIGWINCH — so entering a session
+     * *produces output*. The desktop's `ActivityTracker` calls that `working`,
+     * waits `SETTLE_MS` (700 ms) for the output to stop, classifies the screen,
+     * and sends `waiting`. Tap in and straight back out and that classification
+     * lands a second later, on the list, as a banner about a session he was
+     * looking at when he caused it. Which is exactly what he reported: *"I go
+     * inside I come back it's throwing a new notification."*
+     *
+     * Five seconds covers the settle plus a relay round trip with room to
+     * spare, and it is the same number `ConnectionGrace` uses for the same kind
+     * of judgement — his own answer to "how long is not worth mentioning".
+     * Anything later than that really did happen while he was not looking.
+     */
+    static let watchedGrace: TimeInterval = 5
+
     /// Whether the app is on screen. Set by the scene, and read for exactly two
     /// decisions: whether the session being *looked at* should also interrupt
     /// with a banner, and whether a reconnect's catch-up is news or a summary.
@@ -243,7 +362,7 @@ final class DeckModel {
      */
     private func alertsChanged(_ host: HostLink, _ sessions: [RemoteSession], _ reason: AlertReason) {
         let raised = watcher.observe(hostId: host.id, hostName: host.label, sessions: sessions)
-        let wanted = raised.filter { AlertSettings.wants($0.kind) && !isOnScreen($0) }
+        let wanted = raised.filter { AlertSettings.wants($0.kind) && !isBeingWatched($0) }
         guard !wanted.isEmpty else { return }
 
         if reason == .catchUp && isForeground {
@@ -253,10 +372,51 @@ final class DeckModel {
         for alert in wanted { alerts.present(alert) }
     }
 
-    /// Whether this alert is about the session the person is already looking at.
-    private func isOnScreen(_ alert: SessionAlert) -> Bool {
-        guard isForeground, case let .session(host, id)? = route.last else { return false }
-        return host == alert.hostId && id == alert.sessionId
+    /**
+     * Whether this alert is about a session he is looking at — or has just
+     * finished looking at.
+     *
+     * The second half is the part that was missing, and it is the whole of the
+     * notification-spam bug. The first half has always been here and it is not
+     * enough on its own: the desktop does not classify a screen the instant it
+     * changes, it waits for the output to stop and then decides
+     * (`session-activity.ts`, `SETTLE_MS`). So the verdict on a session arrives
+     * about a second *after* the thing that caused it — and when the thing that
+     * caused it was opening the session, that second is very often spent back on
+     * the list, where the alert is drawn as a banner about something he did on
+     * purpose thirty frames ago.
+     *
+     * A notification has to mean "this changed while you were not looking". The
+     * grace is what makes that sentence true. See `watchedGrace`.
+     */
+    private func isBeingWatched(_ alert: SessionAlert) -> Bool {
+        guard isForeground else { return false }
+        if case let .session(host, id)? = route.last, host == alert.hostId, id == alert.sessionId {
+            return true
+        }
+        guard let left = leftSessionAt[alert.thread] else { return false }
+        return now().timeIntervalSince(left) < Self.watchedGrace
+    }
+
+    /**
+     * A terminal came on screen, or went off it.
+     *
+     * Called by `TerminalScreen` from the same `onAppear`/`onDisappear` that
+     * attach and detach the session, because those are the two moments the
+     * answer changes and there is nothing else to observe: `route` is written by
+     * `NavigationStack`'s own binding, so a pop leaves no callback behind.
+     *
+     * Arriving *clears* the mark rather than setting one. A session he is
+     * standing in is covered by the route check above, and leaving the stale
+     * departure time in place would mean re-entering a session shortened its own
+     * grace period the next time he left.
+     */
+    func watchingSession(_ id: String, on hostId: String) {
+        leftSessionAt.removeValue(forKey: SessionAlert.thread(hostId: hostId, sessionId: id))
+    }
+
+    func stoppedWatchingSession(_ id: String, on hostId: String) {
+        leftSessionAt[SessionAlert.thread(hostId: hostId, sessionId: id)] = now()
     }
 
     /**
@@ -270,12 +430,6 @@ final class DeckModel {
      */
     private let gitHubAccounts: GitHubAccountStore
     let credentialResponder: CredentialResponder
-
-    /// Whether something is covering the session list — today the localhost
-    /// browser, which is a `fullScreenCover`. Read by `RootView` so its copy of
-    /// the credential prompt stands down while the browser's copy is the one
-    /// that can actually present. See `CredentialPromptHost`.
-    var covered = false
 
     /// Whether the GitHub account sheet is up. A flag rather than a route,
     /// because it is raised from a menu that exists on every screen.
@@ -303,9 +457,11 @@ final class DeckModel {
          gitHubAccounts: GitHubAccountStore? = nil,
          alerts: AlertPresenting? = nil,
          lookup: (@MainActor (String) async -> MachineOffer?)? = nil,
+         now: @escaping () -> Date = Date.init,
          makeTransport: ((String, CredentialStore, DeviceDescriptor) -> Transport)? = nil) {
         self.credentials = credentials
         self.device = device
+        self.now = now
         // Defaulted here rather than in the signature for the same reason
         // `alerts` is: the real one dials a relay, and a default argument would
         // put that in every test that only wanted to construct a model.
@@ -443,6 +599,12 @@ final class DeckModel {
         // tick instead of each machine keeping whatever phase it had.
         Heartbeat.shared.realign()
         for host in hosts { host.resume() }
+        // A sign-in in flight is almost certainly finished: the reason the app
+        // was in the background is that GitHub was in the foreground. Asking now
+        // rather than at the end of the interval is the difference between the
+        // screen catching up before he looks at it and five seconds of it saying
+        // "enter this code" after he already has.
+        signInFlow?.cameToTheFront()
     }
 
     func refresh() {
@@ -600,6 +762,10 @@ final class DeckModel {
         // Its sessions are not going to change again. Keeping them would make a
         // later re-pair look like a machine where everything happened at once.
         watcher.forget(hostId: hostId)
+        // And the record of which of its terminals were on screen, for the same
+        // reason: a machine re-paired a minute later gets a fresh start rather
+        // than a grace period left over from the last time it was here.
+        leftSessionAt = leftSessionAt.filter { !$0.key.hasPrefix("\(hostId).") }
         route.removeAll { route in
             if case let .session(host, _) = route { return host == hostId }
             return false
@@ -657,11 +823,30 @@ final class DeckModel {
         gitHubAccounts.disconnect()
     }
 
-    /// A sign-in flow for the account screen. Made here so the screen never
-    /// builds its own store and cannot end up writing to a second drawer.
-    func makeGitHubSignIn() -> GitHubSignIn {
-        GitHubSignIn(accounts: gitHubAccounts)
+    /**
+     * The GitHub sign-in, owned here rather than by the screen that shows it.
+     *
+     * It used to be `@State` on `GitHubAccountView`, built fresh from a
+     * `makeGitHubSignIn()` factory, and the ownership was the bug. A device flow
+     * takes as long as somebody takes to type a code into a browser in another
+     * app; a flow that belongs to a sheet is a flow that dies when the sheet
+     * does, and the sheet dies on the one button a person presses when they come
+     * back and the screen has not caught up yet — Done. He recorded exactly
+     * that: *"it's done, but on the application it's not. If I click on done,
+     * it's again there."*
+     *
+     * One per model, created on first use, so the screen can be closed and
+     * reopened and find the same flow still running — or find the account it
+     * finished with while nobody was looking at it.
+     */
+    var gitHubSignIn: GitHubSignIn {
+        if let signIn = signInFlow { return signIn }
+        let signIn = GitHubSignIn(accounts: gitHubAccounts)
+        signInFlow = signIn
+        return signIn
     }
+
+    @ObservationIgnored private var signInFlow: GitHubSignIn?
 
     // MARK: - Navigation
 
@@ -671,9 +856,10 @@ final class DeckModel {
         guard let host, hosts.contains(where: { $0.id == host }) else { return }
         if host != currentHostId { select(host) }
         // The stack this route is pushed onto belongs to one tab. A session
-        // opened from a notification tap, a deep link or the Machines tab while
-        // another tab is showing would otherwise be pushed somewhere nobody is
-        // looking, which reads as the tap having done nothing.
+        // opened from a notification tap, a deep link, or a dev-server row on
+        // the Localhost tab while another tab is showing would otherwise be
+        // pushed somewhere nobody is looking, which reads as the tap having done
+        // nothing.
         tab = .sessions
         let next = Route.session(host: host, id: id)
         if route.last != next { route.append(next) }
