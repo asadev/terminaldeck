@@ -10,6 +10,8 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-08-17
+
 ### Added
 
 - **A copilot.** An assistant for the deck itself, pinned above the session
@@ -109,7 +111,6 @@ A release with nothing under Unreleased is refused rather than shipped blank.
   actually distinguishes them, rather than by a fixed cut that could collide.
 - A scrolling sidebar fades at its edge instead of slicing the bottom row
   through the middle of the letters.
-
 
 ## [0.2.0] — 2026-08-16
 
@@ -882,7 +883,8 @@ First cut. macOS 12+, Apple silicon, unsigned.
 - Preferences with live dark/light theming
 - Session resume (`⌘⇧T`)
 
-[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.1.9...HEAD
+[Unreleased]: https://github.com/asadev/terminaldeck/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/asadev/terminaldeck/releases/tag/v0.3.0
 [0.1.9]: https://github.com/asadev/terminaldeck/releases/tag/v0.1.9
 [0.1.8]: https://github.com/asadev/terminaldeck/releases/tag/v0.1.8
 [0.1.7]: https://github.com/asadev/terminaldeck/releases/tag/v0.1.7
