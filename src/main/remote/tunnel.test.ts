@@ -551,6 +551,25 @@ describe('carrying bytes', () => {
 
     await until(() => of(sent, 'net.ack').length > 0, 'an acknowledgement')
     expect(of(sent, 'net.ack')[0]).toEqual({ t: 'net.ack', ch: 'c1', bytes: payload.length })
+
+    /*
+     * Waited for separately, because the ack and the bytes are two different
+     * arrivals and neither implies the other.
+     *
+     * The ack says the hub handed the payload to the socket. What `seen` holds
+     * is what the *server on the other end of that socket* has been given, and
+     * that is a second trip through the loopback stack landing on a `'data'`
+     * listener of its own. On this Mac the two collapse into one tick and the
+     * distinction never appears; on a shared Linux runner it does, and this
+     * line read `expected '' to be 'hello from the phone'` while the ack above
+     * it passed — which reads as "the tunnel dropped the payload" when the
+     * truth is that it had not been delivered *yet*. It cost a CI run on
+     * 2026-08-17.
+     *
+     * A ceiling rather than a sleep: it ends the instant the bytes land, so a
+     * fast machine pays nothing and a slow one still gets a real answer.
+     */
+    await until(() => Buffer.concat(seen).length >= payload.length, 'the bytes at the far end')
     expect(Buffer.concat(seen).toString()).toBe('hello from the phone')
   })
 })
