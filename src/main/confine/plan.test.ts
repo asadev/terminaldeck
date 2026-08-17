@@ -158,19 +158,134 @@ describe('sessionPlan', () => {
   })
 })
 
+describe('read-only project grants', () => {
+  const PROJECTS = [`${HOME}/Projects/one`, `${HOME}/Projects/two`]
+  const base = {
+    folder: '/app-storage/copilot',
+    home: '/app-storage/device-home/copilot',
+    accountHome: HOME,
+    path: '/usr/bin:/bin',
+    resolver: fs({ dirs: [...PROJECTS, '/usr/bin', '/bin', HOME, '/'] }),
+    platform: 'darwin' as const,
+  }
+
+  it('puts a project in the read list and never in the write list', () => {
+    const plan = sessionPlan({ ...base, projects: PROJECTS })
+    for (const project of PROJECTS) {
+      expect(plan.readable).toContain(project)
+      expect(plan.writable).not.toContain(project)
+    }
+    expect(plan.writable).toEqual(['/app-storage/copilot', '/app-storage/device-home/copilot'])
+  })
+
+  it('names them separately from the system roots they share a list with', () => {
+    expect(sessionPlan({ ...base, projects: PROJECTS }).readableProjects).toEqual(PROJECTS)
+  })
+
+  it('carves the credential shapes out of each one', () => {
+    const plan = sessionPlan({ ...base, projects: PROJECTS })
+    expect(plan.readExclusions.length).toBeGreaterThan(0)
+    for (const project of PROJECTS) {
+      expect(plan.readExclusions.some((rule) => rule.pattern.includes(project))).toBe(true)
+    }
+  })
+
+  it('grants nothing and carves nothing when no project was asked for', () => {
+    const plan = sessionPlan(base)
+    expect(plan.readableProjects).toEqual([])
+    expect(plan.readExclusions).toEqual([])
+  })
+
+  it('refuses the account home as a project, however it was added', () => {
+    // Somebody can add `~` to this app — the picker accepts a folder — and a
+    // read grant on it is a read grant on `.ssh`, the keychain directory, and
+    // every other project at once.
+    const plan = sessionPlan({ ...base, projects: [HOME] })
+    expect(plan.readableProjects).toEqual([])
+    expect(plan.readable.some((root) => within(HOME, root, 'darwin'))).toBe(false)
+  })
+
+  it('refuses the filesystem root', () => {
+    expect(sessionPlan({ ...base, projects: ['/'] }).readableProjects).toEqual([])
+  })
+
+  it('refuses a project that would contain the app\'s own storage', () => {
+    // `/app-storage` holds the copilot's folder and its home, which means it
+    // also holds this app's settings, its state and every session's transcript.
+    const plan = sessionPlan({
+      ...base,
+      projects: ['/app-storage'],
+      resolver: fs({ dirs: ['/app-storage', '/usr/bin', '/bin'] }),
+    })
+    expect(plan.readableProjects).toEqual([])
+  })
+
+  it('drops a folder that is no longer there', () => {
+    // A renamed project is ordinary, and a profile naming a path that does not
+    // exist is a rule nobody can check against reality later.
+    const plan = sessionPlan({ ...base, projects: [`${HOME}/Projects/gone`] })
+    expect(plan.readableProjects).toEqual([])
+  })
+
+  it('keeps one rule when one project is inside another', () => {
+    const nested = [`${HOME}/Projects/one`, `${HOME}/Projects/one/packages/ui`]
+    const plan = sessionPlan({
+      ...base,
+      projects: nested,
+      resolver: fs({ dirs: [...nested, '/usr/bin', '/bin'] }),
+    })
+    expect(plan.readableProjects).toEqual([`${HOME}/Projects/one`])
+  })
+
+  it('refuses to build a plan the platform cannot enforce the exclusions on', () => {
+    // The fence for the next caller. `linux.ts` turns readable roots into whole
+    // read-only bind mounts and cannot express "except these names"; Windows
+    // ignores `readable` altogether. Either would hand over the `.env` with the
+    // repository, and the caller would believe a boundary existed.
+    expect(() => sessionPlan({ ...base, projects: PROJECTS, platform: 'linux' })).toThrow(
+      /enforceable only under Seatbelt/,
+    )
+  })
+
+  it('does not let a PATH entry above a project become a read root', () => {
+    // The same guard the granted folder gets, for the same reason: a `PATH`
+    // prefix covering a project would grant everything beside it too.
+    const plan = sessionPlan({
+      ...base,
+      projects: PROJECTS,
+      path: `${HOME}/Projects/bin:/usr/bin`,
+      resolver: fs({ dirs: [...PROJECTS, `${HOME}/Projects/bin`, '/usr/bin', '/bin'] }),
+    })
+    expect(plan.readable).not.toContain(`${HOME}/Projects`)
+  })
+})
+
 describe('the confined environment', () => {
   it('points HOME and TMPDIR inside the boundary', () => {
-    expect(confinedEnv('/app-storage/device-home/abc')).toEqual({
+    expect(confinedEnv('/app-storage/device-home/abc')).toMatchObject({
       HOME: '/app-storage/device-home/abc',
       TMPDIR: '/app-storage/device-home/abc/tmp',
     })
+  })
+
+  it("points Claude Code's own scratch directory inside the boundary too", () => {
+    // Not a nicety and not a guess. Claude Code 2.1.233 keeps its scratch
+    // directory at the literal `/tmp/claude-<uid>` rather than under `TMPDIR`,
+    // which is outside every plan this module builds — so without this a
+    // confined session died on its first turn with
+    // `EPERM: operation not permitted, open '/tmp/claude-501'`, having answered
+    // `claude auth status` perfectly a moment earlier. Measured inside a real
+    // `sandbox-exec` run, not read.
+    expect(confinedEnv('/app-storage/device-home/abc').CLAUDE_CODE_TMPDIR).toBe(
+      '/app-storage/device-home/abc/tmp',
+    )
   })
 
   it('says nothing about PATH', () => {
     // Deliberate: the tools live outside the folder and stay findable. A
     // confinement that shortened PATH would produce "command not found" for
     // `git`, which reads as a broken app rather than as a boundary.
-    expect(Object.keys(confinedEnv('/x'))).toEqual(['HOME', 'TMPDIR'])
+    expect(Object.keys(confinedEnv('/x'))).not.toContain('PATH')
   })
 
   it('gives each device its own home', () => {

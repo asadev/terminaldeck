@@ -37,6 +37,10 @@ import {
   type LauncherRunner,
   type ProbeFiles,
 } from './appcontainer'
+// The POSIX arm of the same two-branch switch. Imported so the last test in the
+// `windowsConfinedEnv` block can compare the two by reading them, rather than by
+// a list of variable names that would go stale the moment either side grows one.
+import { confinedEnv } from './plan'
 import type { ConfinementPlan } from './plan'
 
 const plan: ConfinementPlan = {
@@ -46,6 +50,8 @@ const plan: ConfinementPlan = {
   writable: ['C:\\Users\\Imza\\Projects\\app', 'C:\\Users\\Imza\\AppData\\Roaming\\td\\device-home\\abc'],
   readable: ['C:\\Program Files\\nodejs'],
   readableFiles: ['C:\\Users\\Imza\\AppData\\Roaming\\td\\guest-git\\askpass.cmd'],
+  readableProjects: [],
+  readExclusions: [],
 }
 
 /**
@@ -155,6 +161,8 @@ describe('planAncestors', () => {
       writable: ['C:\\Users\\Imza\\Projects', 'C:\\Users\\Imza\\Projects\\app'],
       readable: [],
       readableFiles: [],
+      readableProjects: [],
+      readExclusions: [],
     }
     expect(planAncestors(inner)).not.toContain('C:\\Users\\Imza\\Projects')
     expect(planAncestors(inner)).toContain('C:\\Users\\Imza')
@@ -265,6 +273,8 @@ describe('appContainerArgs', () => {
       writable: ['\\\\server\\share\\project'],
       readable: [],
       readableFiles: [],
+      readableProjects: [],
+      readExclusions: [],
     }
     expect(() =>
       appContainerArgs({ container: launch.container, plan: share, tools }, 'cmd.exe', []),
@@ -283,6 +293,8 @@ describe('appContainerArgs', () => {
       writable: ['/home/asad/work'],
       readable: [],
       readableFiles: [],
+      readableProjects: [],
+      readExclusions: [],
     }
     expect(() =>
       appContainerArgs({ container: launch.container, plan: linux, tools }, 'cmd.exe', []),
@@ -299,6 +311,8 @@ describe('appContainerArgs', () => {
       ...plan,
       readable: ['/System', '/usr', '/bin', 'C:\\Program Files\\nodejs'],
       readableFiles: ['/System/Library/thing', ...plan.readableFiles],
+      readableProjects: [],
+      readExclusions: [],
     }
     const built = appContainerArgs({ container: launch.container, plan: leaked, tools }, 'cmd.exe', [])
     expect(built.join(' ')).not.toContain('/usr')
@@ -349,6 +363,60 @@ describe('windowsConfinedEnv', () => {
   it('redirects the two application-data directories', () => {
     expect(env.APPDATA).toContain('device-home\\abc\\AppData\\Roaming')
     expect(env.LOCALAPPDATA).toContain('device-home\\abc\\AppData\\Local')
+  })
+
+  it("redirects Claude Code's own scratch directory, which does not read TEMP", () => {
+    /*
+     * The variable that is not a Windows spelling of a POSIX one, and the one
+     * that was left out when `confinedEnv` grew it.
+     *
+     * Read out of the shipped `claude` 2.1.233 bundle — the same JavaScript on
+     * both platforms, with no branch on the platform anywhere in it:
+     *
+     *   function Kce(){ let e = env.CLAUDE_CODE_TMPDIR; if (e) return e; return "/tmp" }
+     *   let name = `claude-${process.getuid?.() ?? 0}`
+     *   let dir  = path.join(Kce(), name)
+     *
+     * `process.getuid` does not exist on Windows, so the name is `claude-0` for
+     * every account on the machine, and `path.win32.join('/tmp','claude-0')` is
+     * the drive-relative `\tmp\claude-0` — `C:\tmp\claude-0` in practice. That
+     * is outside the boundary and shared between accounts, and the CLI writes a
+     * `claude-pwd-ps-<id>` file into it for every shell command it runs on
+     * Windows, so a confined session that cannot write there cannot run one.
+     *
+     * Held equal to TEMP rather than spelled out again: one directory is the
+     * whole of a device's session state, which is the same argument
+     * `confinedEnv` makes for putting `tmp` under the home.
+     */
+    expect(env.CLAUDE_CODE_TMPDIR).toBe(env.TEMP)
+    expect(env.CLAUDE_CODE_TMPDIR).toBe(
+      'C:\\Users\\Imza\\AppData\\Roaming\\td\\device-home\\abc\\tmp',
+    )
+  })
+
+  it('names every variable the POSIX branch names, so neither branch can be half-updated', () => {
+    /*
+     * The shape of the bug this pins, rather than the bug itself.
+     *
+     * `host-core.ts` picks between `confinedEnv` and this function on
+     * `confinementKind(platform)`. A variable added to one arm and not the
+     * other is invisible from either machine — the fix looks complete in the
+     * diff and is missing on the platform nobody is sitting at. `HOME` and
+     * `CLAUDE_CODE_TMPDIR` are the two that belong to both; `TMPDIR` is
+     * deliberately POSIX-only and `TEMP`/`TMP` are deliberately Windows-only,
+     * so the check is that everything *not* on that exception list appears in
+     * both.
+     */
+    const posixOnly = new Set(['TMPDIR'])
+    const shared = Object.keys(confinedEnv('/home/device')).filter((key) => !posixOnly.has(key))
+    for (const key of shared) {
+      expect(
+        Object.keys(env),
+        `confinedEnv sets ${key} and windowsConfinedEnv does not. If it is genuinely POSIX-only, ` +
+          'add it to the exception list above with the reason; otherwise Windows is running ' +
+          'without it.',
+      ).toContain(key)
+    }
   })
 })
 

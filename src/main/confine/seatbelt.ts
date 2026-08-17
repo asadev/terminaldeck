@@ -81,6 +81,32 @@
 import type { ConfinementPlan } from './plan'
 
 /**
+ * A regex, as a Seatbelt regex literal — and **not** through
+ * {@link seatbeltString}.
+ *
+ * The two serialisers look interchangeable and are not, which cost a real
+ * measurement to find. `seatbeltString` doubles a backslash, correctly, because
+ * an ordinary string literal is unescaped by the profile reader. A `#"…"` regex
+ * literal is **not** unescaped: what is between the quotes reaches the regex
+ * engine as written. So a pattern serialised through `seatbeltString` arrives as
+ * `\\.` where `\.` was meant, matches nothing, and the rule silently stops
+ * being a rule.
+ *
+ * Reproduced on macOS 27.0 with a real `sandbox-exec`: the same profile with
+ * single escapes refused `<project>/.env`, and with doubled escapes allowed it,
+ * while both profiles looked like they contained a deny for it. That is the
+ * exact shape of a gate that does not gate, so the two serialisers are kept
+ * apart and named for what they take.
+ *
+ * A double quote cannot appear at all — `\"` ends the literal early and `\x22`
+ * is not understood — so `pathAsRegex` in `secrets.ts` removes the possibility
+ * upstream rather than this function pretending to handle it.
+ */
+export function seatbeltRegex(pattern: string): string {
+  return `#"${pattern}"`
+}
+
+/**
  * A path, as a Seatbelt string literal.
  *
  * Not decoration. A folder called `q"uote` produces
@@ -192,7 +218,7 @@ export function seatbeltProfile(plan: ConfinementPlan): string {
     '(allow file-ioctl (subpath "/dev"))',
     '',
     '; The Xcode tool shim\'s cache, and nothing else in that shared directory.',
-    `(allow file-read* file-write* (regex #${seatbeltString(XCRUN_CACHE)}))`,
+    `(allow file-read* file-write* (regex ${seatbeltRegex(XCRUN_CACHE)}))`,
     '',
     '; The operating system and the tools. Read only: a confined session cannot',
     '; modify the machine it is running on.',
@@ -213,6 +239,18 @@ export function seatbeltProfile(plan: ConfinementPlan): string {
     }
   }
 
+  if (plan.readableProjects.length > 0) {
+    lines.push(
+      '',
+      '; The projects the person has already added to this app, read only.',
+      '; They appear above, among the readable roots. Named again here as a',
+      '; comment because "read only" is the whole of the decision: there is no',
+      '; write rule for any of them below, and the exclusions at the bottom of',
+      '; this profile carve the credential shapes back out of them.',
+    )
+    for (const root of plan.readableProjects) lines.push(`;   ${root}`)
+  }
+
   lines.push(
     '',
     '; The granted folder, and the session\'s own state. This is the whole of',
@@ -220,6 +258,38 @@ export function seatbeltProfile(plan: ConfinementPlan): string {
   )
   for (const root of plan.writable) {
     lines.push(`(allow file-read* file-write* (subpath ${seatbeltString(root)}))`)
+  }
+
+  /*
+   * Last, because last is what makes them work.
+   *
+   * Measured: a `deny` written above the `(allow file-read* (subpath …))` that
+   * grants a project is overridden and the file stays readable — the rule that
+   * matches last is the one that takes effect. Every allow in this profile is
+   * therefore emitted before any of these, and the exceptions inside
+   * `readExclusions` come after their own denies for the same reason. The order
+   * of that list is the semantics; it is not sorted here and must not be.
+   *
+   * Denies are `file-read*` only. Nothing below grants a write into a project in
+   * the first place, and adding `file-write*` to these lines would imply the
+   * opposite to anybody reading the profile to find out what a session may do.
+   */
+  if (plan.readExclusions.length > 0) {
+    lines.push(
+      '',
+      '; Credential shapes carved out of the read-only project grants above.',
+      '; A denylist is a reduction and not a guarantee — see `secrets.ts` for',
+      '; what it does not cover — and it is enforced by the kernel rather than',
+      '; asked for in an instruction file.',
+    )
+    let shape = ''
+    for (const rule of plan.readExclusions) {
+      if (rule.shape !== shape) {
+        shape = rule.shape
+        lines.push(`; ${rule.shape}: ${rule.why}`)
+      }
+      lines.push(`(${rule.effect} file-read* (regex ${seatbeltRegex(rule.pattern)}))`)
+    }
   }
 
   lines.push('')

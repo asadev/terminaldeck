@@ -164,6 +164,7 @@ import {
   realFiles,
   WINDOWS_SETUP_NEEDED,
   WINDOWS_UNCONFINED_REASON,
+  windowsConfinedEnv,
   type AppContainerLaunch,
   type LauncherRunner,
   type ProbeFiles,
@@ -331,6 +332,23 @@ export interface DeviceConfinement {
   writable: readonly string[]
   /** Individual files it must be able to read and execute. */
   files: readonly string[]
+  /**
+   * Directories the session may **read and never write**.
+   *
+   * The copilot's grant over the projects a person has already added to this
+   * app, and nothing else uses it — a session from a paired device is confined
+   * to the one folder that was granted to it, and stays that way.
+   *
+   * It rides on this interface rather than being a separate argument to
+   * {@link planFor} so that the copilot's spawn goes through `startSession`
+   * exactly like every other session, carrying its wider grant in the same
+   * envelope the narrower ones travel in. A second parameter would have meant a
+   * second code path through the one function in this app that starts a
+   * session, which is the thing the copilot's design is built on not doing.
+   *
+   * Optional, so every existing caller keeps meaning what it already meant.
+   */
+  projects?: readonly string[]
 }
 
 /**
@@ -405,10 +423,46 @@ export { installWindowsTools, windowsToolsFor } from './tools'
  * The environment a confined *Windows* session needs, which is not the one
  * `confinedEnv` builds. Re-exported for the same reason.
  */
-export { windowsConfinedEnv } from './appcontainer'
+export { windowsConfinedEnv }
 
 /** The environment a confined session adds. Re-exported so callers need one import. */
 export { confinedEnv }
+
+/**
+ * The environment a confined session adds **on this platform**, chosen once.
+ *
+ * ## Why this is a function rather than two exports and a ternary
+ *
+ * Because it was two exports and a ternary, and the ternary was written twice —
+ * correctly in `host-core.ts`, where the session is spawned, and not at all in
+ * `copilot-session.ts`, where the sign-in probe was added later and called
+ * `confinedEnv` directly. That is not a typo anybody could have caught by
+ * reading either file: each one is locally sensible, and the platform that
+ * takes the missing branch is not the platform either of them was written on.
+ *
+ * What it cost, concretely. The probe runs `claude auth status --json` with the
+ * copilot's own home so that it reports the *copilot's* login rather than the
+ * machine's, and `confinedEnv` expresses "its own home" as `HOME` and `TMPDIR`.
+ * On Windows almost nothing reads either: `os.homedir()` reads `USERPROFILE`,
+ * git reads `HOMEDRIVE`+`HOMEPATH`, and scratch space is `TEMP`/`TMP`. So the
+ * probe would have run with the copilot's `HOME` and the *owner's* everything
+ * else — the exact failure the comment above the probe's `CLAUDE_CONFIG_DIR`
+ * warns about, arriving through the variable beside it.
+ *
+ * `confinementKind` rather than a bare `platform === 'win32'`, because the
+ * question is which mechanism is holding this session, and on Windows that is
+ * not a property of the platform: before the one-time AppContainer grant the
+ * answer is `'none'`, and a session that is not confined at all has no
+ * redirected home to describe. Callers gate on `confinementKind` before asking
+ * for this, and this asks the same question again rather than a different one
+ * that happens to agree today.
+ */
+export function confinedHomeEnv(
+  home: string,
+  platform: Platform = currentPlatform(),
+): Record<string, string> {
+  return confinementKind(platform) === 'appcontainer' ? windowsConfinedEnv(home) : confinedEnv(home)
+}
 
 /**
  * The plan for one session, from the pieces the spawn path holds.
@@ -441,6 +495,7 @@ export function planFor(input: {
       ...(input.agentConfigDir === undefined ? [] : [input.agentConfigDir]),
     ],
     files: input.device.files,
+    projects: input.device.projects ?? [],
     resolver: input.resolver ?? realResolver,
     platform: input.platform,
   }

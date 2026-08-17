@@ -149,8 +149,18 @@ const hex = (rgb: Rgb): string =>
  * flat strip beside a gradient can do. Written out here as well as in
  * `title-bar.ts` so that a reader can check the arithmetic in the source
  * against an independent implementation of it, rather than against a comment.
+ *
+ * `none` is a value, not a parse failure, and this is where that had to be
+ * said. The dark-flat pass set `--material-sheen: none` — the dark chrome is
+ * one colour from top to bottom now, and an opaque `--material-bg` plus no
+ * gradient is how it gets there. This function demanded at least two white
+ * stops and threw `no white stops in none`, so both of the overlay-colour
+ * assertions failed for a reason that named a gradient and pointed nowhere near
+ * the appearance change that caused it. A sheen of nothing contributes nothing:
+ * mean zero, and the composite below then correctly returns the fill on its own.
  */
 function meanSheenAlpha(gradient: string): number {
+  if (gradient === 'none') return 0
   const stops = [...gradient.matchAll(/rgba\(255, 255, 255, ([\d.]+)\) ([\d.]+)%/g)].map(
     (match) => [Number(match[2]) / 100, Number(match[1])] as const,
   )
@@ -174,6 +184,84 @@ function toolbarColour(appearance: Appearance): string {
   const sheen = { rgb: [255, 255, 255] as Rgb, alpha: meanSheenAlpha(theme.get('--material-sheen') ?? '') }
   return hex(composite(sheen, glass))
 }
+
+/**
+ * The body of one top-level rule in one of the shell's stylesheets.
+ *
+ * Anchored on a `{` at the end of the selector line and a `}` in column zero,
+ * because rules in these sheets start in column zero and none of them nest —
+ * which is what keeps this from matching an indented copy inside a `@media`
+ * block, a different rule with a different job. The same reading
+ * `shell/shell.test.ts` makes, for the same reason this file reads `tokens.css`
+ * as text: the main project does not compile `src/renderer`.
+ */
+function ruleBody(sheet: string, selector: string): string {
+  const css = lf(sheet)
+  const opening = `\n${selector} {\n`
+  const start = css.indexOf(opening)
+  expect(start, `no \`${selector}\` rule — has the shell been rewritten?`).not.toBe(-1)
+  const from = start + opening.length
+  const end = css.indexOf('\n}', from)
+  return css.slice(from, end === -1 ? undefined : end)
+}
+
+describe('the two bars that can be the window top band are painted the same', () => {
+  /*
+   * The assumption the colour arithmetic rests on, checked instead of assumed.
+   *
+   * The Windows overlay is a strip in the top-right *of the window*, so what it
+   * has to match is whatever band is at the top. With tabs open that is
+   * `.strip`; with none it is `.toolbar`. Everything below computes one colour
+   * because those two wear one recipe today — and nothing anywhere said so, so
+   * a pass that restyled the strip alone would have moved the top band out from
+   * under a constant that still matched the other bar and still passed every
+   * test in this file.
+   *
+   * Not a claim that they must always agree. It is a claim that while they do,
+   * one colour is enough; the day they stop, this fails first and the overlay
+   * needs a rule about which band it is in, not a new hex.
+   */
+  const SHELL = lf(readFileSync(join(ROOT, 'src', 'renderer', 'shell', 'shell.css'), 'utf8'))
+  const STRIP = lf(
+    readFileSync(join(ROOT, 'src', 'renderer', 'browser', 'WorkspaceTabStrip.css'), 'utf8'),
+  )
+
+  for (const [name, body] of [
+    ['.toolbar', ruleBody(SHELL, '.toolbar')],
+    ['.strip', ruleBody(STRIP, '.strip')],
+  ] as const) {
+    it(`${name} is the glass recipe the overlay colour is computed from`, () => {
+      expect(
+        body,
+        `${name} no longer paints \`--material-bg\`. The Windows window buttons are painted a ` +
+          'colour composited from that token in title-bar.ts, and the OS paints them outside ' +
+          'the page where no stylesheet can reach. Work out which band the overlay is in now.',
+      ).toContain('background-color: var(--material-bg)')
+      expect(body).toContain('background-image: var(--material-sheen)')
+    })
+
+    it(`${name} is exactly as tall as the overlay`, () => {
+      // A band shorter than the strip leaves the buttons overhanging onto the
+      // content; taller, and they float in a lane of their own. Both are the
+      // stacked-strips look this whole feature removed, arriving sideways.
+      expect(body).toContain('height: var(--toolbar-h)')
+    })
+  }
+
+  it('the band one step down is a different colour, and is not where the buttons are', () => {
+    /*
+     * `.toolbar[data-under-strip]` is `--tab-active`, so that the selected tab,
+     * this bar and the session below it are one continuous panel. It measures
+     * `rgb(25,25,25)` in the dark theme against the top band's `rgb(33,33,33)`,
+     * and it is the bar you land on if you read "the toolbar" without noticing
+     * there is a strip above it. Pinned as *different* so that nobody
+     * reconciles the overlay to it.
+     */
+    const under = ruleBody(SHELL, '.toolbar[data-under-strip]')
+    expect(under).toContain('background-color: var(--tab-active)')
+    expect(under).toContain('background-image: none')
+  })
+})
 
 describe('the Windows overlay is painted in the colours of the bar it sits in', () => {
   for (const appearance of ['dark', 'light'] as const) {

@@ -56,6 +56,11 @@ function planOf(over: Partial<ConfinementPlan> = {}): ConfinementPlan {
     writable: ['/home/asad/work/app', '/home/asad/.config/deck/device-home/abc'],
     readable: ['/usr', '/bin'],
     readableFiles: [],
+    // The Linux backend never sees either of these: `sessionPlan` refuses to
+    // build a plan carrying credential exclusions off Seatbelt, precisely
+    // because a bind mount cannot express "this folder except these names".
+    readableProjects: [],
+    readExclusions: [],
     ...over,
   }
 }

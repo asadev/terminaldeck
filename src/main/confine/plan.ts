@@ -42,6 +42,7 @@
 
 import { basename, join, posix, win32 } from 'node:path'
 import { isWindows, type Platform } from '../platform/host'
+import { secretExclusions, type ReadExclusion } from './secrets'
 
 /**
  * The path rules for the platform being asked about, rather than for the one
@@ -116,6 +117,38 @@ export interface ConfinementPlan {
   readable: readonly string[]
   /** Individual files that may be read and executed. Realpaths. */
   readableFiles: readonly string[]
+  /**
+   * The project folders inside {@link readable} that were granted because the
+   * person had already added them to this app, resolved.
+   *
+   * Named separately from `readable` for the same reason {@link folder} and
+   * {@link home} are named separately from `writable`: something has to be able
+   * to say *which* of the readable directories are somebody's own work rather
+   * than the operating system, and the list cannot answer because `collapse`
+   * sorts it. Two callers need that distinction — a settings pane telling a
+   * person what their copilot can see, and {@link readExclusions}, which is
+   * derived from exactly these and from nothing else.
+   *
+   * Empty for every session except the copilot's. An ordinary session is
+   * granted one folder and it is writable.
+   */
+  readableProjects: readonly string[]
+  /**
+   * Read rules applied **after** every allow above, in this order.
+   *
+   * The credential shapes carved back out of {@link readableProjects} — see
+   * `secrets.ts`. Order is the whole semantics, because the Seatbelt rule that
+   * matches last is the one that takes effect; a plan whose exclusions were
+   * sorted or de-duplicated by something downstream would be a plan whose denies
+   * silently stopped denying.
+   *
+   * **Only the Seatbelt backend honours this.** {@link sessionPlan} refuses to
+   * build a plan that carries exclusions for any other platform rather than
+   * handing one to a backend that would ignore it, because an exclusion that is
+   * not applied is worse than one that was never asked for: the caller believes
+   * a boundary exists.
+   */
+  readExclusions: readonly ReadExclusion[]
 }
 
 /**
@@ -345,8 +378,72 @@ export interface SessionPlanInput {
    * folder would grant every other device's git identity along with it.
    */
   files?: readonly string[]
+  /**
+   * Folders the session may read and may never write: the projects the person
+   * has already added to this app.
+   *
+   * The copilot is the only caller, and `copilot-session.ts` argues the decision
+   * at length. What matters here is the shape of it: these arrive as a
+   * *read* list, so there is no flag anybody can flip to make them writable and
+   * no path by which they end up in {@link ConfinementPlan.writable} — the
+   * distinction the three-list design exists to make impossible to fudge.
+   *
+   * They are guarded harder than any other input, because unlike the system
+   * roots and unlike `PATH` they name the person's own files. A root that is,
+   * or contains, the account's home directory or any writable root is dropped;
+   * so is one that is not a directory. The guards run *before* the tool-root
+   * walk for the reason {@link sessionPlan} gives.
+   */
+  projects?: readonly string[]
   resolver: PathResolver
   platform: Platform
+}
+
+/**
+ * Project roots that survive being looked at, resolved and de-duplicated.
+ *
+ * Separate from {@link sessionPlan} so the filtering can be asked about
+ * directly. Every rejection here is a case where granting the folder would
+ * hand over something nobody chose to hand over:
+ *
+ *  - **The account's home, or anything containing it.** Somebody can add `~` to
+ *    this app as a project — it is a folder, the picker will accept it — and a
+ *    read grant on it is a read grant on `.ssh`, the keychain directory, every
+ *    other project and every other application's data. `accountHome` is the
+ *    thing the whole plan protects; it does not become readable because it was
+ *    reached from a different direction.
+ *  - **Anything containing a writable root.** The copilot's writable roots are
+ *    its own folder and its own home, both of which live under this app's
+ *    storage; a project root above either of them would make the app's state
+ *    directory readable, which is `<userData>` — every session's transcript,
+ *    the pairing credentials, `state.json`, `settings.json`. The caller drops
+ *    `<userData>` itself for the same reason and knows where it is; this guard
+ *    is what holds when the caller forgets.
+ *  - **The filesystem root.** `/` as a project is the whole machine.
+ *  - **Anything that is not a directory.** A stale entry in the project list is
+ *    ordinary — a folder gets renamed — and a profile naming a path that is not
+ *    there is a rule nobody can check against reality later. Same reasoning as
+ *    `toolRoots`.
+ */
+export function projectRoots(
+  paths: readonly string[],
+  resolver: PathResolver,
+  guards: PlanGuards,
+  platform: Platform,
+): string[] {
+  const { sep } = rules(platform)
+  const forbidden = [guards.home, ...guards.protect]
+  const kept: string[] = []
+  for (const raw of paths) {
+    if (!resolver.isDirectory(raw)) continue
+    const dir = resolver.real(raw)
+    if (canonical(dir, platform) === canonical(sep, platform)) continue
+    // `within(bad, dir)` — is the protected thing *inside* this root? That is
+    // the dangerous direction and the one that is easy to write backwards.
+    if (forbidden.some((bad) => within(bad, dir, platform))) continue
+    kept.push(dir)
+  }
+  return collapse(kept, platform)
 }
 
 /**
@@ -357,7 +454,15 @@ export interface SessionPlanInput {
  * directory have to be known before `PATH` is walked, or a `PATH` entry whose
  * prefix happens to contain the granted folder would be added as a *read* root
  * covering it — which is not a leak of the folder (it is already writable) but
- * is a leak of everything beside it.
+ * is a leak of everything beside it. The project roots are guarded by the same
+ * assembly for the same reason, one step earlier than the tool roots because
+ * a `PATH` prefix must not be allowed to cover a project either.
+ *
+ * Exclusions are derived here rather than passed in, and that is the one piece
+ * of policy this otherwise mechanical function holds. Granting a project folder
+ * and carving the credential shapes back out of it are two halves of one
+ * decision; a caller that could do the first without the second would only have
+ * to forget once.
  */
 export function sessionPlan(input: SessionPlanInput): ConfinementPlan {
   const { platform, resolver } = input
@@ -375,8 +480,33 @@ export function sessionPlan(input: SessionPlanInput): ConfinementPlan {
     protect: writable,
   }
 
+  const projects = projectRoots(input.projects ?? [], resolver, guards, platform)
+  const readExclusions = secretExclusions(projects)
+
+  /*
+   * A backend that would ignore these must never be handed them.
+   *
+   * `linux.ts` turns `readable` into read-only bind mounts and has no way to
+   * express "except these names inside it"; `appcontainer.ts` does not use
+   * `readable` at all. Either would grant the project folder whole. Refusing
+   * here rather than silently narrowing — or silently widening — is the same
+   * rule the rest of this subsystem follows: the side reporting a boundary must
+   * be the side enforcing it. Today only `copilot-session.ts` passes projects,
+   * and it already refuses to ask off Seatbelt; this is the fence that holds
+   * when the next caller does not know that.
+   */
+  if (readExclusions.length > 0 && platform !== 'darwin') {
+    throw new Error(
+      `Read-only project grants are enforceable only under Seatbelt; ${platform} would ignore the credential exclusions.`,
+    )
+  }
+
   const readable = collapse(
-    [...MACOS_SYSTEM_READ_ROOTS, ...toolRoots(input.path, resolver, guards, platform)],
+    [
+      ...MACOS_SYSTEM_READ_ROOTS,
+      ...toolRoots(input.path, resolver, { ...guards, protect: [...writable, ...projects] }, platform),
+      ...projects,
+    ],
     platform,
   )
 
@@ -397,6 +527,8 @@ export function sessionPlan(input: SessionPlanInput): ConfinementPlan {
     writable,
     readable,
     readableFiles: [...new Set(files)],
+    readableProjects: projects,
+    readExclusions,
   }
 }
 
@@ -457,6 +589,24 @@ export function deviceKeyOf(home: string): string {
  *    default is a per-account directory shared with every other program the
  *    account runs, so it is outside the boundary by design, and a session
  *    without a writable temp cannot run `git commit`.
+ *  - **`CLAUDE_CODE_TMPDIR`.** The one that is not guessable, and the one that
+ *    made every confined Claude session on macOS die on its first turn.
+ *    Measured against Claude Code 2.1.233 inside a real `sandbox-exec` with a
+ *    real plan: the CLI does not use `TMPDIR` for its own scratch directory. It
+ *    uses `/tmp/claude-<uid>` — a literal path, shared with every other Claude
+ *    process this account runs, and therefore outside the boundary by design.
+ *    The session printed
+ *    `EPERM: operation not permitted, open '/tmp/claude-501'` and exited before
+ *    a single token was generated. `claude auth status` was unaffected, which
+ *    is why this was invisible until somebody asked a confined session a
+ *    question. With this variable set the same command reaches the API and
+ *    answers.
+ *
+ * Only Claude Code is named here because only Claude Code was measured to need
+ * it; the other agent CLIs run confined without it. A variable added for an
+ * agent that is not installed costs nothing, and the alternative — opening
+ * `/tmp/claude-<uid>` in the plan — would hand the session a directory shared
+ * with every unconfined Claude process on the machine.
  *
  * The `PATH` is deliberately **not** in here. The tools live outside the granted
  * folder, they stay on the `PATH`, and the plan makes their directories readable
@@ -474,5 +624,6 @@ export function confinedEnv(home: string): Record<string, string> {
   // this file composes is a POSIX path by definition. Using the host's joiner
   // made the Windows CI runner answer `\app-storage\…\tmp` for a boundary
   // Windows cannot even have, and failed the release build on it.
-  return { HOME: home, TMPDIR: posix.join(home, 'tmp') }
+  const tmp = posix.join(home, 'tmp')
+  return { HOME: home, TMPDIR: tmp, CLAUDE_CODE_TMPDIR: tmp }
 }

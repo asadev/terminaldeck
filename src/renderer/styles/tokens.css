@@ -156,7 +156,40 @@
   --color-critical: #bd3a2c;
   --color-positive: #19714a;
 
-  --tab-active: #ffffff;
+  /*
+     The selected tab — and, through it, every band that belongs to the thing
+     that tab opened.
+
+     The strip draws the selected tab as the *top edge of its own content*
+     rather than as a plate resting on a bar: the tab reaches the strip's
+     hairline, paints over it, and flares sideways at its feet. That shape only
+     says anything if the tab is the same colour as whatever is directly under
+     it, which is why this token is read three sheets away from the strip —
+     `.toolbar[data-under-strip]` in `shell.css` and `.bw` in
+     `BrowserWorkspace.css` are both painted with it.
+
+     It used to be `#ffffff`, i.e. `--bg-primary`, and in the dark theme that
+     is also `--terminal-bg`, so the whole chain matched for free and the dark
+     window has always looked right. In the light theme it did not: the
+     terminal is deliberately a recessed paper (`--terminal-bg` below) while
+     the chrome is the app canvas, so the session bar stood twenty-three levels
+     lighter than the session under it. Asad, comparing the two appearances:
+     *"on dark mode it is actually the same, which I like. But on light mode it
+     is pure white, and inside the terminal itself it is a little bit
+     different, like kind of grey."*
+
+     So this is the terminal's own paper in both themes, and `tokens.test.ts`
+     holds the two equal rather than leaving a third hand-copied grey to drift.
+     The *strip itself* keeps its glass and stays distinct from all of this —
+     *"the top header where we see the windows is different, which is good,
+     which I don't want to change"* — because what changed is the cut-out in
+     the strip, not the strip.
+
+     `--tab-inactive` is not the twin of that and never was: nothing paints an
+     unselected tab, which is flat against the bar by design. It is kept as the
+     name of the strip's own ground for anything that later needs to fill
+     against it. */
+  --tab-active: #e8e8e8;
   --tab-inactive: #f5f5f5;
   /* The focused pane's ring, and it is deliberately NOT the raw accent here.
 
@@ -167,10 +200,17 @@
      supposed to be pointing at. Same job, same hue, two thirds of the weight.
      The dark theme keeps the accent verbatim. */
   --pane-focus: color-mix(in srgb, var(--accent) 62%, transparent);
-  --pane-unfocus: var(--border);
+  /* And the edge of one that is not focused, which is a *container* edge rather
+     than the absence of a focus mark — a boxed pane is a box whether or not the
+     keyboard is in it. `--border-strong`, not `--border`: since 2026-08-17 both
+     panes are painted the terminal's own paper and the desk between them is two
+     levels away from it in this theme, so at `--border` the card's boundary was
+     the faintest line in the window and the box you were meant to be able to
+     pick out at a glance was one you had to look for. */
+  --pane-unfocus: var(--border-strong);
 
-  /* The terminal's own paper, and the one surface in the light theme that is
-     not the chrome's.
+  /* The terminal's own paper, and the surface in the light theme that is not
+     the chrome's.
 
      "Terminal in the content, Apple in the chrome — the contrast between the
      two is the look." In the dark theme that happens for free. In the light
@@ -179,7 +219,15 @@
      terminal and became an empty document with a cursor in it. This is a
      genuinely recessed paper: a 23-level step below the chrome, so the session
      reads as a panel let into the window. Ink on it is 14.8:1, darker than the
-     app's own body text because a terminal's job is to be exact. */
+     app's own body text because a terminal's job is to be exact.
+
+     It is no longer the *only* thing wearing that step. The session's own bar
+     — the one carrying the account chip and the Terminal/Chat/Split switch —
+     and the selected tab above it are painted with it too, through
+     `--tab-active`, so the whole session reads as one panel rather than as a
+     white bar sitting on a grey one. The chrome that stays white is the chrome
+     that belongs to the *window* rather than to the session: the rail, the tab
+     strip, and the toolbar in a window that has no strip. */
   --terminal-bg: #e8e8e8;
   --terminal-fg: #141414;
 
@@ -239,7 +287,25 @@
      border in the dark theme is one of these, so a fifteen-point yellow bias
      in the tint was most of the cast on its own. */
   --bg-hover: rgba(255, 255, 255, 0.055);
-  --bg-active: rgba(255, 255, 255, 0.095);
+  /*
+   * The selected row, and the one token that decides whether you can see where
+   * you are in this app.
+   *
+   * It was 0.095. Over the settings rail that composites to about #3c3c3c on
+   * #282828 — twenty levels, which measures as "present" and reads, at 3× zoom
+   * on the real screen, as a blank gap where the selected section should be.
+   * The nav is a column of grey words and the current one was a grey word.
+   * Asad's note is the whole of it: in dark mode you cannot see which section
+   * you are in.
+   *
+   * 0.14 is thirty-one levels over the rail and thirty over the dialog, which
+   * is the same step the light theme has always had — a light theme's selection
+   * darkens paper by a similar amount, which is why this was never a bug there.
+   * It is one token and it moves every selected row in the window at once: the
+   * sidebar's session, the file tree, the git row, the command palette. That is
+   * the point, not a side effect; they were all the same twenty levels.
+   */
+  --bg-active: rgba(255, 255, 255, 0.14);
   --fill-quaternary: rgba(255, 255, 255, 0.04);
   --fill-tertiary: rgba(255, 255, 255, 0.07);
   --fill-secondary: rgba(255, 255, 255, 0.11);
@@ -292,6 +358,12 @@
   --color-critical: #ff6f60;
   --color-positive: #5fbf95;
 
+  /* The surface the selected tab opens onto — see the light theme's note for
+     what reads it and why. Here it is the canvas, the terminal's paper and the
+     tab all at once, which is the reason the dark window never had the seam
+     the light one did. Written as a literal for the same reason
+     `--terminal-bg` below is: `tokens.test.ts` reads these declarations as
+     text, and it is that test which keeps the copies equal. */
   --tab-active: #191919;
   --tab-inactive: #202020;
   /* The focused pane's ring, and its unfocused twin. Written out here rather
@@ -301,7 +373,7 @@
      mid blue reads as a mark; on paper the same rule is a saturated rectangle,
      which is the whole reason the two themes differ here. */
   --pane-focus: var(--accent);
-  --pane-unfocus: var(--border);
+  --pane-unfocus: var(--border-strong);
   /* The canvas, copied by value rather than by `var()`: `tokens.test.ts` reads
      these declarations as text, so a reference would be unreadable to it — and
      the test that keeps the two in step is what makes writing it twice safe. */
@@ -311,14 +383,41 @@
      light coral here, so this is the same trade `--accent-fg` makes. */
   --badge-fg: #0f1114;
 
-  --material-bg: rgba(36, 36, 36, 0.68);
+  /*
+   * Flat. The dark theme's chrome is one colour from top to bottom.
+   *
+   * It was not, and the difference was not subtle. The sidebar and the toolbar
+   * are `--material-bg` over `--material-sheen` over the app's own
+   * `radial-gradient`, and in the dark theme those three composited to roughly
+   * level 53 at the top of the rail and level 30 at its foot — a 23-step ramp
+   * down 900 pixels, with the sheen's leading edge reading as a lighter seam
+   * where the rail meets the window. Asad, comparing it with the flat surface
+   * he wanted: the sidebar is *"lighter at the top, near-black by the footer"*.
+   * The light theme was already flat, because a white sheen over near-white
+   * paper composites to near-white paper — so this was a dark-only regression
+   * and it is fixed dark-only.
+   *
+   * Two changes, and both are needed. An **opaque** `--material-bg` stops the
+   * app's radial gradient showing through the rail, and a sheen of **nothing**
+   * stops the vertical ramp being painted on top of it. Either one alone still
+   * leaves four or five levels of drift, which is exactly the kind of almost-
+   * flat that reads as a rendering fault rather than as a decision.
+   *
+   * #212121 is two levels above `--bg-secondary` and eight above the canvas, so
+   * the rail still reads as chrome against the work without a line between
+   * them, which is the order the brief asks for: space, then a tint, then a
+   * line. r = g = b, as `tokens.test.ts` requires of every named surface.
+   *
+   * The floating surfaces keep their translucency (`--material-bg-strong` is
+   * still 88%) and lose only the sheen, and they lose nothing by it: a dialog
+   * is 400 pixels tall rather than 900, so the same gradient contributed almost
+   * nothing to it, and `--material-edge` still draws the top highlight and
+   * `--shadow-lg` still lifts it off the page. Glass in the dark theme is now
+   * blur, translucency and an edge — not a painted gradient.
+   */
+  --material-bg: #212121;
   --material-bg-strong: rgba(40, 40, 40, 0.88);
-  --material-sheen: linear-gradient(
-    180deg,
-    rgba(255, 255, 255, 0.085) 0%,
-    rgba(255, 255, 255, 0.028) 45%,
-    rgba(255, 255, 255, 0) 100%
-  );
+  --material-sheen: none;
   --material-edge: rgba(255, 255, 255, 0.11);
   --material-hairline: rgba(0, 0, 0, 0.5);
   --material-filter: saturate(170%) blur(26px);

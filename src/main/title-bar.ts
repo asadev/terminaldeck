@@ -46,21 +46,44 @@ import type { Platform } from './platform/host'
  * beside it are the same colour, and the arithmetic is written out below so the
  * next reader can check it by hand.
  *
- * The toolbar (`.toolbar` in `shell/shell.css`) is `--material-bg` over the
- * content canvas `--bg-primary`, with `--material-sheen` on top. The blur in
- * `--material-filter` contributes nothing there because what is behind the
- * toolbar is `.main`'s flat `--bg-primary`, so the composite is exact rather
- * than an approximation:
+ * ## Which bar the strip actually sits in
  *
- *   dark:  36×0.68 + 25×0.32 = 32.48, then the sheen's mean alpha 0.0331 of
- *          white over that → 39.85 → #282828
+ * The window's top band is the tab strip (`.strip` in
+ * `browser/WorkspaceTabStrip.css`) whenever there are tabs, and `.toolbar`
+ * (`shell/shell.css`) when there are not. That distinction turns out not to
+ * matter, and it is worth saying why rather than leaving the next reader to
+ * work it out: both wear the same recipe — `--material-bg` over the content
+ * canvas `--bg-primary` with `--material-sheen` on top, and the same
+ * `--toolbar-h` height. The bar one band *further* down, `.toolbar` while a
+ * strip is above it, is a different colour (`--tab-active`) and is not where
+ * the window buttons are. `title-bar.test.ts` pins the two top bands to one
+ * recipe so that changing one of them fails here rather than opening a seam on
+ * a machine nobody is sitting at.
+ *
+ * The blur in `--material-filter` contributes nothing to either, because what
+ * is behind them is flat `--bg-primary`, so the composite is exact rather than
+ * an approximation:
+ *
+ *   dark:  33 opaque, sheen `none` → 33 → #212121
  *   light: 250×0.72 + 255×0.28 = 251.4, then the sheen's mean alpha 0.2986 of
  *          white over that → 252.47 → #fcfcfc
  *
- * The sheen is a vertical gradient and the OS paints a flat strip, so its
- * *mean* alpha over the bar's height is the value that minimises the seam. The
- * bar is 48px tall and the gradient runs top-to-bottom across it; a flat colour
- * cannot match a gradient everywhere, and the mean is where it is least wrong.
+ * The dark line used to read `36×0.68 + 25×0.32 = 32.48`, then a sheen mean of
+ * 0.0331 over it, landing on `#282828`. Both halves of that arithmetic were
+ * true and are not any more: the dark-flat pass made `--material-bg` the opaque
+ * `#212121` and set `--material-sheen: none`, because the sidebar and toolbar
+ * were composing to a 23-step vertical ramp — *"lighter at the top, near-black
+ * by the footer"*. The tokens moved and this copy did not, which is exactly the
+ * drift the test below exists to catch; it caught it, and this is the value it
+ * named. Three levels sounds like nothing and is not: it is a rectangle of a
+ * different grey in the corner of a flat bar, which reads as a rendering fault.
+ *
+ * The sheen, where there is one, is a vertical gradient and the OS paints a
+ * flat strip, so its *mean* alpha over the bar's height is the value that
+ * minimises the seam. The bar is 48px tall and the gradient runs top-to-bottom
+ * across it; a flat colour cannot match a gradient everywhere, and the mean is
+ * where it is least wrong. A sheen of `none` contributes nothing at all, which
+ * is a mean of zero rather than a case that has no answer.
  *
  * The symbols take `--text-secondary`, which is what `.toolbar-btn` next to
  * them is set in. The window buttons and our own toolbar buttons are the only
@@ -112,7 +135,7 @@ export const OVERLAY_HEIGHT = 48
 
 /** The composite worked out in the header comment, one per appearance. */
 const OVERLAY: Record<Appearance, WindowControlsOverlay> = {
-  dark: { color: '#282828', symbolColor: '#a8a8a8', height: OVERLAY_HEIGHT },
+  dark: { color: '#212121', symbolColor: '#a8a8a8', height: OVERLAY_HEIGHT },
   light: { color: '#fcfcfc', symbolColor: '#545454', height: OVERLAY_HEIGHT },
 }
 

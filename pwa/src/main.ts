@@ -31,6 +31,7 @@ import {
   type DeckEndpoint,
 } from './endpoint'
 import {
+  DEV_CAPTION,
   NO_DEV,
   cannotOpenSentence,
   devRowView,
@@ -51,68 +52,27 @@ import {
   localhostOffered,
   localhostStep,
   noPortsSentence,
+  portLabel,
   stalePortsSentence,
   type LocalhostAction,
   type LocalhostState,
 } from './localhost'
-import {
-  MACHINES_FOOTNOTE,
-  clearBook as clearMachineBook,
-  cleanNickname,
-  currentMachine,
-  endpointSummary,
-  forgetMachine,
-  lastReachedSentence,
-  loadMachines,
-  machineById,
-  machineId,
-  machineLabel,
-  MAX_NICKNAME_LENGTH,
-  NO_MACHINES,
-  renameMachine,
-  saveBook,
-  selectMachine,
-  withCredential,
-  withMachine,
-  type MachineBook,
-  type StoredMachine,
-} from './machines'
 import { watchPhysicalKeyboard, type KeyBarFit, type MatchMedia } from './physical-keyboard'
 import {
   clearPairing,
   describeDevice,
+  loadPairing,
   REMEMBERED_TTL_MS,
   renewed,
   savePairing,
   type StoredCredential,
 } from './pair'
-import {
-  NAMING_FOOTNOTE,
-  categoryTitle,
-  directAppPorts,
-  portRowDetail,
-  portRowTitle,
-  secondAction,
-  sections as portSections,
-  type LocalhostRow,
-  type LocalhostSection,
-} from './port-catalog'
-import { MAX_NAME_LENGTH, PortBook } from './port-book'
-import {
-  canGoLarger,
-  canGoSmaller,
-  largerText,
-  readTextSize,
-  smallerText,
-  textSizeLabel,
-  writeTextSize,
-} from './text-size'
 import { normaliseCode } from '../../src/shared/short-code'
 import { asCodeField } from './code-field'
 import { browserStores, type Remember } from './remember'
 import { relaySocket } from './relay-socket'
 import { lookupMachine } from './rendezvous'
-import { chunkInput, type DevServerReport, type RemoteSession, type ServerMessage } from './protocol-client'
+import { chunkInput, type RemoteSession, type ServerMessage } from './protocol-client'
 import { formatSince, sessionTone, shortenPath, sortSessions, statusLabel } from './sessions'
 import { createTerminal, type TerminalHandle } from './terminal'
 import {
@@ -164,25 +124,7 @@ function socketUrl(location: Location): string {
  * `localhost.ts` for what that screen can honestly do from a browser tab and
  * what it deliberately does not pretend to.
  */
-type Screen = 'pair' | 'sessions' | 'localhost' | 'settings' | 'machines' | 'terminal'
-
-/**
- * The three tabs, and why Machines is not one of them.
- *
- * The phone answered this first and the answer is followed rather than
- * re-litigated — see the header of `ios/TerminalDeck/Screens/DeckTabs.swift`, which
- * records him asking for four pills and then moving Machines off the bar a minute
- * later because pairing a machine is something done once, and a strip of tabs is
- * for the screens somebody moves between all day.
- *
- * So: Sessions, Localhost, Settings — and Machines is a screen pushed from
- * Settings, reached by a chevron row that says how many are paired. The one place
- * this client differs is that the strip stays visible on the Machines screen,
- * which is the same call the phone makes ("Pill should be on here only on the
- * homepage or machines or settings") for the same reason: a person who has pushed
- * one screen deep has not left the app.
- */
-const LISTING_SCREENS: readonly Screen[] = ['sessions', 'localhost', 'settings', 'machines']
+type Screen = 'pair' | 'sessions' | 'localhost' | 'terminal'
 
 /**
  * Text on its way into the terminal rather than into the DOM.
@@ -249,19 +191,6 @@ class Deck {
    */
   private readonly tabs = element('nav', 'tabs')
   private readonly content = element('main', 'content')
-  /**
-   * A sentence that has been said and will stop being said.
-   *
-   * The only floating thing in this client, and it is here rather than inside a
-   * screen for the same reason the tab strip is: it is raised by a control on a
-   * row that the very next frame from the desktop will rebuild, and a message
-   * living inside that row would disappear with it before anybody read it.
-   *
-   * `aria-live` rather than a role, because it is an aside — nothing here is ever
-   * the only place something is said, and a screen reader should mention it
-   * without abandoning what the reader was on.
-   */
-  private readonly toast = element('div', 'toast')
 
   private connection: Connection | null = null
   private state: ConnectionState = { phase: 'offline', detail: 'Not connected.', retryAt: null, attempts: 0 }
@@ -316,30 +245,7 @@ class Deck {
   private screen: Screen = 'pair'
   private sessions: RemoteSession[] = []
   private activity = new Map<string, number>()
-  /**
-   * Every machine this browser is paired with, and which one it is talking to.
-   *
-   * This used to be a single `StoredCredential`, and the whole of `machines.ts`
-   * exists to explain why one was not enough once the phone grew a Machines
-   * screen. Everything that reads "the credential" below now reads
-   * `this.credential`, which is the current machine's — so the connection, the
-   * banner, the session list and the terminal are untouched by the change. What
-   * moved is only the answer to *which* machine.
-   */
-  private book: MachineBook = NO_MACHINES
-  /**
-   * The names this browser has given ports, and the groups it has folded, per
-   * machine. See `port-book.ts`; the grouping that reads it is `port-catalog.ts`.
-   *
-   * Made in the constructor rather than here because it needs `this.stores`, and a
-   * field initialiser cannot see another field that is declared after it.
-   */
-  private readonly portBook: PortBook
-  /**
-   * How big the terminal's characters are. See `text-size.ts`, which owns the
-   * bounds and says why a browser needs this control when a phone barely does.
-   */
-  private textSize: number
+  private credential: StoredCredential | null = null
   private attachedId: string | null = null
   /** True once an `attach` has gone out for `attachedId` on this connection. */
   private attachSent = false
@@ -428,49 +334,14 @@ class Deck {
   private keyboard: KeyBarFit | null = null
   /** The strip the key bar sits in, so its visibility can follow the hardware. */
   private keybarDock: HTMLElement | null = null
-  /**
-   * The row whose actions are showing, by `LocalhostRow.id` or machine id.
-   *
-   * One at a time and held here rather than on the row, because the list is
-   * rebuilt from scratch on every frame the desktop pushes — a flag living in the
-   * DOM would be wiped by the next `ports` answer, which on this screen arrives
-   * while somebody's finger is still on the button.
-   */
-  private openRow: string | null = null
-  /** The port being renamed, and the text so far. See `port-book.ts`. */
-  private renamingPort: number | null = null
-  /** The machine being renamed, by id. */
-  private renamingMachine: string | null = null
-  /** What a rename field holds. Kept here so a redraw does not empty it. */
-  private renameText = ''
-  /**
-   * A message that has been said and will stop being said.
-   *
-   * Copying an address is silent by nature; without this the action feels broken
-   * even when it worked. The same two and a half seconds the phone waits.
-   */
-  private toastText: string | null = null
-  private toastTimer: number | null = null
-  /**
-   * Set while the pair screen was reached from the Machines screen rather than by
-   * having no machines at all.
-   *
-   * It is the difference between a first run and adding a second machine, and the
-   * only thing it changes is whether there is a way back — a person part-way
-   * through pairing a second machine must be able to abandon it without being
-   * stranded on a screen that looks like they have been signed out.
-   */
-  private pairingAnother = false
 
   constructor(root: HTMLElement) {
     this.root = root
     document.title = BRAND.name
-    this.portBook = new PortBook(this.stores, this.remember)
-    this.textSize = readTextSize(this.stores.browser)
 
     this.back.type = 'button'
     this.back.setAttribute('aria-label', 'Back')
-    this.back.addEventListener('click', () => this.goBack())
+    this.back.addEventListener('click', () => this.leaveTerminal())
 
     const titles = element('div', 'header__titles')
     titles.append(this.title, this.subtitle)
@@ -480,10 +351,7 @@ class Deck {
     this.bannerAction.addEventListener('click', () => this.connection?.resume())
     this.banner.append(this.bannerText, this.bannerAction)
 
-    this.toast.hidden = true
-    this.toast.setAttribute('aria-live', 'polite')
-
-    root.append(this.header, this.banner, this.credentialCard, this.tabs, this.content, this.toast)
+    root.append(this.header, this.banner, this.credentialCard, this.tabs, this.content)
   }
 
   /* ------------------------------------------------------------- startup -- */
@@ -494,20 +362,11 @@ class Deck {
     // corrects itself is a flash somebody sees on every visit.
     this.startTheme()
 
-    // The book, or the single pairing every browser that has used this client
-    // before is holding. `loadMachines` owns that migration and explains it.
-    const found = loadMachines(this.stores, Date.now())
-    this.book = found?.book ?? NO_MACHINES
+    const found = loadPairing(this.stores, Date.now())
+    this.credential = found?.credential ?? null
     this.remember = found?.remember ?? 'this-tab'
-    // Both follow whichever machine is current. Held as fields rather than read
-    // through the book on every access because they are answered before the first
-    // socket exists — the pair screen has no connection by definition — and
-    // because `welcome` writes `hostPlatform` before the credential is rebuilt.
     this.hostPlatform = this.credential?.hostPlatform ?? 'unknown'
     this.endpoint = this.credential?.endpoint ?? DIRECT
-    // The book is written where the pairing chose, so it has to be told which
-    // that was before anything can change a name.
-    this.portBook.setLifetime(this.remember)
 
     /*
      * Nothing is read out of the URL here any more, and that is a deletion
@@ -537,143 +396,6 @@ class Deck {
     window.setInterval(() => {
       if (this.state.retryAt !== null) this.renderBanner()
     }, 1000)
-  }
-
-  /* ------------------------------------------------------------ machines -- */
-
-  /** The machine this browser is talking to, or null when there are none. */
-  private get machine(): StoredMachine | null {
-    return currentMachine(this.book)
-  }
-
-  /**
-   * The current machine's credential.
-   *
-   * A getter rather than the field it used to be, so that every one of the two
-   * dozen places below that ask "are we paired" keeps working unchanged while the
-   * answer moves from *the* pairing to *this* pairing. Writing one goes through
-   * `putCredential`, which knows the difference between renewing the machine on
-   * screen and minting one for a machine being added.
-   */
-  private get credential(): StoredCredential | null {
-    return this.machine?.credential ?? null
-  }
-
-  /**
-   * Which machine the connection is currently pointed at, whether or not this
-   * browser has a credential for it yet.
-   *
-   * The distinction matters exactly once, and it is the case that would otherwise
-   * be a real bug: while a *second* machine is being paired, `this.endpoint` is the
-   * new machine and `this.machine` is still the old one, so a credential written
-   * against "the current machine" would overwrite the pairing somebody is using
-   * with a token for a different computer.
-   */
-  private get dialledId(): string {
-    return machineId(this.endpoint)
-  }
-
-  /**
-   * Put a credential in the book against the machine it is actually for.
-   *
-   * Adds the machine when it is new — which is what makes "pair another machine" a
-   * feature rather than a re-pair — and updates it in place when it is not, which
-   * is what makes a renewed credential keep the nickname, the position in the list
-   * and, because `port-book.ts` keys on the same id, the names its ports were
-   * given.
-   */
-  private putCredential(credential: StoredCredential): void {
-    const id = this.dialledId
-    const known = machineById(this.book, id)
-    // A machine is never *added* on a credential with no token in it. `welcome`
-    // can arrive before `credential` has been redeemed on a route that has not
-    // been seen, and a row written from that frame would be a machine in the list
-    // that nothing can reconnect to — `loadCredential` refuses an empty token on
-    // the way back in, so it would also vanish at the next launch with no
-    // explanation. Renewing a machine that already has one is a different thing
-    // and is allowed: the token is carried over by the caller.
-    if (known === null && credential.token === '') return
-    this.book = known === null
-      ? withMachine(this.book, { id, nickname: null, credential })
-      : selectMachine(withCredential(this.book, id, credential), id)
-    this.keep()
-  }
-
-  /**
-   * Talk to another machine.
-   *
-   * Everything the old machine told this browser goes with it, and that is the
-   * whole method. A session list, a folder list, a port list and a capability set
-   * are each a statement about *one* desktop, and carrying any of them across
-   * would put the previous machine's sessions on screen under the new one's name —
-   * which is the same stale truth the offline banner exists to prevent, with a
-   * worse failure attached: tapping one of those rows would attach to an id the
-   * new machine has never heard of.
-   */
-  private switchTo(id: string): void {
-    const machine = machineById(this.book, id)
-    if (machine === null || id === this.book.currentId) return
-    this.connection?.stop()
-    this.connection = null
-    this.book = selectMachine(this.book, id)
-    this.keep()
-
-    this.sessions = []
-    this.activity.clear()
-    this.capabilities = []
-    this.folders = null
-    this.picking = false
-    this.awaitingCreate = false
-    this.notice = null
-    this.credentialAsk = null
-    this.openRow = null
-    this.attachedId = null
-    this.destroyTerminal()
-    this.forgetLocalhost()
-
-    this.hostPlatform = machine.credential.hostPlatform
-    this.state = { phase: 'connecting', detail: `Connecting to ${machineLabel(machine, this.origin)}…`, retryAt: null, attempts: 0 }
-    this.screen = 'sessions'
-    this.render()
-    this.connect(machine.credential.token, machine.credential.endpoint)
-  }
-
-  /**
-   * Forget one machine, and only that one.
-   *
-   * The last machine is the interesting case: forgetting it is the old `forget()`
-   * in full — every store cleared, the terminal destroyed, back to the pair screen
-   * — because a browser with no machines is an unpaired browser. Forgetting one of
-   * several is a much smaller event, and the promise the screen makes is that it
-   * leaves every other machine alone.
-   */
-  private forgetMachine(id: string): void {
-    if (machineById(this.book, id) === null) return
-    const wasCurrent = id === this.book.currentId
-    const next = forgetMachine(this.book, id)
-    if (next.machines.length === 0) {
-      this.forget()
-      return
-    }
-    this.book = next
-    this.keep()
-    if (!wasCurrent) {
-      this.render()
-      return
-    }
-    // The machine being talked to has just been forgotten, so the socket has to
-    // go before anything else — `switchTo` refuses a machine that is already
-    // current, and after `forgetMachine` the current id is a different machine.
-    this.connection?.stop()
-    this.connection = null
-    const moved = next.currentId
-    this.book = { ...next, currentId: null }
-    if (moved !== null) this.switchTo(moved)
-  }
-
-  /** The address this page was served from, for the rows that name it. */
-  private get origin(): string {
-    return window.location.host
   }
 
   /**
@@ -903,16 +625,10 @@ class Deck {
       // The credential is no good. Holding on to it would mean every launch
       // fails the same way with no route back to pairing — and on a computer
       // that is not this person's, it would be a dead secret left in a profile
-      // somebody else will open.
-      //
-      // **Only the machine that refused it.** This used to clear both stores
-      // outright, which was right when there was one pairing and is wrong now: a
-      // Mac that has revoked this browser says nothing whatsoever about the PC in
-      // the next room, and signing somebody out of every machine because one of
-      // them was re-imaged would be the client throwing away work it was told
-      // nothing about. `forgetMachine` falls through to the full `forget()` when
-      // that machine was the only one, which is the old behaviour exactly.
-      const refused = this.dialledId
+      // somebody else will open. Both stores, because the tab's copy and the
+      // durable one are the same pairing.
+      clearPairing(this.stores)
+      this.credential = null
       this.attachedId = null
       // Everything the refused machine told us about itself goes with it. A
       // folder list is a statement about a device this desktop no longer
@@ -929,27 +645,16 @@ class Deck {
       // device that has just been told it is no longer trusted should not still
       // be carrying it around in memory.
       this.destroyTerminal()
-      this.sessions = []
-      this.activity.clear()
-      // Said only when there is somewhere to say it. With one machine this ends
-      // on the pair screen, where the banner is already carrying the desktop's
-      // own account of the refusal, and a second sentence parked on a session
-      // list nobody will see again would be waiting for the next person to pair.
-      if (this.book.machines.length > 1) {
-        this.notice = `That ${this.noun} no longer recognises this browser, so it has been forgotten.`
-      }
-      // Which either moves to whatever is left, or — when that machine was the
-      // only one — clears every store and lands on the pair screen, exactly as
-      // this branch always did.
-      this.forgetMachine(refused)
+      this.screen = 'pair'
+      this.render()
       return
     }
 
     this.terminal?.setLive(state.phase === 'online')
     this.renderBanner()
-    // Every list screen redraws: what they offer — New session, Refresh, Check,
-    // the machine rows' own status line — is drawn from the connection.
-    if (LISTING_SCREENS.includes(this.screen)) this.renderContent()
+    // Both list screens redraw: what they offer — New session, Refresh, Check —
+    // is drawn only while there is a socket to carry it.
+    if (this.screen === 'sessions' || this.screen === 'localhost') this.renderContent()
   }
 
   /* ----------------------------------------------------------- localhost -- */
@@ -1062,13 +767,10 @@ class Deck {
 
   private onCredential(token: string): void {
     const now = Date.now()
-    // The machine this token is *for*, which during a second pairing is not the
-    // machine on screen. See `dialledId`.
-    const dialled = machineById(this.book, this.dialledId)
-    this.putCredential({
+    this.credential = {
       token,
-      deviceId: dialled?.credential.deviceId ?? '',
-      deviceName: dialled?.credential.deviceName ?? 'This device',
+      deviceId: this.credential?.deviceId ?? '',
+      deviceName: this.credential?.deviceName ?? 'This device',
       pairedAt: now,
       hostPlatform: this.hostPlatform,
       // Written with the credential, not after it. The credential is what the
@@ -1077,11 +779,8 @@ class Deck {
       // machine it can no longer find.
       endpoint: this.endpoint,
       expiresAt: now + REMEMBERED_TTL_MS,
-    })
-    // Whatever brought this browser to the pair screen is over. Leaving the flag
-    // set would leave a back chevron on the session list pointing at a machine
-    // list the person has just finished with.
-    this.pairingAnother = false
+    }
+    this.keep()
   }
 
   /**
@@ -1094,17 +793,8 @@ class Deck {
    * along inside `savePairing` for the same reason.
    */
   private keep(): void {
-    saveBook(this.stores, this.remember, this.book)
-    const credential = this.credential
-    if (credential === null || credential.token === '') return
-    // The single-credential record `pair.ts` owns is still written, and it is
-    // deliberately a *mirror of the current machine* rather than a second pairing:
-    // a shell cached by the service worker before the Machines screen shipped
-    // reads that key and nothing else, and `sw.js` does not `skipWaiting`, so one
-    // more launch of the old shell is guaranteed. It is also what carries this
-    // browser's X25519 key into the same store as the book — see `savePairing`,
-    // which is the one function allowed to move the two together.
-    savePairing(this.stores, this.remember, credential, this.deviceKeys)
+    if (this.credential === null || this.credential.token === '') return
+    savePairing(this.stores, this.remember, this.credential, this.deviceKeys)
   }
 
   /**
@@ -1161,29 +851,23 @@ class Deck {
         // than waiting for a socket.
         this.hostPlatform = readHostPlatform(message.hostPlatform)
         this.capabilities = message.capabilities
-        {
-          // The machine that just said hello, which during a second pairing is
-          // not the one on screen. See `dialledId`.
-          const dialled = machineById(this.book, this.dialledId)
-          this.putCredential(
-            renewed(
-              {
-                token: dialled?.credential.token ?? '',
-                deviceId: message.deviceId,
-                deviceName: message.deviceName,
-                pairedAt: dialled?.credential.pairedAt ?? Date.now(),
-                hostPlatform: this.hostPlatform,
-                endpoint: this.endpoint,
-                expiresAt: dialled?.credential.expiresAt ?? 0,
-              },
-              // A welcome is the only frame that proves this browser actually
-              // reached the machine, which is what the sliding window measures. A
-              // socket that merely opened proves nothing — the relay will open one
-              // against a host id whose owner revoked this device an hour ago.
-              Date.now(),
-            ),
-          )
-        }
+        this.credential = renewed(
+          {
+            token: this.credential?.token ?? '',
+            deviceId: message.deviceId,
+            deviceName: message.deviceName,
+            pairedAt: this.credential?.pairedAt ?? Date.now(),
+            hostPlatform: this.hostPlatform,
+            endpoint: this.endpoint,
+            expiresAt: this.credential?.expiresAt ?? 0,
+          },
+          // A welcome is the only frame that proves this browser actually
+          // reached the machine, which is what the sliding window measures. A
+          // socket that merely opened proves nothing — the relay will open one
+          // against a host id whose owner revoked this device an hour ago.
+          Date.now(),
+        )
+        this.keep()
         this.applySessions(message.sessions, activity)
         if (this.screen === 'pair') this.screen = 'sessions'
         // A desktop that offers neither tunnelling nor dev servers — a different
@@ -1317,21 +1001,17 @@ class Deck {
   }
 
   /**
-   * The strip that switches between the list screens.
+   * The strip that switches between the session list and localhost.
    *
-   * Sessions, Localhost and Settings — the phone's three, in the phone's order.
-   * Before Settings existed the strip was drawn only against a desktop that
-   * advertised `localhost`, because two tabs is a choice and one is not; it is now
-   * always at least two, so what varies is whether Localhost is among them. The
-   * rule is unchanged and so is what a browser paired to an older machine sees:
-   * nothing is offered that the desktop did not say it can do.
-   *
-   * Absent — not disabled — on the pair screen and inside a terminal. Present on
-   * Machines, which is pushed from Settings and keeps Settings marked as the
-   * current tab: a person one screen deep has not left it.
+   * Absent — not disabled, and not drawn with one tab in it — whenever there is
+   * nothing to switch *to*: on the pair screen, inside a terminal, and against
+   * any desktop that did not advertise `localhost`. That is the same rule
+   * `startBlock` follows for New session, and it is the reason a browser paired
+   * to an older machine sees exactly what it saw before this existed.
    */
   private renderTabs(): void {
-    const show = LISTING_SCREENS.includes(this.screen) && this.credential !== null
+    const listing = this.screen === 'sessions' || this.screen === 'localhost'
+    const show = listing && this.credential !== null && this.servesLocalhost
     this.tabs.hidden = !show
     if (!show) {
       this.tabs.replaceChildren()
@@ -1340,17 +1020,11 @@ class Deck {
 
     const options: Array<{ screen: Screen; label: string }> = [
       { screen: 'sessions', label: 'Sessions' },
-      ...(this.servesLocalhost ? [{ screen: 'localhost' as Screen, label: 'Localhost' }] : []),
-      { screen: 'settings', label: 'Settings' },
+      { screen: 'localhost', label: 'Localhost' },
     ]
     this.tabs.replaceChildren(
       ...options.map((option) => {
-        // Machines is Settings' own screen rather than a fourth place to be, so
-        // the strip keeps pointing at Settings while it is open. Without this the
-        // pushed screen would leave every tab unmarked, which reads as having
-        // fallen out of the app.
-        const here =
-          this.screen === option.screen || (option.screen === 'settings' && this.screen === 'machines')
+        const here = this.screen === option.screen
         const tab = element('button', here ? 'tab tab--here' : 'tab', option.label)
         tab.type = 'button'
         // `aria-current` rather than `aria-pressed`: these are two places to be,
@@ -1374,12 +1048,6 @@ class Deck {
   private goTo(screen: Screen): void {
     if (this.screen === screen) return
     this.screen = screen
-    // A menu or a rename field belongs to the row it was opened on, and that row
-    // is not on this screen. Left set, the next visit to the screen it came from
-    // would arrive with a field already open under somebody's finger.
-    this.openRow = null
-    this.renamingPort = null
-    this.renamingMachine = null
     if (
       screen === 'localhost' &&
       this.localhost.ports === null &&
@@ -1445,101 +1113,25 @@ class Deck {
     this.credentialCard.replaceChildren(headline, why, dismiss)
   }
 
-  /**
-   * The bar over everything, and the three questions it answers.
-   *
-   * What this is, where the back chevron goes, and — the part that is new —
-   * *which machine you are looking at*. That last one had nowhere to live while
-   * there was only one machine; the subtitle simply printed its host id. With
-   * several it is the single most important fact on the screen, because every row
-   * under it belongs to one of them.
-   *
-   * So the subtitle becomes a button, and only when there is something to press it
-   * for. One machine is not a choice and is not drawn as one — the standing rule
-   * in this client, the same one that decides whether the folder picker appears —
-   * and the label is the machine's name rather than its address, which is the whole
-   * reason `machines.ts` has nicknames.
-   */
   private renderHeader(): void {
     const attached = this.sessions.find((session) => session.id === this.attachedId)
-    this.back.hidden = this.backTarget() === null
-    this.title.textContent = BRAND.name
+    this.back.hidden = this.screen !== 'terminal'
     if (this.screen === 'terminal' && attached) {
       this.title.textContent = attached.title
-      this.subtitle.replaceChildren(`${attached.provider} · ${shortenPath(attached.cwd)}`)
+      this.subtitle.textContent = `${attached.provider} · ${shortenPath(attached.cwd)}`
       return
     }
-    if (this.screen === 'machines') this.title.textContent = 'Machines'
-    if (this.screen === 'settings') this.title.textContent = 'Settings'
-
-    const machine = this.machine
-    if (machine === null) {
-      this.subtitle.replaceChildren('Not paired')
-      return
-    }
-    // Named by the person, or by the route it is actually on. Printing
-    // `location.host` for a relay pairing was true of this page and false of the
-    // machine — the browser can be served from anywhere now, and a subtitle that
-    // reads like an address is read as one.
-    const label = machineLabel(machine, this.origin)
-    if (this.book.machines.length < 2 || this.screen === 'machines') {
-      this.subtitle.replaceChildren(label)
-      return
-    }
-    const switcher = element('button', 'header__machine', label)
-    switcher.type = 'button'
-    switcher.setAttribute('aria-label', `${label} — choose a machine`)
-    switcher.addEventListener('click', () => this.goTo('machines'))
-    // The chevron is a separate node so the name can ellipsise without taking the
-    // affordance with it. A nickname is up to twenty-four characters and a phone
-    // header is not. It is the same turned `›` the group headers use rather than a
-    // `⌄`, for the same measured reason: the two glyphs sit on different baselines
-    // in this face and the downward one hangs visibly below the text it follows.
-    this.subtitle.replaceChildren(switcher, element('span', 'header__machine-mark', '›'))
-  }
-
-  /**
-   * Where the back chevron goes from here, or null when it is not drawn.
-   *
-   * One function rather than a `hidden` rule beside a click handler, because those
-   * are two statements of one fact and they have already been one negation apart
-   * once — `.header__back[hidden]` carries a comment about the time the chevron
-   * sat on the pair screen pointing at nothing.
-   */
-  private backTarget(): Screen | null {
-    if (this.screen === 'terminal') return 'sessions'
-    if (this.screen === 'machines') return 'settings'
-    // The pair screen has a way back only when it was reached deliberately from
-    // the Machines screen. A browser with no machines has nowhere to go back to,
-    // and a chevron there would be the bug that rule exists to prevent.
-    if (this.screen === 'pair' && this.pairingAnother && this.book.machines.length > 0) return 'machines'
-    return null
-  }
-
-  /** The chevron was pressed. Leaving a terminal is its own operation. */
-  private goBack(): void {
-    const target = this.backTarget()
-    if (target === null) return
-    if (this.screen === 'terminal') {
-      this.leaveTerminal()
-      return
-    }
-    if (this.screen === 'pair') {
-      // Abandoning a half-finished second pairing. The connection was pointed at
-      // whatever the typed code found, so it goes back to the machine that was
-      // being used — anything else leaves a socket dialling a machine this
-      // browser has no credential for.
-      this.pairingAnother = false
-      const current = this.book.currentId
-      this.screen = target
-      this.render()
-      if (current !== null && this.dialledId !== current) {
-        this.book = { ...this.book, currentId: null }
-        this.switchTo(current)
-      }
-      return
-    }
-    this.goTo(target)
+    this.title.textContent = BRAND.name
+    // Named by the route it is actually on. Printing `location.host` for a relay
+    // pairing was true of this page and false of the machine — the browser can
+    // be served from anywhere now, and a subtitle that reads like an address is
+    // read as one.
+    this.subtitle.textContent =
+      this.credential === null
+        ? 'Not paired'
+        : this.endpoint.kind === 'relay'
+          ? this.endpoint.hostId.slice(0, 6)
+          : window.location.host
   }
 
   private renderBanner(): void {
@@ -1560,26 +1152,15 @@ class Deck {
   }
 
   private renderContent(): void {
-    switch (this.screen) {
-      case 'terminal':
-        this.showTerminalScreen()
-        return
-      case 'pair':
-        this.content.replaceChildren(this.pairScreen())
-        return
-      case 'localhost':
-        this.content.replaceChildren(this.localhostScreen())
-        return
-      case 'settings':
-        this.content.replaceChildren(this.settingsScreen())
-        return
-      case 'machines':
-        this.content.replaceChildren(this.machinesScreen())
-        return
-      case 'sessions':
-        this.content.replaceChildren(this.sessionsScreen())
-        return
+    if (this.screen === 'terminal') {
+      this.showTerminalScreen()
+      return
     }
+    if (this.screen === 'pair') {
+      this.content.replaceChildren(this.pairScreen())
+      return
+    }
+    this.content.replaceChildren(this.screen === 'localhost' ? this.localhostScreen() : this.sessionsScreen())
   }
 
   /**
@@ -1647,16 +1228,7 @@ class Deck {
     input.className = 'code-field'
     screen.append(label, input)
 
-    // Asked once per browser, not once per machine.
-    //
-    // The question is about *this computer* — whether a credential may outlive the
-    // tab — and it is answered on the first pairing. Asking it again while adding a
-    // second machine would be asking somebody to re-decide something they have
-    // already decided, on a screen where the honest answer is "the same as last
-    // time"; worse, the two answers cannot differ, because `remember` is one field
-    // and one store. So the second time it is *stated* instead, with the one place
-    // it can be changed named.
-    screen.append(this.book.machines.length === 0 ? this.rememberChoice() : this.lifetimeAlready())
+    screen.append(this.rememberChoice())
 
     const submit = element('button', 'button', this.looking ? 'Looking…' : 'Pair')
     submit.type = 'button'
@@ -1767,26 +1339,6 @@ class Deck {
       group.append(row)
     }
     return group
-  }
-
-  /**
-   * What this browser has already been told to do with a pairing.
-   *
-   * One line, on the pair screen, when there is already a machine. It is not a
-   * control: the control is in Settings and there must not be two of it — that is
-   * the same rule that keeps the appearance out of Settings and in the header.
-   */
-  private lifetimeAlready(): HTMLElement {
-    const days = Math.round(REMEMBERED_TTL_MS / 86_400_000)
-    return element(
-      'p',
-      'note',
-      this.remember === 'this-browser'
-        ? `This browser is remembered, so this ${this.noun} will be too — until you unpair it, or ${days} days ` +
-            'pass without using it. Settings is where that changes.'
-        : 'This pairing will end when you close this tab, like the machine you are already paired with. ' +
-            'Settings is where that changes.',
-    )
   }
 
   /**
@@ -1917,80 +1469,38 @@ class Deck {
       list.append(row)
     }
     screen.append(list)
-    /*
-     * Nothing else. This screen used to end with the lifetime block and a "Forget
-     * this Mac" button, and both have moved — the lifetime question to Settings,
-     * where it sits with the other things that are about this browser rather than
-     * about a session, and Forget onto the machine's own row, where it can name
-     * which machine it is about.
-     *
-     * That is the phone's arrangement and the phone's argument for it: everything
-     * that was not a session lived behind one control in a corner, *"which is
-     * where features go to be undiscovered"*, and the fix was to give them a
-     * screen rather than to leave them at the bottom of this one. A session list
-     * that ends in two settings is the same problem upside down.
-     */
+
+    const lifetime = this.lifetimeBlock()
+    if (lifetime !== null) screen.append(lifetime)
+
+    const forget = element('button', 'button button--quiet', `Forget this ${this.noun}`)
+    forget.type = 'button'
+    forget.style.margin = '20px 16px'
+    forget.style.width = 'auto'
+    forget.addEventListener('click', () => this.forget())
+    screen.append(forget)
     return screen
   }
 
   /**
-   * Everything the machine is serving, and everything it could serve, on one
-   * screen that is not a wall.
+   * What the machine is serving, and whether it is answering.
    *
-   * Asad, opening the phone app: *"I can already see a big list of local hosts. So
-   * it should not be like that… we need to fold it in a better way"*, and then the
-   * three things that would fix it — rename them, categorise them, and *"I don't
-   * see any kind of option here to make anyone up or make anyone activated"*. He
-   * then said the same thing about this client in one line: *"I mean web app also,
-   * improve according to the new things."*
+   * Everything on this screen is a value out of `localhost.ts`, including every
+   * sentence — the rows, the three outcomes of a check, the empty states, and the
+   * paragraph explaining why there is no button that opens a page. That is not
+   * tidiness: a wording decision written into this file is one nothing can check,
+   * and the sentence at the bottom of this screen is the one that has to stay
+   * honest as the feature changes around it.
    *
-   * What this screen was: `portsInto` drew every port the desktop named, in one
-   * flat list, and `devInto` drew a second flat list of projects underneath it —
-   * so a machine serving nine things showed nine identical `2019 · wslrelay` rows
-   * and then said "Dev servers" and did it again. Three things happen to it now,
-   * and all three are the phone's, ported as rules rather than as code.
+   * The order of the page is the order of the questions. What is listening, then
+   * one press per port to find out whether it really answers, then what could be
+   * listening and is not — the dev servers — and then, last, because it is the
+   * answer to a question somebody asks after they have looked, why this client
+   * stops there.
    *
-   * ## 1. It is grouped, from facts
-   *
-   * `port-catalog.ts` holds the rules and the reasoning. The short version is that
-   * every group is derived from something the wire carries — a process name, a
-   * proven dev-server port, the socket this browser is connected on — and the
-   * three groups that are noise start folded rather than hidden.
-   *
-   * ## 2. Rows can be named, and naming one promotes it
-   *
-   * `port-book.ts` holds the names, in this browser, against the machine and the
-   * port. A named port is lifted to the top group, which is the whole of *"we can
-   * keep some in the list and we can keep some folded"* — one gesture, one meaning.
-   *
-   * ## 3. The dev servers are on the same list, joined to their own ports
-   *
-   * The port list can only ever say what is *already* running; a project whose
-   * server is not up is a row with a Start on it. They are one list because they
-   * answer one question, and a `ready` dev server is **joined** to its port row
-   * rather than drawn beside it — see "one row per server, never two".
-   *
-   * ## What is deliberately not ported
-   *
-   * The phone's swipe actions. `.swipeActions` is a `List` affordance that exists
-   * on iOS and nowhere in a browser, and hand-rolling a drag here would give a
-   * gesture with no rubber band, no interaction with the back gesture at the left
-   * edge, and a different depth from every other page the reader has open. What
-   * carries across is the *behaviour* — every row has its actions — and in a
-   * browser those live behind the `…` he asked for in the same breath: *"maybe
-   * three dots and more options and stuff like that"*.
-   *
-   * ## There is no Stop, and it is not an oversight
-   *
-   * A dev server runs in an **ordinary session** — the desktop opens a shell in the
-   * project folder and types the command into it — so stopping one is Ctrl-C in
-   * that session, which is why the wire has no stop verb to send. What this screen
-   * will not do is type the interrupt blindly from a button: the desktop decides a
-   * folder is `ready` and only stops saying so when the *session* exits, which a
-   * Ctrl-C into a shell does not do. The row would go on offering an address for a
-   * server that had gone — the one thing `DevServerReport` says a client of that
-   * frame must never display. So the action opens the session, with the interrupt
-   * one key away on the key bar, and the honest fix is a stop verb on the desktop.
+   * Both halves are gated on their own capability and neither assumes the other.
+   * A desktop can advertise `localhost` without `devserver` or the other way
+   * round, and the screen is whatever it actually offers.
    */
   private localhostScreen(): HTMLElement {
     const screen = element('div', 'screen')
@@ -2000,417 +1510,190 @@ class Deck {
     const online = this.state.phase === 'online'
     const tunnels = localhostOffered(this.capabilities)
 
-    // Refresh exists only while there is a socket to carry it — the standing rule
-    // against a control whose only function is to explain that it does not
-    // function — so offline there is no row here at all rather than an empty one,
-    // and the sentence under the list says how old it is instead.
-    if (online && (tunnels || devserverOffered(this.capabilities))) {
-      const heading = element('div', 'localhost__head')
-      const refresh = element(
-        'button',
-        'button button--quiet localhost__refresh',
-        this.localhost.listing ? 'Asking…' : 'Refresh',
-      )
-      refresh.type = 'button'
-      refresh.disabled = this.localhost.listing
-      refresh.addEventListener('click', () => {
-        if (tunnels) this.localhostDo({ t: 'list' })
-        // The projects are re-asked too. It is one Refresh over one screen, and a
-        // button that refreshed half of what is under it would be the sort of
-        // thing somebody presses twice and still does not trust.
-        this.askDevServers()
-      })
-      heading.append(refresh)
-      screen.append(heading)
-    }
-
-    const groups = this.localhostSections()
-    if (groups.length === 0) {
-      screen.append(element('p', 'empty', this.nothingServedSentence(online, tunnels)))
-    } else {
-      for (const section of groups) screen.append(this.sectionBlock(section, online, tunnels))
-      // The rule nothing else on screen states — that naming a port is what moves
-      // it up — because a folded group is otherwise a thing somebody has to
-      // discover twice. It comes before the paragraph about serving because it is
-      // about the list, and that one is about the whole feature.
-      screen.append(element('p', 'note localhost__note', NAMING_FOOTNOTE))
-    }
-
-    const ports = this.localhost.ports
-    if (!online && ports !== null && ports.length > 0) {
-      screen.append(element('p', 'note localhost__note', stalePortsSentence(this.noun)))
-    }
-
+    if (tunnels) this.portsInto(screen, online)
+    this.devInto(screen, online)
     // The screen's footnote, and it is the last thing on purpose: it answers a
-    // question somebody asks *after* they have looked at the list and wondered why
-    // nothing here opens a page. It covers the dev servers' addresses as well,
-    // which is why the shorter version below is written only when this one is
-    // absent.
+    // question somebody asks *after* they have looked at the list and wondered
+    // why nothing here opens a page. It covers the dev servers' addresses as
+    // well, which is why `devInto` writes its own shorter version of it only
+    // when this one is absent.
     if (tunnels) screen.append(element('p', 'note localhost__note', cannotServeSentence(this.noun)))
-    else if (this.dev.rows.some((row) => row.status === 'ready' && row.url !== undefined)) {
-      screen.append(element('p', 'note localhost__note', cannotOpenSentence(this.noun)))
-    }
     return screen
   }
 
   /**
-   * The grouped rows, from the two halves this screen is made of.
+   * The port list, its Refresh and its check results.
    *
-   * Both halves are gated on their own capability and neither assumes the other.
-   * A desktop can advertise `localhost` without `devserver` or the other way round
-   * — the public demo box deliberately withholds `localhost`, so a stranger is not
-   * offered a byte pipe to its loopback — and the screen is whatever it actually
-   * offers.
-   *
-   * The names are read here rather than inside the catalog, so that file stays a
-   * pure function over values and never learns which machine it is describing.
+   * Split out of `localhostScreen` when the dev servers joined it: two features
+   * on one screen, each with four states, is a method nobody can read as one
+   * thing. Nothing here changed with the split.
    */
-  private localhostSections(): LocalhostSection[] {
-    const host = this.machine?.id ?? ''
-    const ports = localhostOffered(this.capabilities) ? (this.localhost.ports ?? []) : []
-    const devServers = devserverOffered(this.capabilities) ? this.dev.rows : []
-    // A `ready` dev server's port is nameable too, even on a machine that does not
-    // offer the port list at all: that address came off `dev.state`.
-    const nameable = [
-      ...ports.map((entry) => entry.port),
-      ...devServers.map((row) => row.port).filter((port): port is number => port !== undefined),
-    ]
-    return portSections({
-      ports,
-      devServers,
-      // Empty for a relay pairing, and that is correct rather than a gap: nothing
-      // on this side knows which local port a relayed desktop bound. See
-      // `directAppPorts`.
-      appPorts: this.endpoint.kind === 'direct' ? directAppPorts(window.location) : [],
-      names: this.portBook.namesFor(host, nameable),
-    })
-  }
+  private portsInto(screen: HTMLElement, online: boolean): void {
+    const { ports, listing, checking, outcome } = this.localhost
 
-  /**
-   * Nothing to show, and which of the four reasons it is.
-   *
-   * A machine that does not offer the capability at all is a different fact from
-   * one that offers it and is serving nothing, and both are different from a
-   * socket that is down — saying "nothing is running" over a dead connection is a
-   * claim nobody checked.
-   */
-  private nothingServedSentence(online: boolean, tunnels: boolean): string {
-    if (tunnels && this.localhost.ports === null) {
-      return this.localhost.listing
-        ? `Asking the ${this.noun} what is listening…`
-        : `The ${this.noun} has not said what it is serving yet.`
-    }
-    // One sentence for the round trip between arriving here and the first answer,
-    // and nothing like it once the answer is "no project here has a dev script".
-    if (!tunnels && devserverOffered(this.capabilities) && online && (this.folders?.length ?? 0) > 0) {
-      return devWaitingSentence(this.noun)
-    }
-    return noPortsSentence(this.noun)
-  }
-
-  /**
-   * One group, and its header, which is also the control that folds it.
-   *
-   * The whole header is the hit target rather than a chevron beside it, because a
-   * 12px chevron is not a touch target and the row is already the shape of one.
-   * The count is on it for the same reason the phone's is: a folded group has to
-   * be worth opening before anybody opens it, and *"Other services · 9"* answers
-   * that where *"Other services ›"* does not.
-   */
-  private sectionBlock(section: LocalhostSection, online: boolean, tunnels: boolean): HTMLElement {
-    const host = this.machine?.id ?? ''
-    const folded = this.portBook.isFolded(host, section.category)
-    const group = element('section', 'portgroup')
-
-    const head = element('button', 'portgroup__head')
-    head.type = 'button'
-    head.setAttribute('aria-expanded', folded ? 'false' : 'true')
-    head.append(
-      // One glyph, turned rather than swapped — see the stylesheet, where the two
-      // spellings this used to have are written down along with what they did to
-      // the header's baseline.
-      element('span', folded ? 'portgroup__mark' : 'portgroup__mark portgroup__mark--open', '›'),
-      element('span', 'portgroup__title', categoryTitle(section.category)),
-      element('span', 'portgroup__count', String(section.rows.length)),
-    )
-    head.addEventListener('click', () => {
-      this.portBook.setFolded(!folded, host, section.category)
-      this.renderContent()
-    })
-    group.append(head)
-
-    if (!folded) {
-      const list = element('ul', 'ports')
-      for (const row of section.rows) list.append(this.portRow(row, online, tunnels))
-      group.append(list)
-    }
-    return group
-  }
-
-  /**
-   * One row, whichever kind it is.
-   *
-   * The two kinds share a shell — the same list item, the same actions, the same
-   * rename field — and differ only in the lines inside it. A second row type
-   * saying the same things in a slightly different order is how two halves of one
-   * screen end up disagreeing about what `failed` looks like.
-   */
-  private portRow(row: LocalhostRow, online: boolean, tunnels: boolean): HTMLElement {
-    const item = element('li', 'port')
-    const port = row.port
-
-    /*
-     * One line carries the row's identity **and** its controls, and that is the
-     * shape rather than a saving.
-     *
-     * The first version put the controls on a line of their own, on the reasoning
-     * that a 390px phone cannot hold a label, a Check and a menu at once. Rendered,
-     * it was wrong twice over: a port row became 215 points tall, so five of them
-     * filled a phone, and at 1440px the menu was stranded a thousand pixels from
-     * the row it belongs to. A flexible label between them is what actually solves
-     * both — it eats the space on a monitor and gives it up on a phone.
-     */
-    const line = element('div', 'port__line')
-    if (row.dev !== null) this.devHeadInto(line, row)
-    else {
-      // Mono while the port number is the identity, and the interface face once a
-      // name has replaced it. Monospace is a promise that the characters are exact
-      // and countable, which is true of `localhost:3000` and not of "client
-      // billing app".
-      const named = row.name !== null
-      line.append(element('span', named ? 'port__label port__label--named' : 'port__label', portRowTitle(row)))
+    // No heading. The tab above already says Localhost, and a title repeating
+    // the control that got you here is exactly the "nothing extra" this pass was
+    // asked for. Refresh exists only while there is a socket to carry it — the
+    // standing rule against a control whose only function is to explain that it
+    // does not function — so offline there is no row here at all rather than an
+    // empty one, and the sentence under the list says how old it is instead.
+    if (online) {
+      const heading = element('div', 'localhost__head')
+      const refresh = element('button', 'button button--quiet localhost__refresh', listing ? 'Asking…' : 'Refresh')
+      refresh.type = 'button'
+      refresh.disabled = listing
+      refresh.addEventListener('click', () => this.localhostDo({ t: 'list' }))
+      heading.append(refresh)
+      screen.append(heading)
     }
 
-    // One check at a time, and only with a socket. A second Check pressed while
-    // one is running is refused by the machine itself; disabling it is what stops
-    // somebody pressing a button that does nothing.
-    if (online && tunnels && port !== null) {
-      const checking = this.localhost.checking
-      const here = checking?.port === port
-      const check = element('button', 'port__check', here ? 'Checking…' : 'Check')
-      check.type = 'button'
-      check.disabled = checking !== null
-      check.addEventListener('click', () => {
-        this.checks += 1
-        this.localhostDo({ t: 'check', port, id: `localhost-${this.checks}` })
-      })
-      line.append(check)
-    }
-    if (port !== null) {
-      const open = this.openRow === row.id
-      const more = element('button', 'port__more', '···')
-      more.type = 'button'
-      more.setAttribute('aria-expanded', open ? 'true' : 'false')
-      more.setAttribute('aria-label', `Actions for ${portRowTitle(row)}`)
-      more.addEventListener('click', () => {
-        this.openRow = open ? null : row.id
-        this.renamingPort = null
-        this.renderContent()
-      })
-      line.append(more)
-    }
-    item.append(line)
-
-    if (row.dev !== null) this.devLinesInto(item, row)
-    else {
-      const detail = portRowDetail(row)
-      if (detail !== null) item.append(element('p', 'port__detail', detail))
-    }
-
-    // The row's own verb, on a line of its own — unlike Check and the menu, which
-    // are the same two controls on every row. A Start belongs under the project it
-    // will start, at the width its label needs.
-    const action = this.rowAction(row)
-    if (action !== null) {
-      const actions = element('div', 'port__controls')
-      actions.append(action)
-      item.append(actions)
-    }
-
-    if (this.renamingPort !== null && this.renamingPort === port) {
-      item.append(
-        this.renameField(this.renameText, `localhost:${port} on this ${this.noun}`, MAX_NAME_LENGTH, (value) => {
-          this.portBook.setName(value, this.machine?.id ?? '', port)
-          this.renamingPort = null
-          this.openRow = null
-          this.renderContent()
-        }),
-      )
-    } else if (this.openRow === row.id && port !== null) {
-      item.append(this.portMenu(row, port))
-    }
-
-    // The answer sits under the port it is about. A single result line at the foot
-    // of the list would be correct and unreadable: three ports in, nobody can tell
-    // which one "it answered" is about.
-    const outcome = this.localhost.outcome
-    if (outcome !== null && outcome.port === port) {
-      item.append(
+    if (ports === null) {
+      screen.append(
         element(
           'p',
-          outcome.kind === 'answered' ? 'port__result port__result--ok' : 'port__result',
-          // Through `plain` like every other string that came off this socket: a
-          // refusal is composed on the desktop, and this end is the one that pays
-          // if that ever stops being true.
-          plain(checkSentence(outcome, this.noun)),
+          'empty',
+          listing
+            ? `Asking the ${this.noun} what is listening…`
+            : `The ${this.noun} has not said what it is serving yet.`,
         ),
       )
+    } else if (ports.length === 0) {
+      screen.append(element('p', 'empty', noPortsSentence(this.noun)))
+    } else {
+      const list = element('ul', 'ports')
+      for (const port of ports) {
+        const row = element('li', 'port')
+        const line = element('div', 'port__line')
+        line.append(element('span', 'port__label', portLabel(port)))
+
+        // One check at a time, and only with a socket. A second Check pressed
+        // while one is running is refused by the machine itself; disabling it
+        // is what stops somebody pressing a button that does nothing.
+        if (online) {
+          const here = checking?.port === port.port
+          const check = element('button', 'port__check', here ? 'Checking…' : 'Check')
+          check.type = 'button'
+          check.disabled = checking !== null
+          check.addEventListener('click', () => {
+            this.checks += 1
+            this.localhostDo({ t: 'check', port: port.port, id: `localhost-${this.checks}` })
+          })
+          line.append(check)
+        }
+        row.append(line)
+
+        // The answer sits under the port it is about. A single result line at
+        // the foot of the list would be correct and unreadable: three ports in,
+        // nobody can tell which one "it answered" is about.
+        if (outcome !== null && outcome.port === port.port) {
+          const said = element(
+            'p',
+            outcome.kind === 'answered' ? 'port__result port__result--ok' : 'port__result',
+            // Through `plain` like every other string that came off this socket:
+            // a refusal is composed on the desktop, and this end is the one that
+            // pays if that ever stops being true.
+            plain(checkSentence(outcome, this.noun)),
+          )
+          row.append(said)
+        }
+        list.append(row)
+      }
+      screen.append(list)
+
+      if (!online) screen.append(element('p', 'note localhost__note', stalePortsSentence(this.noun)))
     }
-    return item
   }
 
   /**
-   * The identity of a dev-server row: its state, its name, and the project it is.
+   * The projects this desktop could start a dev server in.
    *
-   * When the person has named the row's port, their name leads and the project's
-   * own name becomes a chip beside it. Replacing one with the other would lose the
-   * fact that this row is a project at all.
-   */
-  private devHeadInto(line: HTMLElement, row: LocalhostRow): void {
-    const report = row.dev
-    if (report === null) return
-    const view = this.devView(report)
-    line.append(
-      element('span', `dev__dot dev__dot--${view.tone}`),
-      element('span', 'dev__name', row.name ?? view.name),
-    )
-    if (row.name !== null) line.append(element('span', 'dev__project', view.name))
-  }
-
-  /**
-   * The lines under a dev-server row, in whichever of its five states it is in.
+   * Every word comes out of `dev-server.ts` and every rule with it; this is
+   * delivery. Two of those rules are visible in the shape of the code and are
+   * worth naming where somebody editing the DOM will see them:
    *
-   * Every word is `devRowView`'s and every rule with it; this is delivery. Two of
-   * those rules are worth naming where somebody editing the DOM will see them: the
-   * rows are whatever the reducer holds, never assembled from `folders` — a folder
-   * with no dev script has no row — and `note` is process output, drawn as text
-   * through `plain` and never parsed.
-   */
-  private devLinesInto(item: HTMLElement, row: LocalhostRow): void {
-    const report = row.dev
-    if (report === null) return
-    const view = this.devView(report)
-    // The whole path, reachable from a row that shows only the project's name. The
-    // same escape hatch the folder picker uses, for the same reason: two checkouts
-    // can share a last segment.
-    item.title = view.folder
-    item.append(element('p', view.exact ? 'dev__line dev__line--exact' : 'dev__line', plain(view.line)))
-    if (view.note !== null) item.append(element('p', 'dev__note', plain(view.note)))
-    if (view.address !== null) item.append(element('p', 'dev__address', plain(view.address)))
-  }
-
-  /** One row's view, asked for by both halves of the row that draws it. */
-  private devView(report: DevServerReport): ReturnType<typeof devRowView> {
-    return devRowView(report, {
-      online: this.state.phase === 'online',
-      starting: this.dev.starting === report.folder,
-    })
-  }
-
-  /**
-   * The row's own verb, or nothing.
+   *  - **The rows are whatever the reducer holds, in its order.** They are never
+   *    assembled here from `folders`, because a folder with no dev script has no
+   *    row — and a row built from the folder list would put one there, with a
+   *    button whose only outcome is a refusal.
+   *  - **`note` is process output.** It goes on screen as text, through `plain`
+   *    like every other string that came off this socket, and is never parsed.
    *
-   * Which one it is lives in `port-catalog.ts`, so the answer to "what does start
-   * do in each of the five states" is a value a unit test can read rather than a
-   * branch inside a render that only a paired browser with a project on the far
-   * machine could exercise. `copyAddress` is the one case that is not a button
-   * here — it is in the `…` menu, because a Copy on every row would be the loudest
-   * thing on a screen whose whole complaint was noise.
+   * The whole section is absent — not empty, not a heading with nothing under it
+   * — when there is nothing to draw. A desktop that never advertised `devserver`,
+   * or one whose every project is a folder with no dev script, is a desktop this
+   * screen says nothing about.
    */
-  private rowAction(row: LocalhostRow): HTMLElement | null {
-    const action = secondAction(row)
-    if (action.kind === 'none' || action.kind === 'copyAddress') return null
-    if (this.state.phase !== 'online') return null
-    if (action.kind === 'openSession') {
-      // Labelled for what it does. It is also how a dev server is stopped — Ctrl-C
-      // is on the key bar in there — and calling the button "Stop" would be naming
-      // it after the thing the *next* tap does. See this screen's header.
-      const open = element('button', 'button button--quiet port__action', 'Open session')
-      open.type = 'button'
-      open.addEventListener('click', () => this.openSession(action.id))
-      return open
-    }
-    // Not a Start drawn as though nothing had happened, when it is a retry:
-    // `dev.start` re-reads the folder, so a `package.json` fixed since the failure
-    // is picked up rather than the old answer being replayed.
-    const folder = action.folder
-    const start = element('button', 'button port__action', action.kind === 'retry' ? 'Try again' : 'Start')
-    start.type = 'button'
-    // Disabled while *any* start is in flight, not just this row's: the desktop
-    // allows one at a time and refuses the second with a sentence, so a live-looking
-    // button on the row below is a press that produces an error message rather than
-    // a dev server.
-    start.disabled = this.dev.starting !== null
-    start.addEventListener('click', () => this.devDo({ t: 'start', folder }))
-    return start
-  }
+  private devInto(screen: HTMLElement, online: boolean): void {
+    if (!devserverOffered(this.capabilities)) return
+    const rows = this.dev.rows
 
-  /**
-   * The three dots he asked for, opened in place.
-   *
-   * *"maybe three dots and more options and stuff like that"*. A popover would be
-   * the desktop's answer; in a page that is a fixed frame with one scrolling region
-   * inside it, an absolutely-positioned menu has to be dismissed, repositioned on
-   * a resize and kept inside the viewport — three problems, none of which is the
-   * feature. Opening in the row costs one row of height and cannot be misplaced.
-   */
-  private portMenu(row: LocalhostRow, port: number): HTMLElement {
-    const menu = element('div', 'port__menu')
-    const named = row.name !== null
-
-    const rename = element('button', 'port__menu-item', named ? 'Rename' : 'Name this port')
-    rename.type = 'button'
-    rename.addEventListener('click', () => {
-      this.renamingPort = port
-      this.renameText = row.name ?? ''
-      this.renderContent()
-    })
-    menu.append(rename)
-
-    if (named) {
-      // Not "delete": nothing on the machine changes and the port stays in the
-      // list. It goes back to being called by the process holding it.
-      const clear = element('button', 'port__menu-item', 'Clear name')
-      clear.type = 'button'
-      clear.addEventListener('click', () => {
-        this.portBook.setName(null, this.machine?.id ?? '', port)
-        this.openRow = null
-        this.renderContent()
-      })
-      menu.append(clear)
+    if (rows.length === 0) {
+      // One sentence for the round trip between arriving here and the first
+      // answer, and nothing at all once the answer is "no project here has a dev
+      // script". Silence is the honest state for that: there is nothing to press
+      // and nothing to explain.
+      if (online && (this.folders?.length ?? 0) > 0) {
+        screen.append(element('p', 'empty', devWaitingSentence(this.noun)))
+      }
+      return
     }
 
-    const copy = element('button', 'port__menu-item', 'Copy address')
-    copy.type = 'button'
-    copy.addEventListener('click', () => {
-      this.openRow = null
-      void this.copyAddress(port)
-    })
-    menu.append(copy)
-    return menu
-  }
+    screen.append(element('p', 'dev__caption', DEV_CAPTION))
+    const list = element('ul', 'dev')
+    for (const row of rows) {
+      const view = devRowView(row, { online, starting: this.dev.starting === row.folder })
+      const item = element('li', 'dev__row')
+      // The whole path, reachable from a row that shows only the project's name.
+      // The same escape hatch the folder picker uses, for the same reason: two
+      // checkouts can share a last segment.
+      item.title = view.folder
 
-  /**
-   * `http://localhost:<port>`, on the clipboard, and said out loud.
-   *
-   * The address is the *machine's* loopback and not this reader's, which is the
-   * whole point of the footnote at the bottom of this screen — so what this is for
-   * is pasting into a terminal on that machine, or into a message to somebody
-   * sitting at it.
-   *
-   * A clipboard write can be refused: the API needs a secure context and, in some
-   * browsers, a permission. A refusal is said rather than swallowed, because a
-   * silent copy that did not happen is indistinguishable from one that did.
-   */
-  private async copyAddress(port: number): Promise<void> {
-    const address = `http://localhost:${port}`
-    try {
-      await navigator.clipboard.writeText(address)
-      this.say(`Copied ${address}`)
-    } catch {
-      this.say(`This browser would not let the page copy ${address}.`)
+      const head = element('div', 'dev__head')
+      head.append(
+        element('span', `dev__dot dev__dot--${view.tone}`),
+        element('span', 'dev__name', view.name),
+      )
+      item.append(head)
+      item.append(element('p', view.exact ? 'dev__line dev__line--exact' : 'dev__line', plain(view.line)))
+      if (view.note !== null) item.append(element('p', 'dev__note', plain(view.note)))
+      if (view.address !== null) item.append(element('p', 'dev__address', plain(view.address)))
+
+      const actions = element('div', 'dev__actions')
+      if (view.start !== null) {
+        const start = element('button', 'button', view.start)
+        start.type = 'button'
+        // Disabled while *any* start is in flight, not just this row's: the
+        // desktop allows one at a time and refuses the second with a sentence,
+        // so a live-looking button on the row below is a press that produces an
+        // error message rather than a dev server.
+        start.disabled = this.dev.starting !== null
+        start.addEventListener('click', () => this.devDo({ t: 'start', folder: view.folder }))
+        actions.append(start)
+      }
+      const sessionId = view.sessionId
+      if (sessionId !== null) {
+        // The dev server runs in an ordinary session. This is how its output is
+        // read, how a failure is investigated, and — since there is no stop verb
+        // and should not be — how it is stopped: Ctrl-C, in the session it is
+        // running in, like any other process.
+        const open = element('button', 'button button--quiet', 'Open session')
+        open.type = 'button'
+        open.addEventListener('click', () => this.openSession(sessionId))
+        actions.append(open)
+      }
+      if (actions.childElementCount > 0) item.append(actions)
+      list.append(item)
     }
-    this.renderContent()
+    screen.append(list)
+
+    // Why the address above is text and not a link. Only when this screen has no
+    // port list under it — with one, the footnote at the bottom of the screen
+    // says the same thing at more length and a second copy would be the sort of
+    // duplication this pass was asked to take out.
+    const serving = rows.some((row) => row.status === 'ready' && row.url !== undefined)
+    if (serving && !localhostOffered(this.capabilities)) {
+      screen.append(element('p', 'note localhost__note', cannotOpenSentence(this.noun)))
+    }
   }
 
   /**
@@ -2425,16 +1708,11 @@ class Deck {
    * on their own laptop would re-pair every morning without ever finding out
    * why.
    *
-   * So it is stated in the sentence that says what it means rather than the name
-   * of a setting, and the button is the *action* rather than a toggle: nobody has
-   * to work out which way a switch is pointing. Nothing here is a second copy of
-   * the state — both halves read `remember`, which is what `loadMachines` found in
-   * whichever store answered.
-   *
-   * It used to sit at the foot of the session list, and it is on the Settings
-   * screen now. Same block, same words, one screen over: this is a fact about the
-   * browser rather than about the sessions, and a list of somebody's running work
-   * is not where a storage decision belongs.
+   * So it is stated where the pairing is, in the sentence that says what it
+   * means rather than the name of a setting, and the button is the *action*
+   * rather than a toggle: nobody has to work out which way a switch is pointing.
+   * Nothing here is a second copy of the state — both halves read `remember`,
+   * which is what `loadPairing` found in whichever store answered.
    */
   private lifetimeBlock(): HTMLElement | null {
     if (this.credential === null) return null
@@ -2460,388 +1738,14 @@ class Deck {
     change.type = 'button'
     change.addEventListener('click', () => {
       this.remember = remembered ? 'this-tab' : 'this-browser'
-      // Moves the machines, the mirrored credential *and* this browser's key into
-      // the other store and clears the one they came from. The port names go with
-      // them: they are the person's own text about a machine, and leaving them in
-      // a profile on a computer whose owner has just said "just for this visit" is
-      // exactly the residue that answer promises there will not be.
+      // Moves the credential *and* this browser's key into the other store and
+      // clears the one they came from — `savePairing` is the only thing that
+      // touches either, precisely so the two cannot end up in different places.
       this.keep()
-      this.portBook.setLifetime(this.remember)
       this.renderContent()
     })
     block.append(change)
     return block
-  }
-
-  /* ------------------------------------------------------------ settings -- */
-
-  /**
-   * The things that belong to this browser rather than to a machine.
-   *
-   * Three groups and two sentences. Asad on the desktop's settings page: *"we
-   * don't need this much of big descriptions under each. The whole page is going
-   * to be used just because of the big descriptions."* So each row is a line, and
-   * the only prose is the two paragraphs that say something no row can — what
-   * changing the text size does to a session that is already open, and the one
-   * thing this client genuinely cannot do.
-   *
-   * ## What is here, and what is deliberately not
-   *
-   * The phone's Settings has Machines, GitHub, Alerts, Text size and About. Two of
-   * those are missing here and neither is an omission:
-   *
-   *  - **GitHub.** This client refuses a machine's request for a git credential
-   *    and says so on a card of its own — see `credential.ts`, which explains at
-   *    length why a browser served by the machine that would be asking is the one
-   *    place that would be dishonest. A row that opened a sign-in this client will
-   *    not complete is the definition of a fake feature.
-   *  - **Alerts.** There is no notification path in this client at all, and the
-   *    closing paragraph says so rather than a switch pretending otherwise.
-   *
-   * The appearance is not here either, and that one is a placement rather than an
-   * absence: it is in the header, on every screen including the pair screen,
-   * because it is the one preference somebody changes *because of what is on the
-   * screen right now*. A second copy of it here would be two controls for one
-   * setting.
-   */
-  private settingsScreen(): HTMLElement {
-    const screen = element('div', 'screen')
-    const paired = this.book.machines.length
-
-    const machines = element('div', 'group')
-    const row = element('button', 'setting')
-    row.type = 'button'
-    row.append(
-      element('span', 'setting__title', 'Machines'),
-      element('span', 'setting__value', paired === 1 ? '1 paired' : `${paired} paired`),
-      element('span', 'setting__mark', '›'),
-    )
-    row.addEventListener('click', () => this.goTo('machines'))
-    machines.append(row)
-    screen.append(machines)
-
-    screen.append(element('p', 'caption', 'Terminal'))
-    screen.append(this.textSizeGroup())
-    screen.append(
-      element(
-        'p',
-        'note note--plain',
-        'A session already open picks this up straight away — the column count is the font, so changing ' +
-          `it resizes the session on the ${this.noun}.`,
-      ),
-    )
-
-    screen.append(element('p', 'caption', 'This browser'))
-    const lifetime = this.lifetimeBlock()
-    if (lifetime !== null) screen.append(lifetime)
-
-    screen.append(
-      element(
-        'p',
-        'note note--plain',
-        `This page talks to your own machines. There is no notification server in ${BRAND.name} and there ` +
-          'is nowhere for one to send anything — a browser tab that is closed is not running, so a session ' +
-          'that needs you is found when you come back rather than announced while you are away.',
-      ),
-    )
-    return screen
-  }
-
-  /**
-   * How big the terminal's characters are.
-   *
-   * The same setting the phone puts in its Settings, for the same two reasons: it
-   * is a property of the person's eyes rather than of one session, and a control
-   * you can only reach from inside a session is one that somebody with a
-   * nine-pixel terminal cannot read well enough to find.
-   *
-   * Two buttons and the value, rather than a slider: the range is thirteen whole
-   * pixels, every one of them is a distinct answer, and a slider on a phone is a
-   * control you cannot land on a specific one of thirteen values with.
-   */
-  private textSizeGroup(): HTMLElement {
-    const group = element('div', 'group')
-    const row = element('div', 'setting setting--static')
-    row.append(element('span', 'setting__title', 'Text size'))
-    row.append(element('span', 'setting__value', textSizeLabel(this.textSize)))
-
-    const stepper = element('span', 'setting__stepper')
-    const smaller = element('button', 'setting__step', '−')
-    smaller.type = 'button'
-    smaller.setAttribute('aria-label', 'Smaller text')
-    smaller.disabled = !canGoSmaller(this.textSize)
-    smaller.addEventListener('click', () => this.chooseTextSize(smallerText(this.textSize)))
-
-    const larger = element('button', 'setting__step', '+')
-    larger.type = 'button'
-    larger.setAttribute('aria-label', 'Larger text')
-    larger.disabled = !canGoLarger(this.textSize)
-    larger.addEventListener('click', () => this.chooseTextSize(largerText(this.textSize)))
-
-    stepper.append(smaller, larger)
-    row.append(stepper)
-    group.append(row)
-    return group
-  }
-
-  /**
-   * The person moved the size.
-   *
-   * The emulator is told, and then measured. A font change without a `fit` leaves
-   * xterm holding the column count it computed for the old face, which is a
-   * terminal drawing eighty columns into a box that now fits sixty — and the
-   * machine still sending eighty. The resize frame that follows is what makes the
-   * far end agree, and `terminal.ts` clamps it so a size the protocol would refuse
-   * cannot close the socket.
-   */
-  private chooseTextSize(size: number): void {
-    if (size === this.textSize) return
-    this.textSize = size
-    writeTextSize(this.stores.browser, size)
-    this.terminal?.setFontSize(size)
-    this.terminal?.fit()
-    this.renderContent()
-  }
-
-  /* ------------------------------------------------------------ machines -- */
-
-  /**
-   * Every machine this browser is paired with, on a screen instead of nowhere.
-   *
-   * Asad on the desktop's equivalent: *"I am not able to edit the name of this
-   * account and I don't know where it belongs to… I should be able to edit the
-   * account, delete and add."* Same three verbs, here, in one place — and the
-   * screen answers the second complaint on every row, because the line under the
-   * name is the endpoint and says who can read the session.
-   *
-   * ## Why only one row has a connection on it
-   *
-   * The phone holds a socket to every paired machine from launch, because it
-   * delivers alerts and a machine nobody is looking at is still a machine that
-   * might need you. This client has no notifications and cannot have any, so a
-   * second socket would buy nothing and cost a real thing — see the header of
-   * `machines.ts`. What the other rows say instead is when this browser last got
-   * through, which is a fact rather than a guess: the credential's window is
-   * pushed out by `renewed()` on every `welcome`, and a `welcome` is the only frame
-   * that proves this browser reached the machine at all.
-   */
-  private machinesScreen(): HTMLElement {
-    const screen = element('div', 'screen')
-    const now = Date.now()
-
-    const list = element('ul', 'machines')
-    for (const machine of this.book.machines) {
-      list.append(this.machineRow(machine, now))
-    }
-    screen.append(list)
-
-    const add = element('button', 'button button--quiet machines__add', 'Pair another machine')
-    add.type = 'button'
-    add.addEventListener('click', () => {
-      this.pairingAnother = true
-      this.screen = 'pair'
-      this.render()
-    })
-    screen.append(add)
-
-    screen.append(element('p', 'note note--plain', MACHINES_FOOTNOTE))
-    return screen
-  }
-
-  /**
-   * One machine.
-   *
-   * The name leads because it is what somebody is looking for. The endpoint under
-   * it is mono and dimmed because it is data — and here it is also the answer to
-   * *"I don't know where it belongs to"*. The status line is a sentence about the
-   * row rather than the row itself, so it is quieter than both.
-   *
-   * Pressing the row switches to that machine; the `···` beside it renames or
-   * forgets it. The two are separated because one of them is a thing people do
-   * twenty times a day and the other is a thing they do once and regret.
-   */
-  private machineRow(machine: StoredMachine, now: number): HTMLElement {
-    const item = element('li', 'machine')
-    const current = machine.id === this.book.currentId
-    const label = machineLabel(machine, this.origin)
-
-    const line = element('div', 'machine__line')
-    const choose = element('button', 'machine__choose')
-    choose.type = 'button'
-    choose.append(
-      element('span', current ? 'machine__dot machine__dot--here' : 'machine__dot'),
-      element('span', 'machine__name', label),
-    )
-    choose.addEventListener('click', () => {
-      if (current) return
-      this.switchTo(machine.id)
-    })
-    line.append(choose)
-
-    const open = this.openRow === machine.id
-    const more = element('button', 'port__more', '···')
-    more.type = 'button'
-    more.setAttribute('aria-expanded', open ? 'true' : 'false')
-    more.setAttribute('aria-label', `Actions for ${label}`)
-    more.addEventListener('click', () => {
-      this.openRow = open ? null : machine.id
-      this.renamingMachine = null
-      this.renderContent()
-    })
-    line.append(more)
-    item.append(line)
-
-    // Two lines, wrapped, rather than one truncated. The summary is a host id, a
-    // relay and how it is protected; cut at either end it loses one of the three,
-    // and this is a screen with room — unlike the header, where the same machine
-    // is named by its first six characters.
-    item.append(element('p', 'machine__where', endpointSummary(machine, this.origin)))
-    item.append(element('p', 'machine__state', this.machineState(machine, current, now)))
-
-    if (this.renamingMachine === machine.id) {
-      item.append(
-        this.renameField(this.renameText, endpointSummary(machine, this.origin), MAX_NICKNAME_LENGTH, (value) => {
-          this.book = renameMachine(this.book, machine.id, cleanNickname(value))
-          this.renamingMachine = null
-          this.openRow = null
-          this.keep()
-          this.render()
-        }),
-      )
-    } else if (open) {
-      const menu = element('div', 'port__menu')
-      const rename = element('button', 'port__menu-item', machine.nickname === null ? 'Name this machine' : 'Rename')
-      rename.type = 'button'
-      rename.addEventListener('click', () => {
-        this.renamingMachine = machine.id
-        this.renameText = machine.nickname ?? ''
-        this.renderContent()
-      })
-      menu.append(rename)
-
-      // Named, because this menu is opened on a row and a browser paired with
-      // three machines is three identical menus.
-      const forget = element('button', 'port__menu-item port__menu-item--warn', `Forget ${label}`)
-      forget.type = 'button'
-      forget.addEventListener('click', () => {
-        this.openRow = null
-        this.forgetMachine(machine.id)
-      })
-      menu.append(forget)
-      item.append(menu)
-    }
-    return item
-  }
-
-  /**
-   * What the row says the machine is doing.
-   *
-   * Sessions while it is up, because that is the number worth switching for; the
-   * connection's own sentence when it is not, because then the session count is
-   * history. For a machine this browser is not talking to there is no connection
-   * to describe at all, and the honest answer is when it was last reached — never
-   * a dot, and never a count from the last time somebody looked.
-   */
-  private machineState(machine: StoredMachine, current: boolean, now: number): string {
-    if (!current) return lastReachedSentence(machine, now)
-    if (this.state.phase !== 'online') return this.state.detail
-    const running = this.sessions.filter((session) => session.exitCode === undefined).length
-    if (running === 0) return 'nothing running'
-    return running === 1 ? '1 session' : `${running} sessions`
-  }
-
-  /* --------------------------------------------------------------- bits -- */
-
-  /**
-   * The one field this client has besides the pairing code.
-   *
-   * Written once and used by both renames, because the two are the same
-   * interaction — a name, the thing it is about underneath it, Save and Cancel —
-   * and a second copy is how one of them ends up without an Enter handler.
-   *
-   * `maxLength` is set from the store's own bound rather than left to the cleaner
-   * afterwards, so the field cannot show more than will be kept. Saving with the
-   * field emptied is how a name is removed; `cleanLabel` folds empty and
-   * whitespace onto nothing, which is why there is no separate Clear here.
-   */
-  private renameField(
-    value: string,
-    about: string,
-    maximum: number,
-    save: (value: string) => void,
-  ): HTMLElement {
-    const block = element('div', 'rename')
-    block.append(element('p', 'rename__about', about))
-
-    const field = element('input')
-    field.type = 'text'
-    field.className = 'rename__field'
-    field.value = value
-    field.maxLength = maximum
-    field.placeholder = 'A name you will recognise'
-    field.setAttribute('aria-label', 'Name')
-    field.addEventListener('input', () => {
-      // Held here rather than read off the element at save time, because a frame
-      // pushed by the desktop rebuilds this list — and with it this input — while
-      // somebody is still typing into it.
-      this.renameText = field.value
-    })
-    field.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter') save(field.value)
-      if (event.key === 'Escape') {
-        this.renamingPort = null
-        this.renamingMachine = null
-        this.renderContent()
-      }
-    })
-
-    const actions = element('div', 'rename__actions')
-    const confirm = element('button', 'button rename__save', 'Save')
-    confirm.type = 'button'
-    confirm.addEventListener('click', () => save(field.value))
-    const cancel = element('button', 'button button--quiet', 'Cancel')
-    cancel.type = 'button'
-    cancel.addEventListener('click', () => {
-      this.renamingPort = null
-      this.renamingMachine = null
-      this.renderContent()
-    })
-    actions.append(confirm, cancel)
-
-    block.append(field, actions)
-    // After the tree is built, by the caller that puts it on screen — focusing an
-    // element that is not in the document does nothing, and doing nothing quietly
-    // is how the pair screen's keypad stopped appearing once already.
-    queueMicrotask(() => {
-      field.focus()
-      field.select()
-    })
-    return block
-  }
-
-  /**
-   * Say something that will stop being said.
-   *
-   * Two and a half seconds, the same as the phone's. It is not a notification and
-   * must never be used as one: everything that matters — the connection, a refused
-   * request, a machine asking for a login — has a surface that stays on screen
-   * until it stops being true.
-   */
-  private say(message: string): void {
-    this.toastText = message
-    if (this.toastTimer !== null) window.clearTimeout(this.toastTimer)
-    this.toastTimer = window.setTimeout(() => {
-      this.toastTimer = null
-      this.toastText = null
-      this.renderToast()
-    }, 2500)
-    this.renderToast()
-  }
-
-  private renderToast(): void {
-    const message = this.toastText
-    this.toast.hidden = message === null
-    this.toast.textContent = message ?? ''
   }
 
   /**
@@ -3012,27 +1916,21 @@ class Deck {
   private buildTerminal(): void {
     this.destroyTerminal()
 
-    const terminal = createTerminal(
-      {
-        onData: (data) => this.sendInput(data),
-        onResize: (size) => {
-          // Only after the attach has gone out. A resize for a session the
-          // server has not given us yet is answered with `unknown-session`.
-          if (this.attachedId !== null && this.attachSent) {
-            this.connection?.send({ t: 'resize', id: this.attachedId, cols: size.cols, rows: size.rows })
-          }
-        },
+    const terminal = createTerminal({
+      onData: (data) => this.sendInput(data),
+      onResize: (size) => {
+        // Only after the attach has gone out. A resize for a session the
+        // server has not given us yet is answered with `unknown-session`.
+        if (this.attachedId !== null && this.attachSent) {
+          this.connection?.send({ t: 'resize', id: this.attachedId, cols: size.cols, rows: size.rows })
+        }
       },
-      // Built in the appearance that is on screen, rather than built dark and
-      // corrected: xterm paints its first frame from the theme it was constructed
-      // with, and a terminal that flashes charcoal before going white is the
-      // failure this feature is judged on, in miniature.
-      this.appearance,
-      // And at the size that was chosen, for exactly the same reason: a terminal
-      // that appears at 13px and reflows to 18px one frame later is the same
-      // failure with a different property.
-      this.textSize,
-    )
+    },
+    // Built in the appearance that is on screen, rather than built dark and
+    // corrected: xterm paints its first frame from the theme it was constructed
+    // with, and a terminal that flashes charcoal before going white is the
+    // failure this feature is judged on, in miniature.
+    this.appearance)
     const keybar = createKeyBar({ onData: (data) => this.sendInput(data) })
 
     const dock = element('div', 'keybar-dock')
@@ -3096,28 +1994,13 @@ class Deck {
     }
   }
 
-  /**
-   * Forget everything — every machine, and this browser's own identity with it.
-   *
-   * Reached from the last machine's Forget, and from nowhere else. With several
-   * machines the row's Forget is `forgetMachine`, which leaves the others alone;
-   * this is the state where there is nothing left to leave alone, and a browser
-   * holding no machines is an unpaired browser.
-   */
   private forget(): void {
     clearPairing(this.stores)
-    clearMachineBook(this.stores)
-    this.book = NO_MACHINES
-    this.notice = null
-    this.openRow = null
-    this.renamingPort = null
-    this.renamingMachine = null
-    this.pairingAnother = false
+    this.credential = null
     // Back to the safe answer. The next pairing on this browser asks again, and
     // it must not inherit "remember" from a machine this person has just said is
     // not theirs any more.
     this.remember = 'this-tab'
-    this.portBook.setLifetime(this.remember)
     // The route goes with the machine. Keeping a relay endpoint after the user
     // has said "that is not my machine any more" would put its host id under the
     // title on the pair screen.

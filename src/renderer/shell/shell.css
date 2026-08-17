@@ -331,54 +331,13 @@
   color: var(--text-primary);
 }
 
-/* The other half of the primary button.
-
-   Joined to it rather than floating beside it: same tint, same height, square
-   on the edge they meet and rounded on the outside, so the pair reads as one
-   split control — press for a session, press the chevron to be asked which
-   folder and which agent. A separate button of its own would read as a third
-   action in a row that already has two. */
-.sb-new-more {
-  position: relative;
-  display: grid;
-  place-items: center;
-  width: var(--sp-6);
-  height: var(--control-h-lg);
-  flex-shrink: 0;
-  /* Cancels the row's own gap: these two touch, the globe beside them does not. */
-  margin-left: calc(-1 * var(--sp-1));
-  border-radius: 0 var(--radius-md) var(--radius-md) 0;
-  background: var(--accent-soft);
-  color: var(--text-secondary);
-  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
-}
-
-.sb-new-more:hover {
-  background: color-mix(in srgb, var(--accent) 26%, transparent);
-  color: var(--text-primary);
-}
-
-.sb-new-more:active {
-  background: color-mix(in srgb, var(--accent) 34%, transparent);
-}
-
-/* The seam. A hairline of the page's own colour, so the two halves are told
-   apart by a gap in the tint rather than by a drawn line. */
-.sb-new-more::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 50%;
-  width: 1px;
-  height: 16px;
-  transform: translateY(-50%);
-  background: var(--bg-secondary);
-}
-
-/* Square off the primary's trailing corners only when it has a partner. */
-.sb-new:has(+ .sb-new-more) {
-  border-radius: var(--radius-md) 0 0 var(--radius-md);
-}
+/* `.sb-new-more` used to be here: the chevron half of a split button, square on
+   the edge it met the primary and rounded on the outside, with a hairline seam
+   between the two. It is gone, and the request was explicit — *"remove this
+   drop-down button at all from the side panel."* The rules went with it rather
+   than being left orphaned, including the `:has(+ .sb-new-more)` that squared
+   the primary's trailing corners; with no partner, New session is a single
+   rounded control again and needs no rule to say so. */
 
 .sidebar-scroll {
   flex: 1;
@@ -473,23 +432,60 @@
   display: block;
 }
 
+/*
+  The name a row exists to carry, and the floor under it.
+
+  `min-width: 0` on its own is what produced `Sess…` and then `S…` in his
+  recording: it lets this flex item shrink to nothing, and everything else on the
+  line — the account caption, the hover actions — held a fixed width, so the name
+  was the only thing that could give and it gave all of it. A row whose name is
+  one character has stopped being a row about anything.
+
+  Eight characters is the floor because it is roughly where "Session 1" and
+  "Session 12" still read; below it the ellipsis is eating the part that
+  identifies. The account chip is what shrinks past this point, and below
+  `ACCOUNT_NEEDS_RAIL` (`workspace-tabs.ts`) it is not drawn at all.
+*/
 .sb-label {
-  flex: 1;
-  min-width: 0;
+  flex: 1 1 auto;
+  min-width: 8ch;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 /* Which account a session belongs to, on its row in the rail.
-   Drawn only when more than one account is in play — see
-   `accountsWorthShowing`. A label every row carries says nothing. */
+   Drawn only when more than one account is in play *and* the rail is wide
+   enough to say so — see `accountsWorthShowing`. A label every row carries says
+   nothing, and a label that costs the row its name says less than nothing.
+
+   `flex-shrink: 1` with no floor: this is the thing that gives. On a hover that
+   brings two action buttons onto the line, the account narrows and then
+   disappears, and the name is untouched. */
 .sb-account {
-  flex-shrink: 0;
+  flex-shrink: 1;
+  min-width: 0;
   max-width: 12ch;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-size: var(--t-caption);
+  color: var(--text-muted);
+}
+
+/* The head of a session's id, drawn only on a row whose name cannot identify it
+   — see `tabQualifiers`. Two sessions in one folder whose agents wrote the same
+   title are otherwise the same row twice.
+
+   `flex-shrink: 0`, unlike the account beside it, and that is the whole point of
+   having both: the account is a fact you can get at elsewhere, so it gives its
+   pixels up first; this is the only thing on the line saying *which* of the two
+   rows you are looking at, so it holds its eight characters. It is set in the
+   mono face because it is an identifier and reads as one — the same eight
+   characters the Inspector prints, so the two can be matched by eye. */
+.sb-qualifier {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
   font-size: var(--t-caption);
   color: var(--text-muted);
 }
@@ -513,6 +509,7 @@
 .sb-row-action:focus-visible,
 .sb-new:focus-visible,
 .sb-new-alt:focus-visible,
+.sb-icon:focus-visible,
 .sb-group-action:focus-visible,
 .sb-link:focus-visible {
   outline: 2px solid var(--accent);
@@ -560,6 +557,28 @@
 .sb-row-action:hover {
   background: var(--bg-active);
   color: var(--text-primary);
+}
+
+/*
+  The ✕ that ends a session, told apart from the ✕ that does not.
+
+  There are two of them in this window and they look the same because they mean
+  the same *gesture* — get this out of my way. Since 2026-08-17 they have
+  different consequences: the tab's ✕ takes the tab off the top bar and leaves
+  everything running, and this one kills the pty. Asad asked for the first of
+  those in so many words — *"it should not delete the session"* — and the moment
+  the two diverge, two identical glyphs is a trap.
+
+  So this one recruits the app's own critical colour on approach, which is the
+  one hue in this palette that means "this destroys something", and the strip's
+  stays grey. Colour rather than a different glyph, because a ✕ is what people
+  reach for to close a thing and replacing it would cost more than it bought;
+  and on hover rather than at rest, because a red mark sitting permanently on
+  every row of the rail would read as an error state on the sessions themselves.
+*/
+.sb-close:hover {
+  background: color-mix(in srgb, var(--color-critical) 16%, transparent);
+  color: var(--color-critical);
 }
 
 /* Dimmed on reveal, not revealed by being dimmed. Setting the opacity on
@@ -758,16 +777,85 @@
   text-decoration: underline;
 }
 
-/* The app talking about itself: an update, Alerts, Settings — in that order,
-   because that is news, then a standing list, then a place you go on purpose.
-   Separated from the project list above it by space and a change of tone, not
-   by a rule. */
+/* The app talking about itself: an update, then Remote, then the Settings line
+   — news, then a standing list, then a place you go on purpose. Separated from
+   the project list above it by space and a change of tone, not by a rule. */
 .sidebar-foot {
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
   gap: var(--sp-05);
   padding: var(--sp-2);
+}
+
+/*
+  The last line of the rail: Settings, and the bell at the end of it.
+
+  *"For the alerts icon, let's not keep it a complete separate pill. Let's make
+  it a small icon next to the settings pill."* Settings takes the line and the
+  bell sits at its end — so the foot is one line shorter than it was and the
+  thing that lost the row is the one that is usually empty.
+
+  A flex row rather than the bell being absolutely positioned inside the
+  Settings button: they are separate controls that open separate sheets, and one
+  nested inside the other would make the whole line ambiguous to click.
+*/
+.sidebar-settings {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-05);
+}
+
+/* `.sb-row` is `width: 100%`, which as a flex item beside the bell would push
+   it off the end of the rail. It takes what is left instead. */
+.sb-settings {
+  flex: 1;
+  min-width: 0;
+}
+
+.sb-icon {
+  position: relative;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: var(--row-h);
+  height: var(--row-h);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.sb-icon:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+/* There was a `.sb-icon.active` here, matching `.sb-row.active`, and it went
+   when Alerts became a pop-up: *"notifications should be a pop-up just like
+   settings, not a full page."* `active` means "this view is filling the window
+   and that is where you are" — a dialog is never that, and the gear one pixel
+   to the left has never claimed it either. A state nothing can enter is a rule
+   the next reader has to disprove. */
+
+/*
+  Unread alerts, as a dot rather than a number.
+
+  The row this replaced carried `.sb-badge` with a count in it, and a 30px
+  glyph has nowhere to put one — so the count moves into the button's
+  `aria-label`, where it is still spoken, and what is left on screen is Mail's
+  answer: a small mark that means "there is something in here". Positioned
+  against the button rather than drawn inside the glyph, because the glyph is
+  a stroked path (`ALERTS_GLYPH`, in the panel it opens) and this app never
+  edits an icon's geometry to carry state.
+*/
+.sb-icon-dot {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
 }
 
 /*
@@ -924,9 +1012,76 @@
   the pad here is only what keeps the *heading* clear of it: 82px for the
   lights, plus the button and its gap. Written as one number rather than a sum
   so the two rules that override it below stay readable.
+
+  `:not([data-under-strip])` on every one of these, because none of it is true
+  when there is a tab strip above: the lights are on the strip, the reveal
+  button is drawn by the strip, and this bar starts at its own ordinary lead.
+  Written into the selector rather than as an override underneath so that the
+  Windows counterpart the sweep in `shell.test.ts` insists on stays a
+  character-for-character mirror of it.
 */
-.toolbar[data-sidebar-collapsed] {
+.toolbar[data-sidebar-collapsed]:not([data-under-strip]) {
   padding-left: 118px;
+}
+
+/*
+  Under the strip, this is not the window's top band any more.
+
+  It gives up all four things a top band does. The glass and the hairline go
+  because the strip above already wears them — two glass bars separated by a
+  rule read as two stacked applications, which is the exact fault
+  `PLAN-0.2.0.md` opens with. What is left is `--tab-active`: the surface the
+  selected tab is painted, so the tab, this bar and the session below it are
+  one continuous panel and the tab reads as the top edge of the thing it
+  opened.
+
+  It used to say `--bg-primary`, and that was right by accident. The two tokens
+  are the same colour in the dark theme, so the whole chain matched there and
+  nobody looked again; in the light theme `--bg-primary` is the app's white
+  canvas while the session under this bar is `--terminal-bg`, a recessed grey,
+  and the bar stood twenty-three levels above the terminal it belonged to —
+  *"on light mode it is pure white, and inside the terminal itself it is a
+  little bit different, like kind of grey."* Naming the tab's own token instead
+  of a colour that happened to equal it in one theme is what stops that
+  reappearing: `tokens.test.ts` holds `--tab-active` equal to `--terminal-bg`
+  in both appearances, so this bar cannot drift away from its session again.
+
+  Chat mode is the one place in the light theme where this bar and the thing
+  under it are then *not* the same colour, and that is a decision rather than an
+  oversight. `.chat-view` is on the app canvas, because everything in it — the
+  role tint on your own message, the folded code block, the composer — is a
+  fill tuned to sit on white; moving its ground to the terminal's paper would
+  turn every one of those recesses into a raised block, which is a redesign of
+  the chat pane and not a fix to this bar. The alternative, flipping this bar to
+  the canvas while a chat is up, is worse: the *tab* cannot change colour with
+  the mode, so it would go back to being a plate resting on a bar, which is the
+  exact shape the strip was rebuilt to stop being. What is left in chat mode is
+  an ordinary chrome-over-document edge, which is what a toolbar above a
+  document is supposed to look like.
+*/
+.toolbar[data-under-strip] {
+  background-color: var(--tab-active);
+  background-image: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  box-shadow: none;
+}
+
+/*
+  Except over a sidebar page, which is not what any tab opened.
+
+  A page from the rail covers the strip's selection — `WorkspaceTabStrip` is
+  passed `covered`, and it stops drawing any tab as selected — so there is no
+  tab above this bar for it to continue, and what is below it is `.panel-page`
+  on the app canvas rather than a session on the terminal's paper. Painting the
+  session's grey here would move the seam rather than close it: a grey bar with
+  a white page under it, which is the same fault one band down.
+
+  So the two states are written as two rules with one reason each, rather than
+  as one rule with a colour that has to be right for both.
+*/
+.toolbar[data-under-strip][data-page] {
+  background-color: var(--bg-primary);
 }
 
 /* Parked over the traffic-light strip, out of the flow. In the flow it moved
@@ -961,7 +1116,7 @@
   padding-left: max(var(--sp-8), calc((100% - var(--page-measure)) / 2));
 }
 
-.toolbar[data-sidebar-collapsed][data-page]:not([data-page='files']) {
+.toolbar[data-sidebar-collapsed]:not([data-under-strip])[data-page]:not([data-page='files']) {
   /* The lights and the reveal button still have to clear, whatever the measure
      works out to on a narrow window. */
   padding-left: max(118px, calc((100% - var(--page-measure)) / 2));
@@ -999,11 +1154,11 @@
   left: var(--sp-4);
 }
 
-:root[data-window-controls] .toolbar[data-sidebar-collapsed] {
+:root[data-window-controls] .toolbar[data-sidebar-collapsed]:not([data-under-strip]) {
   padding-left: 52px;
 }
 
-:root[data-window-controls] .toolbar[data-sidebar-collapsed][data-page]:not([data-page='files']) {
+:root[data-window-controls] .toolbar[data-sidebar-collapsed]:not([data-under-strip])[data-page]:not([data-page='files']) {
   padding-left: max(52px, calc((100% - var(--page-measure)) / 2));
 }
 
@@ -1021,8 +1176,64 @@
   min-width: 0;
 }
 
+/*
+  The name, the folder and the account of whatever this bar is about — and in a
+  split, that is the *host* pane, whose chrome never came down into it.
+
+  `min-width: 0` is what lets the whole block give way. It is a flex item on a
+  bar that also carries the mode switch, and without it the item's automatic
+  minimum is its content, so a long session name in a narrow window pushes the
+  switch off the right-hand edge instead of ellipsising. Asad asked for the
+  behaviour in those terms — *"just the text will be a little bit folded to left
+  to stay in place"* — and this is the whole of it: the heading holds its
+  position at the window's left margin and loses characters from its right, and
+  every control on the bar stays exactly where it was. `.toolbar-title` and the
+  two chips below each carry the ellipsis that spends that room.
+
+  Deliberately no `min-width` floor. A floor sounds kinder — a heading squeezed
+  to nothing is not much of a heading — but this is the one item on the bar that
+  is allowed to yield, and the things beside it are the mode switch (the only
+  way out of a split) and whatever cluster the right-hand slot is carrying. A
+  floor here does not create room, it only decides who goes off the edge of the
+  window instead, and a control the user cannot reach is worse than a title they
+  cannot read. If the bar is out of room the answer is for the right-hand
+  cluster to fold, which is a thing it knows how to do.
+*/
 .toolbar-heading {
   min-width: 0;
+  /*
+    Declared here and not on the dimmed state below, which is the whole reason
+    it is on this rule: a transition is read off the style the element is
+    moving *to*, so one written only on `[data-focused='false']` fades out and
+    then snaps back. Both directions have to be the same gesture or the pair
+    reads as a glitch rather than as focus moving.
+  */
+  transition: opacity var(--dur-fast) var(--ease);
+}
+
+/*
+  Drawn back while the keyboard is in another pane.
+
+  This is the host pane's focus mark, and it is up here because the host pane's
+  chrome is up here. It cannot be a ring: the host is deliberately the pane with
+  no box — `SplitView.css` argues that at length — so there is no border to put
+  one on, and a ring drawn round the window's own edge is a frame around the
+  window rather than a mark on a pane.
+
+  The value is `.pane-cell-head[data-focused='false']`'s, to the digit, because
+  it has to be the same idiom and not a second one: a pane's identity dims when
+  the keyboard is somewhere else, wherever that identity is written. It also
+  does the teaching. "The top bar names the pane with no box" is a convention a
+  first-time user has to infer, and the fastest way to hand it to them is to let
+  them watch the top bar fade as the guest's bar comes up, and swap back on the
+  next click. Two things that dim together are one thing.
+
+  Never true while the window is showing one thing: `WindowToolbar` defaults
+  `headingFocused` to true, because unsplit there is nowhere else for focus to
+  be and a permanently half-lit title would read as a disabled app.
+*/
+.toolbar-heading[data-focused='false'] {
+  opacity: 0.55;
 }
 
 .toolbar-title {
@@ -1048,16 +1259,35 @@
   max-width: 46ch;
 }
 
-/* ----------------------------------------------------------- folder chip -- */
+/* ---------------------------------------------------------- folder title -- */
 
-/* Where a session is running, as a control. It sits where the subtitle used to,
-   so the heading block is still a title and one quiet line under it — the line
-   is just pressable now, because the app chose the folder and the user has to
-   be able to disagree. */
-.folder-chip {
-  position: relative;
+/*
+  Where a session is running. A word, not a control.
+
+  It was a dropdown until 2026-08-17 and the menu did not do what a dropdown
+  beside a running session implies — a pty has one working directory for its
+  whole life, so "choose another folder" could only ever mean "start a different
+  session". `FolderChip.tsx` has the whole account of it. What is left is the
+  quiet line under the session's name, in mono because a path is data, sitting
+  in the same place the subtitle always did.
+
+  Mono, `--t-caption`, `--text-muted`: identical to the pressable version it
+  replaced, so the line did not move or change weight when the chevron went —
+  only the pointer and the hover fill are gone, which is exactly the amount of
+  difference "this is not a control" should make.
+*/
+.folder-title {
+  max-width: 30ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: var(--t-caption);
+  color: var(--text-muted);
 }
 
+/* Shared with the account chip beside it, which is still a control and still
+   opens a menu — see `AccountChip.tsx`. */
 .folder-chip-button {
   display: inline-flex;
   align-items: center;
@@ -1067,6 +1297,31 @@
   padding: 0 var(--sp-1);
   border-radius: var(--radius-sm);
   color: var(--text-muted);
+  /*
+    Bounded by whatever room the heading actually has, and shrinkable inside it.
+
+    An inline-flex box is as wide as its contents and paints straight out of a
+    parent that is narrower, so on a small window this chip drew a whole email
+    address across the middle of the bar, over the controls on the right —
+    while the heading it belongs to had already given all of its width up. The
+    heading is supposed to fold toward the left and lose characters, not spill.
+
+    `max-width` is what makes it obey the box; `min-width: 0` is what lets it
+    get there, because a flex item's automatic minimum is its content. What
+    spends the room is `.account-chip-name`, which ellipsises — everything else
+    in here (the dot, the agent badge, the caret) is small and fixed, so the
+    chip degrades to a mark and a caret rather than to nothing.
+
+    The `+ var(--sp-1)` is the negative left margin above, and it is not a fudge
+    factor: this chip is pulled four pixels left of its box so its hover fill
+    lines up with the text rather than with the padding, so its right edge only
+    reaches the parent's at `100% + 4px`. Written as plain `100%` it took those
+    four pixels back off the far end instead, and an account named "Work"
+    rendered as "W…" on a window with three hundred pixels to spare — a
+    truncation with no shortage behind it, which is the worst kind to read.
+  */
+  min-width: 0;
+  max-width: calc(100% + var(--sp-1));
   transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
 
@@ -1078,17 +1333,6 @@
 .folder-chip-button:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
-}
-
-/* Mono, because a path is data: the characters are exact and countable. The
-   label around it is not, and stays in the UI face. */
-.folder-chip-path {
-  max-width: 30ch;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-family: var(--font-mono);
-  font-size: var(--t-caption);
 }
 
 /*
@@ -1367,13 +1611,40 @@
 /* ---------------------------------------------------------------- panes -- */
 
 /*
-  One pane of a split: a quiet header naming the session, and the terminal.
+  One pane of a split: its own chrome, then its own content.
 
-  The header exists because a terminal shows no sign of which session it is —
-  two agents side by side are two identical black rectangles — and because a
-  pane needs somewhere to put its own close button. It is deliberately smaller
-  and quieter than the window's toolbar: the toolbar names what the window is
-  doing, and a second bar of the same weight inside it would compete.
+  ## Why a pane has chrome at all — and why only the guests do
+
+  The window's toolbar described one session while the window could show two.
+  Asad, 2026-08-17: *"In a split view, it can be from two different projects,
+  two different folders, two different accounts. … So it can be a problem, it
+  can be a confusion — which one it is showing right now."* The account chip
+  states which login one agent process was spawned under; drawn across both
+  halves it was wrong about at least one of them, with nothing on screen to say
+  which.
+
+  The first fix gave *every* pane a bar of its own and emptied the toolbar out,
+  and it went too far:
+
+    > *"We wanted to keep it in the top bar, under the pills of windows, so it
+    > feels like a main session and the other ones like secondary sessions. If
+    > we make both exactly the same placement — if the name and the account come
+    > down — then there is no reason to keep one of them in a box, because all
+    > the sizes, everything, is the same. So let's keep the main."*
+
+  So `.pane-cell-head` is a *guest's* bar and the host has none. Both halves of
+  that matter. The guest needs one because there is nowhere else on screen its
+  cwd and its config directory could be stated — that reasoning is untouched.
+  The host must not have one because the toolbar already unambiguously means
+  this pane: the host is the pane the window is about, drawn flush, with the bar
+  sitting directly on top of it and no box around either. Give it a second copy
+  in a bar of its own and the two panes become the same shape saying the same
+  things in the same place, and the box around one of them stops meaning
+  anything. `App.tsx` renders this only for `!primary`.
+
+  It is deliberately quieter than the window's toolbar. That bar names the host;
+  a guest bar of the same weight would compete with it, and with three panes
+  there would be two of them competing.
 */
 .pane-cell {
   display: flex;
@@ -1387,26 +1658,122 @@
   display: flex;
   align-items: center;
   gap: var(--sp-2);
-  height: 26px;
+  height: var(--control-h-lg);
   flex-shrink: 0;
   padding: 0 var(--sp-1) 0 var(--sp-3);
-  color: var(--text-muted);
+  color: var(--text-secondary);
   font-size: var(--t-caption);
+  /* Both directions of the focus swap, for the reason spelled out on
+     `.toolbar-heading`: a transition written only on the dimmed state fades one
+     way and snaps the other. */
+  transition: opacity var(--dur-fast) var(--ease);
+  /*
+    The same surface as the thing underneath it, in both appearances.
+
+    This is the rule the window's bar already follows — `.toolbar[data-under-strip]`
+    above, and the long version is in `tokens.css` under `--tab-active` — and it
+    now has to hold one level further in, because this is the band that sits on
+    the terminal. In the dark theme the paper and the canvas are the same colour
+    and it comes for free; in the light theme the terminal is a recessed grey
+    and the app's chrome is white, so a bar painted with the canvas would stand
+    twenty-three levels above the session it belongs to: *"on light mode it is
+    pure white, and inside the terminal itself it is a little bit different,
+    like kind of grey."*
+
+    `--terminal-bg` rather than `--tab-active` because there is no tab above
+    *this* bar to continue — the two tokens are held equal by `tokens.test.ts`,
+    and naming the one whose meaning applies is what keeps the reason readable.
+  */
+  background: var(--terminal-bg);
 }
 
-/* The focused pane is the one the sidebar fills and the keyboard reaches, so
-   saying which one that is has to be more than a hairline. The title brightens;
-   the pane itself is lit from `.pane-leaf[data-focused]` in SplitView.css. */
-.pane-cell[data-focused='true'] .pane-cell-title {
+/*
+  The pane the keyboard and the sidebar are pointed at.
+
+  Drawn back rather than lit up, which is the split-pane idiom on this platform.
+  The boxed panes also carry a focus ring in their own border; this is the mark
+  they share with the host, whose identity is written in the window's toolbar
+  and dims there instead — `.toolbar-heading[data-focused='false']` above, at
+  the same 0.55. One idiom, in whichever place a pane's name happens to live, so
+  clicking between panes swaps two things that are plainly a pair.
+
+  On the bar and not on the pane: the content must never be dimmed. Half the
+  point of a split is reading two terminals at once, and a greyed-out terminal
+  is a terminal you have to squint at to use.
+*/
+.pane-cell-head[data-focused='false'] {
+  opacity: 0.55;
+}
+
+.pane-cell-head[data-focused='true'] .pane-cell-title,
+.pane-cell-head[data-focused='true'] .toolbar-title {
   color: var(--text-primary);
 }
 
 .pane-cell-title {
-  flex: 1;
   min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* The mark on a pane that is showing a web page rather than a session — the
+   one thing standing where a status dot stands on a session, because a page has
+   no status and a bar with a hole in it reads as a session that failed to
+   load. */
+.pane-cell-kind {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+/*
+  The room this pane's session controls occupy — model, effort, fast mode and
+  connectors, for this pane's own pty. See `SessionControls.tsx`.
+
+  It was rendered empty for a day, on purpose, while the mechanisms behind those
+  controls were built elsewhere; the slot existed so that landing them was a
+  composition rather than a third trip through this stylesheet. It is full now.
+
+  `flex: 1 0 auto` — grow, but never shrink — is the one line here that is a
+  decision rather than plumbing, and it was made by looking at the result of the
+  other one. With `flex: 1` the slot shared the squeeze with everything else on
+  the bar, and in a 568px pane it was handed 36px for a chip that wanted 120: the
+  word "Model" survived and its value was pushed under the close button. The rule
+  the bar already followed for the close button is the right one for this too and
+  is stated a few rules down — *a control gives way last*. So the caption gives
+  way instead: the session's name ellipsises (it already did), and the folder and
+  the account, which are the same statement written twice as long, ellipsise
+  after it. What is lost when a pane is dragged narrow is characters of a path
+  you can still read in full by hovering; what is kept is a control you can press.
+*/
+.pane-cell-slot {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex: 1 0 auto;
+  min-width: 0;
+  justify-content: flex-end;
+}
+
+/*
+  …and the captions have to be *able* to give way, which by default they are not.
+
+  A flex item's automatic minimum size is its content, so a row of chips that
+  never overflows anything simply refuses to be smaller than the address inside
+  it. `.toolbar-chips` already sets `min-width: 0` for the window's bar; the two
+  chips inside it are what actually hold the width, and each needs the same
+  permission plus somewhere for the overflow to go. The folder title already
+  clips and ellipsises; the account chip is a button, and this is what lets its
+  name — capped at 26 characters, which is an entire email address — shorten
+  before a control does.
+
+  Scoped to a pane's bar. The window's toolbar has room to spare and its account
+  chip should keep saying the whole address there.
+*/
+.pane-cell-head .toolbar-chips,
+.pane-cell-head .account-chip-button {
+  min-width: 0;
+  overflow: hidden;
 }
 
 /*
@@ -1463,6 +1830,28 @@
   position: relative;
   flex: 1;
   min-height: 0;
+}
+
+/* -------------------------------------------- the session's name, in a pane -- */
+
+/*
+  The same heading, at the pane's scale.
+
+  `.toolbar-title` is a window title and is set as one; two of those side by
+  side is two windows' worth of chrome in one window. This is the same control
+  — the same double-click, the same F2, the same single write path — set to sit
+  on one line with the folder, the account and the status dot beside it. See the
+  `scale` prop in `SessionTitle.tsx` for why it is one component and not two.
+*/
+.toolbar-title[data-scale='pane'] {
+  font-size: var(--t-body);
+  letter-spacing: normal;
+  /* Shrinkable, and capped. A pane can be dragged down to 140px, and a name
+     that refused to shrink would push the folder, the account and finally the
+     close button out of the bar rather than ellipsising — the close button
+     being the one control in there that a narrow pane most needs. */
+  flex: 0 1 auto;
+  max-width: 22ch;
 }
 
 /* ----------------------------------------------------------------- page -- */
@@ -1689,6 +2078,17 @@
   overflow: auto;
   padding: var(--sp-3) var(--sp-2);
   background: var(--bg-secondary);
+}
+
+/* Nothing in the folder, or the folder could not be read: the viewer is not
+   rendered at all (see `filesPageState`), so the tree's one sentence owns the
+   page rather than sitting in a 280px stripe beside an empty grey field. */
+.files-page[data-layout='tree-only'] .files-page-tree {
+  width: auto;
+  flex: 1;
+  background: none;
+  padding-top: var(--sp-8);
+  text-align: center;
 }
 
 .files-page-viewer {

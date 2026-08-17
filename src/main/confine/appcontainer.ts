@@ -432,9 +432,65 @@ export function releaseArgs(launch: AppContainerLaunch): string[] {
  *  - **`TEMP` and `TMP`**, not `TMPDIR`, are what Windows programs read. The
  *    default is a directory under the owner's home, so a session without them
  *    redirected has no writable temp at all.
+ *  - **`CLAUDE_CODE_TMPDIR`**, which is the one variable here that is *not*
+ *    about Windows spelling, and the reason this list grew after the fact. It
+ *    is explained at length below, because "we set the two Windows temp
+ *    variables, so temp is covered" is exactly the reasoning that left this out.
+ *
+ * ## The one that is not a spelling difference
+ *
+ * `confinedEnv` in `plan.ts` grew `CLAUDE_CODE_TMPDIR` after a measured
+ * failure: every confined Claude session on macOS died on its first turn with
+ * `EPERM: operation not permitted, open '/tmp/claude-501'`, because the CLI
+ * does not use `TMPDIR` for its own scratch directory — it uses a literal path
+ * outside the boundary. That fix went into the POSIX branch of a two-branch
+ * platform switch and not into this one, and the assumption underneath the
+ * omission was that Windows would use `TEMP`, which this function already sets.
+ *
+ * It does not. Read out of the shipped `claude` 2.1.233 bundle, which is the
+ * same JavaScript on both platforms:
+ *
+ * ```js
+ * function Kce(){ let e = env.CLAUDE_CODE_TMPDIR; if (e) return e; return "/tmp" }
+ * function ddd(cache){
+ *   let name = `claude-${process.getuid?.() ?? 0}`
+ *   let dir  = path.join(Kce(), name)      // node's `path`, so win32 on Windows
+ *   …mkdirSync(dir, { recursive: true, mode: 0o700 })…
+ *   return dir
+ * }
+ * ```
+ *
+ * There is no platform branch in either function, and neither consults
+ * `os.tmpdir()`, `TEMP` or `TMP`. On Windows `process.getuid` does not exist, so
+ * the name is `claude-0` for **every** account on the machine, and
+ * `path.win32.join('/tmp', 'claude-0')` is `\tmp\claude-0` — a drive-relative
+ * path that resolves against whatever drive the session's working directory is
+ * on, i.e. `C:\tmp\claude-0` for an ordinary session. Confirmed on
+ * `DESKTOP-DDGMNCV`: `C:\tmp` exists on that machine and nothing else put it
+ * there.
+ *
+ * So the same fault is present on Windows and is worse in two ways. It is
+ * outside the AppContainer boundary, which is the failure macOS had; and
+ * because the directory name drops to `claude-0` without a uid, it is one
+ * directory shared by every user of the machine rather than one per account.
+ * The Windows arm of that `mkdirSync` is wrapped in a bare `catch {}`, so the
+ * refusal is silent where it happens and surfaces later as whatever tried to
+ * write into the directory failing.
+ *
+ * It is used for real work on Windows, not only for scratch: the PowerShell
+ * shell provider writes a `claude-pwd-ps-<id>` file into that directory for
+ * every shell command it runs, and sets `CLAUDE_CODE_TMPDIR` to it for the
+ * child processes it spawns. A confined session that cannot write there cannot
+ * run a shell command.
+ *
+ * Pointed at `<home>\tmp` — the same directory `TEMP` and `TMP` already name —
+ * the CLI's scratch space is inside the boundary and inside the one directory
+ * that is the whole of a device's session state, which is the same argument
+ * `confinedEnv` makes for putting `tmp` under the home rather than beside it.
  */
 export function windowsConfinedEnv(home: string): Record<string, string> {
   const parsed = win32.parse(home)
+  const tmp = win32.join(home, 'tmp')
   return {
     HOME: home,
     USERPROFILE: home,
@@ -442,8 +498,9 @@ export function windowsConfinedEnv(home: string): Record<string, string> {
     HOMEPATH: home.slice(parsed.root.length - 1),
     APPDATA: win32.join(home, 'AppData', 'Roaming'),
     LOCALAPPDATA: win32.join(home, 'AppData', 'Local'),
-    TEMP: win32.join(home, 'tmp'),
-    TMP: win32.join(home, 'tmp'),
+    TEMP: tmp,
+    TMP: tmp,
+    CLAUDE_CODE_TMPDIR: tmp,
   }
 }
 
@@ -724,17 +781,39 @@ export const WINDOWS_UNCONFINED_REASON =
 
 /**
  * The other reason Windows can be unconfined, and it is a different sentence
- * because it has a different remedy.
+ * because it is a different fact about the machine.
  *
  * The launcher shipping and the machine being set up are two facts, and running
  * them together would produce the worst kind of message: one that tells somebody
- * a feature is missing from their copy of the app when it is one click away.
- * This is the one a user can act on.
+ * a feature is missing from their copy of the app when the launcher is right
+ * there in the install.
+ *
+ * ## What this sentence used to promise, and why it no longer does
+ *
+ * It read *"needs a one-time permission, granted once with an administrator
+ * prompt"*, which a person reads as "a prompt is coming". It is not.
+ * `tools.ts` builds the whole grant — {@link plannedToolGrant} describes it
+ * without doing it, {@link elevatedGrantCommand} raises Windows' own consent
+ * dialog, {@link establishToolGrant} runs it and writes the record — and
+ * **nothing in the app calls any of them.** Searched across `src/`: the only
+ * callers are `tools.test.ts`. So on a Windows machine with this build there is
+ * no click, no prompt, and no path from this sentence to the state it describes.
+ *
+ * That is a real gap and it is named in `RELEASE-CHECK.md` rather than papered
+ * over here. What this constant owes the person reading it in the meantime is
+ * the truth: the mechanism exists and is measured, this copy of the app does not
+ * yet offer the grant, and until it does a Windows session runs unconfined —
+ * which is exactly the state they are in and can now recognise, instead of
+ * waiting for a dialog that is not coming.
+ *
+ * `windows-setup-reachable.test.ts` holds the two together: the moment somebody
+ * wires the grant, that test fails and sends them here to put the prompt back
+ * into the sentence.
  */
 export const WINDOWS_SETUP_NEEDED =
-  'Windows confinement is built on AppContainer and needs a one-time permission, granted once ' +
-  'with an administrator prompt, on the folders holding node, git and the agent CLIs. Until that ' +
-  'is done a session from a device runs the way it always has. ' +
+  'Windows confinement is built on AppContainer and needs a one-time permission on the folders ' +
+  'holding node, git and the agent CLIs, which only an administrator can grant. This build does ' +
+  'not offer that step yet, so a session from a device runs unconfined, the way it always has. ' +
   'A session in a WSL folder is a Linux process and is held by the Linux mechanism instead, not by this one.'
 
 /**

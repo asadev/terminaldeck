@@ -1,43 +1,271 @@
 /* ============================================================================
-   The top tab strip — the windows promoted out of the side panel.
+   The tab strip — the window's top band, shaped the way a browser shapes one.
 
-   It sits directly under the unified toolbar and over `.panes`, so it is the
-   second band of chrome in a window whose whole design is "one sidebar and one
-   toolbar". That is a real cost, and it is paid for by being the thing the user
-   put there themselves: nothing appears in this strip except by a drag, so an
-   untouched install never sees it at all.
+   ## The two jobs this sheet has
 
-   Consequently it carries no borders. The toolbar above already draws the one
-   hairline in this part of the window; a strip with a rule of its own would put
-   two lines four pixels apart and read as two stacked apps — the exact fault
-   `PLAN-0.2.0.md` opens with about the Windows chrome. The separation here is a
-   tint change and nothing else: the strip is `--bg-secondary`, the panes below
-   are `--bg-primary`, and the selected tab is filled with the panes' colour so
-   it reads as the top of the thing it opens.
+   **One: be the top band.** The strip sits *above* the session's bar, which is
+   what he asked for — "this tabs should be upside, and this session and all
+   this whole bar including chat, split, terminal should be under this, not
+   above — because if I am inside the browser, this whole bar header is
+   useless." A top band on macOS has to do three things, and none of them is
+   visible in a screenshot of a broken one:
+
+     1. **Hold the traffic lights.** They only land here when the sidebar is
+        pinned away — otherwise they are over the rail's own gutter — so the
+        reserve is conditional, and it has a Windows counterpart for the same
+        reason every reserve in `shell.css` does. `shell.test.ts` sweeps this
+        sheet as well and fails if a rule with 82px or 118px in it appears
+        without one.
+     2. **Move the window.** The bar drags; every control on it subtracts its
+        own rectangle back out with `no-drag`. Get this wrong and there is
+        nothing to grab a window by while a browser page fills the pane, because
+        in that state this is the only chrome on screen.
+     3. **Be the edge.** It wears the same glass as the sidebar and carries the
+        one hairline, which lines up with `.sidebar-gutter`'s so the rule runs
+        unbroken across the whole window. The bar underneath is the page's
+        colour and draws no line of its own — two rules 48px apart would read as
+        two stacked apps.
+
+   ## Two: the Chrome shape
+
+   Asad sent a screenshot of Chrome's tab bar as the reference. The thing in
+   that picture is not roundedness — it is that **the selected tab and the page
+   below it are one surface**. The tab is filled with `--tab-active`, which is
+   `--bg-primary` in both themes and therefore exactly what the session bar and
+   the panes beneath are painted; it has a radius on its two top corners and
+   none at the bottom; it runs the full way down to the bar's own hairline and
+   paints over it; and two small flares at its feet carry that surface sideways
+   across the gap, which is the mark that stops the tab reading as a plate
+   resting on a bar and makes it read as the top edge of the thing it opens.
+
+   Everything that is *not* selected used to have no fill at all — flat against
+   the bar, which is how Chrome draws it and which is also what "separate with
+   space, then with a tint, and only then with a line" asks for. That was one
+   step too austere. Asad, looking at the rebuilt bar: *"let's make the selected
+   tab pill up there, selected and other tabs' pill, a little bit more white."*
+   Measured in the running app in the dark theme, he was describing something
+   exact: an unselected tab was `rgb(33,33,33)` and the bar behind it was
+   `rgb(33,33,33)`, the same number, so four fifths of the row was text floating
+   on glass with no pill under it at all.
+
+   So an unselected tab now carries the app's faintest system fill at rest and
+   the next one up on hover — `--fill-quaternary` then `--fill-tertiary`, which
+   is a tint and still not a line. It is still the smaller half of the tint
+   ladder: the row reads as tabs, and nothing in it competes with the selected
+   one.
+
+   **The selected tab did not move, and that is a decision.** Lifting it means
+   lifting `--tab-active`, and `--tab-active` is not a colour for this tab — it
+   is the colour of the session bar under it, of `.panes`, of the browser
+   panel and of the terminal's own paper. Raising it here alone would open the
+   seam the whole rebuild exists to close; raising it everywhere is a change to
+   the window's content surfaces, not to its tab strip. His sentence names both
+   states, so this is the half that was answered, and the frame was sent back to
+   him with the other half named.
+
+   What was here before all of this was a detached pill: legible, and silent
+   about the pane underneath it, which is the whole of what the reference
+   picture says.
    ============================================================================ */
 
 .strip {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: var(--sp-1);
   flex-shrink: 0;
-  height: var(--tabbar-height);
+  /* The gutter's height, not a height of its own. The traffic lights sit at
+     y=12..26 and the rail's gutter is `--toolbar-h` tall with a hairline along
+     its bottom; anything else here would leave that hairline ending in mid-air
+     at the rail's edge, which reads as a clipping bug rather than as an edge. */
+  height: var(--toolbar-h);
   padding: 0 var(--sp-2);
-  background: var(--bg-secondary);
+  /* The room the Windows caption buttons take, measured and published by
+     `shell/window-controls.ts`. Zero fallback, so every platform without an
+     overlay resolves this to the padding it had before. */
+  padding-right: calc(var(--sp-2) + var(--window-controls-inset, 0px));
+  /*
+    The tab's own three measurements, named here so that everything that has to
+    line up with a tab — the openers beside them, the flares at their feet, the
+    insertion caret between them — is derived from one number rather than from
+    four copies of it. All three are token arithmetic, not invented pixels: the
+    tab is the bar less one spacing step, so the gap above it is a step of the
+    same rhythm as everything else in the window, and the flare is the app's
+    small radius.
+
+    ## `--strip-tab-w`, and the width it is putting back
+
+    Asad, on the bar as this sheet first shipped it: *"on the top header the
+    pills of the windows, it got smaller. So let's make them a little bit more
+    wider, just like before."* He is right, and the cause is not in this
+    stylesheet's numbers — the cap went **up** in that pass, 220px to 280px. It
+    is that a tab is sized by what is inside it, and the same pass took a
+    control out: the fold-away arrow that used to sit between the label and the
+    ✕ (*"the arrow inside the pill also doesn't need to be there"*). That arrow
+    was 18px wide with a 2px gap beside it, and with nothing declaring a width
+    the pill simply closed up by those 20 pixels. Measured in the running app,
+    on a tab reading "Session 1": 139px before the rebuild, 119px after.
+
+    So the fix is a floor rather than a bigger cap, because the cap was never
+    what was binding. Four times the tab's own height is the proportion that
+    reads as a horizontal pill rather than as a chip, and it lands at 144px —
+    within five pixels of where the row sat before, which is what "just like
+    before" asks for. Stated as a ratio on `--strip-tab-h` and not as `144px`
+    so that a tab is still one number tall and that number is still the bar's.
+  */
+  --strip-tab-h: calc(var(--toolbar-h) - var(--sp-3));
+  --strip-tab-w: calc(var(--strip-tab-h) * 4);
+  --strip-flare: var(--radius-sm);
+  background-color: var(--material-bg);
+  background-image: var(--material-sheen);
+  -webkit-backdrop-filter: var(--material-filter);
+  backdrop-filter: var(--material-filter);
+  /* The one hairline in this part of the window, continuous with the rail's.
+
+     The selected tab crosses it, and that is the whole point of the shape: an
+     inset shadow paints inside the box's own background, *under* every child,
+     so a tab that reaches the bar's bottom edge covers the line for its own
+     width and its flares cover it for theirs. The line stops where the pane
+     begins, which is what "one surface" means. */
+  box-shadow: inset 0 -1px 0 var(--border-subtle);
+  /*
+    The bar is what you drag the window by. A drag region is a *rectangle* and
+    covers every pixel inside it including its children's, so each control below
+    opts back out — a press on a tab that moved the window instead of switching
+    to it would be indistinguishable, in a screenshot, from one that worked.
+  */
+  -webkit-app-region: drag;
+  /*
+    Chrome above work. `backdrop-filter` makes this a stacking context, and a
+    stacking context on a statically positioned box paints with the in-flow
+    content — under every positioned descendant of `.panes`. That is the exact
+    mechanism that once put the folder menu underneath the terminal.
+  */
+  z-index: 6;
+}
+
+/*
+  The tabs and the two openers, scrolling inside a bar that does not.
+
+  Three reasons this is not the same element as the bar, and all three bite only
+  once the strip is full. The reveal button is positioned against the bar, and
+  an absolutely-positioned child of a *scrolling* box scrolls with the box's
+  contents — so with twelve tabs and the rail put away, the one control that
+  brings the rail back would slide off the left edge and the tabs would run
+  underneath the space where it had been. The `tablist` inside must contain
+  nothing but tabs, and the openers are not tabs. And the flares on the selected
+  tab reach `--strip-flare` past its box on each side, so the row needs that
+  much lead-in and lead-out or the first and last tab's flares are shaved off by
+  the scroll box's own clip.
+*/
+.strip-rail {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  /* Sitting on the bottom edge, not floating in the middle of the bar: the
+     selected tab has to touch the pane for the join to exist at all. */
+  align-items: flex-end;
+  gap: var(--sp-1);
+  height: 100%;
+  padding: 0 var(--strip-flare);
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: none;
-  -webkit-app-region: no-drag;
 }
 
-.strip::-webkit-scrollbar {
+.strip-rail::-webkit-scrollbar {
   display: none;
 }
 
-/* Nothing promoted yet: a hint, and a drop target that is genuinely there.
+.strip-list {
+  display: flex;
+  align-items: flex-end;
+  /* One flare's width of clearance on each side of a tab, so the selected
+     tab's feet reach into the gap without arriving underneath its neighbour.
+     `--sp-2` is two flares plus a hair. */
+  gap: var(--sp-2);
+  height: 100%;
+  /*
+    What lets a tab shrink at all.
 
-   Quieter than a real tab and shorter than one, so an empty strip is a line of
-   grey text rather than an empty shelf. */
+    This row is itself a flex item — of `.strip-rail` — and a flex item's
+    `min-width` defaults to `auto`, which is not zero: it is the item's own
+    content-based minimum, and a flex item is never squeezed below it. So the
+    list sat at its max-content width, the space that would have been taken out
+    of the tabs was never taken out of anything, and `flex-shrink: 1` on
+    `.strip-tab` could not fire no matter how narrow the window got. The tabs
+    kept their natural width and the rail scrolled instead — the exact behaviour
+    the note on `.strip-tab` says the strip does not have.
+
+    That is the failure mode worth naming: nothing was broken on the tab, and
+    every declaration on it read correctly. The rule that disabled them was one
+    the stylesheet never wrote, on their parent, two rules up.
+
+    Measured in Chrome against this sheet, ten tabs with a project qualifier on
+    each. Before: 255px per tab at 1600px, at 820px and at 620px, rail scrolling
+    at all three. After: 144px per tab and **no scroll at all** at 1600px, 144px
+    and a scroll at 820px, and 174px with no scroll when only four are open.
+    Which is the whole intent — give to the floor first, scroll only once the
+    floor is reached.
+  */
+  min-width: 0;
+}
+
+/*
+  The sidebar is pinned away, so the traffic lights are sitting on this bar.
+
+  118px is 82 for the lights plus the reveal button and its gap — the same
+  arithmetic `.toolbar[data-sidebar-collapsed]` uses in `shell.css`, because it
+  is the same button in the same place; whichever of the two bars happens to be
+  the top one draws it.
+*/
+.strip[data-sidebar-collapsed] {
+  padding-left: 118px;
+}
+
+/* Windows has no lights on the left: its caption buttons are on the right and
+   are handled by `--window-controls-inset` above. The reveal button lines up
+   with the bar's own lead instead. */
+:root[data-window-controls] .strip[data-sidebar-collapsed] {
+  padding-left: 52px;
+}
+
+/* Parked over the traffic-light strip, out of the flow — so it stays put
+   whatever the tabs beside it do. In the flow it would slide sideways with
+   every tab that opened. */
+.strip-reveal {
+  position: absolute;
+  left: 82px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: grid;
+  place-items: center;
+  width: var(--control-h);
+  height: var(--control-h);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  -webkit-app-region: no-drag;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+:root[data-window-controls] .strip-reveal {
+  left: var(--sp-4);
+}
+
+.strip-reveal:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.strip-reveal:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* Tabs exist, none is promoted and none is active — a host that says so, which
+   in practice is the harness. Taking the last tab off with its ✕ does *not*
+   land here: `App.tsx` resolves a null selection to the first open tab, so the
+   window keeps showing a session and this bar keeps showing its tab. It stays a
+   real drop target and keeps the openers either way. */
 .strip-empty {
   justify-content: center;
   transition: background var(--dur-fast) var(--ease), box-shadow var(--dur) var(--ease);
@@ -45,29 +273,32 @@
 
 /* A tab is being dragged *somewhere in this window*.
 
-   The edge is the whole point: at rest this bar is a sentence with no
-   boundary, so there is nothing on screen saying how far the target extends or
-   even that it is one. It is drawn inset rather than as a border so the strip
-   keeps its height and the panes below do not shift by a pixel the moment a
-   drag begins — a target that moves when you reach for it is worse than one
-   that was hard to find. */
-.strip-empty[data-armed] {
-  background: color-mix(in srgb, var(--accent) 6%, var(--bg-secondary));
+   The edge is the whole point: at rest there is nothing on screen saying how
+   far the target extends or even that it is one. Drawn inset rather than as a
+   border so the strip keeps its height and the panes below do not shift by a
+   pixel the moment a drag begins — a target that moves when you reach for it is
+   worse than one that was hard to find. */
+.strip[data-armed] {
+  background-color: color-mix(in srgb, var(--accent) 6%, var(--material-bg));
   box-shadow: inset 0 0 0 1.5px var(--accent-line);
 }
 
 .strip-empty[data-over] {
-  background: var(--accent-soft);
+  background-color: var(--accent-soft);
   box-shadow: inset 0 0 0 1.5px var(--accent);
 }
 
 .strip-hint {
+  /* Centred in the bar with the openers held at the far end, rather than the
+     two of them huddled together in the middle. */
+  flex: 1;
   margin: 0;
+  text-align: center;
   color: var(--text-muted);
   font-size: var(--t-footnote);
 }
 
-.strip-empty[data-armed] .strip-hint {
+.strip[data-armed] .strip-hint {
   color: var(--text-secondary);
 }
 
@@ -77,41 +308,260 @@
   position: relative;
   display: flex;
   align-items: center;
-  gap: 2px;
-  flex-shrink: 0;
-  max-width: 220px;
-  height: 26px;
+  /* The gutter between the label and the ✕, and the only thing standing between
+     the two now that the ✕ is pinned to the far edge and the label grows into
+     the space in front of it. It was 2px, which was enough while the ✕ trailed
+     the text and the pair sat in the middle of the tab; with a truncated title
+     ending in an ellipsis right up against the glyph it is not, and the two run
+     together into something that reads as one smudge at the end of the name. */
+  gap: var(--sp-1);
+  /*
+    A floor, a ceiling, and free to move between them. Three declarations for
+    three different failures, and leaving any one of them out brings its own
+    back.
+
+    **The floor** is the width he asked for; see `--strip-tab-w` above. Without
+    it a tab is only as wide as "Session 1" happens to render, which is how the
+    row lost twenty pixels the moment a control came off it — a width nobody
+    chose, arrived at by subtraction.
+
+    **The ceiling** is the qualifier's room: a tab can carry the project that
+    tells it apart from its twin, and the name itself is budgeted in characters
+    by `middleEllipsis`, so this is the width the qualifier borrows on top of it.
+
+    **`flex-shrink: 1`** is what stops the floor from becoming a fixed width.
+    A row of tabs with long names and their projects beside them can measure
+    twice the bar; with the tabs shrinkable, that row compresses to the floor
+    before the rail starts scrolling, which is one gesture saved on every window
+    that is merely a bit too full rather than genuinely overflowing. Past the
+    floor the rail does scroll, and the effect in `WorkspaceTabStrip.tsx` keeps
+    the selected tab in view — a tab squeezed narrower than its own furniture
+    would be a worse answer than one you have to scroll to.
+
+    That last paragraph was a description of behaviour this rule did not have
+    for as long as `.strip-list` was left at its default `min-width: auto`: the
+    shrink factor here is only permission to give room back, and the parent has
+    to be willing to ask for it. `min-width: 0` on `.strip-list` is what makes
+    the sentence true, so the two rules have to move together — take it off and
+    every word above goes back to being a claim about a strip that scrolls at
+    its natural width. `finish.test.ts` fails if it goes.
+  */
+  flex: 0 1 auto;
+  min-width: var(--strip-tab-w);
+  max-width: 280px;
+  height: var(--strip-tab-h);
   padding: 0 var(--sp-1) 0 var(--sp-2);
-  border-radius: var(--radius-sm);
+  /* Top corners only. The bottom two are where the pane begins, and a radius
+     there is a gap between the tab and the thing it opens. */
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
   color: var(--text-secondary);
-  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease),
-    opacity var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
+  -webkit-app-region: no-drag;
+  /*
+    `--strip-tab-fill` rather than `background`, and the swap is not cosmetic.
+
+    An unselected tab's fill is painted as a gradient so that it can stop a
+    pixel above the bar's hairline — see the note over
+    `.strip-tab:not([data-active])`. Chromium does not interpolate a
+    `background-image` between two gradients here: sampled every frame in the
+    running app, the tint went 0.07 → 0.04 in a single step with nothing in
+    between, so the pill snapped while the label carried on easing over the same
+    120ms. Two halves of one hover running at different speeds reads worse than
+    either an instant hover or a smooth one.
+
+    A *registered* custom property does interpolate — that is the whole reason
+    `@property` exists — so the gradient reads one, the property is what the
+    transition names, and the fill fades again with the label beside it.
+
+    `background` is deliberately **not** in this list any more, and taking it
+    out is what stops a flicker rather than what causes one. Selecting a tab
+    swaps a gradient for a plain `--tab-active`: the image half of that has no
+    interpolation and disappears on the first frame, while the colour half fades
+    in over 120ms, so a pill that was lighter than the bar blinked to the bar's
+    own colour before darkening into place. Selection is a discrete act and a
+    step is the honest way to draw it; the hover, which follows a pointer, is
+    the one that wants easing.
+  */
+  transition: --strip-tab-fill var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease), opacity var(--dur-fast) var(--ease);
 }
 
-.strip-tab:hover {
-  background: var(--bg-hover);
+/*
+  The pill under a tab you are not in, and the one pixel it deliberately spares.
+
+  ## Why there is a fill here at all
+
+  There was not one, and the row was measured at `rgb(33,33,33)` on the tab and
+  `rgb(33,33,33)` on the bar behind it — the same number to the level, so an
+  unselected tab was a word and an icon lying on glass. *"Let's make the
+  selected tab pill up there, selected and other tabs' pill, a little bit more
+  white."* This is the "other tabs" half of that; the header of this sheet says
+  what happened to the other half and why.
+
+  ## Why it stops 1px short of the bottom
+
+  `.strip` draws the window's one hairline as `inset 0 -1px 0`, and an inset
+  shadow paints under every child — so any fill on a tab that reaches the bar's
+  bottom edge covers the line for the tab's whole width. That is exactly what
+  the *selected* tab does, on purpose, and it is the mark that says "this tab
+  and the pane below it are one surface". Five unselected tabs doing the same
+  thing would punch five holes in the edge that is supposed to run unbroken
+  across the window into `.sidebar-gutter`'s, and the strip would end in a
+  dashed line — which reads as a rendering fault, and would also spend the one
+  signal the selected tab has left now that it is no longer the only tab with a
+  fill.
+
+  So the fill is painted as a gradient with a hard stop rather than as a plain
+  colour, purely so it can end one pixel above the box's own bottom. The tab's
+  geometry is untouched by this: a `margin-bottom` or a transparent
+  `border-bottom` would each buy the same pixel and move the label half a pixel
+  up with it, which at 2× is a visible jog in the row every time the selection
+  changes. The hairline shows through the gap, the pill never touches the pane,
+  and the only tab in the row that is continuous with the work below it is still
+  the one you are in.
+
+  (The hover state had this bug before the rest state existed — `background:
+  var(--bg-hover)` covered the hairline for as long as the pointer was on a tab.
+  It goes through the same gradient now, so the edge holds in both states.)
+
+  ## Why the colour is a registered custom property
+
+  Because a gradient does not animate and a registered custom property does.
+  Only the *colour* differs between the two states, so the transition belongs on
+  the colour rather than on the paint it feeds; see the note on `.strip-tab`'s
+  `transition`, which is where the timing lives.
+*/
+@property --strip-tab-fill {
+  syntax: '<color>';
+  inherits: false;
+  initial-value: transparent;
+}
+
+.strip-tab:not([data-active]) {
+  --strip-tab-fill: var(--fill-quaternary);
+  background: linear-gradient(
+    to bottom,
+    var(--strip-tab-fill) calc(100% - 1px),
+    transparent calc(100% - 1px)
+  );
+}
+
+/* One step up the same ladder under the pointer. `--fill-tertiary`, not
+   `--fill-secondary`, and the reason is invisible in the theme this was worked
+   in: the fills are a tint of the *ink*, so in the light theme every step up
+   the ladder walks an unselected tab *towards* the selected tab's
+   `--tab-active` rather than away from it. `--fill-secondary` was tried in the
+   running app and measured rgb(232,232,232) against a selected tab of
+   rgb(232,232,232) — the same number, exactly the fault this whole change was
+   fixing, moved from the bar onto the selection. One theme would have gained a
+   louder hover and the other would have lost the difference between the tab
+   you are in and the tab you are pointing at.
+
+   The selected tab is exempt from the hover entirely: it already has a fill,
+   and a hover that changed it would break the join with the pane for as long as
+   the pointer was there. */
+.strip-tab:hover:not([data-active]) {
+  --strip-tab-fill: var(--fill-tertiary);
   color: var(--text-primary);
 }
 
-/* The page's own colour, so the selected tab reads as the top edge of the
-   content under it rather than as a highlighted row.
-
-   That fill alone was not enough to see. `--bg-primary` and `--bg-secondary`
-   are one step apart on purpose — the whole palette moves in small steps — and
-   at 26px tall on a 38px bar the difference between #191919 and #202020 is
-   invisible in a dark room, which is where this app is used. So the fill is
-   joined by the two things the rest of the shell already uses to mean "this is
-   the one you are in": the small shadow that lifts a surface off its
-   background, and the accent on the icon, exactly as `.sb-row.active` does in
-   the sidebar. Nothing new was invented for the strip. */
+/* The page's own colour. `--tab-active` is `--bg-primary`, which is exactly
+   what `.toolbar[data-under-strip]` and `.panes` are painted, so the tab, the
+   session bar and the work below it are one continuous surface — in both
+   themes, because both define the pair to the same value. */
 .strip-tab[data-active] {
   background: var(--tab-active);
   color: var(--text-primary);
-  box-shadow: var(--shadow-sm);
 }
 
 .strip-tab[data-active] .strip-tab-label {
   font-weight: var(--w-medium);
+}
+
+/*
+  The two flares at the selected tab's feet.
+
+  This is the part of the Chrome shape that actually does the work. Without it
+  the tab is a rounded rectangle whose bottom happens to touch the pane, and the
+  eye reads the vertical sides as edges; with it the surface visibly *spreads*
+  into the bar at the bottom, and the tab and the page below read as one object
+  with a neck.
+
+  Each flare is a `--strip-flare` square of the page's colour, sitting in the
+  gap beside the tab, with a quarter-disc taken out of the corner nearest the
+  tab's top — so its outline is a concave curve running from the bar down to the
+  tab's baseline. The bite is a mask rather than a second element in the bar's
+  colour, because the bar is glass: anything painted over it in an opaque
+  approximation of its colour is visible as a patch the moment there is
+  something behind the window.
+
+  The `#000` in the gradients is not a colour and is not an exception to this
+  project's "no raw hex" rule: a mask is read for its *alpha*, so the two stops
+  mean "hide" and "show". There is no token for opaque, and `var(--text-primary)`
+  standing in for one would be a lie about what the value is doing.
+
+  The half-pixel between the two stops is the antialiasing. A hard stop leaves a
+  stair-stepped curve on a non-retina display, which is where this was first
+  looked at.
+
+  Drawn on a child rather than on the tab's own `::before`/`::after`: the
+  insertion caret already owns `::before`, and a tab shape that fell apart
+  whenever something was being dragged past it would be a memorable bug.
+*/
+.strip-tab-skirt {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.strip-tab[data-active] .strip-tab-skirt::before,
+.strip-tab[data-active] .strip-tab-skirt::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  width: var(--strip-flare);
+  height: var(--strip-flare);
+  background: var(--tab-active);
+}
+
+.strip-tab[data-active] .strip-tab-skirt::before {
+  right: 100%;
+  -webkit-mask-image: radial-gradient(
+    circle at 100% 0,
+    transparent var(--strip-flare),
+    #000 calc(var(--strip-flare) + 0.5px)
+  );
+  mask-image: radial-gradient(
+    circle at 100% 0,
+    transparent var(--strip-flare),
+    #000 calc(var(--strip-flare) + 0.5px)
+  );
+}
+
+.strip-tab[data-active] .strip-tab-skirt::after {
+  left: 100%;
+  -webkit-mask-image: radial-gradient(
+    circle at 0 0,
+    transparent var(--strip-flare),
+    #000 calc(var(--strip-flare) + 0.5px)
+  );
+  mask-image: radial-gradient(
+    circle at 0 0,
+    transparent var(--strip-flare),
+    #000 calc(var(--strip-flare) + 0.5px)
+  );
+}
+
+/*
+  A tab that is here only because you are looking at it.
+
+  It is not pinned: leave it and it goes. Italic is the mark every editor with a
+  preview tab settled on, and it is the right one here for the reason it is
+  right there — it says "provisional" without adding a glyph, a colour or a
+  second control to a bar that has just been asked to hold fewer things. What
+  makes it permanent is the rail's own arrow, one panel to the left.
+*/
+.strip-tab[data-transient] .strip-tab-label {
+  font-style: italic;
 }
 
 /* The tab being dragged, seen through the drag image that is following the
@@ -122,35 +572,66 @@
 }
 
 /* The insertion caret. A line in the gap, not a gap that opens — a strip that
-   reflows under the pointer moves the target you were aiming at. */
+   reflows under the pointer moves the target you were aiming at. It runs to the
+   bar's bottom edge, like the tabs on either side of it. */
 .strip-tab[data-drop-before]::before,
 .strip-drop-end {
   content: '';
   position: absolute;
-  top: 3px;
-  bottom: 3px;
-  left: -3px;
+  top: var(--sp-1);
+  bottom: 0;
+  left: calc(-1 * var(--sp-1) - 1px);
   width: 2px;
   border-radius: var(--radius-pill);
   background: var(--accent);
 }
 
+/* The same caret, at the end of the row, where there is no next tab to hang it
+   off. Every offset the shared rule above set has to be undone by name: it is
+   `absolute` there and in the flow here, and a stray `top` on a relatively
+   positioned box moves it rather than sizing it. */
 .strip-drop-end {
   position: relative;
+  top: 0;
   left: 0;
-  align-self: stretch;
-  margin: 3px 0;
+  height: calc(var(--strip-tab-h) - var(--sp-1));
   flex-shrink: 0;
 }
 
+/*
+  Everything except the ✕, and the thing that takes up the slack.
+
+  *"The close button on the most right side of the pill, not next to the text —
+  it should be just at the end of the pill inside."* The ✕ is the last child of
+  the tab, so where it lands is decided by how much of the tab everything before
+  it uses up — and before this, nothing in a tab grew. A tab is at least 144px
+  wide whatever is written on it (see `--strip-tab-w`), so on "Session 1" the
+  content ran out 30 pixels early and the ✕ stopped there: measured at 30.6px in
+  from the tab's right edge on an unselected tab and 29.0px on the selected one,
+  because its label is `--w-medium` and a pixel and a half wider. Two identical
+  tabs, one selected, and their ✕ glyphs on different vertical lines.
+
+  `flex: 1 1 auto` on the face is the whole fix: the face absorbs every pixel
+  the tab has spare, so the ✕ is pushed against the tab's right padding and
+  stays there at any title length. The face's own children stay left, because it
+  is a flex row that starts its content — so the name still begins at the icon
+  and the space opens up between the name and the ✕, which is where a browser
+  puts it.
+
+  It also makes the whole pill except the ✕ one target. That is a gain rather
+  than a side effect: the dead 30 pixels used to belong to the tab's own div,
+  which switches nothing and only starts a drag.
+*/
 .strip-tab-face {
   display: flex;
   align-items: center;
   gap: var(--sp-1);
+  flex: 1 1 auto;
   min-width: 0;
   height: 100%;
   color: inherit;
   font-size: var(--t-footnote);
+  -webkit-app-region: no-drag;
   /* It can be picked up, and the cursor is the only thing that says so before
      the mouse goes down. `button` is `cursor: pointer` app-wide, so this has to
      be said here rather than inherited from the row. */
@@ -171,14 +652,55 @@
   color: var(--accent);
 }
 
+/*
+  The name, and the thing that tells it from its twin — in that order of
+  priority, which is the whole point of them being two elements.
+
+  From the frames of the 2026-08-16 recording: a sidebar reading
+  `Session 1, Session 2, Sess…, Session 4, Session 5`, and later a name cut to
+  the single character `S…`, because the metadata beside it was holding its
+  width and the name was the only thing in the row that could give. That is the
+  identifier losing to the label, which is exactly backwards. So here the name
+  does not shrink at all — it is already budgeted to 22 characters by
+  `middleEllipsis`, which is a cut that keeps both ends of a title — and the
+  qualifier is the flexible one. A tab too narrow for both shows the whole name
+  and part of the project, never part of the name.
+*/
 .strip-tab-label {
-  min-width: 0;
+  /* A floor, not a refusal to shrink. `flex-shrink: 0` would keep the name
+     whole at any cost, and the cost on a tab of unusually wide glyphs is the
+     buttons being pushed out of the box. Eight characters is where "Session 1"
+     and "Session 12" still read, which is the same floor `.sb-label` holds in
+     the rail, for the same reason. */
+  flex: 0 1 auto;
+  min-width: 8ch;
   overflow: hidden;
   white-space: nowrap;
   /* The backstop under `middleEllipsis`. The budget is in characters and this
      is in pixels, so a title of unusually wide glyphs still ends politely
-     rather than running under the fold button. */
+     rather than running under the buttons. */
   text-overflow: ellipsis;
+}
+
+.strip-tab-qualifier {
+  /* Ten, so that in a tab that has to give up room the qualifier gives up
+     roughly ten times as much of it as the name does — which in practice means
+     the qualifier is gone before the name has lost a character. Flexbox shrinks
+     every shrinkable item in proportion, so "the metadata gives" has to be
+     spelled as a ratio; there is no way to say "this one last". */
+  flex-shrink: 10;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--t-caption);
+  color: var(--text-muted);
+}
+
+/* Set off by a change of weight and colour rather than by a bullet or a dash:
+   the qualifier is a caption on the name, not a second name. */
+.strip-tab[data-active] .strip-tab-qualifier {
+  color: var(--text-secondary);
 }
 
 /* The dot is `.status-dot` from `components/StatusDot.tsx`, styled once in
@@ -188,37 +710,108 @@
   flex-shrink: 0;
 }
 
-.strip-tab-fold,
-.strip-tab-close {
+/*
+  The ✕ that takes a tab off the bar, and the two openers at the end of the row.
+
+  One line, not three: `shell.test.ts` reads this sheet as text to check that
+  every control on a bar that drags the window subtracts itself back out, and
+  its parser anchors a rule on a selector list that ends the line it starts. A
+  selector list broken across lines is a rule that sweep cannot see, and a sweep
+  that sees nothing reports no offenders.
+*/
+.strip-tab-close, .strip-open {
   flex-shrink: 0;
   display: grid;
   place-items: center;
-  width: 18px;
-  height: 18px;
   border-radius: var(--radius-sm);
   color: var(--text-muted);
-  opacity: 0;
-  transition: opacity var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+  -webkit-app-region: no-drag;
+  transition: opacity var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
 }
 
-/* Revealed on hover and on focus. Focus matters as much as hover here: these
-   are the only way to empty the strip without knowing the drag gesture, and a
-   control that appears only under a pointer is unreachable from a keyboard.
+/* Pinned to the inside of the tab's trailing edge — by `.strip-tab-face` taking
+   every spare pixel in front of it, not by a `margin-left: auto` here. Both
+   spellings put the ✕ in the same place and only one of them also hands the
+   empty space to something that can be clicked; see the note over the face. The
+   ✕ keeps its box at every width, including while it is invisible, so the label
+   is measured against the same right edge whether or not the pointer is on the
+   tab — a ✕ that only took up room on hover would retruncate the title under
+   the pointer. */
+.strip-tab-close {
+  width: 18px;
+  height: 18px;
+  opacity: 0;
+}
 
-   The tab you are actually in keeps its close button out, the way every browser
-   does and the way `.sb-row.active .sb-close` already does one panel to the
-   left. Its fold control still waits for a hover: two permanent buttons on a
-   26px tab leaves the title about eight characters to live in. */
-.strip-tab:hover .strip-tab-fold,
+/* Revealed on hover and on focus. Focus matters as much as hover here: this is
+   the only way to take a tab off the bar without knowing the drag gesture, and
+   a control that appears only under a pointer is unreachable from a keyboard.
+
+   The tab you are actually in keeps its ✕ out, the way every browser does and
+   the way `.sb-row.active .sb-close` already does one panel to the left. */
 .strip-tab:hover .strip-tab-close,
 .strip-tab[data-active] .strip-tab-close,
-.strip-tab-fold:focus-visible,
 .strip-tab-close:focus-visible {
   opacity: 1;
 }
 
-.strip-tab-fold:hover,
+/*
+  Grey on hover, and deliberately grey.
+
+  This ✕ removes the tab from this bar and nothing else — the session keeps
+  running and the sidebar keeps its row. The rail's ✕ ends the session, asks
+  first when there is work to lose, and turns `--color-critical` under the
+  pointer. That difference is the only thing standing between "I tidied my tab
+  bar" and "I killed a twenty-minute agent run", so it is a real difference in
+  colour rather than a difference in wording alone.
+
+  It is the same token the tab under it now wears on hover, and that is not a
+  collision: `--fill-tertiary` is an alpha over whatever it lands on, so on a
+  hovered unselected tab the chip composites a second time and stays clear of
+  the tab in both themes. Measured with the pointer on the ✕ — dark,
+  rgb(63,63,63) on a tab of rgb(48,48,48); light, rgb(223,223,223) on
+  rgb(236,236,236). A named grey would have disappeared here.
+*/
 .strip-tab-close:hover {
   background: var(--fill-tertiary);
   color: var(--text-primary);
+}
+
+/* -------------------------------------------------- after the last tab -- */
+
+/*
+  *"There will be a terminal and browser globe icon next to the last window.
+  Whatever the icon we click accordingly it will open the next window."*
+
+  Inside the scrolling rail, so "next to the last window" stays true as tabs are
+  opened rather than becoming "at the right-hand end of the window". As tall as
+  a tab and centring its own children, so the two icons line up with the tab
+  labels without a nudge value that would have to be re-derived every time the
+  bar's height changed.
+*/
+.strip-openers {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-05);
+  flex-shrink: 0;
+  height: var(--strip-tab-h);
+  padding: 0 var(--sp-1);
+}
+
+.strip-open {
+  width: var(--control-h);
+  height: var(--control-h);
+  color: var(--text-secondary);
+}
+
+.strip-open:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.strip-tab-close:focus-visible,
+.strip-open:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }

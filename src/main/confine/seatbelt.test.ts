@@ -9,6 +9,8 @@ const plan: ConfinementPlan = {
   writable: ['/Users/asad/Projects/app', '/app-storage/device-home/abc'],
   readable: ['/usr', '/System'],
   readableFiles: ['/app-storage/guest-git/askpass.sh'],
+  readableProjects: [],
+  readExclusions: [],
 }
 
 describe('seatbeltString', () => {
@@ -92,6 +94,69 @@ describe('the generated profile', () => {
     const paths = [...profile.matchAll(/\(subpath "([^"]+)"\)/g)].map((match) => match[1])
     const allowed = new Set([...plan.writable, ...plan.readable, '/dev'])
     for (const path of paths) expect(allowed.has(path ?? '')).toBe(true)
+  })
+})
+
+describe('a profile carrying read exclusions', () => {
+  const withProjects: ConfinementPlan = {
+    ...plan,
+    readable: ['/usr', '/System', '/Users/asad/Projects/one'],
+    readableProjects: ['/Users/asad/Projects/one'],
+    readExclusions: [
+      {
+        effect: 'deny',
+        pattern: String.raw`^/Users/asad/Projects/one(/.*)?/\.env(\.[^/]*)?$`,
+        shape: 'dotenv',
+        why: 'the conventional home of every local credential a project has',
+      },
+      {
+        effect: 'allow',
+        pattern: String.raw`^/Users/asad/Projects/one(/.*)?/\.env\.example$`,
+        shape: 'dotenv-template',
+        why: 'placeholder files, which are how a repo documents its configuration',
+      },
+    ],
+  }
+  const text = seatbeltProfile(withProjects)
+
+  it('puts every exclusion after every allow, because the last match wins', () => {
+    // Measured, not assumed: the identical deny written above the `(allow
+    // file-read* (subpath <project>))` is overridden and the file stays
+    // readable. This is the ordering the whole mechanism rests on.
+    const lastAllow = Math.max(
+      text.lastIndexOf('(allow file-read* (subpath'),
+      text.lastIndexOf('(allow file-read* file-write* (subpath'),
+    )
+    expect(text.indexOf('(deny file-read* (regex')).toBeGreaterThan(lastAllow)
+  })
+
+  it('keeps the exception after the deny it re-opens', () => {
+    expect(text.indexOf('(allow file-read* (regex')).toBeGreaterThan(
+      text.indexOf('(deny file-read* (regex'),
+    )
+  })
+
+  it('emits regexes with single escapes, never through the string serialiser', () => {
+    /*
+     * The bug this pins, and it is the reason `seatbeltRegex` exists at all.
+     * The profile reader does **not** unescape backslashes inside a `#"…"`
+     * regex literal, so a pattern serialised through `seatbeltString` — which
+     * correctly doubles them for an ordinary string — arrives as `\\.` where
+     * `\.` was meant and matches nothing. Reproduced against a real
+     * `sandbox-exec`: the doubled profile allowed `.env` while appearing to
+     * contain a rule refusing it.
+     */
+    expect(text).toContain(String.raw`\.env`)
+    expect(text).not.toContain(String.raw`\\.env`)
+  })
+
+  it('grants a project read and never write', () => {
+    expect(text).toContain('(allow file-read* (subpath "/Users/asad/Projects/one"))')
+    expect(text).not.toContain('(allow file-read* file-write* (subpath "/Users/asad/Projects/one"))')
+  })
+
+  it('says nothing about exclusions when no project was granted', () => {
+    expect(seatbeltProfile(plan)).not.toContain('(deny file-read* (regex')
   })
 })
 

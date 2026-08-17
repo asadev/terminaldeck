@@ -24,6 +24,8 @@ const plan: ConfinementPlan = {
   writable: ['/work/app'],
   readable: ['/usr'],
   readableFiles: [],
+  readableProjects: [],
+  readExclusions: [],
 }
 
 /**
@@ -250,6 +252,8 @@ describe('the Linux proof', () => {
     writable: ['/home/asad/work/app'],
     readable: ['/usr'],
     readableFiles: [],
+    readableProjects: [],
+    readExclusions: [],
   }
 
   it('passes when the canary is readable outside and refused inside', async () => {
@@ -367,6 +371,8 @@ describe('confineSpawn', () => {
       ],
       readable: ['C:\\Program Files\\nodejs'],
       readableFiles: [],
+      readableProjects: [],
+      readExclusions: [],
     }
     afterAll(() => {
       for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
