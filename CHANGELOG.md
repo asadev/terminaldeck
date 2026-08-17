@@ -10,6 +10,107 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+### Added
+
+- **A copilot.** An assistant for the deck itself, pinned above the session
+  list: it can see your sessions, read their transcripts, start new ones and
+  change settings, and it keeps a memory of your conversation with it. It is a
+  developer's assistant and not a general one — no inbox, no calendar. It is
+  built as **a real session** rather than a hidden service, which is the whole
+  point: its folder, its instructions, its memory and its transcript are all
+  files you can open, and Settings → Copilot shows you exactly what it reads
+  before it starts.
+
+  It runs inside the same sandbox as any other session — **including from us**.
+  Proven against `sandbox-exec` rather than asserted: it cannot read your home
+  directory, your SSH keys, your keychain or any other account's login. Its
+  routines and its action log live *outside* the one folder it can write to,
+  because a routine it could author without asking is not gated, and an audit
+  log the audited party can rewrite is not an audit log. A consequence worth
+  stating: it starts **signed out**, because the keychain is closed to it, and
+  its first screen says so.
+
+- **Routines** — saved instructions that run on their own, triggered by
+  something happening rather than by a clock: a session finishing, a session
+  failing, git state changing, a file changing. A schedule is one trigger among
+  several, not the foundation. A routine that fires while nobody is at the
+  machine is refused an action needing consent, immediately and legibly, instead
+  of hanging on a dialog no one can answer.
+
+- **Add your own agent.** The list of agents is no longer four names compiled
+  into the app. Name a command, and it runs — with the honest caveat drawn on
+  the row that an agent we have never characterised gets a terminal and not a
+  model picker.
+
+- **Model, effort, fast mode, connectors and usage live in the chrome**, beside
+  the account, for a terminal as much as a chat. Clicking a model now actually
+  changes a running session — and refuses, saying why, when your prompt has
+  something typed in it.
+
+- **Attach a file from anywhere**, through the real system dialog, by drag and
+  drop, or by paste. The picker had only ever offered files inside the project.
+
+- **Draw on a page and send it to an agent**, alongside inspect and record.
+
+### Changed
+
+- **Tabs take Chrome's shape** and join the pane below them. The `+` leaves the
+  strip; a terminal and a globe sit after the last tab. There is one path to a
+  new session and it is the dialog.
+- **A tab's ✕ closes the view, not the session.** The session keeps running and
+  stays in the sidebar; only the sidebar's ✕ ends one.
+- **Chrome belongs to the pane, not the window.** In a split, each pane names
+  its own account, folder and session — an account chip drawn once above two
+  sessions from two projects was wrong for at least one of them, with nothing
+  saying which. The main session keeps its chrome in the top bar, which is what
+  makes it read as the main one.
+- **A pane can hold a browser page.** It could only hold a session before, so
+  anything else was by definition a closed one and the split collapsed.
+- **Notifications open as a popup** rather than taking over the window.
+- **Settings is one surface** — no card floating on a pane, and the selected
+  section is marked by colour and weight rather than by a grey box that kept
+  disappearing in dark mode.
+
+### Removed
+
+- **Every price and cost figure.** One of the two could not be computed at all —
+  nothing is published from which to derive what a subscription costs per token
+  — and the other told someone on a flat monthly fee that they had spent money
+  they had not. Token counts, cache share and context window stay, because those
+  are facts rather than inferences.
+
+### Fixed
+
+- **Hooks stopped working every time the app restarted.** The endpoint took a
+  new port on each launch and that port was written into the hook files, so
+  session-finished events silently never fired — and a credential was written
+  into `~/.gemini/settings.json` world-readable. The endpoint is now a socket at
+  a path the kernel cannot reassign to a stranger.
+- **The model picker left a dialog standing on your terminal.** It typed
+  `/model` into a live prompt; on any session with history the CLI answers with
+  a confirmation dialog, and the next Return *you* typed answered it. It now
+  waits for the screen to echo the command before committing it, and refuses
+  outright when you have something typed.
+- **Clicking a file in the tree closed the Files page.** Navigation was a
+  toggle, so selecting the page you were already on turned it off.
+- **A confined session died on its first turn on macOS**, before generating a
+  token, because Claude Code keeps scratch files at a path outside every
+  sandbox. This also broke sessions started from a paired phone.
+- **The file viewer drew characters the file did not contain** — `<!--` as
+  `←!—`, `-->` as `⟶` — because programming ligatures were on in a pane whose
+  whole job is showing text verbatim.
+- Settings panes that contradicted themselves: a lid switch its own notice
+  denied, a sound picker promising to play under a switch that stopped it, a
+  language dropdown with one option, a debug file offering Reveal when it did
+  not exist, and three identical warnings about browsers that were not installed.
+- The account is named by its email everywhere, instead of the internal word
+  `Default`. Renaming an account worked on none of them; it works now.
+- Sessions with the same name are told apart by the shortest id prefix that
+  actually distinguishes them, rather than by a fixed cut that could collide.
+- A scrolling sidebar fades at its edge instead of slicing the bottom row
+  through the middle of the letters.
+
+
 ## [0.2.0] — 2026-08-16
 
 ### Changed
