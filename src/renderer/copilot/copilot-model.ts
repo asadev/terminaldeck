@@ -25,7 +25,7 @@ import type { SessionStatus } from '@shared/types'
 /* ------------------------------------------------------------------ shapes -- */
 
 /** Mirrors `CopilotStatus` in `src/main/copilot-session.ts`. */
-export type CopilotStatus = 'stopped' | 'starting' | 'running' | 'unavailable'
+export type CopilotStatus = 'stopped' | 'starting' | 'running'
 
 /** Mirrors `CopilotSignInState`. `unknown` is never collapsed into signed-out. */
 export type CopilotSignInState = 'signed-in' | 'signed-out' | 'unknown'
@@ -44,10 +44,17 @@ export interface CopilotStateView {
   sessionId: string | null
   paths: CopilotPathsView | null
   startedAt: number | null
-  /** Why it is not running, or null. Always set when the status is `unavailable`. */
+  /** Why the last start did not produce a running copilot, or null. */
   problem: string | null
-  /** True only when the session actually ran inside a proven boundary. */
-  confined: boolean
+  /**
+   * True only when the running process was started inside a proven records
+   * fence — this app's own routines and action log refused to it by the
+   * operating system rather than by a rule in its instructions.
+   *
+   * Not "is it sandboxed". The copilot is not sandboxed; it is an ordinary
+   * session with the person's own account. See `confine/records.ts`.
+   */
+  recordsHeld: boolean
 }
 
 export interface CopilotSignInView {
@@ -74,7 +81,7 @@ function num(source: Record<string, unknown> | null, key: string): number | null
   return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
 
-const STATUSES: readonly CopilotStatus[] = ['stopped', 'starting', 'running', 'unavailable']
+const STATUSES: readonly CopilotStatus[] = ['stopped', 'starting', 'running']
 
 /**
  * The state, or null when what came back is not a state at all.
@@ -92,7 +99,7 @@ export function readCopilotState(value: unknown): CopilotStateView | null {
 
   const paths = record(source.paths)
   const root = str(paths, 'root')
-  const confinement = record(source.confinement)
+  const records = record(source.records)
 
   return {
     status: status as CopilotStatus,
@@ -111,7 +118,7 @@ export function readCopilotState(value: unknown): CopilotStateView | null {
           },
     startedAt: num(source, 'startedAt'),
     problem: str(source, 'problem'),
-    confined: confinement?.enforced === true,
+    recordsHeld: records?.enforced === true,
   }
 }
 
@@ -129,31 +136,36 @@ export function readCopilotSignIn(value: unknown): CopilotSignInView | null {
 /**
  * What the copilot view is showing, as one word.
  *
- * Six, and the two in the middle are the ones this whole feature turns on.
+ * Five, and the two in the middle are the ones this component turns on.
  *
- * `first-run` is a copilot that is running and **signed out**, which is not a
- * fault — it is the boundary working. The copilot has a home of its own so its
- * login lives inside its own sandbox, and the macOS keychain is closed to a
- * sandboxed process, so the first thing it does is print a URL and wait for the
- * code to be pasted back. That is correct and it will confuse anybody who has
- * not been told, which is why it is a state with a name and a paragraph rather
- * than a chat pane that mysteriously has nothing in it.
+ * `first-run` is a copilot that is running and **signed out**. It used to be
+ * every copilot's first launch, by design: the copilot was jailed, its login
+ * lived inside its own sandbox, and the macOS keychain is closed to a sandboxed
+ * process — so it could never borrow the account the person was already signed
+ * in as. That is gone. The copilot runs as one of the app's accounts now, so a
+ * person already signed into Claude Code has a copilot that is already signed
+ * in, and this stage means what it says on any other session: *that account is
+ * signed out*. Still worth a stage of its own, because the fix is a login and a
+ * chat pane cannot show one.
  *
  * `unverified` is running with the sign-in probe unable to answer — the CLI
  * could not be run, was refused, or timed out. Not evidence of being signed
  * out, so it is not drawn as a login; it is the conversation, with one line
  * saying the window could not check.
+ *
+ * There is no `unavailable`. There used to be: a machine with no measured
+ * confinement mechanism could not run the copilot at all, which was every
+ * Windows machine. Nothing produces it now, and a stage nothing can reach is a
+ * paragraph on screen that has stopped being true.
  */
 export type CopilotStage =
-  /** This machine cannot hold it inside a boundary, so it will not be started. */
-  | 'unavailable'
   /** Never started, or stopped, or a start that gave up. */
   | 'stopped'
   /** A start is in flight. */
   | 'starting'
   /** Running; the sign-in answer has not arrived yet. */
   | 'checking'
-  /** Running and signed out: its own login, on its own terminal. */
+  /** Running, and the account it runs as is signed out. */
   | 'first-run'
   /** Running; the window could not tell whether it is signed in. */
   | 'unverified'
@@ -165,7 +177,6 @@ export function copilotStage(
   signIn: CopilotSignInView | null,
 ): CopilotStage {
   if (!state) return 'stopped'
-  if (state.status === 'unavailable') return 'unavailable'
   if (state.status === 'starting') return 'starting'
   if (state.status !== 'running') return 'stopped'
   if (!signIn) return 'checking'
@@ -201,8 +212,6 @@ export function defaultPane(stage: CopilotStage): CopilotPane {
  */
 export function entryTooltip(stage: CopilotStage, state: CopilotStateView | null): string {
   switch (stage) {
-    case 'unavailable':
-      return state?.problem ?? 'The copilot cannot run on this machine.'
     case 'stopped':
       // A refusal from the last attempt is far more useful than the word
       // "stopped", and it is the only place that sentence is ever shown.
@@ -212,7 +221,7 @@ export function entryTooltip(stage: CopilotStage, state: CopilotStateView | null
     case 'checking':
       return 'Running. Checking whether it is signed in…'
     case 'first-run':
-      return 'Running, and signed out — it signs itself in on its own terminal.'
+      return 'Running — the account it runs as is signed out. Sign in on its terminal.'
     case 'unverified':
       return 'Running. This window could not check whether it is signed in.'
     case 'ready':
@@ -242,13 +251,9 @@ export function entryTooltip(stage: CopilotStage, state: CopilotStateView | null
  * in this rail that is not a session — and the tooltip carries the reason,
  * including the sentence from the last refused start.
  *
- * `unavailable` is null for the same reason rather than because it matters
- * less: a machine that cannot hold the copilot is not running one either, and
- * the page says so in full the moment the row is opened.
  */
 export function entryDot(stage: CopilotStage): SessionStatus | null {
   switch (stage) {
-    case 'unavailable':
     case 'stopped':
       return null
     case 'starting':

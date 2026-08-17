@@ -47,6 +47,17 @@ interface Recorder {
   settingsTrace: string[]
   /** Set to make the snapshot fail, the way a full disk would. */
   snapshotFails: boolean
+  /**
+   * The folders each paired device may start a session in.
+   *
+   * The rule `sessions.start` narrows itself against for a remote caller. Held
+   * as state rather than as a constant so a test can take a folder away and
+   * watch the very next call be refused, which is the whole property of the
+   * grant being read per call.
+   */
+  deviceFolders: Map<string, string[]>
+  /** `(deviceId, cwd)` for every start, so the guest path can be pinned. */
+  startedFor: Array<{ deviceId: string | undefined; cwd: string }>
 }
 
 function meta(overrides: Partial<SessionMeta> & { id: string }): SessionMeta {
@@ -75,17 +86,25 @@ function fakeSurface(): Recorder {
     reads: [],
     settingsTrace: [],
     snapshotFails: false,
+    deviceFolders: new Map([['phone-1', ['/work/api']]]),
+    startedFor: [],
   }
 
   state.surface = {
     listSessions: () => state.sessions,
     sessionStatus: (id) => state.statuses.get(id) ?? null,
-    startSession: async (input) => {
+    startSession: async (input, forDevice) => {
       state.started.push(input)
+      // Recorded separately from `input`, because it is not part of the input:
+      // it is who asked, and it is what decides whether the session gets a guest
+      // git identity and a boundary. A start that lost it would look identical
+      // here and be a session running with the owner's credentials.
+      state.startedFor.push({ deviceId: forDevice, cwd: input.cwd })
       const created = meta({ id: `copilot-${state.started.length}`, cwd: input.cwd })
       state.sessions = [...state.sessions, created]
       return created
     },
+    deviceFolders: (deviceId) => state.deviceFolders.get(deviceId) ?? [],
     writeToSession: (id, data) => {
       state.typed.push({ id, data })
     },
@@ -97,6 +116,9 @@ function fakeSurface(): Recorder {
     listProjects: () => [
       { path: '/work/api', lastOpenedAt: 3 },
       { path: '/work/web', lastOpenedAt: 2 },
+      // A third, so the budget tests can start three sessions without tripping
+      // the one-copilot-session-per-working-tree rule first.
+      { path: '/work/docs', lastOpenedAt: 1 },
     ],
     gitStatus: async (cwd) => ({ repo: true, cwd, clean: true }),
     alerts: async (projectPath) => ({ projectPath, alerts: [{ id: 'a' }] }),
@@ -121,12 +143,49 @@ function fakeSurface(): Recorder {
       state.preferences = { ...state.preferences, ...patch }
       return { ...state.preferences }
     },
-    newestTranscript: async (cwd) => (cwd === '/work/api' ? '/transcripts/api.jsonl' : null),
+    transcriptsIn: async (cwd) =>
+      cwd === '/work/api'
+        ? [
+            {
+              path: '/transcripts/api.jsonl',
+              sessionId: 'api',
+              createdAt: 1_000,
+              modifiedAt: 2_000,
+              bytes: 512,
+            },
+          ]
+        : [],
     transcriptBytes: async () => state.transcriptSize,
     readTranscriptFrom: async (path, from) => {
       state.reads.push({ path, from })
       return state.transcript
     },
+    /*
+     * The five reads the fleet capabilities added, answered inertly.
+     *
+     * This fake exists to exercise the dispatcher, not the reports, so every
+     * one of these returns the empty answer its real counterpart returns for a
+     * folder with no repository and a session with no transcript. The report
+     * tools have their own tests with their own fixtures.
+     */
+    readToolTrail: async () => ({ events: [], compactions: [], fileBytes: 0, fromByte: 0, partial: false }),
+    transcriptTotals: async () => null,
+    gitChanges: async () => ({
+      repo: false,
+      root: null,
+      branch: null,
+      ahead: 0,
+      behind: 0,
+      files: [],
+      reason: 'not a repository',
+    }),
+    fileDiff: async () => '',
+    fileModifiedAt: async () => null,
+    // `<userData>` and the copilot's folder inside it. Distinct from every
+    // project path in these fixtures, which is what `sessions.start`'s refusal
+    // to run inside the app's own storage needs in order to mean anything.
+    appStateRoot: () => '/state',
+    copilotRoot: () => '/state/copilot',
   }
   return state
 }
@@ -372,9 +431,12 @@ describe('starting a session', () => {
     const { control, state } = build({
       budgets: { sessionStarts: { limit: 2, windowMs: 60_000 } },
     })
+    // Three different folders, because one copilot-started session per working
+    // tree is now its own rule — see `refuseSecondSessionHere`. This test is
+    // about the *budget*, so it must not trip the other guard first.
     await control.call('sessions_start', { cwd: '/work/api' })
-    await control.call('sessions_start', { cwd: '/work/api' })
-    const third = await control.call('sessions_start', { cwd: '/work/api' })
+    await control.call('sessions_start', { cwd: '/work/web' })
+    const third = await control.call('sessions_start', { cwd: '/work/docs' })
 
     expect(third.refusal).toBe('rate-limited')
     expect(state.started).toHaveLength(2)
@@ -841,6 +903,90 @@ describe('a caller that was never granted the tier', () => {
     expect(asked).toHaveLength(1)
     expect(state.settings['appearance.density']).toBe('compact')
   })
+
+  /**
+   * The tier is not the whole story: the same tool at the same tier does a
+   * different amount of damage depending on who asked.
+   *
+   * `sessions.start` validated its folder against the app's own open projects
+   * and spawned with the owner's git identity, unconfined — correct for the
+   * person at the keyboard, and strictly *more* than a phone's own New Session
+   * button can do. Granting a device `act` with that unchanged would have handed
+   * it, through the copilot, a power it does not have directly: the OC-02 shape
+   * arriving through a back door, where the tool name was gated and the effect
+   * was not. `remote-start.ts` carries the argument.
+   */
+  describe('a start is narrowed to what that device could have done itself', () => {
+    const acting = {
+      kind: 'remote' as const,
+      deviceId: 'phone-1',
+      tiers: { read: true, act: true, alter: false },
+    }
+
+    it('refuses a folder the app has open but the device was not granted', async () => {
+      const { control, state } = build()
+      // `/work/web` is one of this desktop's projects, so `requireKnownFolder`
+      // is happy with it. It is not on this device's list, and that is the check
+      // that has to be the binding one.
+      const result = await control.call('sessions_start', { cwd: '/work/web' }, { caller: acting })
+
+      expect(result.refusal).toBe('not-permitted')
+      expect(state.started).toEqual([])
+      // The refusal names the folders it *may* use, because a model told only
+      // "refused" spends the rest of its turn guessing at variations.
+      expect(result.error).toContain('/work/api')
+    })
+
+    it('starts in a granted folder, and hands the spawn the device id', async () => {
+      const { control, state } = build()
+      const result = await control.call('sessions_start', { cwd: '/work/api' }, { caller: acting })
+
+      expect(result.ok).toBe(true)
+      // The device id is what makes the guest git identity and the confinement
+      // apply. A start that dropped it would look identical in `started` and be
+      // a session running with the owner's GitHub token.
+      expect(state.startedFor).toEqual([{ deviceId: 'phone-1', cwd: '/work/api' }])
+    })
+
+    it('leaves the person’s own starts unconfined and unnarrowed', async () => {
+      const { control, state } = build()
+      const result = await control.call('sessions_start', { cwd: '/work/web' })
+
+      expect(result.ok).toBe(true)
+      // No device id: their machine, their credentials, any folder the app has
+      // open. The asymmetry is the point rather than an inconsistency.
+      expect(state.startedFor).toEqual([{ deviceId: undefined, cwd: '/work/web' }])
+    })
+
+    it('takes the folder away on the very next call, with no reconnect', async () => {
+      const { control, state } = build()
+      expect((await control.call('sessions_start', { cwd: '/work/api' }, { caller: acting })).ok).toBe(true)
+
+      state.deviceFolders.set('phone-1', [])
+      const after = await control.call('sessions_start', { cwd: '/work/api' }, { caller: acting })
+
+      expect(after.refusal).toBe('not-permitted')
+      expect(after.error).toContain('no folders chosen')
+    })
+
+    it('refuses outright on a host that cannot answer whose folder it is', async () => {
+      /*
+       * A surface with no `deviceFolders` — a headless host with no remote
+       * layer, some future embedding — cannot answer "may this device use this
+       * folder", and the answer for a host that cannot answer is no. Falling
+       * back to the desktop's project list would be the exact widening this
+       * whole rule exists to prevent, and it would be invisible: everything
+       * would work, for everybody, all the time.
+       */
+      const { control, state } = build()
+      delete (state.surface as { deviceFolders?: unknown }).deviceFolders
+
+      const result = await control.call('sessions_start', { cwd: '/work/api' }, { caller: acting })
+
+      expect(result.refusal).toBe('not-permitted')
+      expect(state.started).toEqual([])
+    })
+  })
 })
 
 describe('settings the copilot may never write', () => {
@@ -1025,7 +1171,7 @@ describe('the budgets', () => {
   it('lets reads through after the change budget is spent', async () => {
     const { control } = build({ budgets: { changes: { limit: 1, windowMs: 60_000 } } })
     await control.call('sessions_start', { cwd: '/work/api' })
-    expect((await control.call('sessions_start', { cwd: '/work/api' })).refusal).toBe('rate-limited')
+    expect((await control.call('sessions_start', { cwd: '/work/web' })).refusal).toBe('rate-limited')
     expect((await control.call('projects_list', {})).ok).toBe(true)
   })
 })

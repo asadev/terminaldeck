@@ -33,18 +33,33 @@ export interface CopilotBridge {
   ensureCopilot(): Promise<unknown>
   stopCopilot(): Promise<unknown>
   copilotSignIn(): Promise<unknown>
+  copilotReadInstructions(): Promise<unknown>
+  copilotWriteInstructions(text: string): Promise<unknown>
   copilotResetInstructions(): Promise<unknown>
 
   /* looking at it — `src/main/copilot-inspect.ts` */
   copilotScaffold(): Promise<unknown>
   copilotMemory(): Promise<unknown>
   copilotMemoryRead(name: string): Promise<unknown>
+  copilotMemoryWrite(name: string, text: string): Promise<unknown>
   copilotMemoryDelete(name: string): Promise<unknown>
   copilotActions(limit?: number): Promise<unknown>
   copilotReveal(place: string): Promise<unknown>
 
   /* routines — `src/main/routines/ipc.ts` */
   routinesList(): Promise<unknown>
+  routinesText(id: string): Promise<unknown>
+  /**
+   * Replace a routine file with the exact text somebody typed.
+   *
+   * The one method on this bridge with no counterpart in `deck-control`, and
+   * that is the point rather than an omission: routines live outside the
+   * copilot's writable folder precisely so that authoring one takes a human, and
+   * writing chosen bytes into that folder is wider than any tool the copilot
+   * could be given. `routines/ipc.ts` marks the operation `human` and says why.
+   * A window is a person; this is the door for one.
+   */
+  routinesSaveText(id: string, text: string): Promise<unknown>
   routinesRun(id: string): Promise<unknown>
   routinesPause(id: string, reason?: string): Promise<unknown>
   routinesResume(id: string): Promise<unknown>
@@ -56,14 +71,19 @@ const BRIDGE_METHODS: ReadonlyArray<keyof CopilotBridge> = [
   'ensureCopilot',
   'stopCopilot',
   'copilotSignIn',
+  'copilotReadInstructions',
+  'copilotWriteInstructions',
   'copilotResetInstructions',
   'copilotScaffold',
   'copilotMemory',
   'copilotMemoryRead',
+  'copilotMemoryWrite',
   'copilotMemoryDelete',
   'copilotActions',
   'copilotReveal',
   'routinesList',
+  'routinesText',
+  'routinesSaveText',
   'routinesRun',
   'routinesPause',
   'routinesResume',
@@ -142,16 +162,14 @@ export interface StartupFile {
 /** Mirrors `InstructionsState` in `src/main/copilot-home.ts`. */
 export type InstructionsState = 'missing' | 'current' | 'superseded' | 'edited'
 
-export type CopilotStatus = 'stopped' | 'starting' | 'running' | 'unavailable'
+export type CopilotStatus = 'stopped' | 'starting' | 'running'
 
-/** Mirrors `CopilotProjects` in `src/main/copilot-session.ts`. */
-export interface CopilotProjects {
-  granted: string[]
-  available: string[]
-  pending: string[]
-  enforceable: boolean
+/** Mirrors `CopilotRecords` in `src/main/copilot-session.ts`. */
+export interface CopilotRecords {
+  kind: string
+  enforced: boolean
   reason: string | null
-  excluded: string[]
+  paths: string[]
 }
 
 /** Mirrors `CopilotState` in `src/main/copilot-session.ts`. */
@@ -162,10 +180,10 @@ export interface CopilotState {
   home: string
   startedAt: number | null
   problem: string | null
-  confinement: { kind: string; enforced: boolean; reason: string | null }
+  records: CopilotRecords
+  profile: { id: string; name: string } | null
   instructionsAreDefault: boolean
   instructions: InstructionsState
-  projects: CopilotProjects
   startupFiles: StartupFile[]
 }
 
@@ -190,14 +208,11 @@ export function toCopilotState(raw: unknown): CopilotState | null {
   if (!entry) return null
   const paths = record(entry.paths)
   if (!paths || typeof paths.root !== 'string') return null
-  const confinement = record(entry.confinement)
-  const projects = record(entry.projects)
+  const records = record(entry.records)
+  const profile = record(entry.profile)
   const status = entry.status
   return {
-    status:
-      status === 'running' || status === 'starting' || status === 'unavailable'
-        ? status
-        : 'stopped',
+    status: status === 'running' || status === 'starting' ? status : 'stopped',
     sessionId: optStr(entry.sessionId),
     paths: {
       root: paths.root,
@@ -209,24 +224,21 @@ export function toCopilotState(raw: unknown): CopilotState | null {
     home: str(entry.home),
     startedAt: optNum(entry.startedAt),
     problem: optStr(entry.problem),
-    confinement: {
-      kind: str(confinement?.kind, 'none'),
-      enforced: bool(confinement?.enforced),
-      reason: optStr(confinement?.reason),
+    records: {
+      kind: str(records?.kind, 'none'),
+      // Defaults to false rather than true, and the direction matters: this
+      // boolean feeds the sentence "the routines and the action log are held
+      // against it", so a build that could not read the field must say no.
+      enforced: bool(records?.enforced),
+      reason: optStr(records?.reason),
+      paths: strings(records?.paths),
     },
+    profile:
+      profile && typeof profile.id === 'string'
+        ? { id: profile.id, name: str(profile.name, profile.id) }
+        : null,
     instructionsAreDefault: bool(entry.instructionsAreDefault),
     instructions: toInstructionsState(entry.instructions),
-    projects: {
-      granted: strings(projects?.granted),
-      available: strings(projects?.available),
-      pending: strings(projects?.pending),
-      // Defaults to false rather than true: claiming a boundary this build could
-      // not read would be the one wrong answer, because the sentence it feeds is
-      // "your projects are readable and unwritable".
-      enforceable: bool(projects?.enforceable),
-      reason: optStr(projects?.reason),
-      excluded: strings(projects?.excluded),
-    },
     startupFiles: list(entry.startupFiles)
       .map(toStartupFile)
       .filter((file): file is StartupFile => file !== null),
@@ -238,6 +250,9 @@ export interface CopilotSignIn {
   state: 'signed-in' | 'signed-out' | 'unknown'
   account: string | null
   plan: string | null
+  /** Which account this answer is about — the profile the copilot runs as. */
+  profileId: string
+  profileName: string
   checkedAt: number
 }
 
@@ -249,6 +264,8 @@ export function toCopilotSignIn(raw: unknown): CopilotSignIn | null {
     state: state === 'signed-in' || state === 'signed-out' ? state : 'unknown',
     account: optStr(entry.account),
     plan: optStr(entry.plan),
+    profileId: str(entry.profileId),
+    profileName: str(entry.profileName),
     checkedAt: num(entry.checkedAt),
   }
 }
@@ -265,6 +282,45 @@ export function toResetResult(raw: unknown): InstructionsResetResult {
   const entry = record(raw)
   return {
     reset: bool(entry?.reset),
+    backup: optStr(entry?.backup),
+    error: optStr(entry?.error),
+    state: toCopilotState(entry?.state),
+  }
+}
+
+/** Mirrors `InstructionsReadResult` in `src/main/copilot-home.ts`. */
+export type InstructionsReadResult =
+  | { ok: true; text: string; state: InstructionsState }
+  | { ok: false; error: string }
+
+export function toInstructionsRead(raw: unknown): InstructionsReadResult {
+  const entry = record(raw)
+  /*
+   * `ok === true` *and* a string, rather than either alone.
+   *
+   * A frame that answered `{ ok: true }` with no text would otherwise put an
+   * empty box in front of somebody over a file that is not empty — and the
+   * button under that box saves what is in it. The failure branch is the safe
+   * one to fall into, because it disables the save and prints a sentence.
+   */
+  if (entry?.ok === true && typeof entry.text === 'string') {
+    return { ok: true, text: entry.text, state: toInstructionsState(entry.state) }
+  }
+  return { ok: false, error: str(entry?.error, 'Its instructions could not be read.') }
+}
+
+/** Mirrors `InstructionsWriteResult` in `src/main/copilot-home.ts`, plus the state. */
+export interface InstructionsWriteResult {
+  saved: boolean
+  backup: string | null
+  error: string | null
+  state: CopilotState | null
+}
+
+export function toInstructionsWrite(raw: unknown): InstructionsWriteResult {
+  const entry = record(raw)
+  return {
+    saved: bool(entry?.saved),
     backup: optStr(entry?.backup),
     error: optStr(entry?.error),
     state: toCopilotState(entry?.state),
@@ -368,6 +424,19 @@ export function toMemoryDelete(raw: unknown): MemoryDeleteResult {
     error: optStr(entry?.error),
     memory: toMemoryReport(entry?.memory),
   }
+}
+
+/**
+ * Mirrors `MemoryWriteResult` in `src/main/copilot-inspect.ts`.
+ *
+ * Identical in shape to the delete, and kept as its own name rather than shared,
+ * because the two results are read into two different sentences and a shared
+ * alias is how one of them ends up saying "forgotten" about a save.
+ */
+export type MemoryWriteResult = MemoryDeleteResult
+
+export function toMemoryWrite(raw: unknown): MemoryWriteResult {
+  return toMemoryDelete(raw)
 }
 
 /* -------------------------------------------------------------- action log -- */
@@ -497,6 +566,32 @@ const ROUTINE_STATES: readonly RoutineStateName[] = [
   'paused',
   'stale',
 ]
+
+/** Mirrors `RoutineApi.text` in `src/main/routines/ipc.ts`. */
+export type RoutineTextResult =
+  | { ok: true; text: string; file: string }
+  | { ok: false; problems: string[] }
+
+export function toRoutineText(raw: unknown): RoutineTextResult {
+  const entry = record(raw)
+  // Same argument as `toInstructionsRead`: an `ok` with no text would show an
+  // empty box over a file that has something in it, above a Save button.
+  if (entry?.ok === true && typeof entry.text === 'string') {
+    return { ok: true, text: entry.text, file: str(entry.file) }
+  }
+  const problems = strings(entry?.problems)
+  return { ok: false, problems: problems.length > 0 ? problems : ['That routine could not be read.'] }
+}
+
+/** Mirrors `WriteResult` in `src/main/routines/ipc.ts`. */
+export type RoutineWriteResult = { ok: true; id: string } | { ok: false; problems: string[] }
+
+export function toRoutineWrite(raw: unknown): RoutineWriteResult {
+  const entry = record(raw)
+  if (entry?.ok === true) return { ok: true, id: str(entry.id) }
+  const problems = strings(entry?.problems)
+  return { ok: false, problems: problems.length > 0 ? problems : ['That routine could not be saved.'] }
+}
 
 export function toRoutineRows(raw: unknown): RoutineRow[] {
   return list(raw).flatMap((item) => {

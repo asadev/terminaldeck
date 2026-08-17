@@ -31,11 +31,13 @@ describe('the catalogue is well formed', () => {
   it('covers the surface the design asks for, and nothing it cannot do', () => {
     expect(tools.map((tool) => tool.id).sort()).toEqual([
       'alerts.list',
+      'git.diff',
       'git.status',
       'log.note',
       'projects.list',
       'sessions.get',
       'sessions.list',
+      'sessions.result',
       'sessions.send',
       'sessions.start',
       'sessions.stop',
@@ -93,6 +95,11 @@ describe('the catalogue is well formed', () => {
     expect(byId.get('sessions.transcript')).toBe('read')
     expect(byId.get('projects.list')).toBe('read')
     expect(byId.get('git.status')).toBe('read')
+    // The two fleet capabilities. Both only ever read — `sessions.result`
+    // parses transcripts and runs `git status`, and `git.diff` runs `git diff`
+    // — so neither may drift up a tier without somebody arguing for it here.
+    expect(byId.get('sessions.result')).toBe('read')
+    expect(byId.get('git.diff')).toBe('read')
     expect(byId.get('alerts.list')).toBe('read')
     expect(byId.get('settings.read')).toBe('read')
     expect(byId.get('sessions.start')).toBe('act')
@@ -176,12 +183,14 @@ describe('what the catalogue costs on every turn', () => {
   it('fits inside its token budget with room to grow', () => {
     const cost = catalogueCost(tools)
 
-    // Measured, so a failure reads as a number rather than as a boolean. At the
-    // time this was written: 12 tools, 9,034 characters, ~2,582 estimated
-    // tokens — 32% of the ceiling, with the largest single tool
-    // (`settings.write`) at ~401 and `log.note` behind it at ~314. The
-    // capabilities document adds roughly five more tools, which is still
-    // inside it.
+    // Measured, so a failure reads as a number rather than as a boolean. It was
+    // 12 tools, 9,034 characters and ~2,582 estimated tokens when this
+    // assertion was written; the two fleet capabilities took it to **14 tools,
+    // 11,786 characters, ~3,368 estimated tokens — 42% of the ceiling**, with
+    // `sessions.result` the largest single tool at ~423 and `settings.write`
+    // behind it at ~401. Six tools of head-room left, and the instruction on
+    // `MAX_CATALOGUE_TOKENS` for whoever runs out of it: disclose
+    // progressively, do not raise the number.
     expect(cost.tools).toBeLessThanOrEqual(MAX_CATALOGUE_TOOLS)
     expect(cost.tokens, `catalogue is ${cost.tokens} estimated tokens over ${cost.tools} tools`).toBeLessThanOrEqual(
       MAX_CATALOGUE_TOKENS,

@@ -71,7 +71,7 @@ final class MultiHostTests: XCTestCase {
             onEvent?(.state(state))
             onEvent?(.message(.welcome(protocolVersion: 1, deviceId: "d", deviceName: "iPhone",
                                        token: nil, sessions: sessions, capabilities: capabilities,
-                                       hostPlatform: hostPlatform, folders: folders),
+                                       hostPlatform: hostPlatform, folders: folders, copilot: .silent),
                               activity: [:]))
         }
 

@@ -287,6 +287,25 @@ enum WireCapability {
     static let devserver = "devserver"
 
     /**
+     * The desktop can speak `copilot.*` frames.
+     *
+     * The name lives on `Copilot.capability` rather than being spelled again
+     * here, and this is an alias so that every capability in the product can
+     * still be read off one type. The copilot's half of the wire is large
+     * enough — a grant, five value types, seventeen frames — to have its own
+     * file, and splitting the *name* away from it would be the first step in the
+     * two halves drifting.
+     *
+     * Not in `claimed` below, deliberately, even though the desktop pushes
+     * frames on this capability. `credential` is claimed because it is a
+     * *question* the desktop will not ask unless something here answers it; the
+     * copilot's pushes are answers to frames this phone sent first, and a phone
+     * that never sends `copilot.attach` is simply never subscribed. Claiming it
+     * would be telling the desktop something it has no use for.
+     */
+    static let copilot = Copilot.capability
+
+    /**
      * What this build tells a desktop it can do, in `hello.capabilities`.
      *
      * Only names that run desktop→phone belong here. `create`, `localhost`,
@@ -609,6 +628,80 @@ enum ClientMessage: Equatable {
     case credentialAnswer(id: String, username: String, password: String, remember: Bool)
     /// No. Carries a code rather than a sentence — see `CredentialDenial`.
     case credentialDeny(id: String, reason: CredentialDenial)
+
+    /* ---- capability `copilot`. Never sent unless the desktop offered it, and
+       never sent unless this device's grant covers it. See `CopilotWire.swift`
+       for why the second gate is here as well as on the desktop. ------------ */
+
+    /**
+     * Watch the copilot. **Tier: read.**
+     *
+     * Subscribes this connection to the copilot surface and asks for what
+     * exists: the desktop answers with `copilot.state`, then a `copilot.chat`
+     * carrying `reset`. It **starts nothing** — no process, no run, no spend —
+     * which is exactly why it is separable from `copilotStart` and why the read
+     * tier is a grant worth handing out on its own.
+     *
+     * Like `devStatus`, the subscription belongs to the *socket*, so this is
+     * re-sent on every `welcome` rather than remembered across a reconnect.
+     */
+    case copilotAttach
+    /// Stop the stream. **Tier: read.** The run keeps going — see the grace
+    /// window in `CopilotLink` — because a phone going into a pocket is not a
+    /// person cancelling their question.
+    case copilotDetach
+    /// What the copilot is: running or not, whose run, which profile, and how
+    /// many confirmations are waiting at the desk. **Tier: read.**
+    case copilotState
+    /// The sessions the copilot started, each linked back to the turn that made
+    /// it. **Tier: read.**
+    case copilotSessions
+    /**
+     * The tail of the action log, newest last. **Tier: read.**
+     *
+     * `before` is a row id, for paging backwards — the same shape the desktop's
+     * own Activity pane uses. `limit` is clamped to 1…200 on arrival; this end
+     * sends `Copilot.logPage` and never composes a number from anything a view
+     * holds.
+     */
+    case copilotLog(limit: Int, before: String?)
+    /// Confirmations waiting **at the desk**. **Tier: read, and watch-only** —
+    /// there is no frame here that answers one, by design. See `CopilotQuestion`.
+    case copilotPending
+    /**
+     * Start this device's own copilot run. **Tier: act. The tap is the consent.**
+     *
+     * It spends money, which is the whole reason it is not folded into
+     * `copilotAttach`: a screen that started a second Claude process because
+     * somebody looked at it would be a screen with a bill attached to opening
+     * it. Nothing runs on the far machine because of this feature until this is
+     * sent, and it is sent because a person pressed a button that says so.
+     *
+     * The run is the phone's own — same folder, same `CLAUDE.md`, same
+     * `memory/`, same action log as the copilot at the desk, and its own
+     * conversation and its own bearer token. That separation is what makes the
+     * action log able to say which of my phones did that.
+     */
+    case copilotStart
+    /**
+     * Say something to it. **Tier: act.**
+     *
+     * `act` and not `read`, and the line is what makes the read tier mean
+     * something: talking to the copilot *is* `sessions.send` against a session,
+     * it spends money and it causes tool calls. So `read` is a **watching**
+     * grant — this phone shows me what my copilot is doing and cannot make it do
+     * anything — which is the grant worth handing out first.
+     *
+     * Prose. Never a tool name, never an argument object. See the header of
+     * `CopilotWire.swift`.
+     */
+    case copilotSay(text: String)
+    /// Interrupt the current turn of **this device's own run**. **Tier: act.**
+    case copilotCancel
+    /// End this device's own run. **Tier: act.** Not the copilot at the desk —
+    /// runs are keyed by device, and a phone that could stop the run somebody is
+    /// working in would be a phone holding a power its grant does not name.
+    case copilotStop
 }
 
 enum ServerMessage: Equatable {
@@ -623,10 +716,26 @@ enum ServerMessage: Equatable {
      * all — so the phone keeps the list it used to assemble for itself. Empty
      * means a person sat at that machine and granted this device no folders,
      * which is a real answer and the one the New Session button has to respect.
+     *
+     * `copilot` carries **two** answers and that is why it is a `CopilotOffer`
+     * rather than a bare grant. Absent and `{read: false, act: false}` mean the
+     * same thing about the *grant* — no access — because nobody has ever had
+     * remote copilot access, so there is no older behaviour for a desktop's
+     * silence to preserve. They do not mean the same thing about the *machine*:
+     * the field is written by the same object on the desktop that serves the
+     * frames, so its presence is the only trustworthy answer to "does this
+     * machine have a copilot at all". The capability name is not that answer —
+     * see `CopilotOffer`, which is where the difference is argued and where the
+     * host that advertises a feature it does not implement is named.
+     *
+     * So the collapse is right one level down, inside the grant, and wrong here;
+     * `folders` one field to the left keeps nil and empty apart for a third,
+     * unrelated reason. Three fields, three rules, written differently rather
+     * than tidied into agreement.
      */
     case welcome(protocolVersion: Int, deviceId: String, deviceName: String, token: String?,
                  sessions: [RemoteSession], capabilities: Set<String>, hostPlatform: HostPlatform,
-                 folders: [String]?)
+                 folders: [String]?, copilot: CopilotOffer)
     case sessions([RemoteSession])
     /**
      * This device's folder list changed while it was connected.
@@ -748,6 +857,55 @@ enum ServerMessage: Equatable {
      */
     case credentialRequest(id: String, host: String, repo: String?,
                            operation: CredentialOperation, prompt: Bool)
+
+    /* ---- capability `copilot` --------------------------------------------- */
+
+    /// What the copilot is. An answer to `copilotState`, and pushed on change.
+    case copilotState(CopilotState)
+    /**
+     * The conversation, as parsed messages — never pty bytes.
+     *
+     * Merge by `message.id`: replace on a match, append otherwise. `reset` means
+     * drop everything and take this as the whole conversation.
+     *
+     * `run` is carried so a frame from a run that has since been replaced is
+     * **dropped** rather than merged into the new one. Without it, a run that
+     * ended while the phone was in a pocket and a fresh one started on the way
+     * back would produce one conversation made of two, with no seam visible on
+     * screen — a phone showing an agent apparently answering a question nobody
+     * asked it.
+     */
+    case copilotChat(run: String, messages: [CopilotChatMessage], reset: Bool)
+    /**
+     * One tool call, as it happens, already scrubbed.
+     *
+     * This is *"see what it is doing"*, and it is also the frame that makes a
+     * refusal visible: a call this device's grant did not cover arrives here
+     * with `outcome: refused` and `refusal: not-granted`, in the copilot's own
+     * words, rather than as silence the person has to interpret.
+     */
+    case copilotTool(CopilotAction)
+    /// The sessions the copilot started. An answer, and pushed when the set
+    /// changes.
+    case copilotSessions([CopilotSessionRow])
+    /// A page of the action log. An answer only — never pushed, because the live
+    /// view of the same thing is `copilotTool`. `more` says the tail was
+    /// bounded, in the same spirit `ToolTrail.partial` reports its own window.
+    case copilotLog(rows: [CopilotAction], more: Bool)
+    /// Confirmations waiting at the desk. An answer, and pushed when the set
+    /// changes — including to empty, which is how a question that was answered
+    /// or timed out leaves this phone's screen.
+    case copilotPending([CopilotQuestion])
+    /**
+     * This device's copilot grant changed while it was connected.
+     *
+     * Pushed the moment the panel on the desktop changes, so a revoked phone's
+     * Copilot screen goes away without a reconnect. The *rule* is already live
+     * without this frame — the desktop re-reads the grant on every call — which
+     * is what makes this honest rather than load-bearing: it stops the phone
+     * offering a control whose only outcome is a refusal, and nothing more.
+     */
+    case copilotGrant(CopilotGrant)
 }
 
 enum ProtocolErrorCode: String, CaseIterable, Equatable {

@@ -1,30 +1,39 @@
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  realpathSync,
-  writeFileSync,
-} from 'node:fs'
+/**
+ * What the copilot is handed, and what it is not.
+ *
+ * The most important cases in this file are the ones asserting an **absence**.
+ * The copilot used to be started with a `DeviceConfinement` and a guest git
+ * environment — the treatment a session from a paired device gets — and that is
+ * what made it, in practice, less capable than an ordinary session in the same
+ * app: signed out, unable to write anything, and refusing to start at all on two
+ * of three platforms. `confine/records.ts` carries the whole argument.
+ *
+ * So `expect(call?.confine).toBeUndefined()` is not a tidiness assertion. It is
+ * the policy, written where somebody re-adding a boundary would trip over it.
+ */
+
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { beforeEach, describe, expect, it } from 'vitest'
 import type { CreateSessionInput, ProviderId, SessionMeta } from '../shared/types'
-import type { DeviceConfinement } from './confine'
+import { recordsFenceList, recordsFencePaths, type RecordsFence } from './confine/records'
 import { copilotPaths, resetCopilotInstructions } from './copilot-home'
 import { PAST_COPILOT_INSTRUCTIONS } from './copilot-instructions-history'
+import type { Profile } from './profiles'
 import {
   COPILOT_HOME_KEY,
-  copilotConfigDir,
   copilotHome,
-  copilotPlan,
-  copilotProjectRoots,
+  copilotHomeScope,
   copilotState,
   ensureCopilot,
+  isCopilotSession,
+  readCopilotSignIn,
   registerCopilotIpc,
   resetCopilot,
   stopCopilot,
   type CopilotRuntimeDeps,
+  type SpawnFence,
 } from './copilot-session'
 
 /**
@@ -33,14 +42,16 @@ import {
  * `startSession` is the one thing this module must not re-implement — it is the
  * single place in the app that starts a session, and the whole design rests on
  * the copilot going through it like everything else. So the interesting
- * assertions here are about *what is handed to it*: the folder, the account, the
- * confinement, and the environment. Whether a pty appears is `pty-manager`'s
- * question and is answered by its own tests and by a real run.
+ * assertions here are about *what is handed to it*: the folder, the account, and
+ * the two things that are deliberately not handed to it at all.
  */
 interface Recorded {
   input: CreateSessionInput
-  guest: { set: Record<string, string>; remove: string[] } | undefined
-  confine: DeviceConfinement | undefined
+  guest: unknown
+  confine: unknown
+  fence: SpawnFence | undefined
+  /** The flags this launch adds to the CLI's own — where its tools come from. */
+  extraArgs: readonly string[] | undefined
 }
 
 let userData: string
@@ -48,6 +59,27 @@ let calls: Recorded[]
 let alive: Set<string>
 let stopped: string[]
 let deps: CopilotRuntimeDeps
+
+/** The account the profile system answers with, unless a test says otherwise. */
+const DEFAULT_PROFILE: Profile = {
+  id: 'system',
+  name: 'Default',
+  provider: 'claude',
+  configDir: '/Users/someone/.claude',
+  system: true,
+  color: '#000000',
+  createdAt: 0,
+  lastUsedAt: null,
+}
+
+/** A fence that would really wrap a command, without running `sandbox-exec`. */
+function stubFence(): RecordsFence {
+  return {
+    kind: 'seatbelt',
+    paths: recordsFencePaths(userData),
+    apply: (command, args) => ({ command: '/usr/bin/sandbox-exec', args: ['-p', '…', command, ...args] }),
+  }
+}
 
 function meta(input: CreateSessionInput, provider: ProviderId = 'claude'): SessionMeta {
   return {
@@ -64,26 +96,19 @@ function harness(overrides: Partial<CopilotRuntimeDeps> = {}): CopilotRuntimeDep
   return {
     userData: () => userData,
     storageDir: () => join(userData, 'remote'),
-    accountHome: () => join(userData, 'account-home'),
     platform: 'darwin',
     agents: async () => ({ claude: true, codex: false, gemini: false, shell: true }),
     /*
-     * No projects and no event, unless a test asks for them.
-     *
-     * Both default to the app's own store in production, and reaching it from
-     * here would make every case below depend on a `state.json` this file never
-     * wrote — and on `platform/paths.ts` having been told where userData is,
-     * which it has not.
+     * The fence is stubbed by default so these cases do not each spawn
+     * `sandbox-exec`. Whether the real one holds is measured in
+     * `confine/records.test.ts` and in the two boundary tests, against a real
+     * kernel — which is the only place that question can honestly be asked.
      */
-    projects: () => projects,
-    onProjectsChanged: (listener) => {
-      projectListeners.push(listener)
-      return () => {
-        projectListeners = projectListeners.filter((seen) => seen !== listener)
-      }
-    },
-    async startSession(input, guest, confine) {
-      calls.push({ input, guest, confine })
+    fence: async () => ({ fence: stubFence(), reason: null }),
+    profile: () => DEFAULT_PROFILE,
+    signInOf: async () => ({ state: 'signed-in' as const, account: 'someone@example.com', plan: 'max' }),
+    async startSession(input, guest, confine, fence, extraArgs) {
+      calls.push({ input, guest, confine, fence, extraArgs })
       const created = meta(input)
       alive.add(created.id)
       return created
@@ -97,32 +122,12 @@ function harness(overrides: Partial<CopilotRuntimeDeps> = {}): CopilotRuntimeDep
   }
 }
 
-/** The folders "the person has added", as the harness answers for them. */
-let projects: string[] = []
-let projectListeners: ((paths: readonly string[]) => void)[] = []
-
-/** Make a folder and add it to the list, the way opening one in the app does. */
-function addProject(name: string): string {
-  const path = realpathSync(mkdtempSync(join(tmpdir(), `copilot-project-${name}-`)))
-  projects = [...projects, path]
-  for (const listener of projectListeners) listener(projects)
-  return path
-}
-
-/** Take one back out again. */
-function dropProject(path: string): void {
-  projects = projects.filter((seen) => seen !== path)
-  for (const listener of projectListeners) listener(projects)
-}
-
 beforeEach(() => {
   resetCopilot()
   userData = mkdtempSync(join(tmpdir(), 'copilot-run-'))
   calls = []
   alive = new Set()
   stopped = []
-  projects = []
-  projectListeners = []
   deps = harness()
 })
 
@@ -167,7 +172,7 @@ describe('there is one copilot', () => {
   })
 })
 
-describe('what it is handed', () => {
+describe('it is an ordinary session', () => {
   it('runs in its own folder, as a Claude session, fresh each launch', async () => {
     await ensureCopilot(deps)
     const [call] = calls
@@ -178,78 +183,270 @@ describe('what it is handed', () => {
     expect(call?.input.resume).toBe(false)
   })
 
-  it('pins its account rather than following whatever a project defaults to', async () => {
-    await ensureCopilot(deps)
-    // The system profile is how the resolution chain is told not to apply a
-    // project or global default. With HOME redirected, the CLI's own store is
-    // inside the copilot's boundary rather than the machine's.
-    expect(calls[0]?.input.profileId).toBe('system')
-  })
-
-  it('is confined to its own folder and its own home', async () => {
-    await ensureCopilot(deps)
-    const confine = calls[0]?.confine
-    expect(confine).toBeDefined()
-    expect(confine?.home).toBe(copilotHome(join(userData, 'remote')))
-    expect(confine?.writable).toEqual([])
-  })
-
-  it('keeps its home where the transcript readers already look', async () => {
-    // Not decoration. `transcript.ts` walks every directory under the
-    // confined-homes root when it is asked where a project's conversations are,
-    // so this placement is what makes the transcript viewer, chat mode, the
-    // cost pane and the alert watcher see the copilot with no change at all.
-    await ensureCopilot(deps)
-    expect(copilotHome(join(userData, 'remote'))).toBe(
-      join(userData, 'remote', 'device-home', COPILOT_HOME_KEY),
-    )
-    expect(existsSync(calls[0]?.confine?.home ?? '')).toBe(true)
-  })
-
-  it('points the CLI at a config directory inside its own home', async () => {
+  it('is handed no confinement, which is what an ordinary session is handed', async () => {
     /*
-     * The one line that decides whether the copilot can ever be signed in.
+     * The assertion this whole change is about.
      *
-     * Measured against Claude Code 2.1.233 inside a real sandbox: with
-     * `CLAUDE_CONFIG_DIR` unset the CLI reads its credential from the macOS
-     * login keychain, which a confined process cannot reach — so the copilot
-     * walks into the login screen forever, whatever is on its disk. With it set
-     * the CLI reads `<configDir>/.credentials.json`, a file inside the boundary
-     * that it can also write.
+     * `host-core.ts` decides whether to confine by asking whether a
+     * `DeviceConfinement` was passed at all — absent means "a person at their
+     * own keyboard, with no grant to be held inside". The copilot passes none,
+     * so it is confined by nothing, reads and writes what the person does, and
+     * starts on every platform.
      *
-     * `.claude` under the home, and the name matters twice: `transcript.ts`
-     * looks for exactly that when it walks the confined homes, which is what
-     * keeps the copilot's conversation visible to the transcript viewer.
+     * It used to pass one. That is what made it start signed out (its login
+     * would have been in the keychain, which a `(deny default)` process cannot
+     * reach), unable to change a line of anybody's code, and non-existent on
+     * Windows.
      */
     await ensureCopilot(deps)
-    const home = copilotHome(join(userData, 'remote'))
-    expect(calls[0]?.guest?.set.CLAUDE_CONFIG_DIR).toBe(copilotConfigDir(home))
-    expect(copilotConfigDir(home)).toBe(join(home, '.claude'))
+    expect(calls[0]?.confine).toBeUndefined()
   })
 
-  it("takes away the variables that would hand it somebody else's GitHub account", async () => {
-    // The sandbox is about files. A `GH_TOKEN` inherited from whatever launched
-    // the app is in the process, not on the disk, and the copilot has a shell
-    // and an open network.
+  it('is handed no guest git environment, because it is not a guest', async () => {
+    /*
+     * `prepareGuestGit` strips `GH_TOKEN`, `GITHUB_TOKEN` and `SSH_AUTH_SOCK`
+     * and substitutes a git identity of its own. That is right for a paired
+     * device, whose owner is not the person at this keyboard. Applied to the
+     * copilot it made it the one agent in the app that could not push a branch
+     * or read the person's git config.
+     */
     await ensureCopilot(deps)
-    const remove = calls[0]?.guest?.remove ?? []
-    expect(remove).toContain('GH_TOKEN')
-    expect(remove).toContain('GITHUB_TOKEN')
-    expect(remove).toContain('SSH_AUTH_SOCK')
-    expect(calls[0]?.guest?.set.GIT_CONFIG_GLOBAL).toContain(COPILOT_HOME_KEY)
+    expect(calls[0]?.guest).toBeUndefined()
+  })
+
+  it('resolves its account through the profile system, and records which one', async () => {
+    const chosen: Profile = { ...DEFAULT_PROFILE, id: 'work', name: 'Work', system: false }
+    const asked: string[] = []
+    const state = await ensureCopilot(
+      harness({
+        profile: (projectPath) => {
+          asked.push(projectPath)
+          return chosen
+        },
+      }),
+    )
+    // Asked about the copilot's own folder, which is what makes a per-project
+    // pin on that folder the way to choose the copilot's account.
+    expect(asked).toEqual([copilotPaths(userData).root])
+    expect(calls[0]?.input.profileId).toBe('work')
+    // Resolved once, so what the state reports and what the session runs as
+    // cannot come apart.
+    expect(state.profile).toEqual({ id: 'work', name: 'Work' })
+  })
+
+  it('sets no CLAUDE_CONFIG_DIR, which is what keeps it on the person’s own login', async () => {
+    /*
+     * The variable that must not come back.
+     *
+     * It existed to force the CLI off the macOS keychain and onto a file inside
+     * the sandbox, because that was the only way a jailed copilot could ever be
+     * signed in. With no jail, setting it would take the copilot *off* the
+     * person's account and into a store nothing signs in — reintroducing the
+     * signed-out first run through the same variable that used to fix it.
+     *
+     * There is nowhere left for it to be set: no guest environment is passed at
+     * all. This case is the one that would fail if somebody added one back.
+     */
+    await ensureCopilot(deps)
+    expect(calls[0]?.guest).toBeUndefined()
+  })
+})
+
+/**
+ * Where the copilot's tools come from, which for a while was nowhere.
+ *
+ * `deck-control` wrote its config on every start, its loopback server listened
+ * behind a bearer token, the routine runner passed it — and the pinned copilot
+ * was spawned with no `--mcp-config` at all. So it had the native Claude Code
+ * tools and none of this app's: it could not list a session, read a transcript,
+ * look at a screen or raise a confirmation, and every sentence about it being
+ * "bounded by the tool tiers and the consent gate" described a gate with nothing
+ * behind it.
+ *
+ * The invocation was measured against the real CLI on this machine (Claude Code
+ * 2.1.233): it connects with no approval prompt and answers `sessions_list` with
+ * the real fleet. `copilot-tools-live.test.ts` is that measurement, kept and
+ * re-runnable; these cases are the wiring that carries it.
+ */
+describe('the tools it is launched with', () => {
+  it('passes the config it was given, strictly', async () => {
+    const state = await ensureCopilot(harness({ mcpConfig: () => '/state/copilot/deck-control.json' }))
+    expect(state.status).toBe('running')
+    expect(calls[0]?.extraArgs).toEqual([
+      '--mcp-config',
+      '/state/copilot/deck-control.json',
+      '--strict-mcp-config',
+    ])
+  })
+
+  it('is strict on purpose, so its powers do not depend on the person’s own MCP servers', async () => {
+    /*
+     * Asserted on its own rather than left inside the array above, because
+     * dropping this one flag is a change nothing else would notice: the copilot
+     * would still have these tools, plus every MCP server in the person's
+     * `~/.claude.json`. An action log that cannot say which server a call came
+     * from is not an audit record, and a tool surface that varies by machine is
+     * one nobody can reason about.
+     */
+    await ensureCopilot(harness({ mcpConfig: () => '/state/copilot/deck-control.json' }))
+    expect(calls[0]?.extraArgs).toContain('--strict-mcp-config')
+  })
+
+  it('starts with no tools rather than pointing at a server that is not there', async () => {
+    /*
+     * `mcpConfigPath()` answers a path whether or not the server came up, and
+     * `deck-control` can genuinely fail to start — a port that will not bind, a
+     * token file that cannot be made owner-only. Handing the CLI that path
+     * would produce a copilot that starts, believes it has tools, and cannot
+     * reach one. Null means no flags, and the copilot still runs.
+     */
+    const state = await ensureCopilot(harness({ mcpConfig: () => null }))
+    expect(state.status).toBe('running')
+    expect(calls[0]?.extraArgs).toEqual([])
+  })
+
+  it('writes which of the two happened into the log, because nothing else records it', async () => {
+    await ensureCopilot(harness({ mcpConfig: () => '/state/copilot/deck-control.json' }))
+    expect(readFileSync(copilotPaths(userData).actions, 'utf8')).toContain(
+      'with this app’s tools from /state/copilot/deck-control.json',
+    )
+
+    resetCopilot()
+    calls = []
+    await ensureCopilot(harness({ mcpConfig: () => null }))
+    // A copilot with no tools and a copilot whose every call is refused look
+    // identical from the outside; this row is the only durable difference.
+    expect(readFileSync(copilotPaths(userData).actions, 'utf8')).toContain('no deck-control server')
+  })
+
+  it('adds nothing about the CLI’s own permissions, in either direction', async () => {
+    /*
+     * The copilot runs as the person, so its Claude Code prompts follow *their*
+     * `~/.claude/settings.json` — `permissions.defaultMode` and all. This app
+     * neither loosens that nor tightens it, and both halves matter.
+     *
+     * Passing `--dangerously-skip-permissions` would be this app deciding, on
+     * somebody's behalf, that their assistant may edit files without asking —
+     * a decision that is theirs and that they may already have made. Passing a
+     * stricter `--permission-mode` would be the opposite: an assistant that
+     * stops to ask about things every other session on the machine does
+     * silently, for no reason the person could find on any screen.
+     *
+     * The confirmation this app *does* raise is a different system entirely and
+     * is unaffected either way — see "the CLI's permission mode is not this
+     * gate" in `deck-control/index.test.ts`.
+     */
+    await ensureCopilot(harness({ mcpConfig: () => '/state/copilot/deck-control.json' }))
+    const flags = calls[0]?.extraArgs ?? []
+    expect(flags.some((flag) => flag.includes('permission'))).toBe(false)
+    expect(flags.some((flag) => flag.includes('dangerously'))).toBe(false)
+    // Two flags and a path, and nothing else travels on this launch.
+    expect(flags).toHaveLength(3)
+  })
+
+  it('asks for the config at start time rather than capturing it', async () => {
+    /*
+     * `deck-control` starts asynchronously at boot and the copilot starts later
+     * — from a window, or from whoever opens it — so a value read when the
+     * dependencies were assembled would be the answer from before the server
+     * existed. A function means the answer is the truth at the moment the
+     * session is spawned.
+     */
+    let config: string | null = null
+    const deps = harness({ mcpConfig: () => config })
+    await ensureCopilot(deps)
+    expect(calls[0]?.extraArgs).toEqual([])
+
+    // The server came up while the copilot was stopped.
+    resetCopilot()
+    config = '/state/copilot/deck-control.json'
+    await ensureCopilot(deps)
+    expect(calls[1]?.extraArgs).toContain('--mcp-config')
+  })
+})
+
+describe('the records fence', () => {
+  it('wraps the spawn when this machine holds it', async () => {
+    await ensureCopilot(deps)
+    const fence = calls[0]?.fence
+    expect(fence).toBeDefined()
+    expect(fence?.apply('/bin/echo', ['x']).command).toBe('/usr/bin/sandbox-exec')
+    expect(copilotState(deps).records).toMatchObject({ kind: 'seatbelt', enforced: true, reason: null })
+  })
+
+  it('starts the copilot anyway when it cannot be held, and says so', async () => {
+    /*
+     * The opposite of what confinement does, and deliberately.
+     *
+     * `confineSpawn` throws when a boundary cannot be proven, because the grant
+     * screen promises a device is held inside a folder. This fence protects the
+     * *record* rather than the person's disk, so a machine that cannot hold it
+     * has worse auditing rather than an escaped agent — and refusing to start
+     * over it would refuse the whole feature everywhere but macOS, which is the
+     * failure being corrected.
+     */
+    const state = await ensureCopilot(
+      harness({ fence: async () => ({ fence: null, reason: 'no mechanism here' }) }),
+    )
+    expect(state.status).toBe('running')
+    expect(calls[0]?.fence).toBeUndefined()
+    expect(state.records.enforced).toBe(false)
+    expect(state.records.reason).toBe('no mechanism here')
+  })
+
+  it('writes which of the two happened into the log, because the state forgets', async () => {
+    await ensureCopilot(harness({ fence: async () => ({ fence: null, reason: 'no mechanism here' }) }))
+    const actions = readFileSync(copilotPaths(userData).actions, 'utf8')
+    expect(actions).toContain('NOT held against it')
+    expect(actions).toContain('no mechanism here')
+
+    resetCopilot()
+    calls = []
+    await ensureCopilot(deps)
+    expect(readFileSync(copilotPaths(userData).actions, 'utf8')).toContain('held against it (seatbelt)')
+  })
+
+  it('reports the platform’s own sentence before anything has started', () => {
+    // A person opening Settings on Windows learns what is and is not true there
+    // without having to start anything.
+    const state = copilotState(harness({ platform: 'win32' }))
+    expect(state.records.kind).toBe('none')
+    expect(state.records.reason).toMatch(/recorded/i)
+    expect(state.records.enforced).toBe(false)
+  })
+
+  it('names every path it holds, from the same function the profile uses', () => {
+    expect(copilotState(deps).records.paths).toEqual(recordsFenceList(recordsFencePaths(userData)))
+    /*
+     * Five, not three, since `COPILOT-REMOTE.md` §0.3: the grant store and the
+     * trust store joined the fence when a phone's copilot access became a thing
+     * a file decides, because a store the copilot can write is a permission the
+     * copilot grants itself.
+     *
+     * The count is asserted at all — rather than left to the `toEqual` above,
+     * which would pass against a `recordsFenceList` that quietly returned
+     * fewer — because that is the shape this fence fails in: a path dropped
+     * from the list is a path the kernel stops being told about, and nothing on
+     * screen changes.
+     */
+    expect(copilotState(deps).records.paths).toHaveLength(5)
   })
 })
 
 describe('it refuses rather than pretending', () => {
-  it('will not start where the boundary cannot be enforced', async () => {
-    // Windows without the one-time setup answers `none`, and `startSession`
-    // would happily run it unconfined — the right answer for a person at their
-    // own keyboard and the wrong one for an agent the app is running itself.
+  it('starts on a platform with no confinement mechanism at all', async () => {
+    /*
+     * The regression this change exists for. `confinementKind('win32')` answers
+     * `'none'` on every Windows machine that has not had the one-time
+     * AppContainer grant — which is every Windows machine, because nothing in
+     * the shipped UI performs it — and the copilot used to refuse outright
+     * there. It was the single largest cost of the jail: on two of three
+     * platforms the feature did not exist.
+     */
     const state = await ensureCopilot(harness({ platform: 'win32' }))
-    expect(calls).toHaveLength(0)
-    expect(state.status).toBe('unavailable')
-    expect(state.problem).toBeTruthy()
-    expect(state.confinement.enforced).toBe(false)
+    expect(state.status).toBe('running')
+    expect(calls).toHaveLength(1)
+    expect(state.problem).toBeNull()
   })
 
   it('will not open a plain shell when the agent CLI is missing', async () => {
@@ -268,8 +465,8 @@ describe('it refuses rather than pretending', () => {
     // otherwise leave a bare shell pinned in the sidebar as your assistant.
     const state = await ensureCopilot(
       harness({
-        async startSession(input, guest, confine) {
-          calls.push({ input, guest, confine })
+        async startSession(input, guest, confine, fence, extraArgs) {
+          calls.push({ input, guest, confine, fence, extraArgs })
           const created = meta(input, 'shell')
           alive.add(created.id)
           return created
@@ -281,18 +478,18 @@ describe('it refuses rather than pretending', () => {
     expect(state.problem).toMatch(/rather than an agent/i)
   })
 
-  it('reports a refused confinement as a sentence rather than throwing', async () => {
+  it('reports a failed spawn as a sentence rather than throwing', async () => {
     const state = await ensureCopilot(
       harness({
         startSession: async () => {
-          throw new Error('This session could not be confined to its folder: no boundary')
+          throw new Error('that folder does not exist')
         },
       }),
     )
     // A pane has to draw this. A rejected promise would push the job onto every
     // caller and lose the reason on the way.
     expect(state.status).toBe('stopped')
-    expect(state.problem).toContain('could not be confined')
+    expect(state.problem).toContain('does not exist')
   })
 
   it('lets a later attempt succeed after a refusal', async () => {
@@ -305,32 +502,57 @@ describe('it refuses rather than pretending', () => {
   })
 })
 
-describe('the plan', () => {
-  const plan = (): ReturnType<typeof copilotPlan> =>
-    copilotPlan({
-      folder: '/app/copilot',
-      home: '/app/remote/device-home/copilot',
-      accountHome: '/Users/someone',
-      path: '/usr/bin:/bin',
-      platform: 'darwin',
+describe('sign-in', () => {
+  it('asks about the profile the copilot actually runs as', async () => {
+    const asked: Profile[] = []
+    const answer = await readCopilotSignIn(
+      harness({
+        signInOf: async (profile) => {
+          asked.push(profile)
+          return { state: 'signed-in' as const, account: 'a@b.c', plan: 'max' }
+        },
+      }),
+    )
+    expect(asked.map((profile) => profile.id)).toEqual(['system'])
+    expect(answer).toMatchObject({ state: 'signed-in', account: 'a@b.c', profileName: 'Default' })
+  })
+
+  it('does not reuse a cached answer for a different account', async () => {
+    /*
+     * The moment a person is most likely to look at this pane is straight after
+     * changing which account the copilot uses, and the cache is a minute long.
+     */
+    await readCopilotSignIn(deps, 1_000)
+    const other: Profile = { ...DEFAULT_PROFILE, id: 'work', name: 'Work', system: false }
+    const answer = await readCopilotSignIn(
+      harness({
+        profile: () => other,
+        signInOf: async () => ({ state: 'signed-out' as const, account: null, plan: null }),
+      }),
+      1_500,
+    )
+    expect(answer.state).toBe('signed-out')
+    expect(answer.profileId).toBe('work')
+  })
+
+  it('reuses it for the same account inside the window', async () => {
+    let asked = 0
+    const same = harness({
+      signInOf: async () => {
+        asked += 1
+        return { state: 'signed-in' as const, account: null, plan: null }
+      },
     })
-
-  it('grants the folder and the home, and nothing of the account', () => {
-    const built = plan()
-    expect(built.writable).toContain('/app/copilot')
-    expect(built.writable).toContain('/app/remote/device-home/copilot')
-    expect(built.writable).not.toContain('/Users/someone')
-    expect(built.readable).not.toContain('/Users/someone')
+    await readCopilotSignIn(same, 1_000)
+    await readCopilotSignIn(same, 1_500)
+    expect(asked).toBe(1)
   })
 
-  it('protects the account home by naming it as the thing being guarded', () => {
-    expect(plan().accountHome).toBe('/Users/someone')
-  })
-
-  it('grants no individual files', () => {
-    // The credential helper is the only thing that ever needed a file rule, and
-    // the copilot has no credential proxy: it is not a guest device.
-    expect(plan().readableFiles).toEqual([])
+  it('never reports `unsupported`, which a pane has nothing to do with', async () => {
+    const answer = await readCopilotSignIn(
+      harness({ signInOf: async () => ({ state: 'unsupported' as const, account: null, plan: null }) }),
+    )
+    expect(answer.state).toBe('unknown')
   })
 })
 
@@ -339,6 +561,7 @@ describe('the state a window reads', () => {
     const state = copilotState(deps)
     expect(state.status).toBe('stopped')
     expect(state.sessionId).toBeNull()
+    expect(state.profile).toBeNull()
     expect(state.paths.root).toBe(copilotPaths(userData).root)
     expect(state.startupFiles.map((file) => file.exists)).toEqual([false, false])
   })
@@ -351,15 +574,27 @@ describe('the state a window reads', () => {
     expect(state.instructionsAreDefault).toBe(true)
   })
 
-  it('says the boundary was enforced only for a session that actually started', async () => {
-    expect(copilotState(deps).confinement.enforced).toBe(false)
-    await ensureCopilot(deps)
-    expect(copilotState(deps).confinement).toMatchObject({ kind: 'seatbelt', enforced: true })
+  it('still reports where a jailed copilot kept its conversations', () => {
+    /*
+     * Nothing writes there any more. An install upgraded from a build that
+     * jailed the copilot still has that directory, holding its history, and it
+     * is still inside the root four transcript readers scan — which is why
+     * `copilotHomeScope` is still installed at boot. See
+     * `copilot-transcript-forgery.test.ts`.
+     */
+    expect(copilotState(deps).home).toBe(copilotHome(join(userData, 'remote')))
+    expect(copilotHome(join(userData, 'remote'))).toBe(
+      join(userData, 'remote', 'device-home', COPILOT_HOME_KEY),
+    )
+    expect(copilotHomeScope(userData)).toEqual({
+      home: copilotHome(join(userData, 'remote')),
+      folder: copilotPaths(userData).root,
+    })
   })
 })
 
 describe('the bridge', () => {
-  it('registers six channels and none of them takes an argument from the page', () => {
+  it('registers the channels and takes nothing from the page but instruction text', () => {
     const handlers = new Map<string, (...args: unknown[]) => unknown>()
     registerCopilotIpc(
       { handle: (channel: string, fn: () => unknown) => handlers.set(channel, fn) } as never,
@@ -368,17 +603,22 @@ describe('the bridge', () => {
     expect([...handlers.keys()].sort()).toEqual([
       'copilot:ensure',
       'copilot:files',
-      // The only one that writes, and it still takes nothing: *which* file and
-      // *what* goes in it are both decided in this process.
+      'copilot:read-instructions',
+      // The only ones that write, and only one takes an argument: *which* file
+      // is decided in this process either way.
       'copilot:reset-instructions',
       'copilot:signin',
       'copilot:state',
       'copilot:stop',
+      'copilot:write-instructions',
     ])
-    // The validation *is* the arity: nothing about where the copilot runs comes
-    // from the renderer, so there is no path to sanitise and no id to check.
-    // (`length` counts declared parameters; the IPC event is the only one.)
-    for (const handler of handlers.values()) expect(handler.length).toBeLessThanOrEqual(1)
+    // The validation *is* the arity for all but one: nothing about where the
+    // copilot runs comes from the renderer, so there is no path to sanitise and
+    // no id to check. (`length` counts declared parameters; the IPC event is
+    // one of them.)
+    for (const [channel, handler] of handlers) {
+      expect(handler.length, channel).toBeLessThanOrEqual(channel === 'copilot:write-instructions' ? 2 : 1)
+    }
   })
 
   it('answers `copilot:files` with the same list the state carries', async () => {
@@ -400,7 +640,9 @@ describe('the action log records the lifecycle', () => {
       .split('\n')
       .map((line) => JSON.parse(line) as { action: string; detail?: string })
     expect(lines.map((line) => line.action)).toEqual(['home.created', 'session.started'])
-    expect(lines[1]?.detail).toContain('seatbelt')
+    // Which account it ran as, because "why did that answer come from a
+    // different subscription" is a question the log should answer.
+    expect(lines[1]?.detail).toContain('Default')
   })
 
   it('does not repeat `home.created` on a later start', async () => {
@@ -409,6 +651,54 @@ describe('the action log records the lifecycle', () => {
     await ensureCopilot(deps)
     const actions = readFileSync(copilotPaths(userData).actions, 'utf8')
     expect(actions.match(/home\.created/g)).toHaveLength(1)
+  })
+})
+
+/**
+ * The answer the network asks for, and the reason it is asked of this module.
+ *
+ * `isCopilotSession` is consulted by `remote/session-fanout.ts` on the read path
+ * of every frame a paired device sends — `list`, `attach`, `input`, `resize` —
+ * so that the copilot's keyboard is not reachable from a phone. The cases below
+ * are the three states it has to get right; the end-to-end proof that a phone
+ * is actually refused lives in `remote/server.test.ts`, and the proof that this
+ * app wires the two together lives in `copilot-off-the-network.test.ts`.
+ */
+describe('which session is the copilot', () => {
+  it('names the running copilot and nothing else', async () => {
+    const state = await ensureCopilot(deps)
+    expect(state.sessionId).not.toBeNull()
+    expect(isCopilotSession(state.sessionId as string)).toBe(true)
+    // A session the person opened is not the copilot, whatever it is doing.
+    expect(isCopilotSession('session-the-person-opened')).toBe(false)
+    // Nor is a made-up id, which is what a phone guessing would send.
+    expect(isCopilotSession('')).toBe(false)
+  })
+
+  it('answers for the new session after a restart, not the old one', async () => {
+    const first = await ensureCopilot(deps)
+    alive.clear()
+    const second = await ensureCopilot(deps)
+    expect(second.sessionId).not.toBe(first.sessionId)
+    expect(isCopilotSession(second.sessionId as string)).toBe(true)
+    // The old id stops being the copilot the moment a new one is: the answer
+    // follows the live session rather than accumulating every id this module
+    // has ever started, so a hidden set cannot grow for the life of the app.
+    expect(isCopilotSession(first.sessionId as string)).toBe(false)
+  })
+
+  it('still names a copilot whose process has gone, until something restarts it', async () => {
+    const state = await ensureCopilot(deps)
+    // The process died; nothing has recomputed the state yet. This is the
+    // window a phone would have to hit, and the honest answer in it is "that
+    // might still be the copilot's keyboard" — an attach to a dead session is
+    // refused for not existing anyway, and pty ids are not reused.
+    alive.clear()
+    expect(isCopilotSession(state.sessionId as string)).toBe(true)
+  })
+
+  it('answers false when no copilot is running', () => {
+    expect(isCopilotSession('anything')).toBe(false)
   })
 })
 
@@ -423,150 +713,11 @@ describe('resetCopilot', () => {
   })
 })
 
-describe('reading the person\'s projects', () => {
-  it('grants every project as read-only and none of them as writable', async () => {
-    const one = addProject('one')
-    const two = addProject('two')
-    await ensureCopilot(deps)
-    const confine = calls[0]?.confine
-    expect([...(confine?.projects ?? [])].sort()).toEqual([one, two].sort())
-    // The half that is not being widened. There is no arrangement of these
-    // fields that makes a repository writable by the copilot.
-    expect(confine?.writable).toEqual([])
-  })
-
-  it('reads the list at the spawn rather than holding a snapshot', async () => {
-    // The plan is frozen at `exec`, so the only thing that can be live is the
-    // derivation. A folder added before the start must be in the profile.
-    const late = addProject('late')
-    await ensureCopilot(deps)
-    expect(calls[0]?.confine?.projects).toContain(late)
-  })
-
-  it('never grants the app\'s own storage, even when it is on the list', async () => {
-    // `<userData>` holds every session's transcript, the paired devices'
-    // credentials, `state.json` and `settings.json`. A person can add any
-    // folder to this app, this one included.
-    const inside = join(userData, 'somewhere')
-    mkdirSync(inside, { recursive: true })
-    projects = [userData, inside]
-    await ensureCopilot(deps)
-    expect(calls[0]?.confine?.projects).toEqual([])
-  })
-
-  it('says in the action log which folders it can read', async () => {
-    const one = addProject('logged')
-    await ensureCopilot(deps)
-    const actions = readFileSync(copilotPaths(userData).actions, 'utf8')
-    expect(actions).toContain('read-only')
-    expect(actions).toContain(one)
-  })
-
-  it('grants nothing where the credential exclusions cannot be enforced', async () => {
-    // Not a narrower version of the feature: the Linux backend would grant the
-    // folder whole, `.env` included, and Windows ignores read roots entirely.
-    // `copilotProjectRoots` says so rather than leaving it to be guessed.
-    addProject('linux')
-    const linux = harness({ platform: 'linux' })
-    const answer = copilotProjectRoots(linux)
-    expect(answer.roots).toEqual([])
-    expect(answer.enforceable).toBe(false)
-    expect(answer.reason).toMatch(/macOS/)
-  })
-})
-
-describe('the grant follows the project list', () => {
-  it('stops the copilot when a folder it could read is removed', async () => {
-    const one = addProject('revoked')
-    await ensureCopilot(deps)
-    const sessionId = copilotState(deps).sessionId
-
-    dropProject(one)
-
-    expect(stopped).toContain(sessionId)
-    expect(copilotState(deps).status).toBe('stopped')
-    expect(copilotState(deps).problem).toContain(one)
-    const actions = readFileSync(copilotPaths(userData).actions, 'utf8')
-    expect(actions).toContain('projects.revoked')
-  })
-
-  it('leaves a running copilot alone when a folder is added', async () => {
-    // A widening is nobody's emergency, and throwing away a conversation in
-    // progress because somebody opened an unrelated folder would be worse than
-    // the delay.
-    addProject('first')
-    await ensureCopilot(deps)
-    const sessionId = copilotState(deps).sessionId
-    const later = addProject('later')
-    expect(stopped).toEqual([])
-    expect(copilotState(deps).sessionId).toBe(sessionId)
-    // But it is reported, because otherwise the person has no way to know why
-    // their copilot cannot see the folder they just opened.
-    expect(copilotState(deps).projects.pending).toEqual([later])
-  })
-
-  it('picks the new folder up on the next start', async () => {
-    addProject('first')
-    await ensureCopilot(deps)
-    const later = addProject('later')
-    stopCopilot(deps)
-    await ensureCopilot(deps)
-    expect(calls[1]?.confine?.projects).toContain(later)
-    expect(copilotState(deps).projects.pending).toEqual([])
-  })
-
-  it('catches a removal that no event announced, at the next ensure', async () => {
-    // The certain half. A listener that was never attached, a shell that does
-    // not emit, a `state.json` edited by hand while the app was closed — the
-    // event is what makes this prompt, and `ensure` is what makes it hold.
-    const one = addProject('quietly-removed')
-    await ensureCopilot(deps)
-    expect(calls[0]?.confine?.projects).toEqual([one])
-    projects = []
-    await ensureCopilot(deps)
-    expect(calls[1]?.confine?.projects).toEqual([])
-  })
-
-  it('reports what the running process can read, not what the list says', async () => {
-    const one = addProject('granted')
-    await ensureCopilot(deps)
-    addProject('not-yet')
-    const state = copilotState(deps)
-    expect(state.projects.granted).toEqual([one])
-    expect(state.projects.available).toHaveLength(2)
-    expect(state.projects.enforceable).toBe(true)
-    expect(state.projects.excluded).toContain('dotenv')
-  })
-
-  it('reports nothing readable while nothing is running', () => {
-    addProject('listed')
-    const state = copilotState(deps)
-    expect(state.projects.granted).toEqual([])
-    expect(state.projects.available).toHaveLength(1)
-  })
-
-  it('stops listening once it has been stopped', async () => {
-    addProject('one')
-    await ensureCopilot(deps)
-    expect(projectListeners).toHaveLength(1)
-    stopCopilot(deps)
-    expect(projectListeners).toHaveLength(0)
-  })
-
-  it('leaves one listener behind, not one per start', async () => {
-    addProject('one')
-    await ensureCopilot(deps)
-    alive.clear()
-    await ensureCopilot(deps)
-    expect(projectListeners).toHaveLength(1)
-  })
-})
-
 describe('putting the instructions back', () => {
   it('detects an out-of-date default and replaces it, keeping a copy', async () => {
     await ensureCopilot(deps)
     const paths = copilotPaths(userData)
-    // Exactly what an install from earlier tonight has on disk.
+    // Exactly what an install from an earlier build has on disk.
     writeFileSync(paths.instructions, PAST_COPILOT_INSTRUCTIONS[0]?.(paths) ?? '')
     expect(copilotState(deps).instructions).toBe('superseded')
     expect(copilotState(deps).instructionsAreDefault).toBe(false)

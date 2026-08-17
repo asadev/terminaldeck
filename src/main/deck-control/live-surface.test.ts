@@ -162,6 +162,42 @@ describe('sessions', () => {
     expect(killed).toEqual(['live-1'])
     expect(await live.sessionScreen('live-1')).toBe('a rendered screen')
   })
+
+  /**
+   * The tripwire under `COPILOT-REMOTE.md` §0.2, and the reason it is an
+   * assertion about an *absence*.
+   *
+   * `sessions.start` narrows a remote caller's folder through
+   * `DeckSurface.deviceFolders` and starts the session through
+   * `startSession(input, forDevice)` — the same spawn path that device's own
+   * `create` frame takes, so it gets that device's folder grants, its guest git
+   * identity and its confinement. This surface implements neither half: it
+   * holds the *person's* starter, which knows nothing about devices.
+   *
+   * That is a coherent state, not a half-built one. `requireDeviceFolder` reads
+   * a missing `deviceFolders` as "this host cannot say whether a device may use
+   * a folder" and refuses every remote `sessions.start` outright, which is the
+   * right answer for a host that cannot honour the argument.
+   *
+   * What must never happen is one arriving without the other. A `deviceFolders`
+   * added here while `startSession` still drops `forDevice` would let a phone,
+   * through the copilot, start a session in any folder this desktop has open —
+   * with the owner's git credentials and no confinement, which is strictly more
+   * than the New Session button on that phone can do. That is the shape of
+   * OC-02 (GHSA-943q-mwmv-hhvh): the tool name gated, the effect not.
+   *
+   * So: when somebody wires the device-aware start, this test fails, and the
+   * fix is to delete it and replace it with one asserting the start really is
+   * device-aware.
+   */
+  it('offers no device folders, because it has no device-aware way to start one', () => {
+    const live = surface()
+    expect(live.deviceFolders).toBeUndefined()
+    // The two travel together. Read `deps.startSession`'s arity rather than its
+    // behaviour, because "did this honour `forDevice`" is not observable from a
+    // starter that ignores it — which is exactly the failure being guarded.
+    expect(live.startSession.length).toBe(1)
+  })
 })
 
 /* --------------------------------------------------------------- projects -- */
@@ -272,18 +308,34 @@ describe('transcripts', () => {
     return path
   }
 
-  it('finds the transcript the app’s own chat view would open', async () => {
-    const path = writeTranscript(
+  it('lists every conversation in a folder, with its size and when it began', async () => {
+    /*
+     * Every one, not the newest one, and that is the change this asserts.
+     *
+     * `newestChatTranscript(cwd)` is right for the chat view and wrong for a
+     * fleet: several sessions share a folder, and handing them all the same
+     * file made three of them report a fourth session's work as their own.
+     * `transcript-match.ts` picks per session from this list.
+     */
+    const first = writeTranscript(
       'one.jsonl',
       prompt('p1', 'run the tests', '2026-08-17T09:00:00.000Z') +
         reply('m1', 'running them now', '2026-08-17T09:00:01.000Z'),
     )
-    expect(await surface().newestTranscript(work)).toBe(path)
-    expect(await surface().transcriptBytes(path)).toBeGreaterThan(0)
+    const second = writeTranscript('two.jsonl', prompt('p2', 'and again', '2026-08-17T09:05:00.000Z'))
+
+    const found = await surface().transcriptsIn(work)
+    expect(found.map((file) => file.path).sort()).toEqual([first, second].sort())
+    for (const file of found) {
+      expect(file.bytes).toBeGreaterThan(0)
+      expect(file.createdAt).toBeGreaterThan(0)
+      expect(file.sessionId).toMatch(/^(one|two)$/)
+    }
+    expect(await surface().transcriptBytes(first)).toBeGreaterThan(0)
   })
 
-  it('answers null for a folder with no transcript at all', async () => {
-    expect(await surface().newestTranscript(join(ROOT, 'nowhere'))).toBeNull()
+  it('answers an empty list for a folder with no transcript at all', async () => {
+    expect(await surface().transcriptsIn(join(ROOT, 'nowhere'))).toEqual([])
   })
 
   it('parses the real JSONL into prose, keeping the roles apart', async () => {

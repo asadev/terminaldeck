@@ -72,6 +72,20 @@ struct DeckTabs: View {
                         switch route {
                         case let .session(host, id):
                             TerminalScreen(model: model, hostID: host, sessionID: id)
+                        /*
+                         * The copilot is on this stack and not on a fourth tab.
+                         *
+                         * He reconsidered a four-pill layout once already, in the
+                         * recording this file's header quotes, and settled on
+                         * three. The argument for putting it *here* rather than
+                         * anywhere else is in `CopilotView`; in one line, the
+                         * desktop pins the copilot above the session list, this
+                         * tab is the session list, and every question the
+                         * copilot exists to answer is a question about the rows
+                         * underneath it.
+                         */
+                        case let .copilot(host):
+                            CopilotView(model: model, hostID: host)
                         }
                     }
             }

@@ -10,6 +10,39 @@ A release with nothing under Unreleased is refused rather than shipped blank.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The bell in the sidebar now carries a count.** It has been drawn, styled and
+  tested since Alerts became a pop-up, and nothing in the app ever gave it a
+  number — *"if there is an alerts option and we don't wire anything to it to
+  give us the alerts, why would we have an alerts option?"* Alerts themselves
+  worked the whole time; what was missing was the mark that tells you to look.
+
+  **Unread means: this alert has not been on screen.** Opening the sheet is
+  what clears it, and that is the only thing that does — five of the six alert
+  kinds describe a condition that is still true after you have read about it, so
+  a per-row dismiss would either lie about the project or come back on the next
+  scan. An alert that gets *worse* counts as new: a session blocked for ten
+  minutes and the same session blocked for forty-five share one id, and the
+  escalation is the most important thing this panel says, so the bell lights
+  again for it exactly once. The record is per project, kept in the window's own
+  storage so the dot is right on the first frame rather than a frame later, and
+  it is bounded in both directions — a project remembers only the alerts it
+  currently has, and only the last thirty-two projects are remembered at all.
+
+  It costs nothing when nothing is happening. The reason the count was left
+  unwired was that the only thing which knows the number is a scan of every
+  transcript in the project, and putting that on a timer was a price the window
+  would not pay for a dot. So the scan is driven by the events the app already
+  receives — a session changing status, starting or exiting — at most once a
+  minute, which is no more than the panel already cost while it was open, and
+  never at all on a quiet machine. The one alert that is genuinely about a clock
+  rather than an event, a session that has been waiting on you for ten minutes,
+  gets a single wake-up armed for that exact moment instead.
+
+  The sheet and the bell now read one report, so they cannot disagree about how
+  many there are.
+
 ## [0.3.0] — 2026-08-17
 
 ### Added

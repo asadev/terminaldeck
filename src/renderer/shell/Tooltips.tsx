@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { NATIVE_VIEW_SELECTOR } from '../browser/overlay-watch'
 import './tooltip.css'
 import {
   OPEN_DELAY_MS,
@@ -10,6 +11,7 @@ import {
   splitChord,
   titleHold,
   type Placed,
+  type Rect,
 } from './tooltip'
 
 /**
@@ -95,6 +97,27 @@ function textIsClipped(el: HTMLElement): boolean {
     if (kid.scrollWidth > kid.clientWidth + 1) return true
   }
   return false
+}
+
+/**
+ * The parts of the window a bubble would be invisible in.
+ *
+ * A browser page is a native view composited above the whole renderer, so a
+ * bubble that lands on one is painted over however it is styled —
+ * `browser/overlay-watch.ts` is the long version and `placeTip`'s `blind`
+ * parameter is what does something about it. Read fresh each time a bubble
+ * opens, rather than watched: a tooltip is placed once and does not chase a
+ * moving anchor, so one `querySelectorAll` of a handful of elements at the
+ * moment of placement is both cheaper and more honest than a subscription that
+ * has to be kept current between them.
+ *
+ * `DOMRect` already has the `left`/`top`/`width`/`height` this wants, so there
+ * is nothing to convert and nothing to get wrong in converting.
+ */
+function blindRegions(): Rect[] {
+  return Array.from(document.querySelectorAll(NATIVE_VIEW_SELECTOR), (el) =>
+    el.getBoundingClientRect(),
+  ).filter((box) => box.width > 0 && box.height > 0)
 }
 
 export function Tooltips() {
@@ -292,6 +315,7 @@ export function Tooltips() {
         bubble.anchor,
         { width: node.offsetWidth, height: node.offsetHeight },
         { width: window.innerWidth, height: window.innerHeight },
+        blindRegions(),
       ),
     )
   }, [bubble])

@@ -38,8 +38,23 @@ import {
   totalTokens,
   type ContextUsage,
 } from './cost'
+/*
+ * Across into `deck-control/` for one function, which is the wrong direction on
+ * paper and the right one here.
+ *
+ * `progress.ts` is the app's judgement about whether an agent is getting
+ * anywhere. It happens to live under `deck-control/` because the copilot was
+ * the first thing that needed it, and it depends on nothing from that folder —
+ * one type import, erased at compile — so nothing circular arrives with it.
+ * Moving it up here would be the tidier arrangement and a larger edit into a
+ * file another agent is holding; importing it is what keeps the panel and the
+ * copilot answering "is that session stuck" with the same numbers, which is
+ * the property that actually matters.
+ */
+import { assessProgress, REPEAT_CRITICAL, type ProgressReport } from './deck-control/progress'
 import { readGitStatus, type GitStatusResult } from './git'
 import { detectProviders, PROVIDERS } from './providers'
+import { readToolTrail, TRAIL_WINDOW_BYTES } from './tool-trail'
 import {
   DEFAULT_MAX_AGE_MS,
   DEFAULT_MAX_SESSIONS,
@@ -98,6 +113,32 @@ export const HEAVY_SEVERE_MULTIPLE = 6
  */
 export const HEAVY_MIN_TOKENS = 1_000_000
 
+/**
+ * How recently a session must have done something for a loop to be worth
+ * raising.
+ *
+ * A loop alert is about money being spent *now*. A transcript that stopped
+ * moving two hours ago describes a session that already finished being stuck,
+ * and there is nothing left to interrupt anybody about — the evidence is still
+ * there for `sessions.result` to read when somebody asks. Thirty minutes is
+ * comfortably longer than the span of the thirty tool calls
+ * `deck-control/progress.ts` examines, so a session that is genuinely mid-loop
+ * is always inside it.
+ */
+export const LOOP_ACTIVE_WITHIN_MS = 30 * 60 * 1000
+
+/**
+ * How many transcripts one scan will read the tool trail of.
+ *
+ * The trail read is a bounded tail rather than the whole file, so it is cheap
+ * next to the full `readTranscript` pass this scan already does — but it is not
+ * free, and a project with forty recent transcripts must not turn a 60-second
+ * refresh into forty extra reads. Three is enough: the sessions are sorted by
+ * how recently they moved, and a person running more than three agents in one
+ * folder at once has a different problem.
+ */
+export const LOOP_MAX_TRAILS = 3
+
 /** Sessions that have to have run since the working tree was last touched. */
 export const DIRTY_TREE_SESSION_STREAK = 3
 export const DIRTY_TREE_CRITICAL_STREAK = 8
@@ -116,6 +157,23 @@ export type AlertKind =
   | 'session-blocked'
   | 'provider-missing'
   | 'heavy-session'
+  /**
+   * A live session that is repeating itself and writing nothing.
+   *
+   * The one alert here that is about *behaviour* rather than about a quantity.
+   * Everything else in this list fires on a number crossing a line — context
+   * percentage, token multiple, minutes blocked, files uncommitted — and a
+   * session stuck in a loop crosses none of them: it is `working`, the dot is
+   * green, output is arriving, and the token count climbs at the ordinary rate
+   * for as long as somebody lets it. `heavy-session` eventually catches the
+   * expensive ones, at `HEAVY_MIN_TOKENS` — a million tokens later.
+   *
+   * `COPILOT-CAPABILITIES.md` §2.3 calls loop detection "the cheapest safety
+   * feature in the design and the one most often skipped", and the reason it
+   * has to be an *alert* rather than only a tool the copilot can call is in the
+   * same sentence: the failure this catches happens while nobody is looking.
+   */
+  | 'loop'
   | 'dirty-tree'
 
 /**
@@ -165,6 +223,34 @@ export interface AlertSession {
   /** Epoch ms the status last changed, used to age a blocked session. */
   statusSince?: number
   provider?: ProviderId
+  /**
+   * What the tail of this session's tool use looks like, when it was read.
+   *
+   * Absent on most entries and that is the normal case, not a gap:
+   * `collectAlertInput` only reads a trail for the handful of transcripts that
+   * could be about a *live* loop — see {@link LOOP_ACTIVE_WITHIN_MS} and
+   * {@link LOOP_MAX_TRAILS}. `undefined` here means "not looked at", which
+   * {@link loopAlerts} treats as silence. It is deliberately not the same value
+   * as a {@link ProgressReport} whose verdict is `unknown`, which means "looked,
+   * and there was nothing to read" — the distinction the whole of `progress.ts`
+   * exists to keep, because reporting silence as health is how a supervision
+   * surface starts lying.
+   */
+  progress?: ProgressReport
+  /**
+   * The app's own id for the session this transcript belongs to, when it can be
+   * told, so an alert about it can point at a tab.
+   *
+   * Almost always absent, and the reason is the namespace split documented at
+   * the bottom of `collectAlertInput`: `PtyManager` names a session with its own
+   * `randomUUID()` while a transcript is named with the id the CLI generated
+   * inside that process, so {@link AlertSession.sessionId} on a transcript entry
+   * is *not* a session id this app can focus. It is filled in only for the one
+   * case where the answer is a fact rather than a guess — exactly one live
+   * session open in the folder — which is the same `only-one` basis
+   * `deck-control/transcript-match.ts` reasons about at greater length.
+   */
+  appSessionId?: string
 }
 
 export interface AlertGit {
@@ -414,6 +500,97 @@ export function heavySessionAlerts(input: AlertInput): Alert[] {
 }
 
 /**
+ * A session that is spending money without getting anywhere.
+ *
+ * The judgement is not made here. `deck-control/progress.ts` owns it — the
+ * window, the thresholds, the four signals and the rule that repetition alone
+ * is not a loop unless nothing is being written — and this rule does nothing
+ * but decide whether the verdict it already reached is worth interrupting
+ * somebody about. That split is deliberate and it is the reason this file
+ * imports across into `deck-control/`, which is otherwise the wrong direction:
+ * the alternative was a second copy of the same thresholds, and the copilot
+ * saying "this looks stuck" while the alerts panel said nothing is precisely
+ * the disagreement `COPILOT-DESIGN.md` argues the whole feature exists to
+ * avoid.
+ *
+ * Only `looping` fires. `suspect` is repetition with files still landing, which
+ * is what a refactor looks like from the outside, and alerting on it would put
+ * a warning on ordinary work — the failure mode this module's header calls the
+ * one it lives or dies by.
+ */
+export function loopAlerts(input: AlertInput): Alert[] {
+  const alerts: Alert[] = []
+  for (const session of input.sessions) {
+    const progress = session.progress
+    if (progress === undefined || progress.verdict !== 'looping') continue
+
+    /*
+     * Severity comes from the count the finding fired on, against
+     * `progress.ts`'s own two thresholds — ten repeats is worth a line, twenty
+     * is "it is nearly all this session is doing". Reading the number off the
+     * finding rather than re-deriving it here is what keeps one set of
+     * thresholds in the product: if somebody retunes `REPEAT_CRITICAL`, this
+     * moves with it.
+     */
+    const worst = progress.findings.reduce<number>(
+      (top, finding) => (finding.count === null ? top : Math.max(top, finding.count)),
+      0,
+    )
+    const severity: AlertSeverity = worst >= REPEAT_CRITICAL ? 'critical' : 'warning'
+
+    const tool = progress.findings.find((finding) => finding.tool !== null)?.tool ?? null
+    /*
+     * Its own sentence, not a clause.
+     *
+     * Every `ProgressFinding.detail` already ends in a full stop, so appending
+     * " over the last 6 minutes" produced "…in the last 26 tool calls. over the
+     * last 6 minutes." — which is what the real alert said on this machine
+     * before somebody read one. A joined list of finished sentences can only be
+     * extended with another finished sentence.
+     */
+    const forHow =
+      progress.spanMs === null || progress.spanMs <= 0
+        ? ''
+        : ` It has been doing that for ${formatDuration(progress.spanMs)}.`
+
+    alerts.push({
+      id: `loop:${session.sessionId}`,
+      kind: 'loop',
+      severity,
+      title:
+        tool === null
+          ? 'A session is repeating itself and writing nothing'
+          : `A session is stuck on ${tool}`,
+      /*
+       * The findings, joined, and then the honest qualifier.
+       *
+       * `progressSentence` is not used even though it exists, because it opens
+       * with "Looks stuck." and this alert's title has already said that. What
+       * is wanted here is the evidence underneath it — the counts a person can
+       * act on in one glance — which is what `COPILOT-CAPABILITIES.md` §2.3
+       * means by preferring "Bash 14 times, 11 of them failing, nothing
+       * written" over "looks stuck".
+       */
+      detail: `${progress.findings.map((finding) => finding.detail).join(' ')}${forHow} This is read from tool names and outcomes only, so it is a strong hint rather than proof — open it before stopping it.`,
+      ...(session.appSessionId === undefined ? {} : { sessionId: session.appSessionId }),
+      at: session.lastActivityAt,
+      action: { kind: 'open-inspector', label: 'See what it is doing', target: session.transcriptPath },
+    })
+  }
+  /*
+   * Worst first, then at most one.
+   *
+   * Two agents looping in one folder is real, and reporting both would still be
+   * right — but the panel groups by severity and the routine that hangs off
+   * this trigger starts a copilot turn per *new* alert id. One line about the
+   * worst one, with the second reachable through the tool, is the same call
+   * `heavySessionAlerts` makes two rules above and for the same reason.
+   */
+  alerts.sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity] || b.at - a.at)
+  return alerts.slice(0, 1)
+}
+
+/**
  * Uncommitted work that several sessions have now been built on top of.
  *
  * "Across many sessions" is measured against the tree itself: count the
@@ -456,6 +633,7 @@ const RULES: Array<(input: AlertInput) => Alert[]> = [
   contextAlerts,
   blockedAlerts,
   providerAlerts,
+  loopAlerts,
   heavySessionAlerts,
   dirtyTreeAlerts,
 ]
@@ -721,6 +899,8 @@ export async function collectAlertInput(
     })
   }
 
+  await attachProgress(sessions, live, now)
+
   const providersInUse: ProviderId[] = []
   for (const session of live) {
     if (session.provider && !providersInUse.includes(session.provider)) {
@@ -754,6 +934,68 @@ export async function collectAlertInput(
     providersInstalled: installed,
     git: toAlertGit(gitStatus, lastChangeAt),
   }
+}
+
+/**
+ * Read the tool trail of the few transcripts a live loop could be in, and hang
+ * the verdict on them.
+ *
+ * Three gates before a single byte is read, in this order, because each one is
+ * cheaper than the next and each removes most of what the next would look at:
+ *
+ *  1. **No live session in this folder, no read at all.** A loop alert is about
+ *     an agent burning wall-clock right now. A transcript with no process
+ *     behind it is history — still readable through `sessions.result` when
+ *     somebody asks, never worth an interruption.
+ *  2. **Only transcripts that moved inside {@link LOOP_ACTIVE_WITHIN_MS}**, and
+ *     only ones with requests on them, which is the same `activeSessions` rule
+ *     every other quantitative rule here obeys.
+ *  3. **At most {@link LOOP_MAX_TRAILS}**, newest first.
+ *
+ * In the ordinary case — a project open in the sidebar with nothing running in
+ * it — that is zero extra reads, which is what makes this affordable on a scan
+ * the panel drives from a timer.
+ *
+ * Mutates the entries in place rather than returning a new list. The array was
+ * built four lines above by its only caller and the transcript entries are
+ * already the objects the rules read; rebuilding it to attach one optional
+ * field would be a copy whose only purpose is to look functional.
+ */
+async function attachProgress(
+  sessions: AlertSession[],
+  live: readonly LiveSession[],
+  now: number,
+): Promise<void> {
+  if (live.length === 0) return
+
+  const candidates = sessions
+    .filter(
+      (session) =>
+        session.transcriptPath !== '' &&
+        session.requests > 0 &&
+        session.lastActivityAt >= now - LOOP_ACTIVE_WITHIN_MS,
+    )
+    .sort((a, b) => b.lastActivityAt - a.lastActivityAt)
+    .slice(0, LOOP_MAX_TRAILS)
+
+  /*
+   * One live session in the folder means the conversation is that session's.
+   *
+   * With two or more it genuinely cannot be told from here — the ids are in
+   * different namespaces, and this scan does not hold the session start times
+   * that `deck-control/transcript-match.ts` uses to do better. So the alert
+   * keeps its transcript pointer and drops the session link rather than
+   * guessing, and the sentence a person reads names the file instead of a tab.
+   */
+  const only = live.length === 1 ? live[0].sessionId : undefined
+
+  await Promise.all(
+    candidates.map(async (session) => {
+      const trail = await readToolTrail(session.transcriptPath, TRAIL_WINDOW_BYTES)
+      session.progress = assessProgress(trail)
+      if (only !== undefined) session.appSessionId = only
+    }),
+  )
 }
 
 /* -------------------------------------------------------------------------- */

@@ -11,9 +11,9 @@
  *
  * ## Why it is not inside `<userData>/copilot/`
  *
- * It was, for a few hours, and that was a hole. `<userData>/copilot/` is the one
- * directory the copilot session is granted write access to — see `copilotPlan`
- * in `copilot-session.ts` — and *the directory is the database* means a file
+ * It was, for a few hours, and that was a hole. `<userData>/copilot/` is the
+ * copilot session's working directory — at the time, the only directory it could
+ * write to at all — and *the directory is the database* means a file
  * written there by any hand is a routine that really runs on a real trigger.
  * Creating a routine is an alter-tier act the person is meant to confirm; with
  * the folder inside the boundary, the copilot's ordinary `Write` tool was a
@@ -22,11 +22,17 @@
  * subagents from touching scheduled tasks for exactly this reason: an agent that
  * can write its own next trigger is an automation loop with no human in it.
  *
- * `<userData>/routines/` is outside every writable path in the copilot's plan,
- * so the write is refused by the kernel rather than declined by a model.
- * `copilot-writable-boundary.test.ts` proves that against a real `sandbox-exec`;
- * `store.test.ts` pins the path itself. Nothing else changes — a person opens
- * the same folder in the same editor, one directory higher up.
+ * `<userData>/routines/` is one of the paths the **records fence** denies
+ * the copilot — `confine/records.ts` — so the write is refused by the kernel
+ * rather than declined by a model. That fence is the whole of what is left of
+ * the copilot's old confinement: it is otherwise an ordinary session with the
+ * person's own account, and this directory is one of the few things on the
+ * machine it cannot write. Reads are deliberately still allowed, because
+ * `routines.list` hands it the same contents through the front door.
+ * `copilot-writable-boundary.test.ts` proves the refusal against a real
+ * `sandbox-exec`, and against the path {@link routinesDirFor} itself returns;
+ * `store.test.ts` pins the path. Nothing else changes — a person opens the same
+ * folder in the same editor, one directory higher up.
  *
  * So:
  *
@@ -228,6 +234,66 @@ export class RoutineStore {
     const file = routineFilePath(this.dir, routine.id)
     const temp = `${file}.tmp`
     writeFileSync(temp, serializeRoutine(routine), 'utf8')
+    renameSync(temp, file)
+    return file
+  }
+
+  /**
+   * The exact bytes of one routine file, for an editor to put in a box.
+   *
+   * {@link read} answers with a *parsed* routine, which is what the engine wants
+   * and is lossy in the one way that matters to a person: `parseRoutine` throws
+   * away the second and later `#` headings — somebody's notes to themselves —
+   * along with blank lines, key order and any comment they left. Handing that
+   * back as "your file" and then saving it would delete their writing to make
+   * room for a canonical form nobody asked for.
+   *
+   * So a text editor gets text. Unparsed, unnormalised, and capped at the same
+   * {@link MAX_FILE_BYTES} the loader uses, so a file too large to be a routine
+   * is also too large to be opened as one.
+   */
+  readText(id: string): { ok: true; text: string; file: string } | { ok: false; error: string } {
+    let file: string
+    try {
+      file = routineFilePath(this.dir, id)
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) }
+    }
+    try {
+      if (statSync(file).size > MAX_FILE_BYTES) {
+        return { ok: false, error: `This file is larger than ${MAX_FILE_BYTES} bytes.` }
+      }
+      return { ok: true, text: readFileSync(file, 'utf8'), file }
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  /**
+   * Write one routine file verbatim.
+   *
+   * The counterpart to {@link readText}, and the same argument in reverse: what
+   * a person typed is what lands on disk, byte for byte. {@link save} exists for
+   * the caller that holds a `Routine` — a draft from a tool, a value the engine
+   * produced — and it serialises through the canonical writer so those two
+   * always agree. This one exists for the caller that holds *text*, and running
+   * that text through `serializeRoutine` on the way past would silently reformat
+   * an edit somebody is looking at, which is the fastest way to teach a person
+   * that the box in Settings is not really their file.
+   *
+   * Nothing here checks that the text parses. That is the caller's job and
+   * `RoutineApi.saveText` does it, because refusing at *this* layer would mean
+   * the store had an opinion about validity that {@link list} — which cheerfully
+   * loads a broken file and reports its problems — does not share.
+   *
+   * Atomic, for the reason {@link save} is: this directory is watched, and a
+   * half-written file is a real routine that really runs.
+   */
+  saveText(id: string, text: string): string {
+    this.ensureDir()
+    const file = routineFilePath(this.dir, id)
+    const temp = `${file}.tmp`
+    writeFileSync(temp, text, 'utf8')
     renameSync(temp, file)
     return file
   }

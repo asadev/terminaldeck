@@ -46,14 +46,19 @@ function fakeDeck(): Record<string, unknown> {
     ensureCopilot: answer,
     stopCopilot: answer,
     copilotSignIn: answer,
+    copilotReadInstructions: answer,
+    copilotWriteInstructions: answer,
     copilotResetInstructions: answer,
     copilotScaffold: answer,
     copilotMemory: answer,
     copilotMemoryRead: answer,
+    copilotMemoryWrite: answer,
     copilotMemoryDelete: answer,
     copilotActions: answer,
     copilotReveal: answer,
     routinesList: answer,
+    routinesText: answer,
+    routinesSaveText: answer,
     routinesRun: answer,
     routinesPause: answer,
     routinesResume: answer,
@@ -123,20 +128,29 @@ describe('the claims the pane makes', () => {
       'What it reads at startup',
       'Its memory',
       'The action log',
-      'What it can and cannot reach',
+      'What it can reach',
       'Routines',
     ]) {
       expect(markup, heading).toContain(heading)
     }
   })
 
-  it('says the memory is the copilot’s own conversation and nothing else', () => {
+  it('says the memory is the copilot’s own conversation, and calls that a rule', () => {
     const markup = html()
     expect(markup).toContain('One file per fact')
     // The promise worth making visible, per `COPILOT-DESIGN.md`: what it reads
     // out of another session is evidence it reports on, never a fact it keeps.
     expect(markup).toContain('never another session')
     expect(markup).toContain('evidence it reports on')
+    /*
+     * And which *kind* of promise it is. While the copilot was jailed, other
+     * sessions' transcripts sat outside its boundary, so this could be told as
+     * something the machine enforced — and even then it was only half true,
+     * because `sessions.transcript` handed them over by design. It is now a rule
+     * in its instructions and nothing else, and a screen that let a reader go on
+     * believing otherwise would be the defect this whole feature keeps hunting.
+     */
+    expect(markup).toContain('a rule in its instructions rather than something the machine refuses')
   })
 
   it('says where the action log lives and why that is the right way round', () => {
@@ -148,21 +162,73 @@ describe('the claims the pane makes', () => {
     expect(markup).toContain('log.note')
   })
 
-  it('says the confinement is the kernel’s rather than the copilot’s good behaviour', () => {
+  it('says out loud that the copilot is not sandboxed, before it names any refusal', () => {
+    /*
+     * The reversal, pinned on the screen as well as in the code.
+     *
+     * This block used to promise "a boundary the operating system holds" and
+     * list four things the copilot could not reach, ending with the person's
+     * keychain. Every one of those was true, and the boundary is gone — it made
+     * the copilot start signed out and unable to read a line of their code.
+     *
+     * A screen that kept those sentences would be the worst possible outcome of
+     * this change: a person reading Settings and believing their assistant is
+     * held inside something it is not. So the uncomfortable fact leads, and the
+     * three real refusals follow it.
+     */
     const markup = html()
-    expect(markup).toContain('A boundary the operating system holds')
-    expect(markup).toContain('Cannot reach at all')
-    expect(markup).toContain('keychain')
+    expect(markup).toContain('not a sandboxed one')
+    expect(markup).toContain('not sandboxed')
+    expect(markup).not.toContain('A boundary the operating system holds')
+    expect(markup).not.toContain('Cannot reach at all')
   })
 
-  it('says routines are kept where the copilot cannot reach them', () => {
+  it('names the records it still cannot touch, and counts them correctly', () => {
+    /*
+     * The count is asserted because it has already been wrong on screen. The
+     * fence was three paths for its whole life and became five when the remote
+     * copilot grant and the paired-device trust store joined it — a store the
+     * copilot can write is a permission the copilot grants itself — and the
+     * paragraph above the list went on saying "three" while the list below it
+     * rendered five. A screen that contradicts itself two lines apart is worse
+     * than one that says nothing.
+     */
+    const markup = html()
+    expect(markup).toContain('Five paths, and only five')
+    expect(markup).toContain('an automation loop with no human in it')
+    expect(markup).toContain('a record its subject can compose is worth nothing')
+    expect(markup).toContain('a permission an agent can grant itself is not a permission')
+  })
+
+  it('separates Claude Code’s own prompts from this app’s confirmation', () => {
+    /*
+     * Two permission systems that look like one. Claude Code's prompts follow
+     * the person's own `permissions.defaultMode`; this app's confirmation is
+     * asked by the desktop after the tier check and cannot be reached from that
+     * file at all. Somebody who turns off the first and believes they turned off
+     * the second — or who sees the second and assumes the first is on — has been
+     * misled by this screen, so this screen has to say it.
+     */
+    const markup = html()
+    expect(markup).toContain('~/.claude/settings.json')
+    expect(markup).toContain('This app does not change that setting in either direction')
+    expect(markup).toContain('Nothing in your Claude Code settings turns it off')
+    // And the old half-truth is gone: under a bypassing default the CLI does
+    // not ask before it edits a file, so the screen must not say it does.
+    expect(markup).not.toContain('Anything it cannot undo, it asks about first')
+  })
+
+  it('says routines are kept where the copilot cannot write them', () => {
     const markup = html()
     expect(markup).toContain('cannot reach them')
     expect(markup).toContain('the confirmation a person is owed')
   })
 
-  it('says the account is its own rather than the one the app is using', () => {
-    expect(html()).toContain('Pinned to a login of its own')
+  it('says the account is one of yours rather than a login the copilot keeps', () => {
+    const markup = html()
+    expect(markup).toContain('One of the accounts in Accounts')
+    expect(markup).toContain('rather than having a login of its own')
+    expect(markup).not.toContain('Pinned to a login of its own')
   })
 })
 
@@ -225,20 +291,32 @@ describe('what the pane deliberately cannot do', () => {
     expect(SOURCE.slice(from, to)).not.toContain('copilotScaffold')
   })
 
-  it('cannot rewrite a routine file, only pause one', () => {
+  it('has no way to create a routine, only to edit one that exists', () => {
     /*
-     * `enabled:` is a line in a file a person wrote and may have hand-edited, so
-     * the Armed switch writes engine state instead — pause and resume, which are
-     * kept beside the file rather than in it. The strongest form that guarantee
-     * can take is that the bridge has no method for the other thing: no create,
-     * no update, nothing to wire wrongly later.
+     * The editor added on 2026-08-17 gave this pane a routine `Save`, and the
+     * guarantee had to be restated rather than dropped. Two halves survive:
+     *
+     *  - **The Armed switch still never writes to the file.** `enabled:` is a
+     *    line in a file somebody wrote; the switch pauses, which is engine state
+     *    kept beside the file. What changed is that a person can now change that
+     *    line themselves, in a box, on a press — which is not the app editing
+     *    their work to record a preference of its own.
+     *  - **The pane cannot bring a routine into existence.** Creating one is an
+     *    alter-tier act, and the strongest form that guarantee takes is that
+     *    there is no method on the bridge for it: no create, nothing to wire
+     *    wrongly later.
      */
     const bridge = readFileSync(join(SRC, 'renderer/settings/sections/copilot-bridge.ts'), 'utf8')
-    const block = bridge.slice(bridge.indexOf('interface CopilotBridge'))
+    const block = bridge.slice(bridge.indexOf('interface CopilotBridge'), bridge.indexOf('const BRIDGE_METHODS'))
     expect(block).toContain('routinesPause')
     expect(block).toContain('routinesResume')
+    expect(block).toContain('routinesSaveText')
     expect(block).not.toContain('routinesCreate')
-    expect(block).not.toContain('routinesUpdate')
+
+    // And the switch's own handler pauses rather than saving, which is the half
+    // a reader of the bridge alone could not check.
+    const switchHandler = SOURCE.slice(SOURCE.indexOf('act(`routine-arm:'))
+    expect(switchHandler.slice(0, switchHandler.indexOf('}),'))).not.toContain('SaveText')
   })
 })
 
@@ -332,16 +410,22 @@ describe('the bridge and its narrowing', () => {
     expect(toActionLog({})).toBeNull()
   })
 
-  it('never invents a boundary it could not read', () => {
+  it('never invents a refusal it could not read', () => {
     /*
-     * The two booleans that feed a sentence about safety default to the answer
-     * that makes no claim. A build that answered `true` for a field it did not
-     * receive would print "your projects are readable and unwritable" and "the
-     * copilot cannot write this log" on the strength of a missing key.
+     * The booleans that feed a sentence about safety default to the answer that
+     * makes no claim. A build that answered `true` for a field it did not
+     * receive would print "the routines and the action log are held against it"
+     * and "the copilot cannot write this log" on the strength of a missing key.
+     *
+     * It matters more since the copilot stopped being sandboxed: the fence is
+     * the *only* thing standing in front of those files now, so a pane that
+     * claims it on a machine where it does not hold is the one wrong answer.
      */
     const state = toCopilotState({ paths: { root: '/tmp/copilot' } })
-    expect(state?.projects.enforceable).toBe(false)
-    expect(state?.confinement.enforced).toBe(false)
+    expect(state?.records.enforced).toBe(false)
+    expect(state?.records.kind).toBe('none')
+    expect(state?.records.paths).toEqual([])
+    expect(state?.profile).toBeNull()
     expect(toActionLog({ file: '/tmp/actions.jsonl' })?.outsideCopilotFolder).toBe(false)
   })
 
@@ -374,5 +458,134 @@ describe('the bridge and its narrowing', () => {
 
   it('falls back to a state that claims nothing when the engine names one it does not know', () => {
     expect(toRoutineRows([{ id: 'x', state: 'invented' }])[0].state).toBe('unarmed')
+  })
+})
+
+/* ------------------------------------------------------------- editable -- */
+
+describe('the three files a person can change here', () => {
+  const EDITOR = readFileSync(join(SRC, 'renderer/settings/sections/CopilotEditor.tsx'), 'utf8')
+
+  it('gives all three files an editor, and the log none', () => {
+    /*
+     * Asad, 2026-08-17: *"none of them is clickable or editable … I should be
+     * able to click and make changes and click save."* Three `FileEditor`s and
+     * no more: the instruction file, one memory, one routine.
+     *
+     * Counted in the source rather than in the markup, because
+     * `renderToStaticMarkup` runs no effects — so nothing has been read off
+     * disk, and every one of these boxes correctly draws its "reading…" or
+     * "there is no file yet" state instead. `CopilotEditor.test.tsx` exercises
+     * the box itself against props.
+     */
+    expect(SOURCE.match(/<FileEditor/g) ?? []).toHaveLength(3)
+    expect(SOURCE).toContain('label="CLAUDE.md"')
+  })
+
+  it('draws the state it is really in before anything has been read', () => {
+    // And the state a static render *is* in has to be honest rather than an
+    // empty box over a file nobody has looked at — a box somebody would type
+    // into and save.
+    const markup = withDeck(fakeDeck(), () => renderToStaticMarkup(<CopilotSection />))
+    expect(markup).toContain('The file does not exist')
+    expect(markup).not.toContain('copilot-editor-box')
+  })
+
+  it('says a changed CLAUDE.md applies at the next start, not mid-conversation', () => {
+    /*
+     * The claim the whole feature stands or falls on. The CLI reads the file as
+     * the session spawns and never again, so an editor that let somebody save
+     * and walk away believing the running copilot had changed would be worse
+     * than no editor at all. Both branches are pinned: the sentence at rest, and
+     * the Restart offered while something is running.
+     */
+    expect(SOURCE).toContain('the next time it starts')
+    expect(SOURCE).toContain('restart it to hand it the new one')
+    expect(SOURCE).toContain("act('restart'")
+    // A stop *and* a start, because there is no reload to call.
+    const restart = SOURCE.slice(SOURCE.indexOf("act('restart'"))
+    expect(restart.slice(0, 400)).toContain('stopCopilot')
+    expect(restart.slice(0, 400)).toContain('ensureCopilot')
+  })
+
+  it('never lets a truncated memory be saved back over the whole file', () => {
+    /*
+     * The one way an editor on this pane could destroy data, and it is quiet:
+     * `readMemoryFact` stops at 256 KB, so a Save from a box holding the head of
+     * a longer file would write exactly that head. The reader already reports
+     * `truncated`; this is the pane refusing to act on it, with the sentence
+     * saying where to go instead.
+     */
+    expect(SOURCE).toContain('truncated')
+    expect(SOURCE).toContain('throw the rest of it away')
+  })
+
+  it('says a saved routine takes effect straight away, unlike the other two', () => {
+    // Three editors, three different answers to "when does this apply", and the
+    // pane is not allowed to be quiet about any of them.
+    expect(SOURCE).toContain('the next time this routine fires, it fires on the new file')
+    expect(SOURCE).toContain('its memory is read as the session spawns')
+  })
+
+  it('makes every editor state when its edit takes effect', () => {
+    // `effect` is required on the component rather than optional, so a fourth
+    // editor added later cannot be silent about this by omission.
+    const props = EDITOR.slice(EDITOR.indexOf('interface FileEditorProps'), EDITOR.indexOf('export function FileEditor'))
+    expect(props).toContain('effect: string')
+    expect(props).not.toContain('effect?:')
+  })
+
+  it('disables Save with a reason rather than leaving it inert', () => {
+    // The pane's house rule, inside the shared editor: every reason a Save
+    // cannot act is a string that is rendered, not a bare boolean guard.
+    expect(EDITOR).toContain('saveBecause: string | null')
+    expect(EDITOR).toContain('{saveBecause}')
+  })
+
+  it('goes clean the moment a save lands, rather than staying dirty', () => {
+    /*
+     * A real defect, caught on the rendered pane rather than in a test: after a
+     * successful memory save the box still said "Unsaved." and Save was still
+     * blue, because the editor compares its draft against the text the section
+     * last *read* — and that read happened when the fact was opened. Somebody
+     * seeing that presses Save again and then doubts the first press.
+     *
+     * All three writers write verbatim, so the bytes just sent are the bytes on
+     * disk and there is nothing to re-read. One assertion per editor.
+     */
+    expect(SOURCE.match(/setText\(next\)/g) ?? []).toHaveLength(3)
+  })
+
+  it('keeps a half-typed draft through a reload that changed nothing', () => {
+    /*
+     * The pane re-reads everything after every action, so a box controlled
+     * directly by the loaded text would lose an edit in progress every time
+     * somebody deleted a memory elsewhere on the pane. A draft survives a reload
+     * that brought back the same bytes and yields to one that did not, because
+     * keeping it there would mean saving over somebody else's write.
+     */
+    expect(EDITOR).toContain('seen.current !== text')
+  })
+})
+
+describe('the action log stays read-only', () => {
+  it('has no editor and no channel behind one', () => {
+    /*
+     * Deliberate, and the reason is the paragraph the pane already prints about
+     * it: the log is the one artefact a person can check a claim against. A
+     * person editing it would not break the "the audited party cannot compose
+     * it" claim — a person is not the audited party — but it would destroy what
+     * the file is *for*. So there is no Save under it, and the bridge has no
+     * method that could be wired to one.
+     */
+    const log = SOURCE.slice(SOURCE.indexOf('function ActionsGroup'), SOURCE.indexOf('function ReachGroup'))
+    expect(log).not.toContain('FileEditor')
+    expect(log).not.toContain('Save')
+
+    const bridge = readFileSync(join(SRC, 'renderer/settings/sections/copilot-bridge.ts'), 'utf8')
+    const block = bridge.slice(bridge.indexOf('interface CopilotBridge'), bridge.indexOf('const BRIDGE_METHODS'))
+    expect(block).toContain('copilotActions')
+    expect(block).not.toContain('copilotActionsWrite')
+    expect(block).not.toContain('copilotActionsAppend')
   })
 })

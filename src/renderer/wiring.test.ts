@@ -176,7 +176,7 @@ const SEAMS: Array<{ file: string; child: string; props: string[]; why: string }
   {
     file: 'renderer/App.tsx',
     child: 'AlertsWindow',
-    props: ['open', 'projectPath', 'onAction'],
+    props: ['open', 'projectPath', 'onAction', 'report', 'onRescan'],
     // Alerts stopped being a page on 2026-08-17 — *"and notifications should be
     // a pop-up just like settings, not a full page"* — and a dialog is the
     // easiest thing in this codebase to build and never mount: the bell would
@@ -184,7 +184,11 @@ const SEAMS: Array<{ file: string; child: string; props: string[]; why: string }
     // is the failure this table exists for. `projectPath` is what it scans;
     // without it the sheet is permanently the "no project open" state. `onAction`
     // is the whole point of an alert — the page it replaces spent its life with
-    // that prop undefined, drawing buttons that swallowed the click.
+    // that prop undefined, drawing buttons that swallowed the click. `report`
+    // and `onRescan` joined the list when the scan moved out of the panel into
+    // `alerts-feed.ts`: the sheet fetches nothing now, so a missing `report`
+    // is a dialog permanently reading "Checking…" and a missing `onRescan` is
+    // a "Check again" button with nothing behind it.
     why: 'the bell and the palette row both open this, and it is the only thing that renders an alert',
   },
   {
@@ -392,6 +396,54 @@ describe('Alerts is a pop-up, and there is no page left to reach', () => {
     expect(action.indexOf('setAlertsOpen(false)')).toBeLessThan(action.indexOf('switch (action.kind)'))
   })
 
+  /**
+   * The bell's number, and the reason this is a wiring test rather than a
+   * component one.
+   *
+   * `Sidebar` has drawn `alertCount` since the bell was put on the Settings
+   * line, it has a test of its own, and until 2026-08-17 nothing in `App.tsx`
+   * passed it — so the dot was unreachable in the shipped app while every piece
+   * of it was correct and covered. Asad: *"if there is an alerts option and we
+   * don't wire anything to it to give us the alerts, why would we have an
+   * alerts option?"*
+   *
+   * The prop being optional is what made that invisible, which is exactly the
+   * class of failure this file exists for, so the connection is pinned at both
+   * ends: something must feed the rail, and one feed must serve both surfaces.
+   */
+  describe('the bell carries a real count', () => {
+    it('feeds the rail from App.tsx', () => {
+      const sidebar = openingTag(app, 'Sidebar') ?? ''
+      const count = propExpression(sidebar, 'alertCount') ?? ''
+      expect(count, '<Sidebar> has no alertCount={...} — the dot is unwired again').not.toBe('')
+    })
+
+    it('counts from the same report the sheet draws', () => {
+      // Two fetches would be two answers: the dot saying three while the list
+      // shows two is worse than no dot, because it sends you to look at
+      // something that is not there.
+      expect(app).toContain('useProjectAlerts(')
+      const window = openingTag(app, 'AlertsWindow') ?? ''
+      expect(propExpression(window, 'report')).toContain('alertsFeed.report')
+      expect(app).toMatch(/unreadCount\(/)
+    })
+
+    it('clears when the sheet is opened, and only then', () => {
+      // `markSeen` is the whole definition of "read" — see `alerts-unread.ts`.
+      // Guarding it on `alertsOpen` is what makes opening the popup the
+      // clearing event rather than, say, a scan landing behind it.
+      expect(app).toMatch(/if \(!alertsOpen[^)]*\) return\s*\n\s*const next = markSeen\(/)
+    })
+
+    it('does not scan on a timer for the sake of the dot', () => {
+      // The reason the count was left unwired in the first place: a scan reads
+      // every transcript in the project, and the window would not pay that on a
+      // clock. `alerts-feed.test.ts` holds the feed to the same rule.
+      expect(app).not.toMatch(/useEvery\([^)]*projectAlerts/)
+      expect(app).not.toContain('window.deck.projectAlerts')
+    })
+  })
+
   it('respects the feature the way the page did', () => {
     // The page was gated twice: no row in the rail, and `FeatureOffer` for
     // anyone already on it when the feature went off. The sheet needs both
@@ -401,6 +453,10 @@ describe('Alerts is a pop-up, and there is no page left to reach', () => {
     expect(sidebar).toContain("alerts={features.controlOn('sidebar.alerts')}")
     const open = propExpression(openingTag(app, 'AlertsWindow') ?? '', 'open') ?? ''
     expect(open).toMatch(/features\.on\('alerts'\)/)
+    // And a third half the page never needed: the feed behind the dot reads
+    // every transcript in the project, so a feature that is off must stop the
+    // scanning and not merely the drawing.
+    expect(app).toMatch(/useProjectAlerts\(features\.on\('alerts'\)/)
   })
 
   it('parks the browser’s native pages while the sheet is up', () => {

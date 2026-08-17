@@ -95,6 +95,13 @@ import {
     chunkOutput,
     parseClientMessage,
     serialize,
+    COPILOT_FRAME_TIER,
+    type CopilotActionRow,
+    type CopilotChatMessage,
+    type CopilotGrantWire,
+    type CopilotPendingRow,
+    type CopilotStateReport,
+    type CopilotTier,
     type DevServerReport,
     type ProtocolErrorCode,
     type RemoteSession,
@@ -231,6 +238,42 @@ let granted: string[] | null =
 /** `{ folders }`, or `{}` when this host is pretending to predate the field. */
 function foldersField(): { folders?: string[] } {
     return granted === null ? {} : { folders: granted }
+}
+
+/**
+ * What this stand-in does about the copilot, in four states.
+ *
+ *     --copilot absent   no `welcome.copilot` key at all — a machine with no
+ *                        copilot layer, which is what the shipping desktop is
+ *     --copilot none     the key, all false — a machine that has one and has
+ *                        given this device nothing. **The product default.**
+ *     --copilot read     watching: the state, the sessions, the log, the pending
+ *     --copilot act      watching, and able to start a run and talk to it
+ *
+ * `absent` and `none` are the pair that matters and they are the reason this
+ * flag exists rather than a boolean. **This file sends `CAPABILITIES` verbatim**
+ * — the desktop's list of every extension the build knows how to serve, not the
+ * per-connection list `server.ts` assembles — so it advertises `copilot`
+ * whatever this flag says. That is precisely the host a client must survive: one
+ * whose capability list is ahead of what it can actually serve. With `absent`
+ * the honest client draws nothing about a copilot; if it draws "not shared with
+ * this phone" it is sending somebody to look for a switch on a machine that has
+ * no such screen, and if it draws an empty timeline it is the localhost pass
+ * that was reported as verified against a blank screen.
+ *
+ * The default is `absent`, so an ordinary `run.sh host` keeps reproducing the
+ * desktop everybody is actually on.
+ */
+const COPILOT = flag('copilot', 'absent')
+
+let copilotGrant: CopilotGrantWire | null =
+    COPILOT === 'absent'
+        ? null
+        : { read: COPILOT === 'read' || COPILOT === 'act', act: COPILOT === 'act' }
+
+/** `{ copilot }`, or `{}` for a machine with no copilot layer. */
+function copilotField(): { copilot?: CopilotGrantWire } {
+    return copilotGrant === null ? {} : { copilot: copilotGrant }
 }
 
 /**
@@ -664,6 +707,161 @@ devServers.onChange((state) => {
 const MAX_DEV_FOLDERS = 8
 
 /* -------------------------------------------------------------------------- */
+/* The copilot                                                                 */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A copilot, invented — and this is the one place in this file where that word
+ * means something different from everywhere else, so it is worth being exact.
+ *
+ * The frames are **not** invented. `send` takes the desktop's own
+ * `ServerMessage`, so every object below is type-checked against `protocol.ts`;
+ * inbound verbs go through the real `parseClientMessage`, so a client frame this
+ * host accepts is a frame the product accepts. If the protocol renames a field,
+ * this file stops compiling. That is the whole reason it is worth writing at
+ * all, and it is what caught the drift it was written to look for: this client
+ * decoded a `status` field against a report whose field is `desk`.
+ *
+ * What is invented is the *behaviour* — which sessions exist, what the agent
+ * says back, which tools it called. On the shipping desktop that comes from
+ * `CopilotRuns` driving a real Claude CLI, and there is no version of this
+ * harness that could produce it honestly. So the script below is fixed, marked,
+ * and only ever used to put something on a screen a person is looking at. **A
+ * screen filled by this file proves the client draws what it is sent. It proves
+ * nothing about what a real copilot would send**, which is what
+ * `LiveCopilotUITests` and the desktop's own `copilot-frames.test.ts` are for.
+ */
+
+/** This device's run, when it has started one. Keyed by device, per §1. */
+const copilotRuns = new Map<string, { id: string; messages: CopilotChatMessage[] }>()
+
+let copilotActions: CopilotActionRow[] = []
+let copilotQuestions: CopilotPendingRow[] = []
+
+/** Minted rather than constant, so the countdown on the phone actually runs. */
+function seedCopilot(): void {
+    if (copilotActions.length > 0) return
+    /*
+     * One real session, so "sessions it started" is a list rather than an empty
+     * state.
+     *
+     * A **real** pty in a real folder, through this host's ordinary
+     * `startSession`, because the phone can then open it and type into it — the
+     * link back from the copilot to the terminal is half of *why does this
+     * session exist* being one tap in either direction, and a fabricated row
+     * would be a tap that leads nowhere.
+     */
+    const folder = granted?.[0]
+    if (folder !== undefined && sessions.size === 0) {
+        startSession({ title: basename(folder) || folder, cwd: folder, provider: 'claude' })
+    }
+    const minutesAgo = (n: number) => new Date(Date.now() - n * 60_000).toISOString()
+    copilotActions = [
+        {
+            id: 'a1', at: minutesAgo(184), tool: 'sessions.list', tier: 'read', outcome: 'ok',
+            detail: 'Listed 4 sessions', refusal: null, deviceId: null,
+        },
+        {
+            id: 'a2', at: minutesAgo(181), tool: 'sessions.transcript', tier: 'read', outcome: 'ok',
+            detail: 'Read the last 200 lines of “api”', refusal: null, deviceId: null,
+        },
+        {
+            id: 'a3', at: minutesAgo(96), tool: 'sessions.start', tier: 'act', outcome: 'ok',
+            detail: 'Started a session in ~/Projects/app', refusal: null, deviceId: null,
+        },
+        {
+            // The row that carries the most, and the reason the screen colours
+            // outcomes at all: this is what a permission boundary looks like
+            // from outside it.
+            id: 'a4', at: minutesAgo(94), tool: 'settings.write', tier: 'alter', outcome: 'refused',
+            detail: 'Would have set the default agent to codex', refusal: 'not-granted',
+            deviceId: 'harness-device',
+        },
+        {
+            id: 'a5', at: minutesAgo(12), tool: 'log.note', tier: 'read', outcome: 'ok',
+            detail: 'Wrote memory/build-status.md', refusal: null, deviceId: null,
+        },
+    ]
+    copilotQuestions = [
+        {
+            id: 'q1',
+            tool: 'settings.write',
+            summary: 'Change the default agent for new sessions to codex',
+            requestedAt: Date.now(),
+            // Two minutes, which is the broker's, and not one second more for a
+            // phone — the design refuses the longer window on purpose.
+            expiresAt: Date.now() + 120_000,
+        },
+    ]
+}
+
+/** What `copilot.state` answers, in the desktop's own `CopilotStateReport`. */
+function copilotState(deviceId: string): CopilotStateReport {
+    const run = copilotRuns.get(deviceId) ?? null
+    return {
+        desk: 'running',
+        run: run === null ? null : run.id,
+        profile: 'Work Claude',
+        signedIn: true,
+        tools: 14,
+        turnTokens: 3200,
+        pending: copilotQuestions.length,
+        grant: copilotGrant ?? { read: false, act: false },
+        available: true,
+        reason: null,
+    }
+}
+
+/** The sessions this host is running, as the copilot's own list. */
+function copilotSessionRows(): Array<{
+    id: string
+    title: string
+    cwd: string
+    provider: string
+    status: string
+    startedAt: number
+    originRunId: string | null
+}> {
+    return list().map((session, at) => ({
+        id: session.id,
+        title: session.title,
+        cwd: session.cwd,
+        provider: session.provider,
+        status: session.status,
+        startedAt: Date.now() - (at + 1) * 600_000,
+        originRunId: at === 0 ? 'a3' : null,
+    }))
+}
+
+/** Push to every channel that asked, and only to those. */
+function copilotPush(message: ServerMessage): void {
+    for (const channel of channels.values()) {
+        if (channel.copilotWatching) channel.send(message)
+    }
+}
+
+/**
+ * Whether a device may send this verb, read per message.
+ *
+ * `COPILOT_FRAME_TIER` is the desktop's own table rather than a copy, for the
+ * reason that table exists: three clients have to agree with one desktop about
+ * which controls a read-only phone may draw, and a rule written as an `if` in
+ * one server is a rule they can only guess at.
+ */
+function copilotAllows(verb: string): boolean {
+    const needs: CopilotTier | undefined = COPILOT_FRAME_TIER[verb]
+    if (needs === undefined || copilotGrant === null) return false
+    return needs === 'read' ? copilotGrant.read : copilotGrant.read && copilotGrant.act
+}
+
+/** A chat message id that sorts and merges the way the real parser's do. */
+let copilotMessageSeq = 0
+function copilotMessageId(): string {
+    copilotMessageSeq += 1
+    return `m${copilotMessageSeq}`
+}
+
+/* -------------------------------------------------------------------------- */
 /* A minimal WebSocket client                                                  */
 /* -------------------------------------------------------------------------- */
 
@@ -811,6 +1009,16 @@ class Channel {
      * was never given — the same rule `server.ts` states at more length.
      */
     readonly devFolders = new Set<string>()
+
+    /**
+     * Whether this channel asked to watch the copilot.
+     *
+     * The subscription belongs to the *connection*, exactly as `devFolders`
+     * does, which is what makes a client re-sending `copilot.attach` on every
+     * `welcome` the right behaviour rather than a redundant one. Nothing is
+     * pushed to a channel that never asked.
+     */
+    copilotWatching = false
 
     constructor(readonly key: string, readonly channel: Buffer, private readonly link: HostLink) {}
 
@@ -978,6 +1186,13 @@ class Channel {
                 // produce one of them would leave the phone's handling of the
                 // other untested. See `foldersField`.
                 ...foldersField(),
+                // And the copilot, spread for a third version of the same
+                // reason and the sharpest one: absent means *this machine has no
+                // copilot*, while an all-false object means *it has one and you
+                // have none of it*. Those are two different screens on the
+                // phone, and only the second of them names a switch somebody can
+                // go and flip. See `copilotField`.
+                ...copilotField(),
             })
             return
         }
@@ -1223,6 +1438,140 @@ class Channel {
                 const record = credentialAsks.get(message.id)
                 if (record) record.denied = message.reason ?? 'denied'
                 log(`credential ${message.id.slice(0, 8)} refused: ${message.reason ?? 'denied'}`)
+                return
+            }
+
+            /* ---- capability `copilot` ----------------------------------- */
+            /*
+             * Refused per verb, per device, read on every message.
+             *
+             * `unauthorized` and the socket stays open, which is `server.ts`'s
+             * own choice and its reason: a client drawing a control it may not
+             * use is a bug on that client, not an attack on this host. The tier
+             * comes from `COPILOT_FRAME_TIER` rather than from an `if` here —
+             * see `copilotAllows`.
+             */
+            case 'copilot.attach':
+            case 'copilot.detach':
+            case 'copilot.state':
+            case 'copilot.sessions':
+            case 'copilot.log':
+            case 'copilot.pending':
+            case 'copilot.start':
+            case 'copilot.say':
+            case 'copilot.cancel':
+            case 'copilot.stop': {
+                if (!copilotAllows(message.t)) {
+                    return this.send({
+                        t: 'error',
+                        code: 'unauthorized',
+                        message: 'This device has not been given copilot access on this '
+                            + `${hostNoun()}. It is a switch in Settings, under Remote.`,
+                    })
+                }
+                const device = this.deviceId ?? ''
+                seedCopilot()
+
+                switch (message.t) {
+                    case 'copilot.attach': {
+                        this.copilotWatching = true
+                        this.send({ t: 'copilot.state', state: copilotState(device) })
+                        const run = copilotRuns.get(device)
+                        // Only when there is one. `attach` starts nothing — the
+                        // whole reason `copilot.start` is a separate verb is
+                        // that starting spends money, and a screen that spent
+                        // some because somebody looked at it would be a screen
+                        // with a bill attached to opening it.
+                        if (run) {
+                            this.send({
+                                t: 'copilot.chat', run: run.id, messages: run.messages, reset: true,
+                            })
+                        }
+                        return
+                    }
+                    case 'copilot.detach':
+                        // The run keeps going. A phone going into a pocket is
+                        // not a person cancelling their question.
+                        this.copilotWatching = false
+                        return
+                    case 'copilot.state':
+                        return this.send({ t: 'copilot.state', state: copilotState(device) })
+                    case 'copilot.sessions':
+                        return this.send({ t: 'copilot.sessions', sessions: copilotSessionRows() })
+                    case 'copilot.pending':
+                        return this.send({ t: 'copilot.pending', questions: copilotQuestions })
+                    case 'copilot.log': {
+                        const limit = message.limit ?? 50
+                        const before = message.before
+                        const at = before === undefined
+                            ? copilotActions.length
+                            : Math.max(0, copilotActions.findIndex((row) => row.id === before))
+                        const rows = copilotActions.slice(Math.max(0, at - limit), at)
+                        return this.send({ t: 'copilot.log', rows, more: at - limit > 0 })
+                    }
+                    case 'copilot.start': {
+                        // Answered with the run that exists rather than a second
+                        // process, per §1: one run at a time per device.
+                        const existing = copilotRuns.get(device)
+                        const run = existing ?? { id: `run-${device.slice(0, 6)}`, messages: [] }
+                        copilotRuns.set(device, run)
+                        this.send({ t: 'copilot.state', state: copilotState(device) })
+                        this.send({ t: 'copilot.chat', run: run.id, messages: run.messages, reset: true })
+                        log(`copilot run ${run.id} for ${device.slice(0, 8)}`)
+                        return
+                    }
+                    case 'copilot.say': {
+                        const run = copilotRuns.get(device)
+                        if (!run) {
+                            return this.send({
+                                t: 'error', code: 'unavailable',
+                                message: 'There is no copilot running for this device yet.',
+                            })
+                        }
+                        const asked: CopilotChatMessage = {
+                            id: copilotMessageId(), role: 'you', text: message.text, at: Date.now(),
+                        }
+                        run.messages.push(asked)
+                        copilotPush({ t: 'copilot.chat', run: run.id, messages: [asked] })
+                        // The scripted half. See the section header: this is the
+                        // part no harness can produce honestly, and it exists
+                        // only so a screen has something on it.
+                        const answer: CopilotChatMessage = {
+                            id: copilotMessageId(),
+                            role: 'agent',
+                            text: 'Two sessions ran overnight.\n\n“api” finished its migration and '
+                                + 'is idle. “app” is still working — it has been on the same test '
+                                + 'file for forty minutes, which is longer than the other nine took '
+                                + 'together.\n\nI also tried to switch the default agent and was '
+                                + 'refused; that one needs you at the machine.',
+                            at: Date.now(),
+                        }
+                        const row: CopilotActionRow = {
+                            id: `a${copilotActions.length + 1}`,
+                            at: new Date().toISOString(),
+                            tool: 'sessions.transcript',
+                            tier: 'read',
+                            outcome: 'ok',
+                            detail: 'Read the last 200 lines of “app”',
+                            refusal: null,
+                            deviceId: device,
+                        }
+                        copilotActions.push(row)
+                        setTimeout(() => {
+                            copilotPush({ t: 'copilot.tool', row })
+                            copilotPush({ t: 'copilot.chat', run: run.id, messages: [answer] })
+                        }, 600).unref()
+                        run.messages.push(answer)
+                        return
+                    }
+                    case 'copilot.cancel':
+                        log(`copilot interrupt from ${device.slice(0, 8)}`)
+                        return
+                    case 'copilot.stop': {
+                        copilotRuns.delete(device)
+                        return this.send({ t: 'copilot.state', state: copilotState(device) })
+                    }
+                }
                 return
             }
         }

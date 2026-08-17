@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import type { IpcMain } from 'electron'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { copilotPaths } from '../copilot-home'
+import { TIERS } from '../deck-control/surface'
 import { routineLogger } from './log'
 import { RoutineEngine, type RoutineRunner } from './engine'
 import {
@@ -15,6 +16,8 @@ import {
   ROUTINES_PAUSE,
   ROUTINES_RESUME,
   ROUTINES_RUN,
+  ROUTINES_SAVE_TEXT,
+  ROUTINES_TEXT,
   ROUTINES_UPDATE,
   ROUTINE_TIERS,
   registerRoutinesIpc,
@@ -196,6 +199,8 @@ describe('registerRoutinesIpc', () => {
         ROUTINES_PAUSE,
         ROUTINES_RESUME,
         ROUTINES_RUN,
+        ROUTINES_SAVE_TEXT,
+        ROUTINES_TEXT,
         ROUTINES_UPDATE,
       ].sort(),
     )
@@ -207,12 +212,14 @@ describe('registerRoutinesIpc', () => {
     for (const channel of [
       ROUTINES_LIST,
       ROUTINES_GET,
+      ROUTINES_TEXT,
       ROUTINES_CREATE,
       ROUTINES_UPDATE,
       ROUTINES_DELETE,
       ROUTINES_RUN,
       ROUTINES_PAUSE,
       ROUTINES_RESUME,
+      ROUTINES_SAVE_TEXT,
     ]) {
       expect(ROUTINE_TIERS[channel]).toBeDefined()
     }
@@ -220,5 +227,118 @@ describe('registerRoutinesIpc', () => {
     expect(ROUTINE_TIERS[ROUTINES_DELETE]).toBe('alter')
     expect(ROUTINE_TIERS[ROUTINES_LIST]).toBe('read')
     expect(ROUTINE_TIERS[ROUTINES_RUN]).toBe('act')
+  })
+})
+
+describe('editing a routine file as text', () => {
+  const withNote = [
+    '# Nightly sweep',
+    '',
+    '# NOTE: leave the folder alone, the path is deliberate',
+    '',
+    'when: manual',
+    'in: /tmp/td-project',
+    '',
+    '---',
+    '',
+    'Run the tests twice.',
+    '',
+  ].join('\n')
+
+  it('hands a person the file rather than the parsed prompt', () => {
+    api.create(DRAFT)
+    const result = api.text('nightly-sweep')
+    expect(result.ok).toBe(true)
+    // The whole file, header and all — the trigger and the folder are the parts
+    // of a routine that are actually wrong when a routine is wrong, and neither
+    // is in `view.prompt`.
+    expect(result.ok && result.text).toContain('when: manual')
+    expect(result.ok && result.text).toContain('Run the tests.')
+  })
+
+  it('writes what was typed, verbatim, and reloads the engine', () => {
+    api.create(DRAFT)
+    const saved = api.saveText('nightly-sweep', withNote)
+    expect(saved.ok).toBe(true)
+
+    // Byte for byte, including the second heading `serializeRoutine` drops.
+    expect(readFileSync(join(dir, 'routines', 'nightly-sweep.md'), 'utf8')).toBe(withNote)
+    // And live: the engine has re-read the folder, so the next trigger uses it.
+    expect(api.get('nightly-sweep')?.prompt).toBe('Run the tests twice.')
+  })
+
+  it('refuses text that would not parse, and writes nothing at all', () => {
+    /*
+     * A routine that stopped working is the failure this whole feature must not
+     * have, and it is silent: the file is still there, the list still shows it,
+     * and nothing fires. So the parse happens before the write and the parser's
+     * own sentences come back — "this routine has no `when:` line" is something
+     * a person can act on in the box they are already looking at.
+     */
+    api.create(DRAFT)
+    const before = readFileSync(join(dir, 'routines', 'nightly-sweep.md'), 'utf8')
+    const result = api.saveText('nightly-sweep', '# Broken\n\nin: /tmp/td-project\n\n---\n\nGo.\n')
+
+    expect(result.ok).toBe(false)
+    expect(result.ok === false && result.problems.join(' ')).toContain('`when:`')
+    expect(readFileSync(join(dir, 'routines', 'nightly-sweep.md'), 'utf8')).toBe(before)
+  })
+
+  it('refuses an id that is really a path, and one that is not there', () => {
+    expect(api.text('../../state').ok).toBe(false)
+    expect(api.saveText('../../state', withNote).ok).toBe(false)
+    // Not a create. `saveText` is an editor for a routine somebody is looking
+    // at; making a routine is `create`, which checks the cap, the duplicate and
+    // the name.
+    expect(api.saveText('never-existed', withNote).ok).toBe(false)
+    expect(api.list()).toHaveLength(0)
+  })
+
+  it('refuses anything that is not a string', () => {
+    api.create(DRAFT)
+    for (const junk of [undefined, null, 3, {}, ['a']]) {
+      expect(api.saveText('nightly-sweep', junk).ok, String(junk)).toBe(false)
+    }
+  })
+})
+
+describe('the raw-text write is a human route and cannot become a copilot one', () => {
+  /**
+   * The trap this guards, in one sentence: `saveText` writes chosen bytes into
+   * the routines folder, and that folder was moved out of the copilot's
+   * writable reach precisely so that authoring an automation takes a person.
+   *
+   * Every other write here goes through `routineFromDraft`, whose `headerValue`
+   * strips newlines out of each field — which is what makes `create` and
+   * `update` safe to hand to a language model, because a `name` of
+   * `"Sweep\nin: /"` cannot become a routine rooted at the disk. `saveText` has
+   * no such guard and cannot have one: the point is that a person types the
+   * header themselves. So it is wider than the alter tier, and there is no tier
+   * it belongs at.
+   */
+  it('marks it `human`, which is not a tier deck-control has', () => {
+    expect(ROUTINE_TIERS[ROUTINES_SAVE_TEXT]).toBe('human')
+    expect(ROUTINE_TIERS[ROUTINES_UPDATE]).toBe('alter')
+
+    /*
+     * And the claim that makes `human` mean something rather than being a label.
+     * `deck-control`'s own `Tier` is exactly three values and every catalogue
+     * entry must declare one of them, so a tool exposing this operation would
+     * not typecheck until somebody first widened that union — a deliberate,
+     * visible act rather than a mistake made in passing.
+     */
+    expect(TIERS).toEqual(['read', 'act', 'alter'])
+    expect(TIERS).not.toContain('human')
+  })
+
+  it('is absent from the copilot’s tool catalogue', () => {
+    // Read as text rather than by importing the catalogue, because the
+    // assertion is about what is *not* declared and an import can only show
+    // what is. A future `routines.list` tool is fine and expected; a tool that
+    // writes a routine file's bytes is what must never appear.
+    const catalogue = readFileSync(join(__dirname, '..', 'deck-control', 'catalogue.ts'), 'utf8')
+    for (const name of ['saveText', 'save-text', 'routines.text']) {
+      expect(catalogue, name).not.toContain(name)
+    }
   })
 })

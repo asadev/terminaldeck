@@ -264,7 +264,23 @@ if (await tab('Settings')) {
   await page.locator('.setting__step', { hasText: '+' }).click()
   await page.locator('.setting__step', { hasText: '+' }).click()
   await page.waitForTimeout(300)
-  say(`text-size ${await page.locator('.setting__value').last().textContent()}`)
+  /*
+   * Scoped to the Text size row rather than "the last value on the screen".
+   *
+   * It was `.setting__value` `.last()`, which was the text size only for as long
+   * as Settings ended with it. An About row was added underneath and this line
+   * started reporting `text-size 0.3.0` — a build number, printed under the name
+   * of a font size, in a transcript whose whole job is to be read instead of the
+   * images. A harness that quietly reports the wrong field is worse than one
+   * that fails.
+   */
+  say(
+    `text-size ${await page
+      .locator('.setting', { hasText: 'Text size' })
+      .locator('.setting__value')
+      .first()
+      .textContent()}`,
+  )
   await shoot(page, '16-text-size')
 
   await page.locator('.setting', { hasText: 'Machines' }).first().click()

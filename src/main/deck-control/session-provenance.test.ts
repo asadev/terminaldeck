@@ -50,16 +50,45 @@ function surface(started: CreateSessionInput[]): DeckSurface {
     writeToSession: () => undefined,
     killSession: () => undefined,
     sessionScreen: async () => null,
-    listProjects: () => [{ path: '/work/api', lastOpenedAt: 1 }],
+    listProjects: () => [
+      { path: '/work/api', lastOpenedAt: 1 },
+      { path: '/work/web', lastOpenedAt: 2 },
+    ],
     gitStatus: async () => ({}),
     alerts: async () => ({}),
     readSettings: () => ({ settings: {}, preferences: {} }),
     writeSettings: (patch) => patch as Record<string, string | number | boolean>,
     writePreferences: (patch) => patch,
     snapshotSettings: () => ({ path: '/tmp/last-good.json', at: 1 }),
-    newestTranscript: async () => null,
+    transcriptsIn: async () => [],
     transcriptBytes: async () => 0,
     readTranscriptFrom: async () => [],
+    /*
+     * The five reads the fleet capabilities added, answered inertly.
+     *
+     * This fake exists to exercise the dispatcher, not the reports, so every
+     * one of these returns the empty answer its real counterpart returns for a
+     * folder with no repository and a session with no transcript. The report
+     * tools have their own tests with their own fixtures.
+     */
+    readToolTrail: async () => ({ events: [], compactions: [], fileBytes: 0, fromByte: 0, partial: false }),
+    transcriptTotals: async () => null,
+    gitChanges: async () => ({
+      repo: false,
+      root: null,
+      branch: null,
+      ahead: 0,
+      behind: 0,
+      files: [],
+      reason: 'not a repository',
+    }),
+    fileDiff: async () => '',
+    fileModifiedAt: async () => null,
+    // `<userData>` and the copilot's folder inside it. Distinct from every
+    // project path in these fixtures, which is what `sessions.start`'s refusal
+    // to run inside the app's own storage needs in order to mean anything.
+    appStateRoot: () => '/state',
+    copilotRoot: () => '/state/copilot',
   }
 }
 
@@ -107,7 +136,9 @@ describe('sessions.start', () => {
     const started: CreateSessionInput[] = []
     const control = build(started)
     const first = await control.call('sessions.start', { cwd: '/work/api' })
-    const second = await control.call('sessions.start', { cwd: '/work/api' })
+    // A second folder: two copilot-started sessions in one working tree are
+    // refused now, and this test is about run ids rather than about that rule.
+    const second = await control.call('sessions.start', { cwd: '/work/web' })
 
     expect(first.row.id).not.toBe(second.row.id)
     expect(started[0].originRunId).toBe(first.row.id)

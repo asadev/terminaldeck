@@ -44,7 +44,9 @@
  */
 
 import type { CreateSessionInput, ProviderId, SessionMeta, SessionStatus } from '../../shared/types'
+import type { ContextUsage, TokenUsage } from '../cost'
 import type { AttentionView } from './attention'
+import type { TranscriptChoice } from './transcript-match'
 
 /* ------------------------------------------------------------------ tiers -- */
 
@@ -261,6 +263,102 @@ export interface TranscriptMessage {
   truncated: boolean
 }
 
+/* ------------------------------------------------- what a session has done -- */
+
+/**
+ * One tool call in a session's transcript, paired with its result.
+ *
+ * Name and outcome and nothing else, and that is the whole of what
+ * `progress.ts` is allowed to see. The arguments are deliberately absent: one
+ * `Write` call carries a megabyte of file content, and a shape that admitted
+ * them would put an unbounded allocation on a read path the copilot calls
+ * across the whole fleet. See that module's header for what is given up.
+ */
+export interface ToolEvent {
+  /** Epoch ms of the call, or 0 when the line carried no usable timestamp. */
+  at: number
+  name: string
+  /**
+   * Did it fail? **Null means the result was not seen**, which is a third
+   * answer and not a quiet "no": a call still running, and a call whose result
+   * fell outside the window that was read, both land here. Collapsing null into
+   * false would make a session that is failing everything look healthy for
+   * exactly as long as the window was too short.
+   */
+  failed: boolean | null
+}
+
+/**
+ * The tail of what a session has been doing, bounded and honest about it.
+ *
+ * Bounded the same way `sessions.transcript` is, and for the same measured
+ * reason — a transcript on this machine reaches 154 MB — with the same rule
+ * that the bound is *reported* rather than hidden. A caller that summarises a
+ * window as if it were the session will describe behaviour that never happened.
+ */
+export interface ToolTrail {
+  /** Chronological. At most what fitted in the window. */
+  events: ToolEvent[]
+  /** Compactions inside the window, oldest first. */
+  compactions: Array<{ at: number; preTokens: number; postTokens: number; trigger: string }>
+  fileBytes: number
+  fromByte: number
+  /** True when the window started after byte zero, so this is a tail. */
+  partial: boolean
+}
+
+/**
+ * What a whole session cost, read from its transcript.
+ *
+ * Deliberately not a price. This repository deleted its rate card — see
+ * `transcript.ts`'s `rateKey` — so there is no honest way to say "$6.40", and a
+ * number invented here would be a number Asad plans against. Tokens and context
+ * occupancy are facts the file carries; dollars are not.
+ */
+export interface TranscriptTotals {
+  requests: number
+  usage: TokenUsage
+  /** Real models seen, heaviest first. */
+  models: string[]
+  compactions: number
+  /** Occupancy of the context window right now, or null before the first request. */
+  context: ContextUsage | null
+  startedAt: number
+  lastActivityAt: number
+}
+
+/* ------------------------------------------------------------- git changes -- */
+
+/** One file git reports as changed, flattened for a tool result. */
+export interface ChangedFile {
+  path: string
+  group: 'staged' | 'unstaged' | 'untracked' | 'conflicted'
+  /** `modified`, `added`, `deleted`, `renamed`, … as git classified it. */
+  kind: string
+  insertions: number | null
+  deletions: number | null
+  binary: boolean
+}
+
+/**
+ * A folder's uncommitted state, as the copilot is allowed to see it.
+ *
+ * Flattened out of `GitStatusResult` rather than passed through, because that
+ * type crosses the bridge as `unknown` — the app's own choice, so the two sides
+ * cannot drift — and a tool that has to re-narrow an `unknown` before it can
+ * count files is a tool doing the surface's job.
+ */
+export interface RepoChanges {
+  repo: boolean
+  root: string | null
+  branch: string | null
+  ahead: number
+  behind: number
+  files: ChangedFile[]
+  /** Why there is nothing to report, when `repo` is false. Null otherwise. */
+  reason: string | null
+}
+
 /**
  * The app operations the tools need, and deliberately no more.
  *
@@ -275,7 +373,37 @@ export interface DeckSurface {
   listSessions(): SessionMeta[]
   /** Live status, or null when nothing has classified this session yet. */
   sessionStatus(id: string): { status: SessionStatus; at: number } | null
-  startSession(input: CreateSessionInput): Promise<SessionMeta>
+  /**
+   * Start a session.
+   *
+   * `forDevice` is the one argument on this interface that is about *who asked*
+   * rather than about what to start, and it exists because a tool's **effect**
+   * can be wider for a remote caller than the frames that caller already has.
+   *
+   * The shape of that bug, stated plainly so nobody removes this argument as
+   * redundant: a phone's own `create` frame is narrow by construction —
+   * `session-create.ts` checks the folder against that device's grants,
+   * `prepareGuestGit` strips this machine's git identity, and on macOS the
+   * session is held inside the folder it was given. `sessions.start` did none of
+   * that, correctly, because its caller had always been the person at the
+   * keyboard. Grant a phone `act` with that unchanged and you have handed it a
+   * strictly *larger* power than the New Session button it already has: any
+   * folder the desktop happens to have open, with the owner's git credentials,
+   * unconfined. That is the OC-02 shape (GHSA-943q-mwmv-hhvh) arriving through
+   * the back door — the tool name was gated, the effect was not.
+   *
+   * So when it is set, the session is started down the *same* path that device's
+   * own `create` frame takes: its folder grants, its guest git identity, its
+   * confinement. The general rule, worth writing into any tool added later: **a
+   * tool's effect for a remote caller may never exceed what that device's own
+   * protocol frames already permit.**
+   *
+   * Optional on the implementation, not on the interface. A host with no remote
+   * layer cannot honour it, and {@link DeckSurface.deviceFolders} being absent is
+   * how the tool learns that and refuses — rather than answering optimistically,
+   * which is the failure this argument exists to prevent.
+   */
+  startSession(input: CreateSessionInput, forDevice?: string): Promise<SessionMeta>
   /** Raw bytes into a session's pty. `control.ts` decides what may be written. */
   writeToSession(id: string, data: string): void
   killSession(id: string): void
@@ -284,6 +412,39 @@ export interface DeckSurface {
 
   /* --- projects ---------------------------------------------------------- */
   listProjects(): Array<{ path: string; provider?: ProviderId; lastOpenedAt: number }>
+  /**
+   * The folders one paired device may start a session in.
+   *
+   * The *same* call `create` is checked against and the same array that device
+   * was sent in its `welcome` — `remoteSessionStart` hands both out of one
+   * starter, deliberately, because a picker built from a second source is a
+   * picker that eventually offers a folder the rule refuses.
+   *
+   * **Absent is a switch, and its absence must be read as a refusal rather than
+   * as permission.** A host with no remote layer cannot answer "may this device
+   * use this folder", and the correct behaviour for a host that cannot answer is
+   * to refuse the call — not to fall back to {@link listProjects}, which is the
+   * desktop's own list and is precisely the wider power a remote caller must not
+   * gain. The `devserver` capability makes the same call for the same reason.
+   */
+  deviceFolders?(deviceId: string): string[]
+
+  /* --- this app's own storage -------------------------------------------- */
+  /**
+   * `<userData>` — where this app keeps its settings, its state and every
+   * session's transcript.
+   *
+   * Here for one job: refusing to start a session inside it.
+   * `COPILOT-CAPABILITIES.md` §3.2 rule 2 makes that a rule rather than a
+   * preference, and it is the general form of a recorded failure — an agent
+   * pointed at another program's live state directory wrote into it, bypassed
+   * that program's validation, corrupted it, and cost a whole recovery session.
+   * The check has to happen where the session is started, so the fact has to be
+   * reachable from there.
+   */
+  appStateRoot(): string
+  /** `<copilot>` — the copilot's own folder, where briefs are written. */
+  copilotRoot(): string
 
   /* --- git --------------------------------------------------------------- */
   gitStatus(cwd: string): Promise<unknown>
@@ -311,10 +472,52 @@ export interface DeckSurface {
   snapshotSettings(): SettingsSnapshot
 
   /* --- transcripts ------------------------------------------------------- */
-  /** The transcript a folder's chat view would open, or null when there is none. */
-  newestTranscript(cwd: string): Promise<string | null>
+  /**
+   * Every conversation in a folder, with when each began.
+   *
+   * Not "the newest one", which is what this used to be and what
+   * `transcript-match.ts` exists to correct: several sessions share a folder,
+   * and handing them all the same file made three of them report a fourth
+   * session's work as their own. The choice is made per session, from this
+   * list, by a function that says how it chose.
+   */
+  transcriptsIn(cwd: string): Promise<TranscriptChoice[]>
   /** Size in bytes, so a reader can start near the end instead of at zero. */
   transcriptBytes(path: string): Promise<number>
   /** Parse from a byte offset to the end. Never called with offset zero on a big file. */
   readTranscriptFrom(path: string, from: number): Promise<TranscriptMessage[]>
+  /**
+   * The tail of a session's tool use, for {@link ToolTrail}.
+   *
+   * Separate from {@link readTranscriptFrom} even though both read the same
+   * file, because they keep opposite halves of it: that one keeps the prose and
+   * throws the tool calls away, this one does the reverse. One reader returning
+   * both would be a reader whose payload is the whole transcript.
+   */
+  readToolTrail(path: string, windowBytes: number): Promise<ToolTrail>
+  /**
+   * What the whole session cost, in tokens.
+   *
+   * A full-file read rather than a window, and that asymmetry is deliberate:
+   * "how is it behaving" is a question about the last few minutes, and "what
+   * has it spent" is a question about all of it. A windowed total would
+   * under-report, silently, in the direction that makes an expensive session
+   * look cheap.
+   */
+  transcriptTotals(path: string): Promise<TranscriptTotals | null>
+
+  /* --- git --------------------------------------------------------------- */
+  /** Uncommitted state of a folder, flattened. See {@link RepoChanges}. */
+  gitChanges(cwd: string): Promise<RepoChanges>
+  /** Unified diff for one file. '' when there is none or the path is refused. */
+  fileDiff(cwd: string, path: string, options: { staged?: boolean; untracked?: boolean }): Promise<string>
+  /**
+   * When a file was last written, epoch ms, or null when it cannot be told.
+   *
+   * The whole of the attribution in `fleet-diff.ts` rests on this one number.
+   * Null is a real answer and not an error: a deleted file has no mtime, and a
+   * change that cannot be dated is reported as unattributed rather than
+   * guessed at.
+   */
+  fileModifiedAt(path: string): Promise<number | null>
 }

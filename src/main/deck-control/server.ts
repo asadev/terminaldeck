@@ -61,7 +61,7 @@
  * gone changes nothing.
  */
 
-import { randomBytes, timingSafeEqual } from 'node:crypto'
+import { randomBytes } from 'node:crypto'
 import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
@@ -69,8 +69,10 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import { BRAND } from '../../shared/brand'
 import { claimOwnPort, releaseOwnPort } from '../own-ports'
+import { CallerTable, type TokenGrant } from './callers'
 import { advertiseTool } from './catalogue'
 import type { DeckControl } from './control'
+import { LOCAL_CALLER } from './surface'
 
 /* -------------------------------------------------------------- constants -- */
 
@@ -106,8 +108,54 @@ export interface DeckControlEndpoint {
   port: number
   /** Per-run secret. Regenerated on every start. */
   token: string
+  /**
+   * A second per-run secret, for callers that nobody is watching.
+   *
+   * The copilot session a person is looking at and a routine firing at 03:00
+   * reach the same tools over the same socket, and one of them can answer a
+   * confirmation dialog while the other cannot. Which one is asking is
+   * therefore a security property, and a property has to be carried by
+   * something the caller cannot choose for itself — so it is carried by *which
+   * token it holds*, minted here, handed out in two different files, and
+   * checked before any tool name is even read.
+   *
+   * A call bearing this token is dispatched with `attended: false`, which makes
+   * every alter-tier tool refuse immediately with `not-permitted-unattended`
+   * instead of blocking on a dialog nobody will see. That refusal is
+   * `RefusalReason`'s own documented purpose and it exists precisely because of
+   * a recorded failure: OpenClaw's heartbeat spent whole turns waiting for
+   * approvals that could never arrive, then apologising for the timeout.
+   *
+   * The alternative — a header the caller sets — was rejected for the obvious
+   * reason: an unattended caller that wanted the attended path would simply not
+   * send it, and a flag a caller can drop is not a boundary.
+   */
+  unattendedToken: string
   /** The URL an MCP client is configured with. */
   url: string
+  /**
+   * Every token this run has minted, and what each one means.
+   *
+   * The two above are entries in it, registered at start. What made it a table
+   * rather than two fields is remote copilot access: a paired device that has
+   * been granted `act` gets a Claude CLI run of its own, in the copilot's folder
+   * with the copilot's instructions, and its tool calls have to arrive
+   * **attributed to that device** so `control.ts` can check them against that
+   * device's grant.
+   *
+   * Attribution by token is the only version of this that cannot be raced. The
+   * alternative that looks simpler — one shared conversation, and a latch that
+   * says "attribute tool calls to the phone from the moment its text was injected
+   * until the turn ends" — needs a turn boundary, and a turn boundary in a pty is
+   * inferred rather than known. An inferred boundary on a permission edge is not
+   * a boundary. `COPILOT-REMOTE.md` §1 argues it at length.
+   *
+   * Exposed on the endpoint so that whoever starts a run can register its token
+   * and, more importantly, **drop it**: revoking a device's grant removes the
+   * entry, and any tool call in flight on it is aborted through
+   * {@link TokenGrant.signal}.
+   */
+  callers: CallerTable
 }
 
 export interface DeckControlServerOptions {
@@ -117,25 +165,6 @@ export interface DeckControlServerOptions {
 }
 
 /* --------------------------------------------------------------- guarding -- */
-
-/**
- * Constant-time comparison that does not leak length either.
- *
- * Lifted in shape from `hook-server.ts`, which explains it: `timingSafeEqual`
- * throws on a length mismatch, so comparing raw buffers would make "wrong
- * length" a faster answer than "wrong bytes".
- */
-function tokenMatches(supplied: unknown, expected: string): boolean {
-  if (typeof supplied !== 'string') return false
-  const offered = supplied.startsWith('Bearer ') ? supplied.slice('Bearer '.length) : supplied
-  const a = Buffer.from(offered)
-  const b = Buffer.from(expected)
-  if (a.length !== b.length) {
-    timingSafeEqual(b, b)
-    return false
-  }
-  return timingSafeEqual(a, b)
-}
 
 function isLoopback(address: string | undefined): boolean {
   if (!address) return false
@@ -233,7 +262,7 @@ function toolResult(value: unknown, error: string | null): {
  * that decision differently would be a second gate to keep in step with the
  * first.
  */
-export function createMcpServer(control: DeckControl): Server {
+export function createMcpServer(control: DeckControl, grant: TokenGrant = LOCAL_ATTENDED): Server {
   const server = new Server(
     { name: SERVER_NAME, version: '1.0.0' },
     {
@@ -261,23 +290,83 @@ export function createMcpServer(control: DeckControl): Server {
 
   server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
     /*
-     * `attended` is left at its default of true, and that is a claim worth
-     * naming rather than letting a default make silently.
+     * Everything about *who this is* comes from which token the request carried,
+     * and from nothing else the caller can influence.
      *
-     * This transport serves the pinned copilot session — the one a person is
-     * looking at in the sidebar — so there genuinely is somebody who can answer
-     * a confirmation, and if there is not, `ConsentBroker` answers
-     * `no-approver` because no window has attached. The unattended path does not
-     * come through here at all: a routine reaches the same tools through
-     * `DeckControl.unattended()`, in process, with no socket.
+     * The default is the local attended caller because the ordinary caller is
+     * the pinned copilot session — the one a person is looking at in the sidebar
+     * — so there genuinely is somebody who can answer a confirmation, and if
+     * there is not, `ConsentBroker` answers `no-approver` because no window has
+     * attached.
+     *
+     * The other two cases reach these same tools over this same socket, because
+     * both *are* Claude CLI processes and the only surface a CLI process has is
+     * MCP. A routine run carries `unattendedToken`, so every alter call it makes
+     * is refused at the boundary instead of hanging on a dialog nobody will see.
+     * A paired device's copilot run carries a token of its own, so every call it
+     * makes is checked against *that device's* grant — see `callers.ts`.
+     *
+     * `grant.caller()` is called per request rather than captured, which is what
+     * makes unticking a grant in Settings land on the next tool call rather than
+     * on the next reconnect.
      */
     const result = await control.call(request.params.name, request.params.arguments, {
-      signal: extra.signal,
+      /*
+       * Both signals, and the run's one is the addition.
+       *
+       * `extra.signal` fires when the MCP client hangs up, which is the copilot's
+       * own process giving up. The grant's signal fires when the *owner* of the
+       * run goes away — a phone whose relay channel dropped, or a device whose
+       * grant was just revoked — and that is a different event that must have the
+       * same effect: `control.ts` turns either into a `caller-gone` refusal, so a
+       * confirmation left on screen cannot be approved into a change nobody is
+       * waiting to hear about.
+       */
+      signal: anySignal(extra.signal, grant.signal),
+      attended: grant.attended,
+      caller: grant.caller(),
     })
     return toolResult(result.value, result.ok ? null : (result.error ?? 'the call failed'))
   })
 
   return server
+}
+
+/**
+ * The person at this keyboard, as a table entry.
+ *
+ * A module constant rather than a fresh object per request: `LOCAL_CALLER` is
+ * frozen, and a caller that is the same fact every time should not be a new
+ * allocation on the tool-call path.
+ */
+const LOCAL_ATTENDED: TokenGrant = { attended: true, caller: () => LOCAL_CALLER }
+
+/**
+ * One signal that fires when either of two do.
+ *
+ * `AbortSignal.any` exists in Node 20+ and in Electron's runtime, and is used
+ * when it is there. The fallback is not defensive padding: this file is
+ * exercised under vitest against whatever Node the machine has, and a missing
+ * static would otherwise turn a permission property into a `TypeError` on the
+ * request path.
+ *
+ * Returns the single signal unchanged when there is only one, which is the
+ * common case — the copilot at the desk and every routine run have no owner
+ * signal — so the ordinary path allocates nothing.
+ */
+function anySignal(a: AbortSignal | undefined, b: AbortSignal | undefined): AbortSignal | undefined {
+  if (!a) return b
+  if (!b) return a
+  const combine = (AbortSignal as { any?: (signals: AbortSignal[]) => AbortSignal }).any
+  if (combine) return combine.call(AbortSignal, [a, b])
+  const controller = new AbortController()
+  const stop = (): void => controller.abort()
+  if (a.aborted || b.aborted) stop()
+  else {
+    a.addEventListener('abort', stop, { once: true })
+    b.addEventListener('abort', stop, { once: true })
+  }
+  return controller.signal
 }
 
 /* --------------------------------------------------------------- lifecycle -- */
@@ -310,9 +399,19 @@ async function handle(
    */
   if (typeof req.headers.origin === 'string') return deny(res, 403)
 
-  // Token before path, so an unauthenticated caller learns nothing about which
-  // routes exist.
-  if (!tokenMatches(req.headers.authorization, live.token)) return deny(res, 403)
+  /*
+   * Token before path, so an unauthenticated caller learns nothing about which
+   * routes exist — and *which* token, because that is what decides who this is:
+   * whether a confirmation can be asked for at all, and which tiers the call may
+   * reach.
+   *
+   * Every entry in the table is compared whichever one matches, and
+   * `CallerTable.match` is where that is enforced rather than here. See its
+   * header: with one entry per paired device, a short-circuit would turn "how far
+   * down the table is your token" into a measurable quantity.
+   */
+  const grant = live.callers.match(req.headers.authorization)
+  if (!grant) return deny(res, 403)
 
   const path = (req.url ?? '').split('?')[0]
   if (path !== MCP_PATH) return deny(res, 404)
@@ -332,7 +431,7 @@ async function handle(
     return deny(res, 400)
   }
 
-  const mcp = createMcpServer(control)
+  const mcp = createMcpServer(control, grant)
   const transport = new StreamableHTTPServerTransport({
     // Stateless: no session id, nothing to resume, nothing to expire.
     sessionIdGenerator: undefined,
@@ -398,7 +497,28 @@ export async function startDeckControlServer(
 
 async function openServer(options: DeckControlServerOptions): Promise<DeckControlEndpoint> {
   const token = randomBytes(32).toString('hex')
-  const live: DeckControlEndpoint = { port: 0, token, url: '' }
+  // Independently random, not derived from the first. A second secret computed
+  // from the first is one secret with two spellings, and holding either would
+  // eventually yield the other.
+  const unattendedToken = randomBytes(32).toString('hex')
+  const callers = new CallerTable()
+  /*
+   * The two fixed tokens are ordinary table entries, registered here.
+   *
+   * Not special-cased below it, which is the whole point of the table existing:
+   * the copilot at the desk, a routine at 03:00 and a phone's run go through one
+   * comparison path and one dispatch path, so there is no branch where a rule
+   * could be applied to two of them and not the third.
+   *
+   * Both are `LOCAL_CALLER` — the person at this machine, who may *ask for* all
+   * three tiers. That is not an exemption: every tier check, budget,
+   * confirmation and log entry applies to them exactly as before, and `alter`
+   * still means a dialog. What differs is `attended`, which is the one fact that
+   * genuinely separates them.
+   */
+  callers.set(token, { attended: true, caller: () => LOCAL_CALLER })
+  callers.set(unattendedToken, { attended: false, caller: () => LOCAL_CALLER })
+  const live: DeckControlEndpoint = { port: 0, token, unattendedToken, url: '', callers }
 
   const next = createServer((req, res) => {
     void handle(req, res, live, options.control).catch((error) => {

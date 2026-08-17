@@ -46,6 +46,15 @@ import { registerUpdateIpc } from './updates/updater'
 import { createManualStrategy } from './updates/manual-strategy'
 import { registerTailnetIpc } from './remote/tailnet'
 import { registerRemoteIpc } from './remote/server'
+import { CopilotGrants } from './remote/copilot-grants'
+import { CopilotRuns } from './remote/copilot-runs'
+import {
+  startCopilotRun,
+  tailForPhone,
+  toCopilotSessions,
+  toPendingRow,
+  watchRunChat,
+} from './remote/copilot-wiring'
 import { registerMachinesIpc } from './remote/machines/ipc'
 import {
   dropPlanSession,
@@ -62,7 +71,8 @@ import { registerSessionSearchIpc } from './session-search'
 import { registerAlertsIpc } from './alerts'
 import { registerProfilesIpc, getState as profilesState, resolveProfile } from './profiles'
 import { registerSignInIpc } from './profiles-signin'
-import { registerCopilotIpc } from './copilot-session'
+import { copilotState, registerCopilotIpc } from './copilot-session'
+import { copilotPaths } from './copilot-home'
 import { registerCopilotInspectIpc } from './copilot-inspect'
 import { registerDeckControlIpc, type DeckControlHandle } from './deck-control'
 import { registerDeckignoreIpc } from './deckignore'
@@ -226,6 +236,19 @@ const liveStatus = new Map<string, { status: SessionStatus; at: number }>()
 
 /** Held so the recheck interval can be disarmed on quit. */
 let updates: ReturnType<typeof registerUpdateIpc> | null = null
+
+/**
+ * The per-device copilot runs, once the remote layer is assembled.
+ *
+ * At module scope for one reason: `before-quit` has to be able to stop them, and
+ * the assembly happens inside `whenReady`. `ptys.killAll()` on that path already
+ * ends the processes, so this is not about the agents — it is about everything
+ * *else* a run holds. Each one has a bearer token in `deck-control`'s caller
+ * table and a config file on disk containing it, and a token surviving the run
+ * it belonged to is a credential with no owner. Quitting is exactly when nobody
+ * is watching for that.
+ */
+let copilotRuns: CopilotRuns | null = null
 
 /**
  * The copilot's tool surface, once its loopback server is listening.
@@ -1004,6 +1027,138 @@ function registerIpc(): void {
     broadcast: (channel, state) => send(channel, state),
   })
   registerTailnetIpc(ipcMain, { certDir: join(app.getPath('userData'), 'tailnet-certs') })
+  /*
+   * Remote copilot access, assembled — the store, and the runs it authorises.
+   *
+   * One `CopilotGrants` for the whole process, handed to both halves. The panel
+   * in Settings edits it and the run manager enforces it, and a second instance
+   * would give the panel a store that writes the same file and holds a different
+   * copy of it in memory — the same rule `core.grants` follows one field down in
+   * the call below, for the same reason.
+   *
+   * Built here rather than inside `registerRemoteIpc` because the run manager
+   * needs things only this file holds: the core's session starter, the caller
+   * table on `deck-control`'s endpoint, and the copilot's own folder.
+   *
+   * **Every dependency that can be resolved late is a function**, and that is
+   * not a style choice. `deck-control` starts asynchronously and can fail to
+   * start at all; `deckControl` below is null until it does. Capturing its
+   * endpoint here would mean either ordering this after an await that the
+   * remote endpoint cannot wait for, or capturing null forever. Asked per call,
+   * a run simply cannot be started until the tools exist — and the phone is told
+   * exactly that, in a sentence, instead of being handed a Start button that
+   * spawns an agent with nothing behind it.
+   */
+  const copilotGrants = new CopilotGrants(remoteStorageDir())
+  copilotRuns = new CopilotRuns({
+    grants: copilotGrants,
+    /*
+     * Where a run's token is registered, and dropped.
+     *
+     * A shim rather than the table itself, for the reason above: the table is
+     * minted with the endpoint and does not exist at this line. `false` from
+     * `delete` on a dead endpoint is the honest answer — there was no token to
+     * drop, because the process that would have held it never started.
+     */
+    callers: {
+      set: (token, grant) => deckControl?.endpoint.callers.set(token, grant),
+      delete: (token) => deckControl?.endpoint.callers.delete(token) ?? false,
+    },
+    endpoint: () => (deckControl === null ? null : { url: deckControl.endpoint.url }),
+    copilotRoot: () => copilotPaths(app.getPath('userData')).root,
+    spawn: (request) =>
+      startCopilotRun(
+        {
+          startSession,
+          announce: announceSession,
+          stop: (id) => ptys.kill(id),
+          userData: () => app.getPath('userData'),
+        },
+        request,
+      ),
+    isAlive: (id) => ptys.list().some((meta) => meta.id === id && meta.exitCode === null),
+    stop: (id) => ptys.kill(id),
+    /*
+     * Prose into a pty, on the phone's behalf, by the desktop.
+     *
+     * The newline is what submits it, and it is added here rather than expected
+     * on the wire: a `copilot.say` frame carries a *sentence*, and making the
+     * client responsible for a control character would mean a client that forgot
+     * it produced a run that silently never answered.
+     */
+    say: (id, text) => ptys.write(id, `${text}\n`),
+    // Ctrl-C. The one interrupt an agent CLI understands, and it reaches this
+    // device's own run and nothing else.
+    interrupt: (id) => ptys.write(id, '\x03'),
+    desk: () => {
+      /*
+       * A *read* of the copilot's state, not a second way to run it.
+       *
+       * `copilotState` answers out of module-level state in `copilot-session.ts`
+       * — whether a session is live, what the last failure was — and takes deps
+       * only so it can resolve paths and ask whether that session is still
+       * alive. So this literal is four fields and no policy: the account, the
+       * folder and the boundary are all decided in that module, by the call that
+       * started the copilot, and nothing here can disagree with it.
+       *
+       * A named const shared with `registerCopilotIpc` below would be tidier and
+       * would couple a read on the relay's path to the object that owns the
+       * desk copilot's lifecycle. This is the smaller of the two mistakes.
+       */
+      const state = copilotState({
+        startSession,
+        isAlive: (id) => ptys.list().some((meta) => meta.id === id && meta.exitCode === null),
+        stop: (id) => ptys.kill(id),
+        userData: () => app.getPath('userData'),
+        storageDir: remoteStorageDir,
+      })
+      return {
+        status: state.status === 'running' ? 'running' : state.status === 'starting' ? 'starting' : 'stopped',
+        profile: state.profile?.name ?? null,
+        // Not asked here. Resolving a sign-in shells out to the CLI, and this
+        // function is called on every state frame — a phone with the pane open
+        // would spawn a probe per read. Null means "not asked", which the frame
+        // is typed for.
+        signedIn: null,
+        // Available when the copilot could start at all. `problem` is the reason
+        // the last attempt failed and is the honest sentence to forward.
+        available: state.problem === null,
+        reason: state.problem,
+      }
+    },
+    cost: () => {
+      const catalogue = deckControl?.control.cost()
+      /*
+       * `tokens` is what the tool list costs *every turn*, which is what the
+       * phone's field is named after — the whole catalogue is re-sent to the
+       * model on each one, so it is a standing cost rather than a one-off.
+       *
+       * Zero when `deck-control` is not up, and that is not a placeholder: a
+       * copilot with no tool surface genuinely spends nothing on a tool list,
+       * and the same state is already saying `available: false` with a reason
+       * beside it.
+       */
+      return { tools: catalogue?.tools ?? 0, turnTokens: catalogue?.tokens ?? 0 }
+    },
+    sessions: () => toCopilotSessions(ptys.list(), (id) => liveStatus.get(id)?.status ?? 'unknown'),
+    log: (options) => tailForPhone(deckControl?.log.tail(2000) ?? [], options),
+    pending: () => (deckControl?.consent.list() ?? []).map(toPendingRow),
+    /*
+     * The run's conversation, read from the transcript rather than the pty.
+     *
+     * Watched by folder, not by session id, and that is not laziness: the CLI
+     * decides its transcript path when it starts writing, which is after the
+     * spawn has already returned, so there is nothing to key on at this moment.
+     * `watchRunChat` waits for the file to appear and then follows it — one
+     * subscription that migrates, instead of a retry loop with a guessed delay.
+     *
+     * The id is unused here for that reason and is still on the signature,
+     * because it is what `CopilotRuns` uses to drop a late update from a run
+     * that has already ended.
+     */
+    chat: (_sessionId, onUpdate) =>
+      watchRunChat(copilotPaths(app.getPath('userData')).root, onUpdate),
+  })
   // On unless this Mac has been told otherwise.
   //
   // It used to be off until someone pressed a button, and nothing pressed it
@@ -1045,6 +1200,24 @@ function registerIpc(): void {
     // at launch, with nobody pressing anything, so the first push a phone makes
     // is not the one that discovers the feature had never been started.
     credentials: core.credentials,
+    /*
+     * The copilot, as a paired device may touch it — and the store that decides
+     * whether it may.
+     *
+     * Passing the layer is what advertises the `copilot` capability, and that is
+     * deliberate rather than incidental: `server.ts` reads it off this object
+     * instead of a constant so that the advertisement cannot outlive the thing
+     * it advertises. A build with no run manager tells a phone nothing, and the
+     * phone draws no Copilot tab, rather than drawing one that answers
+     * `unauthorized` to every frame it sends.
+     *
+     * Both fields, and the same store behind them: this one is the *enforcing*
+     * side, `copilotGrants` is the *editing* side that the settings panel
+     * writes through. Every device is off in it until somebody ticks a box on
+     * this machine.
+     */
+    copilot: copilotRuns,
+    copilotGrants,
     // Where a photo or a file sent from a phone lands. The user's downloads
     // folder, in a folder named after the app — somewhere a person already looks,
     // rather than application support, which they never do and which an
@@ -1103,13 +1276,19 @@ function registerIpc(): void {
   // whether an account is signed in. See `profiles-signin.ts`.
   registerSignInIpc(ipcMain)
   /*
-   * The copilot: one session, in a folder of its own, held inside it.
+   * The copilot: one session, in a folder of its own, run as the person.
    *
    * Handed the core's own `startSession` rather than a starter of its own,
    * because the whole design rests on the copilot being an ordinary session —
    * that is what makes `sessions.list`, the transcript viewer, chat mode and
    * the cost pane work on it with no changes. `copilot-session.ts` decides
-   * where it runs and what it may reach; it does not decide what a session is.
+   * where it runs; it does not decide what a session is.
+   *
+   * Nothing here names an account or a boundary any more, and the absence is
+   * the point: the copilot resolves its profile through the profile system like
+   * every other session, and it is confined by nothing. What it *cannot* touch
+   * is three of this app's own files, measured per start — see
+   * `confine/records.ts`.
    */
   registerCopilotIpc(ipcMain, {
     startSession,
@@ -1117,7 +1296,25 @@ function registerIpc(): void {
     stop: (id) => ptys.kill(id),
     userData: () => app.getPath('userData'),
     storageDir: remoteStorageDir,
-    accountHome: () => app.getPath('home'),
+    /*
+     * Where its tools come from, asked at the moment it starts.
+     *
+     * Read off the handle rather than composed from `mcpConfigPath()`, and the
+     * difference is the whole point: the handle exists only when the loopback
+     * server is actually listening and the config on disk actually holds that
+     * server's live token. `deck-control` starts asynchronously at boot and can
+     * fail to start — a port that will not bind, a token file that cannot be
+     * made owner-only on Windows — and in every one of those cases the *path*
+     * still exists while the server does not. Handing the CLI a config that
+     * points at nothing would produce a copilot that starts, believes it has
+     * tools, and cannot reach one.
+     *
+     * A function rather than a value because of the ordering: this registration
+     * runs before the `.then` below that assigns `deckControl`, and the copilot
+     * is started later still, by a window or by whoever opens it. Evaluated at
+     * start time, the answer is the truth at start time.
+     */
+    mcpConfig: () => deckControl?.configPath ?? null,
   })
   /*
    * Looking at the copilot, which is a different job from running it.
@@ -1419,6 +1616,17 @@ app.on('before-quit', () => {
   // already being torn down. See `send`.
   quitting = true
   rendererAlive = false
+  /*
+   * Before `killAll`, so each run is unwound rather than merely killed.
+   *
+   * `killAll` ends the processes; this ends everything that pointed at them — a
+   * bearer token out of `deck-control`'s caller table, an abort fired so a tool
+   * call in flight resolves as `caller-gone` instead of hanging, and the config
+   * file that held the token removed from disk. Doing it afterwards would leave
+   * the manager unwinding runs whose ptys had already gone, which works, and
+   * doing it before means the credential dies with the thing that used it.
+   */
+  copilotRuns?.stopAll()
   ptys.killAll()
   // Before `stopAllGitWatches`, because the engine holds git watches of its own
   // and releasing them is how the reference counts stay honest — and it writes

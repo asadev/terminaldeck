@@ -1,9 +1,33 @@
 /**
- * The client itself: three screens, one socket, and no pretending.
+ * The client itself: six screens, one socket, and no pretending.
  *
- * pair → sessions → terminal. The connection is owned here and lives across
- * all three, because a phone loses it constantly and re-establishing it must
- * not cost the user their place.
+ * It was three — pair → sessions → terminal — and that sentence stayed at the
+ * top of this file for a while after it stopped being true, which is worth a
+ * line of its own because a header that lies is read by everybody and checked by
+ * nobody. What is here now:
+ *
+ *   pair ─────────► sessions ──► terminal
+ *                   localhost
+ *                   settings ──► machines
+ *
+ * Three of them are the tab strip — Sessions, Localhost, Settings. `terminal` is
+ * pushed from a session row and `machines` from Settings, and the strip stays up
+ * on `machines` as well, which is why `LISTING_SCREENS` has four entries and not
+ * three: a person one screen deep inside Settings has not left it, and every tab
+ * going unmarked reads as having fallen out of the app. `pair` is where a
+ * browser with no credential lands — and also where it comes back to when
+ * somebody adds a *second* machine, which is why it is reachable from inside the
+ * app rather than only before it.
+ *
+ * **One socket, still, and that is a decision rather than a leftover.** This
+ * client can be paired with several machines and talks to exactly the one you
+ * are looking at; the phones hold a connection to every machine at once because
+ * they deliver alerts, and a browser tab that is closed is not running, so there
+ * is nothing a second socket here could be for. `machines.ts` carries the whole
+ * argument.
+ *
+ * The connection is owned here and lives across every screen, because a phone
+ * loses it constantly and re-establishing it must not cost the user their place.
  *
  * The rule everything below serves: the banner tells the truth about the
  * connection at all times, and a terminal that is not live is dimmed, has a
@@ -107,13 +131,14 @@ import {
   textSizeLabel,
   writeTextSize,
 } from './text-size'
+import { VERSION } from './version'
 import { normaliseCode } from '../../src/shared/short-code'
 import { asCodeField } from './code-field'
 import { browserStores, type Remember } from './remember'
 import { relaySocket } from './relay-socket'
 import { lookupMachine } from './rendezvous'
 import { chunkInput, type DevServerReport, type RemoteSession, type ServerMessage } from './protocol-client'
-import { formatSince, sessionTone, shortenPath, sortSessions, statusLabel } from './sessions'
+import { formatSince, noticeAfter, sessionTone, shortenPath, sortSessions, statusLabel } from './sessions'
 import { createTerminal, type TerminalHandle } from './terminal'
 import {
   THEME_CHOICES,
@@ -1152,6 +1177,14 @@ class Deck {
     // with no folder in it, and the only honest thing to do with one is stop the
     // button spinning.
     this.devDo({ t: 'frame', message })
+    // And the notice, for the third time the same reason: what a frame does to
+    // the sentence above the session list is a rule, and a rule written inside
+    // the switch below is one nothing in this repository can check. It is here
+    // rather than in the two `case`s that used to set it because the frame that
+    // matters most is `welcome` — the frame that *ends* a notice — and a client
+    // that only ever wrote notices was a client that left the pairing
+    // instructions sitting over a live session list. See `noticeAfter`.
+    this.notice = noticeAfter(this.notice, message, this.noun)
 
     switch (message.t) {
       case 'welcome':
@@ -1276,12 +1309,12 @@ class Deck {
         // button left reading "Starting…" over a session that will never exist
         // is the same lie as a live-looking cursor over a dead socket.
         this.awaitingCreate = false
+        // The sentence itself was set by `noticeAfter` above; what is left here
+        // is where it has to be *said*.
         if (message.code === 'unknown-session') {
-          this.notice = `That session is no longer running on the ${this.noun}.`
           this.leaveTerminal()
           return
         }
-        this.notice = message.message
         // Said where the user is looking. An in-session refusal — the desktop
         // answers a keystroke for a session this client is no longer attached
         // to with one — arrives while the terminal is on screen, and a notice
@@ -2535,6 +2568,9 @@ class Deck {
     const lifetime = this.lifetimeBlock()
     if (lifetime !== null) screen.append(lifetime)
 
+    screen.append(element('p', 'caption', 'About'))
+    screen.append(this.aboutGroup())
+
     screen.append(
       element(
         'p',
@@ -2545,6 +2581,42 @@ class Deck {
       ),
     )
     return screen
+  }
+
+  /**
+   * Which build of this client is on screen.
+   *
+   * The phone's Settings ends with the same group, for a reason that applies
+   * twice as hard here: a browser is the one client nobody can look at a file
+   * for. It updates itself while you are not watching, it can be installed to a
+   * home screen, and it serves its own shell out of a service-worker cache —
+   * which is the classic way a web app ships an update nobody receives.
+   * `vite.config.ts` stamps that cache with a content hash *precisely* because
+   * that failure is expected, and when it happens the first question anybody
+   * asks is which build you are on. Until this row there was no answer anywhere
+   * in the client.
+   *
+   * One row, two facts, and nothing that pretends to be more — see `version.ts`
+   * for what this number is and, more importantly, the two things it is not. It
+   * is a fact about the page, never about the machine at the other end: this
+   * protocol carries no app version, so a browser paired with an older desktop
+   * cannot tell and this screen does not imply it can.
+   *
+   * Static, with no chevron. There is nowhere to go: an update arrives by
+   * reloading, which is a thing browsers already have a button for, and a row
+   * that looked pressable and did nothing would be worse than a row that plainly
+   * reports.
+   */
+  private aboutGroup(): HTMLElement {
+    const group = element('div', 'group')
+    const row = element('div', 'setting setting--static')
+    row.append(element('span', 'setting__title', BRAND.name))
+    // Mono, like the machine addresses on the Machines screen and the port
+    // numbers on Localhost: this is a value to be read character by character
+    // and compared against another one somebody has been told, not prose.
+    row.append(element('span', 'setting__value setting__value--mono', VERSION))
+    group.append(row)
+    return group
   }
 
   /**

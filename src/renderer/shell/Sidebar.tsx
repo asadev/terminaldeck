@@ -711,6 +711,15 @@ export function Sidebar({
           }`}
           draggable
           data-dragging={tab.id === draggingId || undefined}
+          /*
+           * How the copilot's focus overlay says "that session, in the list".
+           *
+           * On the row rather than on `.sb-row-main` so the highlight covers the
+           * whole row including its status dot and its actions — the row is the
+           * thing a person means when they point at a session here, and a box
+           * around only the label would look like a box around a word.
+           */
+          data-drive-anchor={`session-row:${tab.id}`}
           onDragStart={(event) => beginDrag(event, tab, label)}
           onDragEnd={() => setDraggingId(null)}
         >

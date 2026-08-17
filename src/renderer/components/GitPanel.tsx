@@ -490,6 +490,24 @@ export function GitPanel({ cwd, onSelectFile, selectedPath, bridge, focusGroup }
                       type="button"
                       className="git-row"
                       data-selected={file.path === selectedPath}
+                      /*
+                       * How the copilot's focus overlay says "this file
+                       * changed".
+                       *
+                       * Keyed on `cwd` and the repo-relative path, because that
+                       * pair is what actually identifies a changed file here: a
+                       * project folder has one working tree no matter how many
+                       * sessions are open in it. `driving/focus-target.ts`
+                       * carries the argument, and the reason it disagrees with
+                       * the design note.
+                       *
+                       * On the button rather than the `<li>` so the box lands on
+                       * the row a person can click. The two boxes would differ
+                       * by the list's own row gap, and a highlight that includes
+                       * the gap reads as pointing at the space between two
+                       * files.
+                       */
+                      data-drive-anchor={`git-file:${cwd}:${file.path}`}
                       onClick={() => onSelectFile?.(file)}
                       title={`${describe(file)} — git status ${file.code.trim() || '?'}`}
                     >

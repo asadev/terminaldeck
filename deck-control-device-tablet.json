@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "deck-control": {
+      "type": "http",
+      "url": "http://127.0.0.1:5599/mcp",
+      "headers": {
+        "Authorization": "Bearer 5c046b475445756545ec6bfeed7f0bb06aeed06d0f5f6862a4603e1e54b36ccf"
+      }
+    }
+  }
+}

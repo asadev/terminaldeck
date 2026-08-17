@@ -76,6 +76,16 @@ const CLIENT_TYPES: Record<ClientMessage['t'], true> = {
   'credential.deny': true,
   'dev.status': true,
   'dev.start': true,
+  'copilot.attach': true,
+  'copilot.detach': true,
+  'copilot.state': true,
+  'copilot.sessions': true,
+  'copilot.log': true,
+  'copilot.pending': true,
+  'copilot.start': true,
+  'copilot.say': true,
+  'copilot.cancel': true,
+  'copilot.stop': true,
 }
 
 /** Same guard for the other direction. */
@@ -103,6 +113,13 @@ const SERVER_TYPES: Record<ServerMessage['t'], true> = {
   'upload.failed': true,
   'credential.request': true,
   'dev.state': true,
+  'copilot.state': true,
+  'copilot.chat': true,
+  'copilot.tool': true,
+  'copilot.sessions': true,
+  'copilot.log': true,
+  'copilot.pending': true,
+  'copilot.grant': true,
 }
 
 const VALID_CLIENT: ClientMessage[] = [
@@ -141,6 +158,22 @@ const VALID_CLIENT: ClientMessage[] = [
   { t: 'credential.deny', id: 'req-1', reason: 'no-account' },
   { t: 'dev.status', folder: '/Users/apple/Projects/terminaldeck' },
   { t: 'dev.start', folder: '/Users/apple/Projects/terminaldeck' },
+  // The copilot surface. Eight of the ten carry nothing at all, which is the
+  // property `copilot-frames.test.ts` pins as text: a phone names no tool, no
+  // session and no path, so there is nothing in these frames to be careless
+  // with.
+  { t: 'copilot.attach' },
+  { t: 'copilot.detach' },
+  { t: 'copilot.state' },
+  { t: 'copilot.sessions' },
+  { t: 'copilot.pending' },
+  { t: 'copilot.log' },
+  { t: 'copilot.log', limit: 50 },
+  { t: 'copilot.log', limit: 50, before: '9f1c2ae0-8f1d-4b1e-9a2f-77d7c0a1b3e5' },
+  { t: 'copilot.start' },
+  { t: 'copilot.say', text: 'which of my sessions is stuck?' },
+  { t: 'copilot.cancel' },
+  { t: 'copilot.stop' },
 ]
 
 const SESSION: RemoteSession = {
@@ -245,6 +278,89 @@ const VALID_SERVER: ServerMessage[] = [
       sessionId: SESSION_ID,
       message: 'Nothing accepted a connection within 90 seconds.',
     },
+  },
+  // The copilot surface, outbound. `welcome.copilot` is covered by the extra
+  // `welcome` below rather than here, because a `welcome` carrying it and one
+  // not carrying it are two frames a client has to survive.
+  {
+    t: 'copilot.state',
+    state: {
+      desk: 'running',
+      run: 'run-1',
+      profile: 'Personal',
+      signedIn: true,
+      tools: 14,
+      turnTokens: 2200,
+      pending: 0,
+      grant: { read: true, act: false },
+      available: true,
+      reason: null,
+    },
+  },
+  {
+    t: 'copilot.chat',
+    run: 'run-1',
+    messages: [{ id: 'm1', role: 'you', text: 'anything stuck?', at: 1_700_000_000_000 }],
+  },
+  {
+    t: 'copilot.chat',
+    run: 'run-1',
+    reset: true,
+    messages: [{ id: 'm2', role: 'agent', text: 'Session 3 has been…', at: 0, truncated: true }],
+  },
+  {
+    t: 'copilot.tool',
+    row: {
+      id: 'row-1',
+      at: '2026-08-17T09:00:00.000Z',
+      tool: 'settings.write',
+      tier: 'alter',
+      outcome: 'refused',
+      detail: 'Change a setting — refused (not-granted)',
+      refusal: 'not-granted',
+      deviceId: 'dev-1',
+    },
+  },
+  {
+    t: 'copilot.sessions',
+    sessions: [
+      {
+        id: SESSION_ID,
+        title: 'terminaldeck',
+        cwd: '/Users/apple/Projects/terminaldeck',
+        provider: 'claude',
+        status: 'working',
+        startedAt: 1_700_000_000_000,
+        originRunId: 'row-1',
+      },
+    ],
+  },
+  { t: 'copilot.log', rows: [], more: false },
+  {
+    t: 'copilot.pending',
+    questions: [
+      {
+        id: 'q-1',
+        tool: 'settings.write',
+        summary: 'Change theme to dark',
+        requestedAt: 1_700_000_000_000,
+        expiresAt: 1_700_000_120_000,
+      },
+    ],
+  },
+  { t: 'copilot.grant', grant: { read: false, act: false } },
+  // A `welcome` carrying the per-device copilot grant. Separate from the one at
+  // the top of this list because both shapes are on the wire at once: a desktop
+  // older than the field sends no key, and a client has to be right about both.
+  {
+    t: 'welcome',
+    protocol: PROTOCOL_VERSION,
+    deviceId: 'dev-1',
+    deviceName: 'iPhone',
+    token: null,
+    sessions: [],
+    capabilities: CAPABILITIES,
+    copilot: { read: true, act: true },
   },
 ]
 

@@ -50,7 +50,7 @@ is his requirement, not elegance:
 | *"see all of his files"* | Its cwd is a real folder. Open it in Files. |
 | *"whatever files it reads in the beginning… properly organized"* | Its startup reads **are** `CLAUDE.md` + `memory/`. The settings pane lists the actual files. |
 | *"see how it started the session, how it worked for us"* | It has a normal transcript. The transcript viewer already exists. |
-| *"proper memory… its own, not the other sessions'"* | A `memory/` folder that only it writes to. |
+| *"proper memory… its own, not the other sessions'"* | A `memory/` folder that only it writes to. **A rule, not a wall** — see below. |
 | *"we can connect any Claude"* | The profile system already built. |
 
 Anything bespoke would have to re-implement all five, and would be a black box —
@@ -71,15 +71,18 @@ All four are shown in **Settings → Copilot**, as files, editable. That pane is
 the answer to *"so we can see and learn how our copilot is working."*
 
 **Two of them moved out of that folder, and the split is the point.** As first
-written, all four sat under `<userData>/copilot/` — which is the one directory
-the copilot's confinement lets it write to. That made a routine file something
-it could author without the confirmation a person is owed, and made the action
-log something the audited party could append to, edit or delete. Neither is a
-thing an instruction can prevent. Routines are now reachable only through
+written, all four sat under `<userData>/copilot/` — which was then the one
+directory the copilot could write to. That made a routine file something it
+could author without the confirmation a person is owed, and made the action log
+something the audited party could append to, edit or delete. Neither is a thing
+an instruction can prevent. Routines are now reachable only through
 `routines/ipc.ts` or a confirmed tool call; the log is written by the app alone,
 and the copilot adds a line to it with the `log.note` tool. `copilot-home.ts`
 carries the argument, and `copilot-writable-boundary.test.ts` and
 `copilot-log-boundary.test.ts` prove both refusals against a real `sandbox-exec`.
+
+Those two refusals survived the confinement being removed, and are now the whole
+of what is fenced — see the correction below.
 
 ---
 
@@ -89,9 +92,47 @@ Two tool surfaces, and the split matters.
 
 **Native Claude Code tools** (Read/Write/Bash/Edit) — it gets these because it
 is a CLI session. This is also the first real security question: Bash is the
-whole machine. It must run under the folder-confinement already built for
-sessions (macOS Seatbelt, Windows AppContainer) — that work exists and applies
-here unchanged. The copilot is not exempt from it because it is ours.
+whole machine.
+
+> **Corrected 2026-08-17 — this paragraph said the copilot must run under the
+> folder confinement built for paired-device sessions, and it did, and that was
+> wrong.** Asad, having used it: *"Why does the copilot have a sandbox instead of
+> being like normal, like the other ones? … The copilot still has less things, it
+> is less controllable, it is not the best copilot in the market."*
+>
+> He is right, and the accounting is one-sided. **What the jail cost:** the
+> copilot started *signed out* on every machine, every time — its login would
+> live in the macOS keychain and the keychain is closed to a `(deny default)`
+> process; it could not write a line of anything; and on Windows and on most
+> Linux boxes it **refused to start at all**, because `confinementKind` answers
+> `'none'` there. The agent meant to supervise the others was less capable than
+> any of them. **What the jail bought:** protection against the copilot
+> *reading* things. Not against exfiltration — the network is open to every
+> confined session by design, because closing it would break `git push` and
+> `npm install`.
+>
+> The real control on a copilot is the **consent gate plus the action log**.
+> Those govern what it *does*, which is the actual risk, and a gate is legible:
+> a person sees the prompt and decides. A jail is invisible and its failures look
+> like the product being broken.
+>
+> So the copilot now runs under **the same policy as any other session started
+> at this keyboard** — unconfined, as one of the accounts in the profile system,
+> reading and writing what the person does, on every platform. What survives is a
+> **records fence**: an `(allow default)` Seatbelt profile with three denies in
+> it, around `<userData>/routines/`, `<userData>/routine-state.json` and
+> `<userData>/copilot-log/`. Not a jail — the process inside it has the
+> keychain, the home directory and every repository — a fence around the two
+> things that are about accountability rather than capability: the triggers it
+> must not author, and the record of what it did. `confine/records.ts` carries
+> the argument and the measurements; it fails open, visibly, on platforms that
+> cannot hold it.
+>
+> Two things that were lost and are said out loud rather than quietly: the
+> credential carve-out (`.env`, `~/.ssh`, `.npmrc` refused inside readable
+> folders) is gone, because it was a *stricter* rule than any other session on
+> the machine obeys and belongs back as a product-wide option; and **memory
+> isolation is now a rule rather than a wall** — see §4 below.
 
 **A `deck-control` MCP server** — the part that does not exist yet. It exposes
 the app's own IPC surface, which is already large:
@@ -109,6 +150,21 @@ running, you can ask him about any other session"* is `sessions.list` +
 start sessions"* is `sessions.start`.
 
 Memory needs no tools. It is files, and it already has Read/Write.
+
+**Its memory being its own is a rule, and the file used to imply otherwise.**
+While the copilot was jailed, `copilot-session.ts` claimed the guarantee was
+structural: other sessions' transcripts sat outside the boundary and could not be
+read at all. That was already only half true — `sessions.transcript` hands them
+over through the front door, by design, because reading the fleet's transcripts
+is one of the capabilities the copilot exists for — and the rule that actually
+matters was never about reading. It is `COPILOT-CAPABILITIES.md` §4.1: *it may
+read another session's transcript to answer a question; it may not copy that into
+`memory/`*. No filesystem rule ever enforced that, because both halves happen
+inside the copilot's own folder. It is stated as a rule in the copilot's
+`CLAUDE.md`, in those words, and Settings → Copilot says it is a rule. The
+mechanism that would make it a wall is a check on the memory-write path
+(§4.5 of the capabilities document); it does not exist yet and nothing pretends
+it does.
 
 ### Permission tiers
 

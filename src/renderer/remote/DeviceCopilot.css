@@ -1,0 +1,139 @@
+/* ============================================================================
+   Per-device copilot grants.
+
+   Deliberately the same shape as `DeviceFolders.css` beside it: a device is a
+   soft fill with space inside it, and the rows on that fill are what somebody
+   chose for it. The two panels sit on the same card and are read one after the
+   other, so a different shape between them would suggest a difference that is
+   not there — both answer *what may this device do here*.
+
+   Nothing here is boxed and nothing has a border. Separate with space, then
+   with a tint, and only then with a line; this needs neither of the last two.
+   ============================================================================ */
+
+/* ------------------------------------------------------------- the list -- */
+
+.dc-list {
+  list-style: none;
+  margin: var(--sp-3) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  /* Larger than the gap between the tier rows inside a device, for the reason
+     the folder list gives: the two nestings are one hierarchy, and if a tier
+     row sat as far from the row above it as it does from the next device, the
+     indentation alone would have to say which device a checkbox belongs to —
+     on a screen whose whole job is saying exactly that. */
+  gap: var(--sp-3);
+}
+
+.dc-device {
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+}
+
+/* --------------------------------------------------------------- a head -- */
+
+/* Name over note rather than side by side, matching `.df-head`. The note is a
+   short phrase here rather than a sentence, but the two lists are stacked and
+   a head that aligned differently between them would read as a mistake. */
+.dc-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-05);
+  min-width: 0;
+}
+
+.dc-name {
+  font-size: var(--t-body);
+  font-weight: var(--w-medium);
+  color: var(--text-primary);
+}
+
+.dc-note {
+  font-size: var(--t-caption);
+  color: var(--text-secondary);
+}
+
+/* ------------------------------------------------------------- the tiers -- */
+
+.dc-tiers {
+  list-style: none;
+  margin: var(--sp-2) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+/* The whole row is the label, so the text is a hit target and not only the
+   twelve pixels of the box. A checkbox whose two-line description is not
+   clickable is a control people miss on the first try and resent on the
+   second. */
+.dc-label {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  cursor: pointer;
+}
+
+.dc-tier-off .dc-label,
+.dc-label:has(.dc-box:disabled) {
+  cursor: default;
+}
+
+.dc-box {
+  /* Nudged down onto the first line of the title rather than centred on the
+     whole block: with a two-line description the optical centre of the text is
+     below the line the box belongs beside. */
+  margin-top: 0.15em;
+  flex: none;
+  accent-color: var(--accent);
+}
+
+.dc-text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-05);
+  min-width: 0;
+}
+
+/* Title bright, description dim, space between them — the same treatment the
+   settings rows give a label and its help text, because this is the same
+   relationship and inventing a second one would make the window less legible
+   for no gain. */
+.dc-title {
+  font-size: var(--t-body);
+  color: var(--text-primary);
+}
+
+.dc-blurb {
+  font-size: var(--t-caption);
+  color: var(--text-secondary);
+  line-height: var(--lh-body);
+}
+
+/* ---------------------------------------------------- the row that is off -- */
+
+/*
+   Dimmed, not hidden, and not struck through.
+
+   This row is the only thing on the screen that says the third tier exists at
+   all. It has to read as *present and unavailable* rather than as *broken* or
+   as *coming soon* — so it keeps its full layout and loses only contrast, the
+   same way any disabled control in this window does. A person has to be able to
+   point at it.
+*/
+.dc-tier-off {
+  opacity: 0.55;
+}
+
+/* ---------------------------------------------------------- no static key -- */
+
+.dc-unsealed {
+  margin: var(--sp-2) 0 0;
+  font-size: var(--t-caption);
+  color: var(--text-secondary);
+  line-height: var(--lh-body);
+}

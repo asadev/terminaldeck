@@ -62,16 +62,26 @@ import { MAX_FAILED_ATTEMPTS, RemoteAuth, type Device, type PairingToken } from 
 // `registerRemoteIpc`; importing the class here would put a second constructor
 // for the same file in the one module that must not own it.
 import type { DeviceFolderGrant, FolderGrants } from './folder-grants'
+// Type-only for the same reason `FolderGrants` is: `index.ts` owns the one
+// instance, and `copilotFrameAllowed` is a pure function over a table, so
+// importing it pulls in nothing but `protocol.ts` — which this file already has.
+import { copilotFrameAllowed, type CopilotRemote, type CopilotSink } from './copilot-remote'
+// Type-only, for the reason `FolderGrants` above is: `index.ts` owns the one
+// instance of this store, and a class import here would be a second constructor
+// for a file whose whole point is that there is one copy of it in memory.
+import type { CopilotGrants, DeviceCopilotGrant } from './copilot-grants'
 import {
   CAPABILITIES,
   CAPABILITY,
   CLOSE,
+  MAX_COPILOT_LOG_ROWS,
   MAX_MESSAGE_BYTES,
   PROTOCOL_VERSION,
   chunkOutput,
   parseClientMessage,
   serialize,
   type ClientMessage,
+  type CopilotGrantWire,
   type DeviceDescriptor,
   type DevServerReport,
   type ProtocolErrorCode,
@@ -403,6 +413,27 @@ export interface RemoteEndpointOptions {
    */
   devServers?: DevServers
   /**
+   * The copilot, as a paired device may touch it. **Absent is the switch.**
+   *
+   * A host with no copilot layer does not advertise the `copilot` capability, so
+   * a phone talking to it never draws a Copilot tab and this server never
+   * receives a verb it would have to refuse — the same negotiation `uploadsDir`,
+   * `credentials` and `devServers` get, and for the same reason.
+   *
+   * It matters more here than for any of those, because of who the other hosts
+   * are. `scripts/remote-host.ts` and the headless daemon have sessions and no
+   * copilot; the public demo box hands a shell to a stranger who has never met
+   * the owner. Asad's constraint on this feature was explicit — *"we don't want
+   * to give this copilot to others to see how we use it. This will be only
+   * ours."* — and a capability that appeared on a demo box would be exactly the
+   * thing he said not to build.
+   *
+   * The **grant** is a separate question from the capability and is read
+   * per-message through {@link CopilotRemote.granted}; see `copilot-remote.ts`
+   * for why the two must not be folded together.
+   */
+  copilot?: CopilotRemote
+  /**
    * The most this host is willing to advertise, whatever it is able to do.
    *
    * Absent means "everything you can serve", which is what a desktop and an
@@ -445,6 +476,17 @@ export interface RemoteEndpoint {
    * connected — a normal outcome, not a failure.
    */
   foldersChanged(deviceId: string): number
+  /**
+   * One device's copilot grant changed on the desktop. Take away what it no
+   * longer holds, and tell it.
+   *
+   * Returns how many of its connections were told, which is zero when it is not
+   * connected — a normal outcome. The *rule* is live without this call, because
+   * the grant is read per message and per tool call; what this does is stop a
+   * revoked phone watching a conversation it can no longer influence, and drop
+   * the MCP token its run was holding.
+   */
+  copilotGrantChanged(deviceId: string): number
   /** Close one socket, leaving the device paired. False when it had already gone. */
   dropConnection(connectionId: string): boolean
   /** End one localhost tunnel from the Mac. False when it had already gone. */
@@ -515,6 +557,18 @@ export interface RemoteServer {
   dropDevice(deviceId: string): number
   /** Re-send one device's folder list. Zero when it is not connected. */
   foldersChanged(deviceId: string): number
+  /**
+   * One device's copilot grant changed. Take away what it no longer holds, and
+   * tell it. Zero when it is not connected.
+   *
+   * Note what happens when the server is *down*: the endpoint is null, so this
+   * answers zero and tells nobody — and the run is not stopped either, because
+   * there is no endpoint holding a reference to the copilot layer. That is
+   * correct rather than a gap. With the server down there is no socket for the
+   * phone to be driving anything over, its run has already lost its watcher, and
+   * the grant is still read per tool call from the store the panel just wrote.
+   */
+  copilotGrantChanged(deviceId: string): number
   dropConnection(connectionId: string): boolean
   stopTunnel(connectionId: string, tunnelId: string): boolean
   status(): RemoteStatus
@@ -1011,6 +1065,20 @@ interface LiveConnection {
    * because it is a per-connection allocation driven by a message.
    */
   devFolders: Set<string>
+  /**
+   * Undo for this connection's copilot subscription, or null when it has none.
+   *
+   * Made on `copilot.attach` and not before, for the reason `tunnels` and
+   * `uploads` are made lazily: most phones never open the Copilot tab, and a
+   * subscription per connection made eagerly would be a callback registered on
+   * the run manager for every device that has not asked.
+   *
+   * Dropped on `copilot.detach`, on the socket closing, and on the grant being
+   * revoked. **The run is not stopped with it** — see `copilot.detach`: a phone
+   * that locked its screen in a lift has not asked for its agent to be killed
+   * mid-turn.
+   */
+  copilot: (() => void) | null
   helloTimer: NodeJS.Timeout | null
   /**
    * Set while a `hello` is being checked. Verification is asynchronous — scrypt
@@ -1139,6 +1207,19 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
         typeof options.sessions.folders === 'function'
       )
     }
+    /*
+     * The object, and nothing else.
+     *
+     * Deliberately *not* also gated on any device holding a grant. The
+     * capability says this desktop speaks these frames; the grant says whether
+     * you may send them, and it travels per-device in `welcome.copilot` and in
+     * the `copilot.grant` push. Folding the two together would make a phone
+     * unable to tell "this desktop is too old to have a copilot" from "you have
+     * not been given access" — two sentences with two different remedies — and
+     * would leave a grant ticked mid-session unable to reach a connected phone,
+     * because the only frame carrying it would be a `welcome`.
+     */
+    if (name === CAPABILITY.copilot) return options.copilot !== undefined
     return true
   })
 
@@ -1304,6 +1385,16 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
   function detachAll(connection: LiveConnection): void {
     connection.tunnels?.closeAll()
     connection.tunnels = null
+    /*
+     * The watcher goes; the run stays.
+     *
+     * That asymmetry is the design and it is worth stating where the teardown
+     * is, because everything else in this function is symmetric. A socket
+     * dropping is a phone going into a pocket, a lift, a tunnel — not a person
+     * asking for their agent to be killed mid-turn. The run has its own grace
+     * window and stops itself when that expires; see `copilot-runs.ts`.
+     */
+    unwatchCopilot(connection)
     // Before the handles, because this deletes half-written files. A partial
     // video left in someone's Downloads wearing a real name is the one piece of
     // state a dropped socket must not leave behind.
@@ -1487,6 +1578,12 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
       // sessions sends no key at all — the same shape a desktop from before this
       // field sends, which is what an older client is already correct about.
       ...foldersFrame(outcome.deviceId),
+      // Same rule, same reason. A desktop with no copilot sends no key; one with
+      // a copilot sends the object even when it is all-false, because "you have
+      // not been given access" is a state with a remedy and a client should be
+      // able to say so rather than hiding the tab as though the feature did not
+      // exist.
+      ...copilotFrame(outcome.deviceId),
     })
     announce()
   }
@@ -1501,6 +1598,215 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
   function foldersFrame(deviceId: string): { folders?: string[] } {
     const list = options.sessions.folders?.(deviceId)
     return list ? { folders: list } : {}
+  }
+
+  /**
+   * This device's copilot grant, in the shape a `welcome` spreads.
+   *
+   * Absent when this host has no copilot at all, which is the same thing its
+   * missing `copilot` capability already says. Present and all-false is the
+   * ordinary case and is *not* the same fact: it means this desktop has a
+   * copilot and this device has not been given access to it, which is a state
+   * with a remedy — a switch, on the desktop, in Settings.
+   */
+  function copilotFrame(deviceId: string): { copilot?: CopilotGrantWire } {
+    const copilot = options.copilot
+    return copilot ? { copilot: copilot.granted(deviceId) } : {}
+  }
+
+  /**
+   * Everything a copilot verb needs, or a refusal already sent.
+   *
+   * One function rather than the three checks written out at each of the ten
+   * verbs, because it is the same three checks every time and the failure mode
+   * of writing them ten times is that the tenth one is missing the middle check.
+   *
+   * The order is: does this host have a copilot at all, is this device holding
+   * the tier this verb needs, and only then the verb. The grant is read **here**,
+   * on every message, never at hello — which is what makes an untick in Settings
+   * land on the next frame rather than on the next reconnect, and it is the same
+   * property `folders()` has for `create`.
+   */
+  function copilotFor(
+    connection: LiveConnection,
+    deviceId: string,
+    verb: string,
+  ): CopilotRemote | null {
+    const copilot = options.copilot
+    if (!copilot) {
+      // A client sending a verb this host never advertised is not a client of
+      // ours — the same refusal `create`, the uploads and the dev servers give.
+      send(connection, {
+        t: 'error',
+        code: 'unauthorized',
+        message: 'There is no copilot to reach on this machine.',
+      })
+      return null
+    }
+    if (!copilotFrameAllowed(copilot.granted(deviceId), verb)) {
+      /*
+       * `unauthorized`, and the sentence names the remedy rather than the tier.
+       *
+       * "You need `act`" is a word from this codebase's permission model that
+       * means nothing on a phone. What a person can act on is that the switch is
+       * on their Mac, in Settings, next to the folders — which is also the only
+       * place it can be changed, deliberately: a grant that could be requested
+       * from the device it is about is a grant the device holds.
+       */
+      send(connection, {
+        t: 'error',
+        code: 'unauthorized',
+        message:
+          'This device has not been given that much access to the copilot. ' +
+          `Change it on the ${machineNoun(currentPlatform())} itself, in Settings → Remote.`,
+      })
+      return null
+    }
+    return copilot
+  }
+
+  /**
+   * Where one connection's copilot frames go.
+   *
+   * Built per connection rather than per device, because two sockets from the
+   * same device — the app and a second window, a phone and the same phone
+   * reconnecting before the first socket has been reaped — are two places the
+   * same conversation has to appear.
+   */
+  function copilotSink(connection: LiveConnection): CopilotSink {
+    return {
+      state: (state) => send(connection, { t: 'copilot.state', state }),
+      chat: (run, messages, reset) =>
+        send(connection, { t: 'copilot.chat', run, messages, ...(reset ? { reset: true } : {}) }),
+      tool: (row) => send(connection, { t: 'copilot.tool', row }),
+      sessions: (sessions) => send(connection, { t: 'copilot.sessions', sessions }),
+      pending: (questions) => send(connection, { t: 'copilot.pending', questions }),
+    }
+  }
+
+  /** Drop this connection's copilot subscription, if it has one. */
+  function unwatchCopilot(connection: LiveConnection): void {
+    const stop = connection.copilot
+    connection.copilot = null
+    if (!stop) return
+    try {
+      stop()
+    } catch (error) {
+      console.error('[remote] could not drop a copilot watcher:', error)
+    }
+  }
+
+  /**
+   * Serve one `copilot.*` frame, after {@link copilotFor} has allowed it.
+   *
+   * Not awaited by the caller, for the same reason `create` is not: the message
+   * loop is the socket's data handler and starting a run spawns an agent
+   * process. A rejection is impossible by contract and caught anyway.
+   */
+  async function copilotServe(
+    connection: LiveConnection,
+    copilot: CopilotRemote,
+    deviceId: string,
+    message: Extract<ClientMessage, { t: `copilot.${string}` }>,
+  ): Promise<void> {
+    switch (message.t) {
+      case 'copilot.attach': {
+        // Re-attaching is how a phone asks for its context again after a
+        // reconnect, so it is not an error — the old subscription goes and a
+        // fresh one is made, exactly as `attach` does for a session.
+        unwatchCopilot(connection)
+        connection.copilot = copilot.watch(deviceId, copilotSink(connection))
+        send(connection, { t: 'copilot.state', state: copilot.state(deviceId) })
+        return
+      }
+      case 'copilot.detach':
+        unwatchCopilot(connection)
+        return
+      case 'copilot.state':
+        send(connection, { t: 'copilot.state', state: copilot.state(deviceId) })
+        return
+      case 'copilot.sessions':
+        send(connection, { t: 'copilot.sessions', sessions: copilot.sessions() })
+        return
+      case 'copilot.pending':
+        send(connection, { t: 'copilot.pending', questions: copilot.pending() })
+        return
+      case 'copilot.log': {
+        const { rows, more } = copilot.log({
+          limit: message.limit ?? MAX_COPILOT_LOG_ROWS,
+          ...(message.before === undefined ? {} : { before: message.before }),
+        })
+        send(connection, { t: 'copilot.log', rows, more })
+        return
+      }
+      case 'copilot.start': {
+        const outcome = await copilot.start(deviceId)
+        // The phone can be gone by now: starting resolves a login shell's PATH,
+        // probes for the CLI and spawns a process. The run is real either way —
+        // that is the honest outcome of "start something" — and it will be found
+        // by the reconnect inside the grace window.
+        if (!live.has(connection.id)) return
+        if (!outcome.ok) {
+          send(connection, { t: 'error', code: outcome.code, message: outcome.message })
+          return
+        }
+        send(connection, { t: 'copilot.state', state: copilot.state(deviceId) })
+        return
+      }
+      case 'copilot.say': {
+        const outcome = await copilot.say(deviceId, message.text)
+        if (!live.has(connection.id)) return
+        if (!outcome.ok) send(connection, { t: 'error', code: outcome.code, message: outcome.message })
+        return
+      }
+      case 'copilot.cancel':
+      case 'copilot.stop': {
+        const outcome = message.t === 'copilot.cancel' ? copilot.cancel(deviceId) : copilot.stop(deviceId)
+        if (!outcome.ok) {
+          send(connection, { t: 'error', code: outcome.code, message: outcome.message })
+          return
+        }
+        send(connection, { t: 'copilot.state', state: copilot.state(deviceId) })
+        return
+      }
+    }
+  }
+
+  /**
+   * Tell one device its copilot grant changed, and take away what it no longer
+   * has.
+   *
+   * Called from the settings panel through `remote:copilot:set`, and from a
+   * revoke. Two halves, and only the second is about the wire:
+   *
+   *  - `CopilotRemote.revoked` drops the device's MCP token — so a tool call in
+   *    flight on it aborts with `caller-gone` — and stops its run. That is what
+   *    stops a phone whose access was just taken away from continuing to drive
+   *    an agent it can no longer be granted.
+   *  - The push, and the unsubscribe, are what stop it *watching* a conversation
+   *    it can no longer influence.
+   *
+   * The *rule* is already live without any of this, because the grant is read
+   * per message and per tool call. This is what makes the screen agree with the
+   * rule, which is why a device with no live connection is not an error and
+   * simply counts zero.
+   */
+  function tellCopilotGrant(deviceId: string): number {
+    const copilot = options.copilot
+    if (!copilot) return 0
+    const grant = copilot.granted(deviceId)
+    // Losing `read` is losing the watch, and losing `act` is losing the run.
+    // Asked of the store rather than of the caller, so that "the panel said so"
+    // and "the disk says so" cannot come apart.
+    if (!grant.act) copilot.revoked(deviceId)
+    let told = 0
+    for (const connection of live.values()) {
+      if (connection.deviceId !== deviceId) continue
+      if (!grant.read) unwatchCopilot(connection)
+      send(connection, { t: 'copilot.grant', grant })
+      told += 1
+    }
+    return told
   }
 
   /**
@@ -1932,6 +2238,52 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
         proxy.handle(connection.deviceId, message satisfies CredentialMessage)
         return
       }
+      case 'copilot.attach':
+      case 'copilot.detach':
+      case 'copilot.state':
+      case 'copilot.sessions':
+      case 'copilot.log':
+      case 'copilot.pending':
+      case 'copilot.start':
+      case 'copilot.say':
+      case 'copilot.cancel':
+      case 'copilot.stop': {
+        /*
+         * Listed one by one rather than caught by a prefix test, so that adding
+         * a verb to this capability without deciding which tier it needs stops
+         * the build instead of falling through to a handler that assumes `read`.
+         *
+         * The tier check is `copilotFor`, and it is deliberately **not** the
+         * boundary — see `copilot-remote.ts`. It keeps the UI honest and gives a
+         * clean refusal; the boundary is `DeckControl.call` on the desktop, at
+         * the point a tool is dispatched, and it holds whether or not this
+         * transport exists.
+         *
+         * `connection.deviceId` is a `string` here and not `string | null`: the
+         * guard at the top of this function returned for anything that had not
+         * said hello, and nothing between reassigns it. Passing it rather than
+         * letting the run manager read it off a connection is the same argument
+         * `create` makes — whose request this is must come from the
+         * authenticated socket, never from the frame.
+         */
+        const copilot = copilotFor(connection, connection.deviceId, message.t)
+        if (!copilot) return
+        void copilotServe(connection, copilot, connection.deviceId, message).catch((error) => {
+          console.error('[remote] copilot request failed:', error)
+          if (!live.has(connection.id)) return
+          send(connection, {
+            t: 'error',
+            code: 'unavailable',
+            // The error is not quoted. It came from a spawn on this machine and
+            // this sentence is drawn on somebody's phone; `protocol.ts`'s rule
+            // that reasons never quote what was refused applies more sharply
+            // here, because the value could be a line of the copilot's own
+            // conversation.
+            message: 'The copilot could not be reached just now.',
+          })
+        })
+        return
+      }
     }
   }
 
@@ -1967,6 +2319,7 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
       tunnels: null,
       uploads: null,
       devFolders: new Set(),
+      copilot: null,
       helloTimer: null,
       greeting: false,
       creating: false,
@@ -2100,6 +2453,17 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
       // a phone in a tunnel are different facts and the person at the terminal
       // is owed the right one.
       options.credentials?.forget(deviceId)
+      /*
+       * And its copilot run goes with it, before the socket does.
+       *
+       * Closing the socket alone would leave a Claude CLI process running in the
+       * copilot's folder, holding an MCP token that `remoteCopilotCaller` would
+       * keep resolving — to `NO_TIERS`, once the grant store has been cleared,
+       * so it could no longer *do* anything. But it would still be spending
+       * money on a turn nobody can read, for a device that has just been thrown
+       * off the machine. Revocation stops the process, not merely its powers.
+       */
+      options.copilot?.revoked(deviceId)
       sweep += 1
       sweptAt.set(deviceId, sweep)
       // Bounded: only a revoke reaches here, and the trust store caps devices
@@ -2120,6 +2484,7 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
       return dropped
     },
     foldersChanged: tellFolders,
+    copilotGrantChanged: tellCopilotGrant,
     dropConnection(connectionId: string): boolean {
       const connection = live.get(connectionId)
       // Not a revoke: the device stays paired and may connect again. This is
@@ -2767,6 +3132,7 @@ export function createRemoteServer(options: RemoteServerOptions): RemoteServer {
     // Nothing to tell when the server is not up: the device is not connected,
     // and it reads the new list in its `welcome` the next time it is.
     foldersChanged: (deviceId) => endpoint?.foldersChanged(deviceId) ?? 0,
+    copilotGrantChanged: (deviceId) => endpoint?.copilotGrantChanged(deviceId) ?? 0,
     dropConnection: (connectionId) => endpoint?.dropConnection(connectionId) ?? false,
     stopTunnel: (connectionId, tunnelId) => endpoint?.stopTunnel(connectionId, tunnelId) ?? false,
     status: snapshot,
@@ -2826,6 +3192,30 @@ export interface RemoteIpcDeps {
    * watch their own idea of whether a project's server is up.
    */
   devServers?: DevServers
+  /**
+   * The copilot, as a paired device may touch it. Absent is the switch — see
+   * {@link RemoteEndpointOptions.copilot}.
+   *
+   * Passed in for the same reason `folders`, `credentials` and `devServers` are:
+   * `index.ts` builds it before this function is called, because the run manager
+   * needs `deck-control`'s caller table and the app's own session starter, and a
+   * second one built here would mint tokens into a table nothing checks.
+   */
+  copilot?: CopilotRemote
+  /**
+   * The per-device copilot grants, for the settings panel.
+   *
+   * Separate from {@link copilot} even though the run manager reads the same
+   * store, and deliberately so: this is the *editing* side and that is the
+   * *enforcing* side. `index.ts` owns the one instance and hands it to both —
+   * the same rule `folders` follows and for the same reason, which the folder
+   * grants' own comment states: a second instance would give the panel a store
+   * that writes the same file and holds a different copy of it in memory.
+   *
+   * Absent means the panel's channels answer with nothing, which is what a host
+   * with no copilot should say to a UI that has no business asking.
+   */
+  copilotGrants?: CopilotGrants
   /**
    * The ceiling on what this host advertises. See {@link RemoteEndpointOptions.offer}.
    *
@@ -3047,6 +3437,11 @@ export function registerRemoteIpc(ipcMain: InvokeRegistrar, deps: RemoteIpcDeps)
     // Spread rather than passed as possibly-undefined, like everything else that
     // is a switch: absent means this host does not advertise `devserver` at all.
     ...(deps.devServers ? { devServers: deps.devServers } : {}),
+    // Likewise. A host with no copilot layer does not advertise `copilot`, so a
+    // phone talking to it draws no Copilot tab at all — which is the shape
+    // Asad's constraint on this feature demands: *"we don't want to give this
+    // copilot to others."*
+    ...(deps.copilot ? { copilot: deps.copilot } : {}),
     ...(deps.offer ? { offer: deps.offer } : {}),
     port: deps.port,
     onConnections: (connections) => deps.broadcast(REMOTE_CONNECTIONS_CHANNEL, connections),
@@ -3174,6 +3569,14 @@ export function registerRemoteIpc(ipcMain: InvokeRegistrar, deps: RemoteIpcDeps)
       // phone pairs again and is issued a *new* device id — so the row left
       // behind could never be reached by anything again.
       deps.folders.forget(id)
+      /*
+       * And its copilot grant, for exactly the same reason and one degree more
+       * sharply: a stale folder row is a preference nobody can reach, and a
+       * stale copilot row is a *permission* sitting in a file with nobody's name
+       * against it. `dropDevice` above has already stopped the run and dropped
+       * its MCP token; this is the record.
+       */
+      deps.copilotGrants?.forget(id)
     }
     return auth.listDevices()
   })
@@ -3203,6 +3606,53 @@ export function registerRemoteIpc(ipcMain: InvokeRegistrar, deps: RemoteIpcDeps)
       // reconnected it.
       server.foldersChanged(id)
       return deps.folders.list()
+    },
+  )
+
+  /**
+   * Which paired devices may drive the copilot, and how far.
+   *
+   * The same shape as the folder channels above — read the whole list, write one
+   * device, answer with the whole list again — for the same reason: the panel
+   * renders what the main process says rather than what it just asked for, so a
+   * switch cannot show as on when the store says off. That matters more here
+   * than it does for a folder list, because {@link CopilotGrants.set} genuinely
+   * does not store everything it is handed: `alter` is dropped whatever arrives,
+   * and a device past the ceiling is refused.
+   *
+   * Devices with nothing granted simply do not appear. That is the default state
+   * and inventing a row for it would make "never granted" and "granted, then
+   * unticked to nothing" two spellings of one fact.
+   */
+  ipcMain.handle('remote:copilot', (): DeviceCopilotGrant[] => deps.copilotGrants?.list() ?? [])
+  ipcMain.handle(
+    'remote:copilot:set',
+    (_event, id: unknown, tiers: unknown): DeviceCopilotGrant[] => {
+      const grants = deps.copilotGrants
+      if (!grants) return []
+      if (typeof id !== 'string' || id === '') return grants.list()
+      /*
+       * `tiers` is handed over unchecked, on purpose.
+       *
+       * `copilotGrantFrom` is the rule — a non-object is nothing, only a literal
+       * `true` grants, and `alter` cannot survive whatever it says — and it
+       * lives in the store because the store is what a hand-edited file is read
+       * through too. Narrowing here as well would be a second copy of a
+       * permission rule, and the second copy is the one that gets it wrong.
+       */
+      grants.set(id, tiers)
+      /*
+       * Then the wire, in that order.
+       *
+       * The disk first, because everything else is downstream of it: a grant the
+       * panel believes and the disk does not is a permission that reverts at the
+       * next launch, and `commit()` throws rather than let that happen. Then the
+       * run's token is dropped and its process stopped if `act` has gone, and
+       * every live connection of that device is told — which is what stops a
+       * revoked phone watching a conversation it can no longer influence.
+       */
+      server.copilotGrantChanged(id)
+      return grants.list()
     },
   )
 

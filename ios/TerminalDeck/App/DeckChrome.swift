@@ -71,6 +71,18 @@ enum DeckSurface: Hashable, CaseIterable {
     case session
     /// A page from the machine, pushed from the Localhost tab.
     case localhostPage
+    /**
+     * The copilot, pushed from the session list.
+     *
+     * Loses the bar, with the terminal and the localhost page, and it belongs
+     * with those two rather than with Machines for the reason the rule is
+     * actually about: it is *the whole thing you came for*, full height, and it
+     * has a text field at the bottom of it. The pill he complained about was
+     * floating over the last three rows of a session with the keyboard down —
+     * *"when this keyboard is down, see the pill is still there"* — and a
+     * composer is the same frame with a different keyboard in it.
+     */
+    case copilot
 }
 
 enum DeckChrome {
@@ -80,7 +92,7 @@ enum DeckChrome {
         switch surface {
         case .sessions, .localhost, .settings, .machines:
             return true
-        case .session, .localhostPage:
+        case .session, .localhostPage, .copilot:
             return false
         }
     }

@@ -89,6 +89,67 @@
   margin-top: var(--sp-6);
 }
 
+/* ---------------------------------------------------------------- editors */
+
+/* The box a person edits their copilot's files in — its instructions, one
+   memory, one routine. One shape for all three, from `CopilotEditor.tsx`.
+
+   `--fill-tertiary`, never a `--bg-*`. The rule at the top of this file is the
+   whole reason: a surface token names a colour and can come to name the colour
+   of the page behind it, and an editable box that is exactly the colour of the
+   sheet is a box nobody can see the edges of — which for a *text field* is worse
+   than for a static block, because the affordance is the edge. A fill is defined
+   as a lift off whatever is behind it and cannot lose that fight in either
+   theme. */
+.copilot-editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+}
+
+.copilot-editor-box {
+  width: 100%;
+  box-sizing: border-box;
+  padding: var(--sp-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--fill-tertiary);
+  color: var(--text-primary);
+  /* Mono, because all three files are configuration a parser reads: a `when:`
+     line, a front-matter block, an indented example. In a proportional face the
+     alignment that makes those readable is gone. */
+  font-family: var(--font-mono);
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
+  /* Vertical only. A routine file's prompt is prose that should wrap, and a
+     horizontal scrollbar under a text box is a second axis nobody uses. */
+  resize: vertical;
+  /* Tabs in these files are one indent level, not eight columns of it. */
+  tab-size: 2;
+}
+
+.copilot-editor-box:hover:not(:disabled) {
+  border-color: var(--border-strong);
+}
+
+.copilot-editor-box:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+  border-color: transparent;
+}
+
+.copilot-editor-box:disabled {
+  opacity: 0.6;
+}
+
+/* A file that could not be read at all. Held apart from the ordinary prose line
+   so that "there is no CLAUDE.md yet" does not sit flush against the label
+   above it as though it were that label's help text. */
+.copilot-editor-problem {
+  margin-top: var(--sp-2);
+}
+
 /* ---------------------------------------------------------------- memory */
 
 .copilot-fact .settings-code {

@@ -148,10 +148,19 @@ describe('routines, end to end', () => {
       `# On edit\n\nwhen: file-change src/**\nin: ${project}\n\n---\n\nGo.\n`,
       'utf8',
     )
-    // This is the state the shipping build is in today: the triggers are wired
-    // and there is nothing on the other end of them. It has to look like that
-    // rather than like a routine that simply has not fired.
-    routines = createRoutines({ allowFolder: () => ({ ok: true }) })
+    /*
+     * `runner: null` explicitly, and the explicitness is the point.
+     *
+     * The shipping build no longer has this shape — `createRoutines` defaults
+     * to a real copilot runner, because a feature whose wiring a shell has to
+     * remember is a feature that ships inert. What has to keep working is the
+     * *reporting*: a shell that genuinely has nothing on the other end of its
+     * triggers — a headless host with no Claude CLI, a test — must show every
+     * routine as unarmed with the reason attached, rather than as a routine
+     * that simply has not fired yet. Those two look identical from outside and
+     * only one of them is worth waiting for.
+     */
+    routines = createRoutines({ runner: null, allowFolder: () => ({ ok: true }) })
     routines.engine.start()
     const view = routines.engine.get('on-edit')
     expect(view?.state).toBe('unarmed')

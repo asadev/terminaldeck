@@ -201,6 +201,74 @@ export function customProviderSpec(
   }
 }
 
+/**
+ * The same agent, launched with two more flags on the end of its command line.
+ *
+ * One caller: the copilot, which is spawned with `--mcp-config <file>
+ * --strict-mcp-config` so that it has the `deck-control` tools at all. Without
+ * this seam it had none — `mcpConfigPath()` wrote the file, the server listened,
+ * and nothing on the spawn path could put a flag anywhere, so every sentence
+ * about the copilot being "bounded by the tool tiers and the consent gate"
+ * described a gate that was not in the path. `deck-control/index.ts` records the
+ * three alternatives that were tried and rejected before this one.
+ *
+ * ## Why it is not `[...spec.spawn.args, ...extra]` at the call site
+ *
+ * Because `spawn.args` has already been through {@link launcher}, and on one of
+ * the three launch shapes that array is not the agent's arguments at all. Inside
+ * WSL it is a whole `wsl.exe` invocation whose last element is a shell command
+ * *line* — appending there passes the flags to the login shell as positional
+ * parameters, where `bash -lic '<cli>' --mcp-config <path>` sets `$0`, and the
+ * CLI never sees them. The flags have to join the inner command before it is
+ * quoted, which means re-running the launcher rather than editing its output.
+ *
+ * The two other shapes would tolerate a naive append — `cmd.exe /c <bin> …` and
+ * a bare POSIX spawn both end with the agent's own arguments — and that is
+ * precisely the trap: it would work on this machine, work in CI, and be wrong
+ * only for the person whose projects live in Ubuntu.
+ *
+ * `spawn.command` is preserved rather than rebuilt, because on macOS and Linux
+ * `resolvedProvidersFor` may have pointed it at a *working copy* of a CLI whose
+ * name on PATH does not execute. Losing that here would reintroduce a bug that
+ * cost a recording: the npm `@openai/codex` launcher failing to spawn its own
+ * missing native binary.
+ *
+ * Resume args get the flags too when there are any. The copilot does not resume
+ * — it starts fresh every time, deliberately — but an argument list that is
+ * correct on one path and silently different on the other is how the next caller
+ * gets a session with no tools and no error.
+ */
+export function withLaunchArgs(
+  spec: ProviderSpec,
+  extra: readonly string[],
+  platform: Platform,
+  env: Env,
+  wsl: WslTarget | null = null,
+): ProviderSpec {
+  if (extra.length === 0) return spec
+  const args = [...spec.args, ...extra]
+  const resumeArgs = spec.resumeArgs.length > 0 ? [...spec.resumeArgs, ...extra] : []
+
+  const target = isWindows(platform) ? wsl : null
+  if (target !== null) {
+    return { ...spec, args, resumeArgs, spawn: launcher(platform, env, wsl)(spec.bin, args, resumeArgs) }
+  }
+
+  return {
+    ...spec,
+    args,
+    resumeArgs,
+    spawn: {
+      ...spec.spawn,
+      args: [...spec.spawn.args, ...extra],
+      // Empty stays empty: `startSession` reads a zero-length `resumeArgs` as
+      // "this agent cannot continue a conversation" and falls back to the start
+      // arguments, so filling it in here would invent a resume flag.
+      resumeArgs: spec.spawn.resumeArgs.length > 0 ? [...spec.spawn.resumeArgs, ...extra] : [],
+    },
+  }
+}
+
 export function providersFor(
   platform: Platform,
   env: Env,

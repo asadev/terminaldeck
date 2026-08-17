@@ -27,6 +27,20 @@ import type { ProviderId } from '../shared/types'
  * path* — which is the branch of `lookupCommand` that checks the executable bit
  * rather than shelling out to `which`, so this test never depends on what
  * happens to be installed on the machine running it.
+ *
+ * ## What the assertion in the fixture caught
+ *
+ * `expect(added.ok, …)` below is there so that a failure lands on the setup
+ * rather than as three mysterious failures underneath it, and on the Windows
+ * runner it did exactly that: the agent could not be added at all. The cause was
+ * not this fixture being POSIX-shaped — the command above is already the right
+ * one for the platform. It was the feature. `validateDraft` refused any command
+ * containing a backslash, which is every absolute path on Windows, so no Windows
+ * user could add an agent by path either. Fixed in `shared/custom-agents.ts`,
+ * where the reasoning is written out, and pinned in `custom-agents.test.ts` on
+ * both platforms. The lesson worth keeping is the shape of it: the untestable
+ * branch was refused on a Mac with a comment saying nothing here runs on
+ * Windows, in a repository that ships a Windows installer from every tag.
  */
 
 const windows = process.platform === 'win32'
@@ -55,7 +69,31 @@ afterAll(async () => {
   await core.ptys.drain()
   await core.credentials.stop()
   resetPaths()
-  rmSync(dir, { recursive: true, force: true })
+  /*
+   * `maxRetries`, and it is Windows that needs it.
+   *
+   * The sessions above run in this directory, so it is the working directory of
+   * a real child process. On Windows a directory with a handle open on it — and
+   * a process's own cwd is such a handle — cannot be removed, and the handle
+   * outlives the process by a moment: `drain()` returns when the pty reports
+   * exit, while the kernel releases the last reference some milliseconds later,
+   * and ConPTY has its own helper process that closes on its own schedule. So
+   * the first `rm` lands on `EPERM` and the second, a tenth of a second later,
+   * does not. POSIX has no such rule — an unlinked directory is unlinked — so
+   * this costs nothing there.
+   *
+   * `maxRetries` rather than a sleep because Node implements exactly this: it
+   * retries `EBUSY`, `EMFILE`, `ENFILE`, `ENOTEMPTY` and `EPERM` on Windows and
+   * nothing on POSIX. And retries rather than a `try`/`catch`, because a
+   * directory that is *still* locked after two seconds is a process this test
+   * failed to kill, which is worth failing over — the whole reason
+   * `killAll`/`drain` are above.
+   *
+   * This only became reachable when the fixture started working on Windows: for
+   * as long as `agents.add` refused every path on that platform, no session ever
+   * started here and there was nothing holding the folder.
+   */
+  rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
 })
 
 describe('starting a session on an agent somebody added', () => {
@@ -80,6 +118,56 @@ describe('starting a session on an agent somebody added', () => {
 
     expect(meta.provider).toBe('shell')
   })
+
+  /**
+   * The flags a launch adds reach the real process, and are read off it.
+   *
+   * This is the seam the copilot's tools travel through: `startSession(input,
+   * guest, confine, fence, extraArgs)`, with `--mcp-config <file>
+   * --strict-mcp-config`. Before it existed there was nowhere on the spawn path
+   * to put a flag, so the copilot had none of this app's tools while every
+   * screen in the product described the gate in front of them.
+   *
+   * Asserted against a process's *output* rather than against a spec, because
+   * the whole failure being guarded is a value that looks right in the object
+   * and never arrives at `execvp`. `/bin/echo` is the one command that will say
+   * what it was given.
+   */
+  it.skipIf(windows)('hands a launch’s extra flags to the process itself', async () => {
+    const meta = await core.startSession(
+      { cwd: dir, cols: 80, rows: 24, provider: 'custom:echo' },
+      undefined,
+      undefined,
+      undefined,
+      ['--mcp-config', '/state/copilot/deck-control.json', '--strict-mcp-config'],
+    )
+
+    const deadline = Date.now() + 4000
+    let printed = ''
+    while (Date.now() < deadline) {
+      printed = core.ptys.scrollback(meta.id)
+      if (printed.includes('--strict-mcp-config')) break
+      await new Promise((done) => setTimeout(done, 25))
+    }
+
+    // The agent's own arguments first, then the launch's — `echo` prints them
+    // in the order they were passed, which is the order the CLI parses them in.
+    expect(printed).toContain('hello --mcp-config /state/copilot/deck-control.json --strict-mcp-config')
+  }, 10_000)
+
+  it('adds nothing to an ordinary session, which is every session but one', async () => {
+    // The copilot is the only caller. A session a person opened must have
+    // exactly the arguments its agent declares.
+    const meta = await core.startSession({ cwd: dir, cols: 80, rows: 24, provider: 'custom:echo' })
+    const deadline = Date.now() + 4000
+    let printed = ''
+    while (Date.now() < deadline) {
+      printed = core.ptys.scrollback(meta.id)
+      if (printed.includes('hello')) break
+      await new Promise((done) => setTimeout(done, 25))
+    }
+    expect(printed).not.toContain('--mcp-config')
+  }, 10_000)
 
   it('records no account against it, because none was isolated', async () => {
     // `supportsProfiles` is false for an agent whose config directory this app

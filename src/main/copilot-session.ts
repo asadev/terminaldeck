@@ -35,186 +35,179 @@
  * having to deliver an event. This is the pattern the ledger avoids and it is
  * right here for the opposite reason: there is exactly one id to ask about.
  *
- * ## Its account is its own, and that is a security decision
+ * ## It is an ordinary session, and that reversal is the important part of this file
  *
- * The design left this open and suggested pinned is safer. Pinned is what this
- * does, and it goes one step further: the copilot does not run as *any* of the
- * app's accounts. It runs with its own home directory, so its login lives inside
- * its own boundary and nowhere else.
+ * It was not. Until this change the copilot ran inside the full folder
+ * confinement a session from a *paired device* runs inside: `(deny default)`, a
+ * granted folder, a home directory of its own, the person's projects read-only,
+ * their `.env` files carved back out, and a flat refusal to start at all on a
+ * platform where none of that could be proven. The reasoning is in
+ * `COPILOT-DESIGN.md` and it was not arbitrary — a CLI session has Bash, Bash is
+ * the whole machine, and this app ships to strangers.
  *
- * Three reasons, in order of how much they matter:
+ * It was still wrong, and the way it was wrong is worth keeping written down,
+ * because it is a trade that will look tempting again.
  *
- *  1. **Following the app's current account would move money and identity by
- *     accident.** The "current" account is a per-project or global default that
- *     a person changes for their own work. A copilot that followed it would
- *     start billing a different subscription, and answering as a different
- *     login, because somebody switched accounts in a project they happen to have
- *     open. Nobody decided that.
- *  2. **Borrowing a named account's directory would widen the boundary.** A
- *     confined session can only reach a config directory if that directory is
- *     added to its plan — and that directory holds the account's Claude state
- *     for every project. Giving the copilot its own home costs nothing and grants
- *     nothing.
- *  3. **Its conversation is its own.** The design is explicit that what the
- *     copilot remembers is its own conversation and not other sessions'. With a
- *     home of its own that is not a rule anybody has to follow — the other
- *     sessions' transcripts are outside the boundary and cannot be read at all.
+ * **What the jail cost.** The copilot started **signed out**, every time, on
+ * every machine — its login would live in the macOS login keychain and the
+ * keychain is closed to a `(deny default)` process. It could not write a line of
+ * anything. Off macOS it did not exist: `confinementKind` answers `'none'` on
+ * Windows until a one-time grant nothing in the shipped UI performs, so the
+ * start path refused outright. And a Seatbelt profile is fixed at `exec`, so
+ * opening a new project meant stopping the copilot and losing the conversation.
+ * The net of it is that the agent meant to *supervise* the others was less
+ * capable than any of them, which is exactly backwards.
  *
- * The cost is stated rather than hidden, and it is the first thing a person will
- * meet: **the copilot starts signed out, and signs itself in once.** The
- * account's Claude login lives in the macOS login keychain, and the keychain is
- * unreachable from inside the sandbox — measured, and the biggest single leak
- * `CONFINEMENT.md` closed. So the copilot's first launch is the CLI's own login
- * screen, in its own terminal; it prints a URL rather than opening a browser,
- * because LaunchServices is closed to it too, and the code is pasted back. From
- * then on its credential is a file inside its own home, which is a thing a
- * person can look at and delete.
+ * **What the jail bought.** Protection against the copilot *reading* things —
+ * secrets, other accounts, the keychain. Worth having, and narrower than it
+ * sounds: the network is open to every confined session by design, because
+ * closing it would stop `git push`, `npm install` and every agent CLI. So a
+ * determined exfiltration was never blocked by the boundary; only the pool of
+ * things to exfiltrate was smaller.
  *
- * Making that possible took one non-obvious line, and the spawn below carries
- * the measurement: **which credential store the CLI uses depends on whether
- * `CLAUDE_CONFIG_DIR` is set.** Unset, it reads the keychain and there is no
- * login the copilot can ever complete; set, it reads a file it owns.
+ * **What actually controls a copilot** is the consent gate and the action log —
+ * they govern what it *does*, which is where the risk is. A gate is also
+ * legible: a person sees the prompt and decides. A jail is invisible, and its
+ * failures look like the product being broken.
  *
- * {@link readCopilotSignIn} asks the CLI which of those two states it is in,
- * from inside the boundary and against the same store, so the answer is about
- * the copilot rather than about the machine.
+ * So: the copilot now runs under the same policy as any other session started at
+ * this keyboard. `startSession` is handed no `DeviceConfinement`, exactly as
+ * `session:create` hands it none, which is the app's own way of saying "a person
+ * at their own keyboard, with no grant to be held inside". It reads and writes
+ * what they read and write. It signs in through the profile system like every
+ * other session. It starts on every platform.
  *
- * ## It can read your projects, and it can change none of them
+ * ## Its account comes from the profile system, and the signed-out first run is gone
  *
- * The first version of this file granted the copilot two directories: its own
- * folder and its own confined home. `device.writable` was `[]` and there was no
- * read grant at all, so its native `Read`, `Grep` and `Bash` reached nothing of
- * the person's. That was a defensible default for the general assistant the
- * copilot was originally scoped as, and it stopped being defensible the moment
- * the scope became *a developer's assistant, to help him get the developments
- * done*. An assistant that cannot see the code cannot triage a failing test,
- * review a diff, answer "what changed", or scope a prompt against what is
- * actually in the repository — which is the whole of what it is for.
+ * `profileId` is left null and {@link resolveProfile} answers, which is what
+ * every session started from a window does: a per-project pin if the person set
+ * one for the copilot's folder, otherwise their global default, otherwise their
+ * own install of Claude Code. That last case is the common one and it is the
+ * whole win — their own install reads the login keychain, so a person who is
+ * already signed into Claude Code has a copilot that is already signed in.
  *
- * So it gets **read access to the projects the person has already added to this
- * app**, and **no write access to any of them**. Three properties, in the order
- * they matter:
+ * Measured, because it is the assumption the change rests on: under
+ * `(allow default)` — the records fence below — `claude auth status --json`
+ * answers `{"loggedIn": true, …}`. Under the old `(deny default)` profile the
+ * same command answers `Not logged in`. `confine/records.ts` carries the run.
  *
- *  1. **Read-only is enforced by the kernel, not by intent.** The project roots
- *     go into the plan's *read* list. There is no rule anywhere in the generated
- *     profile that permits a write into one, and `confine/copilot-projects.test.ts`
- *     proves it against a real `sandbox-exec` rather than against the profile
- *     text. Seeing your work is the mental model; changing it goes through a
- *     tool where a human confirms.
- *  2. **Credential-shaped files are carved back out**, by the kernel, in the
- *     same profile — `.env`, private keys, `.npmrc`, keystores, tfvars. The
- *     reasoning, the measurements and the honest limits are in
- *     `confine/secrets.ts`. It matters here because a confined session has an
- *     open network by design, so read access is exfiltration capability, and
- *     this is the one agent that also ingests other agents' transcripts, which
- *     is untrusted text.
- *  3. **The grant follows the project list**, as far as the operating system
- *     allows it to — which is not all the way, and the difference is written
- *     down rather than papered over. See below.
+ * `CLAUDE_CONFIG_DIR` is no longer set here and must not come back. It existed
+ * to force the CLI off the keychain and onto a file inside the sandbox, which
+ * was the only way a jailed copilot could ever be signed in. Setting it now
+ * would take the copilot back off the person's account and into a store of its
+ * own that nothing signs in — reintroducing the exact cost this change removes,
+ * through the same variable.
  *
- * ## What "follows the list" can and cannot mean
+ * {@link readCopilotSignIn} therefore asks the ordinary question about the
+ * ordinary profile: `readSignIn(profile)`, the same call the accounts pane
+ * makes, with the same cache. There is nothing copilot-specific left in it,
+ * which is the point.
  *
- * A Seatbelt profile is an argument to `sandbox-exec` and is fixed for the life
- * of the process. It cannot be widened later — measured: `sandbox-exec` nested
- * inside itself fails with `sandbox_apply: Operation not permitted` — and there
- * is no reload. So the set of folders a *running* copilot can read is
- * necessarily the set that existed when its process started.
+ * ## What is kept: the records fence
  *
- * What is genuinely live is the *derivation*: {@link copilotProjectRoots} reads
- * the store every time it is called, so nothing here holds a snapshot and every
- * start grants what is in the list at that moment. On top of that, the two
- * directions are handled differently because they are not the same risk:
+ * Two things had to survive the boundary going away, and one of them needed a
+ * mechanism rather than a paragraph.
  *
- *  - **A folder removed from the list is a grant the person has withdrawn**, and
- *    a running copilot holding it is the app enforcing something nobody wants.
- *    That is the direction that must not wait. `store.onProjectsChanged` fires
- *    the moment the set shrinks, {@link reconcileProjectGrant} sees that the
- *    live grant is no longer a subset of what is allowed, and it **stops the
- *    copilot** and records why. It is not restarted automatically: the next
- *    `ensure` from a window brings it back with the narrower plan, and an agent
- *    that quietly respawns after being stopped for a security reason is an agent
- *    nobody can reason about.
- *  - **A folder added to the list is a widening**, so nothing is stopped for it.
- *    The state reports it as {@link CopilotProjects.pending}, and a person
- *    applies it by stopping and starting the copilot — two channels that already
- *    exist. Restarting on its own would throw away a conversation in progress
- *    because somebody opened an unrelated folder.
+ * **The forgery protections.** Routines and the action log stay out of the
+ * copilot's writable reach — not because it is jailed, but because those three
+ * paths, and only those three, are denied to its process. `confine/records.ts`
+ * carries the whole argument, the profile and the measurements. It is a fence
+ * around this app's own *records*, not around the machine: the copilot inside it
+ * has the keychain, the person's home directory and every one of their
+ * repositories, and cannot compose the log that says what it did.
  *
- * The alternative — not granting the folders at all and serving every project
- * read through a `deck-control` tool that re-checks the list per call — is live
- * in both directions and is the shape the tool surface already has. It is not
- * what was asked for here, and it is worth knowing that it remains true of the
- * tools: the aperture that *is* live is the tool aperture.
+ * It **fails open, visibly**. Off macOS there is no fence and
+ * {@link CopilotRecords.reason} says so, in a sentence the settings pane draws.
+ * That is the opposite of what confinement does, and deliberately: the fence
+ * protects the record rather than the disk, so a machine that cannot hold it has
+ * worse auditing rather than an escaped agent — and refusing to start the
+ * copilot over it would be refusing the whole feature on every platform but one,
+ * which is the failure being corrected.
  *
- * ## It is confined, and it does not start if it cannot be
+ * **The transcript scope.** `installHomeScopes` narrows any copilot home *found
+ * on disk* to answering for the copilot's own folder. The copilot no longer
+ * writes there — its conversation goes into its profile's store like everybody
+ * else's — but an install upgraded from a build that jailed it still has one,
+ * with real history in it, and that store must keep being read for the copilot's
+ * own folder and never for anybody else's. `copilot-transcript-forgery.test.ts`
+ * is the proof, and {@link copilotHomeScope} is why this module still knows
+ * where that home was.
  *
- * A CLI session has Bash, and Bash is the whole machine. The copilot runs under
- * exactly the folder confinement a session from a paired device runs under —
- * `confine/index.ts`, Seatbelt on macOS — and it is not exempt because it is
- * ours. On a platform where that boundary cannot be proven, this refuses to
- * start it and says why, rather than starting an unconfined agent with the
- * app's name on it. That is the same "no silent downgrade" rule the remote spawn
- * path already follows, for the same reason: the side reporting success must be
- * the side doing the work.
+ * ## What is honestly *not* kept, said here rather than discovered later
+ *
+ * **Memory isolation is now a rule, not a wall.** The old header claimed the
+ * copilot could not read other sessions' transcripts at all, because they sat
+ * outside its boundary. That claim was already only half true — `deck-control`'s
+ * `sessions.transcript` hands it their contents through the front door, by
+ * design, because reading the fleet's transcripts is one of the capabilities the
+ * copilot exists for. What the boundary actually prevented was reading them *as
+ * files*, and the rule that matters was never about reading: it is
+ * `COPILOT-CAPABILITIES.md` §4.1, *it may read another session's transcript to
+ * answer a question; it may not copy that into `memory/`* — and no filesystem
+ * rule ever enforced that, because both halves happen inside the copilot's own
+ * boundary. It is stated as a rule in the copilot's `CLAUDE.md`, in those words,
+ * and the settings pane says it is a rule. A check on the memory-write path is
+ * the mechanism that would make it a wall; it does not exist yet and this file
+ * does not pretend otherwise.
+ *
+ * **The credential carve-out is gone.** `confine/secrets.ts` refused `.env`,
+ * private keys and `.npmrc` inside every folder the copilot could read. It was
+ * good, and it was a *stricter* rule than any other session on this machine
+ * obeys — which is the thing being removed. It belongs back as a product-wide
+ * option over every session, not as a special case for this one.
  */
 
-import { execFile } from 'node:child_process'
 import { join } from 'node:path'
-import { promisify } from 'node:util'
 import type { IpcMain } from 'electron'
 import type { CreateSessionInput, ProviderId, SessionMeta } from '../shared/types'
+import { deviceHomesRoot } from './confine'
 import {
-  confineSpawn,
-  confinedHomeEnv,
-  confinementKind,
-  deviceHomesRoot,
-  planFor,
-  prepareDeviceHome,
-  realResolver,
-  unconfinedReason,
-  type DeviceConfinement,
-} from './confine'
-import type { ConfinementPlan } from './confine/plan'
-import { projectRoots, within, type PlanGuards } from './confine/plan'
-import { SECRET_SHAPES } from './confine/secrets'
+  buildRecordsFence,
+  recordsFenceKind,
+  recordsFenceList,
+  recordsFencePaths,
+  recordsFenceUnavailable,
+  type RecordsFence,
+  type RecordsFenceKind,
+} from './confine/records'
 import {
   appendCopilotAction,
   copilotHomeReport,
   copilotPaths,
+  readCopilotInstructions,
   resetCopilotInstructions,
   scaffoldCopilotHome,
+  writeCopilotInstructions,
   type CopilotPaths,
+  type InstructionsReadResult,
   type InstructionsState,
   type StartupFile,
 } from './copilot-home'
-import { currentPlatform, withPath, type Platform } from './platform/host'
-import { homeDir, userDataDir } from './platform/paths'
-import { parseAuthStatus } from './profiles-signin'
-import { detectProviders, loginPath, PROVIDERS } from './providers'
-import { prepareGuestGit, type GuestGitEnv } from './remote/git-guest'
+import { currentPlatform, type Platform } from './platform/host'
+import { userDataDir } from './platform/paths'
+import { readSignIn } from './profiles-signin'
+import { detectProviders, PROVIDERS } from './providers'
 import type { HomeScope } from './transcript'
-import { SYSTEM_PROFILE_ID } from './profiles'
-import { store } from './store'
-
-const run = promisify(execFile)
+import { getState as profilesState, resolveProfile, type Profile } from './profiles'
 
 /* ------------------------------------------------------------------ model -- */
 
 /**
- * The name of the copilot's home directory inside the confined-homes root.
+ * The name the copilot's home directory had, back when it had one.
  *
- * A literal word rather than a hash, and it cannot collide with a device's:
- * `deviceKey` in `remote/credentials.ts` produces sixteen hexadecimal
- * characters, and `copilot` is not one of those.
+ * **Nothing creates this any more.** A jailed copilot needed a home of its own —
+ * its login, its caches and its transcripts had to be inside the boundary — and
+ * it was put in the confined-homes root so that `transcript.ts`, which walks
+ * every directory under that root, would find its conversation with no change to
+ * any reader. An unjailed copilot runs as an ordinary profile and writes where
+ * every other session writes, so there is nothing left to place.
  *
- * It lives beside the device homes rather than inside `<userData>/copilot`, and
- * that placement is load-bearing rather than tidy. `transcript.ts` reads every
- * directory under this root when it is asked where a project's conversations
- * are, so putting the copilot's home here is what makes the transcript viewer,
- * chat mode, the cost pane and the alert watcher see the copilot's conversation
- * *with no change to any of them* — which is the entire argument for the copilot
- * being a session in the first place. A home somewhere prettier would have meant
- * teaching four readers about a fifth place to look.
+ * The name survives for one reason, and it is not nostalgia: an install upgraded
+ * from a build that jailed the copilot still has that directory on disk, with
+ * real conversations in it, and it is still inside a root that four readers
+ * scan. {@link copilotHomeScope} is what keeps it answering for the copilot's
+ * own folder and for nobody else's, and this constant is how that pair is
+ * spelled in one place. See `copilot-transcript-forgery.test.ts`.
  */
 export const COPILOT_HOME_KEY = 'copilot'
 
@@ -225,8 +218,6 @@ export type CopilotStatus =
   | 'starting'
   /** Its process is alive. */
   | 'running'
-  /** This machine cannot run it, and {@link CopilotState.problem} says why. */
-  | 'unavailable'
 
 export type CopilotSignInState = 'signed-in' | 'signed-out' | 'unknown'
 
@@ -236,49 +227,41 @@ export interface CopilotSignIn {
   account: string | null
   /** Its plan or auth method, as the CLI reported it. */
   plan: string | null
+  /** Which profile was asked — the account this copilot actually runs as. */
+  profileId: string
+  /** That profile's name, so a pane can say it without a second round trip. */
+  profileName: string
   checkedAt: number
 }
 
 /**
- * What the copilot can see of the person's own work, and what it cannot yet.
+ * The three of this app's own files the copilot is refused, and whether the
+ * refusal is real on this machine.
  *
- * Four lists rather than one with a flag on each entry, because the difference
- * between them is the whole of what a person needs to be told and a flag hides
- * it: *this is what it can read right now*, *this is what the next start would
- * give it*, *this is the gap*, and *this is what is carved out of all of them*.
+ * This is what replaced `confinement` on this type, and the swap is the whole
+ * change in one field. The old one answered *which jail is this agent in*. This
+ * one answers *can it rewrite the record of what it did* — a smaller question
+ * with a much better answer, and the only one a person actually needs, because
+ * the copilot is otherwise an ordinary session with their own account.
  */
-export interface CopilotProjects {
+export interface CopilotRecords {
+  /** `seatbelt` where the fence is held, `none` where it is not. */
+  kind: RecordsFenceKind
   /**
-   * What the **running** process can actually read, as its profile was written.
-   * Empty whenever nothing is running, because nothing is then readable.
+   * True only when a *running* process was actually started inside a proven
+   * fence. False while nothing is running, for the same reason the old
+   * `enforced` was: a claim about a process is worth nothing without one.
    */
-  granted: readonly string[]
-  /** What a start right now would grant — the live list, guarded. */
-  available: readonly string[]
-  /**
-   * Available but not granted: added since the copilot started. Readable after
-   * a stop and a start, and not before. See the header for why not before.
-   */
-  pending: readonly string[]
-  /**
-   * Whether this machine can hold a read-only project grant at all.
-   *
-   * False off macOS, and then `granted` and `available` are both empty. The
-   * exclusions below are Seatbelt rules; the Linux and Windows backends would
-   * grant the folder whole, which is not the same feature, so they are given
-   * nothing rather than something that looks like it.
-   */
-  enforceable: boolean
-  /** Why not, when `enforceable` is false. Null otherwise. */
+  enforced: boolean
+  /** Why the fence is not held, or null. Always set when `kind` is `none`. */
   reason: string | null
   /**
-   * The credential shapes refused inside every granted folder, by name.
+   * What is fenced, absolute, so a pane can list it rather than describing it.
    *
-   * Carried so a settings pane can print what is carved out instead of a person
-   * having to read a sandbox profile — and so the claim stays honest, because
-   * the list is generated from the same constant the profile is.
+   * Generated from the same function the profile is, so the screen and the
+   * kernel cannot come to disagree about which paths are meant.
    */
-  excluded: readonly string[]
+  paths: readonly string[]
 }
 
 export interface CopilotState {
@@ -287,18 +270,27 @@ export interface CopilotState {
   sessionId: string | null
   /** Its folder, its instructions, its memory, its log. */
   paths: CopilotPaths
-  /** Its own home directory — its login, its caches, its transcripts. */
+  /**
+   * Where a jailed copilot kept its login and its transcripts.
+   *
+   * Still reported, and still on disk on an upgraded install, because that is
+   * where its conversations from before this change are. Nothing writes here
+   * now. See {@link COPILOT_HOME_KEY}.
+   */
   home: string
   startedAt: number | null
-  /** Why it is not running, or null. Always set when the status is `unavailable`. */
+  /** Why the last start did not produce a running copilot, or null. */
   problem: string | null
-  confinement: {
-    kind: ReturnType<typeof confinementKind>
-    /** True only when the session actually ran inside a proven boundary. */
-    enforced: boolean
-    /** Why it is not enforced, or null. */
-    reason: string | null
-  }
+  /** Whether this app's own routines and action log are held against it. */
+  records: CopilotRecords
+  /**
+   * The account it runs as, resolved the way any other session's is.
+   *
+   * Null before anything has asked. A pane draws this rather than a sentence
+   * about a login inside a sandbox, because there is no longer such a thing:
+   * the copilot uses one of the profiles in the accounts list.
+   */
+  profile: { id: string; name: string } | null
   /**
    * True only when `CLAUDE.md` is *this build's* default, byte for byte.
    *
@@ -309,8 +301,6 @@ export interface CopilotState {
   instructionsAreDefault: boolean
   /** Whether `CLAUDE.md` is current, out of date, hand-edited, or missing. */
   instructions: InstructionsState
-  /** What it can read of the person's projects, and what it cannot. */
-  projects: CopilotProjects
   /** The files it reads at startup, in order. */
   startupFiles: StartupFile[]
 }
@@ -327,66 +317,111 @@ export interface CopilotState {
  * session". Every field here is something the caller already holds.
  */
 export interface CopilotRuntimeDeps {
-  /** The one session starter, from `createHostCore`. */
+  /**
+   * The one session starter, from `createHostCore`.
+   *
+   * The copilot passes neither `guest` nor `confine`, which is exactly what
+   * `session:create` passes for a tab a person opened — that absence *is* the
+   * policy. `fence` is the one thing it does pass, and it is not confinement: it
+   * wraps the launch so three of this app's own files stay out of reach. See
+   * `confine/records.ts`.
+   */
   startSession(
     input: CreateSessionInput,
-    guest?: GuestGitEnv,
-    confine?: DeviceConfinement,
+    guest?: undefined,
+    confine?: undefined,
+    fence?: SpawnFence,
+    extraArgs?: readonly string[],
   ): Promise<SessionMeta>
   /** Is that session still alive? Asked on every state read; see the header. */
   isAlive(sessionId: string): boolean
   /** Stop it. */
   stop(sessionId: string): void
+  /**
+   * Where the `deck-control` MCP config is, or null when there is no server.
+   *
+   * This is what gives the copilot **any** tools. Without it the session is a
+   * Claude CLI with the native tools and nothing of this app's — it cannot list
+   * a session, read a transcript, look at a screen or ask for a confirmation,
+   * and every sentence in the product about the copilot being "bounded by the
+   * tool tiers and the consent gate" describes a gate that is not in the path,
+   * because there is nothing to gate.
+   *
+   * Injected rather than imported, and the reason is the one this whole
+   * interface exists for: `deck-control` is started by the Electron shell at
+   * boot, asynchronously, and it can fail to start — a loopback port that will
+   * not bind, a token file that cannot be made owner-only. Importing
+   * `mcpConfigPath()` here would produce a *path* in all three of those cases,
+   * which is worse than none: `claude --mcp-config` on a file that is missing,
+   * stale or holds a dead token is a session that starts and then cannot reach
+   * the tools it was told it has. Asking the shell means the answer is "the
+   * config of the server that is actually listening", or null.
+   *
+   * Null is honest and is not a failure to start: the copilot runs, with no
+   * tools, and says so — its `CLAUDE.md` tells it to read its own tool list and
+   * state plainly when a capability is not there.
+   */
+  mcpConfig?(): string | null
   /** `<userData>`. Defaults to this shell's answer. */
   userData?(): string
   /** Where remote and confinement storage lives — `<userData>/remote`. */
   storageDir?(): string
-  /** The account's real home. Never inside the boundary; it is what is protected. */
-  accountHome?(): string
   /** Which agent CLIs this machine has. Defaults to the real probe. */
   agents?(): Promise<Record<ProviderId, boolean>>
   /**
-   * The folders the person has added to this app, right now.
+   * Measure the records fence and hand back something to wrap the spawn with.
    *
-   * Defaults to the app's own store rather than being required, for the reason
-   * `deck-control/live-surface.ts` gives about reaching for `store()` directly:
-   * a second copy of the project list handed in from somewhere else is a place
-   * for the copilot's grant and the sidebar to disagree, and they must not. It
-   * is injectable only so the tests can pin what happens to a list they control.
+   * Injected only so a test can drive both answers without a machine on which
+   * each is true. Defaults to the real measurement, which runs `sandbox-exec`.
    */
-  projects?(): readonly string[]
+  fence?(userData: string, platform: Platform): Promise<{ fence: RecordsFence | null; reason: string | null }>
   /**
-   * Subscribe to the project list changing. Defaults to the store's own event.
+   * Which account the copilot runs as, resolved the way any session's is.
    *
-   * Injected for the same reason and used for one thing: a folder leaving the
-   * list has to reach a running copilot, because the operating system fixed its
-   * grant when the process started. See {@link reconcileProjectGrant}.
+   * Defaults to the profile system, which is the whole point: a copilot that
+   * resolved its account any other way would be the special case this change
+   * removed. Injectable so tests need no `profiles.json`.
    */
-  onProjectsChanged?(listener: (paths: readonly string[]) => void): () => void
+  profile?(projectPath: string): Profile
+  /** Its sign-in state, asked of the same profile. Defaults to `readSignIn`. */
+  signInOf?(profile: Profile): Promise<{
+    state: CopilotSignInState | 'unsupported'
+    account: string | null
+    plan: string | null
+  }>
   platform?: Platform
   /** Initial terminal size. The window resizes it the moment it attaches. */
   cols?: number
   rows?: number
 }
 
+/**
+ * What `startSession` needs in order to wrap a launch.
+ *
+ * Structurally the same shape `confine/records.ts` produces, restated here so
+ * that `host-core.ts` can take one without importing a confinement module — the
+ * host core knows how to start a session and deliberately does not know what a
+ * fence is for.
+ */
+export interface SpawnFence {
+  apply(command: string, args: readonly string[]): { command: string; args: string[] }
+}
+
 interface Resolved {
   paths: CopilotPaths
-  home: string
   userData: string
   storageDir: string
-  accountHome: string
   platform: Platform
   cols: number
   rows: number
 }
 
-function resolve(deps: CopilotRuntimeDeps): Omit<Resolved, 'home'> {
+function resolve(deps: CopilotRuntimeDeps): Resolved {
   const userData = deps.userData?.() ?? userDataDir()
   return {
     paths: copilotPaths(userData),
     userData,
     storageDir: deps.storageDir?.() ?? join(userData, 'remote'),
-    accountHome: deps.accountHome?.() ?? homeDir(),
     platform: deps.platform ?? currentPlatform(),
     // 120x30 is a readable first frame for an agent CLI that draws a box, and it
     // is replaced by the real size within a frame of a terminal attaching. It
@@ -402,16 +437,17 @@ function resolve(deps: CopilotRuntimeDeps): Omit<Resolved, 'home'> {
 interface Live {
   sessionId: string
   startedAt: number
-  enforced: boolean
   /**
-   * The project folders this process's Seatbelt profile actually names.
+   * Whether *this* process was started inside a proven records fence.
    *
-   * Recorded rather than recomputed, and that is the point of the whole
-   * reconcile: the profile is fixed at `exec`, so what the running copilot can
-   * read is what was true then, and the only way to know whether that still
-   * matches the person's intent is to have kept it.
+   * Recorded rather than recomputed, for the reason the old project grant was:
+   * a Seatbelt profile is fixed at `exec`, so what is true of the running
+   * process is what was measured when it started, and asking again later would
+   * answer about a process that does not exist.
    */
-  projects: readonly string[]
+  fenced: boolean
+  /** The account it was started as, so the state can name it without re-resolving. */
+  profile: { id: string; name: string }
 }
 
 let live: Live | null = null
@@ -419,141 +455,80 @@ let live: Live | null = null
 let starting: Promise<CopilotState> | null = null
 /** Why the last attempt did not produce a running copilot. */
 let problem: string | null = null
-/** Drops the project-list subscription. Held only while a copilot is running. */
-let unwatchProjects: (() => void) | null = null
+/** Why the records fence is not held, when it is not. Null when it is. */
+let fenceProblem: string | null = null
+
+/**
+ * Is this session the copilot's own terminal?
+ *
+ * The one question the *network* has to be able to ask about a session, and the
+ * reason it takes no dependencies: it is answered from a socket's read path,
+ * inside `SessionFanout`, for every `list`, `attach`, `input` and `resize` a
+ * paired device sends. `copilotState` would answer the same thing and cannot be
+ * used — it wants the whole `CopilotRuntimeDeps`, it stats the copilot's folder
+ * on every call, and neither is a thing to do per keystroke.
+ *
+ * ## What it is for, which is not a tidy grouping
+ *
+ * The copilot is an ordinary session, and that is the whole design: it means
+ * the transcript viewer, chat mode, the cost pane and the sidebar work on it
+ * with no changes. It also meant, in 0.3.0 as shipped, that a paired phone
+ * could `list`, find the row whose folder is `<userData>/copilot`, `attach` to
+ * it and type straight into the Claude CLI that holds `deck-control` — past
+ * every tier check, every budget and every confirmation dialog, because none of
+ * those sit between a pty and its keyboard. `remote/session-fanout.ts` is where
+ * this answer is used and carries the rest of that argument.
+ *
+ * ## Why the reading is deliberately narrow
+ *
+ * True for exactly the session id this module started and is still holding, and
+ * false for everything else — including a session the person opens *in the
+ * copilot's folder themselves*, which is theirs and is not this. A rule written
+ * against the folder rather than the id would have been the wider, sloppier
+ * version of the same idea and would have hidden a tab the person opened
+ * deliberately.
+ *
+ * A stale `live` — the copilot's process has exited but nothing has recomputed
+ * the state yet — answers `true` for a dead id, which is the safe direction: an
+ * attach to a dead session is refused anyway, and ids are not reused.
+ */
+export function isCopilotSession(sessionId: string): boolean {
+  return live !== null && live.sessionId === sessionId
+}
 
 /** Forget everything. For tests, and for nothing else. */
 export function resetCopilot(): void {
   live = null
   starting = null
   problem = null
+  fenceProblem = null
   signIn = null
-  unwatchProjects?.()
-  unwatchProjects = null
 }
 
-/* ------------------------------------------------------ the project grant -- */
+/* ------------------------------------------------------ the records fence -- */
 
 /**
- * The folders a copilot started right now would be able to read.
+ * What a pane draws about the records fence, running or not.
  *
- * Read from the store on every call — nothing here is captured — so this is the
- * live answer and not a snapshot. What it removes from that live answer is
- * `<userData>` and everything inside it, and that removal is this function's
- * whole reason to exist rather than the caller just handing the list to
- * `planFor`.
+ * `enforced` is deliberately a fact about a *process* rather than about the
+ * machine, exactly as the old `confinement.enforced` was: a fence is a thing a
+ * running thing is inside, and reporting one where nothing is running would be
+ * the app claiming a property of something that does not exist.
  *
- * `<userData>` is where this app keeps every session's transcript, the paired
- * devices' credentials, `state.json` and `settings.json` — and, inside it, the
- * copilot's own folder and its own home, which *are* granted, deliberately and
- * by name. A person can add any folder to this app as a project, `<userData>`
- * included, and `COPILOT-CAPABILITIES.md` §3.2 is explicit that the copilot
- * never reaches this app's own state except through a tool. `plan.ts` drops
- * anything containing a writable root, which catches `<userData>` itself; this
- * catches a sibling *inside* it, which that guard cannot see.
- *
- * Empty off macOS, and the reason is returned rather than left to be guessed.
- * The exclusions in `secrets.ts` are Seatbelt rules; the Linux backend turns
- * readable roots into whole read-only bind mounts and the Windows one ignores
- * them entirely, so either would grant a project folder including its `.env`.
- * A narrower feature would be defensible; a feature that silently loses its
- * safety half is not, and `sessionPlan` throws rather than build one.
+ * `reason` is filled from two different places and both matter. Before anything
+ * has started it is the platform's own sentence, so a Windows user opening
+ * Settings learns what is and is not true there without starting anything. After
+ * a start it is whatever the measurement actually said, which can be more
+ * specific — `sandbox-exec` missing, a profile that would not run.
  */
-export function copilotProjectRoots(deps: CopilotRuntimeDeps): {
-  roots: readonly string[]
-  enforceable: boolean
-  reason: string | null
-} {
-  const { userData, storageDir, accountHome, paths, platform } = resolve(deps)
-  if (confinementKind(platform) !== 'seatbelt') {
-    return {
-      roots: [],
-      enforceable: false,
-      reason:
-        'Reading your projects is granted only where the credential exclusions can be enforced, which today is macOS.',
-    }
-  }
-  const listed = deps.projects?.() ?? store().getProjects().map((project) => project.path)
-  /*
-   * The same guards the plan will apply, applied here too — not instead.
-   *
-   * `projectRoots` is the function `sessionPlan` calls, run with the two
-   * writable roots the copilot's plan will have, so what this returns is what
-   * the profile would actually name: resolved, de-duplicated, and with `~`,
-   * `/` and anything containing the copilot's own directories already dropped.
-   * Answering with the raw list instead would put folders in `pending` that no
-   * start will ever grant, and would compare an unresolved path against a
-   * resolved one in {@link reconcileProjectGrant} — which, for a project
-   * reached through a symlink, reads as a folder that has been removed and
-   * would stop a perfectly good copilot.
-   */
-  const guards: PlanGuards = {
-    home: realResolver.real(accountHome),
-    protect: [paths.root, copilotHome(storageDir)].map((path) => realResolver.real(path)),
-  }
-  const guarded = projectRoots(listed, realResolver, guards, platform)
+function recordsState(deps: CopilotRuntimeDeps, alive: boolean): CopilotRecords {
+  const { userData, platform } = resolve(deps)
+  const kind = recordsFenceKind(platform)
   return {
-    roots: guarded.filter((path) => !within(path, realResolver.real(userData), platform)),
-    enforceable: true,
-    reason: null,
-  }
-}
-
-/**
- * Stop a copilot whose grant is wider than the person's current intent.
- *
- * Called from two places and from nowhere else: the store's change event, which
- * is what makes a removal prompt, and `ensureCopilot`, which is what makes it
- * certain — a listener that was never attached, or a change made by a shell
- * that does not emit, still gets caught the next time a window asks for the
- * copilot.
- *
- * It only ever *narrows*. A folder added to the list leaves a running copilot
- * alone; see the header for why a widening is not worth a conversation.
- *
- * Stopping rather than restarting is deliberate. The copilot costs money per
- * turn and its transcript is a product feature; a process that dies and silently
- * comes back is one whose conversation vanished with no sentence to explain it.
- * `problem` carries that sentence, and the pane's existing start button is the
- * way back.
- */
-export function reconcileProjectGrant(deps: CopilotRuntimeDeps): void {
-  if (live === null) return
-  const { paths, platform } = resolve(deps)
-  const { roots } = copilotProjectRoots(deps)
-  const revoked = live.projects.filter(
-    (granted) => !roots.some((root) => within(granted, root, platform)),
-  )
-  if (revoked.length === 0) return
-
-  const sessionId = live.sessionId
-  deps.stop(sessionId)
-  live = null
-  unwatchProjects?.()
-  unwatchProjects = null
-  problem =
-    revoked.length === 1
-      ? `The copilot was stopped because ${revoked[0]} was removed from your projects and it could still read it. Start it again to carry on without that folder.`
-      : `The copilot was stopped because ${revoked.length} folders were removed from your projects and it could still read them. Start it again to carry on without them.`
-  appendCopilotAction(paths, {
-    action: 'projects.revoked',
-    sessionId,
-    detail: `stopped; no longer granted: ${revoked.join(', ')}`,
-  })
-}
-
-/** What a pane draws about the project grant, running or not. */
-function projectState(deps: CopilotRuntimeDeps): CopilotProjects {
-  const { platform } = resolve(deps)
-  const { roots, enforceable, reason } = copilotProjectRoots(deps)
-  const granted = live?.projects ?? []
-  return {
-    granted,
-    available: roots,
-    pending: roots.filter((root) => !granted.some((have) => within(root, have, platform))),
-    enforceable,
-    reason,
-    excluded: SECRET_SHAPES.map((shape) => shape.name),
+    kind,
+    enforced: alive && live !== null && live.fenced,
+    reason: kind === 'none' ? recordsFenceUnavailable(platform) : fenceProblem,
+    paths: recordsFenceList(recordsFencePaths(userData)),
   }
 }
 
@@ -566,16 +541,19 @@ function projectState(deps: CopilotRuntimeDeps): CopilotProjects {
  * pane to check that their edit landed, which is the one moment this is looked
  * at.
  *
- * It reports the project grant and never changes it. Reconciling from a state
- * read would mean a pane refreshing could kill a session, which is the kind of
- * action-at-a-distance nobody can debug; {@link reconcileProjectGrant} is called
- * from the event and from `ensureCopilot`, both of which are things that
- * happened rather than things that were looked at.
+ * ## `unavailable` is gone, and its absence is the change
+ *
+ * This used to answer `unavailable` — a dead end with a sentence — on every
+ * platform where `confinementKind` said `'none'`, which is every Windows machine
+ * and every Linux one where the namespace mechanism cannot be proven. The
+ * copilot did not exist there. It does now: no boundary is required to run it,
+ * because it is an ordinary session, so the only reasons it will not start are
+ * the ordinary ones (no Claude Code on this machine, the folder could not be
+ * made) and those are already `stopped` with a `problem`.
  */
 export function copilotState(deps: CopilotRuntimeDeps): CopilotState {
-  const { paths, storageDir, platform } = resolve(deps)
+  const { paths, storageDir } = resolve(deps)
   const report = copilotHomeReport(paths)
-  const kind = confinementKind(platform)
   const alive = live !== null && deps.isAlive(live.sessionId)
   if (live !== null && !alive) live = null
 
@@ -590,13 +568,11 @@ export function copilotState(deps: CopilotRuntimeDeps): CopilotState {
    */
   const status: CopilotStatus = alive
     ? 'running'
-    : kind === 'none'
-      ? 'unavailable'
-      : problem !== null
-        ? 'stopped'
-        : starting !== null
-          ? 'starting'
-          : 'stopped'
+    : problem !== null
+      ? 'stopped'
+      : starting !== null
+        ? 'starting'
+        : 'stopped'
 
   return {
     status,
@@ -604,15 +580,11 @@ export function copilotState(deps: CopilotRuntimeDeps): CopilotState {
     paths,
     home: copilotHome(storageDir),
     startedAt: alive && live !== null ? live.startedAt : null,
-    problem: kind === 'none' ? unconfinedReason(platform) : problem,
-    confinement: {
-      kind,
-      enforced: alive && live !== null ? live.enforced : false,
-      reason: kind === 'none' ? unconfinedReason(platform) : null,
-    },
+    problem,
+    records: recordsState(deps, alive),
+    profile: alive && live !== null ? live.profile : null,
     instructionsAreDefault: report.instructionsAreDefault,
     instructions: report.instructions,
-    projects: projectState(deps),
     startupFiles: report.startupFiles,
   }
 }
@@ -631,36 +603,30 @@ export function copilotHome(storageDir: string): string {
  * the viewer, chat mode, the cost pane and the alert watcher see the copilot's
  * own conversation without any of them being taught about a fifth place to look.
  *
- * The cost of sitting in that root is that the copilot — which *can* write
- * inside its own home, and can write nowhere else — could create
+ * The cost of sitting in that root was that the copilot — which could write
+ * inside its own home, and could write nowhere else — could create
  * `<home>/.claude/projects/<encode(somebody's repo)>/x.jsonl` and have those
  * same four readers render it as a conversation belonging to that repo. Nothing
- * about the boundary is wrong there; the file is inside it. What was wrong is
+ * about the boundary was wrong there; the file was inside it. What was wrong is
  * that a store belonging to one folder was being consulted for every folder.
  *
  * So the pair is registered as a scope: the copilot's store answers for
- * {@link CopilotPaths.root}, which is the only directory its sessions ever run
+ * {@link CopilotPaths.root}, which is the only directory its sessions ever ran
  * in, and for nothing else. Nothing legitimate is lost — its own transcript is
  * found exactly as before — and a fabricated one is never looked for.
+ *
+ * **This survives the copilot no longer having a home**, and that is why it is
+ * still installed at boot. Nothing writes into that directory any more; an
+ * install upgraded from a build that jailed the copilot still *has* one, holding
+ * its conversations from before the change, and that store is still inside a
+ * root four readers scan. Removing the scope would put every one of those old
+ * files back in front of every project. Keeping it costs one entry.
  *
  * `storageDir` defaults the same way {@link resolve} does, because the two must
  * not disagree about where the homes are.
  */
 export function copilotHomeScope(userData: string, storageDir = join(userData, 'remote')): HomeScope {
   return { home: copilotHome(storageDir), folder: copilotPaths(userData).root }
-}
-
-/**
- * The copilot's own agent configuration directory — its login, its history.
- *
- * One spelling, because three things depend on it agreeing with itself: the
- * spawn sets `CLAUDE_CONFIG_DIR` to it, the sign-in probe has to ask about the
- * same store or it answers about the machine's, and `transcript.ts` looks for
- * this exact name under each confined home when it goes looking for
- * conversations.
- */
-export function copilotConfigDir(home: string): string {
-  return join(home, '.claude')
 }
 
 /**
@@ -671,22 +637,11 @@ export function copilotConfigDir(home: string): string {
  * produce a second agent. Every early return below is one of those cases.
  *
  * It does not throw for an ordinary refusal. A copilot that will not start
- * because the CLI is missing, or because this machine has no boundary to hold
- * it, is a state a pane has to *draw*, and turning it into a rejected promise
- * would push that job onto every caller and lose the reason on the way.
+ * because the CLI is missing is a state a pane has to *draw*, and turning it into
+ * a rejected promise would push that job onto every caller and lose the reason on
+ * the way.
  */
 export async function ensureCopilot(deps: CopilotRuntimeDeps): Promise<CopilotState> {
-  /*
-   * The certain half of the project reconcile. See `reconcileProjectGrant`.
-   *
-   * Before anything is reported as running, check that what it can read is
-   * still what the person allows. The event is what makes a removal prompt;
-   * this is what makes it *hold* — through a listener that was never attached,
-   * a shell that does not emit, a `state.json` edited by hand while the app was
-   * closed. It runs before the liveness check below, because the point is to
-   * catch a copilot that is alive and should not be.
-   */
-  reconcileProjectGrant(deps)
   if (live !== null && deps.isAlive(live.sessionId)) return copilotState(deps)
   if (starting !== null) return starting
 
@@ -698,7 +653,7 @@ export async function ensureCopilot(deps: CopilotRuntimeDeps): Promise<CopilotSt
 }
 
 async function startCopilot(deps: CopilotRuntimeDeps): Promise<CopilotState> {
-  const { paths, storageDir, platform, cols, rows } = resolve(deps)
+  const { paths, userData, platform, cols, rows } = resolve(deps)
   problem = null
 
   const scaffolded = scaffoldCopilotHome(paths)
@@ -713,22 +668,17 @@ async function startCopilot(deps: CopilotRuntimeDeps): Promise<CopilotState> {
   }
 
   /*
-   * No boundary, no copilot.
-   *
-   * `startSession` decides whether to confine by asking `confinementKind`, and
-   * on a platform that answers `'none'` it starts the session *unconfined* — the
-   * right answer for a person at their own keyboard, and the wrong one for an
-   * agent the app itself is running with an open network and a shell. Checking
-   * here rather than relying on the spawn to refuse is what makes the refusal a
-   * sentence instead of a session nobody meant to start.
-   */
-  const kind = confinementKind(platform)
-  if (kind === 'none') return refuse(deps, unconfinedReason(platform))
-
-  /*
    * The CLI has to be there. `startSession` falls back to a plain shell when the
    * requested agent is missing — correct for a tab, and a lie for this: a shell
    * pinned in the sidebar as your assistant is a feature that does not exist.
+   *
+   * This is now the *only* thing that can stop the copilot existing, and that is
+   * the change. There used to be a check above it refusing to start at all where
+   * `confinementKind` answered `'none'` — every Windows machine, and every Linux
+   * one where the namespace mechanism could not be proven. It was right while the
+   * copilot was an agent the app ran inside a jail; it is wrong for a session the
+   * person runs as themselves, and it was the reason the copilot did not exist on
+   * two of three platforms.
    */
   const available = await (deps.agents?.() ?? detectProviders(platform, null))
   if (!available.claude) {
@@ -738,66 +688,60 @@ async function startCopilot(deps: CopilotRuntimeDeps): Promise<CopilotState> {
     )
   }
 
-  const home = prepareDeviceHome(deviceHomesRoot(storageDir), COPILOT_HOME_KEY)
   /*
-   * Its git, isolated the same way a guest device's is.
+   * The records fence, measured now rather than assumed.
    *
-   * The confinement already stops it reading `~/.ssh` and `~/.gitconfig`, but a
-   * boundary is about files and this is about *environment*: a `GH_TOKEN` or an
-   * `SSH_AUTH_SOCK` inherited from whatever launched this app is inside the
-   * process, not on the disk, and the sandbox has nothing to say about it. The
-   * copilot has a shell and an open network, so an inherited token is a token it
-   * can spend. `guestGitEnv` already names every variable that hands a process
-   * somebody's account and why; reusing it is what stops this file growing a
-   * second, shorter, staler copy of that list.
+   * Before the spawn because it wraps the spawn, and every start rather than
+   * once because a machine can change its mind — `sandbox-exec` is deprecated,
+   * and a proof cached from this morning is a claim about a process that has
+   * already exited.
+   *
+   * A failure here does **not** stop the copilot. See the header: this fence
+   * protects the record of what the copilot did, not the person's disk, so a
+   * machine that cannot hold it has worse auditing rather than an escaped agent
+   * — and refusing the whole feature over it is precisely the mistake being
+   * corrected. The reason is kept, reported in the state, and drawn in Settings.
    */
-  const git = prepareGuestGit({ dir: join(home, 'git'), platform })
-  /*
-   * And its Claude configuration directory, named explicitly.
-   *
-   * This looks redundant — `HOME` already points at the copilot's own home, so
-   * the CLI's default store is `<home>/.claude` either way — and it is not.
-   * Measured against Claude Code 2.1.233: **which credential store the CLI uses
-   * depends on whether this variable is set.** With it unset the CLI reads the
-   * macOS login keychain, which is closed to a sandboxed process, so a confined
-   * copilot walks straight into the login screen no matter what is on its disk.
-   * With it set the CLI reads `<configDir>/.credentials.json` — a file, inside
-   * the boundary, that the copilot can both read and write.
-   *
-   * That is the difference between a copilot that can be signed in once and one
-   * that can never be signed in at all, and it was invisible until a real
-   * sandboxed run was watched: the first attempt printed
-   * `Not logged in · Please run /login`, and the same binary with the same home
-   * and this variable set read the credential and answered.
-   *
-   * `.claude` inside the home rather than a directory of its own, and that name
-   * is load-bearing too: `transcript.ts` looks for exactly `<home>/.claude` when
-   * it walks the confined homes, so this is what keeps the copilot's transcript
-   * visible to the viewer, chat mode, the cost pane and the alert watcher.
-   *
-   * Carried on the environment bundle rather than through a profile, because a
-   * profile would mean a directory in the app's shared profile storage — outside
-   * the boundary, and shared with the person's own sessions. `paths` names it as
-   * a path so it survives the WSL crossing; that crossing cannot happen for the
-   * copilot today, and naming it costs nothing and is one less thing to remember
-   * if it ever can.
-   */
-  const configDir = copilotConfigDir(home)
-  const environment: GuestGitEnv = {
-    ...git,
-    set: { ...git.set, CLAUDE_CONFIG_DIR: configDir },
-    paths: [...git.paths, 'CLAUDE_CONFIG_DIR'],
-  }
+  const measured = await (deps.fence ?? defaultFence)(userData, platform)
+  fenceProblem = measured.reason
 
   /*
-   * The folders it will be able to read, decided here and recorded below.
+   * Its account, resolved exactly the way any other session's is.
    *
-   * Read at the last possible moment before the spawn, because this is the
-   * moment the operating system freezes the answer: everything after `exec` is
-   * fixed for the life of the process, so a list read any earlier would be a
-   * list that could already be wrong by the time it became a profile.
+   * `resolveProfile` with the copilot's own folder as the project path, which is
+   * the same call `host-core.ts` makes for a tab: a per-project pin if the
+   * person set one for this folder, otherwise their global default, otherwise
+   * their own install of Claude Code. The id is then handed to `startSession`
+   * rather than left null, so that what the state reports and what the session
+   * actually runs as cannot come apart — the resolution happens once, here.
    */
-  const { roots: projects } = copilotProjectRoots(deps)
+  const profile = (deps.profile ?? defaultProfile)(paths.root)
+
+  /*
+   * Its tools, which until now it did not have.
+   *
+   * `deck-control` wrote this config file on every start, the loopback server
+   * listened behind a bearer token, the routine runner passed it — and nothing
+   * passed it to the copilot. So the agent a person talks to in the sidebar had
+   * the native Claude Code tools and none of this app's, and every claim that it
+   * was "bounded by the tool tiers and the consent gate" described a gate that
+   * was not in the path. It was honest about it, because its `CLAUDE.md` tells
+   * it to read its own tool list and say plainly when a capability is missing.
+   * Honest is not the same as finished.
+   *
+   * The invocation was measured against the real CLI on this machine (Claude
+   * Code 2.1.233) pointed at a live server: it connects with no approval prompt
+   * and answers `sessions_list` with the real fleet.
+   *
+   * `--strict-mcp-config` is not decoration. Without it the copilot *also*
+   * inherits whatever MCP servers happen to be configured in the person's own
+   * `~/.claude.json` — so its powers, and the action log that is supposed to
+   * account for them, would depend on something nobody thought of as part of
+   * this feature. With it, the copilot's tool surface is exactly the native
+   * Claude Code tools plus these.
+   */
+  const config = deps.mcpConfig?.() ?? null
+  const mcpArgs = config === null ? [] : ['--mcp-config', config, '--strict-mcp-config']
 
   let meta: SessionMeta
   try {
@@ -818,31 +762,28 @@ async function startCopilot(deps: CopilotRuntimeDeps): Promise<CopilotState> {
          * edit.
          */
         resume: false,
-        /*
-         * Its own account, pinned. Naming the system profile is how this asks
-         * the resolution chain *not* to apply a project or global default — and
-         * with `HOME` redirected into the copilot's own directory, the CLI's
-         * default store is inside the boundary rather than the machine's. See
-         * the header for why that is the safer of the two answers.
-         */
-        profileId: SYSTEM_PROFILE_ID,
+        profileId: profile.id,
       },
-      environment,
       /*
-       * `writable` stays empty and must stay empty.
+       * No guest git environment and no confinement, and both absences are the
+       * policy rather than an omission.
        *
-       * The projects ride in on `projects`, which `planFor` puts in the plan's
-       * *read* list and nowhere else, so there is no arrangement of these three
-       * fields that makes one of somebody's repositories writable by the
-       * copilot. That is the boundary being widened here, and the one half of
-       * it that is not being widened at all.
+       * `prepareGuestGit` used to strip `GH_TOKEN`, `GITHUB_TOKEN` and
+       * `SSH_AUTH_SOCK` and point the copilot at a git identity of its own. That
+       * belongs to a *guest* — a paired device whose owner is not the person at
+       * this keyboard — and applying it here made the copilot the one agent in
+       * the app that could not push a branch or read the person's git config.
+       * The copilot is not a guest. It is them.
+       *
+       * `undefined` is spelled out rather than the arguments being left off,
+       * because the fence is the fourth one and skipping to it needs them named.
        */
-      { home, writable: [], files: [], projects },
+      undefined,
+      undefined,
+      measured.fence ?? undefined,
+      mcpArgs,
     )
   } catch (error) {
-    // The interesting one is `ConfinementUnavailableError`, which is thrown when
-    // the boundary could not be *proven* on this machine at this moment. It
-    // arrives as a sentence and is passed through as one.
     return refuse(deps, error instanceof Error ? error.message : String(error))
   }
 
@@ -860,31 +801,61 @@ async function startCopilot(deps: CopilotRuntimeDeps): Promise<CopilotState> {
     return refuse(deps, `The copilot started as a ${meta.provider} session rather than an agent.`)
   }
 
-  live = { sessionId: meta.id, startedAt: meta.createdAt, enforced: true, projects }
-  /*
-   * Watch the list from the moment there is a grant to withdraw.
-   *
-   * Subscribed here rather than at module load so that nothing is listening
-   * while nothing is running, and dropped in `stopCopilot` and in the reconcile
-   * so a copilot that has been stopped four times does not leave four listeners
-   * behind. The previous one is dropped first for the same reason — `ensure`
-   * can start a second process after the first died on its own, and that path
-   * does not go through `stopCopilot`.
-   */
-  unwatchProjects?.()
-  const watch = deps.onProjectsChanged ?? ((listener) => store().onProjectsChanged(listener))
-  unwatchProjects = watch(() => {
-    reconcileProjectGrant(deps)
-  })
+  live = {
+    sessionId: meta.id,
+    startedAt: meta.createdAt,
+    fenced: measured.fence !== null,
+    profile: { id: profile.id, name: profile.name },
+  }
   appendCopilotAction(paths, {
     action: 'session.started',
     sessionId: meta.id,
+    /*
+     * The row says what is true, including when what is true is worse.
+     *
+     * A person reading the Activity pane after the fact has to be able to tell a
+     * session whose actions were held against it from one whose were not, and
+     * the log is the only place that distinction is durable — the state is
+     * recomputed and forgets. This is the same discipline `host-core.ts` applies
+     * when it declines to write "unconfined" as a boundary note: say the fact,
+     * once, in the place that keeps it.
+     */
     detail:
-      projects.length === 0
-        ? `${kind} confinement, cwd ${paths.root}, no project folders readable`
-        : `${kind} confinement, cwd ${paths.root}, read-only: ${projects.join(', ')}`,
+      (measured.fence === null
+        ? `cwd ${paths.root}, as ${profile.name}, routines and this log NOT held against it${
+            measured.reason === null ? '' : ` — ${measured.reason}`
+          }`
+        : `cwd ${paths.root}, as ${profile.name}, routines and this log held against it (${measured.fence.kind})`) +
+      /*
+       * And whether it has this app's tools at all, on the same row.
+       *
+       * A copilot with no `deck-control` server behind it looks exactly like one
+       * whose every tool call is being refused — right up until somebody reads
+       * the log. This is the only place that difference is durable, for the same
+       * reason the fence note above is: the state is recomputed and forgets.
+       *
+       * The config's *path* is written, never its contents: the file holds a
+       * bearer token for a server that can start sessions on this machine, and
+       * this log is read in a settings pane.
+       */
+      (config === null
+        ? ', with none of this app’s tools — no deck-control server is running'
+        : `, with this app’s tools from ${config}`),
   })
   return copilotState(deps)
+}
+
+/** The real measurement. Named so the deps default reads as one thing. */
+async function defaultFence(
+  userData: string,
+  platform: Platform,
+): Promise<{ fence: RecordsFence | null; reason: string | null }> {
+  return buildRecordsFence({ userData, platform })
+}
+
+/** The real resolution, through the app's own profile system. */
+function defaultProfile(projectPath: string): Profile {
+  return resolveProfile(profilesState(), { projectPath })
 }
 
 /** Record a refusal, in the log and in the state, and answer with the state. */
@@ -902,9 +873,8 @@ function refuse(deps: CopilotRuntimeDeps, reason: string): CopilotState {
  * process that costs money and holds a pty, and a singleton a person cannot
  * switch off is a fault rather than a simplification. Stopping is also the
  * honest way to change something it read at startup — edit `CLAUDE.md`, stop it,
- * start it again — and it is now also how a project folder added since it
- * started becomes readable, because a Seatbelt profile cannot be widened after
- * `exec`. See the header.
+ * start it again — and it is how a change of account takes effect, because the
+ * profile is resolved once, at the spawn.
  */
 export function stopCopilot(deps: CopilotRuntimeDeps): CopilotState {
   const { paths } = resolve(deps)
@@ -913,8 +883,6 @@ export function stopCopilot(deps: CopilotRuntimeDeps): CopilotState {
     appendCopilotAction(paths, { action: 'session.stopped', sessionId: live.sessionId })
     live = null
   }
-  unwatchProjects?.()
-  unwatchProjects = null
   return copilotState(deps)
 }
 
@@ -926,21 +894,29 @@ let signIn: CopilotSignIn | null = null
  * How long a sign-in answer is trusted before it is asked again.
  *
  * A minute, because the thing that changes it is a person completing a login in
- * front of the pane — so the answer has to refresh on a human timescale — and
- * because asking costs a `sandbox-exec` proof plus a CLI spawn, which is not
- * something to do on every render.
+ * front of the pane — so the answer has to refresh on a human timescale. It is
+ * kept even though `readSignIn` has a cache of its own: that one is keyed on the
+ * profile and shared with the accounts pane, and this one exists so the copilot
+ * pane polling its state does not fan out into a spawn per render.
  */
 const SIGN_IN_TTL_MS = 60_000
 
 /**
- * Is the copilot signed in? Asked of the CLI, **from inside the boundary**.
+ * Is the copilot signed in? Asked the ordinary way, about an ordinary account.
  *
- * The distinction is the whole point. Running `claude auth status` as the app
- * would answer a question about the machine's own login, which the copilot
- * cannot reach: the macOS keychain is closed to a sandboxed process — measured,
- * and the leak `CONFINEMENT.md` cared about most — so the machine can be signed
- * in while the copilot is not. Asking through the same confinement the copilot
- * runs under is the only way to get an answer that is about the copilot.
+ * This function used to be the most copilot-specific thing in the module: it
+ * built the copilot's confinement plan, ran `claude auth status --json` *inside*
+ * it against a `CLAUDE_CONFIG_DIR` no other session used, and unpicked the exit
+ * status by hand — all of it because the copilot's login lived in a sandbox and
+ * the machine could be signed in while the copilot was not.
+ *
+ * None of that is true now. The copilot runs as one of the profiles in the
+ * accounts list, so the question "is the copilot signed in" is the question
+ * "is that profile signed in", and `profiles-signin.ts` has answered that for
+ * every account in the app since before the copilot existed — including the
+ * measurement that mattered here, that `claude auth status --json` **exits 1
+ * when it is not logged in** and the answer has to be read off the output rather
+ * than the exit code.
  *
  * Three states, and `unknown` is never collapsed into `signed-out`, for the
  * reason `profiles-signin.ts` gives: they send a person to different places.
@@ -949,216 +925,42 @@ export async function readCopilotSignIn(
   deps: CopilotRuntimeDeps,
   now = Date.now(),
 ): Promise<CopilotSignIn> {
-  if (signIn !== null && now - signIn.checkedAt < SIGN_IN_TTL_MS) return signIn
-  const answer = await probeSignIn(deps)
-  signIn = { ...answer, checkedAt: now }
+  const profile = (deps.profile ?? defaultProfile)(resolve(deps).paths.root)
+  /*
+   * The cached answer is only reused for the *same* profile.
+   *
+   * Without the id check, changing which account the copilot runs as would keep
+   * showing the previous account's state for up to a minute — and the moment a
+   * person is most likely to look at this pane is straight after changing it.
+   */
+  if (signIn !== null && signIn.profileId === profile.id && now - signIn.checkedAt < SIGN_IN_TTL_MS) {
+    return signIn
+  }
+
+  const answer = await (deps.signInOf ?? defaultSignIn)(profile)
+  signIn = {
+    // `unsupported` is an agent that cannot be signed in at all, which Claude
+    // is not — but the type allows it, and folding it into `unknown` rather
+    // than widening this one is right: a pane drawing the copilot has nothing
+    // useful to do with a fourth state that cannot occur.
+    state: answer.state === 'unsupported' ? 'unknown' : answer.state,
+    account: answer.account,
+    plan: answer.plan,
+    profileId: profile.id,
+    profileName: profile.name,
+    checkedAt: now,
+  }
   return signIn
 }
 
-/**
- * What a command printed, whether or not it thought it had succeeded.
- *
- * `execFile` rejects on any non-zero exit and on a timeout, and in both cases
- * hangs whatever the process managed to write off the rejection rather than
- * returning it. A caller that only reads the resolved value therefore loses the
- * output of every command that answers a question by exiting non-zero — which
- * `claude auth status --json` does, every time it is not logged in. See
- * {@link probeSignIn} for the measurement and for what that cost.
- *
- * Exported for the test that pins it: the interesting case is a rejection that
- * carries a complete answer, and that cannot be exercised without being able to
- * hand this function one.
- */
-export async function outputOf(
-  running: Promise<{ stdout: string; stderr: string }>,
-): Promise<{ stdout: string; stderr: string }> {
-  try {
-    return await running
-  } catch (error) {
-    const failure = error as { stdout?: unknown; stderr?: unknown }
-    return {
-      stdout: typeof failure.stdout === 'string' ? failure.stdout : '',
-      stderr: typeof failure.stderr === 'string' ? failure.stderr : '',
-    }
-  }
-}
-
-async function probeSignIn(
-  deps: CopilotRuntimeDeps,
-): Promise<Omit<CopilotSignIn, 'checkedAt'>> {
-  const { paths, storageDir, accountHome, platform } = resolve(deps)
-  const unknown = { state: 'unknown' as const, account: null, plan: null }
-  /*
-   * No boundary, nothing to ask about — and on Windows this is the ordinary
-   * state, not an exotic one.
-   *
-   * `startCopilot` refuses on the same condition, so a machine that answers
-   * `'none'` has no copilot, no home of its own and no credential file to read;
-   * probing anyway would spawn the CLI with the *machine's* store and report
-   * the person's own login as the copilot's. Returning `unknown` is right, and
-   * it is not what the pane draws: `copilotState` sets the status to
-   * `unavailable` and carries `unconfinedReason(platform)`, and `CopilotView`
-   * shows that sentence rather than the "could not check" one, which is only
-   * reachable while the copilot is *running*.
-   *
-   * Windows reaches this on every machine today, because the one-time
-   * AppContainer grant is built in `confine/tools.ts` and nothing in the app
-   * calls it — see `windows-setup-reachable.test.ts`, which holds the sentence
-   * the user reads honest about that. Whoever wires the grant makes this branch
-   * stop being taken on Windows, and nothing here needs to change when they do:
-   * the question asked is "is there a boundary", and the answer simply becomes
-   * yes.
-   */
-  if (confinementKind(platform) === 'none') return unknown
-
-  try {
-    const path = await loginPath(platform)
-    const home = prepareDeviceHome(deviceHomesRoot(storageDir), COPILOT_HOME_KEY)
-    const plan = copilotPlan({ folder: paths.root, home, accountHome, path, platform })
-    // `--json` is a guard rather than a preference: an older CLI reads an unknown
-    // subcommand as a *prompt* and starts a paid turn. `profiles-signin.ts` has
-    // the measurement. An unknown option is rejected by the argument parser
-    // before anything is spawned.
-    const launch = await confineSpawn(plan, PROVIDERS.claude.spawn.command, [
-      'auth',
-      'status',
-      '--json',
-    ])
-    /*
-     * The answer is read off the *output*, whatever the exit status was.
-     *
-     * `claude auth status --json` **exits 1 when it is not logged in** —
-     * measured against 2.1.233, with `{"loggedIn": false, "authMethod":
-     * "none"}` on stdout and nothing on stderr. `promisify(execFile)` rejects
-     * on any non-zero exit and hangs the output off the *error object*, so
-     * awaiting it directly threw away a perfectly good answer and reported
-     * `unknown`.
-     *
-     * That is not a cosmetic loss. `unknown` is the one sign-in state that is
-     * drawn as "this window could not check", so a signed-out copilot — which
-     * is *every* copilot on its first run, by design, because its login lives
-     * inside a sandbox that cannot reach the keychain — could never reach the
-     * first-run explanation. The one state a person most needs explained was
-     * the one state this could not report. Seen on screen, not reasoned about.
-     *
-     * `profiles-signin.ts` already learned this for the account probes and
-     * takes stdout off the failure the same way; this is that lesson, applied
-     * to the one prober that had not had it. A killed or timed-out process
-     * still yields nothing parseable and still answers `unknown`, which is
-     * correct — that genuinely is "could not check".
-     */
-    const output = await outputOf(
-      run(launch.command, launch.args, {
-        cwd: paths.root,
-        /*
-         * `confinedHomeEnv`, not a hand-spelled `HOME`: the probe has to run in
-         * the same environment the session runs in, or it answers a question
-         * about a different store than the one the copilot will read.
-         *
-         * And `confinedHomeEnv` rather than `confinedEnv`, which is what this
-         * line said first and is the reason that function exists. `confinedEnv`
-         * spells "its own home" as `HOME` and `TMPDIR`, which is the POSIX
-         * spelling; on Windows `os.homedir()` reads `USERPROFILE`, the CLI's
-         * own state lives under `APPDATA`/`LOCALAPPDATA`, and scratch space is
-         * `TEMP`/`TMP`. Calling the POSIX one on Windows would have left this
-         * probe running with the copilot's `HOME` and the owner's everything
-         * else — reporting the *machine's* login for a copilot that has none,
-         * which is the same failure the `CLAUDE_CONFIG_DIR` note below is here
-         * to prevent, arriving through the variable beside it.
-         *
-         * The platform is passed rather than defaulted so that this reads the
-         * same in a test as it does at run time; `confinementKind` inside it
-         * still decides, and on a Windows machine that has not been set up it
-         * answers `'none'` — but that case never reaches here, because the
-         * guard at the top of this function has already returned.
-         */
-        env: withPath(
-          // `CLAUDE_CONFIG_DIR` is not optional here and not cosmetic: with it
-          // unset the CLI answers out of the macOS keychain, which the copilot
-          // cannot reach — so the probe would report the *machine's* login and
-          // call a signed-out copilot signed in. See the spawn for the
-          // measurement.
-          {
-            ...process.env,
-            ...confinedHomeEnv(home, platform),
-            CLAUDE_CONFIG_DIR: copilotConfigDir(home),
-          },
-          path,
-          platform,
-        ),
-        timeout: 15_000,
-        encoding: 'utf8',
-        windowsHide: true,
-      }),
-    )
-    // stdout and stderr together, because a CLI free to print a deprecation
-    // notice above its JSON is equally free to print the JSON to either — the
-    // same joined read `profiles-signin.ts` makes, and `parseAuthStatus` finds
-    // the object inside whatever surrounds it.
-    const parsed = parseAuthStatus(`${output.stdout}\n${output.stderr}`)
-    if (parsed === null) return unknown
-    return {
-      state: parsed.loggedIn ? 'signed-in' : 'signed-out',
-      account: parsed.account,
-      plan: parsed.plan,
-    }
-  } catch (error) {
-    /*
-     * The CLI could not be run, was refused, or timed out. None of those is
-     * evidence of being signed out, so the answer stays `unknown`.
-     *
-     * It is *logged*, though, and that is not decoration. `unknown` is drawn as
-     * a sentence saying this window could not check — which is honest and gives
-     * nobody anything to act on — and the failure is otherwise completely
-     * silent, so an install where this always fails looks exactly like one where
-     * the probe is merely slow. The first symptom would be that the first-run
-     * explanation never appears for a copilot that genuinely is signed out,
-     * which is the one state a person most needs explained.
-     */
-    console.error('[copilot] could not read the sign-in state:', error)
-    return unknown
-  }
-}
-
-/**
- * The confinement plan for the copilot, in one place.
- *
- * Two callers need the identical plan and they are on different paths — the
- * spawn goes through `startSession`, the sign-in probe runs a command directly —
- * so a second spelling of it would be a probe that measured a boundary the
- * session does not actually run inside.
- *
- * `projects` is optional and the sign-in probe leaves it out, which is not an
- * inconsistency: the probe runs `claude auth status` and needs to be inside the
- * same *boundary* the session runs in — the same home, the same config
- * directory, the same refusals — and giving it read access to somebody's
- * repositories to ask whether a token file exists would be a grant with no
- * purpose. Narrower is always allowed; the rule this file obeys is that the
- * probe may never be *wider* than the session it is measuring.
- */
-export function copilotPlan(input: {
-  folder: string
-  home: string
-  accountHome: string
-  path: string
-  platform: Platform
-  projects?: readonly string[]
-}): ConfinementPlan {
-  return planFor({
-    folder: input.folder,
-    // Its git directory is inside its home, which is already writable, so there
-    // is nothing extra to grant. Listed as nothing rather than listed
-    // redundantly: `collapse` would drop it, and a plan that names a path it
-    // does not need reads as if that path were the point.
-    //
-    // `projects` is the one thing this device confinement carries that a paired
-    // device's never does, and it goes into the plan's *read* list. `writable`
-    // stays empty.
-    device: { home: input.home, writable: [], files: [], projects: input.projects ?? [] },
-    accountHome: input.accountHome,
-    path: input.path,
-    platform: input.platform,
-  })
+/** The real probe, through the same reader the accounts pane uses. */
+async function defaultSignIn(profile: Profile): Promise<{
+  state: CopilotSignInState | 'unsupported'
+  account: string | null
+  plan: string | null
+}> {
+  const report = await readSignIn(profile)
+  return { state: report.state, account: report.account, plan: report.plan }
 }
 
 /* -------------------------------------------------------------------- ipc -- */
@@ -1166,20 +968,36 @@ export function copilotPlan(input: {
 /**
  * The renderer's questions, and deliberately not one more.
  *
- * **Every handler takes no arguments.** That is the validation: there is no path
- * to sanitise, no id to check and no way for page code to ask for a copilot
- * somewhere else, because nothing about where it runs comes from the renderer.
- * A window can start it, stop it, ask how it is, ask what it read, and put its
- * instructions back — which is the whole of what the settings pane and the
- * pinned sidebar entry need.
+ * **Every handler but one takes no arguments.** That was the whole validation
+ * here: there is no path to sanitise, no id to check and no way for page code to
+ * ask for a copilot somewhere else, because nothing about where it runs comes
+ * from the renderer. A window can start it, stop it, ask how it is, ask what it
+ * read, read and write its instructions, and put the shipped ones back — which
+ * is the whole of what the settings pane and the pinned sidebar entry need.
  *
- * `copilot:reset-instructions` is the newest and the only one that writes.
- * It still takes nothing: *which* file and *what* goes in it are both decided in
- * this process, so the page can ask for the shipped instructions to be restored
- * and cannot ask for anything else to be written anywhere. What was there is
- * copied aside first — see `resetCopilotInstructions` — because a person who
- * clicks it having forgotten they hand-edited the file should be able to get
- * their words back.
+ * `copilot:write-instructions` is the exception and the only argument any of
+ * these takes: the text of `CLAUDE.md`. It is still true that *which* file is
+ * decided in this process — the renderer names no path and cannot — so the
+ * argument is content rather than a target, and the checks it needs are a type,
+ * a floor and a ceiling rather than a containment proof. `writeCopilotInstructions`
+ * holds all three, and copies what was there aside before writing, for the same
+ * reason the reset does: a person who saves over their own wording by accident
+ * should be able to get it back.
+ *
+ * `copilot:reset-instructions` takes nothing and puts *this build's* wording
+ * back. It stays alongside the write rather than being subsumed by it, because
+ * "restore the default" must not depend on a window having the default text to
+ * send — the shipped instructions live in this process and a renderer that had
+ * to hold a copy would be a second copy that can go stale.
+ *
+ * ## What a changed `CLAUDE.md` does, and when
+ *
+ * Nothing, until the copilot next starts. The CLI reads it as the session spawns
+ * and never re-reads it, so there is no handler here that "applies" an edit and
+ * there deliberately is not one — a running copilot has the old text in its
+ * context and no message can replace it. A window that wants the edit live calls
+ * `copilot:stop` and then `copilot:ensure`, which is what the settings pane
+ * offers in those words.
  *
  * Nothing here returns a credential. The sign-in channel answers with a state, an
  * account name and a plan, which is what a pane draws; the token itself is in a
@@ -1191,6 +1009,38 @@ export function registerCopilotIpc(ipcMain: IpcMain, deps: CopilotRuntimeDeps): 
   ipcMain.handle('copilot:files', () => copilotState(deps).startupFiles)
   ipcMain.handle('copilot:stop', () => stopCopilot(deps))
   ipcMain.handle('copilot:signin', () => readCopilotSignIn(deps))
+  ipcMain.handle(
+    'copilot:read-instructions',
+    (): InstructionsReadResult => readCopilotInstructions(resolve(deps).paths),
+  )
+  ipcMain.handle('copilot:write-instructions', (_event, text: unknown) => {
+    const { paths } = resolve(deps)
+    const result = writeCopilotInstructions(paths, text)
+    if (result.saved && result.backup !== null) {
+      /*
+       * Logged, and logged as the person's doing.
+       *
+       * The instruction file *is* the agent, so a copilot that answers
+       * differently next week is a thing somebody will try to explain, and the
+       * explanation is usually an edit made here and forgotten. The row names
+       * the actor and points at the backup, because "what did it used to say"
+       * is the second question and it has an answer on disk.
+       *
+       * Only when something was replaced: a first save into a file that did not
+       * exist has no previous version to point at, and `backup === null` also
+       * covers a save whose text matched what was already there — neither is a
+       * change worth a row.
+       */
+      appendCopilotAction(paths, {
+        action: 'instructions.edited',
+        detail: `you edited its instructions from Settings; the previous file is at ${result.backup}`,
+      })
+    }
+    // The state travels with the result for the reason the reset gives below:
+    // the pane needs the new `instructions` value and the new file size in the
+    // same round trip, or it draws the old ones until something else refreshes.
+    return { ...result, state: copilotState(deps) }
+  })
   ipcMain.handle('copilot:reset-instructions', () => {
     const { paths } = resolve(deps)
     const result = resetCopilotInstructions(paths)

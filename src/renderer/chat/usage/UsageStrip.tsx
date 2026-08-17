@@ -98,6 +98,15 @@ export interface UsageStripViewProps {
    */
   scoped?: boolean
   unwired?: boolean
+  /**
+   * The session this strip is reporting on, for the copilot's focus overlay.
+   *
+   * Absent on a project-wide strip, and the attribute is then absent too rather
+   * than being written with a placeholder: an anchor that exists but names
+   * nothing is worse than no anchor, because a lookup for it succeeds and boxes
+   * the wrong strip. See `driving/focus-target.ts`.
+   */
+  sessionId?: string
 }
 
 interface Note {
@@ -120,10 +129,23 @@ export function UsageStripView({
   scanning,
   scoped = false,
   unwired = false,
+  sessionId,
 }: UsageStripViewProps) {
+  /*
+   * Written on all three of this component's returns, including the two empty
+   * states, and that is the point rather than an oversight.
+   *
+   * "This session has spent nothing yet" is a thing worth pointing at — it is
+   * the honest answer when the copilot has been asked which session is
+   * expensive and one of them turns out never to have run. An anchor present
+   * only on the populated strip would make the overlay silently fail on exactly
+   * the sessions whose emptiness is the finding.
+   */
+  const anchor = sessionId === undefined ? undefined : `usage-strip:${sessionId}`
+
   if (unwired) {
     return (
-      <div className="usage-strip usage-strip-empty">
+      <div className="usage-strip usage-strip-empty" data-drive-anchor={anchor}>
         <span className="us-muted">Usage is not wired into this build.</span>
       </div>
     )
@@ -131,7 +153,7 @@ export function UsageStripView({
 
   if (!session) {
     return (
-      <div className="usage-strip usage-strip-empty">
+      <div className="usage-strip usage-strip-empty" data-drive-anchor={anchor}>
         <span className="us-muted">
           {scanning
             ? 'Reading transcripts…'
@@ -157,7 +179,12 @@ export function UsageStripView({
   }
 
   return (
-    <div className="usage-strip" role="group" aria-label="What this session has used">
+    <div
+      className="usage-strip"
+      role="group"
+      aria-label="What this session has used"
+      data-drive-anchor={anchor}
+    >
       <div className="us-items">
         {context ? (
           <Item label="Context" title={context.title} wide>
@@ -271,13 +298,30 @@ export interface UsageStripProps {
    * number about you and a number about somebody else.
    */
   scoped?: boolean
+  /**
+   * Which session this strip belongs to, so the copilot can point at it.
+   *
+   * Deliberately separate from `transcriptPath`, which is the same fact told a
+   * different way and is not always present: a session that has not written a
+   * transcript yet still has an id, still has a strip on screen, and is still
+   * something a tour has a reason to point at — "this one has spent nothing"
+   * being the reason.
+   */
+  sessionId?: string
   /** Injectable for tests; defaults to the preload bridge on `window.deck`. */
   bridge?: UsageBridge
   /** Clock, for tests. */
   now?: number
 }
 
-export function UsageStrip({ cwd, transcriptPath, scoped = false, bridge, now }: UsageStripProps) {
+export function UsageStrip({
+  cwd,
+  transcriptPath,
+  scoped = false,
+  sessionId,
+  bridge,
+  now,
+}: UsageStripProps) {
   const usage = useUsage(cwd, bridge)
   const at = now ?? Date.now()
 
@@ -298,6 +342,7 @@ export function UsageStrip({ cwd, transcriptPath, scoped = false, bridge, now }:
       scanning={usage.summary?.scanning ?? false}
       scoped={scoped}
       unwired={usage.unwired}
+      sessionId={sessionId}
     />
   )
 }

@@ -104,13 +104,49 @@ describe('what a device is granted', () => {
     expect(new CopilotGrants(dir).granted('phone-1').read).toBe(false)
   })
 
-  it('is written 0600, like every other file in this directory', () => {
+  /**
+   * POSIX-only, and skipped rather than softened off it, because off POSIX the
+   * number is not a permission.
+   *
+   * Windows has no mode bits: `fs` synthesises one from the read-only attribute
+   * alone, so any read-write file reports 0666 (438, not 384 — measured on the
+   * Windows CI runner and again on a Windows 11 machine) whatever `open` was
+   * asked for. Asserting 0600 there would assert a made-up number, and asserting
+   * 0666 would record the absence of a check as though it were one.
+   *
+   * What keeps this file to one account on Windows is not a mode and not the
+   * inherited ACL either. It is the explicit one `writeSecretFile` applies —
+   * `icacls /inheritance:r /grant:r <user>:(F)`, on the folder before the temp
+   * file exists and on the temp file before the rename — and *that* is asserted
+   * on Windows, against the real `icacls`, in `secret-file.test.ts`. The
+   * inherited alternative was measured rather than assumed: a file written the
+   * ordinary way under `%APPDATA%` on a real Windows 11 PC comes back granting
+   * SYSTEM, `BUILTIN\Administrators` and the user, all inherited from the
+   * profile — so a second *standard* account cannot read it, and a second
+   * *administrator* account reads it with no elevation and nothing to notice.
+   * Stripping the inheritance is what turns that second case into "take
+   * ownership first", which is a deliberate act that leaves a trace.
+   */
+  it.skipIf(process.platform === 'win32')(
+    'is written 0600, like every other file in this directory',
+    () => {
+      const dir = tempDir()
+      const grants = new CopilotGrants(dir)
+      grants.set('phone-1', { read: true })
+      // Not a secret in the sense a token is, but it is a permission, and it
+      // goes through `writeSecretFile` for the atomicity as well as the mode.
+      expect(statSync(grants.file).mode & 0o777).toBe(0o600)
+    },
+  )
+
+  it('is written wherever it runs, whatever a mode means there', () => {
+    // The companion to the skip above, so that a platform which cannot check
+    // the protection still checks that the write happened at all. Without it,
+    // Windows would run this describe block and prove nothing about the file.
     const dir = tempDir()
     const grants = new CopilotGrants(dir)
     grants.set('phone-1', { read: true })
-    // Not a secret in the sense a token is, but it is a permission, and it goes
-    // through `writeSecretFile` for the atomicity as well as the mode.
-    expect(statSync(grants.file).mode & 0o777).toBe(0o600)
+    expect(JSON.parse(readFileSync(grants.file, 'utf8')).version).toBe(1)
   })
 })
 
@@ -196,9 +232,26 @@ function surface(): { surface: DeckSurface; killed: string[]; started: number } 
     writeSettings: () => ({}),
     writePreferences: () => ({}),
     snapshotSettings: () => ({ path: '/tmp/settings.last-good.json', at: 0 }),
-    newestTranscript: async () => null,
+    transcriptsIn: async () => [],
     transcriptBytes: async () => 0,
     readTranscriptFrom: async () => [],
+    // The reads the fleet capabilities added, answered inertly: this fake is
+    // about *who may call a tool*, not about what the reports say.
+    readToolTrail: async () => ({ events: [], compactions: [], fileBytes: 0, fromByte: 0, partial: false }),
+    transcriptTotals: async () => null,
+    gitChanges: async () => ({
+      repo: false,
+      root: null,
+      branch: null,
+      ahead: 0,
+      behind: 0,
+      files: [],
+      reason: 'not a repository',
+    }),
+    fileDiff: async () => '',
+    fileModifiedAt: async () => null,
+    appStateRoot: () => '/state',
+    copilotRoot: () => '/state/copilot',
   }
   return state
 }

@@ -156,6 +156,30 @@ agent's report.
 - [ ] No notification spam returning to the list
 - [ ] Localhost list folds, groups, renames
 
+## Found on Windows, reported and deliberately not fixed (2026-08-17)
+
+Both came out of clearing the v0.3.0 Windows release block. Each was judged too
+broad to fix as a side quest, and each is real.
+
+- [ ] **The headless daemon cannot write `host.json` on a workgroup Windows box
+      started over ssh.** `windowsPrincipal()` builds `${USERDOMAIN}\${username}`,
+      and in an OpenSSH-service session `USERDOMAIN=WORKGROUP`, so
+      `icacls /grant:r WORKGROUP\Imza:(F)` fails with **1332, "No mapping between
+      account names and security IDs was done"** and `writeSecretFile` refuses.
+      Bare `Imza` and `DESKTOP-DDGMNCV\Imza` both work. The Electron app is
+      unaffected — it runs in a desktop session — but this is exactly the
+      deployment `HEADLESS.md` targets. A blind fallback to the bare name is not
+      obviously safe on a domain-joined machine, which is why it was reported
+      rather than guessed at.
+
+- [ ] **`custom-agents.json` is written with a bare `writeFileSync`** — no mode,
+      and a temp name without the pid. It names a program the app spawns, so it
+      is worth protecting. It was not routed through `writeSecretFile` because
+      its directory is `<userData>` itself, and that writer runs
+      `/inheritance:r` on the directory — which would strip SYSTEM from Cache,
+      Cookies and everything else under the Electron root. Correct call; needs a
+      narrower fix.
+
 ## Release scope — every surface, tested before any of it ships
 
 He was explicit, twice:

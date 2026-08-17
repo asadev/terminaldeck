@@ -114,9 +114,35 @@ function surface(settings: Record<string, string | number | boolean>): DeckSurfa
     },
     writePreferences: () => ({}),
     snapshotSettings: () => ({ path: '/tmp/settings.last-good.json', at: 0 }),
-    newestTranscript: async () => null,
+    transcriptsIn: async () => [],
     transcriptBytes: async () => 0,
     readTranscriptFrom: async () => [],
+    /*
+     * The five reads the fleet capabilities added, answered inertly.
+     *
+     * This fake exists to exercise the dispatcher, not the reports, so every
+     * one of these returns the empty answer its real counterpart returns for a
+     * folder with no repository and a session with no transcript. The report
+     * tools have their own tests with their own fixtures.
+     */
+    readToolTrail: async () => ({ events: [], compactions: [], fileBytes: 0, fromByte: 0, partial: false }),
+    transcriptTotals: async () => null,
+    gitChanges: async () => ({
+      repo: false,
+      root: null,
+      branch: null,
+      ahead: 0,
+      behind: 0,
+      files: [],
+      reason: 'not a repository',
+    }),
+    fileDiff: async () => '',
+    fileModifiedAt: async () => null,
+    // `<userData>` and the copilot's folder inside it. Distinct from every
+    // project path in these fixtures, which is what `sessions.start`'s refusal
+    // to run inside the app's own storage needs in order to mean anything.
+    appStateRoot: () => '/state',
+    copilotRoot: () => '/state/copilot',
   }
 }
 
@@ -274,6 +300,141 @@ describe('the config the copilot session is launched with', () => {
     expect(server.headers.Authorization).toBe(`Bearer ${handle.endpoint.token}`)
   })
 
+  /**
+   * Two configs, two tokens, and the difference is who may be asked a question.
+   *
+   * The pinned copilot gets one; a routine run gets the other, and the run's
+   * alter-tier calls are then refused at the transport with
+   * `not-permitted-unattended` instead of blocking on a dialog nobody is awake
+   * to answer. Carried by *which token the file holds* rather than by a header,
+   * because a caller can simply not send a header.
+   */
+  it('writes a second config for callers nobody is watching, with a different token', () => {
+    const unattended = JSON.parse(readFileSync(handle.unattendedConfigPath, 'utf8')) as {
+      mcpServers: Record<string, { url: string; headers: Record<string, string> }>
+    }
+    const server = unattended.mcpServers['deck-control']
+    expect(server.url).toBe(handle.endpoint.url)
+    expect(server.headers.Authorization).toBe(`Bearer ${handle.endpoint.unattendedToken}`)
+    // Same server, different secret, different file. Handing a routine the
+    // other one would give an unwatched process the right to ask for things
+    // nobody is there to allow.
+    expect(handle.unattendedConfigPath).not.toBe(handle.configPath)
+    expect(handle.endpoint.unattendedToken).not.toBe(handle.endpoint.token)
+  })
+
+  /**
+   * The two ends, joined: the file this module writes is the file the copilot
+   * is launched with.
+   *
+   * This test replaces one that asserted the opposite. For a while `configPath`
+   * existed, the file on disk was correct, and *nothing launched the pinned
+   * copilot with it* — so the copilot had none of this app's tools, and every
+   * claim that it was bounded by the tool tiers and the confirmation gate
+   * described a gate that was not in the path. The old test pinned that absence
+   * honestly and said, in its failure message, to come back and delete it. This
+   * is coming back.
+   *
+   * It drives the real `ensureCopilot` rather than reading source text, because
+   * the failure being guarded is not "the string `--mcp-config` disappeared from
+   * a file" — it is "the flag stopped reaching the spawn", which a grep cannot
+   * tell apart from a comment.
+   */
+  it('is the config the copilot session is actually launched with', async () => {
+    const { ensureCopilot, resetCopilot } = await import('../copilot-session')
+    const launches: Array<readonly string[] | undefined> = []
+    resetCopilot()
+    try {
+      const state = await ensureCopilot({
+        userData: () => ROOT,
+        platform: 'darwin',
+        agents: async () => ({ claude: true, codex: false, gemini: false, shell: true }),
+        fence: async () => ({ fence: null, reason: 'not measured here' }),
+        profile: () => ({
+          id: 'system',
+          name: 'Default',
+          provider: 'claude',
+          configDir: join(ROOT, '.claude'),
+          system: true,
+          color: '#000000',
+          createdAt: 0,
+          lastUsedAt: null,
+        }),
+        // The one line under test, spelled the way `src/main/index.ts` spells
+        // it: read off the live handle, so the config named is the config of
+        // the server that is actually listening.
+        mcpConfig: () => handle.configPath,
+        async startSession(_input, _guest, _confine, _fence, extraArgs) {
+          launches.push(extraArgs)
+          return { ...SESSION, id: 'copilot-1' }
+        },
+        isAlive: () => true,
+        stop: () => undefined,
+      })
+      expect(state.status).toBe('running')
+    } finally {
+      resetCopilot()
+    }
+
+    expect(launches).toHaveLength(1)
+    expect(launches[0]).toEqual(['--mcp-config', handle.configPath, '--strict-mcp-config'])
+    // `--strict-mcp-config` is not decoration and is asserted separately from
+    // the array above so that dropping it reads as its own failure: without it
+    // the copilot also inherits whatever MCP servers are in the person's own
+    // `~/.claude.json`, and an action log that cannot say which server a tool
+    // came from is not an audit record.
+    expect(launches[0]).toContain('--strict-mcp-config')
+  })
+
+  it('launches it with no tools rather than a config for a server that is not there', async () => {
+    /*
+     * The failure mode this shape exists to avoid: `mcpConfigPath()` answers a
+     * path whether or not the server came up, and `deck-control` can genuinely
+     * fail to start — a loopback port that will not bind, a token file that
+     * cannot be made owner-only on Windows. A copilot pointed at that path would
+     * start, believe it had tools, and be unable to reach one. Null instead, and
+     * the copilot runs and says so.
+     */
+    const { ensureCopilot, resetCopilot } = await import('../copilot-session')
+    const launches: Array<readonly string[] | undefined> = []
+    resetCopilot()
+    try {
+      await ensureCopilot({
+        userData: () => ROOT,
+        platform: 'darwin',
+        agents: async () => ({ claude: true, codex: false, gemini: false, shell: true }),
+        fence: async () => ({ fence: null, reason: 'not measured here' }),
+        profile: () => ({
+          id: 'system',
+          name: 'Default',
+          provider: 'claude',
+          configDir: join(ROOT, '.claude'),
+          system: true,
+          color: '#000000',
+          createdAt: 0,
+          lastUsedAt: null,
+        }),
+        mcpConfig: () => null,
+        async startSession(_input, _guest, _confine, _fence, extraArgs) {
+          launches.push(extraArgs)
+          return { ...SESSION, id: 'copilot-2' }
+        },
+        isAlive: () => true,
+        stop: () => undefined,
+      })
+    } finally {
+      resetCopilot()
+    }
+
+    expect(launches[0]).toEqual([])
+    // And the log says which of the two happened, because a copilot with no
+    // tools and a copilot whose every tool call is refused look identical from
+    // the outside.
+    const { copilotPaths } = await import('../copilot-home')
+    const actions = readFileSync(copilotPaths(ROOT).actions, 'utf8')
+    expect(actions).toContain('no deck-control server')
+  })
+
   it('writes it inside the copilot’s own folder, where a confined session can read it', () => {
     // The copilot session is confined to its folder. A config file outside it
     // would be one the CLI cannot open, which is a failure that only shows up
@@ -282,17 +443,64 @@ describe('the config the copilot session is launched with', () => {
     expect(handle.configPath.startsWith(join(ROOT, 'copilot'))).toBe(true)
   })
 
-  it('writes it 0600, and keeps it 0600 on a second start', async () => {
-    const mode = (path: string): number => statSync(path).mode & 0o777
-    expect(mode(handle.configPath)).toBe(0o600)
+  /**
+   * POSIX-only, because a mode is a POSIX thing — and the *reason* this is a
+   * skip rather than a softened assertion is the whole story of this file.
+   *
+   * The config used to be written with a raw `write` plus a `chmod`, with a
+   * comment saying the second call was what made 0600 true on the second and
+   * every subsequent start. That was correct on POSIX and beside the point on
+   * Windows, where a mode is synthesised from the read-only attribute: this
+   * file came back 0666 (438, not 384) on the CI runner however it was written,
+   * and who could actually open it was decided by an ACL neither call touched.
+   * Measured on a real Windows 11 PC, a file written that way under
+   * `%APPDATA%\Terminal Deck` inherits SYSTEM, `BUILTIN\Administrators` and the
+   * user from the profile — and this file is a **bearer token for a server that
+   * can start sessions and run tools**, which is not a thing to leave under a
+   * weaker ACL than `machines.json` next door.
+   *
+   * So it now goes through `remote/secret-file.ts` like every other secret this
+   * app writes. That is pinned on every platform, twice: the source sweep in
+   * `remote/secret-file.test.ts` lists this module among the writers that may
+   * not grow a raw write, and the Windows half of that file asserts the real
+   * ACL produced by the real `icacls`.
+   */
+  it.skipIf(process.platform === 'win32')(
+    'writes it 0600, and keeps it 0600 on a second start',
+    async () => {
+      const mode = (path: string): number => statSync(path).mode & 0o777
+      expect(mode(handle.configPath)).toBe(0o600)
 
-    // The second start is the one that matters: `writeFileSync`'s mode applies
-    // at creation only, so an existing file from the previous run would keep
-    // whatever permissions it had.
+      // The second start is the one that matters: a mode given at `open` time
+      // applies at creation only, so an existing file from the previous run
+      // would otherwise keep whatever permissions it had. `writeSecretFile`
+      // creates a fresh temp file and renames over the old name, so the answer
+      // is the same every time rather than only the first.
+      await handle.stop()
+      resetDeckControlForTests()
+      await boot()
+      expect(mode(handle.configPath)).toBe(0o600)
+    },
+  )
+
+  it('replaces the file on a second start, so a dead token cannot survive one', async () => {
+    // The half of the test above that means something on every platform: the
+    // file is rewritten rather than left alone, and what it carries is this
+    // run's token rather than the last one's.
+    const before = JSON.parse(readFileSync(handle.configPath, 'utf8')) as {
+      mcpServers: Record<string, { headers: Record<string, string> }>
+    }
     await handle.stop()
     resetDeckControlForTests()
     await boot()
-    expect(mode(handle.configPath)).toBe(0o600)
+    const after = JSON.parse(readFileSync(handle.configPath, 'utf8')) as typeof before
+
+    expect(after.mcpServers['deck-control'].headers.Authorization).not.toBe(
+      before.mcpServers['deck-control'].headers.Authorization,
+    )
+    expect(after.mcpServers['deck-control'].headers.Authorization).toBe(
+      `Bearer ${handle.endpoint.token}`,
+    )
   })
 
   it('takes the config away when it stops', async () => {
@@ -422,5 +630,87 @@ describe('the gate, through the wiring', () => {
     const actions = broadcasts.filter((entry) => entry.channel === 'deck-control:action')
     expect(actions).toHaveLength(1)
     expect(actions[0].args[0]).toMatchObject({ action: 'tool.projects.list', outcome: 'ok' })
+  })
+})
+
+/**
+ * Two permission systems that look like one, and the seam between them.
+ *
+ * The copilot runs as the person, in their own environment, so it reads their
+ * `~/.claude/settings.json` like any session they open themselves — including
+ * `permissions.defaultMode`. On the machine this was written on that says
+ * `bypassPermissions`, so the *CLI* does not stop to ask before it runs a
+ * command or edits a file. That is the person's own setting applied to their own
+ * agent, and this app deliberately does not override it.
+ *
+ * It has nothing to do with the gate in this module, and the two being confused
+ * is exactly how somebody ends up surprised — "I turned prompts off, why is this
+ * asking" or, far worse, "I turned prompts off, so this stopped asking". A
+ * `defaultMode` decides whether the CLI prompts *its own user* before
+ * dispatching a tool. This gate is asked by the desktop, of the person at the
+ * desk, over an HTTP request, after `control.ts` has already checked the tier.
+ * An MCP client has no channel to answer it and none to skip it.
+ *
+ * These cases are that claim, made falsifiable: the call carries every field a
+ * client could invent to wave itself through, and the answer still comes from
+ * the window.
+ */
+describe('the CLI’s permission mode is not this gate', () => {
+  /** Everything a caller might put in a tool call to approve itself. */
+  const SELF_APPROVAL = {
+    confirm: true,
+    approved: true,
+    permissionMode: 'bypassPermissions',
+    bypassPermissions: true,
+    dangerouslySkipPermissions: true,
+  }
+
+  it('still asks the window, whatever the call claims about permissions', async () => {
+    approverWindow.answers = true
+    await ipc.invoke('deck-control:consent-attach', approverWindow)
+
+    const result = await callTool('settings_write', {
+      scope: 'settings',
+      patch: { 'appearance.density': 'compact' },
+      ...SELF_APPROVAL,
+    })
+
+    // It worked — because the window said yes, and for no other reason.
+    expect(result.isError).toBe(false)
+    expect(approverWindow.sent.map((message) => message.channel)).toContain(
+      'deck-control:consent-request',
+    )
+  })
+
+  it('still refuses when the window says no, whatever the call claims', async () => {
+    approverWindow.answers = false
+    await ipc.invoke('deck-control:consent-attach', approverWindow)
+
+    const result = await callTool('settings_write', {
+      scope: 'settings',
+      patch: { 'appearance.density': 'compact' },
+      ...SELF_APPROVAL,
+    })
+
+    expect(result.isError).toBe(true)
+    expect(settings['appearance.density']).toBe('comfortable')
+  })
+
+  it('still refuses when no window has enrolled, which is the copilot’s ordinary case', async () => {
+    /*
+     * The state that matters most, because it is the one a bypassed CLI would
+     * be assumed to sail through: nothing on screen to ask. The answer is
+     * `no-approver` — a refusal — rather than a default of yes, and no argument
+     * in the call changes it.
+     */
+    const result = await callTool('settings_write', {
+      scope: 'settings',
+      patch: { 'appearance.density': 'compact' },
+      ...SELF_APPROVAL,
+    })
+
+    expect(result.isError).toBe(true)
+    expect(settings['appearance.density']).toBe('comfortable')
+    expect(approverWindow.sent).toEqual([])
   })
 })

@@ -14,6 +14,7 @@ import {
 } from '../machines/MachineLinks'
 import { asView, resolveBridge, type MachinesBridge, type MachinesView } from '../machines/types'
 import { DeviceFolders, type FolderDevice } from './DeviceFolders'
+import { DeviceCopilot, type CopilotDevice } from './DeviceCopilot'
 import './RemoteSection.css'
 
 /**
@@ -1012,6 +1013,16 @@ export interface RemoteViewProps {
    * built here. Null before anything has been read — see where it is passed.
    */
   folders?: ReactNode
+  /**
+   * The per-device copilot grants, which read their own store and so cannot be
+   * built here either.
+   *
+   * A second node rather than a field on the folder chooser, because they are
+   * two different permissions over two different stores — losing a folder list
+   * costs a preference, losing this costs a permission — and the main process
+   * keeps them in two files for exactly that reason.
+   */
+  copilot?: ReactNode
   actions: RemoteActions
   now: number
   /**
@@ -1097,6 +1108,7 @@ export function RemoteView({
   busy,
   machines,
   folders = null,
+  copilot = null,
   actions,
   now,
   platform = detectPlatform(),
@@ -1779,6 +1791,19 @@ export function RemoteView({
       {approved.length > 0 && folders}
 
       {/*
+        Directly under the folders, on the same card, and withheld on the same
+        condition.
+
+        Both answer *what may this device do here*, and somebody deciding about a
+        phone should see both answers at once rather than finding the second one
+        under a different heading a month later. The order is the argument the
+        screen makes, continued: pair a device, approve it, choose what it may
+        open — and then, separately and off by default, whether it may reach the
+        copilot at all.
+      */}
+      {approved.length > 0 && copilot}
+
+      {/*
         The outward half, last — and only when there is one.
 
         The order is the argument the section makes, and it runs one way:
@@ -2404,6 +2429,9 @@ export function RemoteSection({ bridge: provided, machines: providedMachines }: 
       folders={
         wired && state !== null ? <DeviceFolders devices={grantableDevices(state.devices)} /> : null
       }
+      copilot={
+        wired && state !== null ? <DeviceCopilot devices={copilotDevices(state.devices)} /> : null
+      }
     />
   )
 }
@@ -2428,4 +2456,28 @@ export function grantableDevices(devices: readonly RemoteDevice[]): FolderDevice
   return devices
     .filter((device) => device.state === 'approved')
     .map((device) => ({ id: device.id, name: device.name }))
+}
+
+/**
+ * The devices worth showing copilot grants for.
+ *
+ * The same approved-only filter, and one extra fact carried rather than one
+ * extra filter: whether the device has a key.
+ *
+ * A device that paired before sealed channels has no static key, so it cannot
+ * open a sealed channel at all — and `copilot.*` frames ride inside that channel
+ * like every other frame. Offering it a grant would be a switch with nothing
+ * behind it, which is precisely the defect this whole panel was warned about
+ * shipping.
+ *
+ * It is **carried, not filtered**, and that is the decision worth defending. A
+ * device silently missing from this list while sitting in the roster two
+ * headings above would read as a bug in the panel, and the person would go
+ * looking for the row rather than learning why it is not there. So the row is
+ * drawn, and it says what is wrong and what fixes it.
+ */
+export function copilotDevices(devices: readonly RemoteDevice[]): CopilotDevice[] {
+  return devices
+    .filter((device) => device.state === 'approved')
+    .map((device) => ({ id: device.id, name: device.name, sealed: device.fingerprint !== null }))
 }

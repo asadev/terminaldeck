@@ -650,6 +650,23 @@ export function BrowserWorkspace({
           void iso.browserIsolationDispose?.(tab.isolationKey).catch(() => undefined)
         }
         if (!tab.id) continue
+        /*
+         * Hidden first, and synchronously.
+         *
+         * `browserVisible` is a `send` — it lands in the main process's queue
+         * immediately — where release and close are `invoke`s that resolve
+         * whenever the round trip does. Without this line the pane is already
+         * showing a terminal while the page is still composited over it, for as
+         * many frames as that round trip takes; the effect ordering makes that a
+         * flash rather than the permanent version of the same picture, and a
+         * flash of somebody's website over their terminal is still the bug.
+         *
+         * It is not the fix, and must not be mistaken for it: an unmount is the
+         * polite path, and the whole point of the main-process rule in
+         * `browser-tab.ts` is that the impolite ones — a reload, a crash, a
+         * window closing — cannot reach any line in this file.
+         */
+        api.browserVisible(tab.id, false)
         void api.browserRelease(tab.id).catch(() => undefined)
         void api.browserClose(tab.id).catch(() => undefined)
       }
@@ -711,6 +728,12 @@ export function BrowserWorkspace({
         return
       }
       const id = tab.id
+      // Off the screen now, not when the queue reaches it. Closing a tab drops
+      // it from `tabs` in the same commit, so the effect that pushes visibility
+      // will never mention this id again — and the work below is queued behind
+      // whatever else the panel has in flight, which on a slow create can be a
+      // second or more of a closed page still painted over its replacement.
+      api.browserVisible(id, false)
       enqueue(async () => {
         await api.browserRelease(id).catch(() => undefined)
         await api.browserClose(id).catch(() => undefined)

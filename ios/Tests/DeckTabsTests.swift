@@ -228,6 +228,71 @@ final class DeckTabsTests: XCTestCase {
         XCTAssertEqual(model.settingsSurface, .machines)
     }
 
+    /**
+     * The copilot is on the Sessions stack, and the tab bar knows it.
+     *
+     * Two things at once, and both are the sort that fail silently. Opening the
+     * copilot from Settings or from Localhost has to move the selection, or the
+     * screen is pushed onto a stack nobody is looking at and the tap reads as
+     * having done nothing. And the surface has to report `.copilot` rather than
+     * `.session`, because `DeckChrome` is then answering correctly about the
+     * wrong screen — a pill floating over a composer, with every other test
+     * green.
+     */
+    func testTheCopilotOpensOnTheSessionsTabAndIsItsOwnSurface() {
+        model.tab = .settings
+        model.openCopilot(on: Self.macId)
+
+        XCTAssertEqual(model.tab, .sessions)
+        XCTAssertEqual(model.route.last, .copilot(host: Self.macId))
+        XCTAssertEqual(model.sessionsSurface, .copilot)
+        XCTAssertFalse(DeckChrome.showsTabBar(on: model.sessionsSurface))
+    }
+
+    /// Asking twice does not stack two copies of a live conversation, which
+    /// would take two taps of Back to leave and would look like the first tap
+    /// having done nothing.
+    func testOpeningTheCopilotTwiceDoesNotStackIt() {
+        model.openCopilot(on: Self.macId)
+        model.openCopilot(on: Self.macId)
+
+        XCTAssertEqual(model.route, [.copilot(host: Self.macId)])
+    }
+
+    /**
+     * A session opened from the copilot goes **on top of** it rather than
+     * replacing it.
+     *
+     * That is the other half of "why does this session exist" being one tap in
+     * either direction: Back from the terminal has to land on the conversation
+     * that started it, not on the session list.
+     */
+    func testASessionOpenedFromTheCopilotLeavesTheCopilotUnderneath() {
+        model.openCopilot(on: Self.macId)
+        model.open(session: "01J8ZC4T9K5Q2V7XW3NHRF6MBD", on: Self.macId)
+
+        XCTAssertEqual(model.route, [.copilot(host: Self.macId),
+                                     .session(host: Self.macId, id: "01J8ZC4T9K5Q2V7XW3NHRF6MBD")])
+        XCTAssertEqual(model.sessionsSurface, .session)
+    }
+
+    /**
+     * Switching machines pops a copilot belonging to the machine being left.
+     *
+     * One conversation per machine, keyed by device on the far end — so a
+     * copilot screen that survived a switch would be showing one machine's run
+     * under another machine's name, with a composer that sends to neither. The
+     * same rule `select` already applies to a terminal, extended to the case it
+     * did not know about.
+     */
+    func testSwitchingMachinesPopsTheOtherMachinesCopilot() {
+        model.openCopilot(on: Self.macId)
+        model.select(Self.pcId)
+
+        XCTAssertTrue(model.route.isEmpty,
+                      "the Mac's copilot must not stay on screen under the PC's name")
+    }
+
     /// And each of them goes back when what was on top of it does. A bar that
     /// stayed hidden after the screen it was hidden for had gone would strand
     /// somebody on one tab.

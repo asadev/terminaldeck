@@ -204,11 +204,40 @@ const SAFE_BIN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
  * inside that line every one of these characters is an instruction. A command
  * of `foo & del /q *` would be two commands there.
  *
- * Nothing in this repository runs on Windows, so the rule is the one that needs
- * no verification to be safe: refuse the characters rather than invent a
- * quoting scheme that cannot be tested from here.
+ * ## The backslash used to be in this set, and it made the feature unusable
+ *
+ * The first version of this line read `` /[&|;<>^"'`$()%!\\\n\r\t]/ `` and
+ * justified the backslash with "nothing in this repository runs on Windows, so
+ * the rule is the one that needs no verification to be safe". The sentence was
+ * already false when it was written — this repository ships a signed Windows
+ * installer from the same tag as the dmg — and the rule it justified was not
+ * safe, it was merely strict in a direction nobody here could feel. Every
+ * absolute path on Windows contains backslashes, so `C:\Windows\System32\
+ * cmd.exe` was refused by this expression, and the sentence the person got back
+ * told them to "give the full path to it" — advice that cannot be followed on
+ * the platform they are standing on. A Windows user could add an agent only by
+ * bare name; a program not on PATH could not be added at all. That is a broken
+ * feature, not a strict one, and it is how it was found: the fixture in
+ * `host-core.agents.test.ts` that adds an agent so the rest of the file means
+ * anything could not add one on the Windows CI runner.
+ *
+ * A backslash is **not** a metacharacter to the thing this set is guarding
+ * against. `cmd.exe` reads `&`, `|`, `<`, `>`, `^`, `%`, `(`, `)` and `!` as
+ * instructions; a backslash is an ordinary character to it, and a path
+ * separator to everything downstream. The one place a backslash *is* special is
+ * the argv→command-line conversion `CreateProcess` needs, and node-pty already
+ * implements the standard rules for it — `argsToCommandLine` in
+ * `windowsPtyAgent.js` doubles a run of backslashes before a quote and before a
+ * closing quote it added itself, which is read out of the installed copy rather
+ * than assumed. A quote cannot arrive here anyway: `"` and `'` stay in this set.
+ *
+ * What kept UNC paths out was never this expression either, and they are still
+ * out. `\\server\share\tool.exe` matches neither {@link SAFE_BIN} nor
+ * {@link isAbsoluteCommand}, so it lands on the "neither a plain command name
+ * nor a full path" refusal — as does every relative path with a separator in
+ * it. The shape rule is what does that work, and it does it on both platforms.
  */
-const SHELL_META = /[&|;<>^"'`$()%!\\\n\r\t]/
+const SHELL_META = /[&|;<>^"'`$()%!\n\r\t]/
 
 /** Anything a terminal would read as an instruction rather than as text. */
 const CONTROL_CHARS = /[\u0000-\u001f\u007f]/
@@ -218,9 +247,12 @@ const CONTROL_CHARS = /[\u0000-\u001f\u007f]/
  *
  * Both spellings, because the store is per machine and the shapes are
  * different: `/usr/local/bin/thing` and `C:\tools\thing.exe`. A UNC path
- * (`\\server\share`) is refused by the backslash in {@link SHELL_META} before
- * it reaches here, which is the right answer — a launch off somebody else's
- * file server is not a thing to make one click away.
+ * (`\\server\share`) answers false here and does not match {@link SAFE_BIN}
+ * either, so it is refused as neither a name nor a path — which is the right
+ * answer, because a launch off somebody else's file server is not a thing to
+ * make one click away. That refusal used to come from a backslash ban inside
+ * {@link SHELL_META}, which also refused every ordinary Windows path; the shape
+ * rule here is what was actually doing the work worth keeping.
  */
 function isAbsoluteCommand(command: string): boolean {
   return command.startsWith('/') || /^[A-Za-z]:[\\/]/.test(command)
@@ -373,7 +405,11 @@ export function validateDraft(
     for (const arg of list) {
       if (CONTROL_CHARS.test(arg)) return 'Arguments cannot contain control characters.'
       if (SHELL_META.test(arg)) {
-        return 'Arguments cannot contain shell characters like & | ; < > $ or backslashes.'
+        // Backslashes are deliberately absent from this sentence and from the
+        // set behind it. An argument on Windows is very often a path, and
+        // refusing `--config C:\tools\agent.json` was the same defect as
+        // refusing the command itself — see {@link SHELL_META}.
+        return 'Arguments cannot contain shell characters like & | ; < > $ or %.'
       }
     }
     return null

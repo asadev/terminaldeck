@@ -132,13 +132,36 @@ class FakeWebContentsView {
   }
 }
 
-const fakeWindow = {
-  isDestroyed: () => false,
-  contentView: {
+/**
+ * A window that can be listened to and can be destroyed.
+ *
+ * An `EventEmitter`, unlike the plain object this used to be, because the module
+ * now registers `once('closed')` on it — a view whose window has gone must not
+ * be left composited, and a fake with no `once` would have made that
+ * unwriteable rather than merely untested.
+ */
+class FakeWindow extends EventEmitter {
+  destroyed = false
+  readonly removed: unknown[] = []
+  readonly contentView = {
     addChildView: () => undefined,
-    removeChildView: () => undefined,
-  },
+    removeChildView: (view: unknown) => {
+      this.removed.push(view)
+    },
+  }
+
+  isDestroyed(): boolean {
+    return this.destroyed
+  }
+
+  /** What closing a window does, in the order Electron does it. */
+  close(): void {
+    this.destroyed = true
+    this.emit('closed')
+  }
 }
+
+let fakeWindow = new FakeWindow()
 
 vi.mock('electron', () => ({
   app: { getPath: () => USER_DATA },
@@ -153,7 +176,8 @@ vi.mock('electron', () => ({
   WebContentsView: FakeWebContentsView,
 }))
 
-const { destroyAllBrowserTabs, readCaptureRect, registerBrowserIpc } = await import('./browser-tab')
+const { destroyAllBrowserTabs, readCaptureRect, registerBrowserIpc, shouldComposite } =
+  await import('./browser-tab')
 const { GUEST_CANCEL_CHANNEL, GUEST_ELEMENT_CHANNEL } = await import('./browser-preload')
 
 type Handler = (event: unknown, ...args: unknown[]) => unknown
@@ -240,6 +264,9 @@ beforeEach(() => {
   rejectLoads = false
   captureFails = false
   host = new FakeWebContents()
+  // A fresh window per test as well as a fresh host: the module watches each
+  // window once, and a window carried over would arrive already closed.
+  fakeWindow = new FakeWindow()
 })
 
 afterAll(() => {
@@ -592,6 +619,140 @@ describe('the view’s backdrop', () => {
     expect(view.backgrounds.at(-1)).toBe('#ffffff')
     const refused = await openTab({ background: 'var(--bg-primary)' })
     expect(refused.view.backgrounds.at(-1)).toBe('#ffffff')
+  })
+})
+
+/**
+ * The bug of 2026-08-17, and the rule that ends it.
+ *
+ * He pressed ⌘R with a page open. The strip came back holding one terminal tab,
+ * the mode switch read Terminal, Claude Code's own `bypass permissions on
+ * (shift+tab to cycle)` was visible along the bottom of the window — and
+ * `example.com` was painted over all of it. Nothing had crashed: the renderer's
+ * document had been replaced, React unmount cleanups do not run for a page
+ * unload, and the host WebContents is the *same object* across a reload, so
+ * neither the panel's teardown nor the `destroyed` registration fired. The old
+ * `WebContentsView` simply stayed a child of the window, at its last rectangle,
+ * with its last visibility.
+ *
+ * These pin both halves. The rule is a pure function so it can be stated
+ * without a window; the integration cases drive the three events that make a
+ * renderer stop owning its views, because the rule is worthless if nothing
+ * reports the facts it reads.
+ */
+describe('a view cannot outlive the renderer that asked for it', () => {
+  /** A tab that is genuinely on screen: asked for, and with room to be in. */
+  async function shownTab(): Promise<{ id: string; view: FakeWebContentsView }> {
+    const { state, view } = await openTab({ url: 'http://localhost:3000' })
+    emit('browser:bounds', { sender: host }, state.id, { x: 0, y: 0, width: 800, height: 600 })
+    emit('browser:visible', { sender: host }, state.id, true)
+    expect(view.visible, 'the fixture never showed the view').toBe(true)
+    return { id: state.id, view }
+  }
+
+  it('hides and forgets a page when the renderer reloads', async () => {
+    const { id, view } = await shownTab()
+
+    // ⌘R. `did-start-navigation` on the *host* — the app's own renderer — with a
+    // real document swap. This is the exact event the old code never listened
+    // for, and the WebContents is deliberately not destroyed here because a
+    // reload does not destroy it.
+    host.emit('did-start-navigation', {
+      url: 'file:///app/index.html',
+      isMainFrame: true,
+      isSameDocument: false,
+    })
+
+    expect(view.visible, 'the page was left composited over the reloaded window').toBe(false)
+    expect(await invoke('browser:state', {}, id)).toBeNull()
+    expect(host.destroyed, 'a reload must not be mistaken for a destroyed renderer').toBe(false)
+  })
+
+  it('hides and forgets a page when the renderer process dies', async () => {
+    // A crashed renderer is replaced in place, so again nothing is destroyed and
+    // again the view would otherwise float over whatever came back.
+    const { id, view } = await shownTab()
+    host.emit('render-process-gone', {}, { reason: 'crashed' })
+    expect(view.visible).toBe(false)
+    expect(await invoke('browser:state', {}, id)).toBeNull()
+  })
+
+  it('hides and forgets a page when the window closes under it', async () => {
+    const { id, view } = await shownTab()
+    fakeWindow.close()
+    expect(view.visible).toBe(false)
+    expect(await invoke('browser:state', {}, id)).toBeNull()
+  })
+
+  it('leaves the page alone for a navigation that owns nothing', async () => {
+    // A fragment link and a subframe are not the document being replaced. If
+    // either counted, the browser panel would tear itself down for an anchor.
+    const { id, view } = await shownTab()
+
+    host.emit('did-start-navigation', {
+      url: 'file:///app/index.html#settings',
+      isMainFrame: true,
+      isSameDocument: true,
+    })
+    host.emit('did-start-navigation', {
+      url: 'https://ads.example/frame',
+      isMainFrame: false,
+      isSameDocument: false,
+    })
+
+    expect(view.visible).toBe(true)
+    expect(await invoke('browser:state', {}, id)).not.toBeNull()
+  })
+
+  it('watches a renderer once, however many tabs it opens', async () => {
+    // Every `browser:create` calls the watcher, so an unguarded registration
+    // would add a listener per tab — the `MaxListenersExceededWarning` that
+    // `web-contents-teardown.ts` exists to have removed, reintroduced here.
+    await openTab({ url: 'http://localhost:3000' })
+    await openTab({ url: 'http://localhost:5173' })
+    await openTab({ url: 'http://localhost:8080' })
+    expect(host.listenerCount('did-start-navigation')).toBe(1)
+    expect(host.listenerCount('render-process-gone')).toBe(1)
+  })
+
+  it('will not show a page the renderer asks for after its document has moved on', async () => {
+    /*
+     * The clause that does not depend on any teardown having run.
+     *
+     * Everything above destroys the tab, so it also proves the destroy. This one
+     * proves the *rule*: even with a live host, a live window, room on screen and
+     * the renderer asking for it, a view stamped with a document that is no
+     * longer the current one is never composited.
+     */
+    const asked = {
+      wanted: true,
+      width: 800,
+      height: 600,
+      hostAlive: true,
+      windowAlive: true,
+      bornInto: 0,
+      hostDocument: 0,
+    }
+    expect(shouldComposite(asked)).toBe(true)
+    expect(shouldComposite({ ...asked, hostDocument: 1 })).toBe(false)
+  })
+
+  it('refuses on every other ground on its own', () => {
+    const asked = {
+      wanted: true,
+      width: 800,
+      height: 600,
+      hostAlive: true,
+      windowAlive: true,
+      bornInto: 3,
+      hostDocument: 3,
+    }
+    expect(shouldComposite({ ...asked, wanted: false })).toBe(false)
+    expect(shouldComposite({ ...asked, hostAlive: false })).toBe(false)
+    expect(shouldComposite({ ...asked, windowAlive: false })).toBe(false)
+    // A zero-sized view still paints a white sliver at its origin.
+    expect(shouldComposite({ ...asked, width: 0 })).toBe(false)
+    expect(shouldComposite({ ...asked, height: 0 })).toBe(false)
   })
 })
 

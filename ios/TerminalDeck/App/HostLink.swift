@@ -153,6 +153,32 @@ final class HostLink: Identifiable {
         self?.transport?.send(message) ?? false
     }
 
+    /**
+     * This machine's copilot.
+     *
+     * Built eagerly rather than on first use, unlike the tunnel and the upload,
+     * and the difference is what each of the three *is*. Those two are a live
+     * transfer that exists only while something is happening; this is a
+     * standing fact about the machine — whether it has a copilot, and what this
+     * device may do with it — that has to be answerable the moment the session
+     * list draws its first row. A lazily built one would report "not offered"
+     * on the frame before anybody asked it, which is the wrong answer for a
+     * machine that offers it.
+     */
+    @ObservationIgnored
+    private(set) lazy var copilot: CopilotLink = {
+        let link = CopilotLink(wire: WireProxy { [weak self] message in
+            self?.transport?.send(message) ?? false
+        })
+        // One error surface per machine. A second `lastError` on the copilot
+        // would be a second banner that can disagree with this one about which
+        // of them is showing.
+        link.onError = { [weak self] sentence in
+            self?.lastError = sentence
+        }
+        return link
+    }()
+
     private var bridges: [String: TerminalBridge] = [:]
     /// Confirmed by the host.
     private var attached: Set<String> = []
@@ -224,6 +250,26 @@ final class HostLink: Identifiable {
     var canUseDevServers: Bool {
         connection.isLive && (transport?.capabilities.contains(WireCapability.devserver) ?? false)
     }
+
+    /**
+     * What this phone may do with this machine's copilot.
+     *
+     * **Not** gated on `connection.isLive`, which is the one capability here
+     * that is not, and the asymmetry is deliberate. The others gate a *button*:
+     * New Session over a dead socket is a tap that cannot work, so it goes. This
+     * gates a whole screen, and a screen that vanished for the three seconds of
+     * a reconnect — inside the five-second window where `ConnectionGrace`
+     * deliberately says nothing — would be a feature disappearing with no
+     * explanation anywhere on the phone.
+     *
+     * Nothing is lost by leaving it up, because the controls on it cannot lie:
+     * `Transport.send` refuses rather than queues when the socket is down, so
+     * every act on that screen answers *"Not connected — that was not sent"*
+     * rather than appearing to work. The conversation underneath is history and
+     * stays true; the state and the countdowns are cleared by
+     * `CopilotLink.connectionLost`.
+     */
+    var copilotAccess: CopilotAccess { copilot.access }
 
     var endpointSummary: String { credential.endpoint.summary }
 
@@ -303,6 +349,11 @@ final class HostLink: Identifiable {
         // What a pull genuinely fixes is a folder whose reply was lost with a
         // socket the app has since replaced.
         askDevServers()
+        // The same argument one feature over. The copilot's state, its sessions
+        // and its pending questions are all pushed while the socket is up, so
+        // this is for the answer that was lost with a socket rather than for a
+        // timer that would be polling something already being answered.
+        copilot.refresh()
     }
 
     /// Take this machine down without forgetting it — the app is closing, or the
@@ -324,6 +375,11 @@ final class HostLink: Identifiable {
         // empty one across a stop would leave a phone refusing to offer New
         // Session on a machine that has simply not been asked yet.
         granted = nil
+        // And the copilot with it, for a sharper version of the same reason: a
+        // permission remembered across a teardown is a permission this phone
+        // would draw controls for against a machine it has not been readmitted
+        // to. `stop()` is what an unpair and a re-pair both run.
+        copilot.forget()
         attached = []
         wanted = []
         bridges = [:]
@@ -809,6 +865,11 @@ final class HostLink: Identifiable {
                 // They come back on the next `welcome`, which re-subscribes.
                 devServers = [:]
                 upload?.connectionLost(state.detail)
+                // Its state and its pending questions, and nothing else. See
+                // the header of `CopilotLink`: what was said and done survives a
+                // drop because it happened; a countdown over a dead channel is a
+                // lie with a clock on it.
+                copilot.connectionLost()
             }
             if state.isLive && !wasLive {
                 for id in wanted {
@@ -839,13 +900,23 @@ final class HostLink: Identifiable {
         if upload?.receive(message) == true { return }
 
         switch message {
-        case let .welcome(_, _, _, _, list, capabilities, platform, folders):
+        case let .welcome(_, _, _, _, list, capabilities, platform, folders, copilotOffer):
             sessions = list
             lastActivity = activity
             lastError = nil
             hostPlatform = platform
             granted = folders
             if capabilities.contains(WireCapability.localhost) { transport?.send(.ports) }
+            // The grant and the subscription together, on every welcome, for the
+            // same reason `askDevServers` is called on every welcome: the
+            // desktop's subscription belongs to the connection this frame
+            // arrived on and a reconnect knows nothing about the last one.
+            //
+            // Both halves of the offer go in, not just the grant: whether the
+            // `copilot` field was there at all is what tells this phone the
+            // machine really has one, and it is a different question from
+            // whether the capability list said so. See `CopilotOffer`.
+            copilot.welcomed(capabilities: capabilities, offer: copilotOffer)
             // After `granted` is set, because the folders this asks about are
             // read from it — and on every welcome, because the desktop's
             // subscription belongs to the connection this welcome arrived on.
@@ -973,17 +1044,60 @@ final class HostLink: Identifiable {
         case .uploadReady, .uploadAck, .uploadDone, .uploadFailed:
             break
 
+        /*
+         * The copilot frames, forwarded one for one.
+         *
+         * Forwarded here rather than given first refusal above the switch, the
+         * way the tunnel and the upload are. Those two get first refusal because
+         * they are the chattiest thing on this socket by an order of magnitude
+         * and every byte frame belongs to one object; these are seven frames
+         * that arrive at human speed, and routing them through the switch means
+         * the compiler still checks that every message this app can receive has
+         * somewhere to go.
+         */
+        case let .copilotState(state):
+            copilot.apply(state: state)
+
+        case let .copilotChat(run, messages, reset):
+            copilot.apply(chat: run, messages: messages, reset: reset)
+
+        case let .copilotTool(row):
+            copilot.apply(tool: row)
+
+        case let .copilotSessions(rows):
+            copilot.apply(sessions: rows)
+
+        case let .copilotLog(rows, more):
+            copilot.apply(log: rows, more: more)
+
+        case let .copilotPending(questions):
+            copilot.apply(pending: questions)
+
+        case let .copilotGrant(grant):
+            // A revoke lands here without a reconnect, which is the whole point
+            // of the frame — the *rule* is already live because the desktop
+            // re-reads the grant on every call, so all this does is stop the
+            // phone offering a control whose only outcome is a refusal.
+            //
+            // `pushed` rather than the plain `apply`, because a grant that
+            // arrives as a frame is also proof this machine has a copilot, and
+            // the same grant arriving inside a `welcome` is not.
+            copilot.apply(pushed: grant)
+
         case .pong:
             break
         }
     }
 }
 
-/// See `HostLink.wire`. One class for both protocols, because they ask for the
-/// same single method and a second identical proxy would be a second thing to
-/// keep in step.
+/// See `HostLink.wire`. One class for all three protocols, because they ask for
+/// the same single method and a second identical proxy would be a second thing
+/// to keep in step. The protocols stay separate types even so: what a tunnel may
+/// send and what a copilot may send are different sets, and one protocol shared
+/// by all of them would be the general "send this frame" seam a view could
+/// reach — which is the thing `HostLink.answer` is written not to be.
 @MainActor
-final class WireProxy: TunnelWire, UploadWire {
+final class WireProxy: TunnelWire, UploadWire, CopilotWire {
     private let deliver: (ClientMessage) -> Bool
 
     init(_ deliver: @escaping (ClientMessage) -> Bool) {

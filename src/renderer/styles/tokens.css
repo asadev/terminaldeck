@@ -245,6 +245,34 @@
      to have to excuse. */
   --badge-fg: #ffffff;
 
+  /* The scrim the copilot's focus overlay lays over everything outside the box
+     it is pointing at, and the glow just outside that box.
+
+     The alpha is a budget with two ends, not a taste call, and both ends are
+     asserted in `driving/dim-budget.test.ts` against these very declarations.
+     Too light and there is no focus; too heavy and the surroundings stop being
+     readable, which the requirement forbids in those words — dim is emphasis,
+     not censorship.
+
+     0.26 is where both hold. It keeps 51% of the brighter element's luminance
+     (unmistakably dulled) while the quietest pairing the sheet guarantees,
+     --text-muted on a chrome surface, still measures 3.9:1 here and 3.2:1 in
+     the dark theme — above the 3:1 that WCAG sets for large text, which is the
+     line under which glyph shapes stop resolving.
+
+     The same value in both themes, which is worth a sentence because the first
+     design called for 0.22 light and 0.45 dark. A black scrim multiplies sRGB
+     channels by (1 - alpha) whichever element is the bright one, so the
+     apparent dimming is identical in the two themes; what differs is the
+     headroom, and it differs the other way round. Light can go to about 0.44
+     before its worst pairing drops under 3:1 and dark only to about 0.28, so
+     the shared number is dark's. At 0.45 the dark theme's muted text measures
+     2.2:1 — that is not dim, it is gone. Both are declared rather than one
+     inherited, so the two can diverge later without a code change and so the
+     test can read a value per theme. */
+  --drive-dim: rgba(0, 0, 0, 0.26);
+  --drive-ring-glow: rgba(26, 102, 196, 0.22);
+
   /* Liquid glass. The sheen is the part that matters: opacity alone over an
      empty area just reads as flat paint (see rule 6.2 in the build rules). */
   --material-bg: rgba(250, 250, 250, 0.72);
@@ -382,6 +410,14 @@
   /* Dark ink, not white — see the light theme's note. `--color-critical` is a
      light coral here, so this is the same trade `--accent-fg` makes. */
   --badge-fg: #0f1114;
+
+  /* The focus overlay's scrim and ring glow — see the light theme's note for
+     the budget, and for why this is the same alpha rather than the heavier one
+     a dark theme looks like it should want. The glow follows this theme's own
+     accent, which is the icon's blue at full brightness rather than the walked-
+     down blue paper needs. */
+  --drive-dim: rgba(0, 0, 0, 0.26);
+  --drive-ring-glow: rgba(59, 143, 238, 0.3);
 
   /*
    * Flat. The dark theme's chrome is one colour from top to bottom.

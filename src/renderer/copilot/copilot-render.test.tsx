@@ -59,7 +59,7 @@ const state = (over: Partial<CopilotStateView> = {}): CopilotStateView => ({
   },
   startedAt: 1,
   problem: null,
-  confined: true,
+  recordsHeld: true,
   ...over,
 })
 
@@ -110,19 +110,32 @@ describe('the pinned sidebar entry', () => {
 
 /* ------------------------------------------------------------- the view -- */
 
-describe('the first run', () => {
+describe('a signed-out account', () => {
   const html = renderToStaticMarkup(
     <CopilotView copilot={copilot('first-run')} activity={{ deckControlActivity: async () => [] }} />,
   )
 
-  it('says why it is signed out, in the words that make it not a bug', () => {
-    expect(html).toContain('sign itself in')
-    expect(html).toContain('keychain')
-    expect(html).toContain('boundary working')
+  it('says it is an ordinary account rather than a login of the copilot’s own', () => {
+    /*
+     * This block used to assert the opposite paragraph — a keychain closed to a
+     * sandboxed process, a login the copilot keeps inside its own boundary, "the
+     * boundary working, not a fault". All of that was true of a jailed copilot,
+     * and it was the single largest cost of jailing it: it started signed out on
+     * every machine, every time.
+     *
+     * Now this state means what it means for any other session: that account is
+     * signed out. The pinned words are the ones that stop a person hunting for a
+     * copilot-specific login that does not exist.
+     */
+    expect(html).toContain('runs as one of your accounts')
+    expect(html).toContain('no login of its own')
+    expect(html).toContain('Settings → Accounts')
+    expect(html).not.toContain('keychain')
+    expect(html).not.toContain('boundary working')
   })
 
   it('tells the reader what to actually do', () => {
-    expect(html).toContain('prints a URL')
+    expect(html).toContain('/login')
     expect(html).toContain('paste the code back')
   })
 
@@ -180,19 +193,30 @@ describe('the empty state', () => {
   })
 })
 
-describe('a machine that cannot hold it', () => {
+describe('a start that failed', () => {
+  /*
+   * This block used to cover a machine with no confinement mechanism, where the
+   * copilot refused to start at all — every Windows machine. That refusal is
+   * gone: an ordinary session needs no boundary in order to exist. What is left
+   * is the ordinary failure, which still has to reach the screen as a sentence
+   * rather than as a page that silently offers a button again.
+   */
   const html = renderToStaticMarkup(
     <CopilotView
-      copilot={copilot('unavailable', {
-        state: state({ status: 'unavailable', sessionId: null, problem: 'No folder boundary here.' }),
+      copilot={copilot('stopped', {
+        state: state({
+          status: 'stopped',
+          sessionId: null,
+          problem: 'The copilot runs on Claude Code, which is not installed on this machine.',
+        }),
       })}
       activity={{ deckControlActivity: async () => [] }}
     />,
   )
 
-  it('says why instead of drawing a button that would be refused', () => {
-    expect(html).toContain('No folder boundary here.')
-    expect(html).not.toContain('Start it</button>')
+  it('says why, and still offers the button that would retry it', () => {
+    expect(html).toContain('which is not installed on this machine')
+    expect(html).toContain('Start it')
   })
 })
 

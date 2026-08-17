@@ -1,5 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useEvery } from '../schedule'
+import { useMemo } from 'react'
 import { Modal } from './Modal'
 import { PageEmpty } from './PageEmpty'
 import './AlertsPanel.css'
@@ -32,6 +31,7 @@ export type AlertKind =
   | 'session-blocked'
   | 'provider-missing'
   | 'heavy-session'
+  | 'loop'
   | 'dirty-tree'
 
 export interface AlertAction {
@@ -59,14 +59,27 @@ export interface AlertReport {
   scannedAt: number
 }
 
-/** The slice of the preload bridge this panel needs. */
-export interface AlertsBridge {
-  projectAlerts(projectPath: string): Promise<AlertReport>
-}
-
+/**
+ * Everything this panel draws, and none of it fetched here.
+ *
+ * The scan used to live in this component, and moving it out is what made the
+ * bell's count possible: this panel only exists while the sheet is open, so
+ * while it owned the scan there was nothing producing a report the rest of the
+ * time and nothing the sidebar could count. `alerts-feed.ts` owns it now, one
+ * feed per window, and both surfaces read that one report — which is also why
+ * the dot and the list can no longer disagree about how many there are.
+ */
 export interface AlertsPanelProps {
-  /** Absolute path of the project to check. */
-  projectPath: string
+  /** The latest report for the project, or null before the first scan lands. */
+  report: AlertReport | null
+  /** A scan is running: the button says so and is disabled. */
+  busy?: boolean
+  /** The last scan's failure, shown in place of the summary line. */
+  error?: string | null
+  /** Is there a main process to ask at all? False draws the explanation. */
+  available?: boolean
+  /** "Check again". Absent leaves the panel read-only rather than dead. */
+  onRescan?: () => void
   /** Invoked when the user takes an alert's action. */
   onAction?: (action: AlertAction, alert: Alert) => void
   /**
@@ -76,25 +89,9 @@ export interface AlertsPanelProps {
    * nothing read it, so turning it off changed nothing on this page.
    */
   showInsights?: boolean
-  /** Injectable for tests; defaults to the preload bridge on `window.deck`. */
-  bridge?: AlertsBridge
-  /** Re-scan interval. 0 disables it. Defaults to 60s. */
-  refreshMs?: number
 }
 
 /* ---------------------------------------------------------------- helpers -- */
-
-/**
- * Read defensively: alerts are wired into the preload separately, so the panel
- * has to explain itself rather than crash if it mounts first.
- */
-function resolveBridge(): AlertsBridge | null {
-  // Tests render this to static markup, where there is no window at all.
-  if (typeof window === 'undefined') return null
-  const host = (window as unknown as { deck?: Partial<AlertsBridge> }).deck
-  if (!host || typeof host.projectAlerts !== 'function') return null
-  return host as AlertsBridge
-}
 
 export const SEVERITY_ORDER: readonly AlertSeverity[] = ['critical', 'warning', 'info']
 
@@ -115,79 +112,29 @@ export interface AlertGroup {
   alerts: Alert[]
 }
 
-/* ------------------------------------------------------------------ gate -- */
-
-/**
- * Latest-wins gate around the panel's async scan.
- *
- * Two things went wrong without it, and both are invisible until they bite:
- *
- *  - **A superseded scan could still write.** Switching project cleared the
- *    report and started a new scan, but the *previous* project's scan was still
- *    in flight; whichever finished last won. A slow project handed its alerts
- *    to a different project's panel — naming sessions that are not in front of
- *    the user — which is exactly what the effect's comment claims it prevents.
- *  - **Refreshes stacked.** The 60-second interval fired regardless of whether
- *    the last scan had finished, and a scan reads every transcript in the
- *    project. On a folder where one scan takes longer than the interval, that
- *    is unbounded pile-up on the main process.
- *
- * Kept as a plain object rather than refs inside the component so it can be
- * tested without a DOM — this project's renderer tests render to static markup
- * and never run an effect.
- */
-export interface ScanGate {
-  /** Claim the next token. Anything already running is superseded. */
-  begin(): number
-  /** May the scan holding `token` write what it found? */
-  isCurrent(token: number): boolean
-  /** Mark the scan finished, whatever its outcome. */
-  end(): void
-  /** Is any scan still running? The interval skips its tick when one is. */
-  isBusy(): boolean
-  /** Supersede everything in flight — a project switch, or unmount. */
-  invalidate(): void
-}
-
-export function createScanGate(): ScanGate {
-  let latest = 0
-  let running = 0
-  return {
-    begin() {
-      latest += 1
-      running += 1
-      return latest
-    },
-    isCurrent(token) {
-      return token === latest
-    },
-    end() {
-      running = Math.max(0, running - 1)
-    },
-    isBusy() {
-      return running > 0
-    },
-    invalidate() {
-      latest += 1
-    },
-  }
-}
-
 /**
  * The alert kinds this panel *infers* rather than observes.
  *
  * The distinction the setting draws: "provider missing" and "dirty tree" are
  * facts about the project that are true whether or not anyone is working, and
- * hiding them would hide a broken setup. The four below are read out of what
+ * hiding them would hide a broken setup. The five below are read out of what
  * sessions have been doing — a context window filling up, a session blocked on
- * a question, a run that moved more tokens than the rest put together — and
- * those are the ones somebody may not want raised without being asked.
+ * a question, a run that moved more tokens than the rest put together, an agent
+ * retrying the same failing tool — and those are the ones somebody may not want
+ * raised without being asked.
+ *
+ * `loop` belongs here and not in the other group, even though it is the most
+ * actionable alert in the list. It is an *inference*: `alerts.ts` derives it
+ * from tool names and outcomes, with no view of the arguments, so it is a strong
+ * hint rather than a fact about the project — and the switch exists precisely so
+ * that somebody who does not want inferences raised at them gets none.
  */
 export const INSIGHT_ALERT_KINDS: ReadonlySet<AlertKind> = new Set<AlertKind>([
   'context-bloat',
   'pre-context-bloat',
   'session-blocked',
   'heavy-session',
+  'loop',
 ])
 
 export function isInsightAlert(alert: Alert): boolean {
@@ -247,7 +194,23 @@ export function AlertRow({
 }) {
   const action = alert.action
   return (
-    <li className="alerts-item" data-severity={alert.severity} data-kind={alert.kind}>
+    <li
+      className="alerts-item"
+      data-severity={alert.severity}
+      data-kind={alert.kind}
+      /*
+       * How the copilot's focus overlay says "this alert".
+       *
+       * On the `<li>` rather than on `.alerts-body`, so the box encloses the
+       * severity dot as well as the words. The dot is the only part of the row
+       * that carries the severity, and a highlight that framed the sentence and
+       * left the dot outside would be pointing at half of what the row says.
+       *
+       * `alert.id` is the same key the list already renders on, so there is no
+       * second identity here to fall out of step with the first.
+       */
+      data-drive-anchor={`alert:${alert.id}`}
+    >
       <span className="alerts-dot" aria-hidden="true" />
       <div className="alerts-body">
         <p className="alerts-title">{alert.title}</p>
@@ -277,83 +240,23 @@ export function AlertRow({
 
 /* ------------------------------------------------------------------ panel -- */
 
-/**
- * How often to rescan, and why this one cannot be an event.
- *
- * Most of what this panel reports has a push behind it — a transcript that
- * grew, a working tree that changed — but two of the rules do not, and they are
- * the two worth interrupting for. `BLOCKED_WARNING_MS` and
- * `BLOCKED_CRITICAL_MS` in `src/main/alerts.ts` turn a session that asked a
- * question into an alert after ten minutes and a louder one after forty-five,
- * and a session sitting on an unanswered question is by definition a session
- * that is not doing anything. Nothing happens. No file changes, no process
- * writes, no channel fires — the alert comes into existence purely because time
- * passed, and the only thing that can notice that is a clock.
- *
- * A minute is a tenth of the finest threshold, so the alert is never more than
- * that late. It runs on the shared tick rather than an interval of its own, and
- * the shared tick does not run at all behind a hidden window — an alert nobody
- * is looking at can wait for the moment they look.
- */
-const DEFAULT_REFRESH_MS = 60_000
-
 export function AlertsPanel({
-  projectPath,
+  report,
+  busy = false,
+  error = null,
+  available = true,
+  onRescan,
   onAction,
-  bridge,
-  refreshMs,
   showInsights = true,
 }: AlertsPanelProps) {
-  const host = useMemo(() => bridge ?? resolveBridge(), [bridge])
-  const [report, setReport] = useState<AlertReport | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
-
-  const gate = useMemo(() => createScanGate(), [])
-
-  const scan = useCallback(async () => {
-    if (!host) return
-    const token = gate.begin()
-    setBusy(true)
-    try {
-      const next = await host.projectAlerts(projectPath)
-      if (!gate.isCurrent(token)) return
-      setReport(next)
-      setError(null)
-    } catch (err) {
-      if (!gate.isCurrent(token)) return
-      setError(err instanceof Error ? err.message : 'Could not check this project.')
-    } finally {
-      gate.end()
-      // A superseded scan leaves `busy` alone: the one that superseded it is
-      // still running, and clearing the flag would re-enable the button.
-      if (gate.isCurrent(token)) setBusy(false)
-    }
-  }, [gate, host, projectPath])
-
-  useEffect(() => {
-    // A project switch must not leave the previous project's alerts on screen —
-    // they name sessions that are not in front of the user any more. Clearing
-    // the state is not enough on its own: the old project's scan is still in
-    // flight and will happily write its result over the new project's.
-    gate.invalidate()
-    setReport(null)
-    setError(null)
-    void scan()
-    return () => gate.invalidate()
-  }, [gate, scan])
-
-  const interval = refreshMs ?? DEFAULT_REFRESH_MS
-  useEvery(interval > 0 ? interval : null, () => {
-    // A scan that outlasts its own period must not have another stacked on top
-    // of it — each one reads every transcript in the project.
-    if (!gate.isBusy()) void scan()
-  })
-
   /**
    * Filtered here rather than at fetch time: the switch can be flipped while
    * this page is open, and re-reading every transcript in the project to hide
    * four rows would be absurd.
+   *
+   * The sidebar's count applies the same filter to the same report, so the dot
+   * and this list are always describing the same set of alerts — which is the
+   * property that only holds because there is one feed behind both.
    */
   const shown = useMemo(
     () => (report ? withInsights(report, showInsights) : null),
@@ -367,7 +270,7 @@ export function AlertsPanel({
      second sentence saying the same thing ten viewport-percent below it. When
      there is nothing to list there is nothing to head, so the page is one
      composed empty state and the rescan button moves into it. */
-  const quiet = host && shown !== null && shown.alerts.length === 0 && !error
+  const quiet = available && shown !== null && shown.alerts.length === 0 && !error
 
   return (
     <section className="alerts" aria-label="Project alerts">
@@ -381,15 +284,15 @@ export function AlertsPanel({
           <button
             type="button"
             className="alerts-rescan"
-            onClick={() => void scan()}
-            disabled={busy || !host}
+            onClick={onRescan}
+            disabled={busy || !available || !onRescan}
           >
             {busy ? 'Checking…' : 'Check again'}
           </button>
         </header>
       )}
 
-      {!host ? (
+      {!available ? (
         <PageEmpty icon={ALERTS_GLYPH} title="Alerts are not available here">
           Alerts are not connected to the main process yet.
         </PageEmpty>
@@ -401,7 +304,11 @@ export function AlertsPanel({
              one in the app is a phrase without one — one treatment includes
              the punctuation. */
           title="Nothing needs your attention"
-          action={{ label: busy ? 'Checking…' : 'Check again', onClick: () => void scan(), busy }}
+          action={
+            onRescan
+              ? { label: busy ? 'Checking…' : 'Check again', onClick: onRescan, busy }
+              : undefined
+          }
         >
           Context is healthy, nothing is blocked, and the tools this project uses are installed.
         </PageEmpty>
@@ -439,19 +346,19 @@ export function AlertsPanel({
 
 /* ----------------------------------------------------------------- window -- */
 
-export interface AlertsWindowProps extends Omit<AlertsPanelProps, 'projectPath'> {
+export interface AlertsWindowProps extends AlertsPanelProps {
   open: boolean
   onClose(): void
   /**
-   * The project to check, or null when nothing is open.
+   * The project the report is about, or null when nothing is open.
    *
-   * Nullable where the panel's own prop is not, and that is the whole
-   * difference between a dialog and a page: `PanelView` gated every page behind
-   * "open a project first" and drew `NeedsProject` in front of the ones that
-   * needed one. There is no page any more, so this dialog has to answer the
-   * same question itself — the bell is on the rail from the first launch, and
-   * pressing it with no folder open must say why it has nothing rather than
-   * mount a panel that would scan the string "null".
+   * The dialog needs this even though it no longer fetches anything: `PanelView`
+   * gated every page behind "open a project first" and drew `NeedsProject` in
+   * front of the ones that needed one. There is no page any more, so this dialog
+   * has to answer the same question itself — the bell is on the rail from the
+   * first launch, and pressing it with no folder open must say why it has
+   * nothing rather than draw a panel whose empty state reads as an all-clear
+   * about a project that is not there.
    */
   projectPath: string | null
 }
@@ -517,7 +424,7 @@ export function AlertsWindow({ open, onClose, projectPath, ...panel }: AlertsWin
           what it is waiting on you for. Open one and this will have something to say.
         </PageEmpty>
       ) : (
-        <AlertsPanel projectPath={projectPath} {...panel} />
+        <AlertsPanel {...panel} />
       )}
     </Modal>
   )

@@ -1,8 +1,12 @@
-What to test — 0.2.0, build 2608170342
+What to test — 0.3.0, build 2608170549
 
-Same version number as the build you have, new build. 0.2.0 went up on 16 August
-at 19:36 and everything below was written after it, so your phone still looks
-exactly like the build before it.
+A new version number, not just a new build. The build you have is 0.2.0 from
+16 August at 19:36; the desktop has since tagged 0.3.0, and the phone follows it
+because they are one product — if the two numbers disagree you cannot tell at a
+glance whether your phone is too old to talk to your Mac.
+
+So everything below is new to you. The previous build looked identical to the
+one before it; this one does not.
 
 THREE TABS, MACHINES INSIDE SETTINGS
 Sessions, Localhost, Settings. Machines is a row in Settings that pushes to the
@@ -57,6 +61,28 @@ checked it — a UI test drives that exact gesture against a real Mac and passes
 The other half is on you: hold still for seven tenths of a second and it must
 select the word, extend on a drag, and offer Copy that really lands on the
 pasteboard. No UI test can hold a finger that long.
+
+THE COPILOT, IF YOUR MAC HAS ONE YET
+This is the build the release was held for. On the Sessions tab, above
+everything, there is a Copilot row — but only when the Mac you are looking at
+actually has a copilot to show. Today's desktop does not, so on 0.3.0 of the Mac
+app you will see nothing at all there, and that is correct rather than broken:
+the phone does not draw a feature it cannot reach, and it does not send you
+looking for a switch that machine has not got.
+
+When the Mac side lands, three things to look at. A phone that has not been
+given access says so plainly and names where the switch is, in Settings under
+Remote, on this phone's own card — it does not hide the feature and it does not
+draw a text field that would be refused. A phone that has been given "watch"
+shows what the copilot is doing, what it started and what it was refused, and no
+composer. A phone given "ask it to work" gets a Start button that says what it
+costs before you press it, and then a text field.
+
+And the one to be hardest on: if a confirmation is waiting at the Mac, the phone
+shows it with the countdown running, and there is no Allow and no Refuse on it.
+That is deliberate and it is not coming — a phone approving what a phone asked
+for is the check doing its own checking. If you ever see a button on that card,
+it is a bug.
 
 NOT IN THIS BUILD, THAT YOU ASKED FOR
 - Swipe on the sessions list. Closing a session needs a verb the wire does not

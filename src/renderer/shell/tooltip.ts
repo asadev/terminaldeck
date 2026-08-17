@@ -336,6 +336,17 @@ const GAP = 6
 /** Between the bubble and the window's edges. Never smaller than this. */
 const EDGE = 8
 
+/** Do two boxes share any area? Touching edges do not count. */
+function boxesMeet(a: Rect, b: Rect): boolean {
+  if (a.width <= 0 || a.height <= 0 || b.width <= 0 || b.height <= 0) return false
+  return (
+    a.left < b.left + b.width &&
+    b.left < a.left + a.width &&
+    a.top < b.top + b.height &&
+    b.top < a.top + a.height
+  )
+}
+
 /**
  * Where to put the bubble, in viewport coordinates.
  *
@@ -345,24 +356,43 @@ const EDGE = 8
  * above — flipping on a window one pixel too short reads as a glitch, and a
  * bubble that is slightly tight at the bottom does not.
  *
+ * ## `blind`, and why a tooltip has to know about it
+ *
+ * Rectangles the renderer's own pixels cannot be seen in. There is exactly one
+ * kind in this app and it is not a style problem: a browser page is a
+ * `WebContentsView`, a **native child view of the window**, composited above the
+ * entire renderer. No `z-index`, no portal and no stacking context puts HTML on
+ * top of one — `browser/overlay-watch.ts` is the essay, and it has been
+ * rediscovered twice.
+ *
+ * Measured in the built app on 2026-08-17: the browser toolbar's buttons end
+ * 9px above the page and a bubble needs 24, so hovering Cookies put 21 of the
+ * bubble's 24 pixels under the page and left a 3px sliver. The module that
+ * decides whether to hide the page cannot fix that — hiding a 587×644 website
+ * to reveal a hint is the bug it was just stopped from doing — so the fix is
+ * here, where the bubble is put somewhere it can be read. It is the same flip
+ * this function already does at the bottom of the window, for the same reason:
+ * there is no room on that side.
+ *
+ * The flip only happens when the other side is genuinely clear. A bubble with
+ * nowhere good to go keeps the placement it would have had, because moving it
+ * somewhere equally invisible would only make it harder to explain.
+ *
  * Coordinates are rounded because this is text on glass: a bubble at 41.5px
  * renders every glyph across a half-pixel boundary, which on a non-Retina
  * display is visible as a blurred line and on Retina is visible as a
  * blurred line half the time.
  */
-export function placeTip(anchor: Rect, tip: Size, view: Size): Placed {
+export function placeTip(
+  anchor: Rect,
+  tip: Size,
+  view: Size,
+  blind: readonly Rect[] = [],
+): Placed {
   const below = anchor.top + anchor.height + GAP
   const above = anchor.top - GAP - tip.height
   const roomBelow = view.height - (below + tip.height) - EDGE
   const roomAbove = above - EDGE
-
-  const flip = roomBelow < 0 && roomAbove > roomBelow
-  const side = flip ? 'above' : 'below'
-  const wanted = flip ? above : below
-  // Clamped even on the side that was chosen for having the room: a viewport
-  // shorter than the bubble has no good answer, and hanging off the top edge is
-  // the one answer that loses the first line of text.
-  const top = Math.min(Math.max(wanted, EDGE), Math.max(EDGE, view.height - tip.height - EDGE))
 
   const centred = anchor.left + anchor.width / 2 - tip.width / 2
   const rightmost = view.width - tip.width - EDGE
@@ -370,6 +400,33 @@ export function placeTip(anchor: Rect, tip: Size, view: Size): Placed {
   // the window would otherwise be clamped to a negative left and lose its
   // start, which is the half of a long path you actually need.
   const left = Math.min(Math.max(centred, EDGE), Math.max(EDGE, rightmost))
+
+  // Clamped even on the side that was chosen for having the room: a viewport
+  // shorter than the bubble has no good answer, and hanging off the top edge is
+  // the one answer that loses the first line of text.
+  const clamp = (wanted: number): number =>
+    Math.min(Math.max(wanted, EDGE), Math.max(EDGE, view.height - tip.height - EDGE))
+
+  let side: Placed['side'] = roomBelow < 0 && roomAbove > roomBelow ? 'above' : 'below'
+
+  if (blind.length > 0) {
+    // Judged on the placement that would actually be used, clamp included — an
+    // unclamped `above` can be off the top of the window, and asking whether a
+    // box nobody will ever see lands on a page is how this would answer the
+    // wrong question in the one case it exists for.
+    const boxOn = (at: Placed['side']): Rect => ({
+      left,
+      top: clamp(at === 'below' ? below : above),
+      width: tip.width,
+      height: tip.height,
+    })
+    const covered = (at: Placed['side']): boolean =>
+      blind.some((region) => boxesMeet(boxOn(at), region))
+    const other: Placed['side'] = side === 'below' ? 'above' : 'below'
+    if (covered(side) && !covered(other)) side = other
+  }
+
+  const top = clamp(side === 'below' ? below : above)
 
   return { left: Math.round(left), top: Math.round(top), side }
 }

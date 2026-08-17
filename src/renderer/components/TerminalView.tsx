@@ -5,6 +5,7 @@ import { SearchAddon } from '@xterm/addon-search'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { chordFor, formatChord } from '../keymap'
 import { subscribeTheme } from '../theme'
+import { registerTerminal } from '../driving/terminal-registry'
 
 interface Props {
   sessionId: string
@@ -240,12 +241,28 @@ export function TerminalView({
       term.options.theme = terminalTheme()
     })
 
+    /*
+     * Publish this terminal so the copilot's focus overlay can point at it.
+     *
+     * The overlay is a window-level surface with no React relationship to any
+     * pane — it draws one box over whichever session is on screen — so it needs
+     * a terminal it does not own and cannot be handed as a prop without
+     * threading a ref through four components that have no use for one.
+     * `driving/terminal-registry.ts` carries the argument in full.
+     *
+     * Registered here rather than beside `term.open()` above so it lands after
+     * the addons: the registry's geometry reads `.xterm-screen`, which only
+     * exists once xterm has built its DOM.
+     */
+    const unregister = registerTerminal(sessionId, { term, host })
+
     // Restore anything printed before this component mounted.
     void window.deck.getScrollback(sessionId).then((buf) => {
       if (buf) term.write(buf)
     })
 
     return () => {
+      unregister()
       offTheme()
       offData()
       offExit()

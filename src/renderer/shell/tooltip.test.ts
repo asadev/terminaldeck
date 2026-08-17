@@ -403,6 +403,73 @@ describe('placing the bubble', () => {
   })
 })
 
+/**
+ * Placing a bubble around a browser page.
+ *
+ * A page is a native view composited above the whole renderer, so a bubble that
+ * lands on one is painted over whatever its z-index says — see
+ * `browser/overlay-watch.ts`. Every number below was read off the built app on
+ * 2026-08-17, in a window 1440×920 with a page loaded at
+ * `{x: 864, y: 182, width: 568, height: 644}`: the browser toolbar's buttons
+ * are 26px tall at y=147, so a bubble hangs from y=179 and lands 21px inside
+ * the page.
+ */
+describe('placing the bubble around a native page view', () => {
+  const view = { width: 1440, height: 920 }
+  const page = { left: 864, top: 182, width: 568, height: 644 }
+  /** The `Cookies and site data` bubble, at the size it renders. */
+  const tip = { width: 136, height: 24 }
+  /** The Cookies button on the browser toolbar. */
+  const anchor = { left: 1394, top: 147, width: 26, height: 26 }
+
+  it('lands on the page when nothing tells it the page is there', () => {
+    // The state this fixes, kept as a test so the fix cannot be read as a
+    // no-op: with no blind region, the bubble goes below and 21 of its 24
+    // pixels are under the page.
+    const placed = placeTip(anchor, tip, view)
+    expect(placed.side).toBe('below')
+    expect(placed.top).toBe(179)
+    expect(placed.top + tip.height).toBeGreaterThan(page.top)
+  })
+
+  it('flips above the toolbar rather than under the page', () => {
+    const placed = placeTip(anchor, tip, view, [page])
+    expect(placed.side).toBe('above')
+    // 147 - 6 - 24
+    expect(placed.top).toBe(117)
+    expect(placed.top + tip.height).toBeLessThanOrEqual(page.top)
+  })
+
+  it('leaves a bubble that was never going to touch the page alone', () => {
+    // The sidebar, which is the overwhelming majority of the tooltips in this
+    // window. A blind region it does not reach must change nothing.
+    const row = { left: 16, top: 400, width: 240, height: 28 }
+    const plain = placeTip(row, tip, view)
+    expect(placeTip(row, tip, view, [page])).toEqual(plain)
+  })
+
+  it('stays put when both sides are under the page', () => {
+    /*
+     * Nothing good is available, so nothing changes. Moving a bubble to a
+     * second invisible position would cost the reader the one thing left —
+     * being able to say where it went.
+     */
+    const inside = { left: 1000, top: 400, width: 26, height: 26 }
+    const plain = placeTip(inside, tip, view)
+    expect(placeTip(inside, tip, view, [page])).toEqual(plain)
+  })
+
+  it('does not flip into a page that is above the control instead', () => {
+    // The mirror image, which a rule written only for the toolbar would get
+    // wrong: a page occupying the top of the window and a control below it.
+    const top = { left: 100, top: 0, width: 1200, height: 300 }
+    const control = { left: 500, top: 320, width: 40, height: 26 }
+    const placed = placeTip(control, tip, view, [top])
+    expect(placed.side).toBe('below')
+    expect(placed.top).toBe(352)
+  })
+})
+
 describe('the warm window', () => {
   it('is cold the first time anything is hovered', () => {
     expect(isWarm(null, 10_000)).toBe(false)

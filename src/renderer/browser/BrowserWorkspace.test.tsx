@@ -388,6 +388,68 @@ describe('when a native page is composited', () => {
 })
 
 /**
+ * A page leaves the screen before it is closed, not as a consequence of being
+ * closed.
+ *
+ * `browserVisible` is a `send`: it is in the main process's queue the instant it
+ * is called. `browserClose` and `browserRelease` are `invoke`s that resolve
+ * whenever their round trip does, and in `closeTab` they are queued behind
+ * whatever else the panel has in flight — a create waiting on an isolation key,
+ * for instance. So "close it and it stops being on screen" leaves the page
+ * composited over its replacement for as long as that takes, which is the
+ * permanent bug of 2026-08-17 in miniature: a website over somebody's terminal,
+ * only briefly.
+ *
+ * This is a source-text test because both call sites are inside effects and
+ * callbacks, and this project's test run has no DOM — the same reason the rule
+ * above is a pure function. It reads only for the *order* of the two calls,
+ * which is the whole of the contract; `browser-view.channels.test.ts` is the
+ * precedent for reading a file this way, and the last case here is the one that
+ * fails rather than passing vacuously if the shape ever changes.
+ *
+ * None of this is the fix for the reported bug, and it must not be read as one.
+ * A reload, a crash or a window closing never reaches any line in this file —
+ * `shouldComposite` in `browser-tab.ts` is what covers those, and it is tested
+ * there.
+ */
+describe('a page is hidden before it is closed', () => {
+  const source = readFileSync(join(__dirname, 'BrowserWorkspace.tsx'), 'utf8')
+
+  /** Every bridge call in `source`, in the order they appear. */
+  const calls = [...source.matchAll(/\bapi\.(browser[A-Za-z]+)\(/g)].map((match) => ({
+    name: match[1],
+    at: match.index ?? 0,
+  }))
+
+  function hideBefore(closeIndex: number): boolean {
+    const hides = calls.filter((call) => call.name === 'browserVisible' && call.at < closeIndex)
+    // Within the same block: the nearest preceding call has to be the hide, or
+    // "somewhere earlier in the file" would satisfy this forever.
+    const nearest = calls.filter((call) => call.at < closeIndex).at(-1)
+    return hides.length > 0 && nearest?.name === 'browserVisible'
+  }
+
+  it('hides the page in the unmount teardown before releasing and closing it', () => {
+    const teardown = source.indexOf('void api.browserRelease(tab.id)')
+    expect(teardown, 'the unmount teardown moved').toBeGreaterThan(0)
+    expect(hideBefore(teardown)).toBe(true)
+  })
+
+  it('hides the page when a tab is closed, before the queued close', () => {
+    const queued = source.indexOf('await api.browserRelease(id)')
+    expect(queued, 'closeTab moved').toBeGreaterThan(0)
+    expect(hideBefore(queued)).toBe(true)
+  })
+
+  it('reads a file that really does call the bridge', () => {
+    // If the regex stops matching — the calls move behind a helper, the bridge
+    // is renamed — every case above would pass by finding nothing at all.
+    expect(calls.length).toBeGreaterThan(5)
+    expect(calls.map((call) => call.name)).toContain('browserCreate')
+  })
+})
+
+/**
  * The screenshot popup replaced a one-line banner — *"Saved 3072 x 1496 to
  * …png"* with Reveal and Dismiss beside it, and no picture. His instruction was
  * to show the shot with a box to type into, so the two strings the popup builds

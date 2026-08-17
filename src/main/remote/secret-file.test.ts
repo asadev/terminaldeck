@@ -1,5 +1,14 @@
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { spawnSync } from 'node:child_process'
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
+import { tmpdir, userInfo } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -432,6 +441,19 @@ const SECRET_WRITERS = [
   'src/main/remote/device-auth.ts',
   'src/main/remote/host-identity.ts',
   'src/main/remote/folder-grants.ts',
+  /*
+   * The seventh, added after the Windows gate caught it from the other end.
+   *
+   * `deck-control.json` carries the bearer token for the loopback server that
+   * can start sessions and run tools on this machine, and it was written with a
+   * raw `write` plus a `chmod` — a pair that is exactly right on POSIX and does
+   * nothing at all on Windows, where the mode is synthesised and the ACL is the
+   * protection. It was not on this list, so this sweep did not notice, and the
+   * only test that touched the question asserted a POSIX mode. That is the
+   * "honest limit of a check like this one" the header above names, arriving:
+   * the guard was sound and the list was a file short.
+   */
+  'src/main/deck-control/index.ts',
 ]
 
 /** Anything that puts bytes on disk without going through the door. */
@@ -471,5 +493,106 @@ describe('every secret goes through the one writer', () => {
     ]) {
       expect(readFileSync(join(ROOT, file), 'utf8'), file).toContain('protectSecretFile(')
     }
+  })
+})
+
+/* ------------------------------------------- the real tool, on the real OS -- */
+
+/**
+ * Everything above pins the Windows path with a stand-in for `icacls`. This
+ * pins the same path against `icacls` itself, and it only runs where that is
+ * possible.
+ *
+ * It is here because the alternative was a suite that says nothing on Windows
+ * about the one thing that protects a secret there. Three files asserted a
+ * POSIX mode and skipped on Windows, and a skip that leaves no claim behind is
+ * indistinguishable from a pass — so this is the claim: on Windows, the file
+ * this app just wrote is reachable by this account and by nobody the folder
+ * happened to be inheriting from.
+ *
+ * The assertions are deliberately shaped to survive a localised Windows. The
+ * account names `icacls` prints are localised (`BUILTIN\Administrators` is
+ * `BUILTIN\Администраторы` on the Windows 11 machine this was first run on) and
+ * "Successfully processed 1 files" is localised too — so nothing here reads a
+ * name or a sentence. What it reads are the flags, which are not localised:
+ * `(I)` marks an inherited entry, and after `/inheritance:r` there must be none
+ * left. The one name it does look for is this account's own, which it takes
+ * from the OS rather than from a literal.
+ */
+describe.skipIf(process.platform !== 'win32')('on Windows, against the real icacls', () => {
+  /** Every access-control entry `icacls` prints for a path, one per line. */
+  const entriesOf = (path: string): string[] => {
+    const result = spawnSync(icaclsPath(process.env), [path], { encoding: 'utf8' })
+    expect(result.status, result.stderr ?? '').toBe(0)
+    return (result.stdout ?? '')
+      .split(/\r?\n/)
+      // The first line repeats the path before the first entry; strip it, and
+      // drop the blank line and the localised summary that follow.
+      .map((line, index) => (index === 0 ? line.slice(path.length) : line).trim())
+      .filter((line) => line.includes(':(') && !line.startsWith('Successfully'))
+  }
+
+  it('leaves the file with one entry, this account’s, and nothing inherited', () => {
+    const dir = join(tempDir(), 'nested')
+    const file = join(dir, 'machines.json')
+    writeSecretFile(dir, file, '{"version":1}')
+
+    const entries = entriesOf(file)
+    expect(entries).toHaveLength(1)
+    // `(I)` is what `icacls` prints for an entry that came from the parent. The
+    // inherited entries *are* the exposure this module removes, so one surviving
+    // here is the whole failure.
+    expect(entries[0]).not.toContain('(I)')
+    expect(entries[0].toLowerCase()).toContain(userInfo().username.toLowerCase())
+    expect(entries[0]).toContain('(F)')
+
+    // And the folder, which is what makes the *next* file born protected —
+    // including the temp file this write used and the `.corrupt-*` copies
+    // `machines.json` quarantines.
+    const folder = entriesOf(dir)
+    expect(folder).toHaveLength(1)
+    expect(folder[0]).not.toContain('(I)')
+    expect(folder[0]).toContain('(OI)(CI)')
+  })
+
+  it('rewrites without collecting a second entry, however many times it runs', () => {
+    const dir = tempDir()
+    const file = join(dir, 'host.json')
+    // `/grant:r` replaces rather than adds. Three writes that each appended
+    // would leave three entries, and a file that already had a wider grant
+    // would keep it.
+    writeSecretFile(dir, file, 'one')
+    writeSecretFile(dir, file, 'two')
+    writeSecretFile(dir, file, 'three')
+
+    expect(readFileSync(file, 'utf8')).toBe('three')
+    expect(entriesOf(file)).toHaveLength(1)
+  })
+
+  it('protects a file an older version of this app left unlocked', () => {
+    const dir = tempDir()
+    const file = join(dir, 'auth.json')
+    // Written the way the app used to write it, so what is being repaired is a
+    // genuinely inherited ACL rather than one this test set up.
+    writeFileSync(file, '{"token":"ghu_x"}', { encoding: 'utf8', mode: 0o600 })
+    expect(entriesOf(file).some((entry) => entry.includes('(I)'))).toBe(true)
+
+    protectSecretFile(dir, file)
+
+    const entries = entriesOf(file)
+    expect(entries).toHaveLength(1)
+    expect(entries[0]).not.toContain('(I)')
+    expect(readFileSync(file, 'utf8')).toBe('{"token":"ghu_x"}')
+  })
+
+  it('is what stands behind every POSIX-only mode assertion in this suite', () => {
+    // The deck-control config is the one that was not going through here at
+    // all. Written through the same door now, and checked on the platform where
+    // the difference is real rather than in a comment.
+    const dir = tempDir()
+    const file = join(dir, 'deck-control.json')
+    writeSecretFile(dir, file, '{"mcpServers":{}}')
+    expect(entriesOf(file)).toHaveLength(1)
+    expect(entriesOf(file)[0]).not.toContain('(I)')
   })
 })

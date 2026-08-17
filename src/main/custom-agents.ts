@@ -57,7 +57,7 @@ import {
   type CustomAgent,
   type CustomAgentProblems,
 } from '../shared/custom-agents'
-import { currentPlatform, withPath, type Platform } from './platform/host'
+import { currentPlatform, isWindows, withPath, type Env, type Platform } from './platform/host'
 import { firstLookupPath, lookupSpec } from './platform/lookup'
 import { loginPath } from './providers'
 
@@ -114,6 +114,41 @@ interface StoredState {
 }
 
 /**
+ * What Windows runs when it is handed a file name, if `PATHEXT` says nothing.
+ *
+ * The four the OS itself falls back to. Longer real-world values add script
+ * hosts (`.VBS`, `.JS`, `.WSF`), and those are honoured when the machine names
+ * them — this constant is only the floor for an environment that arrived
+ * without the variable, which is what a stripped service environment looks
+ * like.
+ */
+const DEFAULT_PATHEXT = '.COM;.EXE;.BAT;.CMD'
+
+/**
+ * Would Windows execute a file with this name?
+ *
+ * Read case-insensitively out of the environment for the reason `platform/
+ * host.ts` gives about `PATH`: a Windows environment object copied with a
+ * spread keeps whatever spelling the OS used, and `PATHEXT` is spelled that way
+ * in `process.env` while a hand-written test environment is not. Missing
+ * entirely falls back to {@link DEFAULT_PATHEXT} rather than to "anything
+ * goes"; an environment with no `PATHEXT` is a stripped one, not a permissive
+ * one.
+ */
+function windowsExecutable(command: string, env: Env): boolean {
+  const key = Object.keys(env).find((name) => name.toUpperCase() === 'PATHEXT')
+  const raw = (key === undefined ? undefined : env[key]) ?? DEFAULT_PATHEXT
+  const dot = command.lastIndexOf('.')
+  const slash = Math.max(command.lastIndexOf('\\'), command.lastIndexOf('/'))
+  if (dot <= slash + 1) return false
+  const extension = command.slice(dot).toLowerCase()
+  return raw
+    .split(';')
+    .map((part) => part.trim().toLowerCase())
+    .some((part) => part !== '' && part !== '.' && part === extension)
+}
+
+/**
  * Resolve a command the way the app will resolve it when it spawns.
  *
  * Two paths, because a person may type either.
@@ -124,6 +159,20 @@ interface StoredState {
  * on the strength of a form — a thing this app should not do at any point and
  * least of all here. Executability is the honest floor: it is what the spawn
  * needs, and it is checkable without side effects.
+ *
+ * On Windows the floor needs one more plank, because `access(X_OK)` there is not
+ * the check its name suggests. libuv has no execute bit to consult, so the mode
+ * is ignored and `X_OK` behaves exactly like `F_OK` — measured on Windows 11
+ * (26.7.0), where `accessSync('%TEMP%\\td-x-probe.txt', X_OK)` returns rather
+ * than throwing. Taken alone it would accept any file that exists, so a person
+ * who pointed the form at a readme would get an agent in the picker that dies
+ * the moment it is selected: precisely the "never declare an agent that has not
+ * been launched" rule this module exists to enforce, broken on the one platform
+ * where the check cannot enforce it. So the extension has to be one Windows will
+ * actually execute, read from `PATHEXT` — the same list `where.exe` searches by,
+ * so a name found on PATH and a path typed in full are held to one standard.
+ * This is not reachable on POSIX, where the execute bit is real and the
+ * extension means nothing.
  *
  * A **bare name** goes through `which` / `where.exe` against the login PATH,
  * which is the same question `agent-binaries.ts` asks for the shipped agents and
@@ -141,8 +190,10 @@ interface StoredState {
 export async function lookupCommand(
   command: string,
   platform: Platform = currentPlatform(),
+  env: Env = process.env,
 ): Promise<string | null> {
   if (command.startsWith('/') || /^[A-Za-z]:[\\/]/.test(command)) {
+    if (isWindows(platform) && !windowsExecutable(command, env)) return null
     try {
       accessSync(command, constants.X_OK)
       return command

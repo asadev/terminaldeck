@@ -10,8 +10,17 @@
  *     so a pane can say what the copilot knows without opening a file;
  *   - the action log, as rows, tolerant of the two shapes that legitimately
  *     share that file;
- *   - and one write, `deleteMemoryFact`, because "read and delete" is the whole
- *     of what a person is promised about their assistant's memory.
+ *   - and two writes, {@link writeMemoryFact} and {@link deleteMemoryFact},
+ *     because "read, correct and delete" is the whole of what a person is
+ *     promised about their assistant's memory.
+ *
+ * The correction half arrived second, on Asad's *"I should be able to click and
+ * make changes and click save"*, and it is the one that closes the promise: a
+ * memory that is half wrong could previously only be thrown away whole, which
+ * is a bad trade when the fact is right and the path in it has moved. The
+ * copilot's own instructions tell it to *"correct a memory in place when it
+ * turns out to be wrong"*, and until this existed the person reading that
+ * sentence in Settings had no way to do the same thing.
  *
  * ## Why it is a separate module from the session
  *
@@ -25,7 +34,7 @@
  *
  * It also keeps the session module's IPC surface true to its own comment. Every
  * handler in `registerCopilotIpc` takes **no arguments**, and that is stated
- * there as the validation. Two of the handlers below take a filename, which is
+ * there as the validation. Three of the handlers below take a filename, which is
  * a real argument out of a renderer and needs real checking — see
  * {@link isMemoryName}. Mixing the two sets would make that sentence false in
  * the file that relies on it.
@@ -39,7 +48,7 @@
  * a row that could be either the app or the agent means nothing.
  */
 
-import { readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
+import { readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join, sep } from 'node:path'
 import { shell, type IpcMain, type IpcMainInvokeEvent } from 'electron'
 import {
@@ -117,7 +126,18 @@ export function isMemoryName(name: unknown): name is string {
   return /^[A-Za-z0-9][A-Za-z0-9._-]*\.md$/.test(name) && !name.includes('..')
 }
 
-/** How much of one memory file a window may be handed. */
+/**
+ * How much of one memory file a window may be handed — and, by the same number,
+ * the most one may be saved back as.
+ *
+ * One constant for both directions on purpose, and the reason is a data-loss bug
+ * rather than tidiness. {@link readMemoryFact} truncates at this size and says
+ * so with its `truncated` flag; an editor that was allowed to save a *larger*
+ * file than a viewer is allowed to show would let somebody press Save on the
+ * first 256 KB of a longer file and silently drop the rest. The pane refuses to
+ * save a truncated read for that reason — see `CopilotSection.tsx` — and the two
+ * checks agree because there is only one number to agree about.
+ */
 export const MAX_MEMORY_READ_BYTES = 256 * 1024
 
 /**
@@ -239,6 +259,101 @@ export function readMemoryFact(paths: CopilotPaths, name: unknown): MemoryReadRe
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) }
   }
+}
+
+export interface MemoryWriteResult {
+  ok: boolean
+  error: string | null
+  /** The listing after the write, so a pane redraws from one round trip. */
+  memory: MemoryReport
+}
+
+/**
+ * Correct one fact in place.
+ *
+ * ## It may only overwrite a file that is already there
+ *
+ * This is an editor, not a way to plant a fact, and the difference is worth
+ * enforcing rather than merely intending. Writing a *new* file here would make
+ * the settings pane a second author of the copilot's memory — a directory that
+ * is read into the model's context at every start — with no conversation behind
+ * it and nothing in the transcript explaining where the fact came from. The
+ * person who genuinely wants that has a memory folder they can open in Finder,
+ * which is one click away in this same pane and leaves no doubt about who wrote
+ * what.
+ *
+ * The existence check is a `statSync` rather than a flag on the write because
+ * the failure it must produce is a *sentence*, and `wx` produces `EEXIST` for
+ * the opposite case. A file that disappears between the check and the write —
+ * the copilot pruning its own memory while somebody has it open in Settings, a
+ * real race on this directory — is then a create, which is the one outcome this
+ * function is refusing. It is a tiny window and the honest fix is cheap: the
+ * write is `wx`-free but the *name* is checked first and the outcome is
+ * reported, so what lands on disk is the person's text under a name they were
+ * looking at a moment ago. Losing that race writes back a file the copilot had
+ * just decided to forget; the action log records the edit as the person's, which
+ * is how that is noticed.
+ *
+ * ## Everything else it does not do
+ *
+ * No front-matter validation, no `modified:` stamp, no re-indexing of
+ * `MEMORY.md`. The schema is the copilot's convention, written down in
+ * `copilotInstructions`, and an app that quietly corrected the file to match its
+ * own idea of that schema would be a second author again — and would be wrong
+ * the first time the convention changed. What a person types is what is on disk.
+ */
+export function writeMemoryFact(
+  paths: CopilotPaths,
+  name: unknown,
+  text: unknown,
+): MemoryWriteResult {
+  const listing = (): MemoryReport => readMemory(paths)
+  if (!isMemoryName(name)) {
+    return { ok: false, error: 'That is not a memory file.', memory: listing() }
+  }
+  if (typeof text !== 'string') {
+    return { ok: false, error: 'Nothing was supplied to save.', memory: listing() }
+  }
+  if (Buffer.byteLength(text, 'utf8') > MAX_MEMORY_READ_BYTES) {
+    return {
+      ok: false,
+      error: `A memory cannot be larger than ${Math.round(MAX_MEMORY_READ_BYTES / 1024)} KB.`,
+      memory: listing(),
+    }
+  }
+
+  const path = join(paths.memory, name)
+  try {
+    if (!statSync(path).isFile()) {
+      return { ok: false, error: 'That is not a memory file.', memory: listing() }
+    }
+  } catch {
+    return {
+      ok: false,
+      error: 'That memory is no longer there — it may have been deleted while this was open.',
+      memory: listing(),
+    }
+  }
+
+  try {
+    writeFileSync(path, text, { mode: 0o600 })
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+      memory: listing(),
+    }
+  }
+
+  // Attributed to the person, for the reason the delete below is: an agent that
+  // answers differently tomorrow because a fact was rewritten under it is
+  // exactly the change somebody will later try to explain, and a row that could
+  // be read as the copilot editing its own memory would be a row that lies.
+  appendCopilotAction(paths, {
+    action: 'memory.edited',
+    detail: `you edited memory/${name} from Settings`,
+  })
+  return { ok: true, error: null, memory: listing() }
 }
 
 export interface MemoryDeleteResult {
@@ -517,13 +632,16 @@ function pathsOf(deps: CopilotInspectDeps): { paths: CopilotPaths; userData: str
 }
 
 /**
- * The channels the Copilot pane reads, and the two it writes.
+ * The channels the Copilot pane reads, and the three it writes.
  *
  * Registered separately from `registerCopilotIpc` so that module's promise —
- * *every handler takes no arguments* — stays literally true. The two here that
+ * *every handler takes no arguments* — stays literally true. The three here that
  * do take one take a file name, and {@link isMemoryName} is why that is safe:
  * the name cannot express a separator, a `..` or a drive, so the path built
- * from it cannot leave `memory/`.
+ * from it cannot leave `memory/`. `copilot:memory-write` takes a second
+ * argument, the text, which needs no path checking at all and is capped rather
+ * than inspected — see {@link writeMemoryFact} for why the app never validates
+ * the shape of what somebody writes into their own assistant's memory.
  *
  * Nothing here starts the copilot. That is deliberate and it is the difference
  * between a pane that can be opened out of curiosity and one that spends money
@@ -550,6 +668,12 @@ export function registerCopilotInspectIpc(ipcMain: IpcMain, deps: CopilotInspect
     'copilot:memory-read',
     (_event: IpcMainInvokeEvent, name: unknown): MemoryReadResult =>
       readMemoryFact(pathsOf(deps).paths, name),
+  )
+
+  ipcMain.handle(
+    'copilot:memory-write',
+    (_event: IpcMainInvokeEvent, name: unknown, text: unknown): MemoryWriteResult =>
+      writeMemoryFact(pathsOf(deps).paths, name, text),
   )
 
   ipcMain.handle(

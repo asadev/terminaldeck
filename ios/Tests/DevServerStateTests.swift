@@ -68,7 +68,7 @@ final class DevServerStateTests: XCTestCase {
             onEvent?(.state(state))
             onEvent?(.message(.welcome(protocolVersion: 1, deviceId: "d", deviceName: "iPhone",
                                        token: nil, sessions: sessions, capabilities: capabilities,
-                                       hostPlatform: .mac, folders: folders),
+                                       hostPlatform: .mac, folders: folders, copilot: .silent),
                               activity: [:]))
         }
 

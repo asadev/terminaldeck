@@ -20,7 +20,7 @@ import {
   writeGuestPreload,
 } from './browser-preload'
 import { composeAgentContext, parseCapture, type ElementCapture } from './selector'
-import { isolatedSession } from './browser-isolation'
+import { disposeIsolatedSession, isolatedSession } from './browser-isolation'
 import { onWebContentsDestroyed } from './web-contents-teardown'
 
 /**
@@ -37,6 +37,53 @@ import { onWebContentsDestroyed } from './web-contents-teardown'
  * The cost is that it is a native layer floating over the React tree rather
  * than part of it — so the renderer reports where to put it, and hides it
  * whenever something must appear on top.
+ *
+ * ## Who decides a view is on screen, and why it is not the renderer
+ *
+ * It used to be the renderer, alone. `browser:visible` latched a boolean and
+ * `applyLayout` obeyed it, so a view stayed composited until somebody said
+ * otherwise — and the only somebody was one React effect inside
+ * `BrowserWorkspace.tsx`. An effect reports while it is mounted and says nothing
+ * at all when it stops, which meant "the renderer is showing this page" and "the
+ * renderer has gone silent" were the same message on the wire: none.
+ *
+ * That produced the bug this section exists for. Press ⌘R with a page open —
+ * `{ role: 'reload' }` is in the app menu — and the renderer's document is
+ * replaced. React unmount cleanups do not run for a page unload, so nothing
+ * closed the views and nothing hid them; the host WebContents is the same object
+ * across a reload, so the `destroyed` teardown below did not fire either. The
+ * fresh renderer came back with no browser tab in its strip and no idea any view
+ * existed, while the old `WebContentsView` stayed a child of the window at its
+ * last rectangle, still composited above the whole renderer. Photographed on
+ * 2026-08-17: `example.com` painted over a live Claude Code session, with the
+ * agent's own status line visible along the bottom of the window underneath it.
+ *
+ * So the decision moved here, and it is stated as a rule over facts this process
+ * can check for itself at the moment it applies a layout — see
+ * {@link shouldComposite}. The renderer's message is now one input among several
+ * rather than the whole answer, and every other input is something the renderer
+ * cannot lie about and cannot go quiet on:
+ *
+ *  - **the host's document generation.** Each tab records which renderer
+ *    document asked for it. The host's main-frame navigations are counted here,
+ *    so a reload, a crash-and-restore or any other document swap makes every tab
+ *    that document opened permanently stale — and a stale tab is never
+ *    composited, whatever it last reported.
+ *  - **the host being alive**, and **its window being alive**. A dead renderer
+ *    cannot own a view, and a destroyed window cannot show one.
+ *  - **the rectangle having area**, which is the older half of the rule.
+ *
+ * The same three events that make a tab stale also destroy it, because a view
+ * whose renderer is gone has nobody left to position it, close it or read
+ * anything out of it. The generation check is not redundant with that: it is the
+ * part that holds if a destroy is ever missed, and — unlike a teardown — it is a
+ * pure function a test can drive without an Electron window.
+ *
+ * The rule is deliberately one-directional. Nothing here can tell that a live
+ * renderer's *reasons* for showing a page have gone stale — a dialog it forgot
+ * to report, a menu it opened over the page — and it does not try. Those fail as
+ * a popup hidden behind a website, which is annoying and visible. This fails as
+ * somebody's terminal disappearing under a web page, which is neither.
  *
  * ## The guest is untrusted, all of it
  *
@@ -205,7 +252,36 @@ interface BrowserTab {
   host: WebContents
   window: BrowserWindow
   bounds: BrowserTabBounds
-  visible: boolean
+  /**
+   * The last thing the renderer asked for — a request, not a verdict.
+   *
+   * Renamed from `visible` when the decision moved into the main process, and
+   * the name is the point: this field alone used to *be* whether the view was on
+   * screen, which is how a renderer that stopped talking left a page over
+   * somebody's terminal. {@link shouldComposite} is the verdict now, and this is
+   * one of its inputs.
+   */
+  wanted: boolean
+  /**
+   * Which renderer document opened this tab.
+   *
+   * Compared against the host's current generation on every layout. A reload
+   * replaces the document, the generation moves on, and every tab the previous
+   * document opened is stale for good — so an orphan cannot be composited even
+   * in the window between the navigation starting and its teardown running.
+   */
+  bornInto: number
+  /**
+   * The in-memory partition this tab was given, when it was opened as Isolated.
+   *
+   * Held here so it can be thrown away with the view. The renderer used to be
+   * the only thing that disposed these, on the same unmount path that used to be
+   * the only thing that closed the view — so a reload leaked one cookie jar per
+   * isolated tab for the rest of the process's life, invisibly. Disposal is
+   * idempotent, so the renderer keeping its own call for tabs whose view never
+   * got created costs nothing.
+   */
+  isolationKey: string | null
   inspecting: boolean
   error: string | null
   /**
@@ -235,6 +311,88 @@ const tabs = new Map<string, BrowserTab>()
 
 let guestPreloadPath: string | null = null
 let guestSession: Session | null = null
+
+/* ------------------------------------------------------- who owns a view -- */
+
+/**
+ * How many documents each renderer has been through.
+ *
+ * Zero for a renderer that has not navigated since its first tab was opened,
+ * which is the ordinary case for the whole life of the app. It only moves when
+ * the document the tabs were opened against is replaced — a ⌘R, a
+ * `location.reload()`, a renderer that crashed and came back — and the number
+ * itself means nothing beyond "not the one that was there before".
+ *
+ * A `WeakMap` so a closed window's entry goes with it: the key is the renderer's
+ * own WebContents, and nothing here should be the reason it stays reachable.
+ */
+const hostDocuments = new WeakMap<WebContents, number>()
+
+/** Renderers already being watched, so repeat creates do not stack listeners. */
+const watchedHosts = new WeakSet<WebContents>()
+
+/** Windows already being watched, for the same reason. */
+const watchedWindows = new WeakSet<BrowserWindow>()
+
+function documentOf(host: WebContents): number {
+  return hostDocuments.get(host) ?? 0
+}
+
+/**
+ * Everything this process checks before a native view is painted over the app.
+ *
+ * Exported and pure because it is the whole of the fix and an effect is the one
+ * place a rule cannot be tested — the same reason `pageVisible` was pulled out
+ * of the renderer's effect. Every field is a fact the main process reads for
+ * itself at the moment of the call, except {@link wanted}, which is the only
+ * thing the renderer gets a say in.
+ *
+ * Ordered as it reads: what was asked for, whether there is room for it, and
+ * then the three ways the thing that asked can have ceased to exist.
+ */
+export interface CompositeCheck {
+  /** The last visibility the renderer asked for, over `browser:visible`. */
+  wanted: boolean
+  width: number
+  height: number
+  /** The renderer that opened this tab has not been destroyed. */
+  hostAlive: boolean
+  /** The window this view is a child of has not been destroyed. */
+  windowAlive: boolean
+  /** Which host document opened the tab. */
+  bornInto: number
+  /** Which host document the renderer is on now. */
+  hostDocument: number
+}
+
+/**
+ * Should this view be composited right now?
+ *
+ * A conjunction on purpose: every clause is a hide, and a hide is always the
+ * safe answer. The failure this replaced was a *latch* — one boolean, set by a
+ * message, cleared only by another message that stopped coming — and the whole
+ * change is that no single input can hold a view on screen by itself any more.
+ *
+ * `bornInto === hostDocument` is the clause that ends the reported bug. A view
+ * belongs to the renderer document that asked for it; when that document is
+ * replaced, the number moves and this can never be true again for that tab. It
+ * costs one integer compare per layout and it does not depend on any teardown
+ * having run, which is precisely the property the old arrangement lacked.
+ *
+ * A zero-sized view is still treated as hidden, which is the older half of this
+ * rule and is not tidiness: `setVisible(true)` on a 0x0 view paints a white
+ * sliver at its origin.
+ */
+export function shouldComposite(check: CompositeCheck): boolean {
+  return (
+    check.wanted &&
+    check.width > 0 &&
+    check.height > 0 &&
+    check.hostAlive &&
+    check.windowAlive &&
+    check.bornInto === check.hostDocument
+  )
+}
 
 /* -------------------------------------------------------------- plumbing -- */
 
@@ -345,11 +503,27 @@ function sanitizeBounds(raw: unknown): BrowserTabBounds {
   }
 }
 
+/** The tab's own answer to {@link shouldComposite}, read off the live objects. */
+function compositeCheck(tab: BrowserTab): CompositeCheck {
+  return {
+    wanted: tab.wanted,
+    width: tab.bounds.width,
+    height: tab.bounds.height,
+    hostAlive: !tab.host.isDestroyed(),
+    windowAlive: !tab.window.isDestroyed(),
+    bornInto: tab.bornInto,
+    hostDocument: documentOf(tab.host),
+  }
+}
+
 function applyLayout(tab: BrowserTab): void {
   if (!liveContents(tab)) return
+  // A destroyed window's `contentView` is gone, so positioning a child of it is
+  // a throw rather than a no-op. The visibility rule refuses it too, but the
+  // bounds call happens first and has to be guarded on its own.
+  if (tab.window.isDestroyed()) return
   tab.view.setBounds(tab.bounds)
-  // A zero-sized view still paints a white sliver, so treat "no room" as hidden.
-  tab.view.setVisible(tab.visible && tab.bounds.width > 0 && tab.bounds.height > 0)
+  tab.view.setVisible(shouldComposite(compositeCheck(tab)))
 }
 
 function tellGuest(tab: BrowserTab): void {
@@ -358,6 +532,26 @@ function tellGuest(tab: BrowserTab): void {
 
 function destroyTab(tab: BrowserTab): void {
   tabs.delete(tab.id)
+  /*
+   * Off the screen first, by the same lever that put it there.
+   *
+   * Removing the child view is what actually un-composites it, and that is
+   * exactly why this line is above it: `removeChildView` is skipped outright
+   * when the window is already destroyed and is wrapped in a `try` because it
+   * throws when the window is mid-teardown, so it is the one step here that is
+   * allowed not to happen. Hiding first means "destroyed" and "not painted over
+   * somebody's work" stop being two separate hopes.
+   *
+   * In a `try` for the same reason as the line below it: this also runs from a
+   * window's own `closed`, where the view is a child of something that has
+   * already gone, and a throw here would abandon every remaining tab in the loop
+   * that called this.
+   */
+  try {
+    if (liveContents(tab)) tab.view.setVisible(false)
+  } catch {
+    // Its window went first; it is not composited over anything either way.
+  }
   if (!tab.window.isDestroyed()) {
     try {
       tab.window.contentView.removeChildView(tab.view)
@@ -366,6 +560,12 @@ function destroyTab(tab: BrowserTab): void {
     }
   }
   liveContents(tab)?.close()
+  // An isolated tab's partition is held in memory for the life of the process
+  // unless somebody lets go of it, and "somebody" used to be the renderer alone
+  // — so every teardown the renderer does not run leaked one. Fire and forget:
+  // this is on the teardown path, the storage was never on disk, and a rejected
+  // clear must not stop the rest of the tabs being destroyed.
+  if (tab.isolationKey) void disposeIsolatedSession(tab.isolationKey).catch(() => undefined)
 }
 
 /** Called from `before-quit`, and whenever a host window goes away. */
@@ -377,6 +577,100 @@ function destroyTabsFor(host: WebContents): void {
   for (const tab of [...tabs.values()]) {
     if (tab.host === host) destroyTab(tab)
   }
+}
+
+function destroyTabsIn(window: BrowserWindow): void {
+  for (const tab of [...tabs.values()]) {
+    if (tab.window === window) destroyTab(tab)
+  }
+}
+
+/**
+ * The renderer that owns these views has stopped being the renderer that owns
+ * them: it is navigating away, or its process died.
+ *
+ * Two things, and the order matters. The generation moves *first*, so that from
+ * this instant every one of that document's tabs fails
+ * {@link shouldComposite} — nothing can paint one again even if something below
+ * calls `applyLayout` on the way out. Then they are destroyed, because a view
+ * whose renderer is gone has nobody to move it, resize it, close it or read
+ * anything out of it; leaving it alive would be a Chromium process and a cookie
+ * jar with no owner, which is the same leak wearing a tidier face.
+ *
+ * Destroying on the *start* of the navigation rather than at the end of it is
+ * deliberate. The whole failure was a page still on screen after the document
+ * that put it there had gone, so the correct moment is the earliest one — before
+ * the new document has anything on screen to be covered. The cost is the case
+ * where the navigation is then cancelled: the old document keeps running with
+ * tab ids that no longer resolve, and its panel goes blank until it is reopened.
+ * That is a degraded browser panel in a case that does not arise for a `file://`
+ * bundle, weighed against a website permanently over somebody's work.
+ */
+function hostDocumentReplaced(host: WebContents): void {
+  hostDocuments.set(host, documentOf(host) + 1)
+  destroyTabsFor(host)
+}
+
+/**
+ * Watch the renderer that just asked for a tab, once.
+ *
+ * Three ways a renderer stops being able to own a native view, and the first two
+ * are the ones nobody was listening for:
+ *
+ *  - it **navigates its own main frame**, which is what ⌘R is. The WebContents
+ *    survives a reload — same object, same id — so the `destroyed` registration
+ *    below never fires for it, and that is exactly why the reported bug looked
+ *    like nothing had happened at all.
+ *  - its **process dies**. A crashed renderer is replaced in place, so again the
+ *    WebContents is not destroyed and again nothing else notices.
+ *  - it is **destroyed**, with its window. Already handled, and kept here so all
+ *    three live in one place.
+ *
+ * A same-document navigation swaps no document, so it swaps no ownership;
+ * subframes never owned anything to begin with. Both are ignored rather than
+ * merely harmless — this app's renderer has no subframes and never assigns
+ * `location`, which was checked before relying on it, so anything reaching the
+ * first branch really is the document being replaced.
+ */
+function watchHost(host: WebContents): void {
+  // Keyed rather than counted, so calling this on every create keeps exactly one
+  // registration. See `web-contents-teardown.ts`, which exists because eleven
+  // modules each being individually careful still produced a
+  // `MaxListenersExceededWarning`.
+  onWebContentsDestroyed(host, 'browser-tabs', () => destroyTabsFor(host))
+
+  // The two below are plain `on`s on the WebContents itself — there is no keyed
+  // registry for those — so this is the guard that keeps them at one apiece.
+  // Without it, opening ten tabs would attach ten copies of each and Node would
+  // report the same leak warning that registry was written to remove.
+  if (watchedHosts.has(host)) return
+  watchedHosts.add(host)
+
+  host.on(
+    'did-start-navigation',
+    (details: { isMainFrame: boolean; isSameDocument: boolean }) => {
+      if (!details.isMainFrame || details.isSameDocument) return
+      hostDocumentReplaced(host)
+    },
+  )
+  host.on('render-process-gone', () => hostDocumentReplaced(host))
+}
+
+/**
+ * Watch the window these views are children of, once.
+ *
+ * Belt and braces rather than a second mechanism: closing a window destroys its
+ * WebContents, so {@link watchHost}'s teardown already fires. This catches the
+ * shape of that story where it does not — a window torn down without its
+ * renderer going with it — and it costs one listener per window. `closed` rather
+ * than `close` on purpose: `close` can be prevented, and destroying somebody's
+ * open pages for a quit they then cancelled would be a worse bug than the one
+ * this file is about.
+ */
+function watchWindow(window: BrowserWindow): void {
+  if (watchedWindows.has(window)) return
+  watchedWindows.add(window)
+  window.once('closed', () => destroyTabsIn(window))
 }
 
 function requireTab(id: unknown): BrowserTab {
@@ -559,7 +853,7 @@ function tabForSender(event: IpcMainEvent): BrowserTab | null {
  * - `browser:state`    (invoke, id)                        → {@link BrowserTabState} | null
  * - `browser:close`    (invoke, id)
  * - `browser:bounds`   (send, id, {x,y,width,height})
- * - `browser:visible`  (send, id, boolean)
+ * - `browser:visible`  (send, id, boolean) — a *request*, see {@link shouldComposite}
  *
  * Emits `browser:state-changed` (state) and `browser:element` (id, capture).
  */
@@ -608,7 +902,16 @@ export function registerBrowserIpc(ipcMain: IpcMain): void {
       host: event.sender,
       window,
       bounds: sanitizeBounds(opts.bounds),
-      visible: opts.visible !== false,
+      wanted: opts.visible !== false,
+      // Stamped at creation and never touched again. A tab belongs to the
+      // renderer document that asked for it; the moment that document is
+      // replaced this number stops matching and the view can never be
+      // composited again. See `shouldComposite`.
+      bornInto: documentOf(event.sender),
+      // Only a key this module recognises — `isolatedSession` above has already
+      // refused anything else, and holding a string it would refuse would mean
+      // teardown trying to dispose a partition that was never minted.
+      isolationKey: isolatedSession(opts.isolationKey) ? (opts.isolationKey as string) : null,
       inspecting: false,
       error: null,
       failedUrl: null,
@@ -627,11 +930,10 @@ export function registerBrowserIpc(ipcMain: IpcMain): void {
     window.contentView.addChildView(view)
     applyLayout(tab)
     wireGuestEvents(tab)
-
-    // One registration per host, not per tab, or reopening tabs stacks them up
-    // — and keyed, so the `watchedHosts` set that used to enforce that is gone.
-    // See `web-contents-teardown.ts`.
-    onWebContentsDestroyed(event.sender, 'browser-tabs', () => destroyTabsFor(event.sender))
+    // Everything that can take ownership of this view away, watched from the
+    // side that survives it. Both are idempotent per host and per window.
+    watchHost(event.sender)
+    watchWindow(window)
 
     if (typeof opts.url === 'string' && opts.url.trim() !== '') return navigate(tab, opts.url)
     // An unhandled rejection here takes the main process down with it, and this
@@ -711,7 +1013,10 @@ export function registerBrowserIpc(ipcMain: IpcMain): void {
   ipcMain.on('browser:visible', (_event, id: unknown, visible: unknown) => {
     const tab = typeof id === 'string' ? tabs.get(id) : undefined
     if (!tab) return
-    tab.visible = visible === true
+    // A request, recorded. Whether it is honoured is `shouldComposite`'s answer,
+    // not this line's — which is the difference between this file today and the
+    // one that let a reloaded window keep somebody's page over their terminal.
+    tab.wanted = visible === true
     applyLayout(tab)
   })
 

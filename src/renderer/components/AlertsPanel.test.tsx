@@ -1,16 +1,16 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import {
   AlertRow,
   AlertsPanel,
-  createScanGate,
   groupAlerts,
   SEVERITY_HEADING,
   summarize,
   withInsights,
   type Alert,
   type AlertReport,
-  type AlertsBridge,
 } from './AlertsPanel'
 
 /**
@@ -180,83 +180,54 @@ describe('AlertRow', () => {
 })
 
 describe('AlertsPanel', () => {
-  const quiet: AlertsBridge = { projectAlerts: async () => report([]) }
-
-  it('renders a calm empty state, not an error, for a quiet project', () => {
-    // Static markup renders before the async scan resolves, so the empty branch
-    // is asserted through `summarize` above; here the panel must at least not
-    // claim something is wrong.
-    const markup = renderToStaticMarkup(
-      <AlertsPanel projectPath="/Users/apple/Projects/terminaldeck" bridge={quiet} />,
-    )
-    expect(markup).toContain('Checking…')
+  it('says it is still checking before the first report arrives', () => {
+    // `report: null` is the state between the sheet opening and the feed's
+    // first scan landing. It must not read as an all-clear — the difference
+    // between "nothing is wrong" and "nobody has looked yet" is the whole
+    // value of the panel.
+    const markup = renderToStaticMarkup(<AlertsPanel report={null} onRescan={() => {}} />)
+    expect(markup).toContain('Checking\u2026')
     expect(markup).not.toContain('Nothing needs')
     expect(markup).not.toMatch(/error|failed/i)
   })
 
-  it('explains itself when the bridge is missing', () => {
-    const markup = renderToStaticMarkup(<AlertsPanel projectPath="/Users/apple/Projects/terminaldeck" />)
+  it('renders a calm empty state, not an error, for a quiet project', () => {
+    const markup = renderToStaticMarkup(<AlertsPanel report={report([])} onRescan={() => {}} />)
+    expect(markup).toContain('Nothing needs your attention')
+    expect(markup).not.toMatch(/error|failed/i)
+  })
+
+  it('explains itself when there is no main process to ask', () => {
+    const markup = renderToStaticMarkup(<AlertsPanel report={null} available={false} />)
     expect(markup).toContain('not connected to the main process')
   })
 
   it('labels itself for assistive tech', () => {
-    const markup = renderToStaticMarkup(
-      <AlertsPanel projectPath="/Users/apple/Projects/terminaldeck" bridge={quiet} />,
-    )
+    const markup = renderToStaticMarkup(<AlertsPanel report={report([])} onRescan={() => {}} />)
     expect(markup).toContain('aria-label="Project alerts"')
   })
-})
 
-describe('createScanGate', () => {
-  it('lets the newest scan write and silences the one it superseded', () => {
-    // Regression: switching project started a second scan while the first was
-    // still in flight, and whichever finished last won. A slow project handed
-    // its alerts to a different project's panel — naming sessions that were no
-    // longer in front of the user.
-    const gate = createScanGate()
-    const first = gate.begin()
-    const second = gate.begin()
-
-    expect(gate.isCurrent(first)).toBe(false)
-    expect(gate.isCurrent(second)).toBe(true)
-
-    // The stale one finishing last must still lose.
-    gate.end()
-    expect(gate.isCurrent(first)).toBe(false)
+  /**
+   * The regression this whole change exists to prevent, stated as a render.
+   *
+   * The panel fetched for itself until 2026-08-17, which meant nothing produced
+   * a report while the sheet was shut and the bell's `alertCount` could never
+   * be fed. A `bridge` or `projectPath` prop coming back is that design coming
+   * back, so the props are asserted absent rather than merely unused.
+   */
+  it('fetches nothing itself \u2014 the report is handed to it', () => {
+    const source = readFileSync(join(__dirname, 'AlertsPanel.tsx'), 'utf8')
+    expect(source, 'the panel must not call the bridge').not.toContain('projectAlerts')
+    expect(source, 'no scan means no gate of its own').not.toContain('createScanGate')
+    expect(source, 'and no clock').not.toContain('useEvery')
   })
 
-  it('reports busy until every scan has finished, so refreshes cannot stack', () => {
-    // Regression: the 60s interval fired whether or not the previous scan had
-    // returned, and each scan reads every transcript in the project.
-    const gate = createScanGate()
-    expect(gate.isBusy()).toBe(false)
-
-    gate.begin()
-    expect(gate.isBusy()).toBe(true)
-
-    gate.begin()
-    gate.end()
-    // One of the two is still running.
-    expect(gate.isBusy()).toBe(true)
-
-    gate.end()
-    expect(gate.isBusy()).toBe(false)
-  })
-
-  it('never lets a completed scan write after an unmount', () => {
-    const gate = createScanGate()
-    const token = gate.begin()
-    gate.invalidate()
-    expect(gate.isCurrent(token)).toBe(false)
-  })
-
-  it('does not go negative when end is called more than begin', () => {
-    const gate = createScanGate()
-    gate.end()
-    gate.end()
-    expect(gate.isBusy()).toBe(false)
-    gate.begin()
-    expect(gate.isBusy()).toBe(true)
+  it('draws the button as dead rather than pretending, with no way to rescan', () => {
+    // Rule 1.1 in this repo: a control that swallows a click and reports
+    // nothing is worse than no control. Without `onRescan` there is nothing to
+    // run, so the button says so by being disabled.
+    const markup = renderToStaticMarkup(<AlertsPanel report={report([alert({ id: 'a' })])} />)
+    expect(markup).toContain('disabled')
   })
 })
 

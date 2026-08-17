@@ -136,11 +136,11 @@ export const SECTIONS = [
    * *"we should be able to see all of his files, the things it reads before it
    * starts and all those things… so we can see and learn how our copilot is
    * working."* Everything on that pane is a **reading**: the files it loads at
-   * startup, its memory, the log of what it did, the boundary the kernel holds
-   * it inside, the routines it cannot author. There is nothing to store,
-   * because the copilot's folder, its account and its confinement are all
-   * decided in the main process precisely so that no page can point them
-   * somewhere else.
+   * startup, its memory, the log of what it did, what it can reach (which is
+   * everything the person can — it is not sandboxed), and the three of this
+   * app's own records it is refused. There is nothing to store, because the
+   * copilot's folder and the account it resolves to are both decided in the
+   * main process precisely so that no page can point them somewhere else.
    *
    * It is its own rail entry rather than a group inside Agents on the rule this
    * table is built on — a section is a *subject*. Agents is "which agent runs,

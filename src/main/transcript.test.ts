@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, mkdtempSync } from 'node:fs'
+import { appendFileSync, mkdirSync, mkdtempSync, realpathSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, sep } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -15,6 +15,7 @@ import {
   listTranscripts,
   parseEventLine,
   parseUsage,
+  projectPathSpellings,
   resetDeviceHomes,
   resetHomeScopes,
   SessionAggregator,
@@ -40,6 +41,52 @@ import {
  * `C:\Users\Imza\.claude\projects`.
  */
 const ON_WINDOWS = process.platform === 'win32'
+
+/**
+ * The spelling bug, pinned against a real symlink rather than a described one.
+ *
+ * Found by running the copilot against a live fleet: a session started in
+ * `/tmp/…` had visibly written a file, and the report said it had no usage
+ * record at all — because macOS resolves `/tmp` to `/private/tmp`, the CLI filed
+ * the transcript under the resolved spelling, and this app looked under the
+ * literal one. Every reader downstream turned "could not look" into "nothing to
+ * see", which is the one answer none of them may give.
+ */
+describe('a folder reached through a symlink', () => {
+  it.skipIf(ON_WINDOWS)('is looked for under both spellings', () => {
+    const root = mkdtempSync(join(tmpdir(), 'terminaldeck-link-'))
+    const real = join(root, 'real-project')
+    const link = join(root, 'linked-project')
+    mkdirSync(real)
+    symlinkSync(real, link, 'dir')
+
+    const spellings = projectPathSpellings(link)
+    // The literal spelling first, always: nothing that worked before this
+    // existed may change order because of it.
+    expect(spellings[0]).toBe(link)
+    expect(spellings).toContain(realpathSync.native(real))
+
+    const config = mkdtempSync(join(tmpdir(), 'terminaldeck-link-cfg-'))
+    const dirs = transcriptDirs(link, { configDir: config })
+    expect(dirs).toContain(join(config, 'projects', encodeProjectPath(link)))
+    expect(dirs).toContain(join(config, 'projects', encodeProjectPath(realpathSync.native(real))))
+  })
+
+  it('costs nothing for an ordinary path, and never throws for one that is not there', () => {
+    // One spelling, one directory. The whole of the old behaviour, unchanged.
+    const plain = mkdtempSync(join(tmpdir(), 'terminaldeck-plain-'))
+    // `mkdtemp` under a symlinked tmpdir is itself two spellings, so the
+    // invariant worth pinning is deduplication rather than a count of one.
+    const config = mkdtempSync(join(tmpdir(), 'terminaldeck-plain-cfg-'))
+    const dirs = transcriptDirs(plain, { configDir: config })
+    expect(new Set(dirs).size).toBe(dirs.length)
+
+    // A folder can be added to the sidebar before it exists on disk. `realpath`
+    // throws for it; this must not.
+    expect(() => projectPathSpellings(join(plain, 'not', 'created', 'yet'))).not.toThrow()
+    expect(projectPathSpellings(join(plain, 'nope'))).toHaveLength(1)
+  })
+})
 
 describe('encodeProjectPath', () => {
   // Every case below was checked against a real directory in

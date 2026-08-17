@@ -39,6 +39,12 @@
  * failure happens is a wiring note nobody read.
  */
 
+import { sep } from 'node:path'
+import { unattendedMcpConfigPath } from '../deck-control'
+import { currentEndpoint } from '../deck-control/server'
+import { userDataDir } from '../platform/paths'
+import { store as appStore } from '../store'
+import { chooseSeedFolder, seedDefaultRoutines } from './defaults'
 import { defaultRoutineLogger, type RoutineLogger } from './log'
 import {
   RoutineEngine,
@@ -47,6 +53,7 @@ import {
 } from './engine'
 import type { RoutineRefusal } from './runtime-state'
 import { RoutineApi } from './ipc'
+import { createCopilotRunner } from './runner'
 import { RoutineFileWatchers, watchGitFolder } from './sources'
 import { RoutineStore } from './store'
 import { RuntimeState } from './runtime-state'
@@ -54,6 +61,21 @@ import { RuntimeState } from './runtime-state'
 export interface CreateRoutinesOptions {
   /** Defaults to `<userData>/routines`. */
   dir?: string
+  /**
+   * What performs a routine's prompt. Defaults to a real copilot run.
+   *
+   * It used to default to `null`, and `src/main/index.ts` explained why: there
+   * was nothing on the other end of the triggers, and every routine reported
+   * itself unarmed with that sentence attached. `runner.ts` is that other end,
+   * so the default is now the real thing — and it defaults rather than being
+   * required, because a shell that had to remember to pass it is a shell that
+   * would ship with the whole feature silently inert. That is precisely the
+   * failure this repository keeps a paragraph about.
+   *
+   * Pass `null` explicitly to run with no runner: the engine then reports every
+   * routine as unarmed, which is what the tests want and what a headless shell
+   * with no Claude CLI should have.
+   */
   runner?: RoutineRunner | null
   /**
    * The app's tool surface for runs to act through — **already unattended**.
@@ -83,6 +105,20 @@ export interface CreateRoutinesOptions {
    * a real event and stops taking this list's word for it.
    */
   wired?: ReadonlyArray<Parameters<RoutineEngine['markSource']>[0]>
+  /**
+   * The folder the shipped default routines should watch, or null to skip them.
+   *
+   * Defaults to the project this app opened most recently, read from the store
+   * — the same store `deck-control/live-surface.ts` reaches for directly and
+   * for the same stated reason: a second copy of the project list handed in
+   * from somewhere else is a place for two answers to the same question to
+   * appear.
+   *
+   * Null on a fresh install with no projects yet, and then nothing is seeded
+   * and nothing is marked as seeded, so the next launch tries again. See
+   * `defaults.ts`.
+   */
+  seedFolder?(): string | null
 }
 
 export interface RoutinesHandle {
@@ -100,11 +136,39 @@ export function createRoutines(options: CreateRoutinesOptions = {}): RoutinesHan
   const log = defaultRoutineLogger()
   const files = new RoutineFileWatchers()
 
+  /*
+   * The defaults go in before the engine reads the folder.
+   *
+   * `engine.start()` lists the directory and arms what is in it, so seeding
+   * after that would mean the shipped routines are inert until the next launch
+   * — which on a machine that is restarted once a week is a feature that
+   * appears to be broken for a week. Seeding here, at assembly, means the first
+   * `start()` finds them.
+   *
+   * Swallowed rather than thrown: a routines folder that could not be written
+   * is a reason for the app to have no default routines, not a reason for the
+   * app not to open.
+   */
+  try {
+    seedDefaultRoutines(store.dir, seedFolderOf(options), {
+      write: (id, contents) => store.saveText(id, contents),
+      existing: () => store.list().map((entry) => entry.id),
+    })
+  } catch (error) {
+    console.error('[routines] could not write the default routines:', error)
+  }
+
   const engine = new RoutineEngine({
     store,
     runtime,
     log,
-    runner: options.runner ?? null,
+    /*
+     * `undefined` means "give me the real one"; an explicit `null` means "run
+     * with none". The distinction matters because most of the engine's own
+     * tests want no runner at all, and `?? defaultRunner()` would have silently
+     * given them a real one that spawns a CLI.
+     */
+    runner: options.runner === undefined ? defaultRunner() : options.runner,
     control: options.control ?? null,
     ...(options.allowFolder ? { allowFolder: options.allowFolder } : {}),
     ...(options.globalMaxRunsPerHour ? { globalMaxRunsPerHour: options.globalMaxRunsPerHour } : {}),
@@ -128,6 +192,40 @@ export function createRoutines(options: CreateRoutinesOptions = {}): RoutinesHan
       await engine.stop()
       await files.stop()
     },
+  }
+}
+
+/**
+ * The runner a shell gets when it does not name one.
+ *
+ * `mcpConfig` is a function rather than a value on purpose. `deck-control`'s
+ * server is started asynchronously during `whenReady`, and this assembly runs
+ * at module scope before it — so a path captured here would be captured while
+ * `currentEndpoint()` was still null, and every routine on the machine would
+ * report "the deck-control server is not running" for the life of the process.
+ * Asked per run, it is right by the time anything fires.
+ *
+ * The *unattended* config, always. See `runner.ts`: which token a run holds is
+ * what makes its alter-tier calls refuse immediately instead of blocking on a
+ * confirmation dialog nobody is awake to answer.
+ */
+function defaultRunner(): RoutineRunner {
+  return createCopilotRunner({
+    mcpConfig: () => (currentEndpoint() === null ? null : unattendedMcpConfigPath()),
+  })
+}
+
+function seedFolderOf(options: CreateRoutinesOptions): string | null {
+  if (options.seedFolder) return options.seedFolder()
+  try {
+    // `getProjects` already answers newest first, which is the folder somebody
+    // is most likely to want watched. `chooseSeedFolder` owns the one thing
+    // that has to be excluded from that answer, and says why.
+    return chooseSeedFolder(appStore().getProjects(), userDataDir(), sep)
+  } catch {
+    // No platform paths installed yet, which happens in a test that builds a
+    // store of its own. Nothing to seed against, and nothing worth failing for.
+    return null
   }
 }
 

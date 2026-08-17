@@ -97,7 +97,27 @@ struct SessionListView: View {
              * that were the answer to it. Those rows are the Localhost tab now,
              * so there is nothing under this screen for an empty state to hide.
              */
-            if model.sessions.isEmpty {
+            /*
+             * "Nothing to show" is the sessions **and** the copilot row now.
+             *
+             * The compound test came back, and the note above about it being
+             * "the sessions and nothing else again" is why it is worth saying so
+             * here rather than deleting it. It was compound once before, for the
+             * ports and the dev servers, and it was right to become simple when
+             * those moved to their own tab. The copilot row is not moving: it is
+             * pinned to this list on purpose, and a machine that has a copilot
+             * and no sessions — a fresh pairing, a Mac after a restart — would
+             * otherwise draw `ContentUnavailableView` straight over the top of
+             * the one row on this screen that could answer "so what now".
+             *
+             * The connection is in the test as well, and only here. Every
+             * offline and still-connecting empty state is left exactly as it
+             * was — the spinner, the sentence, and the Try again button, which
+             * is the fix for the situation and is only ever drawn by `empty`.
+             * A copilot row over a dead socket is worth keeping *beside* a list
+             * of sessions and is not worth losing that button for.
+             */
+            if model.sessions.isEmpty && !(model.connection.isLive && showsCopilot) {
                 empty
             } else {
                 list
@@ -300,6 +320,7 @@ struct SessionListView: View {
     private var list: some View {
         ScrollView {
             LazyVStack(spacing: 10) {
+                copilot
                 if let session = model.resumable {
                     ResumeRow(session: session) { model.open(session: session.id) }
                 }
@@ -352,6 +373,36 @@ struct SessionListView: View {
             try? await Task.sleep(for: .milliseconds(450))
         }
     }
+
+    /**
+     * The copilot, above everything else on this screen.
+     *
+     * Absent for a machine that does not speak `copilot.*` — every desktop
+     * shipping today — because there is nothing on that machine to point at and
+     * a row explaining where a missing switch would be is worse than no row.
+     * Present, and honest, the moment a machine has one: including for a phone
+     * that has been granted none of it, which is the state a person can fix and
+     * the state they will never fix if nothing tells them it exists. See
+     * `CopilotListRow` for the wording and `CopilotView` for why the row lives
+     * here rather than on a fourth tab.
+     *
+     * Above Resume deliberately: Resume is where you were, and the copilot is
+     * what to ask before going anywhere. On the morning this feature exists for,
+     * the first thing wanted is a sentence about all the sessions rather than
+     * the one that was open last night.
+     */
+    @ViewBuilder
+    private var copilot: some View {
+        if showsCopilot, let host = model.current {
+            CopilotListRow(host: host) { model.openCopilot(on: host.id) }
+        }
+    }
+
+    /// Whether this machine has a copilot at all. Written once and read twice —
+    /// by the row and by the empty-state test — because a screen that decided
+    /// twice whether a row exists is a screen that eventually draws "No
+    /// sessions" over the top of it.
+    private var showsCopilot: Bool { model.copilotAccess != .notOffered }
 
     /**
      * What this list does *not* contain, said once and quietly.

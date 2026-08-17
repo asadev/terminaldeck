@@ -7,6 +7,7 @@ import type { AddressInfo, Socket } from 'node:net'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   CAPABILITIES,
+  CAPABILITY,
   CLOSE,
   MAX_UPLOAD_CHUNK_BYTES,
   PROTOCOL_VERSION,
@@ -16,6 +17,9 @@ import {
 import type { DevServerState, DevServers } from '../dev-server'
 import type { TailnetReady } from './tailnet'
 import { MAX_FAILED_ATTEMPTS, RemoteAuth } from './device-auth'
+import { CopilotGrants } from './copilot-grants'
+import { CopilotRuns } from './copilot-runs'
+import { SessionFanout, type PtySource } from './session-fanout'
 import { CODE_LENGTH, isCode } from '../../shared/short-code'
 import {
   WS_PATH,
@@ -768,6 +772,152 @@ describe('input', () => {
     expect(error).toMatchObject({ code: 'unauthorized' })
     // A remembered session id is not a keyboard.
     expect(harness.sessions.written).toEqual([])
+  })
+})
+
+/**
+ * The copilot's own terminal, asked for by name over a real socket.
+ *
+ * This was a live hole in 0.3.0 and not a gap in an unbuilt feature:
+ * `SessionFanout.list()` was `ptys.list()` mapped with nothing taken out,
+ * `attach()` admitted any id that came back from it, and remote access is on
+ * unless somebody turned it off. So on every machine with a paired device, that
+ * device could list, find the row whose folder is `<userData>/copilot`, attach,
+ * and type into the Claude CLI that holds `deck-control` — past the per-device
+ * copilot grant, past every tier, past every budget and past the confirmation
+ * dialog, because none of those sit between a pty and its keyboard.
+ *
+ * **The point of testing it here rather than only in `session-fanout.test.ts`
+ * is that absence from a list is not a permission check.** These ids leak by
+ * design — `SessionMeta.originRunId` points at them, an alert names one, a
+ * transcript path contains one — so the question that matters is what happens
+ * when an authenticated phone asks for it *by id*, which is what a client does
+ * rather than what a unit test can assert about a return value. The real
+ * `SessionFanout` is wired to the real server for the same reason: this is the
+ * whole path a phone actually travels.
+ */
+describe('the copilot’s terminal, over the wire', () => {
+  const COPILOT = 'cop-7f3a'
+
+  /** A pty layer holding one ordinary session and the copilot's. */
+  function ptysWithCopilot(): PtySource & { written: string[]; resized: number } {
+    const source = {
+      written: [] as string[],
+      resized: 0,
+      list: () => [
+        { id: 'sess-1', title: 'api', cwd: '/work/api', provider: 'claude', exitCode: null },
+        { id: COPILOT, title: 'copilot', cwd: '/data/copilot', provider: 'claude', exitCode: null },
+      ],
+      write: (_id: string, data: string) => void source.written.push(data),
+      resize: () => void (source.resized += 1),
+      scrollback: () => 'earlier output\r\n',
+      hidden: (id: string) => id === COPILOT,
+    }
+    return source
+  }
+
+  it('refuses a phone that asks for it by id, having never listed it', async () => {
+    const ptys = ptysWithCopilot()
+    const harness = await serve({ sessions: new SessionFanout(ptys) })
+    const client = await connect(harness.port)
+    client.send(HELLO)
+
+    // The listing first, because that is the door the phone is meant to use.
+    const welcome = await client.until((m) => m.t === 'welcome', 'the welcome')
+    expect(welcome.t === 'welcome' && welcome.sessions.map((s) => s.id)).toEqual(['sess-1'])
+
+    // And now the door it is not: the id, typed straight into an attach frame.
+    client.send({ t: 'attach', id: COPILOT, cols: 80, rows: 24 })
+    const error = await client.until((m) => m.t === 'error', 'the refusal')
+    expect(error).toEqual({
+      t: 'error',
+      code: 'unknown-session',
+      message: `No session ${COPILOT} is running.`,
+    })
+
+    // No handle was minted, so no scrollback and no live output ever left the
+    // machine — the assertion that matters, because a refusal sent *after* a
+    // replay would still have published the copilot's conversation.
+    expect(client.received.some((m) => m.t === 'attached')).toBe(false)
+    expect(client.received.some((m) => m.t === 'output')).toBe(false)
+    // And the size that travelled with the attach did not reshape its terminal.
+    expect(ptys.resized).toBe(0)
+  })
+
+  it('answers exactly as it does for an id that names nothing at all', async () => {
+    /*
+     * A distinct refusal would confirm that the id names something real, which
+     * is the one fact a device that was never meant to see it should not be
+     * able to establish. `SessionFanout.attach` returns `null` for both cases
+     * on purpose; this is that decision observed from the far end of a socket,
+     * where it is the only thing a client can actually measure.
+     */
+    const harness = await serve({ sessions: new SessionFanout(ptysWithCopilot()) })
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    client.send({ t: 'attach', id: COPILOT })
+    const hidden = await client.until((m) => m.t === 'error', 'the refusal for the copilot')
+    client.send({ t: 'attach', id: 'sess-does-not-exist' })
+    const absent = await client.until(
+      (m) => m.t === 'error' && m.message.includes('sess-does-not-exist'),
+      'the refusal for a made-up id',
+    )
+
+    expect(hidden.t === 'error' && hidden.code).toBe('unknown-session')
+    expect(absent.t === 'error' && absent.code).toBe('unknown-session')
+    // Same code, same sentence, one id apart.
+    expect(hidden.t === 'error' && hidden.message.replace(COPILOT, 'X')).toBe(
+      absent.t === 'error' ? absent.message.replace('sess-does-not-exist', 'X') : '',
+    )
+  })
+
+  it('will not carry a keystroke to it, however the frame is constructed', async () => {
+    /*
+     * Two frames, both refused, and for two different reasons that both have to
+     * hold. `server.ts` refuses `input` for a session this connection has no
+     * handle for — which is already true, because the attach above failed — and
+     * `SessionFanout.write` refuses it a second time whatever the transport
+     * decided. The belt and the braces are deliberate: this class is injected
+     * into more than one thing, and a rule that holds only because of the order
+     * of checks in another file is a rule the next caller does not have.
+     */
+    const ptys = ptysWithCopilot()
+    const harness = await serve({ sessions: new SessionFanout(ptys) })
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    client.send({ t: 'input', id: COPILOT, data: '/exit\r' })
+    const error = await client.until((m) => m.t === 'error', 'the refusal')
+    expect(error).toMatchObject({ code: 'unauthorized' })
+
+    // The copilot is answering a question in its own window while this happens;
+    // nothing this phone sent reached its keyboard.
+    expect(ptys.written).toEqual([])
+  })
+
+  it('does not offer the copilot’s folder to the phone’s New Session picker', async () => {
+    /*
+     * The same hole one step to the left. A host builds the folders it offers
+     * partly from the cwd of every running session, so an unfiltered list puts
+     * `<userData>/copilot` in a phone's folder picker — where `create` would
+     * refuse it, which is the right answer arriving in the wrong place: a
+     * picker should not show a row whose only outcome is a refusal.
+     */
+    const ptys = ptysWithCopilot()
+    const fanout = new SessionFanout({
+      ...ptys,
+      create: async () => ({ ok: false as const, code: 'unavailable' as const, message: 'no' }),
+      folders: () => ['/work/api', '/data/copilot'],
+    })
+    const harness = await serve({ sessions: fanout })
+    const client = await connect(harness.port)
+    client.send(HELLO)
+
+    const welcome = await client.until((m) => m.t === 'welcome', 'the welcome')
+    expect(welcome.t === 'welcome' && welcome.folders).toEqual(['/work/api'])
   })
 })
 
@@ -2078,5 +2228,293 @@ describe('starting a project’s dev server from a phone', () => {
       code: 'unauthorized',
       message: 'Dev servers cannot be started from a phone here.',
     })
+  })
+})
+
+/* ---------------------------------------------------------------- copilot -- */
+
+/**
+ * The copilot surface, over a real socket, from hello to refusal.
+ *
+ * The unit tests beside this one prove the rules — `copilot-enforcement.test.ts`
+ * for the tier check at the point a tool is dispatched, `copilot-runs.test.ts`
+ * for the run manager, `copilot-frames.test.ts` for the property that a phone
+ * cannot name a tool. What none of them can prove is that the frames actually
+ * reach any of it, which is the failure this repository has paid for twice: a
+ * feature that typechecks, passes its unit tests and is wired to nothing.
+ *
+ * So everything below goes down a loopback WebSocket, through the framing,
+ * through the hello, through `copilotFor`, and into a real {@link CopilotRuns}
+ * over a real {@link CopilotGrants} on a real temp directory. The only fakes are
+ * the pty and the Claude CLI, which cannot be spawned in a test.
+ */
+
+function copilotHost(): {
+  copilot: CopilotRuns
+  grants: CopilotGrants
+  dir: string
+  spawned: number
+  stopped: string[]
+  said: Array<{ id: string; text: string }>
+} {
+  const dir = mkdtempSync(join(tmpdir(), 'deck-copilot-wire-'))
+  roots.push(dir)
+  const grants = new CopilotGrants(dir)
+  const alive = new Set<string>()
+  const box = { spawned: 0, stopped: [] as string[], said: [] as Array<{ id: string; text: string }> }
+  const copilot = new CopilotRuns({
+    grants,
+    callers: { set: () => {}, delete: () => true },
+    endpoint: () => ({ url: 'http://127.0.0.1:5599/mcp' }),
+    copilotRoot: () => join(dir, 'copilot'),
+    spawn: async () => {
+      box.spawned += 1
+      const id = `run-${box.spawned}`
+      alive.add(id)
+      return id
+    },
+    isAlive: (id) => alive.has(id),
+    stop: (id) => {
+      box.stopped.push(id)
+      alive.delete(id)
+    },
+    say: (id, text) => box.said.push({ id, text }),
+    interrupt: () => {},
+    desk: () => ({ status: 'running', profile: 'Personal', signedIn: true, available: true, reason: null }),
+    cost: () => ({ tools: 11, turnTokens: 900 }),
+    sessions: () => [],
+    log: () => ({ rows: [], more: false }),
+    pending: () => [],
+    chat: () => () => {},
+  })
+  return Object.assign(box, { copilot, grants, dir })
+}
+
+describe('the copilot capability is advertised only when it exists', () => {
+  /**
+   * The defect this pins, in the words of the filter's own comment: *the
+   * advertisement cannot outlive the thing it advertises.*
+   *
+   * `advertised` is built by filtering `CAPABILITIES`, and a name with no case
+   * in that filter falls through to `return true`. A desktop built from such a
+   * tree tells every phone it speaks `copilot` while implementing none of it, so
+   * a client gating its Copilot tab on the capability — which is exactly what
+   * the capability is for — draws a tab that answers `unauthorized` to
+   * everything. The two tests here are the pair: present when the layer is
+   * injected, absent when it is not.
+   */
+  it('leaves copilot out of the welcome on a host with no copilot layer', async () => {
+    const harness = await serve()
+    const client = await connect(harness.port)
+    client.send(HELLO)
+
+    const welcome = await client.until((m) => m.t === 'welcome', 'the welcome')
+    expect(welcome.t === 'welcome' && welcome.capabilities).not.toContain(CAPABILITY.copilot)
+    // And the per-device grant is absent too, which is a different fact from
+    // "granted nothing" and is what stops a phone drawing a switch it cannot
+    // change: there is no copilot here at all.
+    expect(welcome.t === 'welcome' && welcome.copilot).toBeUndefined()
+  })
+
+  it('advertises it, and the device’s own grant, when the layer is there', async () => {
+    const host = copilotHost()
+    host.grants.set('device-1', { read: true })
+    const harness = await serve({ copilot: host.copilot })
+    const client = await connect(harness.port)
+    client.send(HELLO)
+
+    const welcome = await client.until((m) => m.t === 'welcome', 'the welcome')
+    expect(welcome.t === 'welcome' && welcome.capabilities).toContain(CAPABILITY.copilot)
+    // `alter` is not on the wire at all — not as `false`, not as anything.
+    expect(welcome.t === 'welcome' && welcome.copilot).toEqual({ read: true, act: false })
+  })
+
+  it('says the capability is there and the grant is nothing, for an ungranted device', async () => {
+    const host = copilotHost()
+    const harness = await serve({ copilot: host.copilot })
+    const client = await connect(harness.port)
+    client.send(HELLO)
+
+    const welcome = await client.until((m) => m.t === 'welcome', 'the welcome')
+    expect(welcome.t === 'welcome' && welcome.capabilities).toContain(CAPABILITY.copilot)
+    expect(welcome.t === 'welcome' && welcome.copilot).toEqual({ read: false, act: false })
+  })
+})
+
+describe('a watching phone can watch, and cannot do', () => {
+  /** The round trip: attach, and get the state of a real copilot layer back. */
+  it('attaches and is answered with the state', async () => {
+    const host = copilotHost()
+    host.grants.set('device-1', { read: true })
+    const harness = await serve({ copilot: host.copilot })
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    client.send({ t: 'copilot.attach' })
+    const state = await client.until((m) => m.t === 'copilot.state', 'the state')
+    expect(state).toMatchObject({
+      t: 'copilot.state',
+      state: { desk: 'running', run: null, tools: 11, grant: { read: true, act: false } },
+    })
+  })
+
+  it('answers every read verb and starts nothing', async () => {
+    const host = copilotHost()
+    host.grants.set('device-1', { read: true })
+    const harness = await serve({ copilot: host.copilot })
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    client.send({ t: 'copilot.state' })
+    await client.until((m) => m.t === 'copilot.state', 'the state')
+    client.send({ t: 'copilot.sessions' })
+    await client.until((m) => m.t === 'copilot.sessions', 'the sessions')
+    client.send({ t: 'copilot.pending' })
+    await client.until((m) => m.t === 'copilot.pending', 'the pending set')
+    client.send({ t: 'copilot.log', limit: 20 })
+    const log = await client.until((m) => m.t === 'copilot.log', 'the log')
+
+    expect(log).toEqual({ t: 'copilot.log', rows: [], more: false })
+    // Watching costs this machine one callback and spends no money. That is the
+    // whole argument for the read tier being the one to hand out.
+    expect(host.spawned).toBe(0)
+  })
+
+  /**
+   * The frame a phone should not be allowed to send, sent anyway.
+   *
+   * `copilot.say` is `act` because talking to the copilot *is* `sessions.send`
+   * by the time it lands — it spends money and causes tool calls — and that line
+   * is what makes `read` a genuinely useful watching grant rather than a
+   * decorative one. A phone holding only `read` gets a clean refusal, and
+   * nothing is spawned, nothing is typed, and nothing is stopped.
+   */
+  it('refuses say, start, cancel and stop from a read-only device', async () => {
+    const host = copilotHost()
+    host.grants.set('device-1', { read: true })
+    const harness = await serve({ copilot: host.copilot })
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    const acting = [
+      { t: 'copilot.say', text: 'stop everything' },
+      { t: 'copilot.start' },
+      { t: 'copilot.cancel' },
+      { t: 'copilot.stop' },
+    ]
+    for (const frame of acting) client.send(frame)
+    // Waited for by count rather than one at a time, because `until` resolves on
+    // anything already received and would otherwise hand back the first
+    // refusal four times over — a loop that looks like it checked four frames
+    // and checked one.
+    client.send({ t: 'ping' })
+    await client.until((m) => m.t === 'pong', 'the pong')
+
+    const errors = client.received.filter((m) => m.t === 'error')
+    expect(errors.length).toBe(acting.length)
+    for (const error of errors) {
+      expect(error).toMatchObject({ t: 'error', code: 'unauthorized' })
+      // The sentence names the remedy rather than the tier. "You need `act`" is
+      // a word from this codebase's permission model that means nothing on a
+      // phone; what a person can act on is that the switch is on their desktop.
+      expect(error.t === 'error' && error.message).toMatch(/Settings/)
+    }
+
+    expect(host.spawned).toBe(0)
+    expect(host.said).toEqual([])
+    expect(host.stopped).toEqual([])
+  })
+
+  it('refuses every verb, including the read ones, from a device with no grant', async () => {
+    const host = copilotHost()
+    const harness = await serve({ copilot: host.copilot })
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    client.send({ t: 'copilot.attach' })
+    const error = await client.until((m) => m.t === 'error', 'the refusal')
+    expect(error).toMatchObject({ t: 'error', code: 'unauthorized' })
+    // The state must not have leaked into the refusal — it is the thing being
+    // protected, and this is the assertion the unauthenticated tests above make
+    // about the session list for the same reason.
+    expect(client.received.some((m) => m.t === 'copilot.state')).toBe(false)
+  })
+
+  /**
+   * An untick lands on the next frame, with no reconnect.
+   *
+   * The grant is read per message — `copilot.granted(deviceId)` inside
+   * `copilotFor` — never captured at hello. This is the same property
+   * `folders()` has for `create`, and it is what makes the `copilot.grant` push
+   * honest rather than load-bearing: the rule is already live without it.
+   */
+  it('refuses on the very next frame after the grant is taken away', async () => {
+    const host = copilotHost()
+    host.grants.set('device-1', { read: true, act: true })
+    const harness = await serve({ copilot: host.copilot })
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    client.send({ t: 'copilot.start' })
+    await client.until((m) => m.t === 'copilot.state', 'the started state')
+    expect(host.spawned).toBe(1)
+
+    host.grants.forget('device-1')
+
+    client.send({ t: 'copilot.say', text: 'anything at all' })
+    const error = await client.until((m) => m.t === 'error', 'the refusal')
+    expect(error).toMatchObject({ t: 'error', code: 'unauthorized' })
+    expect(host.said).toEqual([])
+  })
+})
+
+describe('an acting phone gets its own run', () => {
+  it('starts one run, answers a second start with it, and says into it', async () => {
+    const host = copilotHost()
+    host.grants.set('device-1', { read: true, act: true })
+    const harness = await serve({ copilot: host.copilot })
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    client.send({ t: 'copilot.attach' })
+    await client.until((m) => m.t === 'copilot.state', 'the first state')
+
+    client.send({ t: 'copilot.start' })
+    await client.until(
+      (m) => m.t === 'copilot.state' && m.state.run !== null,
+      'the state naming the run',
+    )
+    client.send({ t: 'copilot.start' })
+    client.send({ t: 'copilot.say', text: 'which session is stuck?' })
+    client.send({ t: 'ping' })
+    await client.until((m) => m.t === 'pong', 'the pong')
+
+    // One process for two starts. A phone that reconnects and taps Start —
+    // which is what a person does when a screen looks empty — must not spawn a
+    // second Claude CLI in the same folder.
+    expect(host.spawned).toBe(1)
+    expect(host.said).toEqual([{ id: 'run-1', text: 'which session is stuck?' }])
+  })
+
+  it('stops its own run and nothing else', async () => {
+    const host = copilotHost()
+    host.grants.set('device-1', { read: true, act: true })
+    const harness = await serve({ copilot: host.copilot })
+    const client = await connect(harness.port)
+    client.send(HELLO)
+    await client.until((m) => m.t === 'welcome', 'the welcome')
+
+    client.send({ t: 'copilot.start' })
+    await client.until((m) => m.t === 'copilot.state' && m.state.run !== null, 'the run')
+    client.send({ t: 'copilot.stop' })
+    await client.until((m) => m.t === 'copilot.state' && m.state.run === null, 'the stopped state')
+
+    expect(host.stopped).toEqual(['run-1'])
   })
 })

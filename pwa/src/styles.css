@@ -1672,6 +1672,17 @@ input[type='text']:focus-visible {
   font-size: 14px;
 }
 
+/* A value somebody reads a character at a time and compares against one they
+   were told — the build number in About, and nothing else so far. Mono for the
+   same reason the port numbers and the host ids are: digits that have to be
+   matched exactly want a face where 1, l and I are three shapes. 13px rather
+   than 14, because JetBrains Mono runs larger on the body than Hanken Grotesk
+   does and the two values sat unevenly against each other at the same size. */
+.setting__value--mono {
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
 .setting__mark {
   flex: none;
   color: var(--text-muted);

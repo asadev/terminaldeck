@@ -6,6 +6,7 @@ import {
   providersFor,
   resetLoginPathCache,
   resolvedProvidersFor,
+  withLaunchArgs,
 } from './providers'
 import { resetAgentBinaryCache } from './agent-binaries'
 
@@ -398,5 +399,88 @@ describe('the probe command itself', () => {
     expect(inner).toContain('\\n')
     // And it asks about every agent in one loop rather than three lookups.
     expect(inner).toContain('for n in claude codex gemini')
+  })
+})
+
+/**
+ * Flags a particular launch adds, on all three launch shapes.
+ *
+ * One caller: the copilot, spawned with `--mcp-config <file>
+ * --strict-mcp-config`, which is the only way a Claude CLI process can be given
+ * the `deck-control` tools at all. Before this existed there was nowhere on the
+ * spawn path to put a flag, so the copilot had none of this app's tools and
+ * every claim about tiers and confirmations described a gate that was not in the
+ * path.
+ *
+ * The WSL case is the reason this is a function rather than a spread at the call
+ * site, and it is the case nobody here can run: inside a distribution
+ * `spawn.args` is a `wsl.exe` invocation whose last element is a quoted shell
+ * command *line*, so appending to it hands the flags to the login shell as
+ * positional parameters and the CLI never sees them. It would have worked on
+ * this machine, worked in CI, and been wrong only for the person whose projects
+ * live in Ubuntu.
+ */
+describe('extra launch arguments', () => {
+  const MCP = ['--mcp-config', '/state/copilot/deck-control.json', '--strict-mcp-config']
+
+  it('appends them to the agent’s own arguments on a POSIX spawn', () => {
+    const mac = providersFor('darwin', { SHELL: '/bin/zsh' })
+    const withTools = withLaunchArgs(mac.claude, MCP, 'darwin', { SHELL: '/bin/zsh' })
+    expect(withTools.spawn.command).toBe('claude')
+    expect(withTools.spawn.args).toEqual(MCP)
+    expect(withTools.spawn.resumeArgs).toEqual(['--continue', ...MCP])
+  })
+
+  it('puts them after the CLI on the Windows command processor, not after cmd', () => {
+    const env = { COMSPEC: 'C:\\Windows\\system32\\cmd.exe' }
+    const win = providersFor('win32', env)
+    const withTools = withLaunchArgs(win.claude, MCP, 'win32', env)
+    expect(withTools.spawn.command).toBe(env.COMSPEC)
+    expect(withTools.spawn.args).toEqual(['/c', 'claude', ...MCP])
+  })
+
+  it('folds them into the shell command line inside a distribution', () => {
+    const env = { COMSPEC: 'C:\\Windows\\system32\\cmd.exe', USERPROFILE: 'C:\\Users\\Asad' }
+    const target = { distro: 'Ubuntu', cwd: '/home/asad/proj' }
+    const withTools = withLaunchArgs(providersFor('win32', env, target).claude, MCP, 'win32', env, target)
+    const args = withTools.spawn.args
+    // The flags are *inside* the quoted command the login shell runs — the last
+    // element — rather than trailing after it, where `sh -lc '<cmd>' --flag`
+    // would make them the shell's positional parameters.
+    expect(args[args.length - 1]).toBe(
+      "exec claude --mcp-config /state/copilot/deck-control.json --strict-mcp-config",
+    )
+    expect(withTools.spawn.command).toBe('wsl.exe')
+    // The Windows-side working directory survives the rebuild; without it
+    // node-pty resolves the Linux path to `C:\home\asad\proj` and the tab dies.
+    expect(withTools.spawn.hostCwd).toBe('C:\\Users\\Asad')
+  })
+
+  it('leaves an empty resume list empty rather than inventing a resume flag', () => {
+    // `startSession` reads a zero-length `resumeArgs` as "this agent cannot
+    // continue a conversation" and falls back to the start arguments. Filling
+    // it in here would make a resume silently start a fresh session.
+    const mac = providersFor('darwin', { SHELL: '/bin/zsh' })
+    expect(withLaunchArgs(mac.gemini, MCP, 'darwin', { SHELL: '/bin/zsh' }).spawn.resumeArgs).toEqual([])
+  })
+
+  it('hands back the very same spec when there is nothing to add', () => {
+    // The ordinary case — every session that is not the copilot — must not pay
+    // for this, and must not get a rebuilt spec that could differ in any field.
+    const mac = providersFor('darwin', { SHELL: '/bin/zsh' })
+    expect(withLaunchArgs(mac.claude, [], 'darwin', { SHELL: '/bin/zsh' })).toBe(mac.claude)
+  })
+
+  it('keeps a command that was resolved to a working copy of the CLI', async () => {
+    /*
+     * `resolvedProvidersFor` points `spawn.command` at an absolute path when the
+     * bare name on PATH will not execute — the npm `@openai/codex` launcher
+     * failing to spawn its own missing native binary, which cost a recording.
+     * Rebuilding the spec from `bin` here would quietly undo that.
+     */
+    const resolved = await resolvedProvidersFor('darwin', { SHELL: '/bin/zsh' })
+    const pointed = { ...resolved.claude, spawn: { ...resolved.claude.spawn, command: '/opt/claude/bin/claude' } }
+    const withTools = withLaunchArgs(pointed, MCP, 'darwin', { SHELL: '/bin/zsh' })
+    expect(withTools.spawn.command).toBe('/opt/claude/bin/claude')
   })
 })

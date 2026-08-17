@@ -1,8 +1,8 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { parseRoutine } from './format'
+import { MAX_FILE_BYTES, parseRoutine, serializeRoutine } from './format'
 import { MAX_ROUTINES, RoutineStore, routineFilePath, routinesDirFor } from './store'
 import { runtimeStateFileFor } from './runtime-state'
 
@@ -166,5 +166,82 @@ describe('RoutineStore', () => {
     writeFileSync(join(dir, 'sweep.md'), GOOD, 'utf8')
     await new Promise((resolve) => setTimeout(resolve, 200))
     expect(changes).toBe(0)
+  })
+})
+
+describe('reading and writing a routine file as text', () => {
+  /**
+   * A file with the things `parseRoutine` throws away: a second heading and a
+   * blank-line rhythm somebody chose. Both survive a round trip through
+   * `readText`/`saveText` and neither survives `serializeRoutine`, which is the
+   * whole reason the text pair exists.
+   */
+  const HAND_WRITTEN = [
+    '# Sweep',
+    '',
+    '# NOTE: raised the rate limit after the 2026-08 incident',
+    '',
+    'when: manual',
+    'in: /tmp/project',
+    '',
+    '---',
+    '',
+    'Have a look.',
+    '',
+  ].join('\n')
+
+  it('hands back the exact bytes on disk', () => {
+    writeFileSync(join(dir, 'sweep.md'), HAND_WRITTEN, 'utf8')
+    const store = new RoutineStore({ dir })
+    const result = store.readText('sweep')
+    expect(result.ok && result.text).toBe(HAND_WRITTEN)
+    expect(result.ok && result.file).toBe(routineFilePath(dir, 'sweep'))
+  })
+
+  it('writes the exact bytes back, keeping what the parser would have dropped', () => {
+    /*
+     * The bug this exists to prevent, stated as a comparison.
+     *
+     * `store.save` serialises a parsed `Routine`, which is right for a caller
+     * holding a value and wrong for a caller holding somebody's file: the
+     * canonical writer keeps no second heading, so an editor that round-tripped
+     * through it would delete the note above every time the person pressed
+     * Save. Deleting somebody's writing to normalise their formatting is the
+     * fastest way to teach them that the box in Settings is not really their
+     * file.
+     */
+    const store = new RoutineStore({ dir })
+    store.saveText('sweep', HAND_WRITTEN)
+    expect(readFileSync(join(dir, 'sweep.md'), 'utf8')).toBe(HAND_WRITTEN)
+
+    const parsed = store.read('sweep')
+    expect(parsed.ok).toBe(true)
+    // And what the canonical writer would have produced instead, so the
+    // difference is visible here rather than inferred.
+    expect(parsed.ok && serializeRoutine(parsed.routine)).not.toContain('NOTE: raised the rate limit')
+  })
+
+  it('leaves no half-written file behind, because the write is a rename', () => {
+    const store = new RoutineStore({ dir })
+    store.saveText('sweep', HAND_WRITTEN)
+    expect(existsSync(join(dir, 'sweep.md.tmp'))).toBe(false)
+  })
+
+  it('refuses an id that is really a path, in both directions', () => {
+    // `routineFilePath` is the one function that turns an id into a path, and
+    // it throws rather than answering "nowhere". Reading catches that and
+    // reports it; writing is allowed to throw, because every caller of
+    // `saveText` has already validated the id through `RoutineApi`.
+    const store = new RoutineStore({ dir })
+    expect(store.readText('../../etc/passwd').ok).toBe(false)
+    expect(() => store.saveText('../../etc/passwd', 'x')).toThrow()
+  })
+
+  it('refuses to open a file too large to be a routine', () => {
+    writeFileSync(join(dir, 'huge.md'), 'x'.repeat(MAX_FILE_BYTES + 1), 'utf8')
+    const store = new RoutineStore({ dir })
+    const result = store.readText('huge')
+    expect(result.ok).toBe(false)
+    expect(result.ok === false && result.error).toContain('larger than')
   })
 })

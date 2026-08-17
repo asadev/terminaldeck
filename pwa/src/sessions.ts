@@ -7,7 +7,60 @@
  * derived here rather than in the DOM code, where they could not be tested.
  */
 
-import type { RemoteSession } from './protocol-client'
+import type { RemoteSession, ServerMessage } from './protocol-client'
+
+/**
+ * The one sentence standing above the session list, after this frame.
+ *
+ * ## The bug this was extracted for
+ *
+ * Pairing a browser goes: type the code, the desktop answers *"Paired. Approve
+ * this device in the desktop app, then reconnect"*, somebody approves it, the
+ * socket comes back with a `welcome`, and the real session list draws. That
+ * sentence stayed on screen — above the live list, on both the dev build and
+ * on app.terminaldeck.dev — telling a person to go and do a thing they had
+ * already done, while the evidence that they had done it was three rows below
+ * it. Found by looking at a screenshot of a successful pairing, which is the
+ * only way it could have been found: nothing was broken, and every frame
+ * involved was handled correctly on its own.
+ *
+ * A notice is a report about the **last thing the machine said**. A `welcome` is
+ * the machine saying something newer and better, so it ends every notice there
+ * is — not only the pairing one. Any refusal a previous connection was still
+ * complaining about is, by definition, over: this is a fresh socket that got
+ * through, and the desktop has just re-stated the whole session list.
+ *
+ * ## Why it is a function here rather than four lines in `main.ts`
+ *
+ * The same reason `foldersAfter` is, and `main.ts` says so at its own call site:
+ * a rule that lives inside the `switch` is a rule nothing in this repository can
+ * check. There is no DOM under vitest, so a decision written in the renderer is
+ * a decision verified only by somebody remembering to take a screenshot — which
+ * is exactly how this one shipped. Written here, `sessions.test.ts` holds it.
+ *
+ * Takes the previous notice and returns the next one, rather than mutating, so
+ * "this frame says nothing about the notice" has an obvious spelling and is the
+ * default for every frame not named below.
+ *
+ * @param noun What this client calls the machine — "Mac", "PC", "desktop". The
+ * caller owns that word (`host-platform.ts`), because it is the one thing in
+ * this sentence that depends on what answered.
+ */
+export function noticeAfter(notice: string | null, message: ServerMessage, noun: string): string | null {
+  // A machine that has just said hello has nothing outstanding to apologise for.
+  if (message.t === 'welcome') return null
+  if (message.t !== 'error') return notice
+  /*
+   * Rewritten rather than shown, and only this one. `unknown-session` is the
+   * desktop refusing a frame about a session that has gone, and its own wording
+   * is aimed at a client, not at a person standing in a queue. Every other code
+   * carries a sentence the desktop composed for a human — see
+   * `PROTOCOL_ERROR_CODES` — and re-writing those here would be this client
+   * inventing an explanation for a refusal it does not understand.
+   */
+  if (message.code === 'unknown-session') return `That session is no longer running on the ${noun}.`
+  return message.message
+}
 
 /**
  * The dot's colour.

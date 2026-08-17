@@ -10,7 +10,9 @@ import { NewSessionDialog } from './components/NewSessionDialog'
 import { HelpDialog } from './components/HelpPanel'
 import { JoinRemoteDialog } from './components/JoinRemoteDialog'
 import { SessionInspector } from './components/SessionInspector'
-import { AlertsWindow } from './components/AlertsPanel'
+import { AlertsWindow, withInsights } from './components/AlertsPanel'
+import { useProjectAlerts } from './alerts-feed'
+import { markSeen, readSeen, unreadCount, writeSeen, type SeenAlerts } from './alerts-unread'
 import {
   CloseSessionConfirm,
   CONFIRM_CLOSE_KEY,
@@ -458,6 +460,80 @@ function Workspace() {
     sessions.find((s) => s.id === activeSessionId)?.projectPath ??
     projects[0]?.path ??
     null
+
+  /**
+   * Alerts, fetched once for the whole window.
+   *
+   * Two surfaces read this and it is deliberately one feed: the dot on the bell
+   * in the rail, and the sheet the bell opens. The sheet used to fetch for
+   * itself, which is why the dot never lit — a dialog only exists while it is
+   * open, so with the scan inside it there was nothing producing a report for
+   * anything else to count, and `Sidebar`'s `alertCount` sat there drawn,
+   * tested and fed by nobody.
+   *
+   * `alerts-feed.ts` carries the argument about *when* it scans; the short
+   * version is that it subscribes to session events rather than keeping a
+   * clock, because a scan reads every transcript in the project and the app's
+   * standing rule is events, not polling.
+   *
+   * The predicate is what keeps a busy machine honest. `session:status` is
+   * machine-wide, and `alerts.ts` filters live sessions by project before any
+   * rule sees them, so an agent going idle in another folder cannot change this
+   * folder's alerts — scanning to rediscover that is the one avoidable cost
+   * here, and it grows with exactly the way this app is used.
+   *
+   * A null path is how the feed is told to do nothing, so switching Alerts off
+   * in Settings stops the scanning as well as the drawing. `off` is the state
+   * somebody chose deliberately, and a feature that is off but still reading
+   * every transcript in the project is the kind of thing that makes turning a
+   * feature off pointless.
+   */
+  const alertsFeed = useProjectAlerts(features.on('alerts') ? activeProjectPath : null, {
+    sessionInProject: (id) =>
+      sessions.find((session) => session.id === id)?.projectPath === activeProjectPath,
+  })
+
+  /**
+   * The same filter the sheet applies, applied to the same report.
+   *
+   * Both the count and the "you have seen this" record are computed from the
+   * *shown* alerts rather than the raw ones, so switching off "Show insight
+   * alerts" cannot leave a dot standing for four rows the sheet would refuse to
+   * draw — which is the version of this defect that would be hardest to
+   * diagnose, because the panel behind the dot would look empty and correct.
+   */
+  const showInsightAlerts = booleanSetting(settings, 'general.showInsightAlerts')
+  const shownAlerts = useMemo(
+    () => (alertsFeed.report ? withInsights(alertsFeed.report, showInsightAlerts) : null),
+    [alertsFeed.report, showInsightAlerts],
+  )
+  const [alertsSeen, setAlertsSeen] = useState<SeenAlerts>(() =>
+    readSeen(globalThis.localStorage ?? null),
+  )
+  const alertCount = shownAlerts
+    ? unreadCount(shownAlerts.alerts, alertsSeen, activeProjectPath)
+    : 0
+
+  /**
+   * Opening the sheet is what marks an alert read. See `alerts-unread.ts` for
+   * why that is the only clearing event and why an escalated alert counts as a
+   * new one.
+   *
+   * It runs on every report while the sheet is open, not only on the open, and
+   * that is the case worth stating: the feed keeps scanning behind the dialog,
+   * so an alert that appears while you are reading the list has been put in
+   * front of you as surely as the ones that were there when you pressed the
+   * bell. Marking only at open would light the dot on a sheet you are looking
+   * at. `markSeen` returns the same object when nothing changed, which is what
+   * stops this effect from writing to disk on every scan.
+   */
+  useEffect(() => {
+    if (!alertsOpen || activeProjectPath === null || shownAlerts === null) return
+    const next = markSeen(alertsSeen, activeProjectPath, shownAlerts.alerts)
+    if (next === alertsSeen) return
+    writeSeen(globalThis.localStorage ?? null, next)
+    setAlertsSeen(next)
+  }, [alertsOpen, activeProjectPath, shownAlerts, alertsSeen])
 
   /** Whether the window is showing a hand-arranged layout rather than one session. */
   const splitting = isSplit(panes)
@@ -2159,6 +2235,10 @@ function Workspace() {
             changes hands.
           */
           alerts={features.controlOn('sidebar.alerts')}
+          /* The number on the bell: alerts this project has that the sheet has
+             not shown you. Computed above from the one feed the sheet reads, so
+             the dot and the list cannot disagree. */
+          alertCount={alertCount}
           unread={unreadIds}
           peeking={sidebar.peeking && sidebar.collapsed}
           // Above Settings, in the foot. Mounted here rather than inside the
@@ -2535,7 +2615,15 @@ function Workspace() {
         open={alertsOpen && features.on('alerts')}
         onClose={() => setAlertsOpen(false)}
         projectPath={activeProjectPath}
-        showInsights={booleanSetting(settings, 'general.showInsightAlerts')}
+        /* The raw report and the switch, not the filtered one: the panel applies
+           `withInsights` itself, and handing it a report that had already been
+           filtered would leave two places deciding the same thing. */
+        report={alertsFeed.report}
+        busy={alertsFeed.busy}
+        error={alertsFeed.error}
+        available={alertsFeed.available}
+        onRescan={alertsFeed.rescan}
+        showInsights={showInsightAlerts}
         /*
          * Every alert's button, given somewhere to go. Each of the five kinds
          * names a target the app can already show; the panel raised them and

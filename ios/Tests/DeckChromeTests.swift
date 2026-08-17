@@ -54,6 +54,24 @@ final class DeckChromeTests: XCTestCase {
     }
 
     /**
+     * And the copilot, which arrived after the sentence was said and belongs
+     * with those two rather than with Machines.
+     *
+     * The rule the complaint is actually about is a bar floating over the bottom
+     * of a screen you came for — and he said it with a keyboard up: *"when this
+     * keyboard is down, see the pill is still there."* The copilot screen has a
+     * composer at the bottom of it, so it is that frame with a different
+     * keyboard in it. Machines, by contrast, is pushed and keeps the bar, which
+     * is why "hidden when pushed" is not the rule and why this case is asserted
+     * by name rather than left to the set below.
+     */
+    func testTheBarIsHiddenInsideTheCopilot() {
+        XCTAssertFalse(DeckChrome.showsTabBar(on: .copilot),
+                       "the copilot screen ends in a text field, which is the pill complaint")
+        XCTAssertEqual(DeckChrome.tabBar(on: .copilot), .hidden)
+    }
+
+    /**
      * Every surface has been decided about, and the two answers are exactly the
      * two sets above.
      *
@@ -66,7 +84,7 @@ final class DeckChromeTests: XCTestCase {
         let hidden = Set(DeckSurface.allCases.filter { !DeckChrome.showsTabBar(on: $0) })
 
         XCTAssertEqual(shown, [.sessions, .localhost, .settings, .machines])
-        XCTAssertEqual(hidden, [.session, .localhostPage])
+        XCTAssertEqual(hidden, [.session, .localhostPage, .copilot])
         XCTAssertEqual(shown.count + hidden.count, DeckSurface.allCases.count)
     }
 

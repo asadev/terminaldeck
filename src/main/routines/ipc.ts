@@ -15,14 +15,22 @@
  * split maps onto these calls exactly, and it is recorded here in code because
  * the phase-2 server will need it and a table in a document is not a check:
  *
- *  - Read: `list`, `get`
+ *  - Read: `list`, `get`, `text`
  *  - Act:  `run`, `pause`, `resume`
  *  - Alter: `create`, `update`, `remove`
+ *  - Human: `saveText` — see {@link RoutineTier}
  *
  * Nothing in this file enforces the confirmation — a confirmation is a window,
  * and a window is a later pass. What it does do is refuse to pretend: every
  * Alter operation is marked, so the surface that gets built on top of it cannot
  * quietly skip the ones that need asking.
+ *
+ * The fourth name is newer and it is the load-bearing one. `saveText` writes the
+ * exact bytes a person typed into a routine file, which is wider than anything
+ * in the Alter row — those all go through `routineFromDraft`, whose
+ * `headerValue` guard is the reason a model may be handed them. There is no tier
+ * at which the copilot may write chosen bytes into this folder, so `human` says
+ * that rather than choosing the nearest of three wrong answers.
  *
  * ## This is now the *only* way a routine comes into existence
  *
@@ -48,7 +56,14 @@
  */
 
 import type { IpcMain, IpcMainInvokeEvent } from 'electron'
-import { isValidId, routineFromDraft, serializeTrigger, suggestId, type RoutineDraft } from './format'
+import {
+  isValidId,
+  parseRoutine,
+  routineFromDraft,
+  serializeTrigger,
+  suggestId,
+  type RoutineDraft,
+} from './format'
 import type { RoutineEngine, RoutineView, RunRequestResult } from './engine'
 import type { RoutineStore } from './store'
 import { MAX_ROUTINES } from './store'
@@ -61,19 +76,41 @@ export const ROUTINES_DELETE = 'routines:delete'
 export const ROUTINES_RUN = 'routines:run'
 export const ROUTINES_PAUSE = 'routines:pause'
 export const ROUTINES_RESUME = 'routines:resume'
+export const ROUTINES_TEXT = 'routines:text'
+export const ROUTINES_SAVE_TEXT = 'routines:save-text'
 
-/** Which permission tier an operation sits in. See the module header. */
-export type RoutineTier = 'read' | 'act' | 'alter'
+/**
+ * Which permission tier an operation sits in. See the module header.
+ *
+ * `human` is a fourth name and it is not a tier at all — it is the absence of
+ * one, written down so that the absence is checkable. `deck-control`'s own
+ * `Tier` in `surface.ts` is exactly `'read' | 'act' | 'alter'`, and every entry
+ * in its catalogue must declare one of those three, so an operation marked here
+ * as `human` has no tier it could be exposed at: a tool declaring it would not
+ * typecheck without somebody first widening `Tier`, which is a deliberate,
+ * visible act rather than a mistake anybody makes in passing.
+ *
+ * Exactly one operation wears it, and the reason is in
+ * {@link RoutineApi.saveText}: writing chosen bytes into the routines folder is
+ * strictly *wider* than `update`, because `update` goes through
+ * `routineFromDraft` and its header-injection guard, and this does not. Handing
+ * that to the copilot would undo, at the API layer, precisely the boundary that
+ * moving the folder out of its reach created. See `store.ts` on why that folder
+ * moved at all.
+ */
+export type RoutineTier = 'read' | 'act' | 'alter' | 'human'
 
 export const ROUTINE_TIERS: Readonly<Record<string, RoutineTier>> = {
   [ROUTINES_LIST]: 'read',
   [ROUTINES_GET]: 'read',
+  [ROUTINES_TEXT]: 'read',
   [ROUTINES_RUN]: 'act',
   [ROUTINES_PAUSE]: 'act',
   [ROUTINES_RESUME]: 'act',
   [ROUTINES_CREATE]: 'alter',
   [ROUTINES_UPDATE]: 'alter',
   [ROUTINES_DELETE]: 'alter',
+  [ROUTINES_SAVE_TEXT]: 'human',
 }
 
 export type WriteResult =
@@ -176,6 +213,66 @@ export class RoutineApi {
     return { ok: true, id, view: this.engine.get(id) }
   }
 
+  /** Read. The file's exact bytes, for a person to edit. */
+  text(id: unknown): { ok: true; id: string; text: string; file: string } | { ok: false; problems: string[] } {
+    if (typeof id !== 'string' || !isValidId(id)) {
+      return { ok: false, problems: ['That is not a usable routine name.'] }
+    }
+    const result = this.store.readText(id)
+    return result.ok
+      ? { ok: true, id, text: result.text, file: result.file }
+      : { ok: false, problems: [result.error] }
+  }
+
+  /**
+   * Human. Replace a routine file with the exact text somebody typed.
+   *
+   * ## Why this is not `update`, and why it is not a tool
+   *
+   * `update` takes a draft and rebuilds the file through `routineFromDraft`,
+   * which pushes every value through `headerValue` — newlines stripped, lengths
+   * capped — because a `name` of `"Sweep\nin: /"` would otherwise write a
+   * routine whose folder is the root of the disk from a field a UI treats as a
+   * label. That guard is what makes `update` safe to hand to a language model.
+   *
+   * This writes bytes. There is no such guard and there cannot be one, because
+   * the whole point is that a person can type the header themselves — the file
+   * format exists to be hand-edited and `store.startWatching` exists so that
+   * hand-editing works. So this is *wider* than the alter-tier `update`, and
+   * marking it `alter` would be the familiar mistake of gating the narrow door
+   * while leaving a wider one beside it: `COPILOT-DESIGN.md` records that the
+   * routines folder moved out of the copilot's writable reach for exactly this
+   * shape of hole, and an API method that writes chosen bytes into that folder
+   * would put it straight back one layer up.
+   *
+   * Hence `human` in {@link ROUTINE_TIERS}, and hence the check below is a
+   * *parse* rather than a sanitisation. The text becomes a routine only if it
+   * would have parsed as one off the disk, through the same `parseRoutine` the
+   * loader uses, with the same clamps on run rates and the same prompt ceiling.
+   * A file that does not parse is refused with the parser's own sentences and
+   * nothing is written — which is the difference between a person seeing "this
+   * routine has no `when:` line" and a person discovering next Tuesday that
+   * their automation quietly stopped.
+   *
+   * What is written is the person's text, not the reparse. See `store.saveText`.
+   */
+  saveText(id: unknown, text: unknown): WriteResult {
+    if (typeof id !== 'string' || !isValidId(id)) {
+      return { ok: false, problems: ['That is not a usable routine name.'] }
+    }
+    if (typeof text !== 'string') {
+      return { ok: false, problems: ['Nothing was supplied to save.'] }
+    }
+    if (this.engine.get(id) === null) {
+      return { ok: false, problems: [`There is no routine called \`${id}\`.`] }
+    }
+    const parsed = parseRoutine(id, text)
+    if (!parsed.ok) return { ok: false, problems: parsed.problems }
+    this.store.saveText(id, text)
+    this.engine.reload()
+    return { ok: true, id, view: this.engine.get(id) }
+  }
+
   /** Alter. */
   remove(id: unknown): { ok: boolean; problems?: string[] } {
     if (typeof id !== 'string' || !isValidId(id)) {
@@ -216,6 +313,15 @@ export class RoutineApi {
 export function registerRoutinesIpc(ipcMain: IpcMain, api: RoutineApi): void {
   ipcMain.handle(ROUTINES_LIST, () => api.list())
   ipcMain.handle(ROUTINES_GET, (_event: IpcMainInvokeEvent, id: unknown) => api.get(id))
+  ipcMain.handle(ROUTINES_TEXT, (_event: IpcMainInvokeEvent, id: unknown) => api.text(id))
+  // The human door, and the only caller `saveText` has. A window is a person —
+  // there is nobody else on the other side of `ipcMain` — which is what makes
+  // this the one place the `human` tier is answerable. `deck-control` reaches
+  // `RoutineApi` directly and never through `ipcMain`, so nothing it can call
+  // arrives here.
+  ipcMain.handle(ROUTINES_SAVE_TEXT, (_event: IpcMainInvokeEvent, id: unknown, text: unknown) =>
+    api.saveText(id, text),
+  )
   ipcMain.handle(ROUTINES_CREATE, (_event: IpcMainInvokeEvent, draft: unknown) => api.create(draft))
   ipcMain.handle(ROUTINES_UPDATE, (_event: IpcMainInvokeEvent, id: unknown, draft: unknown) =>
     api.update(id, draft),

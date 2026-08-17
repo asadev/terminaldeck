@@ -77,9 +77,35 @@ function fake(): Fake {
     },
     writePreferences: () => ({}),
     snapshotSettings: () => ({ path: '/tmp/settings.last-good.json', at: 0 }),
-    newestTranscript: async () => null,
+    transcriptsIn: async () => [],
     transcriptBytes: async () => 0,
     readTranscriptFrom: async () => [],
+    /*
+     * The five reads the fleet capabilities added, answered inertly.
+     *
+     * This fake exists to exercise the dispatcher, not the reports, so every
+     * one of these returns the empty answer its real counterpart returns for a
+     * folder with no repository and a session with no transcript. The report
+     * tools have their own tests with their own fixtures.
+     */
+    readToolTrail: async () => ({ events: [], compactions: [], fileBytes: 0, fromByte: 0, partial: false }),
+    transcriptTotals: async () => null,
+    gitChanges: async () => ({
+      repo: false,
+      root: null,
+      branch: null,
+      ahead: 0,
+      behind: 0,
+      files: [],
+      reason: 'not a repository',
+    }),
+    fileDiff: async () => '',
+    fileModifiedAt: async () => null,
+    // `<userData>` and the copilot's folder inside it. Distinct from every
+    // project path in these fixtures, which is what `sessions.start`'s refusal
+    // to run inside the app's own storage needs in order to mean anything.
+    appStateRoot: () => '/state',
+    copilotRoot: () => '/state/copilot',
   }
   return state
 }
@@ -264,11 +290,13 @@ describe('the tool surface as a client sees it', () => {
 
     expect(tools.map((tool) => tool.name).sort()).toEqual([
       'alerts_list',
+      'git_diff',
       'git_status',
       'log_note',
       'projects_list',
       'sessions_get',
       'sessions_list',
+      'sessions_result',
       'sessions_send',
       'sessions_start',
       'sessions_stop',
@@ -413,6 +441,83 @@ describe('the gate, over the wire', () => {
     expect(result.isError).toBe(true)
     expect(state.typed).toEqual([])
     await client.close()
+  })
+})
+
+/* --------------------------------------------------- the unattended caller -- */
+
+/**
+ * A routine run reaches these same tools over this same socket, and must not be
+ * able to ask a sleeping person for permission.
+ *
+ * The whole of that distinction is carried by **which token the request bore**,
+ * and the reason it is a token rather than a header is that a caller can simply
+ * not send a header. These four assertions are the proof that the boundary is
+ * where it is claimed to be: the transport decides, before a tool name is even
+ * read, and nothing in the request body can move it.
+ *
+ * It exists because of a recorded failure rather than a hypothetical.
+ * OpenClaw's heartbeat tried to run a script, exec needed approval, a heartbeat
+ * cannot get interactive approval, and the run died with `approval-timeout` —
+ * then again, then `user-denied`, each failure spending a whole turn generating
+ * an apology. The fix there was to delete the command.
+ */
+describe('a caller nobody is watching', () => {
+  it('is refused an alter call immediately, with a window standing by that would have said yes', async () => {
+    // The decisive setup: a window *is* attached and *would* approve. An
+    // attended caller gets the change; this one must not, and must not wait.
+    answer = true
+    const client = await connect(endpoint.unattendedToken)
+
+    const result = await client.callTool({
+      name: 'settings_write',
+      arguments: { scope: 'settings', patch: { 'appearance.density': 'compact' } },
+    })
+
+    expect(result.isError).toBe(true)
+    // Nobody was even asked. A dialog drawn for a run at 03:00 is a dialog that
+    // can only time out, and the timeout costs a turn and one of the three
+    // pending slots.
+    expect(asked).toEqual([])
+    expect(state.settings['appearance.density']).toBe('comfortable')
+    await client.close()
+  })
+
+  it('is told to report rather than to retry', async () => {
+    answer = true
+    const client = await connect(endpoint.unattendedToken)
+    const result = await client.callTool({
+      name: 'settings_write',
+      arguments: { scope: 'settings', patch: { 'appearance.density': 'compact' } },
+    })
+    // The refusal text matters as much as the refusal: `no-approver` means
+    // "there is no window", which fixes itself when somebody opens the app, and
+    // a model reading that will try again. This one never fixes itself.
+    const text = String((result.content as Array<{ text: string }>)[0].text)
+    expect(text).toMatch(/nobody at the machine/)
+    expect(text).toMatch(/Do not retry it/)
+    await client.close()
+  })
+
+  it('still gets everything it needs to look at the machine', async () => {
+    const client = await connect(endpoint.unattendedToken)
+    expect((await client.callTool({ name: 'projects_list', arguments: {} })).isError).toBeFalsy()
+    expect((await client.callTool({ name: 'sessions_list', arguments: {} })).isError).toBeFalsy()
+    // And act-tier work is fine: a routine that could not start a session could
+    // not do half of what routines are for.
+    expect(
+      (await client.callTool({ name: 'sessions_start', arguments: { cwd: '/work/api' } })).isError,
+    ).toBeFalsy()
+    await client.close()
+  })
+
+  it('is a different secret from the attended one, not a spelling of it', () => {
+    expect(endpoint.unattendedToken).not.toBe(endpoint.token)
+    expect(endpoint.unattendedToken).toHaveLength(endpoint.token.length)
+  })
+
+  it('refuses a token that is neither', async () => {
+    await expect(connect('0'.repeat(64))).rejects.toThrow()
   })
 })
 

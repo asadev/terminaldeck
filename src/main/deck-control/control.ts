@@ -280,9 +280,21 @@ export class DeckControl {
     return [...this.started]
   }
 
-  private context(callId: string): ToolContext {
+  private context(callId: string, caller: Caller): ToolContext {
     return {
       surface: this.options.surface,
+      /*
+       * Handed down rather than kept to this class, and the split is stated on
+       * `ToolContext.caller`: the *tier* is checked here and nowhere else, and
+       * a tool whose **effect** widens for a remote caller narrows itself.
+       *
+       * The first and so far only one is `sessions.start`, whose folder rule and
+       * whose spawn are both wider for a phone than that phone's own `create`
+       * frame. Before this field existed there was no way for it to know, so the
+       * gate said "this device holds `act`" and the tool then did something the
+       * device could not have done directly.
+       */
+      caller,
       // The id of the row this call will write, so a tool that creates
       // something durable can point that thing back at the turn that made it.
       // `sessions.start` is the only user today; see `ToolContext.callId`.
@@ -423,7 +435,7 @@ export class DeckControl {
       })
     }
 
-    const context = this.context(id)
+    const context = this.context(id, caller)
 
     /*
      * The sentence a person reads, built once and reused.

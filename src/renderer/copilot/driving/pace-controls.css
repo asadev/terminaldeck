@@ -1,0 +1,342 @@
+/* ============================================================================
+   The pacing transport and the reading-speed preference.
+
+   Every value is a token. The brief's order for separating things is followed
+   — space first, then a tint, and only then a line — so there is no border in
+   this sheet at all: the bar is separated from the stop list above it by space,
+   and the skim offer is separated from the bar by a tint.
+
+   Both themes come out of the same declarations, because every colour here is
+   a token that both themes define. Nothing is declared only inside
+   [data-theme='dark'].
+   ============================================================================ */
+
+/* ------------------------------------------------------------ the transport -- */
+
+/*
+  The bar sits at the bottom of the driving panel and is present for the whole
+  tour. It is not a floating overlay: a control that moves while the screen it
+  controls is also moving is one the reader has to track with their eyes, and
+  the entire feature is about looking at exactly one thing at a time.
+*/
+.pace-bar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-15);
+  padding: var(--sp-3);
+}
+
+.pace-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+/*
+  One button shape for all four. They are the same kind of thing — a step in
+  the tour — and giving Next a filled accent treatment would make the other
+  three read as secondary, which they are not: on a tour that has got ahead of
+  the reader, Back is the important one.
+*/
+.pace-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  width: var(--icon-btn);
+  height: var(--icon-btn);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.pace-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.pace-btn:active {
+  background: var(--bg-active);
+}
+
+.pace-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.pace-btn svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Stop is a destructive-ish end, so it is quieter until you go looking for it. */
+.pace-quiet {
+  color: var(--text-muted);
+}
+
+.pace-quiet svg {
+  fill: currentColor;
+  stroke: none;
+}
+
+/* ----------------------------------------------------------------- the ring -- */
+
+/*
+  Next is wider than the others because it carries both the ring and the count
+  of seconds left inside it. The ring is the rate and the number is the value;
+  a reader glancing at it gets "soon" from the arc without reading anything,
+  and gets "four seconds" if they look.
+*/
+.pace-next {
+  width: auto;
+  min-width: var(--control-h-lg);
+  gap: var(--sp-1);
+  padding: 0 var(--sp-15) 0 var(--sp-1);
+}
+
+.pace-ring {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  /* The stroke starts at three o'clock; a countdown reads as a clock face. */
+  transform: rotate(-90deg);
+}
+
+.pace-ring-track {
+  stroke: var(--fill-tertiary);
+  stroke-width: 2;
+}
+
+/*
+  Linear, not eased. The ring is a measurement of remaining time, and an eased
+  fill would be a picture of a rate that is not the rate. The duration matches
+  the engine's publish interval, so the arc slides smoothly between updates
+  instead of stepping ten times a second — and under prefers-reduced-motion
+  tokens.css collapses --dur, which turns the slide into those ten steps, which
+  is exactly the right degradation.
+*/
+.pace-ring-fill {
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-linecap: round;
+  transition: stroke-dashoffset var(--dur) linear;
+}
+
+.pace-count {
+  min-width: 1.5em;
+  color: var(--text-secondary);
+  font-size: var(--t-footnote);
+  font-weight: var(--w-medium);
+  /* So the countdown does not shuffle sideways as it goes 10 → 9. */
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.pace-spacer {
+  flex: 1;
+}
+
+/* ------------------------------------------------------------ the sentence -- */
+
+/*
+  Position and status on one line, always. `statusSentence` never returns an
+  empty string while a tour is running, deliberately: a bar with a stalled ring
+  and nothing written under it reads as a hang, and the reader's next move is to
+  click something, which pauses a tour that was working correctly.
+*/
+.pace-line {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-15);
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--t-caption);
+  letter-spacing: var(--t-caption-ls);
+  line-height: var(--lh-body);
+}
+
+/*
+  Never squeezed and never wrapped. Rendered at the rail's width it broke as
+  "1 of" / "4" across two lines, which is a position indicator that has to be
+  reassembled by the person reading it.
+*/
+.pace-pos {
+  flex-shrink: 0;
+  white-space: nowrap;
+  color: var(--text-secondary);
+  font-weight: var(--w-medium);
+  font-variant-numeric: tabular-nums;
+}
+
+/*
+  Wraps rather than ellipsising. The first version truncated — "Paused — you
+  scrolled — Space to car…" — and what it cut was the half telling the reader
+  how to start it again. A sentence over two lines is fine; a sentence whose
+  instruction is missing is not.
+*/
+.pace-status {
+  min-width: 0;
+}
+
+/* ----------------------------------------------------------------- the skim -- */
+
+/*
+  A tint, not a box. It appears mid-tour, so an outlined card would arrive as a
+  new piece of furniture in a panel the reader has stopped looking at; a fill
+  the same shape as everything else around it reads as the panel saying
+  something rather than as a dialog opening.
+*/
+.pace-skim {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-15);
+  padding: var(--sp-2);
+  border-radius: var(--radius-md);
+  background: var(--fill-quaternary);
+}
+
+.pace-skim p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
+}
+
+.pace-skim-btn {
+  align-self: flex-start;
+  height: var(--control-h-sm);
+  padding: 0 var(--sp-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: var(--t-footnote);
+  font-weight: var(--w-medium);
+  cursor: pointer;
+}
+
+.pace-skim-btn:hover {
+  background: var(--accent-dim);
+}
+
+.pace-skim-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ----------------------------------------------------------- reading speed -- */
+
+.pace-speed {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.pace-speed-set {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-05);
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.pace-speed-legend {
+  padding: 0 0 var(--sp-15);
+  color: var(--text-primary);
+  font-size: var(--t-headline);
+  font-weight: var(--w-semibold);
+}
+
+/*
+  A row per pace: the name, then what it costs. The second half is the part
+  that makes this a human control — nobody knows their own reading speed in
+  words a minute, and everybody knows whether twelve seconds on a paragraph is
+  too long.
+*/
+/*
+  Radio, then the name with what it costs underneath — the same shape every
+  other row in Settings uses, a label with a note under it.
+
+  It was one flowing line first, and at the rail's width the note wrapped in the
+  middle of itself ("about 23 / seconds") under a name it was no longer beside.
+  Stacking it makes the row read the same at any width, which matters because
+  this control is meant to appear both in Settings and in the driving panel.
+*/
+.pace-opt {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-2);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.pace-opt:hover {
+  background: var(--bg-hover);
+}
+
+.pace-opt.on {
+  background: var(--accent-soft);
+}
+
+.pace-opt input {
+  grid-column: 1;
+  grid-row: 1;
+  align-self: center;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.pace-opt-label {
+  grid-column: 2;
+  grid-row: 1;
+  color: var(--text-primary);
+  font-size: var(--t-body);
+}
+
+.pace-opt-help {
+  grid-column: 2;
+  grid-row: 2;
+  color: var(--text-muted);
+  font-size: var(--t-caption);
+  letter-spacing: var(--t-caption-ls);
+}
+
+/*
+  The measurement, and it is a sentence rather than a field. It is something
+  the app noticed, not something the reader sets — see the note on ReadingSpeed
+  in estimate.ts — so it is written the way a person would say it, with the one
+  action they might actually want beside it.
+*/
+.pace-learned {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--t-caption);
+  letter-spacing: var(--t-caption-ls);
+}
+
+.pace-reset {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-size: var(--t-caption);
+  cursor: pointer;
+}
+
+.pace-reset:hover {
+  text-decoration: underline;
+}

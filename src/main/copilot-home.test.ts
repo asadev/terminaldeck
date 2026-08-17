@@ -19,8 +19,11 @@ import {
   instructionsState,
   legacyLogDir,
   legacyRoutinesDir,
+  MAX_INSTRUCTIONS_BYTES,
+  readCopilotInstructions,
   resetCopilotInstructions,
   scaffoldCopilotHome,
+  writeCopilotInstructions,
   type CopilotPaths,
 } from './copilot-home'
 import { PAST_COPILOT_INSTRUCTIONS } from './copilot-instructions-history'
@@ -207,14 +210,25 @@ describe('the instructions', () => {
     expect(copilotInstructions(paths)).toContain(paths.root)
   })
 
-  it('tells the copilot it cannot reach the account it runs beside', () => {
-    // The boundary is enforced by the operating system, but an agent that
-    // believes it can read a person's home will *tell them it can*, and being
-    // wrong out loud is its own defect.
+  it('tells the copilot plainly that it is not sandboxed', () => {
+    /*
+     * The reversal, pinned.
+     *
+     * This test used to assert the opposite — that the file told the copilot it
+     * could not reach the person's home, their keychain or any folder they had
+     * not added. Every one of those sentences was true of a jailed copilot and
+     * is false of this one, and an instruction file that understates the agent's
+     * powers makes it refuse work it can do while telling the person something
+     * untrue about their own machine.
+     *
+     * The responsibility half is asserted with it, because "you can reach
+     * everything" on its own would be a licence rather than a fact.
+     */
     const body = text()
-    expect(body).toMatch(/must not tell anyone you can/i)
+    expect(body).toMatch(/You are not sandboxed/i)
     expect(body).toMatch(/keychain/i)
-    expect(body).toMatch(/any folder they have not added/i)
+    expect(body).toMatch(/Because nothing stops you, ask before you act/i)
+    expect(body).not.toMatch(/must not tell anyone you can/i)
   })
 
   it('frames a developer\'s copilot, not an assistant for the app', () => {
@@ -232,34 +246,56 @@ describe('the instructions', () => {
     expect(body).toMatch(/No inbox, no calendar/i)
   })
 
-  it('says the projects are readable, which the first version denied', () => {
-    // The statement that became false the night it was written. It said the
-    // copilot cannot read "their projects, or any folder outside your own";
-    // projects are a read-only grant now, and a file that denies a power the
-    // agent has makes it refuse work it could do.
+  it('says the person’s work is readable *and* writable, and says what to do with that', () => {
+    /*
+     * Two rewrites of the same paragraph, and the direction reversed each time.
+     *
+     * The first scaffold said the copilot could not read the person's projects.
+     * The second said it could read them and could never write them, with the
+     * refusal coming from the kernel. Both were true when written; neither is
+     * now. An ordinary session writes the person's code, and the copilot is one.
+     *
+     * What replaces the refusal is a preference with a reason attached — work
+     * that goes through a session has a transcript, a diff and a cost, which is
+     * work the person can review — so that is pinned alongside, because "you can
+     * write anything" with nothing after it is the sentence that would produce
+     * an agent quietly refactoring somebody's repository.
+     */
     const body = text()
-    expect(body).toMatch(/the projects the person has added/i)
-    expect(body).not.toMatch(/their projects, or any folder outside your own/i)
+    expect(body).toMatch(/their home directory, their projects/i)
+    expect(body).toMatch(/prefer giving it to a session/i)
+    expect(body).toMatch(/Ask before you write, move or delete anything of theirs/i)
+    expect(body).not.toMatch(/read, and never write/i)
+    expect(body).not.toMatch(/that is a session's job, not yours/i)
   })
 
-  it('says read-only in a way that cannot be read as a request', () => {
+  it('names the destructive commands rather than gesturing at "be careful"', () => {
+    // There is no longer a kernel refusing any of these, so the file has to be
+    // specific: an agent told "be careful" and an agent told "no force-push"
+    // behave differently, and only one of those instructions can be checked.
     const body = text()
-    expect(body).toMatch(/read, and never write/i)
-    expect(body).toMatch(/the refusal comes from the kernel/i)
-    // And it says what to do instead, because an agent told only "no" will keep
-    // looking for a yes.
-    expect(body).toMatch(/that is a session's job, not yours/i)
+    expect(body).toMatch(/rm -rf/)
+    expect(body).toMatch(/force-push/i)
+    expect(body).toMatch(/If it cannot be undone, it needs a yes first/i)
   })
 
-  it('warns that credential files are refused, and that the list is not a guarantee', () => {
+  it('tells it not to repeat a credential, now that nothing stops it reading one', () => {
+    /*
+     * The carve-out this replaces was real: a jailed copilot had `.env`, `.ssh`
+     * and `.npmrc` refused by the kernel inside every folder it could read.
+     * That was a *stricter* rule than any other session on this machine obeys,
+     * and it went with the jail.
+     *
+     * So the protection is now about what it does with what it reads, and the
+     * file says the three specific things — do not print it, do not store it,
+     * do not send it — because "handle credentials carefully" is not an
+     * instruction anybody can follow or check.
+     */
     const body = text()
-    expect(body).toMatch(/Credential files are refused/i)
+    expect(body).toMatch(/Their credentials are not yours to move/i)
     expect(body).toMatch(/\.env/)
-    expect(body).toMatch(/Do not go around it/i)
-    // The honest half. A denylist cannot recognise a password in `prod.yml`,
-    // and an instruction file that implied otherwise would be teaching the
-    // agent to trust something that is only mostly true.
-    expect(body).toMatch(/a list of shapes, not a guarantee/i)
+    expect(body).toMatch(/Never print a secret/i)
+    expect(body).toMatch(/Never send one anywhere/i)
   })
 
   it('names another session\'s output as untrusted data rather than instruction', () => {
@@ -277,13 +313,26 @@ describe('the instructions', () => {
     expect(body).toMatch(/Rules about your own behaviour/i)
   })
 
-  it('forbids copying another session into its memory', () => {
-    // Asad's own instruction, and the reason is mechanical rather than tidy:
-    // `memory/` is injected at startup, so a transcript copied into it is
-    // another agent's output promoted into every future turn.
+  it('forbids copying another session into its memory, and calls that a rule rather than a wall', () => {
+    /*
+     * Asad's own instruction, and the reason is mechanical rather than tidy:
+     * `memory/` is injected at startup, so a transcript copied into it is
+     * another agent's output promoted into every future turn.
+     *
+     * The second assertion is the one that earns this test its rewrite. While
+     * the copilot was jailed, the *header of `copilot-session.ts`* claimed this
+     * was structural — other sessions' transcripts were outside the boundary and
+     * could not be read at all. That was already only half true, because
+     * `sessions.transcript` hands them over through the front door by design,
+     * and it is not true at all now. The file has to say which kind of thing
+     * this is, because a rule presented as a wall is the exact defect this
+     * project keeps hunting.
+     */
     const body = text()
-    expect(body).toMatch(/Anything you read from another session/i)
+    expect(body).toMatch(/Nothing in `memory\/` may come from another session/i)
     expect(body).toMatch(/only if the person says it to \*you\*/i)
+    expect(body).toMatch(/a rule, enforced by you/i)
+    expect(body).toMatch(/nothing on this machine would stop you/i)
   })
 
   it('says routines are outside its reach, and does not name the folder', () => {
@@ -304,8 +353,8 @@ describe('the instructions', () => {
      */
     const body = text()
     expect(body).toMatch(/You cannot write a routine/i)
-    expect(body).toMatch(/outside your folder/i)
-    expect(body).toMatch(/the write fails/i)
+    expect(body).toMatch(/an automation loop with no human in it/i)
+    expect(body).toMatch(/The write is refused/i)
     expect(copilotInstructions(paths)).not.toContain(routinesDirFor(userData))
   })
 
@@ -346,8 +395,9 @@ describe('the instructions', () => {
 
   it('requires a question before anything that spends money or cannot be undone', () => {
     const body = text()
-    expect(body).toMatch(/spends the person's money/i)
-    expect(body).toMatch(/changes settings, deletes a file/i)
+    expect(body).toMatch(/Ask before you spend money/i)
+    expect(body).toMatch(/Starting a session spends money/i)
+    expect(body).toMatch(/Ask before anything leaves this machine/i)
   })
 
   it('describes the one-file-per-fact memory convention with an example', () => {
@@ -371,15 +421,23 @@ describe('the instructions', () => {
     expect(body).not.toMatch(/Never edit or delete a line that is already there/i)
   })
 
-  it('says the log is outside the folder, unreachable, and names the tool instead', () => {
+  it('says the log is out of reach, and is honest about where that is only a rule', () => {
     const body = text()
     expect(body).toContain(paths.actions)
-    expect(body).toMatch(/outside your folder and you cannot touch it/i)
+    expect(body).toMatch(/outside your reach and you cannot touch it/i)
     expect(body).toMatch(/Not append, not edit, not truncate, not delete, not read/i)
     expect(body).toMatch(/log\.note/)
     // And the honest hedge: the tool surface is attached at spawn and may not
     // be there, which is the rule the rest of this file already follows.
     expect(body).toMatch(/if you do not have that tool/i)
+    /*
+     * The platform half, and it is not a hedge — it is the one place the file
+     * would otherwise be lying to somebody. The refusal is a Seatbelt deny, and
+     * Seatbelt is macOS. On Windows and Linux the same sentence is a rule the
+     * copilot keeps, and the file says so rather than letting the reader assume
+     * the kernel is holding something it is not.
+     */
+    expect(body).toMatch(/Everywhere else it is a rule/i)
   })
 
   it('does not draw the log inside the folder listing any more', () => {
@@ -573,5 +631,102 @@ describe('putting the shipped instructions back', () => {
     expect(result.reset).toBe(true)
     expect(result.backup).toBeNull()
     expect(existsSync(paths.instructions)).toBe(true)
+  })
+})
+
+describe('editing the instructions from Settings', () => {
+  it('hands back the whole file, never a head of it', () => {
+    /*
+     * The difference between this reader and `readMemoryFact`, and it is a
+     * data-loss difference rather than a stylistic one: this text goes into a
+     * box with a Save button under it, so a truncated read is a delete waiting
+     * for somebody to press the button. The ceiling is enforced on the way *in*
+     * instead, which is why this can promise the whole file.
+     */
+    scaffoldCopilotHome(paths)
+    const long = `${copilotInstructions(paths)}\n${'x'.repeat(200_000)}\n`
+    writeFileSync(paths.instructions, long)
+    const result = readCopilotInstructions(paths)
+    expect(result.ok).toBe(true)
+    expect(result.ok && result.text).toBe(long)
+  })
+
+  it('reports the state alongside the text, so a pane draws one answer', () => {
+    scaffoldCopilotHome(paths)
+    const result = readCopilotInstructions(paths)
+    expect(result.ok && result.state).toBe('current')
+    expect(result.ok && result.text).toBe(copilotInstructions(paths))
+  })
+
+  it('says there is no file rather than handing back an empty box', () => {
+    // An empty box over a missing file is a box somebody will type into and
+    // save, which creates the file with whatever they typed and nothing else.
+    const result = readCopilotInstructions(paths)
+    expect(result.ok).toBe(false)
+    expect(result.ok === false && result.error).toContain('no CLAUDE.md yet')
+  })
+
+  it('writes what a person typed and keeps what was there', () => {
+    scaffoldCopilotHome(paths)
+    const mine = '# Mine\n\nAlways run typecheck before saying it is done.\n'
+    const result = writeCopilotInstructions(paths, mine)
+
+    expect(result).toMatchObject({ saved: true, error: null })
+    expect(readFileSync(paths.instructions, 'utf8')).toBe(mine)
+    expect(readFileSync(result.backup ?? '', 'utf8')).toBe(copilotInstructions(paths))
+    // And the app now knows this is somebody's own writing, which is what stops
+    // any later scaffold or upgrade path from putting its own wording back.
+    expect(instructionsState(paths)).toBe('edited')
+  })
+
+  it('refuses an empty file, which is an agent with tools and no purpose', () => {
+    /*
+     * The refusal that matters most, because the two ways to reach it are a box
+     * that failed to load and a person clearing it to start again — and both end
+     * with a copilot that still has its tools, still has its boundary, and has
+     * nothing telling it what it is for. Somebody who genuinely wants that can
+     * delete the file in Finder, where nothing is ambiguous about what they did.
+     */
+    scaffoldCopilotHome(paths)
+    for (const empty of ['', '   ', '\n\n\t\n']) {
+      const result = writeCopilotInstructions(paths, empty)
+      expect(result.saved, JSON.stringify(empty)).toBe(false)
+      expect(result.error).toContain('cannot be empty')
+    }
+    expect(readFileSync(paths.instructions, 'utf8')).toBe(copilotInstructions(paths))
+  })
+
+  it('refuses anything that is not a string, and anything over the ceiling', () => {
+    scaffoldCopilotHome(paths)
+    for (const junk of [undefined, null, 3, {}, ['a']]) {
+      expect(writeCopilotInstructions(paths, junk).saved, String(junk)).toBe(false)
+    }
+    const huge = 'x'.repeat(MAX_INSTRUCTIONS_BYTES + 1)
+    expect(writeCopilotInstructions(paths, huge).error).toContain('cannot be larger')
+    expect(readFileSync(paths.instructions, 'utf8')).toBe(copilotInstructions(paths))
+  })
+
+  it('does not replace the backup when the text has not changed', () => {
+    /*
+     * The bug this prevents is quiet and total: press Save twice and the second
+     * press copies the *new* file over the backup, so the one version somebody
+     * actually wanted back is gone. A save whose text already matches disk is a
+     * no-op, and says so by reporting no backup.
+     */
+    scaffoldCopilotHome(paths)
+    const shipped = copilotInstructions(paths)
+    writeCopilotInstructions(paths, '# Mine\n\nFrench only.\n')
+    const second = writeCopilotInstructions(paths, '# Mine\n\nFrench only.\n')
+
+    expect(second).toMatchObject({ saved: true, backup: null })
+    expect(readFileSync(`${paths.instructions}.bak`, 'utf8')).toBe(shipped)
+  })
+
+  it('writes into a folder that is not there yet', () => {
+    // Somebody can delete this directory at any moment, and the next thing that
+    // happens should be the app putting it back rather than a save failing.
+    const result = writeCopilotInstructions(paths, '# Mine\n')
+    expect(result).toMatchObject({ saved: true, backup: null })
+    expect(readFileSync(paths.instructions, 'utf8')).toBe('# Mine\n')
   })
 })

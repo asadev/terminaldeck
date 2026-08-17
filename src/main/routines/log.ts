@@ -44,7 +44,25 @@ export interface RoutineLogEntry {
    * different, because the fixes are different — one is a budget, the other is a
    * decision they have to make themselves.
    */
-  action: 'routine.run' | 'routine.skip' | 'routine.cancel' | 'routine.pause' | 'routine.refused'
+  action:
+    | 'routine.run'
+    | 'routine.skip'
+    | 'routine.cancel'
+    | 'routine.pause'
+    | 'routine.refused'
+    /**
+     * A run that had something to say — the finding, not the record.
+     *
+     * Written by `runner.ts` and by nothing else, and only when a run's reply
+     * survives the silence threshold. It is a separate action rather than a
+     * longer `detail` on `routine.run` because the two answer different
+     * questions: `routine.run` says *this fired and here is how it ended*, and
+     * every run writes one; `routine.report` says *and here is what it found*,
+     * and most runs do not have one. Filtering the log for this action is how a
+     * person reads a night's worth of findings without reading a night's worth
+     * of heartbeats.
+     */
+    | 'routine.report'
   routine: string
   runId?: string
   outcome: RoutineLogOutcome

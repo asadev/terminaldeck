@@ -80,7 +80,7 @@
  */
 
 import { watch, type FSWatcher } from 'chokidar'
-import { existsSync, readdirSync } from 'node:fs'
+import { existsSync, readdirSync, realpathSync } from 'node:fs'
 import { open, readdir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, dirname, extname, join, resolve, sep } from 'node:path'
@@ -126,6 +126,56 @@ import {
  */
 export function encodeProjectPath(cwd: string): string {
   return resolve(cwd).replace(/[^a-zA-Z0-9]/g, '-')
+}
+
+/**
+ * Every spelling of one folder that the CLI might have filed a transcript under.
+ *
+ * `resolve` makes a path absolute and normalises `..`; it does **not** follow a
+ * symlink. The agent CLI files its transcript under whatever `cwd` the operating
+ * system reports to it, and on macOS the OS resolves the link — so a session
+ * started in `/tmp/foo` writes to `-private-tmp-foo`, while this app, holding
+ * the string the person clicked, looks in `-tmp-foo` and finds an empty
+ * directory.
+ *
+ * This is not a corner case dressed up as one. It was found by running the
+ * copilot against a real fleet on this machine: the overnight report said *"no
+ * usage record is exposed to me"* about a session that had visibly written a
+ * file, because the transcript was three directories away under the other
+ * spelling. `/tmp` is symlinked on every macOS install, `/var` with it, and a
+ * person who keeps `~/Projects` as a link to an external volume gets the same
+ * silence across the whole tree. Every reader of this function — chat mode,
+ * cost, alerts, `sessions.result`, the loop detector — reports the miss the same
+ * way: as *nothing to see*, which is the one answer none of them should ever
+ * give when the truth is *could not look*.
+ *
+ * Returned as a list, newest concern first, rather than by "fixing"
+ * {@link encodeProjectPath} to call `realpathSync`:
+ *
+ *  - The realpath of a path that does not exist yet throws, and a folder can be
+ *    added to the sidebar before it is created.
+ *  - It is a filesystem call, and `encodeProjectPath` is called inside loops
+ *    that walk hundreds of directories.
+ *  - **A transcript written before the link changed is still that project's.**
+ *    A folder that used to be real and is now a symlink — or the reverse — has
+ *    conversations under both spellings, and picking one would hide half the
+ *    history. Reading both is the only answer that loses nothing.
+ *
+ * The literal spelling always comes first, so nothing that worked before
+ * changes order, and duplicates are dropped: on Linux, and for any path with no
+ * link in it, this returns exactly one entry and behaves as it always did.
+ */
+export function projectPathSpellings(cwd: string): string[] {
+  const asked = resolve(cwd)
+  const spellings = [asked]
+  try {
+    const real = realpathSync.native(asked)
+    if (real !== asked) spellings.push(real)
+  } catch {
+    // Does not exist, or cannot be read. The literal spelling is still the best
+    // answer available and is what this function returned before it could look.
+  }
+  return spellings
 }
 
 /**
@@ -367,8 +417,22 @@ export function homeScopeFor(configDir: string, options: TranscriptScope = {}): 
  * of which was asking the first question and using the answer for the second.
  */
 export function transcriptDirs(cwd: string, options: TranscriptScope = {}): string[] {
-  const encoded = encodeProjectPath(cwd)
-  return configDirsFor(cwd, options).map((dir) => join(dir, 'projects', encoded))
+  /*
+   * One directory per (store × spelling). See {@link projectPathSpellings} —
+   * the second spelling exists only when the folder is reached through a
+   * symlink, which on macOS is true of everything under `/tmp` and of any
+   * project directory a person has linked to another volume.
+   *
+   * Every caller of this already tolerates a directory that does not exist —
+   * `listTranscripts` answers an empty list for a missing path — so the extra
+   * entry costs one failed `readdir` on the ordinary machine where the two
+   * spellings are the same string and the deduplication below removes it
+   * anyway.
+   */
+  const encodings = [...new Set(projectPathSpellings(cwd).map((spelling) => encodeProjectPath(spelling)))]
+  return configDirsFor(cwd, options).flatMap((dir) =>
+    encodings.map((encoded) => join(dir, 'projects', encoded)),
+  )
 }
 
 /**

@@ -346,6 +346,25 @@ describe('what a public host offers', () => {
       // gets a throwaway container and nothing else. The demo needs a terminal;
       // it does not need to start anybody's dev server.
       CAPABILITY.devserver,
+      /*
+       * `copilot` is the sharpest instance of this rule yet, and it is withheld
+       * twice over.
+       *
+       * The demo box hands a shell to a stranger who has never met the owner.
+       * The copilot is the opposite of that by the owner's own words, which are
+       * the reason the whole feature is a per-device grant rather than a
+       * setting: *"we usually might not give this copilot to others… we don't
+       * want to give this copilot to others to see how we use it. This will be
+       * only ours."*
+       *
+       * Twice over because the demo assembly constructs no run manager at all,
+       * and `server.ts` reads the capability off that object rather than off a
+       * constant — so a demo host would not advertise it even if this list were
+       * wrong. Both hold on purpose: the offer list is the decision, and the
+       * absent object is what makes the advertisement unable to outlive the
+       * thing it advertises.
+       */
+      CAPABILITY.copilot,
     ])
   })
 })

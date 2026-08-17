@@ -123,3 +123,38 @@ the packaged app's own Electron:
 deliberate: the x86_64 slice in there made macOS 28 refuse the arm64 bundle.
 `build/Release/{pty.node,spawn-helper}` are what actually ship, and they are
 enough — verified spawning through the asar.
+
+## Never touch the copy someone is working in
+
+Asad runs Terminal Deck on his own machines. Those installs are **his working
+environment**, not a test rig, and an agent that stops, overwrites or reconfigures
+one has interrupted somebody's actual work.
+
+This has already happened. On 2026-08-17 an agent was told to "build, install and
+launch on his machine" to verify Windows, and it did exactly that — replacing the
+copy on his office PC with an unsigned local build at 07:29, and killing the
+running processes to attach a debugger. Both were reasonable readings of the
+instruction. The instruction was wrong.
+
+**The rule: a test build never shares an install path or a user-data directory
+with a copy a person uses.**
+
+- **Always pass `--user-data-dir`** pointing at a scratch directory. This is
+  honoured — `userDataFlag()` in `src/main/user-data.ts` exists so that
+  `pinUserData` cannot overwrite it. A separate userData means separate sessions,
+  settings, profiles, machines, hooks and remote identity, so nothing you do can
+  reach his.
+- **Never install over an existing install.** Unpack or install to a scratch
+  path. On Windows the installed copy lives at
+  `%LOCALAPPDATA%\Programs\Terminal Deck\` and its data at
+  `%APPDATA%\terminaldeck` — leave both alone.
+- **Never `Stop-Process` / `pkill` a Terminal Deck he might be using.** Launch
+  your own instance instead. `requestSingleInstanceLock()` only collapses copies
+  that share a userData directory, so a distinct `--user-data-dir` starts a
+  genuinely separate process and leaves his window untouched.
+- The **hook endpoint** is a socket inside userData, and a live one is refused
+  rather than stolen, so two instances with separate data directories do not
+  fight over it. That is only true while the data directories differ.
+
+If a verification genuinely cannot be done without touching his install — say so
+and stop. Do not decide on his behalf that the interruption is worth it.

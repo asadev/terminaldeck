@@ -8,6 +8,40 @@ import { defineConfig, type Plugin } from 'vite'
 const here = (rel: string): string => fileURLToPath(new URL(rel, import.meta.url))
 
 /**
+ * The two webfaces, which live outside this directory and are read from it.
+ *
+ * `src/styles.css` declares both `@font-face` rules with a `url()` that climbs
+ * out of `pwa/` into the desktop's asset folder — deliberately, so the product
+ * ships one copy of each face rather than two that can drift. A *build* handles
+ * that without being told: Rollup follows the `url()`, hashes the file and
+ * emits it into `dist/assets/`, which is exactly what it does today.
+ *
+ * A **dev server** does not, and that is what this constant is for. Vite serves
+ * a file from outside its root through `/@fs/…`, and it refuses that path unless
+ * the directory is on `server.fs.allow` — a real protection, because a dev
+ * server bound to `host: true` is reachable from the network. With `pwa/` as the
+ * root and the fonts a level up, the default allow-list did not cover them and
+ * both requests came back **403**, so `document.fonts` reported
+ * `Hanken Grotesk error` and `JetBrains Mono error` and the client fell through
+ * to `-apple-system` and the system mono.
+ *
+ * That mattered far more than a wrong-looking dev server. `vite dev` is the only
+ * way this client can be *looked at* — vitest runs here with no DOM, and the
+ * repo's standing rule is that a visible change has to be verified on a screen —
+ * so every screenshot ever taken of this app, by a person or by
+ * `.harness/web-drive.mjs`, was in a typeface it does not ship. A harness that
+ * renders the wrong font is not a weaker check; it is a check that will one day
+ * approve a layout the product cannot draw.
+ *
+ * Named rather than inlined so `tests/fonts.test.ts` can resolve every
+ * `@font-face` url in the stylesheet and prove each one lands inside a directory
+ * this list allows. That is the pin: the failure it guards against is somebody
+ * moving the fonts, or adding a third face from somewhere new, and finding out
+ * from a screenshot months later.
+ */
+export const FONT_DIR = here('../src/renderer/assets/fonts')
+
+/**
  * The service worker, the manifest and the icons ship verbatim at fixed URLs.
  *
  * They cannot go through Vite's asset pipeline, which fingerprints filenames:
@@ -194,6 +228,28 @@ function bufferImport(): Plugin {
   }
 }
 
+/**
+ * The version this page was built from, stamped in at build time.
+ *
+ * Read from the **repository's** package.json, one directory up, and not from
+ * `pwa/package.json`. That file carries a `0.1.0` nobody has ever bumped, and
+ * nothing keeps it in step with anything — `scripts/version.mjs` moves the root
+ * package.json, the changelog and the git tag together, and that number is what
+ * the desktop release, the changelog entry and the tag all mean by "the
+ * version". This client is built from the same working tree in the same commit,
+ * so it is the honest answer to *which build of Terminal Deck is this page*.
+ *
+ * It is deliberately **not** a claim about the machine on the other end of the
+ * socket. Nothing on this protocol carries the desktop's app version — only
+ * `PROTOCOL_VERSION` and a capability list — so the About row says "this
+ * browser" and stops there rather than implying the pair agree.
+ *
+ * `define` rather than an import so the string is inlined and there is no
+ * `package.json` in the bundle; the value has to be JSON-encoded because
+ * `define` substitutes raw source text.
+ */
+const VERSION: string = JSON.parse(readFileSync(here('../package.json'), 'utf8')).version
+
 export default defineConfig({
   root: here('.'),
   // Root-absolute, not './'. The desktop serves this at the origin root, and a
@@ -201,6 +257,7 @@ export default defineConfig({
   // base would put the worker somewhere it cannot control the navigation.
   base: '/',
   publicDir: false,
+  define: { __APP_VERSION__: JSON.stringify(VERSION) },
   plugins: [checkBuffer(), bufferImport(), shellAssets()],
   resolve: {
     alias: {
@@ -248,5 +305,19 @@ export default defineConfig({
     // it is reachable from the phone that is meant to be testing it.
     host: true,
     port: 5174,
+    fs: {
+      /*
+       * The root, and the one directory outside it this client actually reads.
+       *
+       * Listed rather than widened to the repository, and that is the point: the
+       * dev server is on every interface, so `allow: ['..']` would put the whole
+       * checkout — `credentials`, `.env`, the host identity under `.harness/` —
+       * one crafted `/@fs/` request away from anybody on the network. Two
+       * entries is the smallest list that serves the two faces in `FONT_DIR`,
+       * and it fails loudly rather than silently if a third asset ever arrives
+       * from somewhere new.
+       */
+      allow: [here('.'), FONT_DIR],
+    },
   },
 })

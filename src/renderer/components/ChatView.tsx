@@ -268,7 +268,27 @@ export function ChatBubble({ message, heading }: { message: ChatMessage; heading
   return (
     <>
       {heading ? <div className="cv-day"><span>{heading}</span></div> : null}
-      <article className={`cv-message cv-${message.role}`}>
+      <article
+        className={`cv-message cv-${message.role}`}
+        /*
+         * The one handle the copilot's focus overlay can point at.
+         *
+         * `message.id` is already documented as "stable across reads, so an
+         * appended-to message replaces rather than duplicates" — which is
+         * exactly the property an anchor needs and the reason this needs no id
+         * of its own. It is written as a `data-drive-anchor` rather than a bare
+         * `data-message-id` so that every place the overlay can point at in the
+         * whole app carries one attribute name: the alternative is a second
+         * naming scheme for chat, and a resolver that has to know which
+         * elements use which.
+         *
+         * Prefer a chat anchor over a terminal one wherever a transcript
+         * exists. The chat view renders the same JSONL the copilot actually
+         * read; the terminal shows the CLI's *rendering* of that conversation,
+         * with spinners and repaints, and nothing correlates the two.
+         */
+        data-drive-anchor={`message:${message.id}`}
+      >
         <header className="cv-meta">
           <span className="cv-who">{message.role === 'you' ? 'You' : 'Agent'}</span>
           <time className="cv-time">{formatTime(message.at)}</time>
@@ -934,7 +954,18 @@ export function ChatView({
                  * "Nothing from this session yet". Two halves of one pane
                  * disagreeing about whether the session had done anything.
                  */
-                <UsageStrip cwd={cwd} transcriptPath={target ?? undefined} scoped={scoped} />
+                <UsageStrip
+                  cwd={cwd}
+                  transcriptPath={target ?? undefined}
+                  scoped={scoped}
+                  /*
+                   * The session's own id, so the copilot's focus overlay can
+                   * point at this strip and no other. `liveSessionId` and not
+                   * `target`: a strip is on screen from the first frame of a
+                   * session, and the transcript path arrives later or never.
+                   */
+                  sessionId={liveSessionId}
+                />
               )
             }
           />

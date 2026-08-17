@@ -174,6 +174,27 @@ const api = {
   listDeviceFolders: (): Promise<unknown> => ipcRenderer.invoke('remote:folders'),
   setDeviceFolders: (deviceId: string, folders: string[]): Promise<unknown> =>
     ipcRenderer.invoke('remote:folders:set', deviceId, folders),
+  /**
+   * Which devices may reach the copilot, and how far.
+   *
+   * The same shape as the folder channels above — read the whole list, write one
+   * device, answer with the whole list again — and for a sharper version of the
+   * same reason. `CopilotGrants.set` genuinely does not store everything it is
+   * handed: `alter` is dropped whatever arrives, and a device past the ceiling
+   * is refused outright. A panel that drew its own ask rather than the answer
+   * would therefore show a permission that is not on disk, which is the one
+   * mistake a permission screen must not make.
+   *
+   * `tiers` crosses as a plain object and is **not** narrowed here. The rule
+   * lives in the store, because that is what a hand-edited file is read through
+   * too, and a copy of a permission rule in the preload would be the copy that
+   * gets it wrong. A device with nothing granted simply does not appear in the
+   * reply — that is the default state, and inventing a row for it would make
+   * "never granted" and "unticked to nothing" two spellings of one fact.
+   */
+  listDeviceCopilot: (): Promise<unknown> => ipcRenderer.invoke('remote:copilot'),
+  setDeviceCopilot: (deviceId: string, tiers: Record<string, boolean>): Promise<unknown> =>
+    ipcRenderer.invoke('remote:copilot:set', deviceId, tiers),
   onRemoteConnections: (cb: (connections: unknown) => void): (() => void) => {
     const handler = (_e: IpcRendererEvent, connections: unknown) => cb(connections)
     ipcRenderer.on('remote:connections', handler)
@@ -513,12 +534,31 @@ const api = {
   /** Signed in *as the copilot* — asked of the CLI from inside its boundary. */
   copilotSignIn: (): Promise<unknown> => ipcRenderer.invoke('copilot:signin'),
   /**
+   * `CLAUDE.md`, read and written — the copilot's actual system instruction.
+   *
+   * Editing it changes the agent, at its **next start**: the CLI reads the file
+   * as the session spawns and never again, so a save while it is running does
+   * nothing to the conversation on screen. The settings pane says that in those
+   * words and offers a stop-and-start; there is no channel here that pretends
+   * to apply an edit live, because there is no such thing to call.
+   *
+   * `copilotWriteInstructions` is the only copilot channel that carries content
+   * from the page. *Which* file is still decided in the main process — no path
+   * crosses this bridge — so what it needs is a ceiling and a floor rather than
+   * a containment check, and `writeCopilotInstructions` holds both and copies
+   * what was there aside before it writes.
+   */
+  copilotReadInstructions: (): Promise<unknown> =>
+    ipcRenderer.invoke('copilot:read-instructions'),
+  copilotWriteInstructions: (text: string): Promise<unknown> =>
+    ipcRenderer.invoke('copilot:write-instructions', text),
+  /**
    * Put this build's `CLAUDE.md` back, keeping whatever was there as a `.bak`.
    *
-   * Takes nothing for the same reason as the five above: *which* file and
-   * *what* goes in it are both decided in the main process, so the page can ask
-   * for the shipped instructions and can ask for nothing else to be written
-   * anywhere.
+   * Takes nothing, and stays beside the write rather than being folded into it:
+   * the shipped text lives in the main process, and a page that had to hold a
+   * copy in order to restore it would be a second copy that goes stale a build
+   * later.
    */
   copilotResetInstructions: (): Promise<unknown> =>
     ipcRenderer.invoke('copilot:reset-instructions'),
@@ -526,20 +566,29 @@ const api = {
   /**
    * Looking at the copilot rather than running it — `copilot-inspect.ts`.
    *
-   * The three that take an argument take a *memory file name* or a place key,
+   * The four that take an argument take a *memory file name* or a place key,
    * and both are checked in the main process against a shape that cannot
    * express a separator, a `..` or an absolute path. That check is the reason
-   * these are registered apart from the five above, whose contract is that they
+   * these are registered apart from the ones above, whose contract is that they
    * take nothing at all.
    *
    * `copilotScaffold` writes the folder and its two files without starting
    * anything, so a person can read what their assistant would be told before
    * deciding to spend anything running it.
+   *
+   * `copilotMemoryWrite` corrects a fact in place, which is the half of "read
+   * and delete" that was missing: a memory whose path has moved could only be
+   * thrown away whole, and the copilot's own instructions tell *it* to correct a
+   * memory rather than delete one. It overwrites an existing file and cannot
+   * create one — see `writeMemoryFact` on why a settings pane must not become a
+   * second author of what an agent believes.
    */
   copilotScaffold: (): Promise<unknown> => ipcRenderer.invoke('copilot:scaffold'),
   copilotMemory: (): Promise<unknown> => ipcRenderer.invoke('copilot:memory'),
   copilotMemoryRead: (name: string): Promise<unknown> =>
     ipcRenderer.invoke('copilot:memory-read', name),
+  copilotMemoryWrite: (name: string, text: string): Promise<unknown> =>
+    ipcRenderer.invoke('copilot:memory-write', name, text),
   copilotMemoryDelete: (name: string): Promise<unknown> =>
     ipcRenderer.invoke('copilot:memory-delete', name),
   copilotActions: (limit?: number): Promise<unknown> =>
@@ -607,20 +656,33 @@ const api = {
    * Saved instructions that run on their own.
    *
    * Read, then the two that steer a routine without editing the file its owner
-   * wrote, then the one that deletes it. `routines/ipc.ts` marks each with the
-   * tier it belongs to and explains why creating one is not here: authoring a
-   * routine is an alter-tier act, the folder is outside the copilot's boundary,
-   * and the only two doors onto it are a person clicking or a confirmed tool
-   * call.
+   * wrote, then the two that change the file itself. `routines/ipc.ts` marks
+   * each with the tier it belongs to and explains why creating one is still not
+   * here: authoring a routine is an alter-tier act, the folder is outside the
+   * copilot's boundary, and the only two doors onto it are a person clicking or
+   * a confirmed tool call.
    *
    * `routinesPause` and `routinesResume` are what a person's Armed switch
    * actually does. They are deliberately *not* a write to the routine's own
    * `enabled:` line — a switch in Settings that silently rewrote a file
    * somebody hand-edited would be the app editing their work to record a
-   * preference of its own.
+   * preference of its own. That distinction survives the editor below: the
+   * switch still never touches the file, and the file only ever changes when
+   * somebody presses Save on text they can see.
+   *
+   * `routinesText` and `routinesSaveText` are the editor, and they are the
+   * *human* route the design intends — a routine is authored by a person, and
+   * a folder the copilot cannot reach needs a door somewhere. They are the one
+   * pair here with no counterpart in `deck-control`: `saveText` writes chosen
+   * bytes into that folder, which is wider than any alter-tier tool, and
+   * `routines/ipc.ts` marks it `human` for that reason. A window is a person;
+   * there is nobody else on this side of the bridge.
    */
   routinesList: (): Promise<unknown> => ipcRenderer.invoke('routines:list'),
   routinesGet: (id: string): Promise<unknown> => ipcRenderer.invoke('routines:get', id),
+  routinesText: (id: string): Promise<unknown> => ipcRenderer.invoke('routines:text', id),
+  routinesSaveText: (id: string, text: string): Promise<unknown> =>
+    ipcRenderer.invoke('routines:save-text', id, text),
   routinesRun: (id: string): Promise<unknown> => ipcRenderer.invoke('routines:run', id),
   routinesPause: (id: string, reason?: string): Promise<unknown> =>
     ipcRenderer.invoke('routines:pause', id, reason),

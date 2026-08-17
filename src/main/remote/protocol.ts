@@ -127,12 +127,38 @@ export const PROTOCOL_VERSION = 1
  * does not exist until the thing is up, which is the state the feature exists to
  * get out of. `src/main/dev-server.ts` argues this at length.
  */
+/**
+ * `copilot` is the one capability that is advertised and still refused.
+ *
+ * Every other name on this list is a promise about a *host*: this desktop
+ * speaks these frames, so send them. This one is a promise about the host and
+ * nothing at all about the device — copilot access is a **separate per-device
+ * grant, off by default**, and the grant travels beside the capability rather
+ * than inside it (see `welcome.copilot`).
+ *
+ * The split is deliberate and it is the shape `folders` already has. A
+ * capability answers *can this machine do it*; a grant answers *may you*. Fold
+ * them together — advertise `copilot` only to granted devices — and two things
+ * break at once. A client cannot tell "this desktop is too old to have a
+ * copilot" from "you have not been given access", which are two different
+ * sentences with two different remedies. And a grant ticked while a phone is
+ * connected could only reach it by re-sending a `welcome`, which is a frame
+ * that means "you have just connected"; the push frame `copilot.grant` is what
+ * that grant change actually rides on.
+ *
+ * Nothing is leaked by advertising it to an ungranted device. What this desktop
+ * can do is not a secret — the whole list is already sent to every paired phone
+ * — and a device that sends a `copilot.*` verb without a grant gets a clean
+ * `unauthorized` rather than a closed socket, because a client drawing a tab it
+ * cannot use is a UI bug on that client and not an attack on this one.
+ */
 export const CAPABILITY = {
   localhost: 'localhost',
   create: 'create',
   upload: 'upload',
   credential: 'credential',
   devserver: 'devserver',
+  copilot: 'copilot',
 } as const
 
 /**
@@ -151,6 +177,7 @@ export const CAPABILITIES: string[] = [
   CAPABILITY.upload,
   CAPABILITY.credential,
   CAPABILITY.devserver,
+  CAPABILITY.copilot,
 ]
 
 /**
@@ -509,6 +536,208 @@ export interface DeviceDescriptor {
   platform: string
 }
 
+/* -------------------------------------------------- capability `copilot` -- */
+
+/**
+ * The two tiers a device can be given, on the wire.
+ *
+ * **`alter` is not here, and its absence is the mechanism rather than an
+ * omission.** `remote/copilot-grants.ts` refuses to store it, `REMOTE_GRANTABLE_TIERS`
+ * refuses to read it out of a hand-edited file, and this type refuses to carry
+ * it — three independent refusals, so that closing any one of them by accident
+ * still leaves a device without the tier whose entire safety property is *a
+ * human at the machine says yes*.
+ *
+ * Not spelled `Tier` and not imported from `deck-control/surface.ts`, even
+ * though the words match. That module is main-process-only and this file
+ * compiles into a browser (see the header); more importantly, the two are
+ * genuinely different sets. The tier set is `deck-control`'s and has three
+ * members; the *grantable* set is this feature's and has two, and a third tier
+ * added over there must not silently become grantable over here by sharing a
+ * type.
+ */
+export type CopilotTier = 'read' | 'act'
+
+/**
+ * One device's copilot access, as `welcome` and `copilot.grant` carry it.
+ *
+ * Always both fields, never a partial object and never absent-meaning-false.
+ * A client then has exactly one shape to read, and "no access" has one spelling
+ * rather than three — which matters because the difference between them is the
+ * difference between a Copilot tab that is hidden and one that is drawn and
+ * refuses everything.
+ */
+export interface CopilotGrantWire {
+  read: boolean
+  act: boolean
+}
+
+/**
+ * Which tier each `copilot.*` verb needs.
+ *
+ * A table rather than a check written at each call site, for the reason
+ * `PROTOCOL_ERROR_CODES` is a runtime list: three clients have to agree with
+ * this desktop about which controls to draw for a `read`-only phone, and a rule
+ * that exists only as an `if` in `server.ts` is a rule they can only guess at.
+ * The desktop still enforces it — this table is what it enforces *with*, so
+ * there is one answer rather than an advertised one and an enforced one.
+ *
+ * **`copilot.say` is `act`, and that line is what makes `read` worth having.**
+ * Talking to the copilot is `sessions.send` against a live agent: it spends
+ * money, it causes tool calls, and it is how anything at all gets done. So
+ * `read` is a *watching* grant — what is my copilot doing, what did it start,
+ * what was it refused — and it carries no new power at all. That is the grant
+ * worth handing out first.
+ */
+export const COPILOT_FRAME_TIER: Readonly<Record<string, CopilotTier>> = {
+  'copilot.attach': 'read',
+  'copilot.detach': 'read',
+  'copilot.state': 'read',
+  'copilot.sessions': 'read',
+  'copilot.log': 'read',
+  'copilot.pending': 'read',
+  'copilot.start': 'act',
+  'copilot.say': 'act',
+  'copilot.cancel': 'act',
+  'copilot.stop': 'act',
+}
+
+/**
+ * Largest `copilot.say`, in UTF-8 bytes.
+ *
+ * The same number as {@link MAX_INPUT_BYTES}, deliberately: this *is* a paste
+ * into a terminal by the time it lands, so a second, larger number here would
+ * be a way to type more into a session through the copilot than through the
+ * keyboard the phone already has.
+ */
+export const MAX_COPILOT_SAY_BYTES = MAX_INPUT_BYTES
+
+/**
+ * How many action-log rows one `copilot.log` may ask for.
+ *
+ * The desktop's own Activity pane allows 2000, and that is a pane rather than a
+ * relay: it reads a local file into a local list. Two hundred rows is more than
+ * a phone screen can show and small enough that a client in a loop cannot make
+ * this Mac serialise megabytes of somebody's audit log onto a sealed channel.
+ */
+export const MAX_COPILOT_LOG_ROWS = 200
+
+/**
+ * Longest chat bubble, in characters, before it is cut.
+ *
+ * **Cut with a flag, never chunked.** `TranscriptMessage.truncated` sets the
+ * precedent and the argument is the same: a chat bubble is read, not scrolled,
+ * and a 400 KB agent answer split across fifty bubbles is not the conversation
+ * it is a transcript of a conversation. The flag is what keeps it honest — a
+ * client shows that there is more and offers the desktop, which has the file.
+ */
+export const MAX_COPILOT_MESSAGE_CHARS = 8 * 1024
+
+/** One bubble of a copilot conversation. Parsed text, never terminal bytes. */
+export interface CopilotChatMessage {
+  /** Stable across reads, so an extended message replaces rather than duplicates. */
+  id: string
+  role: 'you' | 'agent'
+  text: string
+  /** Epoch ms of the line that started it, or 0 when the line carried no date. */
+  at: number
+  /** True when `text` was cut to {@link MAX_COPILOT_MESSAGE_CHARS}. */
+  truncated?: true
+}
+
+/**
+ * What the copilot is, as a phone draws it.
+ *
+ * Two different things are running and the frame says so separately, because
+ * conflating them is the one thing this screen can get wrong that a person
+ * would act on. `desk` is the copilot pinned in the sidebar on the Mac — the
+ * conversation the person is having. `run` is *this device's own* run, which is
+ * the only thing the phone can talk to. A phone that showed the desk's state on
+ * its own Start button would offer to start something that is already running,
+ * or refuse to because something unrelated is.
+ */
+export interface CopilotStateReport {
+  /** The copilot at the desk: is it up. Watching this is the whole `read` tier. */
+  desk: 'stopped' | 'starting' | 'running'
+  /** This device's own run: its id, or null when it has none. */
+  run: string | null
+  /** The account the copilot runs as, by name. Never a credential. */
+  profile: string | null
+  /** True, false, or null when it has not been asked. */
+  signedIn: boolean | null
+  /** How many tools the copilot has, and what they cost it every turn. */
+  tools: number
+  turnTokens: number
+  /** Confirmations waiting **at the desk**. Watch-only; see `copilot.pending`. */
+  pending: number
+  /** This device's grant, repeated here so one frame can answer "what may I do". */
+  grant: CopilotGrantWire
+  /**
+   * Could a run start at all — is there a Claude CLI, is it signed in, is the
+   * folder writable. False with a `reason` beats a Start button that fails.
+   */
+  available: boolean
+  reason: string | null
+}
+
+/** A session the copilot started, as a phone lists it. */
+export interface CopilotSessionRow {
+  id: string
+  title: string
+  cwd: string
+  provider: string
+  status: string
+  startedAt: number
+  /** The action-log row that started it, so the phone can link the two. */
+  originRunId: string | null
+}
+
+/**
+ * One row of `actions.jsonl`, trimmed for the wire.
+ *
+ * Rebuilt field by field in `server.ts` rather than passed through, for exactly
+ * the reason `DevServerReport` is: `ActionRow` is the desktop's own type and
+ * this is a contract with three clients, so a field added there reaches a phone
+ * only when somebody writes a line. The arguments are **not** here at all —
+ * they are scrubbed before the row is written, and even scrubbed they are the
+ * text of what was typed into somebody's sessions.
+ */
+export interface CopilotActionRow {
+  id: string
+  /** ISO 8601, as the log writes it. */
+  at: string
+  /** Canonical dotted tool id. */
+  tool: string
+  tier: string
+  outcome: 'ok' | 'refused' | 'error'
+  /** The one line the Activity pane shows. Written by the desktop. */
+  detail: string
+  /** Why it was refused, when it was. Null otherwise. */
+  refusal: string | null
+  /** Which device caused it, when a device did. Null for the person at the Mac. */
+  deviceId: string | null
+}
+
+/**
+ * A confirmation waiting at the desk, as a phone *watches* it.
+ *
+ * There is no Allow and no Refuse on this row and there must never be one. The
+ * alter tier's whole safety property is that a human at the machine says yes,
+ * and the party holding the phone is by definition not that human — a phone
+ * that could answer its own request holds `alter`, and the grant that withheld
+ * it was a ceremony. What this row is for is the failure the design named: the
+ * desktop dialog is on a screen nobody is looking at, and two minutes later it
+ * times out in silence. The phone's job is to say *go and look*.
+ */
+export interface CopilotPendingRow {
+  id: string
+  tool: string
+  summary: string
+  requestedAt: number
+  /** When it refuses itself, so the phone counts down exactly as the dialog does. */
+  expiresAt: number
+}
+
 export type ClientMessage =
   /**
    * `capabilities` is the client's half of the negotiation, and it is here
@@ -746,6 +975,70 @@ export type ClientMessage =
    * `denied`, so a client that only ever refuses can send the bare frame.
    */
   | { t: 'credential.deny'; id: string; reason?: CredentialDenial }
+  /* ---- capability `copilot`. Refused per-tier, per device. ---------------- */
+  /**
+   * ## The rule that makes this whole surface safe: **no tool name is on the wire**
+   *
+   * There is no `copilot.tool`, no `copilot.run`, no argument object and no tool
+   * id in any frame below. A phone sends *prose*. Tool calls are made by a Claude
+   * CLI process on the desktop, over loopback, authenticated by a bearer token it
+   * holds and the phone does not.
+   *
+   * This is the strongest available form of *"a device that was not granted
+   * `alter` must not be able to reach an alter tool by any frame it can
+   * construct"*, because the set of frames it can construct contains no tool at
+   * all. Every other shape of this feature has to enumerate tools and deny them;
+   * this one has nothing to enumerate. `copilot-frames.test.ts` pins it as a
+   * property of the source text, the same way `wire-wording.test.ts` pins the
+   * refusal vocabulary — a type union cannot express "and no future variant
+   * either".
+   *
+   * It is also the rule that will be under pressure. The first person who wants
+   * `copilot.tool` for a nicer phone UI — *tap to re-run that* — should be sent
+   * here, because that one frame gives back everything the design bought.
+   */
+  /**
+   * Watch this device's copilot surface, and replay what exists.
+   *
+   * Starts nothing and spends nothing, which is why it is `read`. Answered with
+   * `copilot.state`, then — if this device already has a run — a `copilot.chat`
+   * carrying `reset: true`.
+   */
+  | { t: 'copilot.attach' }
+  /**
+   * Stop the stream. **The run keeps going**, for a grace window, and that is
+   * deliberate: a phone that locks its screen in a lift has not asked for its
+   * agent to be killed mid-turn. See `copilot-runs.ts` for the window.
+   */
+  | { t: 'copilot.detach' }
+  | { t: 'copilot.state' }
+  /** The sessions the copilot started, each linked back to the turn that made it. */
+  | { t: 'copilot.sessions' }
+  /**
+   * The tail of `actions.jsonl`, newest last.
+   *
+   * `before` pages backwards by row id rather than by index, because the file is
+   * appended to while somebody is reading it and an index-based page would skip
+   * or repeat rows exactly when the copilot is busiest.
+   */
+  | { t: 'copilot.log'; limit?: number; before?: string }
+  /** Confirmations waiting at the desk. Watch-only — see {@link CopilotPendingRow}. */
+  | { t: 'copilot.pending' }
+  /**
+   * Start this device's own run.
+   *
+   * Deliberately not folded into `attach`: it spawns an agent process and that
+   * spends money, so it is a thing a person taps rather than a side effect of
+   * opening a tab. A second one against a live run is answered with the run that
+   * already exists rather than a second process.
+   */
+  | { t: 'copilot.start' }
+  /** Say something to it. `act`, because talking to an agent *is* acting. */
+  | { t: 'copilot.say'; text: string }
+  /** Interrupt the current turn of **this device's own run**, and nothing else. */
+  | { t: 'copilot.cancel' }
+  /** End this device's own run. */
+  | { t: 'copilot.stop' }
 
 export type ServerMessage =
   | {
@@ -804,6 +1097,23 @@ export type ServerMessage =
        * that says so.
        */
       folders?: string[]
+      /**
+       * What this device may do with the copilot. **Absent means nothing.**
+       *
+       * Carried per-device, beside the host-wide `capabilities`, for the reason
+       * `folders` is and `CAPABILITY.copilot` restates: one says what this
+       * machine can do, the other says what *you* may do, and a client that
+       * reads the first as the second draws a control that is always refused.
+       *
+       * Absent and `{read:false, act:false}` mean the same thing, and both are
+       * sendable: a desktop older than this field sends nothing, and a current
+       * desktop sends the object so a client has one shape to read. `alter` is
+       * not a field here — not as `false`, not at all. `copilot-grants.ts`
+       * makes the same choice for the file on disk and gives the reason: a
+       * stored `"alter": false` reads, to somebody looking at it, like a switch
+       * that could be turned on.
+       */
+      copilot?: CopilotGrantWire
     }
   | { t: 'sessions'; sessions: RemoteSession[] }
   | { t: 'attached'; id: string }
@@ -979,6 +1289,56 @@ export type ServerMessage =
       operation: CredentialOperation
       prompt: boolean
     }
+  /* ---- capability `copilot` ---------------------------------------------- */
+  /** Answer to `copilot.state`, and pushed whenever any of it changes. */
+  | { t: 'copilot.state'; state: CopilotStateReport }
+  /**
+   * The conversation, as **parsed messages** and never as terminal bytes.
+   *
+   * Merge by `id`: replace a match, append otherwise. `reset` means drop
+   * everything held and take this frame as the whole conversation — which is
+   * what arrives on a fresh attach and when a run is replaced.
+   *
+   * `run` rides along so a frame from a previous run is *dropped* rather than
+   * merged into the new one. Without it a phone that reconnected after the grace
+   * window expired would splice the end of a dead conversation onto the start of
+   * a live one, and the person would read an answer to a question they never
+   * asked in this run.
+   *
+   * Produced by the same parser the desktop's own chat view uses —
+   * `chat-transcript.ts` — because one parser is one truth. A phone that had its
+   * own would be a second reading of the same file, and the two would disagree
+   * about a compaction replay within a week.
+   */
+  | { t: 'copilot.chat'; run: string; messages: CopilotChatMessage[]; reset?: true }
+  /**
+   * One tool call as it happens, already scrubbed.
+   *
+   * This is *"see what it is doing"*, and it is the frame that makes a refusal
+   * visible: a call this device's grant did not cover arrives here with
+   * `outcome: 'refused'` and `refusal: 'not-granted'`, in the copilot's own
+   * words rather than as silence. A gate that denies invisibly is
+   * indistinguishable from a gate that was never reached.
+   */
+  | { t: 'copilot.tool'; row: CopilotActionRow }
+  | { t: 'copilot.sessions'; sessions: CopilotSessionRow[] }
+  /**
+   * Answer to `copilot.log` only, never pushed — the live view of the log is
+   * `copilot.tool`. `more` says the tail was bounded, in the same spirit
+   * `ToolTrail.partial` reports its own window rather than pretending to be the
+   * whole file.
+   */
+  | { t: 'copilot.log'; rows: CopilotActionRow[]; more: boolean }
+  | { t: 'copilot.pending'; questions: CopilotPendingRow[] }
+  /**
+   * This device's copilot grant changed while it was connected.
+   *
+   * Pushed, so a revoked phone's Copilot tab goes away without a reconnect. The
+   * *rule* is already live without this frame, because the grant is read per
+   * message and per tool call — which is exactly what makes this push honest
+   * rather than load-bearing. Same argument, same shape, as `folders`.
+   */
+  | { t: 'copilot.grant'; grant: CopilotGrantWire }
 
 /**
  * Every refusal this protocol can name, as a value rather than only a type.
@@ -1671,6 +2031,82 @@ export function parseClientMessage(raw: unknown): ParseResult {
       const reason = denial(parsed.reason)
       if (reason !== null) deny.reason = reason
       return { ok: true, message: deny }
+    }
+
+    /* ---- capability `copilot` ------------------------------------------- */
+    /*
+     * Shape only, and authorised nowhere near here — the same division every
+     * other capability keeps. Whether this desktop has a copilot at all, and
+     * *which tier this device holds*, are the server's questions: it is the only
+     * thing that knows which device the socket belongs to, and the grant is read
+     * per message rather than at hello so that unticking a box in Settings lands
+     * on the next frame instead of the next reconnect.
+     *
+     * Six of these carry no fields whatsoever, which is not laziness — it is the
+     * property described on the `ClientMessage` variants: a phone names no tool,
+     * no session, no path and no argument object, so there is nothing here for a
+     * parser to be careless with. The only two with a payload are `say`, which is
+     * prose, and `log`, which is a count and a row id.
+     */
+    case 'copilot.attach':
+    case 'copilot.detach':
+    case 'copilot.state':
+    case 'copilot.sessions':
+    case 'copilot.pending':
+    case 'copilot.start':
+    case 'copilot.cancel':
+    case 'copilot.stop':
+      // Listed one by one rather than caught by a prefix test, so that adding a
+      // verb to this capability without deciding what it carries stops the build
+      // instead of silently arriving as a bare frame.
+      return { ok: true, message: { t: parsed.t } }
+    case 'copilot.say': {
+      // Read once, for the reason spelled out on `input.data`: on the object
+      // path a property can be a getter, and the string that is measured has to
+      // be the string that is forwarded. This value ends up typed into a live
+      // agent's pty, which is the same destination `input.data` has.
+      const text = parsed.text
+      if (typeof text !== 'string' || text === '') return bad('copilot.say without text')
+      // Bytes, not characters. One emoji is four of them and the cap is about
+      // what gets written into a terminal.
+      if (overBytes(text, MAX_COPILOT_SAY_BYTES)) {
+        return tooLarge('copilot.say larger than the message limit')
+      }
+      // Control bytes are **refused**, not stripped, and this is the security
+      // check in this branch rather than a tidiness one. The text is written
+      // into a pty holding a Claude CLI: a carriage return inside it would
+      // submit early and turn the rest of the message into a *second* prompt,
+      // and an escape sequence would drive the CLI's own key handling. Stripping
+      // would turn a hostile value into a different, legal-looking message —
+      // the argument `create.cwd` makes, and it matters more here because the
+      // result is a turn somebody pays for. The submitting newline is added by
+      // the desktop, once, so one frame is at most one prompt.
+      if (CONTROL_CHARS.test(text)) return bad('copilot.say with an unusable message')
+      return { ok: true, message: { t: 'copilot.say', text } }
+    }
+    case 'copilot.log': {
+      const message: Extract<ClientMessage, { t: 'copilot.log' }> = { t: 'copilot.log' }
+      const rawLimit = parsed.limit
+      if (rawLimit !== undefined) {
+        const limit = whole(rawLimit, 1, MAX_COPILOT_LOG_ROWS)
+        // Refused rather than clamped. A client asking for a thousand rows has
+        // misunderstood the cap, and silently answering with two hundred while
+        // it believes it has the whole log is how a phone draws "that is
+        // everything the copilot did today" over a window.
+        if (limit === null) return bad('copilot.log with a limit out of range')
+        message.limit = limit
+      }
+      const rawBefore = parsed.before
+      if (rawBefore !== undefined) {
+        // A row id, which is a `randomUUID` from `control.ts`. `ID_RE` is the
+        // right shape for it and it is compared against ids this process wrote,
+        // so anything else can only be a miss — checked here so the refusal
+        // says "that is not a row id" rather than surfacing as an empty page.
+        const before = id(rawBefore)
+        if (!before) return bad('copilot.log with an unusable cursor')
+        message.before = before
+      }
+      return { ok: true, message }
     }
 
     default:

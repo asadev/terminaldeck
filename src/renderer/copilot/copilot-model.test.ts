@@ -31,7 +31,7 @@ const running = {
   paths: { root: '/u/copilot', instructions: '/u/copilot/CLAUDE.md', memory: '/u/copilot/memory', log: '/u/copilot-log', actions: '/u/copilot-log/actions.jsonl' },
   startedAt: 1,
   problem: null,
-  confinement: { kind: 'seatbelt', enforced: true, reason: null },
+  records: { kind: 'seatbelt', enforced: true, reason: null, paths: ['/u/routines'] },
 }
 
 describe('reading the state', () => {
@@ -40,7 +40,7 @@ describe('reading the state', () => {
     expect(state?.status).toBe('running')
     expect(state?.sessionId).toBe('abc')
     expect(state?.paths?.root).toBe('/u/copilot')
-    expect(state?.confined).toBe(true)
+    expect(state?.recordsHeld).toBe(true)
   })
 
   it('refuses anything that is not a state rather than inventing "stopped"', () => {
@@ -56,12 +56,19 @@ describe('reading the state', () => {
     expect(state?.paths).toBeNull()
   })
 
-  it('reports an unproven boundary as unconfined', () => {
+  it('reports an unproven records fence as not held', () => {
+    /*
+     * The one claim on this screen that is about safety, so it defaults to the
+     * answer that makes no claim. The copilot is not sandboxed — this is about
+     * whether the operating system is refusing it this app's own routines and
+     * action log, or whether that is only a rule in its instructions.
+     */
     const state = readCopilotState({
       ...running,
-      confinement: { kind: 'seatbelt', enforced: false, reason: 'not proven' },
+      records: { kind: 'seatbelt', enforced: false, reason: 'not proven', paths: [] },
     })
-    expect(state?.confined).toBe(false)
+    expect(state?.recordsHeld).toBe(false)
+    expect(readCopilotState({ ...running, records: undefined })?.recordsHeld).toBe(false)
   })
 })
 
@@ -93,9 +100,16 @@ describe('the stage', () => {
     expect(copilotStage(state, null)).toBe('checking')
   })
 
-  it('reports the machine before it reports the sign-in', () => {
-    const unavailable = readCopilotState({ ...running, status: 'unavailable', problem: 'no boundary' })
-    expect(copilotStage(unavailable, { state: 'signed-in', account: null, plan: null })).toBe('unavailable')
+  it('has no stage for a machine that cannot confine it, because there is no such machine', () => {
+    /*
+     * There used to be an `unavailable` stage: a copilot that refused to start
+     * because this machine had no boundary the app could prove, which was every
+     * Windows machine. The copilot is an ordinary session now and needs no
+     * boundary in order to exist, so nothing produces that status — and a status
+     * nothing produces, still narrowed here, would be a paragraph on screen that
+     * had quietly stopped being true.
+     */
+    expect(readCopilotState({ ...running, status: 'unavailable' })).toBeNull()
   })
 
   it('says stopped when nothing has been read at all', () => {
@@ -109,7 +123,7 @@ describe('which pane opens', () => {
   })
 
   it('opens the conversation everywhere else', () => {
-    for (const stage of ['ready', 'unverified', 'checking', 'stopped', 'starting', 'unavailable'] as const) {
+    for (const stage of ['ready', 'unverified', 'checking', 'stopped', 'starting'] as const) {
       expect(defaultPane(stage), stage).toBe('chat')
     }
   })
@@ -127,7 +141,6 @@ describe('the pinned row', () => {
     // beside a copilot that is not there, and `exited` claims a death that
     // never happened. So the row says nothing, and the tooltip says why.
     expect(entryDot('stopped')).toBeNull()
-    expect(entryDot('unavailable')).toBeNull()
   })
 
   it('shows the last refusal rather than the word "stopped"', () => {

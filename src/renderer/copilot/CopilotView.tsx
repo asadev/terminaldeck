@@ -25,20 +25,25 @@ import './copilot.css'
  * The one thing this file adds is *which of the two you are looking at*, and
  * that exists for a single reason worth the whole component:
  *
- * ## The first run, which is a login and looks like a bug
+ * ## A signed-out account, which is a login and looks like a bug
  *
- * The copilot runs under a home directory of its own so its credential lives
- * inside its own sandbox — which means it cannot reach the macOS login keychain,
- * because the keychain is closed to a sandboxed process. That is the boundary
- * doing exactly what it was built to do, and it has a consequence a person will
- * meet before anything else: **the copilot starts signed out.** Its first
- * moments are the CLI's own login, printing a URL to open and waiting for a code
- * to be pasted back — it cannot open a browser either, for the same reason.
+ * This used to be *every* first run, and it was the largest single cost of the
+ * copilot being jailed: it kept its credential inside its own sandbox, which
+ * cannot reach the macOS login keychain, so it could never borrow the account
+ * the person was already signed in as. It started signed out on every machine,
+ * every time, and could not read a line of their code until they had pasted a
+ * code back into a terminal.
  *
- * A chat pane cannot show a URL to copy or take a code. So the first run opens
- * on the terminal, with the paragraph above said in three lines above it. The
- * alternative — the conversation pane, empty, over a session quietly waiting on
- * a login nobody can see — is the exact shape of failure this app has shipped
+ * That is gone. The copilot runs as one of the app's own accounts, so somebody
+ * already signed into Claude Code has a copilot that is already signed in.
+ * `confine/records.ts` carries the argument for the change.
+ *
+ * The stage survives because the state it names still happens — an account can
+ * be signed out, the same as any other session's — and because a chat pane
+ * cannot show a URL to copy or take a code back. So a signed-out copilot opens
+ * on the terminal, with two lines above it saying which account and what to do.
+ * The alternative — the conversation pane, empty, over a session quietly waiting
+ * on a login nobody can see — is the exact shape of failure this app has shipped
  * before: something that looks broken while working correctly.
  *
  * ## What it is for, and what the empty state must not promise
@@ -130,13 +135,9 @@ export function CopilotView({
    * talk to it. `ensureCopilot` is idempotent by contract, so coming back to
    * this page does not produce a second one.
    *
-   * `unavailable` is excluded deliberately: this machine cannot hold it inside a
-   * boundary, so asking again on every visit would be a spawn attempt that is
-   * refused every time, writing a refusal to the action log each visit.
    */
   const { ensure } = copilot
   useEffect(() => {
-    if (stage === 'unavailable') return
     ensure()
     // Once per mount. Re-running on every stage change would re-ask while a
     // start is already in flight, which `ensureCopilot` handles but which would
@@ -245,13 +246,8 @@ export function CopilotView({
               Stop
             </button>
           )}
-          {(stage === 'stopped' || stage === 'unavailable') && (
-            <button
-              type="button"
-              className="cp-btn primary"
-              onClick={copilot.ensure}
-              disabled={stage === 'unavailable'}
-            >
+          {stage === 'stopped' && (
+            <button type="button" className="cp-btn primary" onClick={copilot.ensure}>
               Start
             </button>
           )}
@@ -297,11 +293,11 @@ export function CopilotView({
 
       {stage === 'first-run' && (
         <div className="cp-notice" data-kind="first-run">
-          <h2>It has to sign itself in, once</h2>
+          <h2>The account it runs as is signed out</h2>
           <p>
-            The copilot keeps its login inside its own sandbox rather than sharing yours, and the
-            macOS keychain is closed to a sandboxed process — so it cannot borrow the account this
-            app is signed in as. That is the boundary working, not a fault.
+            The copilot runs as one of your accounts, the same as any other session — it has no
+            login of its own. This one is not signed in yet. Signing it in here signs it in
+            everywhere that account is used, and you can do it under Settings → Accounts instead.
           </p>
           {/*
             Where the login actually is, said accurately for whichever pane is
@@ -312,10 +308,8 @@ export function CopilotView({
           */}
           <p>
             {pane === 'terminal'
-              ? 'Its terminal is below. It prints a URL instead of opening a browser, because it cannot open one either: copy the URL, sign in, and paste the code back here.'
-              : 'The login is on its terminal — press Terminal above. It prints a URL instead of opening a browser, because it cannot open one either: copy the URL, sign in, and paste the code back there.'}{' '}
-            After that the credential is a file inside its own folder, which you can look at and
-            delete.
+              ? 'Its terminal is below. Run /login there: it prints a URL, and you paste the code back here.'
+              : 'The login is on its terminal — press Terminal above, and run /login there.'}
           </p>
         </div>
       )}
@@ -327,12 +321,6 @@ export function CopilotView({
             refused. It is running, so the conversation below is live; if it answers with a login
             prompt, open the terminal.
           </p>
-        </div>
-      )}
-
-      {stage === 'unavailable' && (
-        <div className="cp-notice" data-kind="problem">
-          <p>{state?.problem ?? 'The copilot cannot run on this machine.'}</p>
         </div>
       )}
 
@@ -349,13 +337,11 @@ export function CopilotView({
             // the empty page and the row that opened it cannot draw two marks.
             icon={panelSpec('copilot').icon}
             title={stage === 'starting' ? 'Starting the copilot…' : 'The copilot is not running'}
-            {...(stage === 'unavailable'
-              ? {}
-              : { action: { label: 'Start it', onClick: copilot.ensure, primary: true } })}
+            action={{ label: 'Start it', onClick: copilot.ensure, primary: true }}
           >
-            {stage === 'unavailable'
-              ? 'It is not started here because this machine cannot hold it inside a folder boundary.'
-              : 'It runs in a folder of its own, with its own memory and its own login. Ask it which of your sessions needs you, to review a diff before it lands, or to turn a rough ask into a prompt worth giving a sub-session.'}
+            It runs in a folder of its own, with its own memory, as one of your accounts. Ask it
+            which of your sessions needs you, to review a diff before it lands, or to turn a rough
+            ask into a prompt worth giving a sub-session.
           </PageEmpty>
         ) : (
           <>
@@ -427,8 +413,6 @@ export function CopilotView({
 export function stateLine(copilot: Copilot): string {
   const { state, signIn, stage } = copilot
   switch (stage) {
-    case 'unavailable':
-      return 'Cannot run here'
     case 'starting':
       return 'Starting…'
     case 'stopped':
@@ -442,8 +426,8 @@ export function stateLine(copilot: Copilot): string {
     case 'ready':
       return signIn?.account
         ? `Running · ${signIn.account}`
-        : state?.confined
-          ? 'Running · signed in, in its own folder'
+        : state?.recordsHeld
+          ? 'Running · signed in, its log held'
           : 'Running · signed in'
   }
 }

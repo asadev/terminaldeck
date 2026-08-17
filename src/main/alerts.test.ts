@@ -9,6 +9,8 @@ import {
   PRE_CONTEXT_BLOAT_PERCENT,
 } from './cost'
 import { encodeProjectPath } from './transcript'
+import { assessProgress, REPEAT_CRITICAL, REPEAT_WARNING } from './deck-control/progress'
+import type { ToolTrail } from './deck-control/surface'
 import {
   BLOCKED_CRITICAL_MS,
   BLOCKED_WARNING_MS,
@@ -24,6 +26,8 @@ import {
   HEAVY_MULTIPLE,
   heavySessionAlerts,
   groupBySeverity,
+  LOOP_ACTIVE_WITHIN_MS,
+  loopAlerts,
   median,
   providerAlerts,
   type AlertInput,
@@ -408,6 +412,227 @@ describe('heavySessionAlerts', () => {
 })
 
 /* ------------------------------------------------------------ dirty tree -- */
+
+/* -------------------------------------------------------------------- loops -- */
+
+describe('loopAlerts', () => {
+  /**
+   * A trail built the way a stuck session actually produces one.
+   *
+   * Deliberately fed through the real `assessProgress` rather than hand-writing
+   * a `ProgressReport`: the thing under test is whether a *genuine* verdict
+   * reaches the panel, and a fabricated verdict would pass even if the two
+   * modules had drifted apart on what `looping` means — which is the exact
+   * failure importing `progress.ts` from here was meant to make impossible.
+   */
+  function trailOf(calls: Array<{ name: string; failed: boolean }>): ToolTrail {
+    return {
+      events: calls.map((call, index) => ({
+        at: NOW - (calls.length - index) * 20_000,
+        name: call.name,
+        failed: call.failed,
+      })),
+      compactions: [],
+      fileBytes: 4096,
+      fromByte: 0,
+      partial: false,
+    }
+  }
+
+  function looping(count: number, name = 'Bash'): AlertSession {
+    return session({
+      sessionId: 'looper',
+      progress: assessProgress(trailOf(Array.from({ length: count }, () => ({ name, failed: true })))),
+    })
+  }
+
+  it('fires on a genuine looping verdict, with the counts in the sentence', () => {
+    const alerts = loopAlerts(emptyInput({ sessions: [looping(REPEAT_WARNING)] }))
+    expect(alerts).toHaveLength(1)
+    expect(alerts[0].kind).toBe('loop')
+    expect(alerts[0].title).toContain('Bash')
+    // The evidence, not the adjective: a person should be able to act without
+    // opening anything.
+    expect(alerts[0].detail).toContain(`${REPEAT_WARNING}`)
+    expect(alerts[0].detail).toContain('Nothing has been written')
+    /*
+     * Sentences, not a run-on. Every finding's detail already ends in a full
+     * stop, and the duration used to be appended as a clause — the real alert
+     * on this machine read "…in the last 26 tool calls. over the last 6
+     * minutes." before anybody looked at one.
+     */
+    expect(alerts[0].detail).toContain('It has been doing that for')
+    expect(alerts[0].detail).not.toMatch(/\.\s+[a-z]/)
+  })
+
+  it('is critical only once repetition passes progress.ts own critical threshold', () => {
+    expect(loopAlerts(emptyInput({ sessions: [looping(REPEAT_WARNING)] }))[0].severity).toBe('warning')
+    expect(loopAlerts(emptyInput({ sessions: [looping(REPEAT_CRITICAL)] }))[0].severity).toBe('critical')
+  })
+
+  it('stays silent for a session that is repeating but still writing files', () => {
+    /*
+     * `suspect`, not `looping`. This is what a refactor looks like from the
+     * outside — the same edit tool over and over, files landing every time —
+     * and an alert on it would put a warning on ordinary work, which is the
+     * failure this module's header calls the one it lives or dies by.
+     */
+    const calls = Array.from({ length: REPEAT_WARNING }, () => ({ name: 'Edit', failed: false }))
+    const progress = assessProgress(trailOf(calls))
+    expect(progress.verdict).toBe('suspect')
+    expect(loopAlerts(emptyInput({ sessions: [session({ sessionId: 'refactor', progress })] }))).toEqual([])
+  })
+
+  it('stays silent when nothing looked, and when looking found nothing to read', () => {
+    // Not looked at: `collectAlertInput` reads a trail for at most a handful of
+    // transcripts, so most entries carry no verdict at all.
+    expect(loopAlerts(emptyInput({ sessions: [session({ sessionId: 'unread' })] }))).toEqual([])
+    // Looked, and there was nothing there — a shell keeps no transcript. This
+    // must never read as health, and it must never read as a loop either.
+    const nothing = assessProgress(null)
+    expect(nothing.verdict).toBe('unknown')
+    expect(loopAlerts(emptyInput({ sessions: [session({ sessionId: 'shell', progress: nothing })] }))).toEqual([])
+  })
+
+  it('reports one session rather than every looping session at once', () => {
+    const alerts = loopAlerts(
+      emptyInput({
+        sessions: [
+          { ...looping(REPEAT_WARNING), sessionId: 'mild' },
+          { ...looping(REPEAT_CRITICAL), sessionId: 'severe' },
+        ],
+      }),
+    )
+    expect(alerts).toHaveLength(1)
+    expect(alerts[0].id).toBe('loop:severe')
+  })
+
+  it('points at the transcript, and links a session only when one can be named', () => {
+    const unlinked = loopAlerts(emptyInput({ sessions: [looping(REPEAT_WARNING)] }))[0]
+    expect(unlinked.action).toEqual({
+      kind: 'open-inspector',
+      label: 'See what it is doing',
+      target: '/tmp/looper.jsonl',
+    })
+    /*
+     * No `sessionId` unless `collectAlertInput` could say which live session the
+     * transcript belongs to. A transcript's own id is the CLI's, in a different
+     * namespace from the app's — an alert carrying it would offer a link to a
+     * tab that does not exist, and the routine engine would key its loop guard
+     * on a session it cannot find.
+     */
+    expect(unlinked.sessionId).toBeUndefined()
+
+    const linked = loopAlerts(
+      emptyInput({ sessions: [{ ...looping(REPEAT_WARNING), appSessionId: 'pty-1' }] }),
+    )[0]
+    expect(linked.sessionId).toBe('pty-1')
+  })
+
+  it('is in the rule set, so a looping session reaches the panel and the routine', () => {
+    const report = deriveAlerts(emptyInput({ sessions: [looping(REPEAT_CRITICAL)] }))
+    expect(report.alerts.map((alert) => alert.kind)).toContain('loop')
+    expect(report.worst).toBe('critical')
+  })
+})
+
+describe('collectAlertInput and the loop trail', () => {
+  const temps: string[] = []
+
+  afterAll(async () => {
+    await Promise.all(temps.map((dir) => rm(dir, { recursive: true, force: true }).catch(() => undefined)))
+  })
+
+  /**
+   * A transcript of one session hammering one failing tool.
+   *
+   * Written in the real JSONL shape rather than a fixture object, because the
+   * whole point of the gathering half is that it parses what the CLI actually
+   * writes — `parseInsightLine` carries three documented surprises about this
+   * format and a hand-made shortcut would test none of them.
+   */
+  async function transcriptWith(project: string, calls: number, at: string): Promise<string> {
+    const config = await mkdtemp(join(tmpdir(), 'terminaldeck-loop-'))
+    temps.push(config)
+    const dir = join(config, 'projects', encodeProjectPath(project))
+    await mkdir(dir, { recursive: true })
+    const lines: string[] = []
+    for (let index = 0; index < calls; index += 1) {
+      lines.push(
+        JSON.stringify({
+          type: 'assistant',
+          sessionId: 'stuck',
+          cwd: project,
+          requestId: `req-${index}`,
+          timestamp: at,
+          message: {
+            role: 'assistant',
+            model: 'claude-opus-5',
+            usage: { input_tokens: 100, output_tokens: 50 },
+            content: [{ type: 'tool_use', id: `tu-${index}`, name: 'Bash', input: {} }],
+          },
+        }),
+        JSON.stringify({
+          type: 'user',
+          sessionId: 'stuck',
+          cwd: project,
+          timestamp: at,
+          message: {
+            role: 'user',
+            content: [{ type: 'tool_result', tool_use_id: `tu-${index}`, is_error: true, content: 'boom' }],
+          },
+        }),
+      )
+    }
+    await writeFile(join(dir, 'stuck.jsonl'), lines.join('\n') + '\n', 'utf8')
+    return config
+  }
+
+  it('reads the trail and raises the alert for a folder with a live session', async () => {
+    const project = '/Users/apple/Projects/loop-fixture'
+    const config = await transcriptWith(project, REPEAT_CRITICAL, new Date(NOW - MINUTE).toISOString())
+
+    const input = await collectAlertInput(project, {
+      configDir: config,
+      now: () => NOW,
+      liveSessions: () => [{ sessionId: 'pty-1', cwd: project, status: 'working', statusSince: NOW - MINUTE }],
+    })
+
+    const stuck = input.sessions.find((session) => session.sessionId === 'stuck')
+    expect(stuck?.progress?.verdict).toBe('looping')
+    // One live session in the folder, so the transcript can honestly be given a
+    // tab to point at.
+    expect(stuck?.appSessionId).toBe('pty-1')
+    expect(deriveAlerts(input).alerts.map((alert) => alert.kind)).toContain('loop')
+  }, 30_000)
+
+  it('reads no trail at all when nothing is running in the folder', async () => {
+    /*
+     * The cost gate that makes this affordable on a timer. A loop alert is about
+     * money being spent *now*; a folder with no live session has none, so the
+     * scan does not open a single transcript tail for it.
+     */
+    const project = '/Users/apple/Projects/loop-fixture-dead'
+    const config = await transcriptWith(project, REPEAT_CRITICAL, new Date(NOW - MINUTE).toISOString())
+
+    const input = await collectAlertInput(project, { configDir: config, now: () => NOW })
+    expect(input.sessions.every((session) => session.progress === undefined)).toBe(true)
+    expect(deriveAlerts(input).alerts.map((alert) => alert.kind)).not.toContain('loop')
+  }, 30_000)
+
+  it('ignores a transcript that stopped moving before the activity window', async () => {
+    const project = '/Users/apple/Projects/loop-fixture-stale'
+    const stale = new Date(NOW - LOOP_ACTIVE_WITHIN_MS - 5 * MINUTE).toISOString()
+    const config = await transcriptWith(project, REPEAT_CRITICAL, stale)
+
+    const input = await collectAlertInput(project, {
+      configDir: config,
+      now: () => NOW,
+      liveSessions: () => [{ sessionId: 'pty-1', cwd: project, status: 'working', statusSince: NOW }],
+    })
+    expect(input.sessions.find((session) => session.sessionId === 'stuck')?.progress).toBeUndefined()
+  }, 30_000)
+})
 
 describe('dirtyTreeAlerts', () => {
   const CHANGED_AT = NOW - 5 * 24 * 60 * MINUTE

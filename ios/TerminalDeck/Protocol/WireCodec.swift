@@ -83,7 +83,17 @@ enum WireCodec {
                          // "Running on the desktop" rather than guess "Mac",
                          // which is the whole bug. See `HostPlatform`.
                          hostPlatform: HostPlatform(wire: string(object["hostPlatform"])),
-                         folders: folders(object["folders"])),
+                         folders: folders(object["folders"]),
+                         // Absent is `.none`, and so is malformed — both mean
+                         // "this device may do nothing with the copilot". See
+                         // `copilotGrant`, which explains why that collapse is
+                         // right here and wrong for `folders` one line up. What
+                         // is *not* collapsed is whether the field was there at
+                         // all: that is the only honest answer to "does this
+                         // machine have a copilot", and it is a different
+                         // question from what the capability list claims. See
+                         // `CopilotOffer`.
+                         copilot: copilotOffer(object["copilot"])),
                 activity: list.activity)
 
         case "sessions":
@@ -266,6 +276,75 @@ enum WireCodec {
             return .ok(.credentialRequest(id: id, host: host, repo: repo,
                                           operation: operation, prompt: prompt),
                        activity: [:])
+
+        /* ---- capability `copilot` ------------------------------------------ */
+
+        case "copilot.state":
+            guard let state = copilotState(object["state"]) else {
+                return .failed(reason: "copilot.state without a status")
+            }
+            return .ok(.copilotState(state), activity: [:])
+
+        case "copilot.chat":
+            // The run is required and the messages are not. An empty `reset` is
+            // a real frame — it is what a freshly started run answers with, and
+            // what a run that was cleared sends — so refusing it would leave the
+            // last run's conversation on screen under a new one.
+            guard let run = string(object["run"]), !run.isEmpty,
+                  let rows = object["messages"] as? [Any] else {
+                return .failed(reason: "copilot.chat without a run and messages")
+            }
+            // One malformed message does not discard the frame, for the same
+            // reason one bad session row does not discard a list: a phone
+            // showing four of five turns is useful and one showing none is not.
+            return .ok(.copilotChat(run: run,
+                                    messages: rows.compactMap { copilotMessage($0) },
+                                    reset: (object["reset"] as? Bool) == true),
+                       activity: [:])
+
+        case "copilot.tool":
+            guard let row = copilotAction(object["row"]) else {
+                return .failed(reason: "copilot.tool without a usable row")
+            }
+            return .ok(.copilotTool(row), activity: [:])
+
+        case "copilot.sessions":
+            guard let rows = object["sessions"] as? [Any] else {
+                return .failed(reason: "copilot.sessions without a list")
+            }
+            return .ok(.copilotSessions(rows.compactMap { copilotSessionRow($0) }), activity: [:])
+
+        case "copilot.log":
+            guard let rows = object["rows"] as? [Any] else {
+                return .failed(reason: "copilot.log without rows")
+            }
+            return .ok(.copilotLog(rows: rows.compactMap { copilotAction($0) }.suffix(Copilot.maxLogRows),
+                                   more: (object["more"] as? Bool) == true),
+                       activity: [:])
+
+        case "copilot.pending":
+            guard let rows = object["questions"] as? [Any] else {
+                return .failed(reason: "copilot.pending without a list")
+            }
+            /*
+             * The cap is the desktop's own `maxPending`, mirrored.
+             *
+             * `ConsentBroker` refuses a fourth outstanding question with
+             * `too-many-pending`, so more than three here is a frame that did
+             * not come from a broker this app understands. Bounding it matters
+             * more than usual because these are drawn as full-height cards with
+             * every argument on them: a host sending sixty would be a screen a
+             * person scrolls rather than reads, which is the exact failure mode
+             * a consent surface must not have.
+             */
+            return .ok(.copilotPending(rows.compactMap { copilotQuestion($0) }.prefix(3).map { $0 }),
+                       activity: [:])
+
+        case "copilot.grant":
+            // Unlike the state frame there is nothing here that can be missing:
+            // absent, malformed and "nothing granted" are one answer, and it is
+            // the safe one. See `copilotGrant`.
+            return .ok(.copilotGrant(copilotGrant(object["grant"])), activity: [:])
 
         default:
             return .failed(reason: "unknown message type")
@@ -523,6 +602,41 @@ enum WireCodec {
             object = answer
         case let .credentialDeny(id, reason):
             object = ["t": "credential.deny", "id": id, "reason": reason.rawValue]
+
+        /*
+         * The copilot verbs. Note what is *not* in any of them: a tool id, an
+         * argument object, a session to act on, a folder. The only field this
+         * phone ever composes is `text` — prose — and `limit`/`before`, which
+         * are a page size and a row id it was given. `CopilotWireTests` pins
+         * that, because the first convenience feature anybody asks for here
+         * ("tap that row to run it again") breaks the property the whole
+         * enforcement model rests on.
+         */
+        case .copilotAttach:
+            object = ["t": "copilot.attach"]
+        case .copilotDetach:
+            object = ["t": "copilot.detach"]
+        case .copilotState:
+            object = ["t": "copilot.state"]
+        case .copilotSessions:
+            object = ["t": "copilot.sessions"]
+        case let .copilotLog(limit, before):
+            var request: [String: Any] = ["t": "copilot.log", "limit": limit]
+            // Written only when there is one. A `before: null` would be a field
+            // whose name says "page backwards from here" carrying nothing to
+            // page from, and the desktop's parser reads absence as "the tail".
+            if let before, !before.isEmpty { request["before"] = before }
+            object = request
+        case .copilotPending:
+            object = ["t": "copilot.pending"]
+        case .copilotStart:
+            object = ["t": "copilot.start"]
+        case let .copilotSay(text):
+            object = ["t": "copilot.say", "text": text]
+        case .copilotCancel:
+            object = ["t": "copilot.cancel"]
+        case .copilotStop:
+            object = ["t": "copilot.stop"]
         }
         guard let data = try? JSONSerialization.data(withJSONObject: object, options: []),
               let text = String(data: data, encoding: .utf8) else {
@@ -587,7 +701,24 @@ enum WireCodec {
 
     // MARK: - Narrowing helpers
 
-    private static func string(_ value: Any?) -> String? {
+    /*
+     * `string` and `whole` are internal rather than private, and the two below
+     * them are not.
+     *
+     * Swift's `private` is file-scoped, and the copilot frames are decoded by an
+     * extension of this type in `CopilotWire.swift` — a second file, because
+     * that half of the wire is a grant, five value types and seventeen frames
+     * and would have doubled this one. Those decoders need the same answer to
+     * "is this a string" and "is this a whole number" that every frame here
+     * gets: two definitions of that is two definitions that will eventually
+     * disagree, on a wire where one of them guards a countdown and the other
+     * guards a port.
+     *
+     * `capabilities` and `folders` stay private because they are read off
+     * exactly one frame and nothing outside this file has any business
+     * inventing a second caller for them.
+     */
+    static func string(_ value: Any?) -> String? {
         // `as? String` alone would accept an NSNumber bridged through
         // JSONSerialization in some cases; the explicit NSNull check keeps a
         // null out of a field the UI will print.
@@ -598,7 +729,7 @@ enum WireCodec {
     /// Whole numbers only. JSONSerialization hands back an NSNumber for every
     /// JSON number, and `as? Int` on a 1.5 truncates rather than refusing — so a
     /// broken `cols` would arrive as a plausible one.
-    private static func whole(_ value: Any?) -> Int? {
+    static func whole(_ value: Any?) -> Int? {
         guard let number = value as? NSNumber, !(value is NSNull) else { return nil }
         // Bools bridge to NSNumber too, and `true` must not read as 1.
         if CFGetTypeID(number) == CFBooleanGetTypeID() { return nil }

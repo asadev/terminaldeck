@@ -17,7 +17,26 @@ Three agents are writing `deck-control/`, `routines/` and `copilot-*.ts` as this
 is written. These are the assumptions the new constraint breaks. Each is small
 if fixed now and expensive if fixed after the surface is public.
 
-### 1. The copilot cannot read any project. Every project-facing capability must be a tool, not a file read.
+### 1. ~~The copilot cannot read any project.~~ **Overtaken twice — it now reads *and writes* what the person does.**
+
+> **Corrected 2026-08-17.** This item was written while the copilot ran inside a
+> `(deny default)` folder confinement. It was first overtaken by a read-only
+> project grant, and then by the confinement being removed altogether: the
+> copilot is an ordinary session running as one of the person's accounts, so
+> `Read`, `Grep`, `Edit`, `Write` and `Bash` reach everything they reach in any
+> other session. `COPILOT-DESIGN.md` and `confine/records.ts` carry the
+> reasoning; what survives is a fence around three of this app's own records.
+>
+> Two consequences for everything below. The tool surface is **no longer the
+> entire aperture** onto the developer's work, so `git.diff`,
+> `project.conventions` and friends are convenience and *reviewability* rather
+> than the only way to see anything — which does not make them less worth
+> building, because a diff read through a tool is a diff with a log row against
+> it. And the copilot's own restraint now matters where a kernel used to: item 6,
+> the last-good snapshot, and §3.2's "never edit this app's state directly" are
+> load-bearing in a way they were not.
+
+The original text, for the record:
 
 `copilotPlan()` in `copilot-session.ts` grants exactly two paths: the copilot's
 own folder and its own confined home. `device.writable` is `[]`. That is
@@ -54,7 +73,7 @@ scaffolding is strictly additive and never overwrites, `copilotHomeReport()`
 must flag existing installs as out of date and offer the reset it already
 supports.
 
-### 3. `routines/` sits inside the copilot's writable folder. That is a hole, and `copilot-home.ts` already says so.
+### 3. `routines/` sits inside the copilot's writable folder. That is a hole, and `copilot-home.ts` already says so. — **FIXED, and it survived the confinement being removed.** The folder moved to `<userData>/routines/` (the option this item preferred), and the copilot's inability to write there is now one deny in the records fence rather than a side effect of a jail. `confine/records.ts`.
 
 Its own header:
 

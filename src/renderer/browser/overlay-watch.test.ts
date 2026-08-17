@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
+import * as watch from './overlay-watch'
 import {
   browserOverlayDom,
-  holdOverlay,
-  intersects,
   isCovered,
+  overlap,
   overlayRects,
   watchOverlays,
   type OverlayDom,
@@ -35,24 +35,40 @@ function element(rect: Rect | null, inside: Record<string, OverlayElement> = {})
 
 const STAGE: Rect = { x: 264, y: 96, width: 900, height: 700 }
 
-describe('intersects', () => {
-  it('is true when the boxes actually overlap', () => {
-    expect(intersects(STAGE, { x: 300, y: 200, width: 200, height: 120 })).toBe(true)
+describe('overlap', () => {
+  it('answers the shared rectangle when the boxes actually overlap', () => {
+    expect(overlap(STAGE, { x: 300, y: 200, width: 200, height: 120 })).toEqual({
+      x: 300,
+      y: 200,
+      width: 200,
+      height: 120,
+    })
   })
 
-  it('is false for a box beside the stage', () => {
+  it('clips the shared rectangle into the stage', () => {
+    // The half of a menu that is over the sidebar is not over the page, and
+    // every judgement downstream is about the part that is.
+    expect(overlap(STAGE, { x: 200, y: 60, width: 200, height: 100 })).toEqual({
+      x: 264,
+      y: 96,
+      width: 136,
+      height: 64,
+    })
+  })
+
+  it('is null for a box beside the stage', () => {
     // The ordinary case, and the reason this is geometric at all: a tooltip on a
     // sidebar row must not blank a website.
-    expect(intersects(STAGE, { x: 0, y: 200, width: 240, height: 30 })).toBe(false)
+    expect(overlap(STAGE, { x: 0, y: 200, width: 240, height: 30 })).toBeNull()
   })
 
   it('does not count a shared edge as an overlap', () => {
-    expect(intersects(STAGE, { x: 0, y: 96, width: 264, height: 40 })).toBe(false)
+    expect(overlap(STAGE, { x: 0, y: 96, width: 264, height: 40 })).toBeNull()
   })
 
-  it('is false for a box with no area, whatever its position', () => {
-    expect(intersects(STAGE, { x: 300, y: 200, width: 0, height: 120 })).toBe(false)
-    expect(intersects(STAGE, { x: 300, y: 200, width: 200, height: 0 })).toBe(false)
+  it('is null for a box with no area, whatever its position', () => {
+    expect(overlap(STAGE, { x: 300, y: 200, width: 0, height: 120 })).toBeNull()
+    expect(overlap(STAGE, { x: 300, y: 200, width: 200, height: 0 })).toBeNull()
   })
 })
 
@@ -78,6 +94,105 @@ describe('isCovered', () => {
     // never come back, because a hidden panel is never measured again.
     const unmeasured = { x: 0, y: 0, width: 0, height: 0 }
     expect(isCovered(unmeasured, [{ x: 0, y: 0, width: 400, height: 400 }])).toBe(false)
+  })
+})
+
+/**
+ * The rule that used to be "any intersection at all", measured off the screen
+ * rather than invented.
+ *
+ * Every rectangle below was read out of the built app on 2026-08-17 with a page
+ * loaded into the browser workspace, and photographed. The first case is the
+ * one that shipped as a bug: a 136×24 tooltip clipping the page's top edge by
+ * 21px blanked a 587×644 website for as long as the pointer rested on a toolbar
+ * button. The rest are the surfaces that must keep parking it, so that softening
+ * the rule cannot be taken further by anybody reading only the first test.
+ */
+describe('isCovered, on the real geometry it got wrong', () => {
+  /** The browser workspace's page stage, split beside a terminal. */
+  const PAGE: Rect = { x: 845, y: 182, width: 587, height: 644 }
+
+  it('does not park a page for a tooltip that clips its top edge', () => {
+    // `Cookies and site data`, hanging off the browser toolbar's last button.
+    // The toolbar's buttons end 9px above the page and `placeTip` hangs a bubble
+    // 6px below its anchor, so it starts 3px clear and reaches 21px in.
+    expect(isCovered(PAGE, [{ x: 1296, y: 179, width: 135.90625, height: 24.375 }])).toBe(false)
+  })
+
+  it('parks it for a dialog, which arrives as a full-window scrim', () => {
+    // Measured with the Cookies dialog open: `Modal.tsx` portals a
+    // `.modal-overlay` the size of the window, so a dialog is never a near miss.
+    expect(isCovered(PAGE, [{ x: 0, y: 0, width: 1440, height: 920 }])).toBe(true)
+  })
+
+  it('parks it for a paragraph of tooltip lying on the page', () => {
+    // The Shared/Isolated toggle's title is three lines. From the same toolbar
+    // row as the Cookies bubble, it reaches 64px in — and a reader who cannot
+    // see it has lost something, which is what the 21px bubble had not.
+    expect(isCovered(PAGE, [{ x: 1025, y: 179, width: 320, height: 67.5 }])).toBe(true)
+  })
+
+  it('parks it for a menu opened over the page', () => {
+    // The account menu, at the size it opens: 420×313. Small next to the page
+    // and still the whole reason this module exists.
+    expect(isCovered(PAGE, [{ x: 900, y: 300, width: 420, height: 313 }])).toBe(true)
+  })
+
+  it('parks it for the peeked rail across the page’s left edge', () => {
+    // 264 wide and the height of the window. Flush with an edge, like the
+    // tooltip, and nothing like a graze.
+    expect(isCovered(PAGE, [{ x: 700, y: 0, width: 264, height: 920 }])).toBe(true)
+  })
+
+  it('parks it for a shallow band that is not against an edge', () => {
+    /*
+     * The test that stops this being read as "small overlays are ignored". A
+     * banner 24px tall lying across the middle of the page is exactly as shallow
+     * as the Cookies tooltip and every pixel of it would be painted over, so it
+     * has to park the page. What made the tooltip different was its position,
+     * not its size.
+     */
+    expect(isCovered(PAGE, [{ x: 845, y: 500, width: 587, height: 24 }])).toBe(true)
+  })
+
+  it('treats all four edges the same way', () => {
+    const graze = 20
+    const land = 60
+    for (const [shallow, deep] of [
+      // top
+      [
+        { x: 900, y: PAGE.y - 4, width: 200, height: graze + 4 },
+        { x: 900, y: PAGE.y - 4, width: 200, height: land + 4 },
+      ],
+      // bottom
+      [
+        { x: 900, y: PAGE.y + PAGE.height - graze, width: 200, height: 80 },
+        { x: 900, y: PAGE.y + PAGE.height - land, width: 200, height: 200 },
+      ],
+      // left
+      [
+        { x: PAGE.x - 100, y: 300, width: 100 + graze, height: 200 },
+        { x: PAGE.x - 100, y: 300, width: 100 + land, height: 200 },
+      ],
+      // right
+      [
+        { x: PAGE.x + PAGE.width - graze, y: 300, width: 200, height: 200 },
+        { x: PAGE.x + PAGE.width - land, y: 300, width: 200, height: 200 },
+      ],
+    ]) {
+      expect(isCovered(PAGE, [shallow])).toBe(false)
+      expect(isCovered(PAGE, [deep])).toBe(true)
+    }
+  })
+
+  it('parks it for one real overlay among several grazes', () => {
+    expect(
+      isCovered(PAGE, [
+        { x: 1296, y: 179, width: 136, height: 24 },
+        { x: 0, y: 400, width: 264, height: 28 },
+        { x: 0, y: 0, width: 1440, height: 920 },
+      ]),
+    ).toBe(true)
   })
 })
 
@@ -140,22 +255,41 @@ describe('overlayRects', () => {
   })
 })
 
-describe('holdOverlay', () => {
-  it('adds a surface that is neither a portal nor the rail, and takes it away again', () => {
-    const app = element({ x: 0, y: 0, width: 1440, height: 900 })
-    const release = holdOverlay({ x: 500, y: 500, width: 100, height: 100 })
-    expect(overlayRects({ children: [app] }, app)).toEqual([
-      { x: 500, y: 500, width: 100, height: 100 },
+describe('nothing here outlives the call that measured it', () => {
+  /*
+   * This module used to export `holdOverlay`, a registry a floating surface
+   * could push its rectangle into, with a release function to take it out
+   * again. It had no callers, and it could not have been right for the ones it
+   * named: it took a *static* rectangle, so a surface that moved or resized —
+   * the peeked rail, which is the case it was written for — would have parked
+   * the wrong part of the window, and a caller that unmounted without calling
+   * release would have parked every page for the rest of the process with
+   * nothing on screen to explain it. `overlayRects` skipped it another way, and
+   * the newest floating surface in the app, driving mode's focus overlay, went
+   * further and mounted itself inside `#root` so this module cannot see it at
+   * all.
+   *
+   * So the export list is the guard. Putting a registry back has to be a
+   * deliberate act by somebody who has read this, arriving with the surface
+   * that needs it rather than ahead of one.
+   */
+  it('exports only measurement, and no way to register a rectangle', () => {
+    expect(Object.keys(watch).sort()).toEqual([
+      // A selector, which is a fact about the DOM rather than a place to keep
+      // one. `Tooltips.tsx` reads it and measures for itself.
+      'NATIVE_VIEW_SELECTOR',
+      'browserOverlayDom',
+      'isCovered',
+      'overlap',
+      'overlayRects',
+      'sameRects',
+      'watchOverlays',
     ])
-    release()
-    expect(overlayRects({ children: [app] }, app)).toEqual([])
   })
 
-  it('is safe to release twice', () => {
+  it('answers from the body it was handed and from nothing else', () => {
     const app = element({ x: 0, y: 0, width: 1440, height: 900 })
-    const release = holdOverlay({ x: 1, y: 1, width: 2, height: 2 })
-    release()
-    release()
+    expect(overlayRects({ children: [app] }, app)).toEqual([])
     expect(overlayRects({ children: [app] }, app)).toEqual([])
   })
 })

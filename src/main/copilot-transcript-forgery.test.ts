@@ -1,18 +1,16 @@
 /**
  * Whether the copilot can publish a conversation under somebody else's project,
- * asked of a real `sandbox-exec` and then of the readers themselves.
+ * asked of the readers themselves.
  *
  * ## The channel
  *
  * `transcriptDirs(cwd)` used to answer with `projects/<encode(cwd)>` inside
- * **every** confined home under `<userData>/remote/device-home/`. The copilot's
- * own home is one of those, deliberately — `copilot-session.ts` explains that
- * the placement is what lets the transcript viewer, chat mode, the cost pane and
- * the alert watcher see the copilot's conversation with no change to any of
- * them.
+ * **every** confined home under `<userData>/remote/device-home/`. The copilot
+ * had a home there, deliberately: the placement was what let the transcript
+ * viewer, chat mode, the cost pane and the alert watcher see its conversation
+ * with no change to any of them.
  *
- * The copilot may write inside its own home, and may write nowhere else. So
- * creating
+ * The copilot could write inside its own home. So creating
  *
  *     <copilotHome>/.claude/projects/<encode(/somebody/else/api)>/x.jsonl
  *
@@ -21,19 +19,35 @@
  * permission bypass. Fabricated input to four readers, and those readers are the
  * person's independent check on what their assistant tells them.
  *
+ * ## Why this still matters after the copilot stopped being jailed
+ *
+ * `confine/records.ts` explains the change: the copilot is an ordinary session
+ * now, with the person's own account, and its conversation is written into that
+ * profile's store like every other session's. **Nothing creates a copilot home
+ * any more.**
+ *
+ * Two things follow, and only the second is obvious.
+ *
+ *  1. The privileged channel is gone at the source. A store that answers for
+ *     every project, holding files an agent may write, is what made this a
+ *     copilot-shaped hole rather than a machine-shaped one — and the copilot no
+ *     longer has such a store.
+ *  2. **Every install upgraded from a build that jailed it still has one**, on
+ *     disk, in that root, with real conversations in it — and with anything a
+ *     jailed copilot ever wrote there. Removing the scope because the home is no
+ *     longer created would put all of it back in front of every project. So the
+ *     scope stays installed at boot, and this file is what says so.
+ *
  * ## Why the proof has the shape it has
  *
- * This is *not* a boundary test with a denial at the end of it, and writing one
- * would be dishonest: the write is inside the boundary and must stay inside it,
- * because that directory is where the copilot's own CLI writes its own
- * transcript. The first case below therefore asserts that the forgery is
- * **written successfully**, from inside the real Seatbelt profile. That is the
- * capability, it is not going away, and a proof that pretended otherwise would
- * be proving the wrong thing.
+ * It is *not* a boundary test with a denial at the end of it, and writing one
+ * would be dishonest — for a stronger reason than before. The copilot can write
+ * that file. So can any other agent session on this machine, into the very same
+ * store, because they share the person's `~/.claude`; that is the honest limit
+ * and it is stated rather than papered over. What this file proves is the thing
+ * that *is* still specific to the copilot: a store of its own that four readers
+ * scan answers for one folder and no other.
  *
- * What changed is the *reading*. `installHomeScopes` registers the copilot's
- * home as answering for one folder — its own working directory — so a
- * transcript it writes under any other project's encoding is never looked for.
  * The rest of the file asks the readers, and it asks all three questions that
  * matter: the forged one is gone, the copilot's real one is still there, and a
  * paired phone's transcript for the same project is untouched.
@@ -51,12 +65,13 @@ import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
-import { confinedEnv, deviceHomesRoot } from './confine'
-import { SANDBOX_EXEC, seatbeltProfile } from './confine/seatbelt'
+import { deviceHomesRoot } from './confine'
+import { recordsFencePaths, recordsFenceProfile } from './confine/records'
+import { SANDBOX_EXEC } from './confine/seatbelt'
 import { copilotPaths, type CopilotPaths } from './copilot-home'
 import { createHostCore } from './host-core'
 import { installPaths, resetPaths } from './platform/paths'
-import { COPILOT_HOME_KEY, copilotHomeScope, copilotPlan } from './copilot-session'
+import { COPILOT_HOME_KEY, copilotHomeScope } from './copilot-session'
 import {
   configDirs,
   encodeProjectPath,
@@ -119,12 +134,7 @@ function sh(line: string): Promise<Ran> {
     execFile(
       SANDBOX_EXEC,
       ['-p', profile, '/bin/sh', '-c', line],
-      {
-        cwd: paths.root,
-        timeout: 20_000,
-        encoding: 'utf8',
-        env: { ...process.env, ...confinedEnv(copilotDeviceHome) },
-      },
+      { cwd: paths.root, timeout: 20_000, encoding: 'utf8' },
       (error, stdout, stderr) => {
         const code =
           error && typeof (error as { code?: unknown }).code === 'number'
@@ -144,9 +154,7 @@ beforeAll(() => {
   // composed from the unresolved one asks about paths the profile never names.
   root = realpathSync(mkdtempSync(join(tmpdir(), 'copilot-forgery-')))
   userData = join(root, 'user-data')
-  const accountHome = join(root, 'account-home')
   mkdirSync(userData, { recursive: true })
-  mkdirSync(accountHome, { recursive: true })
 
   paths = copilotPaths(userData)
   homes = deviceHomesRoot(join(userData, 'remote'))
@@ -154,21 +162,24 @@ beforeAll(() => {
 
   mkdirSync(paths.memory, { recursive: true })
   mkdirSync(paths.log, { recursive: true })
-  // The copilot's home, built the way `prepareDeviceHome` builds it: the home,
-  // its `tmp` (the session's `TMPDIR`), and the empty store the CLI will fill.
+  /*
+   * A copilot home, as an install upgraded from a build that jailed the copilot
+   * still has one: the home, its `tmp` (that session's `TMPDIR`), and the store
+   * the CLI filled. Nothing creates this now — which is exactly why it has to be
+   * built by hand here, and exactly the case the scope still exists for.
+   */
   mkdirSync(join(copilotDeviceHome, 'tmp'), { recursive: true })
   mkdirSync(join(copilotDeviceHome, '.claude', 'projects'), { recursive: true })
 
   if (!onMac) return
-  profile = seatbeltProfile(
-    copilotPlan({
-      folder: paths.root,
-      home: copilotDeviceHome,
-      accountHome,
-      path: '/usr/bin:/bin:/usr/sbin:/sbin',
-      platform: 'darwin',
-    }),
-  )
+  /*
+   * The real profile the copilot is launched with — which is now the records
+   * fence rather than a jail, and the substitution is the point of the first
+   * block below: the write it makes was permitted under the old profile and is
+   * permitted under this one, so the protection that closed this hole was never
+   * the sandbox and does not depend on one.
+   */
+  profile = recordsFenceProfile(recordsFencePaths(userData))
 })
 
 afterAll(() => {

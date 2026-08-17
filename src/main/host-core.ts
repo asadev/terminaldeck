@@ -46,6 +46,7 @@ import {
   loginPath,
   providersFor,
   resolvedProvidersFor,
+  withLaunchArgs,
 } from './providers'
 import { CustomAgentStore, lookupCommand } from './custom-agents'
 import { isCustomProviderId } from '../shared/custom-agents'
@@ -65,10 +66,11 @@ import {
 } from './confine'
 import { forgetBoundary, noteBoundary } from './session-boundary'
 import { installDeviceHomes, installHomeScopes } from './transcript'
-import { copilotHomeScope } from './copilot-session'
+import { copilotHomeScope, isCopilotSession, type SpawnFence } from './copilot-session'
 import { createCredentialProxy, deviceKey, type CredentialProxy } from './remote/credentials'
 import { FolderGrants, foldersForDevice } from './remote/folder-grants'
 import { guestGitDir, HELPER_FILE, type GuestGitEnv } from './remote/git-guest'
+import { isHiddenSession } from './remote/hidden-sessions'
 import { SessionFanout } from './remote/session-fanout'
 import { remoteSessionStart } from './remote/session-create'
 import type { SavedSession } from './session-restore'
@@ -242,11 +244,28 @@ export interface HostCore {
    * further down: it is what stops the session leaving the folder it was granted
    * at all. Both are absent for a window, because a person sitting at their own
    * keyboard has no grant to be held inside — see `confine/index.ts`.
+   *
+   * `fence` is set by exactly one caller too — the copilot — and it is **not**
+   * confinement, which is why it is a third argument rather than a field on the
+   * second. A confined session is one that may only touch what it was granted. A
+   * fenced session is an ordinary session that may touch everything *except* a
+   * named few of this app's own files: the routines it could otherwise make fire
+   * on their own, and the log of what it did. It arrives already measured — see
+   * `confine/records.ts` — so all this function does with it is wrap the launch.
+   *
+   * `extraArgs` is the copilot's too, and it is what gives it any tools at all:
+   * `--mcp-config <file> --strict-mcp-config`, the only way a Claude CLI process
+   * can be told about the `deck-control` server. It is an argument here rather
+   * than a field on {@link CreateSessionInput} because the input crosses the
+   * preload bridge and a session's argv is not something page code should be
+   * able to compose — the same reason the three above it are arguments.
    */
   startSession(
     input: CreateSessionInput,
     guest?: GuestGitEnv,
     confine?: DeviceConfinement,
+    fence?: SpawnFence,
+    extraArgs?: readonly string[],
   ): Promise<SessionMeta>
   /** A path a Windows API can stat, for a folder that may live inside a distro. */
   statablePath(cwd: string): string
@@ -417,6 +436,8 @@ export function createHostCore(options: HostCoreOptions): HostCore {
     input: CreateSessionInput,
     guest?: GuestGitEnv,
     confine?: DeviceConfinement,
+    fence?: SpawnFence,
+    extraArgs?: readonly string[],
   ): Promise<SessionMeta> {
     const path = await loginPath()
     /*
@@ -491,12 +512,30 @@ export function createHostCore(options: HostCoreOptions): HostCore {
      * since the payload of that command line is resolved by the distribution's
      * own login shell and a host path would name a file that side cannot see.
      */
-    const spec =
+    const table =
       added !== null && addedRuns
         ? customProviderSpec(added, platform, process.env, target)
         : target === null
           ? (await resolvedProvidersFor(platform, process.env))[provider]
           : providersFor(platform, process.env, target)[provider]
+
+    /*
+     * Flags this particular launch needs, folded in where the launch shape is
+     * still known.
+     *
+     * One caller, the copilot, and one purpose: `--mcp-config <file>
+     * --strict-mcp-config`, which is the only way a Claude CLI process can be
+     * given the `deck-control` tools. `withLaunchArgs` is what knows that a
+     * WSL launch has to be rebuilt rather than appended to; see its comment.
+     *
+     * Deliberately a parameter of *this* function and not a field on
+     * `CreateSessionInput`. The input crosses the preload bridge — a renderer
+     * calls `session:create` with it — and a session's argv is not a thing page
+     * code should be able to compose. Everything else on the spawn path that
+     * only a main-process caller may set (`guest`, `confine`, `fence`) is a
+     * positional argument for exactly this reason, and this joins them.
+     */
+    const spec = withLaunchArgs(table, extraArgs ?? [], platform, process.env, target)
 
     // Resolve the profile the session should run as and hand the PTY its
     // config-dir override. Without this the picker records a choice that never
@@ -674,10 +713,24 @@ export function createHostCore(options: HostCoreOptions): HostCore {
           })
         : null
 
+    /*
+     * Confinement first, then the fence, and they are mutually exclusive by
+     * construction rather than by a check.
+     *
+     * A confined session already cannot reach `<userData>` at all — the fenced
+     * paths are inside it — so applying both would be one sandbox nested inside
+     * another, which macOS refuses outright (`sandbox_apply: Operation not
+     * permitted`, measured in `seatbelt.ts`) and would turn a working session
+     * into one that will not start. The only caller that passes `fence` passes
+     * no `confine`, and the branch below is what makes that impossible to get
+     * wrong by accident rather than merely unlikely.
+     */
     const launch =
       plan !== null
         ? await confineSpawn(plan, spec.spawn.command, wanted, platform)
-        : { command: spec.spawn.command, args: [...wanted] }
+        : fence !== undefined && target === null
+          ? fence.apply(spec.spawn.command, wanted)
+          : { command: spec.spawn.command, args: [...wanted] }
 
     const meta = ptys.create(input, {
       provider,
@@ -787,6 +840,37 @@ export function createHostCore(options: HostCoreOptions): HostCore {
     write: (id, data) => ptys.write(id, data),
     resize: (id, cols, rows) => ptys.resize(id, cols, rows),
     scrollback: (id) => ptys.scrollback(id),
+    /*
+     * The copilot's own terminal is not the network's business.
+     *
+     * `SessionFanout` grew the predicate for this and then nothing answered it,
+     * which is the same failure as not having built it: a phone could `list`,
+     * see the row whose folder is `<userData>/copilot`, `attach`, and type into
+     * the Claude CLI that holds `deck-control` — past the per-device copilot
+     * grant, past every tier, past every budget and past the confirmation
+     * dialog, because none of those sit between a pty and its keyboard.
+     *
+     * Here, at assembly, and for the same reason `installHomeScopes` above is
+     * here rather than beside the copilot's own wiring: the headless build
+     * serves the same remote protocol from the same fanout, and a rule a shell
+     * had to remember to install is a rule the other shell forgets. It costs
+     * nothing on a host with no copilot — `isCopilotSession` reads one module
+     * variable that is null there and always will be.
+     *
+     * The predicate rather than a snapshot of ids because the answer changes
+     * while the app runs: the copilot restarts with a new id whenever it is
+     * stopped and started, and under `COPILOT-REMOTE.md` §1 every per-device
+     * copilot run joins the same answer.
+     *
+     * And it now does. `isCopilotSession` answers for the copilot at the desk,
+     * which is a singleton and lives in `copilot-session.ts`; `isHiddenSession`
+     * answers for every per-device run, which are not, and which belong to the
+     * relay rather than to that module. Two sources rather than one because the
+     * two features deploy separately — the headless host has runs and no pinned
+     * copilot — and an `||` here is what keeps a shell from having to remember
+     * to install either.
+     */
+    hidden: (id) => isCopilotSession(id) || isHiddenSession(id),
     // Both halves out of one starter, so the list a phone's picker is drawn from
     // is the list `create` checks against rather than a second computation of
     // the same idea. See `remoteSessionStart`.

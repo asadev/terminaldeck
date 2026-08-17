@@ -123,6 +123,21 @@
 .gh-asks-body code,
 .settings-account-blocked code,
 .settings-code,
+
+/*
+   The box in Settings → Copilot that edits the copilot's `CLAUDE.md`, one of
+   its memories, or a routine file. Verbatim twice over, which is the case this
+   whole file's header calls the strongest one there is: what is drawn has to
+   equal what is on disk *and* what will be written back when Save is pressed.
+
+   A redrawn glyph in a read-only pane is a lie the reader cannot detect. In an
+   editable one it is worse, because the reader will act on it — a routine
+   header is `key: value` and a prompt is prose the agent is handed literally,
+   and somebody retyping a line they misread has changed the file to match the
+   font. The bytes never change (the value is React state, not the glyph), so
+   the screen and the file would disagree with nothing on screen saying so.
+*/
+.copilot-editor-box,
 .remote-code,
 .ns-install,
 .picker-install,

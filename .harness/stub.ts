@@ -104,6 +104,15 @@ const remote = {
   ],
 }
 
+/**
+ * Which devices may reach the copilot. Starts empty, which is the real default.
+ *
+ * `DeviceCopilotGrant[]`, exactly as `remote:copilot` answers: nobody has ever
+ * had this access, so a harness that opened with a device already granted would
+ * be showing a state no real machine starts in.
+ */
+const copilotGrants: Array<{ deviceId: string; tiers: { read: boolean; act: boolean; alter: boolean } }> = []
+
 /** `RemoteStatus`, rebuilt each read so the buttons above are visible in it. */
 const remoteState = () => ({
   running: remote.running,
@@ -323,6 +332,26 @@ const api: Record<string, unknown> = new Proxy(
       const connection = remote.connections.find((c) => c.id === connectionId)
       if (connection) connection.tunnels = connection.tunnels.filter((t) => t.id !== tunnelId)
       return remote.connections
+    },
+    /*
+     * Copilot grants, mutable for the same reason the approve/revoke stubs are.
+     *
+     * A stub that answered with a fixed list would make every checkbox on the
+     * panel look broken in the harness — ticked, and the row unchanged — which
+     * is precisely the symptom this panel exists to make impossible. It also
+     * models the two rules that matter: a device with nothing granted does not
+     * appear in the reply at all, and `alter` is dropped whatever arrives.
+     */
+    listDeviceCopilot: async () => copilotGrants,
+    setDeviceCopilot: async (deviceId: string, tiers: Record<string, boolean>) => {
+      const read = tiers.read === true
+      const act = tiers.act === true
+      const at = copilotGrants.findIndex((row) => row.deviceId === deviceId)
+      if (at >= 0) copilotGrants.splice(at, 1)
+      // Nothing granted is no row, matching the store: absence and refusal are
+      // the same fact here, unlike the folder list where they are not.
+      if (read || act) copilotGrants.push({ deviceId, tiers: { read, act, alter: false } })
+      return copilotGrants
     },
     onRemoteConnections: noop,
     tailnetStatus: async () => ({
@@ -758,7 +787,23 @@ const api: Record<string, unknown> = new Proxy(
     gitStatus: async () => ({ ok: false, kind: 'not-a-repo', message: 'Not a git repository.' }),
     githubOverview: async () => ({ ok: false, kind: 'no-remote', message: 'This repository has no remotes yet.' }),
     scanReadiness: async () => ({ score: 93, checks: [] }),
-    projectAlerts: async () => ({ alerts: [] }),
+    /*
+     * A whole `AlertReport`, not just its list.
+     *
+     * `{ alerts: [] }` was honest enough while the panel was the only reader,
+     * because every consumer of `counts` and `worst` sat behind a
+     * `alerts.length > 0` branch that an empty list never entered. The sidebar's
+     * bell reads the same report now, and a stub that disagrees with the preload
+     * is how this file has invented bugs three times — so it answers the shape
+     * `alerts.ts` actually returns.
+     */
+    projectAlerts: async (projectPath: string) => ({
+      projectPath,
+      alerts: [],
+      counts: { critical: 0, warning: 0, info: 0 },
+      worst: null,
+      scannedAt: Date.now(),
+    }),
     listDir: async () => ({ entries: [] }),
     hooksStatus: async () => [],
     // Complete `McpServerStatus` rows, not a name and a flag. The composer's

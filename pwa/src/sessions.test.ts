@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import type { RemoteSession } from './protocol-client'
-import { formatSince, sessionTone, shortenPath, sortSessions, statusLabel, statusTone } from './sessions'
+import type { ProtocolErrorCode, RemoteSession, ServerMessage } from './protocol-client'
+import {
+  formatSince,
+  noticeAfter,
+  sessionTone,
+  shortenPath,
+  sortSessions,
+  statusLabel,
+  statusTone,
+} from './sessions'
 
 function session(patch: Partial<RemoteSession> = {}): RemoteSession {
   return {
@@ -120,5 +128,71 @@ describe('folder paths on a narrow screen', () => {
 
   it('uses a tilde when the desktop said where home is', () => {
     expect(shortenPath('/Users/asad/code', '/Users/asad')).toBe('~/code')
+  })
+})
+
+/**
+ * The sentence above the list, and the frame that has to end it.
+ *
+ * This exists because a screenshot of a *successful* pairing showed the pairing
+ * instructions — "Paired. Approve this device in the desktop app, then
+ * reconnect" — sitting above a live list of two running sessions, on the dev
+ * build and on app.terminaldeck.dev alike. Nothing had failed. Every frame was
+ * handled correctly on its own; what was missing was the frame that says the
+ * complaint is over.
+ */
+describe('the notice above the session list', () => {
+  const welcome = (): ServerMessage => ({
+    t: 'welcome',
+    protocol: 1,
+    deviceId: 'd',
+    deviceName: 'This browser',
+    token: null,
+    sessions: [],
+    capabilities: [],
+  })
+
+  const refusal = (code: ProtocolErrorCode, message: string): ServerMessage => ({ t: 'error', code, message })
+
+  it('is cleared by a welcome, which is the whole bug', () => {
+    const pairing = 'Paired. Approve this device in the desktop app, then reconnect.'
+    expect(noticeAfter(pairing, welcome(), 'Mac')).toBeNull()
+  })
+
+  it('is cleared by a welcome whatever the last refusal was, not just the pairing one', () => {
+    /*
+     * Narrowing this to the pairing sentence is the tempting fix and the wrong
+     * one. A `welcome` is a socket that got through and a session list restated
+     * from scratch, so *every* complaint a previous connection was still
+     * carrying is stale — and a special case for one string is a special case
+     * that goes out of date the day somebody rewords it on the desktop.
+     */
+    expect(noticeAfter('That did not reach the Mac.', welcome(), 'Mac')).toBeNull()
+    expect(noticeAfter(null, welcome(), 'Mac')).toBeNull()
+  })
+
+  it('shows the desktop’s own words for a refusal', () => {
+    expect(noticeAfter(null, refusal('unauthorized', 'That folder is not shared.'), 'Mac')).toBe(
+      'That folder is not shared.',
+    )
+  })
+
+  it('rewrites only unknown-session, and in this client’s noun', () => {
+    // The one code whose wire wording is aimed at a client rather than a person.
+    expect(noticeAfter(null, refusal('unknown-session', 'no such session'), 'PC')).toBe(
+      'That session is no longer running on the PC.',
+    )
+  })
+
+  it('leaves the notice alone for every frame that says nothing about it', () => {
+    /*
+     * The default, asserted rather than assumed. Output frames arrive by the
+     * hundred while a terminal is open, and a notice that quietly vanished on
+     * the next byte of output would be a report nobody could read in time.
+     */
+    const standing = 'That session is no longer running on the Mac.'
+    expect(noticeAfter(standing, { t: 'output', id: 'a', data: 'x' }, 'Mac')).toBe(standing)
+    expect(noticeAfter(standing, { t: 'sessions', sessions: [] }, 'Mac')).toBe(standing)
+    expect(noticeAfter(standing, { t: 'pong' }, 'Mac')).toBe(standing)
   })
 })

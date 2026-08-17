@@ -142,7 +142,13 @@ final class DeckModel {
      * which is a bar over a terminal again with every test still green.
      * `DeckTabsTests` walks all three.
      */
-    var sessionsSurface: DeckSurface { route.isEmpty ? .sessions : .session }
+    var sessionsSurface: DeckSurface {
+        switch route.last {
+        case .none: return .sessions
+        case .session: return .session
+        case .copilot: return .copilot
+        }
+    }
     var localhostSurface: DeckSurface { localhostPageIsOpen ? .localhostPage : .localhost }
     var settingsSurface: DeckSurface { settingsRoute.isEmpty ? .settings : .machines }
 
@@ -448,6 +454,23 @@ final class DeckModel {
      */
     enum Route: Hashable {
         case session(host: String, id: String)
+        /**
+         * The copilot on one machine.
+         *
+         * On the **Sessions** stack, and this is the answer to "where does the
+         * copilot go in three tabs" — argued at length in `CopilotView`. The
+         * short version: the desktop pins it above the session list, the phone's
+         * Sessions tab *is* the session list, and everything the copilot is for
+         * is a question about the sessions on that tab. A fourth pill was
+         * considered and dropped once already, on his own instruction, and
+         * Settings is where a thing goes when it is configured once rather than
+         * used all day.
+         *
+         * Named with its machine like a session, and for the same reason: a
+         * route carrying no host would open whichever machine happened to be
+         * current when it was popped, which with two paired is a coin flip.
+         */
+        case copilot(host: String)
     }
 
     /// `makeTransport` is a seam for the tests, which drive this model against a
@@ -517,8 +540,15 @@ final class DeckModel {
         currentHostId = hostId
         UserDefaults.standard.set(hostId, forKey: Self.selectionKey)
         route.removeAll { route in
-            if case let .session(host, _) = route { return host != hostId }
-            return false
+            switch route {
+            case let .session(host, _): return host != hostId
+            // And the copilot, for a sharper version of the same reason. One
+            // conversation per machine — runs are keyed by device on the far end
+            // — so a copilot screen that survived a switch would be showing one
+            // machine's run under another machine's name, over a composer that
+            // sends to neither.
+            case let .copilot(host): return host != hostId
+            }
         }
     }
 
@@ -767,8 +797,13 @@ final class DeckModel {
         // than a grace period left over from the last time it was here.
         leftSessionAt = leftSessionAt.filter { !$0.key.hasPrefix("\(hostId).") }
         route.removeAll { route in
-            if case let .session(host, _) = route { return host == hostId }
-            return false
+            switch route {
+            case let .session(host, _): return host == hostId
+            // A forgotten machine's copilot goes with its terminals. The screen
+            // would otherwise stay up over a `HostLink` that is no longer in the
+            // collection, drawing a conversation nothing will ever update again.
+            case let .copilot(host): return host == hostId
+            }
         }
         if currentHostId == hostId {
             currentHostId = hosts.first?.id
@@ -850,6 +885,27 @@ final class DeckModel {
 
     // MARK: - Navigation
 
+    /**
+     * Open the copilot on the machine that is on screen.
+     *
+     * A method rather than a bare `NavigationLink`, for the same reason
+     * `showMachines` is one: it has to land on the tab that can show it. It is
+     * pushed onto the Sessions stack, so a person who arrived from a
+     * notification, from Localhost, or from Settings ends up looking at it
+     * rather than at a screen pushed under a tab nobody is on.
+     *
+     * Idempotent — asking twice does not stack two copies of a live
+     * conversation.
+     */
+    func openCopilot(on hostId: String? = nil) {
+        let host = hostId ?? currentHostId
+        guard let host, hosts.contains(where: { $0.id == host }) else { return }
+        if host != currentHostId { select(host) }
+        tab = .sessions
+        let next = Route.copilot(host: host)
+        if route.last != next { route.append(next) }
+    }
+
     func open(session id: String, on hostId: String? = nil) {
         guard SessionID.isValid(id) else { return }
         let host = hostId ?? currentHostId
@@ -917,6 +973,19 @@ final class DeckModel {
     /// which is the one case worth a sentence on screen, because it is the only
     /// one a person can fix, and they fix it on the desktop.
     var hasNoGrantedFolders: Bool { current?.granted?.isEmpty == true }
+    /**
+     * What this phone may do with the current machine's copilot.
+     *
+     * `.notOffered` with no machine selected, which is the honest answer and
+     * also the one that draws nothing — a phone with nothing paired has no
+     * copilot in the same sense that it has no sessions.
+     */
+    var copilotAccess: CopilotAccess { current?.copilotAccess ?? .notOffered }
+    /// The current machine's copilot, or nil. Views take the link rather than
+    /// reaching through the model for each of its dozen properties — and they
+    /// must not hold it across a switch, which is why this is read every time
+    /// rather than handed out once.
+    var copilot: CopilotLink? { current?.copilot }
     var canBrowseLocalhost: Bool { current?.canBrowseLocalhost ?? false }
     /// Whether this machine will discuss its projects' dev servers. A separate
     /// question from `canBrowseLocalhost` — see `HostLink.canUseDevServers`.

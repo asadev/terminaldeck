@@ -13,6 +13,80 @@
  *
  * and one at `before-quit`: `await deckControl.stop()`.
  *
+ * ## How the copilot is actually given these tools
+ *
+ * For a while it was not, and that is worth keeping rather than deleting: this
+ * module wrote the config file, the server listened, the routine runner passed
+ * it — and `copilot-session.ts` spawned the copilot with **no `--mcp-config`**.
+ * So the agent a person talks to in the sidebar had the native Claude Code tools
+ * and none of these, and every sentence in the product about it being "bounded
+ * by the tool tiers and the confirmation gate" described a gate that was not in
+ * the path, because there was nothing to gate. The copilot itself was honest
+ * about it — its `CLAUDE.md` tells it to read its own tool list and say plainly
+ * when a capability is not there — and honest is not the same as finished.
+ *
+ * The invocation, measured against the real CLI on this machine (Claude Code
+ * 2.1.233) pointed at this server while the app was running:
+ *
+ *     claude --mcp-config <configPath> --strict-mcp-config …
+ *
+ * It connects with no approval prompt and answers `sessions_list` with the live
+ * fleet. `--strict-mcp-config` is the caller's decision and it is the right one:
+ * without it the copilot also inherits whatever MCP servers happen to be in the
+ * person's own `~/.claude.json`, so its powers — and the action log that is
+ * meant to account for them — would depend on something nobody thought of as
+ * part of this feature.
+ *
+ * What blocked it was never knowledge, it was a seam: `CreateSessionInput`
+ * carries no arguments and `host-core.ts` built argv from `spec.spawn.args`
+ * alone, so there was nowhere for a spawn to put two flags. The seam is now
+ * `startSession(input, guest, confine, fence, extraArgs)` — a positional
+ * argument beside the other three that only a main-process caller may set,
+ * rather than a field on the input, which crosses the preload bridge and would
+ * let page code compose a session's argv. `providers.ts`'s `withLaunchArgs`
+ * folds the flags in before the launch is wrapped, which matters inside WSL,
+ * where the arguments are quoted into a shell command line and appending to the
+ * finished array would hand them to the login shell instead of the CLI.
+ *
+ * Three other ways round it were tried and rejected, and they are written down
+ * so nobody repeats them:
+ *
+ *  - **`.mcp.json` in the copilot's working directory.** Discovered, but held at
+ *    "Pending approval" — project-scoped servers need a person to accept them,
+ *    and `enableAllProjectMcpServers` in a settings file only bypasses that in
+ *    print mode, which the pinned copilot is not.
+ *  - **A user-scope `mcpServers` entry in `.claude.json`.** Trusted without a
+ *    prompt, and it would now land in *the person's own* config — the copilot
+ *    runs under their profile since the sandbox was removed — so every Claude
+ *    session on the machine would get these tools. Wrong by a wide margin.
+ *  - **An environment variable.** There is none; `claude --help` was read.
+ *
+ * The path travels as {@link DeckControlHandle.configPath}, read by
+ * `src/main/index.ts` off the live handle at the moment the copilot starts —
+ * never composed from {@link mcpConfigPath} at the copilot's end. The
+ * difference is the whole of it: the path exists whether or not the server came
+ * up, and a copilot pointed at a config for a server that failed to bind is one
+ * that starts, believes it has tools, and cannot reach a single one.
+ *
+ * ## Two permission systems, and only one of them is this one
+ *
+ * The copilot runs as the person, in their own environment, so it reads their
+ * `~/.claude/settings.json` like any other session they open — including
+ * `permissions.defaultMode`. On a machine where that says `bypassPermissions`,
+ * the *CLI* stops asking before it runs a command or edits a file. That is the
+ * person's own setting, applied to their own agent, and this app does not
+ * override it.
+ *
+ * It has no effect whatsoever on the gate in this module. A `defaultMode`
+ * decides whether the CLI prompts *its own user* before dispatching a tool; the
+ * confirmation here is asked by the desktop, of the person at the desk, on the
+ * other side of an HTTP request, after `control.ts` has already checked the
+ * tier — and an MCP client has no way to answer it or to skip it. The two are
+ * not layers of one system, and the cases in `index.test.ts` under "the CLI's
+ * permission mode is not this gate" pin that so nobody has to take this
+ * paragraph's word for it: the tool call carries every field a client could
+ * invent to wave itself through, and the answer still comes from the window.
+ *
  * ## Started at boot, not when the copilot appears
  *
  * This repository's most expensive class of bug, stated in `CLAUDE.md` and paid
@@ -27,7 +101,9 @@
  * about, and the care is in `server.ts`: loopback only, a per-run bearer token
  * regenerated at every start, a Host check, and any request carrying an
  * `Origin` refused outright. The token reaches the copilot through a file
- * written 0600 and deleted at shutdown.
+ * written by `remote/secret-file.ts` — owner-only on every platform it can be
+ * made owner-only on, and not written at all where it cannot — and deleted at
+ * shutdown.
  *
  * ## The renderer half
  *
@@ -48,10 +124,11 @@
  *  - pushes `deck-control:action` (ActionRow)
  */
 
-import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { copilotPaths } from '../copilot-home'
 import { userDataDir } from '../platform/paths'
+import { writeSecretFile } from '../remote/secret-file'
 import { onWebContentsDestroyed } from '../web-contents-teardown'
 import { ActionLog, type ActionRow } from './action-log'
 import { ConsentBroker, type ConsentOutcome } from './consent'
@@ -89,18 +166,45 @@ export function actionLogDir(): string {
  *
  * A file rather than an inline `--mcp-config '{…}'` string, because argv is
  * readable from outside the process on some platforms and a bearer token in a
- * command line is a token in everybody's process list. Mode 0600 and rewritten
- * on every start, so a copy left behind by a previous run holds a token that
- * authenticates nothing.
+ * command line is a token in everybody's process list. Written through
+ * `remote/secret-file.ts` — 0600 on POSIX, an ACL naming this account alone on
+ * Windows — and rewritten on every start, so a copy left behind by a previous
+ * run holds a token that authenticates nothing.
  *
- * It lives *inside* the copilot's folder deliberately: that folder is what the
- * copilot session is confined to, so a config outside it would be a file the
- * CLI cannot open. The one consequence for the settings pane, which lists this
- * folder's contents, is that this file must not be rendered — it contains the
- * token.
+ * It lives *inside* the copilot's folder, which was once load-bearing — that
+ * folder was the only place a jailed copilot could open a file from — and is now
+ * simply the right place: it is the session's working directory, so the CLI
+ * finds it without an absolute path, and it sits beside the other files a person
+ * opens that folder to read. The one consequence for the settings pane, which
+ * lists this folder's contents, is that this file must not be rendered — it
+ * contains the token.
  */
 export function mcpConfigPath(): string {
   return join(paths().root, 'deck-control.json')
+}
+
+/**
+ * The same server, told to a caller nobody is watching.
+ *
+ * A routine run is a Claude CLI process like the copilot is, so it reaches
+ * these tools the only way a CLI process can — over MCP — and it needs a config
+ * file of its own for one reason: it must carry
+ * {@link DeckControlEndpoint.unattendedToken} rather than the ordinary one, so
+ * that every alter-tier call it makes is refused at the boundary instead of
+ * hanging on a confirmation dialog at three in the morning.
+ *
+ * Two files rather than one file with a flag, because the difference between
+ * them is a *secret* and not a setting. A single config whose caller chose its
+ * own mode would be a boundary the caller could step over; two files means the
+ * privilege travels with the bytes, and a routine that somehow read the other
+ * file would be a routine that had read the copilot's folder, which is a
+ * different and much louder problem.
+ *
+ * It sits beside the attended one and is written the same way, through
+ * `remote/secret-file.ts`, and removed the same way at shutdown.
+ */
+export function unattendedMcpConfigPath(): string {
+  return join(paths().root, 'deck-control-unattended.json')
 }
 
 /* ------------------------------------------------------------------ types -- */
@@ -135,6 +239,18 @@ export interface DeckControlHandle {
   consent: ConsentBroker
   /** Path of the config file a copilot session should be launched with. */
   configPath: string
+  /**
+   * Path of the config file a *routine run* should be launched with.
+   *
+   * Different bytes, different token, different consequences — see
+   * {@link unattendedMcpConfigPath}. A caller that handed this one to the
+   * pinned copilot would give a person at the keyboard an agent that refuses
+   * every confirmation they could have answered; a caller that handed the other
+   * one to a routine would give an unwatched process the right to ask for
+   * things nobody is there to allow. Both are wrong in ways a type cannot
+   * catch, which is why they are two named fields rather than one and a flag.
+   */
+  unattendedConfigPath: string
   stop(): Promise<void>
 }
 
@@ -205,7 +321,23 @@ export async function registerDeckControlIpc(
     ...(deps.port === undefined ? {} : { port: deps.port }),
   })
 
-  const configPath = writeMcpConfig(endpoint)
+  /*
+   * The config is written after the server is listening, because it carries the
+   * port and the token the server just minted — so a refusal here arrives with
+   * a live socket already open, and leaving it open would be a control plane
+   * nothing can reach and nothing will ever close. `registered` goes back too,
+   * or the retry the caller might make would be refused as a double
+   * registration rather than attempted.
+   */
+  let configs: { attended: string; unattended: string }
+  try {
+    configs = writeMcpConfig(endpoint)
+  } catch (error) {
+    await stopDeckControlServer()
+    registered = false
+    throw error
+  }
+  const configPath = configs.attended
 
   /* ------------------------------------------------------------ channels -- */
 
@@ -286,17 +418,20 @@ export async function registerDeckControlIpc(
     log,
     consent,
     configPath,
+    unattendedConfigPath: configs.unattended,
     stop: async () => {
       // The broker first: every outstanding question is refused before anything
       // it might have been guarding is torn down.
       consent.stop()
       await stopDeckControlServer()
-      // The token is dead the moment the server stops, but a file full of a
+      // Both tokens are dead the moment the server stops, but a file full of a
       // dead token invites somebody to wonder whether it still works.
-      try {
-        rmSync(configPath, { force: true })
-      } catch (error) {
-        console.error('[deck-control] could not remove the MCP config:', error)
+      for (const path of [configs.attended, configs.unattended]) {
+        try {
+          rmSync(path, { force: true })
+        } catch (error) {
+          console.error('[deck-control] could not remove the MCP config:', error)
+        }
       }
       registered = false
     },
@@ -317,14 +452,19 @@ export async function registerDeckControlIpc(
  * whose powers depend on somebody's unrelated `~/.claude.json` is a copilot
  * whose action log cannot be reasoned about.
  */
-export function mcpConfigFor(endpoint: DeckControlEndpoint): string {
+export function mcpConfigFor(
+  endpoint: DeckControlEndpoint,
+  caller: 'attended' | 'unattended' = 'attended',
+): string {
   return `${JSON.stringify(
     {
       mcpServers: {
         [SERVER_NAME]: {
           type: 'http',
           url: endpoint.url,
-          headers: { Authorization: `Bearer ${endpoint.token}` },
+          headers: {
+            Authorization: `Bearer ${caller === 'unattended' ? endpoint.unattendedToken : endpoint.token}`,
+          },
         },
       },
     },
@@ -333,29 +473,59 @@ export function mcpConfigFor(endpoint: DeckControlEndpoint): string {
   )}\n`
 }
 
-function writeMcpConfig(endpoint: DeckControlEndpoint): string {
-  const path = mcpConfigPath()
-  // 0700 to match `copilot-home.ts`, which owns this directory: on a shared
-  // machine the folder holds the copilot's memory as well as this token.
-  mkdirSync(paths().root, { recursive: true, mode: 0o700 })
-  /*
-   * Written 0600 in two steps, and the second one is not redundant.
-   *
-   * `writeFileSync`'s mode is applied at *creation*, and the file usually
-   * already exists from the previous run — in which case the mode argument is
-   * ignored entirely and the file keeps whatever permissions it had. An
-   * explicit `chmod` afterwards is what makes 0600 true on the second and every
-   * subsequent start rather than only the first.
-   */
-  writeFileSync(path, mcpConfigFor(endpoint), { encoding: 'utf8', mode: 0o600 })
-  try {
-    chmodSync(path, 0o600)
-  } catch (error) {
-    // Windows has no POSIX mode and answers this with a no-op or an EPERM
-    // depending on the filesystem; neither is a reason to refuse to start.
-    console.error('[deck-control] could not tighten the MCP config permissions:', error)
-  }
-  return path
+/**
+ * Put that file on disk, through the one writer that knows how to keep a secret.
+ *
+ * This used to be a `writeFileSync` with `{ mode: 0o600 }` and a `chmod`
+ * afterwards, with a comment explaining that the second step was not redundant
+ * because a mode argument only applies at creation. That reasoning was right and
+ * the file it protected was the wrong one on Windows, where a mode is a
+ * synthesised number rather than a permission: `stat` reports 0666 for any
+ * read-write file whatever was asked for, `chmod` can express only the read-only
+ * attribute, and who may open the file is decided by an NTFS ACL that neither
+ * call touched. Measured on a real Windows 11 machine — a file written exactly
+ * the old way under `%APPDATA%\Terminal Deck` comes back
+ *
+ *     NT AUTHORITY\SYSTEM:(I)(F)
+ *     BUILTIN\Administrators:(I)(F)
+ *     DESKTOP-…\<user>:(I)(F)
+ *
+ * every entry inherited from the user profile. A second *standard* account on
+ * that PC cannot read it, because the profile directory itself grants no
+ * `Users` or `Everyone` entry; a second *administrator* account reads it
+ * directly, with no elevation prompt and nothing to notice afterwards.
+ *
+ * Which would have been an argument worth having, except that this repository
+ * already had it and settled it: `remote/secret-file.ts` exists because five
+ * other files in this app were in exactly that position, and it strips the
+ * inherited entries with `icacls /inheritance:r /grant:r <user>:(F)` on the file
+ * and on its folder. This file holds a **bearer token for a server that can
+ * start sessions and run tools on this machine**, which is not a weaker secret
+ * than the ones already going through that door — so it goes through the same
+ * door, and `remote/secret-file.test.ts` lists this module among the writers it
+ * sweeps so that a future `writeFileSync` here fails a test rather than a user.
+ *
+ * The atomicity comes along with it and is worth naming separately: the old
+ * write was not atomic, so a crash mid-write left the copilot pointing at half
+ * a JSON document, which the CLI reports as a broken MCP server rather than as
+ * a torn file.
+ *
+ * **This throws when the file cannot be protected**, which on Windows means
+ * `icacls` refused or could not run. That is the writer's deliberate direction
+ * of failure — nothing is written, rather than a token written where the rest
+ * of the machine can read it — and the caller in `src/main/index.ts` already
+ * catches it and logs "failed to start, copilot tools disabled". So the cost of
+ * that refusal is the copilot losing its tools, not the app losing its launch.
+ */
+function writeMcpConfig(endpoint: DeckControlEndpoint): { attended: string; unattended: string } {
+  const attended = mcpConfigPath()
+  const unattended = unattendedMcpConfigPath()
+  // The directory is `writeSecretFile`'s first argument rather than a `mkdir`
+  // here: it creates it 0700, and on Windows it is the folder's inheritable ACL
+  // that makes the temp file protected from the instant it exists.
+  writeSecretFile(paths().root, attended, mcpConfigFor(endpoint, 'attended'))
+  writeSecretFile(paths().root, unattended, mcpConfigFor(endpoint, 'unattended'))
+  return { attended, unattended }
 }
 
 export type { ActionRow } from './action-log'

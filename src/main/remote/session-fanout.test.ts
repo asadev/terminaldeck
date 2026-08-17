@@ -97,4 +97,82 @@ describe('SessionFanout', () => {
     f.write('s1', 'ls\r')
     expect(src.written).toEqual(['ls\r'])
   })
+
+  /*
+   * The copilot's terminal, and the hole these close.
+   *
+   * Before the predicate existed, `list()` was `ptys.list()` mapped and
+   * `attach()` admitted anything in that list — so a paired phone could find the
+   * copilot's session, attach, and type into the Claude CLI that holds
+   * `deck-control`. Every tier check, budget and confirmation dialog sits above
+   * that layer, not below it.
+   *
+   * Undo any one of the four rules below and one of these fails.
+   */
+  describe('sessions the network may not see', () => {
+    const withCopilot = (over: Partial<PtySource> = {}): PtySource & { written: string[] } =>
+      source({
+        list: () => [
+          { id: 's1', title: 'app', cwd: '/work/app', provider: 'claude', exitCode: null },
+          { id: 'cop', title: 'copilot', cwd: '/data/copilot', provider: 'claude', exitCode: null },
+        ],
+        hidden: (id) => id === 'cop',
+        ...over,
+      })
+
+    it('leaves the copilot out of the list', () => {
+      const f = new SessionFanout(withCopilot())
+      expect(f.list().map((s) => s.id)).toEqual(['s1'])
+    })
+
+    it('refuses to attach to it even when its id is known', () => {
+      // The id is recoverable — it appears in `originRunId`, in alerts and in a
+      // transcript path — so unlisting alone is not hiding.
+      const f = new SessionFanout(withCopilot())
+      expect(f.attach('cop', () => {}, () => {}, () => {})).toBeNull()
+    })
+
+    it('will not write to it or resize it', () => {
+      const src = withCopilot()
+      let resized = false
+      const f = new SessionFanout({ ...src, resize: () => void (resized = true) })
+      f.write('cop', 'rm -rf /\r')
+      f.resize('cop', 200, 60)
+      expect(src.written).toEqual([])
+      expect(resized).toBe(false)
+    })
+
+    it('does not offer the copilot’s folder in the picker', () => {
+      const f = new SessionFanout(
+        withCopilot({
+          create: async () => ({ ok: false, code: 'unavailable', message: 'no' }),
+          folders: () => ['/work/app', '/data/copilot'],
+        }),
+      )
+      expect(f.folders?.('phone')).toEqual(['/work/app'])
+    })
+
+    it('treats a rule that throws as “hidden”, rather than dying on the read path', () => {
+      // This runs inside a socket's data handler. A throw here would take the
+      // main process down over a `list` from a phone on a bad network — and the
+      // safe reading of "I do not know whether this is the copilot" is that it
+      // might be.
+      const f = new SessionFanout(
+        withCopilot({
+          hidden: () => {
+            throw new Error('boom')
+          },
+        }),
+      )
+      expect(f.list()).toEqual([])
+      expect(f.attach('s1', () => {}, () => {}, () => {})).toBeNull()
+    })
+
+    it('hides nothing when no rule is supplied', () => {
+      // A host with no copilot layer — the demo box, `scripts/remote-host.ts` —
+      // must not lose its session list to a feature it does not have.
+      const f = new SessionFanout(source())
+      expect(f.list().map((s) => s.id)).toEqual(['s1'])
+    })
+  })
 })

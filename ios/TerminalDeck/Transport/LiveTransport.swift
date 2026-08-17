@@ -277,7 +277,7 @@ final class LiveTransport: Transport {
         // session list. It does not have to be the answer to our own question.
         state.verified = true
 
-        if case let .welcome(version, deviceId, deviceName, token, _, advertised, _, _) = message {
+        if case let .welcome(version, deviceId, deviceName, token, _, advertised, _, _, _) = message {
             guard version == Wire.protocolVersion else {
                 fatal(.incompatible,
                       "The desktop speaks protocol \(version) and this app speaks \(Wire.protocolVersion). "
