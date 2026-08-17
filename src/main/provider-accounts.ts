@@ -55,10 +55,25 @@
  * questions above. "The binary on PATH is broken" was read as "the mechanism
  * does not exist", which is a different sentence.
  *
- * ## Gemini CLI — `GEMINI_CLI_HOME` exists, and it does **not** move the login
+ * ## Gemini CLI — one login, not none
  *
- * This is the one that must be refused, and the reason is worth stating in
- * full because the variable looks like the answer.
+ * This is the entry that was wrong, and the way it was wrong is worth keeping:
+ * the *measurement* below is correct and the *conclusion* drawn from it was one
+ * step too far. `movesLogin: false` was read by every caller as "Gemini has no
+ * account", so `listProfiles` skipped it, the Accounts screen had no Gemini row
+ * at all, and there was nowhere to sign in even once:
+ *
+ *   > *"Now let me try the one Gemini, the login account is… I want to bring one
+ *   > Gemini, one login only. But here currently I cannot even bring one login."*
+ *
+ * A shared keychain entry is an argument against a **second** Gemini account. It
+ * is not an argument against the first. So the boolean became three states in
+ * `shared/agent-catalog.ts` — `multiple`, `single`, `none` — and Gemini is
+ * `single`: one row, which is the machine's own login, with a Sign in button
+ * that opens a Gemini session and lets the CLI run its own auth dialog. Adding a
+ * second is still refused, for the reason below.
+ *
+ * The measurement, unchanged:
  *
  * `GEMINI_CLI_HOME` is real and documented (`docs/reference/configuration.md`
  * in the shipped package: "Specifies the root directory for Gemini CLI's
@@ -103,11 +118,11 @@
  * obfuscation, in order to get a feature the user did not ask to pay for that
  * way, is not a trade this app gets to make on their behalf.
  *
- * So: **Gemini is a first-class provider for sessions and is not offered
- * multi-account.** `unsupportedAccountReason` says so in one sentence, and the
- * Add-account picker refuses it rather than listing it and quietly doing
- * nothing. A user who wants a second Gemini login can still run Gemini here —
- * it just runs under the login the machine already has, which is the truth.
+ * So: **Gemini gets one account and is not offered a second.**
+ * `unsupportedAccountReason` says so in one sentence, and the Add-account picker
+ * refuses a second rather than listing it and quietly doing nothing. The one row
+ * it does get is the machine's own login, and signing into it signs Gemini in
+ * everywhere — which is the truth about how Gemini works, said out loud.
  *
  * ## Shell
  *
@@ -116,11 +131,20 @@
  */
 
 import type { ProviderId } from '../shared/types'
+import {
+  AGENT_CATALOG,
+  AGENT_ENTRIES,
+  hasAnyLogin,
+  hasMultipleLogins,
+  loginsNote,
+  type AgentLogins,
+  type AgentStatusFormat,
+} from '../shared/agent-catalog'
 
 /* --------------------------------------------------------------- strategy -- */
 
 /** How the sign-in probe's output has to be read. See `profiles-signin.ts`. */
-export type AccountStatusFormat = 'claude-json' | 'codex-text'
+export type AccountStatusFormat = AgentStatusFormat
 
 export interface AccountStrategy {
   provider: ProviderId
@@ -146,11 +170,21 @@ export interface AccountStrategy {
   /**
    * Whether that variable moves the *login* along with the configuration.
    *
-   * This is the whole feature in one boolean. `configEnv` being non-null and
-   * this being false is not a half-answer, it is a refusal: Gemini is exactly
-   * that case, and the module header explains what happens if it is ignored.
+   * True only for an agent whose second account is genuinely a second login.
+   * `configEnv` being non-null and this being false is not a half-answer: Gemini
+   * is exactly that case, and the module header explains what happens if it is
+   * ignored.
    */
   movesLogin: boolean
+  /**
+   * How many logins of this agent exist at all — the field the Gemini bug turned on.
+   *
+   * `movesLogin` answers "may there be two?". This answers "is there one?", and
+   * conflating them is what left Gemini with no account row and no way to sign
+   * in. Read straight out of `shared/agent-catalog.ts`, where the evidence for
+   * each answer is written next to the measurement it came from.
+   */
+  logins: AgentLogins
   /**
    * Where, relative to the account's directory, the CLI puts the credential —
    * or null when it puts it somewhere outside the directory (a keychain).
@@ -184,65 +218,41 @@ export interface AccountStrategy {
  * fails to compile here instead of silently having no strategy — the same
  * reason `detectProviders` names its three agents rather than deriving them.
  */
+/**
+ * One agent's strategy, read out of the declared catalogue.
+ *
+ * This used to be four object literals restating what `shared/agent-catalog.ts`
+ * now holds — the label, the variable, the credential filename, the status args
+ * and the sentence — which meant an agent existed in two files that nothing kept
+ * in step. The catalogue is the declaration; this is the view of it that the
+ * account machinery wants, and `provider-accounts.test.ts` pins the two agreeing.
+ */
+function strategyFor(provider: ProviderId): AccountStrategy {
+  const entry = AGENT_CATALOG[provider]
+  return {
+    provider,
+    label: entry.label,
+    configEnv: entry.configEnv,
+    movesLogin: entry.logins === 'multiple',
+    logins: entry.logins,
+    credentialFile: entry.credentialFile,
+    statusArgs: entry.statusArgs,
+    statusFormat: entry.statusFormat,
+    signInArgs: entry.signInArgs,
+    reason: entry.loginsNote,
+  }
+}
+
+/**
+ * The table. A record rather than an array so a provider added to `ProviderId`
+ * fails to compile here instead of silently having no strategy — the same
+ * reason `detectProviders` names its three agents rather than deriving them.
+ */
 export const ACCOUNT_STRATEGIES: Record<ProviderId, AccountStrategy> = {
-  claude: {
-    provider: 'claude',
-    label: 'Claude Code',
-    configEnv: 'CLAUDE_CONFIG_DIR',
-    movesLogin: true,
-    // Present on Windows and on installs that keep credentials in the tree; on
-    // macOS the Keychain holds it instead and its absence proves nothing. See
-    // `platform/credential-store.ts`, which is why this is an observation and
-    // not the isolation claim itself.
-    credentialFile: '.credentials.json',
-    statusArgs: ['auth', 'status', '--json'],
-    statusFormat: 'claude-json',
-    signInArgs: ['auth', 'login'],
-    reason: null,
-  },
-  codex: {
-    provider: 'codex',
-    label: 'Codex CLI',
-    configEnv: 'CODEX_HOME',
-    movesLogin: true,
-    // Measured: a fresh `CODEX_HOME` reports "Not logged in"; the real one
-    // holds `auth.json` (0600, `tokens` + `auth_mode`) and reports "Logged in
-    // using ChatGPT". The credential is in the directory, so deleting the
-    // directory does sign this account out — which `deleteProfile` already
-    // reports through `credentialsRetained`.
-    credentialFile: 'auth.json',
-    statusArgs: ['login', 'status'],
-    // `codex login status` has no `--json`; the parser reads its sentences.
-    statusFormat: 'codex-text',
-    signInArgs: ['login'],
-    reason: null,
-  },
-  gemini: {
-    provider: 'gemini',
-    label: 'Gemini CLI',
-    // Named rather than nulled, because "there is no variable" would be false
-    // and the next person would go looking for one. The variable exists; what
-    // it does not do is the point.
-    configEnv: 'GEMINI_CLI_HOME',
-    movesLogin: false,
-    credentialFile: null,
-    statusArgs: null,
-    statusFormat: null,
-    signInArgs: null,
-    reason:
-      'Gemini keeps its login in one system keychain entry that is the same for every configuration directory, so a second Gemini account here would not be a second login — signing into it would replace the first one. Gemini sessions run under the Google account this machine is already signed into.',
-  },
-  shell: {
-    provider: 'shell',
-    label: 'Shell',
-    configEnv: null,
-    movesLogin: false,
-    credentialFile: null,
-    statusArgs: null,
-    statusFormat: null,
-    signInArgs: null,
-    reason: 'A plain shell has no account to sign in to.',
-  },
+  claude: strategyFor('claude'),
+  codex: strategyFor('codex'),
+  gemini: strategyFor('gemini'),
+  shell: strategyFor('shell'),
 }
 
 /* ---------------------------------------------------------------- queries -- */
@@ -259,11 +269,38 @@ export function supportsAccounts(provider: ProviderId): boolean {
  * Derived from the table rather than restated, so refusing or admitting a
  * provider is a one-field edit above and every screen follows.
  */
-export const ACCOUNT_PROVIDERS: readonly ProviderId[] = (
-  Object.values(ACCOUNT_STRATEGIES) as AccountStrategy[]
-)
-  .filter((strategy) => supportsAccounts(strategy.provider))
-  .map((strategy) => strategy.provider)
+export const ACCOUNT_PROVIDERS: readonly ProviderId[] = AGENT_ENTRIES.filter((entry) =>
+  hasMultipleLogins(entry.id),
+).map((entry) => entry.id)
+
+/**
+ * Whether this agent has a login this app can surface **at all**.
+ *
+ * The distinction from `supportsAccounts` is the whole Gemini fix, and it is
+ * worth stating plainly because the two read alike:
+ *
+ *   supportsAccounts → may there be a *second* account?
+ *   hasSignIn        → is there a *first*?
+ *
+ * Gemini answers no to the first and yes to the second. While there was only one
+ * predicate, no was the answer to both, and the result was an Accounts screen
+ * with no Gemini row on it — so the one login Gemini does have could not be
+ * signed in from this app. `listProfiles` in `profiles.ts` lists from this one;
+ * the Add form still offers only the other.
+ */
+export function hasSignIn(provider: ProviderId): boolean {
+  return hasAnyLogin(provider)
+}
+
+/**
+ * Every agent with a login, in catalogue order — the Accounts screen's list.
+ *
+ * `ACCOUNT_PROVIDERS` is the shorter list of agents that can hold *more than
+ * one*, and it is what the Add form offers.
+ */
+export const SIGN_IN_PROVIDERS: readonly ProviderId[] = AGENT_ENTRIES.filter((entry) =>
+  hasAnyLogin(entry.id),
+).map((entry) => entry.id)
 
 /**
  * Why this agent is not offered multiple accounts.
@@ -275,9 +312,7 @@ export const ACCOUNT_PROVIDERS: readonly ProviderId[] = (
  * the app looked or gave up.
  */
 export function unsupportedAccountReason(provider: ProviderId): string {
-  const strategy = ACCOUNT_STRATEGIES[provider]
-  if (strategy?.reason) return strategy.reason
-  return 'This agent signs in its own way, and nothing here has verified a way to keep two of its logins apart — so a session on it uses whichever login this machine already has.'
+  return loginsNote(provider)
 }
 
 /**

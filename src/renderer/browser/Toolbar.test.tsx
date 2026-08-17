@@ -13,7 +13,11 @@ import { newTab, type WorkspaceTab } from './tabs'
  * renders nothing at all when it cannot work, is the whole bug.
  */
 
-function render(tab: WorkspaceTab | null, onToggleIsolation?: () => void): string {
+function render(
+  tab: WorkspaceTab | null,
+  onToggleIsolation?: () => void,
+  draw?: { onDraw?: () => void; drawing?: boolean },
+): string {
   return renderToStaticMarkup(
     <Toolbar
       tab={tab}
@@ -35,6 +39,8 @@ function render(tab: WorkspaceTab | null, onToggleIsolation?: () => void): strin
       onDevtools={() => {}}
       devtoolsOpen={false}
       recording={false}
+      onDraw={draw?.onDraw}
+      drawing={draw?.drawing === true}
       deviceOpen={false}
       onToggleDevice={() => {}}
       onOpenSession={() => {}}
@@ -74,5 +80,40 @@ describe('the isolation toggle', () => {
 
   it('is disabled with no tab open', () => {
     expect(render(null, () => {})).toContain('disabled')
+  })
+})
+
+/**
+ * *"So this draw option we need to have also, and we can send it to the agent
+ * like this."* — 2026-08-16, said in passing and dropped from every plan file.
+ * This is the control it asked for, held to the same bargain as the isolation
+ * toggle: present and explaining itself when it cannot work, rather than absent.
+ */
+describe('the draw button', () => {
+  it('is a labelled button beside the rest of the page actions', () => {
+    const markup = render(newTab('tab-1'), () => {}, { onDraw: () => {} })
+    expect(markup).toContain('Mark the page up and send it to a session')
+    expect(markup).toContain('>Draw<')
+  })
+
+  it('reads as pressed while a canvas is over the page', () => {
+    // The page is parked behind that canvas, so a button that did not look on
+    // would leave the one visible explanation for a frozen website unstated.
+    const markup = render(newTab('tab-1'), () => {}, { onDraw: () => {}, drawing: true })
+    expect(markup).toMatch(/aria-label="Mark the page up[^"]*" aria-pressed="true"/)
+  })
+
+  it('stays on screen and disabled when the preload has not wired it', () => {
+    // Draw mode's two channels are deliberately outside `BRIDGE_METHODS` — see
+    // `draw-bridge.ts` — so "this build cannot do it" is a state that really
+    // happens, and it has to say so rather than quietly disappear.
+    const markup = render(newTab('tab-1'), () => {})
+    expect(markup).toContain('Marking up the page is not available in this build.')
+    expect(markup).toContain('>Draw<')
+  })
+
+  it('is disabled with no tab open', () => {
+    const markup = render(null, () => {}, { onDraw: () => {} })
+    expect(markup).toMatch(/aria-label="Mark the page up[^"]*"[^>]*disabled/)
   })
 })

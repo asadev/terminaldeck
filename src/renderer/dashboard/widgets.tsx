@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
 import type { SessionStatus } from '@shared/types'
 import { StatusDot } from '../components/StatusDot'
+import { readFailure, withDeadline } from '../deadline'
 // Type-only, so nothing of GitPanel's module — including its CSS import — is
 // pulled into this bundle. Those mirrors of `src/main/git.ts` already exist
 // there; re-declaring them a third time is how the three copies start to drift.
-import type { GitRepoStatus, GitStatusResult } from '../components/GitPanel'
+import type { GitChangeKind, GitRepoStatus, GitStatusResult } from '../components/GitPanel'
 import type { PanelId } from '../shell/panels'
 import { isRetiredWidget, WIDGET_TYPES, type WidgetType } from './layout'
 
@@ -48,9 +49,25 @@ export type AsyncState<T> =
   | { status: 'ready'; data: T }
 
 function errorMessage(err: unknown): string {
-  if (err instanceof Error) return err.message
-  return typeof err === 'string' ? err : 'Unknown error'
+  if (err instanceof Error || typeof err === 'string') return readFailure(err)
+  return 'Unknown error'
 }
+
+/**
+ * How long a widget's read has to answer.
+ *
+ * Every tile on this page is a sentence until its data lands, and two of them —
+ * "Reading transcripts…" and "Reading the repo…" — were caught in the recording
+ * still saying it minutes later, on an Overview page the user had left open.
+ * Nothing here had a deadline, so a bridge call that never settled left the
+ * tile on its sentence for the life of the window with no error, no retry and
+ * nothing in the console.
+ *
+ * Twelve seconds. The slowest honest read behind these tiles is the cost scan,
+ * which totals a project's transcripts in the main process under its own
+ * budget; past twelve it has not started rather than not finished.
+ */
+export const WIDGET_DEADLINE_MS = 12_000
 
 /**
  * Load a widget's data from the preload bridge.
@@ -69,11 +86,18 @@ export function useBridgeData<T>(
   method: string | readonly string[],
   depKey: string,
   run: (call: BridgeFn) => Promise<T>,
-  options: { enabled?: boolean } = {},
+  /**
+   * `what` names the read in the sentence printed if it never answers, in the
+   * widget's own words rather than a channel name — the person looking at a
+   * tile did not ask for `listSessions`. It is the same phrase the widget hands
+   * `renderState`, minus the ellipsis.
+   */
+  options: { enabled?: boolean; what?: string } = {},
 ): { state: AsyncState<T>; reload: () => void } {
   const [state, setState] = useState<AsyncState<T>>({ status: 'loading' })
   const [nonce, setNonce] = useState(0)
   const enabled = options.enabled ?? true
+  const what = options.what ?? 'This widget’s data'
   // Joined so the dependency is a primitive; the array itself is a fresh
   // literal on every render and would restart the effect forever.
   const names = typeof method === 'string' ? method : method.join(',')
@@ -97,7 +121,16 @@ export function useBridgeData<T>(
 
     let stale = false
     setState({ status: 'loading' })
-    runRef.current(call)
+    /*
+     * The deadline is the whole reason this line changed.
+     *
+     * Every state below `loading` was reachable before — unavailable, error,
+     * ready — and `loading` was not: nothing in this hook could ever leave it
+     * if the promise did not settle. Two tiles on the Overview page were caught
+     * exactly there. Now the read is guaranteed to end, and every ending has a
+     * Retry beside it (see `renderState`).
+     */
+    withDeadline(runRef.current(call), what, WIDGET_DEADLINE_MS)
       .then((data) => {
         // A slow load for project A must not land after the user has moved to B.
         if (!stale) setState({ status: 'ready', data })
@@ -109,7 +142,7 @@ export function useBridgeData<T>(
     return () => {
       stale = true
     }
-  }, [names, depKey, nonce, enabled])
+  }, [names, depKey, nonce, enabled, what])
 
   const reload = useCallback(() => setNonce((n) => n + 1), [])
   return { state, reload }
@@ -222,28 +255,17 @@ function doorIf(open: boolean, run: () => void): (() => void) | undefined {
 /* ---------------------------------------------------------------- helpers -- */
 
 /**
- * Money and token formatting mirroring `formatUsd`/`formatTokens` in
- * `src/main/cost.ts`. Duplicated for the same reason GitPanel duplicates the
- * git types: the renderer tsconfig cannot see `src/main`. The `cost:format`
- * channel exists for the exact strings, but a round trip to the main process
- * per number is not worth it for a tile that redraws on every git change.
+ * Token formatting mirroring `formatTokens` in `src/main/cost.ts`. Duplicated
+ * for the same reason GitPanel duplicates the git types: the renderer tsconfig
+ * cannot see `src/main`. The `cost:format` channel exists for the exact
+ * strings, but a round trip to the main process per number is not worth it for
+ * a tile that redraws on every git change.
  *
- * This file used to carry a second idea as well — `usdPrecision`, one shared
- * number of decimal places for a column of figures, so that `$27.41`, `$11.02`
- * and `$3.430` did not stack up in three different shapes. Two places
- * everywhere makes the column line up by construction, so the whole notion is
- * gone: it existed only to reconcile a variable precision with itself.
+ * A `formatUsd` lived here too, one of three hand copies in the renderer. It is
+ * gone with every other dollar figure in the app — the argument is at the
+ * bottom of `src/main/cost.ts`, and `widgets.test.tsx` fails if a `$` comes
+ * back to this tile.
  */
-export function formatUsd(usd: number): string {
-  const abs = Math.abs(usd)
-  if (abs === 0) return '$0.00'
-  // Under half a cent, said in words rather than rounded to `$0.00` — which is
-  // the one thing a dashboard read by somebody watching a bill must not print
-  // for money that was actually spent.
-  if (abs < 0.005) return usd < 0 ? '-<$0.01' : '<$0.01'
-  return `$${usd.toFixed(2)}`
-}
-
 export function formatTokens(tokens: number): string {
   const abs = Math.abs(tokens)
   // The M tier used to be the last one, so a project with four billion cached
@@ -357,7 +379,7 @@ function SessionsWidget({ context }: { context: WidgetContext }): ReactElement {
       },
       [projectPath],
     ),
-    { enabled: !hostSupplied },
+    { enabled: !hostSupplied, what: 'Looking for sessions' },
   )
 
   const list = hostSupplied ? sessions : state.status === 'ready' ? state.data : []
@@ -418,41 +440,154 @@ function SessionsWidget({ context }: { context: WidgetContext }): ReactElement {
   return renderState(state, reload, 'Looking for sessions…', body)
 }
 
-/* ------------------------------------------------------------------- cost -- */
+/* ------------------------------------------------------------------ usage -- */
+
+/*
+ * This tile used to be the Cost tile and it showed money. It does not any more,
+ * and this is where all of it was deleted. Read this before putting one back.
+ *
+ * It carried two figures at once — `$100–200 on plan` beside `$2 on API` — and
+ * then, after the plan half was deleted for being the subscription's own
+ * package price, a single `$4558 at API rates`. Asad, on the survivor: *"people
+ * are using subscription and we are showing API price. So if we cannot show the
+ * both, let's not show any of them completely."*
+ *
+ * He is right, and the reason is not that the arithmetic was wrong. The API
+ * figure was correct — it just describes a bill nobody on a subscription
+ * received. The subscription figure cannot be computed at all, because
+ * Anthropic publishes no token allowance and no per-token value for any plan.
+ * One number misleads and the other is unknowable, so there is no honest pair
+ * and no honest single. The full argument, with the sources and what would have
+ * to change, is at the bottom of `src/main/cost.ts`.
+ *
+ * Deleted from this file with it: `formatUsd`, `RATES_VERIFIED_ON`,
+ * `PLAN_LABELS`, `planKey`, `planName`, `usePlan`, `CostParts`'s money twin,
+ * `CostLine`, `costLines`, `formatRate`, and the `legacyModels` / `legacySpend`
+ * / `unpriced` caveats, every one of which existed to qualify a price. Before
+ * them went `PLAN_PRICES`, `planFee`, `billingMonths`, `MS_PER_BILLING_MONTH`
+ * and `formatUsdRange`.
+ *
+ * What is left is what was always true underneath: tokens, the cache hit rate
+ * that explains their shape, the request and session counts, and the context
+ * meter. The tile lost a stat and kept its four, so nothing on it is a gap.
+ */
 
 /** One row of the breakdown behind the project's totals. */
-interface CostSessionRow {
+interface UsageSessionRow {
   id: string
-  cost: number
-  requests: number
   tokens: number
+  requests: number
   model: string
 }
 
-interface CostView {
-  total: number
-  requests: number
+/** Which session the context reading belongs to, and what it is measured against. */
+interface ContextOwner {
+  /** Transcript session id. Shown truncated, the way the breakdown rows are. */
+  id: string
+  model: string
+  percent: number
+  /** Prompt size of that session's latest request. */
   tokens: number
-  sessions: number
-  contextPercent: number | null
-  unpriced: string[]
-  scanning: boolean
-  perSession: CostSessionRow[]
+  /** The window the percent is a percent *of*. 200k and 1M are not the same denominator. */
+  window: number
 }
 
-function CostWidget({ context }: { context: WidgetContext }): ReactElement {
+/** The four ways the API reports a token. */
+interface TokenParts {
+  input: number
+  output: number
+  cacheWrite: number
+  cacheRead: number
+}
+
+/** Everything the usage tile draws. Exported so `UsageReadout` can be rendered in a test. */
+export interface UsageView {
+  /** The project's tokens, split the way the API reports them. */
+  tokens: TokenParts
+  requests: number
+  sessions: number
+  /** Null until a session in this folder has made its first request. */
+  context: ContextOwner | null
+  /** Models these transcripts name, heaviest first. */
+  models: string[]
+  scanning: boolean
+  perSession: UsageSessionRow[]
+}
+
+/** Prompt tokens: everything that was not output. */
+function promptOf(tokens: TokenParts): number {
+  return tokens.input + tokens.cacheWrite + tokens.cacheRead
+}
+
+/** Every token the project has moved, prompt and output. */
+function totalOf(tokens: TokenParts): number {
+  return promptOf(tokens) + tokens.output
+}
+
+/**
+ * Share of the prompt that was served from cache, 0–1. Mirrors `cacheHitRate`.
+ *
+ * It is on the tile rather than buried because it is the entire explanation for
+ * the shape of the numbers beside it: a warm agent session running at ~90% hits
+ * is re-reading the same prefix every turn, which is why a folder can show
+ * millions of prompt tokens across a few hundred requests.
+ */
+export function cacheHitRate(tokens: TokenParts): number {
+  const prompt = promptOf(tokens)
+  return prompt === 0 ? 0 : tokens.cacheRead / prompt
+}
+
+/** One itemised line of the total: what it was, how many tokens, what share. */
+export interface UsageLine {
+  label: string
+  tokens: number
+  /** Share of every token the project moved, 0–1. Zero when there are none. */
+  share: number
+}
+
+/**
+ * The total, itemised so a reader can add it back up.
+ *
+ * Order is fixed rather than sorted by size: this is a statement, and one that
+ * reorders itself between two viewings is one nobody can compare. It runs the
+ * way a request is recorded — what was sent fresh, what was written to cache,
+ * what was read back from it, what came out.
+ */
+export function usageLines(tokens: TokenParts): UsageLine[] {
+  const total = totalOf(tokens)
+  const line = (label: string, count: number): UsageLine => ({
+    label,
+    tokens: count,
+    share: total > 0 ? count / total : 0,
+  })
+  return [
+    line('Fresh input', tokens.input),
+    line('Cache writes', tokens.cacheWrite),
+    line('Cache reads', tokens.cacheRead),
+    line('Output', tokens.output),
+  ]
+}
+
+/** `91%`, and never `0%` for a session that did hit cache. */
+export function formatPercent(fraction: number): string {
+  const percent = fraction * 100
+  if (percent > 0 && percent < 1) return '<1%'
+  return `${Math.round(percent)}%`
+}
+
+function UsageWidget({ context }: { context: WidgetContext }): ReactElement {
   const { projectPath, onOpenInspector } = context
   /**
    * Whether the totals are showing what they are made of.
    *
-   * Cost is the one number on this dashboard with no page of its own to open —
+   * Usage is the one number on this dashboard with no page of its own to open —
    * so the drill-in happens here, on the tile, which rule 1.2 allows in as many
    * words ("switch to the relevant section on the same page"). The rows come
    * from the same `cost:project` answer the totals do, so opening this costs
    * nothing and cannot disagree with the number above it.
    */
   const [breakdown, setBreakdown] = useState(false)
-  const { state, reload } = useBridgeData<CostView>(
+  const { state, reload } = useBridgeData<UsageView>(
     'getProjectCost',
     projectPath,
     useCallback(async (call) => {
@@ -462,30 +597,78 @@ function CostWidget({ context }: { context: WidgetContext }): ReactElement {
       const raw = (await call(projectPath)) as unknown
       const sessions = isRecord(raw) && Array.isArray(raw.sessions) ? raw.sessions : []
       const usage = isRecord(raw) ? raw.usage : undefined
-      const tokens =
-        numberAt(usage, 'input') +
-        numberAt(usage, 'output') +
-        numberAt(usage, 'cacheWrite5m') +
-        numberAt(usage, 'cacheWrite1h') +
-        numberAt(usage, 'cacheRead')
+      /*
+       * Four categories, not one number.
+       *
+       * A bare token total hides the only thing that makes a folder's numbers
+       * legible: almost all of them are usually cache reads. The five-way
+       * `TokenUsage` collapses to four here because a five-minute and a
+       * one-hour cache write are two TTLs but one line item to a person.
+       */
+      const tokenParts: TokenParts = {
+        input: numberAt(usage, 'input'),
+        output: numberAt(usage, 'output'),
+        cacheWrite: numberAt(usage, 'cacheWrite5m') + numberAt(usage, 'cacheWrite1h'),
+        cacheRead: numberAt(usage, 'cacheRead'),
+      }
 
       const activeId = isRecord(raw) && typeof raw.activeSessionId === 'string' ? raw.activeSessionId : null
       const active = sessions.filter(isRecord).find((s) => s.sessionId === activeId)
       // `context` is null until a session has made its first request. Reading a
       // percent off that yields 0, and a meter reading "0% of the context
       // window" is a claim, not an absence — so it has to stay null.
-      const context = active && isRecord(active.context) ? active.context : null
+      const contextRecord = active && isRecord(active.context) ? active.context : null
+      /*
+       * Whose context window this is.
+       *
+       * The meter used to read "Context window 84%" under a tile that had just
+       * said "39 sessions recorded", and Asad asked the only question that
+       * leaves: *"which one's context window is this one? We don't know."* It
+       * is one session's — the most recently active transcript in this folder,
+       * which is what `activeSessionId` names. A percent that cannot name its
+       * session is withheld rather than drawn anonymously, because 84% of an
+       * unnamed window is not a fact anybody can act on.
+       *
+       * The window itself comes across too, and it is the half that was
+       * missing. A percentage is a ratio and both halves have to be on screen:
+       * 3% of 200k and 3% of a million are the same reading of two different
+       * situations, and PLAN-LOCAL-FIRST §G asks for exactly this — "context
+       * window must say whose".
+       */
+      const activeModels = active && Array.isArray(active.models) ? active.models : []
+      const context: ContextOwner | null =
+        contextRecord && activeId
+          ? {
+              id: activeId,
+              model: typeof activeModels[0] === 'string' ? activeModels[0] : '',
+              percent: numberAt(contextRecord, 'percent'),
+              tokens: numberAt(contextRecord, 'tokens'),
+              window: numberAt(contextRecord, 'window'),
+            }
+          : null
 
-      const unpriced =
-        isRecord(raw) && isRecord(raw.cost) && Array.isArray(raw.cost.unpricedModels)
-          ? raw.cost.unpricedModels.filter((m): m is string => typeof m === 'string')
-          : []
+      /*
+       * Which models did this folder's work, heaviest first.
+       *
+       * `usageByModel` is summed in the main process alongside `usage`, so this
+       * names exactly the buckets the totals above are made of. It used to be
+       * read off the cost aggregate's `byModel` and sorted by money; the
+       * aggregate is gone and tokens are the only weight left, which is also
+       * the one a reader can check against the breakdown underneath.
+       */
+      const byModel = isRecord(raw) && isRecord(raw.usageByModel) ? raw.usageByModel : {}
+      const modelTokens = (model: string): number =>
+        numberAt(byModel[model], 'input') +
+        numberAt(byModel[model], 'output') +
+        numberAt(byModel[model], 'cacheWrite5m') +
+        numberAt(byModel[model], 'cacheWrite1h') +
+        numberAt(byModel[model], 'cacheRead')
+      const models = Object.keys(byModel).sort((a, b) => modelTokens(b) - modelTokens(a))
 
-      const perSession = sessions.filter(isRecord).map((entry, index): CostSessionRow => {
-        const models = Array.isArray(entry.models) ? entry.models : []
+      const perSession = sessions.filter(isRecord).map((entry, index): UsageSessionRow => {
+        const sessionModels = Array.isArray(entry.models) ? entry.models : []
         return {
           id: typeof entry.sessionId === 'string' ? entry.sessionId : `session-${index}`,
-          cost: numberAt(entry, 'cost', 'cost', 'total'),
           requests: numberAt(entry, 'requests'),
           tokens:
             numberAt(entry, 'usage', 'input') +
@@ -493,135 +676,312 @@ function CostWidget({ context }: { context: WidgetContext }): ReactElement {
             numberAt(entry, 'usage', 'cacheWrite5m') +
             numberAt(entry, 'usage', 'cacheWrite1h') +
             numberAt(entry, 'usage', 'cacheRead'),
-          model: typeof models[0] === 'string' ? models[0] : '',
+          model: typeof sessionModels[0] === 'string' ? sessionModels[0] : '',
         }
       })
 
       return {
-        total: numberAt(raw, 'cost', 'cost', 'total'),
+        tokens: tokenParts,
         requests: numberAt(raw, 'requests'),
-        tokens,
         sessions: sessions.length,
-        contextPercent: context ? numberAt(context, 'percent') : null,
-        unpriced,
+        context,
+        models,
         scanning: isRecord(raw) && raw.scanning === true,
         perSession,
       }
     }, [projectPath]),
+    { what: 'Reading this project’s transcripts' },
   )
 
-  return renderState(state, reload, 'Reading transcripts…', (data) => {
-    if (data.requests === 0) {
-      return (
-        <WidgetMessage
-          tone="muted"
-          title={data.scanning ? 'Still scanning…' : 'Nothing recorded yet'}
-          detail="Cost appears once a Claude Code session has written a transcript for this folder."
-        />
-      )
-    }
+  return renderState(state, reload, 'Reading transcripts…', (data) => (
+    <UsageReadout
+      data={data}
+      expanded={breakdown}
+      onToggle={() => setBreakdown((on) => !on)}
+      onOpenInspector={onOpenInspector}
+    />
+  ))
+}
 
-    // Percent can exceed 100 — auto-compaction fires at the limit, so the last
-    // request before it tips slightly over. Clamp the bar, not the number.
-    const percent = data.contextPercent
-    const tone = percent === null ? undefined : percent >= 90 ? 'crit' : percent >= 70 ? 'warn' : undefined
-
-    // All four totals are the same sum seen from four sides, so all four open
-    // the same breakdown rather than pretending to be four destinations.
-    const open = doorIf(data.perSession.length > 0, () => setBreakdown((on) => !on))
-    const goes = breakdown ? 'Hide the per-session breakdown' : 'Show it per session'
-
+/**
+ * The usage tile once its numbers have landed.
+ *
+ * Split out of `UsageWidget` because it is the part with the judgement in it —
+ * the wording, the order, what is withheld — and none of that was reachable
+ * from a test while it lived inside a hook. There is no DOM in this project's
+ * suite and effects do not run under `renderToStaticMarkup`, so a component
+ * that fetches can only ever be rendered in its loading state. This one takes
+ * its data as a prop and is therefore rendered, in full, by `widgets.test.tsx`.
+ */
+export function UsageReadout({
+  data,
+  expanded,
+  onToggle,
+  onOpenInspector,
+}: {
+  data: UsageView
+  expanded: boolean
+  onToggle: () => void
+  onOpenInspector?: () => void
+}): ReactElement {
+  if (data.requests === 0) {
     return (
-      <>
-        <div className="widget-stats">
-          <Stat label="spent" value={formatUsd(data.total)} onClick={open} goes={goes} />
-          <Stat label="tokens" value={formatTokens(data.tokens)} onClick={open} goes={goes} />
-          <Stat
-            label={plural(data.requests, 'request')}
-            value={String(data.requests)}
-            onClick={open}
-            goes={goes}
-          />
-          {/*
-            "sessions recorded", not "sessions".
-
-            This counts transcripts in the folder — every session that has ever
-            written one, including yesterday's and ones this app did not start.
-            The Sessions tile 350 pixels away counts the sessions that are open
-            right now. Both said "sessions", one said 7 and the other said 4,
-            on the same screen, with nothing to say which was which. Two numbers
-            that disagree in public need different words, and the word has to be
-            the one that explains where the number came from.
-          */}
-          <Stat
-            label={`${plural(data.sessions, 'session')} recorded`}
-            value={String(data.sessions)}
-            onClick={open}
-            goes={goes}
-          />
-        </div>
-
-        {breakdown &&
-          (() => {
-            const rows = [...data.perSession].sort((a, b) => b.cost - a.cost)
-            return (
-              <ul className="widget-list widget-list-breakdown">
-                {rows.map((row) => (
-                  <li key={row.id}>
-                    <span className="widget-row static">
-                      <span className="widget-row-main mono">{row.id.slice(0, 8)}</span>
-                      <span className="widget-row-side">{row.model || '—'}</span>
-                      <span className="widget-row-side num">{formatTokens(row.tokens)}</span>
-                      <span className="widget-row-side num">{formatUsd(row.cost)}</span>
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            )
-          })()}
-
-        {percent !== null && (
-          <div className="widget-meter">
-            <div className="widget-meter-head">
-              {onOpenInspector ? (
-                <button type="button" className="widget-meter-link" onClick={onOpenInspector}>
-                  Context window
-                </button>
-              ) : (
-                <span>Context window</span>
-              )}
-              <span className={tone ? `widget-stat-value ${tone}` : undefined}>
-                {Math.round(percent)}%
-              </span>
-            </div>
-            <div
-              className="widget-meter-track"
-              role="progressbar"
-              aria-valuenow={Math.round(percent)}
-              aria-valuemin={0}
-              aria-valuemax={100}
-              aria-label="Context window in use"
-            >
-              <div
-                className={`widget-meter-fill${tone ? ` ${tone}` : ''}`}
-                style={{ width: `${Math.min(100, Math.max(0, percent))}%` }}
-              />
-            </div>
-          </div>
-        )}
-
-        {data.unpriced.length > 0 && (
-          <p className="widget-note">
-            {data.unpriced.length} model{data.unpriced.length === 1 ? '' : 's'} had no rate — this
-            total is a floor.
-          </p>
-        )}
-      </>
+      <WidgetMessage
+        tone="muted"
+        title={data.scanning ? 'Still scanning…' : 'Nothing recorded yet'}
+        detail="Usage appears once a Claude Code session has written a transcript for this folder."
+      />
     )
-  })
+  }
+
+  // Percent can exceed 100 — auto-compaction fires at the limit, so the last
+  // request before it tips slightly over. Clamp the bar, not the number.
+  const percent = data.context?.percent ?? null
+  const tone = percent === null ? undefined : percent >= 90 ? 'crit' : percent >= 70 ? 'warn' : undefined
+
+  // All four totals are the same body of work seen from four sides, so all four
+  // open the same breakdown rather than pretending to be four destinations.
+  const open = doorIf(data.perSession.length > 0, onToggle)
+  const goes = expanded ? 'Hide the breakdown' : 'Show what the figures are made of'
+
+  const tokenTotal = totalOf(data.tokens)
+  const hitRate = cacheHitRate(data.tokens)
+
+  return (
+    <>
+      <div className="widget-stats">
+        {/*
+          Tokens lead, because tokens are now the headline of this tile.
+
+          The slot that used to be first held `$4558 at API rates`. Nothing
+          takes its place and nothing is left blank: the row simply has four
+          stats where it had five, and the grid closes up.
+        */}
+        <Stat label="tokens" value={formatTokens(tokenTotal)} onClick={open} goes={goes} />
+        {/*
+          The hit rate earns a slot of its own rather than a footnote.
+
+          It is not a curiosity — it is the reason the figure beside it is the
+          size it is, and it is the single fact that turns "a million tokens
+          across two hundred requests, this app is broken" into arithmetic
+          anybody can follow.
+        */}
+        <Stat
+          label="from cache"
+          value={formatPercent(hitRate)}
+          onClick={open}
+          goes={goes}
+        />
+        <Stat
+          label={plural(data.requests, 'request')}
+          value={String(data.requests)}
+          onClick={open}
+          goes={goes}
+        />
+        {/*
+          "sessions recorded", not "sessions".
+
+          This counts transcripts in the folder — every session that has ever
+          written one, including yesterday's and ones this app did not start.
+          The Sessions tile 350 pixels away counts the sessions that are open
+          right now. Both said "sessions", one said 7 and the other said 4,
+          on the same screen, with nothing to say which was which. Two numbers
+          that disagree in public need different words, and the word has to be
+          the one that explains where the number came from.
+        */}
+        <Stat
+          label={`${plural(data.sessions, 'session')} recorded`}
+          value={String(data.sessions)}
+          onClick={open}
+          goes={goes}
+        />
+      </div>
+
+      {/*
+        What the numbers are, in the one sentence somebody reads before deciding
+        whether to trust the tile. The sentence this replaces began "Not a
+        bill." and went on to explain what a dollar figure did and did not mean;
+        with no dollar figure there is nothing to disclaim, only to source.
+      */}
+      <p className="widget-note">
+        {formatTokens(tokenTotal)} tokens across {data.requests}{' '}
+        {plural(data.requests, 'request')}, counted from the Claude Code transcripts in this
+        folder.
+      </p>
+
+      {expanded && (
+        <>
+          {/*
+            The itemised total.
+
+            Four lines, in the order a request is recorded, each with its share
+            of the whole — so the total can be reconstructed rather than taken
+            on faith. This table had a money column and a per-million rate
+            column between the tokens and the share; both are gone.
+          */}
+          <p className="widget-breakdown-label">
+            How {formatTokens(tokenTotal)} tokens is made up
+          </p>
+          <ul className="widget-list">
+            {usageLines(data.tokens).map((line) => (
+              <li key={line.label}>
+                <span className="widget-row static">
+                  <span className="widget-row-main">{line.label}</span>
+                  <span className="widget-row-side num">{formatTokens(line.tokens)}</span>
+                  <span className="widget-row-side num">{formatPercent(line.share)}</span>
+                </span>
+              </li>
+            ))}
+            <li>
+              <span className="widget-row static">
+                <span className="widget-row-main">Total</span>
+                <span className="widget-row-side num">{formatTokens(tokenTotal)}</span>
+                <span className="widget-row-side num" />
+              </span>
+            </li>
+          </ul>
+
+          <p className="widget-breakdown-label">
+            The same total across {data.perSession.length}{' '}
+            {plural(data.perSession.length, 'session')}, heaviest first
+          </p>
+          <ul className="widget-list widget-list-breakdown">
+            {[...data.perSession]
+              .sort((a, b) => b.tokens - a.tokens)
+              .map((row) => (
+                <li key={row.id}>
+                  <span className="widget-row static">
+                    <span className="widget-row-main mono">{row.id.slice(0, 8)}</span>
+                    <span className="widget-row-side">{row.model || '—'}</span>
+                    <span className="widget-row-side num">{row.requests}</span>
+                    <span className="widget-row-side num">{formatTokens(row.tokens)}</span>
+                  </span>
+                </li>
+              ))}
+          </ul>
+        </>
+      )}
+
+      {data.context !== null && percent !== null && (
+        <div className="widget-meter">
+          <div className="widget-meter-head">
+            {/*
+              Named, or gone.
+
+              A window belongs to one conversation, and this folder can hold
+              forty of them. The label carries the session the reading came
+              from — the most recently active transcript here — and its model,
+              because the same percent means something different against 200k
+              than against a million.
+            */}
+            {onOpenInspector ? (
+              <button
+                type="button"
+                className="widget-meter-link"
+                title="Open the session inspector"
+                onClick={onOpenInspector}
+              >
+                Context window · session {data.context.id.slice(0, 8)}
+              </button>
+            ) : (
+              <span>Context window · session {data.context.id.slice(0, 8)}</span>
+            )}
+            <span className={tone ? `widget-stat-value ${tone}` : undefined}>
+              {Math.round(percent)}%
+            </span>
+          </div>
+          {/*
+            Whose window, and how big.
+
+            A percentage is a ratio and both halves have to be on screen. "3%"
+            against a 200k window and "3%" against a million are the same
+            reading of two very different situations, and until now the tile
+            printed the numerator's session but never the denominator at all —
+            so the reading could not be checked and could not be acted on.
+            PLAN-LOCAL-FIRST §G, in three words: "must say whose".
+
+            Written as one clause rather than two so it stays one line: the
+            model when the transcript named one, the window always, because
+            the window is the half that makes the percent mean anything and it
+            is known even when the model id is missing.
+          */}
+          <p className="widget-meter-note">
+            Most recent session here
+            {data.context.model !== '' && `, on ${data.context.model}`} —{' '}
+            {formatTokens(data.context.tokens)} of{' '}
+            {data.context.window > 0
+              ? `${data.context.model !== '' ? 'its ' : 'a '}${formatTokens(data.context.window)} window`
+              : 'an unknown window'}
+            .
+          </p>
+
+          <div
+            className="widget-meter-track"
+            role="progressbar"
+            aria-valuenow={Math.round(percent)}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-label="Context window in use"
+          >
+            <div
+              className={`widget-meter-fill${tone ? ` ${tone}` : ''}`}
+              style={{ width: `${Math.min(100, Math.max(0, percent))}%` }}
+            />
+          </div>
+        </div>
+      )}
+
+      {/*
+        Provenance. This line used to date the rate card the money came off —
+        "verified 2026-08-17" — because a price with no date is a price with no
+        shelf life. A token count has no shelf life at all: the transcript said
+        it, and it will say the same thing next year. What is worth naming is
+        which models did the work, since that is what makes the context window
+        above mean anything.
+      */}
+      <p className="widget-note quiet">
+        {hitRate > 0 &&
+          `${formatPercent(hitRate)} of the prompt came from cache, re-read each turn rather than sent again. `}
+        {data.models.length > 0 && `Models seen: ${data.models.join(', ')}.`}
+      </p>
+    </>
+  )
 }
 
 /* -------------------------------------------------------------------- git -- */
+
+/**
+ * What git's status letter means, in a word.
+ *
+ * The status column on both the tile and Source control printed the letter git
+ * prints — `M`, `A`, `D`, and for an untracked file a bare `?`. Asad, looking at
+ * a column of question marks: *"what are these question marks? Is this normal?
+ * Is this like for all of the other tools are also doing like this?"* It is
+ * porcelain's code for untracked, and the answer to his question is that no, a
+ * question mark is not what a person should have to decode. `git.ts` already
+ * resolves every code into a `kind` for exactly this reason and nothing was
+ * reading it.
+ *
+ * `unknown` keeps the raw letter rather than inventing a word for it: a code
+ * this app has not seen is a fact worth showing as it arrived, and it is the one
+ * case where the letter is more honest than any English for it.
+ */
+export const CHANGE_WORD: Record<GitChangeKind, string> = {
+  added: 'Added',
+  modified: 'Modified',
+  deleted: 'Deleted',
+  renamed: 'Renamed',
+  copied: 'Copied',
+  typechange: 'Type',
+  untracked: 'Untracked',
+  conflicted: 'Conflict',
+  unknown: '',
+}
+
+/** The word for a change, falling back to git's own letter when there is none. */
+export function changeLabel(kind: GitChangeKind, code: string): string {
+  return CHANGE_WORD[kind] || code.trim() || '?'
+}
 
 /**
  * The rows a git widget shows, and how many it is not showing.
@@ -646,6 +1006,7 @@ function GitWidget({ context }: { context: WidgetContext }): ReactElement {
     'gitStatus',
     projectPath,
     useCallback(async (call) => (await call(projectPath)) as GitStatusResult, [projectPath]),
+    { what: 'Reading the repo' },
   )
 
   // Live updates when the git watcher is running. Subscribing is optional —
@@ -785,12 +1146,16 @@ function GitWidget({ context }: { context: WidgetContext }): ReactElement {
                       title={`Open ${file.path}`}
                       onClick={() => onOpenFile(file.path)}
                     >
-                      <span className={`widget-code ${file.group}`}>{file.code.trim() || '?'}</span>
+                      <span className={`widget-code ${file.group}`}>
+                        {changeLabel(file.kind, file.code)}
+                      </span>
                       <span className="widget-row-main mono">{file.path}</span>
                     </button>
                   ) : (
                     <span className="widget-row static">
-                      <span className={`widget-code ${file.group}`}>{file.code.trim() || '?'}</span>
+                      <span className={`widget-code ${file.group}`}>
+                        {changeLabel(file.kind, file.code)}
+                      </span>
                       <span className="widget-row-main mono">{file.path}</span>
                     </span>
                   )}
@@ -856,6 +1221,7 @@ function ReadinessWidget({ context }: { context: WidgetContext }): ReactElement 
         })),
       }
     }, [projectPath]),
+    { what: 'Scoring the project' },
   )
 
   return renderState(state, reload, 'Scoring the project…', (data) => {
@@ -984,6 +1350,7 @@ function GithubWidget({ context }: { context: WidgetContext }): ReactElement {
         items: [...pulls.items, ...issues.items],
       }
     }, [projectPath]),
+    { what: 'Asking gh' },
   )
 
   return renderState(state, reload, 'Asking gh…', (data) => {
@@ -1063,11 +1430,19 @@ export const WIDGET_DEFINITIONS: Readonly<Record<WidgetType, WidgetDefinition>> 
     description: 'Agent sessions running in this project, and what each one is doing.',
     Component: SessionsWidget,
   },
+  /*
+   * The key is still `cost`. The tile is called Usage and shows no money.
+   *
+   * `WidgetType` is the id a saved layout stores, so renaming it would drop the
+   * tile out of every dashboard anybody has already arranged — a migration's
+   * worth of risk to change a string no user ever sees. The title and the
+   * description are the parts that are read, and those are honest now.
+   */
   cost: {
     type: 'cost',
-    title: 'Cost',
-    description: 'Spend, tokens and context-window pressure, read from Claude Code transcripts.',
-    Component: CostWidget,
+    title: 'Usage',
+    description: 'Tokens, cache hit rate and context-window pressure, read from Claude Code transcripts.',
+    Component: UsageWidget,
   },
   git: {
     type: 'git',

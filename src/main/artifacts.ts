@@ -53,8 +53,11 @@ import { isWithinRoot } from './fs-tree'
 import { isAbortError, streamLines } from './session-search'
 import {
   configDirs,
+  encodeProjectPath,
+  homeScopeFor,
   listTranscripts,
   transcriptDirs,
+  type HomeScope,
   type TranscriptFile,
   type TranscriptScope,
 } from './transcript'
@@ -267,6 +270,14 @@ export type ArtifactScope = 'project' | 'all'
 export interface ScanOptions {
   configDir?: string
   deviceHomes?: string | null
+  /**
+   * Stores that answer for one folder only. Defaults to whatever was installed.
+   *
+   * Carried through rather than left to the module default because this scan
+   * has a wide mode, and the wide mode is the one that has to respect it. See
+   * {@link allTranscriptDirs}.
+   */
+  homeScopes?: readonly HomeScope[]
   scope?: ArtifactScope
   maxSessions?: number
   maxAgeMs?: number
@@ -297,7 +308,26 @@ function clamp(value: number | undefined, fallback: number, max: number): number
  * Which project a transcript belongs to does not matter here anyway: what
  * matters is where its tool calls wrote, and that is in the calls themselves.
  */
-async function allTranscriptDirs(configDir: string): Promise<string[]> {
+async function allTranscriptDirs(configDir: string, scope: TranscriptScope): Promise<string[]> {
+  /*
+   * Unless the store belongs to one folder, in which case that one folder is
+   * all it may be enumerated for.
+   *
+   * The copilot's home is a store like any other and it is the only directory
+   * on the machine the copilot may write to. Under `scope: 'all'` this function
+   * is what decides which transcripts get their tool calls read — and the reader
+   * below attributes a `Write` by the path *recorded in the call*, not by the
+   * directory the transcript sits in. So handing over a scoped store whole would
+   * let the copilot list files it never wrote, in a repository it cannot even
+   * open, on the panel a person uses to review what their agents did.
+   *
+   * `transcript.ts` has the argument. A scoped home legitimately holds exactly
+   * one project directory, so nothing real is dropped here.
+   */
+  const owned = homeScopeFor(configDir, scope)
+  if (owned !== undefined) {
+    return [join(configDir, 'projects', encodeProjectPath(owned.folder))]
+  }
   let names: string[]
   try {
     names = await readdir(join(configDir, 'projects'))
@@ -315,10 +345,11 @@ export async function projectTranscripts(
   const scope: TranscriptScope = {
     configDir: options.configDir,
     deviceHomes: options.deviceHomes,
+    ...(options.homeScopes === undefined ? {} : { homeScopes: options.homeScopes }),
   }
   const dirs =
     options.scope === 'all'
-      ? (await Promise.all(configDirs(scope).map(allTranscriptDirs))).flat()
+      ? (await Promise.all(configDirs(scope).map((dir) => allTranscriptDirs(dir, scope)))).flat()
       : transcriptDirs(cwd, scope)
 
   const files: TranscriptFile[] = []
@@ -725,38 +756,98 @@ function projectPath(cwd: unknown): string {
 }
 
 /**
+ * One scan per window **per channel**, and the reason that second half is in
+ * bold.
+ *
+ * A newer request replacing an older one is right: the user has moved to
+ * another project, or toggled the scope, and two passes over the same history
+ * only slow each other down. What was wrong was the key. This was a
+ * `Map<senderId, AbortController>`, so *any* request from a window aborted
+ * *any* other request from that window — and the Artifacts page makes two,
+ * on two different channels, about two different things.
+ *
+ * The page's own effects fire them in that order on every scope toggle and
+ * every project switch: the list effect starts `artifacts:list`, and the
+ * history effect, running in the same commit and still seeing the previous
+ * selection, immediately starts `artifacts:changes` — which aborted the list
+ * it had nothing to do with. The list handler then answered
+ * `{ ok: false, error: 'cancelled' }`, a shape the panel silently ignored, and
+ * the page sat on *"Reading this project’s history…"* for the rest of the
+ * session with an empty list under it. Reproducible every time by pressing
+ * "Every session".
+ *
+ * Keying on the channel as well means a list only ever cancels a list. The two
+ * scans do overlap now, which is what the page was always asking for, and both
+ * are bounded by the same time budget they always were.
+ *
+ * Exported so it can be tested without a filesystem: the bookkeeping is the
+ * whole of the bug, and it is not observable through a scan of a real project.
+ */
+export class ScanSlots {
+  private readonly slots = new Map<string, AbortController>()
+
+  // The two halves are joined with a NUL, which cannot occur in either of
+  // them, so no two different (sender, channel) pairs can collide on one key.
+  // Spelled as an escape, never as the byte: a single literal NUL makes
+  // `file`(1) call this source file `data` and makes `grep`(1) treat it as
+  // binary, at which point every search of this file silently returns nothing.
+  private static key(senderId: number, channel: string): string {
+    return `${senderId}\u0000${channel}`
+  }
+
+  /** Start a scan, retiring the previous one **on the same channel** only. */
+  begin(senderId: number, channel: string): AbortController {
+    const key = ScanSlots.key(senderId, channel)
+    this.slots.get(key)?.abort()
+    const controller = new AbortController()
+    this.slots.set(key, controller)
+    return controller
+  }
+
+  /** Forget a finished scan, unless a newer one has already taken its place. */
+  end(senderId: number, channel: string, controller: AbortController): void {
+    const key = ScanSlots.key(senderId, channel)
+    if (this.slots.get(key) === controller) this.slots.delete(key)
+  }
+
+  /** The window has gone. Everything it asked for stops. */
+  cancelAll(senderId: number): void {
+    const prefix = `${senderId}\u0000`
+    for (const [key, controller] of [...this.slots]) {
+      if (!key.startsWith(prefix)) continue
+      controller.abort()
+      this.slots.delete(key)
+    }
+  }
+
+  /** How many scans are running. Tests read this; nothing else does. */
+  get size(): number {
+    return this.slots.size
+  }
+}
+
+/**
  * Register the artifact channels.
  *
  *  - `artifacts:list`    (ArtifactsListRequest)    -> ArtifactsListResponse
  *  - `artifacts:changes` (ArtifactsChangesRequest) -> ArtifactsChangesResponse
  *  - `artifacts:cancel`  ()                        -> void
- *
- * A second request from the same window cancels the first, for the same reason
- * session search does: the user has moved to another project or closed the
- * page, and two passes over the same history only slow each other down.
  */
 export function registerArtifactsIpc(ipcMain: IpcMain): void {
-  const inFlight = new Map<number, AbortController>()
+  const inFlight = new ScanSlots()
 
-  const cancelFor = (senderId: number): void => {
-    inFlight.get(senderId)?.abort()
-    inFlight.delete(senderId)
-  }
-
-  const begin = (event: IpcMainInvokeEvent): AbortController => {
+  const begin = (event: IpcMainInvokeEvent, channel: string): AbortController => {
     const senderId = event.sender.id
-    cancelFor(senderId)
-    const controller = new AbortController()
-    inFlight.set(senderId, controller)
+    const controller = inFlight.begin(senderId, channel)
     // A closed window must not leave a scan of every transcript running for
     // nobody. Keyed, so registering on every request is correct rather than a
     // leak — see `web-contents-teardown.ts`.
-    onWebContentsDestroyed(event.sender, 'artifacts', () => cancelFor(senderId))
+    onWebContentsDestroyed(event.sender, 'artifacts', () => inFlight.cancelAll(senderId))
     return controller
   }
 
-  const end = (event: IpcMainInvokeEvent, controller: AbortController): void => {
-    if (inFlight.get(event.sender.id) === controller) inFlight.delete(event.sender.id)
+  const end = (event: IpcMainInvokeEvent, channel: string, controller: AbortController): void => {
+    inFlight.end(event.sender.id, channel, controller)
   }
 
   ipcMain.handle(
@@ -774,7 +865,7 @@ export function registerArtifactsIpc(ipcMain: IpcMain): void {
         }
       }
 
-      const controller = begin(event)
+      const controller = begin(event, ARTIFACTS_LIST_CHANNEL)
       try {
         const result = await listArtifacts(cwd, {
           scope: payload.scope === 'all' ? 'all' : 'project',
@@ -789,7 +880,7 @@ export function registerArtifactsIpc(ipcMain: IpcMain): void {
         console.error('[artifacts] list failed:', error)
         return { ok: false, error: 'failed', message: 'Could not read this project’s history.' }
       } finally {
-        end(event, controller)
+        end(event, ARTIFACTS_LIST_CHANNEL, controller)
       }
     },
   )
@@ -812,7 +903,7 @@ export function registerArtifactsIpc(ipcMain: IpcMain): void {
         return { ok: false, error: 'invalid-project', message: 'A file is required.' }
       }
 
-      const controller = begin(event)
+      const controller = begin(event, ARTIFACTS_CHANGES_CHANNEL)
       try {
         const result = await artifactHistory(cwd, payload.relPath, {
           scope: payload.scope === 'all' ? 'all' : 'project',
@@ -826,12 +917,14 @@ export function registerArtifactsIpc(ipcMain: IpcMain): void {
         console.error('[artifacts] changes failed:', error)
         return { ok: false, error: 'failed', message: 'Could not read this file’s history.' }
       } finally {
-        end(event, controller)
+        end(event, ARTIFACTS_CHANGES_CHANNEL, controller)
       }
     },
   )
 
+  // The page leaving, or the window closing: everything this sender asked for
+  // stops, on every channel.
   ipcMain.handle(ARTIFACTS_CANCEL_CHANNEL, (event: IpcMainInvokeEvent): void => {
-    cancelFor(event.sender.id)
+    inFlight.cancelAll(event.sender.id)
   })
 }

@@ -1,11 +1,15 @@
 /* ============================================================================
-   Usage strip — what the session cost and how close it is to its limits.
+   Usage strip — what a session has moved: tokens, requests, context.
+
+   The subscription limit that used to sit at the end of this row now lives on
+   the session's own chrome, beside the account it is a fact about — see
+   `shell/UsageBar.css`. What is left is this project's transcripts.
 
    The last line of the pane, and it reports rather than asks, so it is drawn as
    metadata: no rule above it, no panel behind it, no box around anything in it.
    Labels in the muted grey, numbers in the mono face, and colour only where it
-   carries meaning — a context or plan figure past a threshold. The accent is
-   left alone, because in this app the accent means focus.
+   carries meaning — a context figure past a threshold. The accent is left
+   alone, because in this app the accent means focus.
    ============================================================================ */
 
 .usage-strip {
@@ -88,16 +92,6 @@
   text-overflow: ellipsis;
 }
 
-.us-sub[data-tone='warning'] {
-  color: var(--color-warning);
-}
-
-/* Trails the thing before it on the same line. Whoever stacks this strip into a
-   column turns the separator off — see `.ac-sheet` in AgentControls.css. */
-.us-sub-after::before {
-  content: '· ';
-}
-
 .us-muted {
   color: var(--text-muted);
 }
@@ -141,55 +135,6 @@
   color: var(--color-critical);
   font-size: var(--t-caption);
   letter-spacing: var(--t-caption-ls);
-}
-
-/* ------------------------------------------------------------------- plan */
-
-.us-plan-limit {
-  display: inline-flex;
-  align-items: baseline;
-  gap: var(--sp-1);
-}
-
-/* Three limits in a row need more air between them than between a name and its
-   number, or "Session 5% Week 80%" reads as one run-on figure. */
-.us-plan-limit + .us-plan-limit {
-  margin-left: var(--sp-15);
-}
-
-.us-plan-name {
-  color: var(--text-muted);
-  white-space: nowrap;
-}
-
-/* A quiet text target, not a bordered button: nothing in this line is an
-   action until you point at it. */
-.us-refresh {
-  height: var(--control-h-sm);
-  padding: 0 var(--sp-2);
-  cursor: pointer;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: none;
-  color: var(--text-secondary);
-  font-family: var(--font-ui);
-  font-size: var(--t-footnote);
-  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
-}
-
-.us-refresh:hover:not(:disabled) {
-  background: var(--bg-hover);
-  color: var(--text-primary);
-}
-
-.us-refresh:disabled {
-  color: var(--text-muted);
-  cursor: not-allowed;
-}
-
-.us-refresh:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
 }
 
 /* ------------------------------------------------------------------ notes */

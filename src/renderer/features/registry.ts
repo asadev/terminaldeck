@@ -3,15 +3,32 @@ import type { SectionId } from '../settings/settings-schema'
 import type { PanelId } from '../shell/panels'
 
 /**
- * Every feature a person can switch off, declared once.
+ * Every surface that can be switched off, declared once.
  *
- * ## What this actually is
+ * ## The storefront is gone; the table is not
  *
- * Feature flags with a storefront. Every feature ships inside the app, always.
- * Installing turns one on; uninstalling turns it off and clears the data it
- * owns. Nothing is downloaded, nothing is compiled, and no third-party code
- * ever runs — which is exactly why it is safe, and why reinstalling is instant:
- * the code never left.
+ * This was a feature store: ten rows in Settings, each with Install, Uninstall
+ * and a switch. It was removed on 2026-08-17, after a walkthrough of the app:
+ *
+ *   > "still I think they doesn't make any sense to be as a feature. Use or not
+ *   > use. So maybe let's keep them all installed and all active always and
+ *   > remove this section… they are all necessary basic, they don't need to
+ *   > have uninstall and install button, enable and disable thing. Instead of
+ *   > only voice dictation."
+ *
+ * He is right about all of them but one. So **every entry below now ships
+ * `on`** except `voice`, which is the only genuine choice left and is the only
+ * one with a switch anywhere in the app (Settings → Tools). The four that used
+ * to ship `off` had to change with the store: `off` only ever meant "there is a
+ * shop where you can turn this on", and with no shop it means "unreachable".
+ *
+ * The table itself stays, and that is deliberate rather than laziness. It is
+ * what every consumer asks before drawing something optional — the sidebar asks
+ * which panels are live, the palette which commands, the settings window which
+ * sections and rows, the dashboard which widgets — and it is the only reason a
+ * feature cannot be half-switched-off. Deleting it would mean deleting the
+ * gating from a dozen files that four different people are editing, to save a
+ * lookup that now nearly always answers yes.
  *
  * It is called Features and not Plugins on purpose. "Plugins" promises an
  * ecosystem — third-party authors, a published API, things this app did not
@@ -56,7 +73,7 @@ import type { PanelId } from '../shell/panels'
  * **The Overview page, Files, Search, Source control.** Every one of them is
  * about the project you have open, and none of them is big or opinionated
  * enough that a reasonable person would want it permanently gone. Note that
- * *parts* of Overview are still gated: the Cost tile belongs to Cost and usage
+ * *parts* of Overview are still gated: the Usage tile belongs to Cost and usage
  * and the GitHub tile belongs to GitHub, because a tile for an uninstalled
  * feature is exactly the empty section rule 2 is about.
  *
@@ -121,8 +138,30 @@ export const CONTROL_IDS = [
   'chat.dictate',
   'chat.connectors',
   'chat.usage',
+  /*
+   * The usage bar on the session's own chrome — the five-hour window beside the
+   * account, for a terminal session as much as a chat one.
+   *
+   * A second control under the same feature as `chat.usage`, not a replacement
+   * for it: they are two different readings. That one is what this session has
+   * moved (tokens, requests, context); this one is how much of the account's
+   * subscription window is gone. Both switch off with Usage, because both are
+   * read from the same place — the agent's own output — and a person turning
+   * Usage off means "stop showing me any of this".
+   */
+  'chrome.usage',
   'window.split',
   'sidebar.browser',
+  /*
+   * The bell on the rail's Settings line.
+   *
+   * Alerts used to be declared as a `panel`, which is the row the sidebar draws
+   * and the page `PanelView` renders. It is neither now — *"notifications
+   * should be a pop-up just like settings, not a full page"* — so the surface
+   * that can be left behind when the feature is off is a control inside
+   * somebody else's view, which is exactly what this list is for.
+   */
+  'sidebar.alerts',
 ] as const
 
 export type ControlId = (typeof CONTROL_IDS)[number]
@@ -226,8 +265,17 @@ export const FEATURES: readonly Feature[] = [
      * saved from it by being declared here; its two siblings were not. Owning
      * all three means the sheet stops advertising them and the dispatcher
      * offers the feature back instead of swallowing the key.
+     *
+     * `pane.close` joined them on 2026-08-17. It is the palette's name for
+     * closing the pane that has the keyboard, and it is the only way to close
+     * the *host* pane — which has no ✕ of its own, because its name, folder and
+     * account stay in the window's toolbar so that the split reads as a main
+     * session with a guest beside it. It has no chord, so nothing advertises
+     * it; declaring it here is what keeps the row out of the palette when Split
+     * view is uninstalled, rather than offering to close a pane in a window
+     * that cannot have one.
      */
-    commands: ['pane.split', 'pane.focusLeft', 'pane.focusRight'],
+    commands: ['pane.split', 'pane.focusLeft', 'pane.focusRight', 'pane.close'],
     controls: ['window.split'],
     sections: [],
     settings: [],
@@ -238,10 +286,9 @@ export const FEATURES: readonly Feature[] = [
     name: 'Every session at once',
     summary: 'A grid of every running session, for watching several agents work at the same time.',
     where: 'the command palette — "Every session at once".',
-    // Off. It is a whole-window view for a way of working most people never
-    // reach for, and the sessions it draws are all reachable one at a time from
-    // the sidebar without it.
-    default: 'off',
+    // On, like everything else. It was off because a store existed to turn it
+    // on; with no store, off means unreachable.
+    default: 'on',
     panels: [],
     widgets: [],
     commands: ['view.swarm'],
@@ -252,14 +299,19 @@ export const FEATURES: readonly Feature[] = [
   },
   {
     id: 'usage',
-    name: 'Cost and usage',
-    summary: 'What your sessions are spending, and how full each context window is.',
-    where: 'the Cost tile on the Overview page, and the strip under the chat box.',
+    // Named "Usage" rather than "Cost and usage" because there is no longer any
+    // cost in it — no dollar figure appears anywhere in this app. The argument
+    // is at the bottom of `src/main/cost.ts`. The feature *id* stays `usage`,
+    // which it always was, so nobody's saved on/off choice is disturbed.
+    name: 'Usage',
+    summary: 'How many tokens your sessions have moved, and how full each context window is.',
+    where:
+      'the bar beside the account on a session’s own chrome, the Usage tile on the Overview page, and the strip under the chat box.',
     default: 'on',
     panels: [],
     widgets: ['cost'],
     commands: [],
-    controls: ['chat.usage'],
+    controls: ['chat.usage', 'chrome.usage'],
     sections: [],
     settings: [],
     // The numbers are read out of the agent's own transcripts on every look.
@@ -271,14 +323,21 @@ export const FEATURES: readonly Feature[] = [
     id: 'alerts',
     name: 'Alerts',
     summary: 'What this project is waiting on you for — a stalled session, a context window filling up.',
-    where: 'the Alerts row at the bottom of the sidebar.',
+    where: 'the bell beside Settings, at the bottom of the sidebar.',
     default: 'on',
-    panels: ['alerts'],
+    /*
+     * No panel, because there is no page: Alerts opens as a dialog over the
+     * window now, not as a view in it. What can be left behind with the feature
+     * off is the bell that opens it, so the surface is declared as a control —
+     * see `sidebar.alerts` in `CONTROL_IDS`, and the note on `PanelId` in
+     * `shell/panels.ts` for why the panel entry could not simply stay.
+     */
+    panels: [],
     widgets: [],
     commands: ['view.alerts'],
-    controls: [],
+    controls: ['sidebar.alerts'],
     sections: [],
-    settings: ['general.showInsightAlerts'],
+    settings: ['notifications.showInsightAlerts'],
     data: [],
   },
   {
@@ -305,9 +364,9 @@ export const FEATURES: readonly Feature[] = [
     // character in this window — is a glyph twice the width of the sentence
     // around it. A place is named the way it is written on the button.
     where: 'the MCP servers row under Integrations, and Connectors in the Add menu in the chat box.',
-    // Off. Most people have no MCP server configured at all, and for them the
-    // row is a page that can only ever say "nothing here".
-    default: 'off',
+    // On. The page says "nothing configured" for somebody with no MCP server,
+    // which is a better answer than a row that is not there.
+    default: 'on',
     panels: ['mcp'],
     widgets: [],
     commands: ['view.mcp'],
@@ -322,7 +381,7 @@ export const FEATURES: readonly Feature[] = [
     name: 'Hooks',
     summary: 'Commands your project runs around every agent action.',
     where: 'the Hooks row under Integrations in the sidebar.',
-    default: 'off',
+    default: 'on',
     panels: ['hooks'],
     widgets: [],
     commands: ['view.hooks'],
@@ -341,10 +400,10 @@ export const FEATURES: readonly Feature[] = [
     name: 'AI readiness',
     summary: 'Whether a repository gives an agent what it needs: docs, tests, lint, a clean tree.',
     where: 'the AI readiness row under Integrations, and its tile on the Overview page.',
-    // Off. It is a one-off audit rather than something you watch, and it has an
-    // opinion about how a repository should be laid out that not everybody
-    // shares.
-    default: 'off',
+    // On. It is a one-off audit rather than something you watch, but a page
+    // nobody opens costs a row in a list; a page nobody can reach costs the
+    // feature.
+    default: 'on',
     panels: ['readiness'],
     widgets: ['readiness'],
     commands: ['view.readiness'],
@@ -358,7 +417,24 @@ export const FEATURES: readonly Feature[] = [
     name: 'Voice dictation',
     summary: 'Speak a prompt instead of typing it.',
     where: 'the microphone in the chat box, beside Send.',
-    default: 'on',
+    /*
+     * The one entry that ships **off**, and the only one left with a switch.
+     *
+     * This app cannot transcribe. `chat/voice/dictation.ts` records why, from
+     * measurements taken in this exact Electron: `SpeechRecognition` starts and
+     * then emits nothing forever, there is no on-device model, and the cloud
+     * path is Chrome's private endpoint. What the microphone does is hand over
+     * to the operating system's own dictation. That is useful and it is honest,
+     * but it is not what a microphone beside Send promises, which is exactly
+     * what was reported:
+     *
+     *   > "we also might don't need this mic button until we don't have a
+     *   > proper feature for transcription… otherwise it will not come here."
+     *
+     * So the chat box has no microphone until somebody turns one on in
+     * Settings → Tools.
+     */
+    default: 'off',
     panels: [],
     widgets: [],
     commands: [],

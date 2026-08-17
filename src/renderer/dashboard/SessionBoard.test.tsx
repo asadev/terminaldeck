@@ -61,10 +61,12 @@ describe('nothing on the board is invented', () => {
     // indistinguishable from a session that genuinely spent nothing.
     const markup = render([session({ id: 'a', status: 'working', work: null })])
     expect(markup).not.toContain('Tokens')
-    expect(markup).not.toContain('Spent')
+    expect(markup).not.toContain('Requests')
   })
 
-  it('omits the spend when nothing in the session could be priced', () => {
+  it('reports tokens and requests, and no money at all', () => {
+    // The card used to carry a "Spent" figure between these two. It is gone
+    // with every other price in the app — see the bottom of `src/main/cost.ts`.
     const markup = render([
       session({
         id: 'a',
@@ -73,15 +75,15 @@ describe('nothing on the board is invented', () => {
           transcriptPath: '/t/a.jsonl',
           requests: 4,
           tokens: 41_800,
-          costUsd: null,
           contextPercent: null,
           lastActivityAt: 0,
         },
       }),
     ])
     expect(markup).toContain('41.8k')
+    expect(markup).toContain('Requests')
     expect(markup).not.toContain('Spent')
-    expect(markup).not.toContain('$0.00')
+    expect(markup).not.toMatch(/[$]/)
   })
 })
 
@@ -104,12 +106,80 @@ describe('the card', () => {
         status: 'working',
         projectPath: '/Users/apple/Projects/science-locus',
         provider: 'claude',
-        account: 'School',
+        account: { id: 'school', name: 'School' },
       }),
     ])
     expect(markup).toContain('science-locus')
     expect(markup).toContain('Claude Code')
     expect(markup).toContain('School')
+  })
+
+  it('never prints the profile key where the account goes', () => {
+    /*
+     * `Claude Code · Default · started 25m ago`, on two cards at once, while
+     * the chip inside each of those sessions read the address. "Default" is
+     * the key `profiles.ts` mints for the machine's own install — it is not a
+     * name anybody gave that login, and it is identical on every install.
+     *
+     * Nothing here has asked the agent who is signed in, so this reaches
+     * `profileLoginLabel`'s third rung, which says which install it is. That
+     * is a true sentence about a real thing and it is different per agent,
+     * which the slug is not.
+     */
+    const markup = render([
+      session({ id: 'a', status: 'working', account: { id: 'system', name: 'Default' } }),
+    ])
+    expect(markup).not.toContain('Default')
+    expect(markup).toContain('Your own Claude Code install')
+  })
+
+  it('titles the card with the session, not with the folder it runs in', () => {
+    /*
+     * Eight cards, one project, and every heading read `terminaldeck` — with
+     * the same word repeated as the folder chip directly above each heading.
+     * A session is titled after its folder until the agent writes a real title,
+     * and this page printed that placeholder as the card's name, so the one
+     * screen whose job is "which one do I need to go into" could not answer it.
+     *
+     * `sessionLabel` is the rail's rule, applied here: numbered within the
+     * project, in the order the list arrives — which is the store's order and
+     * therefore the sidebar's, so the two halves of the window cannot end up
+     * calling one session by two numbers.
+     */
+    const markup = render([
+      session({ id: 'a', title: 'terminaldeck' }),
+      session({ id: 'b', title: 'terminaldeck' }),
+      session({ id: 'c', title: 'Wire up the relay' }),
+    ])
+    expect(markup).toContain('>Session 1<')
+    expect(markup).toContain('>Session 2<')
+    expect(markup).toContain('>Wire up the relay<')
+    // The folder is still on the card — as the chip it always was, and only
+    // there. It is no longer also the heading four pixels under it.
+    expect(markup).not.toContain('>terminaldeck</h3>')
+    expect(markup.match(/>terminaldeck<\/span>/g)).toHaveLength(3)
+  })
+
+  it('separates two cards that agree on every other thing they show', () => {
+    /*
+     * Everything else a card can be told apart by is already on it — the folder
+     * is the chip in its corner, the account is in its meta line — so the only
+     * pair left is two agents given one task in one folder on one login, which
+     * write the same sentence. Seen exactly that way on the rail and on this
+     * page. The id is the same eight characters the rail prints, so a card and
+     * a row can be matched by eye.
+     */
+    const account = { id: 'system', name: 'Default' }
+    const markup = render([
+      session({ id: '7f3c9a21-6d40-4a1e-9d2b-1a5f0c3e7b81', title: 'Fix the parser', account }),
+      session({ id: 'b4e1d508-2c77-4f93-8a10-9e6b2d4c5a03', title: 'Fix the parser', account }),
+      session({ id: 'c9a70b64-0000-4000-8000-000000000003', title: 'Ship the release', account }),
+    ])
+    expect(markup).toContain('>7f3c9a21<')
+    expect(markup).toContain('>b4e1d508<')
+    // And on nothing else: an id on a card whose name is already unique is a
+    // hex string to read for no reason.
+    expect(markup.match(/board-title-id/g)).toHaveLength(2)
   })
 
   it('marks a session running in another project', () => {

@@ -79,13 +79,19 @@ export const SECTIONS: ReadonlyArray<{ id: HelpSectionId; label: string; hint: s
 
 /** One line each, in the user's terms rather than the module's. */
 export const PANEL_HELP: Record<PanelId, string> = {
-  overview: 'A dashboard for the open project: sessions, spend, git state and readiness in one place. Widgets can be rearranged.',
+  copilot:
+    'An assistant for this deck, pinned at the top of the sidebar. It is a real session in a folder of its own, with its own memory and its own login — so it starts signed out, on its own terminal, and signs itself in once. Ask it which of your sessions needs you, to review a diff before it lands, or to turn a rough ask into a prompt worth giving a sub-session. Anything it does that changes your settings or touches a session you started asks you first.',
+  overview: 'A dashboard for the open project: sessions, token usage, git state and readiness in one place. Widgets can be rearranged.',
   files: 'The project tree, with anything your ignore rules exclude hidden. Open a file to read it beside the session.',
   artifacts: 'Every file your agents wrote or changed here, with the diff of each change. Searching past transcripts moved to the command palette — type ? in it.',
   git: 'Working-tree status and diffs for the project, refreshed as the agent edits files.',
   github: 'Pull requests, issues and checks. Needs the GitHub CLI installed, signed in, and a GitHub remote on the repo.',
   readiness: 'How ready this repo is for an agent to work in — instructions, tests, structure — with a fix offered where one is safe.',
-  alerts: 'Things worth knowing without watching: a session filling its context window, a tool failing repeatedly, work that has stalled.',
+  // No `alerts` line. Alerts is not a view any more — it is a pop-up over
+  // whatever you are doing, opened by the bell beside Settings — so it is
+  // written out by hand in `HELP_TOPICS` below rather than generated from a
+  // panel entry that no longer exists. `PANEL_HELP` is keyed by `PanelId`, so
+  // leaving the line here would not compile, which is the check working.
   mcp: 'Connect to MCP servers, browse the tools, resources and prompts they expose, and call one by hand to see what it returns.',
   hooks: 'Installs callbacks into each agent CLI’s own settings file, so the app knows what the agent is doing without scraping the terminal.',
   remote: 'Pair a phone or another computer with this one, then drive these sessions from it. A code is six digits, lives a minute, and is used once — and the device still has to be approved here before it gets in.',
@@ -333,6 +339,28 @@ export const HELP_TOPICS: HelpTopic[] = [
     keywords: [panel.id],
     blocks: [{ kind: 'text', text: PANEL_HELP[panel.id] }],
   })),
+  /*
+   * Alerts, written out rather than generated.
+   *
+   * It sits in this section because that is where somebody looking for it will
+   * look — it is one of the app's surfaces, and the section is called "The
+   * views" in the same loose sense that Settings is one. What it is not is a
+   * `PanelId`, so there is no entry to generate it from, and a topic dropped
+   * because the entry went would be the app quietly forgetting how to explain
+   * one of its own features.
+   */
+  {
+    id: 'panel-alerts',
+    section: 'panels',
+    title: 'Alerts',
+    keywords: ['alerts', 'notifications', 'bell', 'stalled', 'blocked'],
+    blocks: [
+      {
+        kind: 'text',
+        text: 'Things worth knowing without watching: a session filling its context window, a tool failing repeatedly, work that has stalled. The bell beside Settings at the bottom of the sidebar opens them in a panel over your work — a dot on the bell means there is something in there. Each alert carries the one thing to do about it, and pressing that closes the panel and takes you to it.',
+      },
+    ],
+  },
   ...TROUBLESHOOTING,
 ]
 

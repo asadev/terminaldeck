@@ -64,26 +64,137 @@ jobs:
       - name: Test
         run: npm test
 
-      # `dist:mac` is `npm run build && npm run build:pwa && electron-builder …
-      # --publish never`, and all three parts matter. electron-builder packages
-      # whatever is in `out/` and does not produce it — a run without the build
-      # step fails the asar sanity check ("out/main/index.js … was not found in
-      # this archive"), which is verified behaviour, not a guess.
+      # This step signs. That is the whole reason it is not a one-liner.
       #
-      # `build:pwa` is the part that was missing until 0.1.6, and it took three
-      # releases to notice. `pwa/dist` is build output, so it is gitignored, so
-      # a clean CI checkout does not have it, so the electron-builder allowlist
-      # line `pwa/dist/**/*` matched zero files — and an allowlist entry that
-      # matches nothing looks exactly like one whose files were all excluded.
-      # Nothing warned. Three releases shipped with the phone client absent and
-      # the address the Remote panel prints answering with nothing.
+      # Until 0.1.9 this job ran `npm run dist:mac` on a hosted runner with an
+      # empty keychain, deliberately and with a comment explaining why, and the
+      # published dmg was therefore unsigned. Every stranger who downloaded it
+      # was told the app "is damaged and can't be opened" — Gatekeeper's wording
+      # for an unsigned quarantined bundle, which reads like a corrupt download
+      # and loses the user right there. The certificate existed on the owner's
+      # Mac and never reached the file anyone could actually download.
       #
-      # `--publish never` is the last part: electron-builder infers a GitHub
-      # publish target from the `repository` field and would upload on its own.
-      # Uploading happens below instead, explicitly, with the artifacts chosen
-      # here.
-      - name: Build the mac artifacts
-        run: npm run dist:mac
+      # The fix could have been a documented manual step. It was not, because
+      # that is what already existed: SIGNING-HANDOFF.md named
+      # `scripts/mac-release-signed.sh` as the thing to run before publishing,
+      # and 0.1.9 shipped unsigned anyway. A release step that depends on
+      # somebody remembering, on one particular laptop, is a step that gets
+      # skipped — and it got skipped the first time it counted. So the signing
+      # moved to the machine that builds the artifact, where it cannot be
+      # forgotten.
+      #
+      # `scripts/mac-release-signed.sh` is the same script the owner runs
+      # locally; it takes its identity and its notarization key from repository
+      # secrets when they are present. It also *verifies* — codesign, spctl and
+      # stapler against the app, the disk image and the app inside the update
+      # zip — and exits non-zero if any of that fails. So this step is both the
+      # signing and the gate: a build that is not properly signed, notarized and
+      # stapled fails here rather than reaching the release page.
+      #
+      # The script runs `npm run build && npm run build:pwa` itself, and both
+      # parts matter. electron-builder packages whatever is in `out/` and does
+      # not produce it — a run without the build step fails the asar sanity
+      # check ("out/main/index.js … was not found in this archive"), which is
+      # verified behaviour, not a guess. `build:pwa` is the part that was
+      # missing until 0.1.6, and it took three releases to notice: `pwa/dist` is
+      # build output, so it is gitignored, so a clean CI checkout does not have
+      # it, so the electron-builder allowlist line `pwa/dist/**/*` matched zero
+      # files — and an allowlist entry that matches nothing looks exactly like
+      # one whose files were all excluded. Nothing warned. Three releases
+      # shipped with the phone client absent.
+      #
+      # The unsigned fallback is for forks. This repository is MIT and someone
+      # else's checkout has none of these secrets; failing their build outright
+      # would be rude and would teach them nothing. They get an unsigned build
+      # and release notes that say so. What they do NOT get is this repository
+      # publishing an unsigned dmg by accident: on a tag, in `asadev/terminaldeck`,
+      # missing secrets are a hard error naming exactly what is missing.
+      #
+      # The macOS paragraph of the release notes is written here rather than in
+      # the release job, because this is the only job that knows which of the
+      # two happened. The release job runs on Ubuntu and could not tell a signed
+      # dmg from an unsigned one if it wanted to.
+      - name: Build, sign and notarize the mac artifacts
+        env:
+          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          SIGNED_ONLY: ${{ vars.TD_MAC_SIGNED_ONLY }}
+        run: |
+          set -euo pipefail
+
+          if [ -n "${MACOS_CERTIFICATE_P12:-}" ] && [ "${SIGNED_ONLY:-}" = 'true' ]; then
+            # Apple's notarization service can stop answering for a whole team,
+            # and on 2026-08-16 it did: four submissions sat `In Progress` for
+            # hours, one of them a 330-byte probe sent through a different auth
+            # path, so the hold was on the account and no artifact this job
+            # builds could have cleared it. Without this branch a tag push waits
+            # out the script's two-hour timeout and then fails, and the release
+            # simply does not happen.
+            #
+            # A repository *variable* rather than a code change, because the
+            # condition is Apple's and it will end without warning. Flip
+            # TD_MAC_SIGNED_ONLY back to false and the next tag notarizes again.
+            # It is deliberately not automatic: a notarization that fails for
+            # any other reason is usually the wrong certificate, and that must
+            # stay a hard error rather than silently downgrading every release.
+            scripts/mac-release-signed.sh --signed-only
+            cat > release/mac-install-note.md <<'NOTE'
+          macOS 12 or later, Apple silicon: open `-arm64.dmg` and drag the app to
+          Applications. There is no Intel Mac build: macOS 27 runs on no Intel Mac.
+
+          This build **is** signed with a Developer ID certificate, but it is not
+          notarized — Apple's notarization service is not currently completing
+          submissions for this developer account. macOS will therefore say the
+          developer cannot be verified and offer no button on a normal
+          double-click. **Right-click the app and choose *Open*, then confirm.**
+          You only do this once, and the app opens normally afterwards.
+
+          This is not the "app is damaged" message an unsigned build produces —
+          the signature is real and you can check it yourself:
+
+          ```sh
+          codesign -dv --verbose=2 /Applications/Terminal\ Deck.app
+          ```
+          NOTE
+            exit 0
+          fi
+
+          if [ -n "${MACOS_CERTIFICATE_P12:-}" ]; then
+            scripts/mac-release-signed.sh
+            cat > release/mac-install-note.md <<'NOTE'
+          macOS 12 or later, Apple silicon: open `-arm64.dmg` and drag the app to
+          Applications. It is signed with a Developer ID certificate and notarized
+          by Apple, and the notarization ticket is stapled to both the app and the
+          disk image — so it opens the ordinary way, with no right-click, no
+          `xattr`, and no network. There is no Intel Mac build: macOS 27 runs on
+          no Intel Mac.
+          NOTE
+            exit 0
+          fi
+
+          if [ "${GITHUB_REF_TYPE:-}" = tag ] && [ "${GITHUB_REPOSITORY:-}" = 'asadev/terminaldeck' ]; then
+            echo "::error::Refusing to publish an unsigned macOS build. v0.1.9 shipped unsigned and every download said 'Terminal Deck is damaged and can't be opened'. Set the repository secrets MACOS_CERTIFICATE_P12, MACOS_CERTIFICATE_PASSWORD, APPLE_API_KEY_P8, APPLE_API_KEY_ID and APPLE_API_ISSUER — run scripts/mac-ci-secrets.sh — then re-run this job."
+            exit 1
+          fi
+
+          npm run dist:mac
+          cat > release/mac-install-note.md <<'NOTE'
+          macOS 12 or later, Apple silicon: open `-arm64.dmg` and drag the app to
+          Applications. There is no Intel Mac build: macOS 27 runs on no Intel Mac.
+
+          **This build is not signed**, because it was produced by a checkout with
+          no Developer ID certificate. macOS will refuse the first launch and say
+          the app is damaged, which is Gatekeeper's wording for "unsigned", not a
+          corrupt download. Either right-click the app and choose *Open*, or clear
+          the quarantine flag:
+
+          ```sh
+          xattr -dr com.apple.quarantine "/Applications/{{APP}}.app"
+          ```
+          NOTE
 
       # What is *inside* the app, not just that an app came out. See
       # scripts/check-package.mjs for the 1.0 GB this is here to prevent.
@@ -99,6 +210,7 @@ jobs:
             release/*.zip
             release/*.blockmap
             release/latest-mac.yml
+            release/mac-install-note.md
           if-no-files-found: error
           retention-days: 1
 
@@ -192,8 +304,20 @@ jobs:
 
 
       # `--generate-notes` writes the commit summary; `--notes` is prepended to
-      # it. The install note is not decoration: both builds are unsigned, so a
-      # first launch without it looks like a broken download on either platform.
+      # it. The install note is not decoration: an unsigned first launch looks
+      # like a broken download on either platform, and saying so is the
+      # difference between a user right-clicking and a user giving up.
+      #
+      # The macOS paragraph is NOT written here. It comes from
+      # `mac-install-note.md`, which the macOS job wrote, because only that job
+      # knows whether the dmg it produced was actually signed and notarized —
+      # this job runs on Ubuntu and has no `codesign` to ask. Hardcoding "the
+      # macOS build is signed" here would be a claim this job cannot check, and
+      # the previous version of this file hardcoded the opposite claim and was
+      # right for three releases and then wrong.
+      #
+      # `mac-install-note.md` is deliberately absent from the asset list below:
+      # it is a note *about* the release, not a file anyone should download.
       #
       # The product name is read from package.json and substituted into a
       # placeholder rather than typed here — this repo keeps the name in one
@@ -203,27 +327,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           app="$(node -p "require('./package.json').productName")"
+          macnote="$(cat release/mac-install-note.md)"
           notes="$(cat <<'NOTE'
           ### Install
 
-          macOS 12 or later, Apple silicon: open `-arm64.dmg` and drag the app
-          to Applications. There is no Intel Mac build — macOS 27 runs on none.
+          {{MACNOTE}}
 
           Windows 10 or later, x64: run `-x64-setup.exe`. There is no separate
           ARM build; Windows on ARM runs the x64 one. The whole test suite runs
           on a Windows runner and gates this installer — a red Windows test stops
           the release rather than being waved through.
 
-          Neither build is signed. macOS will refuse the first launch: either
-          right-click the app and choose *Open*, or clear the quarantine flag:
-
-          ```sh
-          xattr -dr com.apple.quarantine "/Applications/{{APP}}.app"
-          ```
-
-          Windows SmartScreen will warn instead: choose *More info*, then
-          *Run anyway*. The `-portable.exe` needs no installation and cannot
-          update itself.
+          The Windows build is not signed, so SmartScreen will warn on first run:
+          choose *More info*, then *Run anyway*. The `-portable.exe` needs no
+          installation and cannot update itself.
 
           {{APP}} runs agent CLIs; it does not bundle them. At least one of
           Claude Code, Codex CLI or Gemini CLI needs to be installed and
@@ -235,10 +352,13 @@ jobs:
           NOTE
           )"
 
+          notes="${notes//\{\{MACNOTE\}\}/$macnote}"
+          notes="${notes//\{\{APP\}\}/$app}"
+
           gh release create "${GITHUB_REF_NAME}" \
             --title "${GITHUB_REF_NAME}" \
             --generate-notes \
-            --notes "${notes//\{\{APP\}\}/$app}" \
+            --notes "$notes" \
             release/*.dmg \
             release/*.zip \
             release/*.exe \

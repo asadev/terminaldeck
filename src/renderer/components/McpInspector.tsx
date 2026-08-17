@@ -7,6 +7,8 @@ import {
   pruneArguments,
 } from './McpSchemaForm'
 import { McpAddForm, type McpAddResult } from './McpAddForm'
+import { readFailure, withDeadline } from '../deadline'
+import { recall, remember } from '../panel-cache'
 import { panelSpec } from '../shell/panels'
 import { PageEmpty, PageNote } from './PageEmpty'
 import './McpInspector.css'
@@ -191,6 +193,39 @@ function prettyJson(value: unknown): string {
 
 type SectionKey = 'tools' | 'resources' | 'prompts'
 
+/**
+ * How long reading the configuration has to take.
+ *
+ * The read shells out to the Claude CLI, so it is a child process rather than
+ * a file — which is exactly why it can hang: a CLI waiting on a network call,
+ * a prompt nobody can answer, a binary that never execs. This page printed
+ * "Reading your MCP configuration…" for the rest of the session when it did.
+ * Twelve seconds is generous for a config read and finite, which is the point.
+ */
+const LIST_DEADLINE_MS = 12_000
+
+/**
+ * How long connecting to one server and listing what it exposes has to take.
+ *
+ * Much longer, and deliberately: expanding a row *spawns* the server, and a
+ * cold `npx` one downloads itself first. Forty-five seconds is the difference
+ * between a slow first connection and one that is never going to happen.
+ */
+const INVENTORY_DEADLINE_MS = 45_000
+
+/**
+ * How long the configuration stays good for without re-reading.
+ *
+ * Thirty seconds: the file is edited by `claude mcp add` and by hand, neither
+ * of which happens while somebody is tabbing between this page and a terminal,
+ * and Reload is right there for the moment it does.
+ */
+const SERVERS_FRESH_MS = 30_000
+
+function serversKey(projectPath: string | null): string {
+  return `mcp:servers:${projectPath ?? ''}`
+}
+
 interface InventoryState {
   loading: boolean
   data: McpInventory | null
@@ -333,29 +368,57 @@ export function McpInspector({ projectPath = null, bridge }: McpInspectorProps) 
   const listTicket = useRef(0)
   const inventoryTickets = useRef<Record<string, number>>({})
 
-  const refresh = useCallback(async (): Promise<void> => {
-    if (!api) {
-      setLoading(false)
-      return
-    }
-    const ticket = (listTicket.current += 1)
-    setLoading(true)
-    try {
-      const next = await api.listMcpServers(projectPath)
-      if (listTicket.current !== ticket) return
-      setServers(next)
-      setListError(null)
-    } catch (err) {
-      if (listTicket.current !== ticket) return
-      setListError(err instanceof Error ? err.message : String(err))
-    } finally {
-      if (listTicket.current === ticket) setLoading(false)
-    }
-  }, [api, projectPath])
+  const refresh = useCallback(
+    /**
+     * `seeded` is a re-read behind a list that is already on screen: the cache
+     * gave us the servers this project had a moment ago and we are checking
+     * them. No spinner, and a failure leaves the rows where they are.
+     */
+    async (seeded = false): Promise<void> => {
+      if (!api) {
+        setLoading(false)
+        return
+      }
+      const ticket = (listTicket.current += 1)
+      if (!seeded) setLoading(true)
+      try {
+        const next = await withDeadline(
+          api.listMcpServers(projectPath),
+          'Reading your MCP configuration',
+          LIST_DEADLINE_MS,
+        )
+        if (listTicket.current !== ticket) return
+        remember(serversKey(projectPath), next)
+        setServers(next)
+        setListError(null)
+      } catch (err) {
+        if (listTicket.current !== ticket || seeded) return
+        setListError(readFailure(err))
+      } finally {
+        if (listTicket.current === ticket) setLoading(false)
+      }
+    },
+    [api, projectPath],
+  )
 
   useEffect(() => {
-    void refresh()
-  }, [refresh])
+    /*
+     * The servers this project had last time, before anything is asked for.
+     *
+     * Reading the configuration means asking the Claude CLI, which is a child
+     * process; the shell unmounts this page every time a session takes the
+     * window, so a trip out and back used to spawn it again and print
+     * "Reading your MCP configuration…" over a list that had not changed.
+     */
+    const held = recall<McpServerStatus[]>(serversKey(projectPath), SERVERS_FRESH_MS)
+    if (held) {
+      setServers(held.value)
+      setListError(null)
+      setLoading(false)
+      if (held.fresh) return
+    }
+    void refresh(Boolean(held))
+  }, [refresh, projectPath])
 
   // Inventories belong to the project they were read for; keeping them across a
   // switch would show one project's tools under another's server list.
@@ -386,7 +449,11 @@ export function McpInspector({ projectPath = null, bridge }: McpInspectorProps) 
       inventoryTickets.current[id] = ticket
       setInventories((current) => ({ ...current, [id]: { loading: true, data: current[id]?.data ?? null, error: null } }))
       try {
-        const data = await api.mcpInventory(id, projectPath)
+        const data = await withDeadline(
+          api.mcpInventory(id, projectPath),
+          `Connecting to ${id}`,
+          INVENTORY_DEADLINE_MS,
+        )
         if (inventoryTickets.current[id] !== ticket) return
         setInventories((current) => ({ ...current, [id]: { loading: false, data, error: null } }))
         setServers((current) => current.map((server) => (server.id === id ? { ...server, ...data.status } : server)))
@@ -396,7 +463,7 @@ export function McpInspector({ projectPath = null, bridge }: McpInspectorProps) 
           ...current,
           // Keep whatever was already listed: a failed refresh should not empty
           // a panel the user was reading.
-          [id]: { loading: false, data: current[id]?.data ?? null, error: err instanceof Error ? err.message : String(err) },
+          [id]: { loading: false, data: current[id]?.data ?? null, error: readFailure(err) },
         }))
       }
     },

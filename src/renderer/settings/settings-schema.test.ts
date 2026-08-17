@@ -56,33 +56,52 @@ describe('the table itself', () => {
   })
 
   it('lists the sections that carry stored settings', () => {
-    // The rest are real sections with nothing to persist — shortcuts, help and
-    // about are read-only, profiles and agents write through their own modules.
+    // The rest are real panes with nothing to persist — About is read-only, and
+    // Tools writes through the feature registry rather than through this table.
     expect(settingsIn('general').length).toBeGreaterThan(0)
     expect(settingsIn('appearance').length).toBeGreaterThan(0)
     expect(settingsIn('notifications').length).toBeGreaterThan(0)
-    expect(settingsIn('shortcuts')).toEqual([])
-    expect(settingsIn('help')).toEqual([])
+    expect(settingsIn('agents').length).toBeGreaterThan(0)
     expect(settingsIn('about')).toEqual([])
-    // Agents kept its pane and lost its setting when the default coding tool
-    // moved to General. An empty list here is the expected state, not a hole.
-    expect(settingsIn('agents')).toEqual([])
+    expect(settingsIn('features')).toEqual([])
   })
 
   it('shows General exactly what it promises, in order', () => {
-    // This section is the one people open, and its order was chosen rather than
-    // accumulated. Asserting it here is what stops the next setting from being
-    // appended to the end of the block because that is where the cursor was.
+    /*
+     * This section is the one people open, and its order was chosen rather than
+     * accumulated. Asserting it here is what stops the next setting from being
+     * appended to the end of the block because that is where the cursor was.
+     *
+     * Three rows left in the 2026-08-17 regroup — the coding-tool picker to
+     * Agents, the sound and the banner to Notifications — and one came back
+     * from Advanced. This list is therefore also the record of what General is
+     * now *about*: how a session behaves while you work.
+     */
     expect(settingsIn('general').map((setting) => setting.id)).toEqual([
       'general.language',
-      'general.defaultProvider',
-      'general.soundOnFinish',
-      'general.notifyOnAttention',
-      'general.showInsightAlerts',
+      'general.restoreSessions',
       'general.autoNameSessions',
       'general.confirmCloseWorking',
       'general.copyOnSelect',
     ])
+  })
+
+  it('puts every notification row in Notifications, which is the whole point', () => {
+    /*
+     * The regroup, stated as an invariant rather than as a list.
+     *
+     * *"Desktop notification when session need attention — all of this stuff,
+     * this is notification part so should be in the notification section."* A
+     * setting whose id begins with `notifications.` and whose section is
+     * something else is the exact defect this pass fixed, and it is the one
+     * that would come back first.
+     */
+    for (const setting of SETTINGS) {
+      if (setting.id.startsWith('notifications.')) {
+        expect(setting.section, setting.id).toBe('notifications')
+      }
+    }
+    expect(settingsIn('notifications')).toHaveLength(6)
   })
 })
 
@@ -102,19 +121,50 @@ describe('the rename table', () => {
   })
 
   it('carries a value written under the old id onto the new one', () => {
-    // The real case: General was rebuilt, and these four moved section — which
-    // is a rename, because an id carries its section as its prefix.
+    // The real case: the settings window was regrouped by subject on
+    // 2026-08-17, and five rows moved section — which is a rename, because an
+    // id carries its section as its prefix.
     const merged = mergeSettings({
-      'notifications.sound': true,
-      'notifications.onNeedsInput': false,
-      'general.restoreSessions': false,
-      'agents.defaultProvider': 'codex',
+      'general.soundOnFinish': true,
+      'general.notifyOnAttention': false,
+      'general.showInsightAlerts': false,
+      'general.defaultProvider': 'codex',
+      'advanced.restoreSessions': false,
     })
-    expect(merged['general.soundOnFinish']).toBe(true)
-    expect(merged['general.notifyOnAttention']).toBe(false)
-    expect(merged['advanced.restoreSessions']).toBe(false)
-    expect(merged['general.defaultProvider']).toBe('codex')
-    expect(merged['notifications.sound']).toBeUndefined()
+    expect(merged['notifications.onFinishSound']).toBe(true)
+    expect(merged['notifications.onNeedsInput']).toBe(false)
+    expect(merged['notifications.showInsightAlerts']).toBe(false)
+    expect(merged['agents.defaultProvider']).toBe('codex')
+    expect(merged['general.restoreSessions']).toBe(false)
+    expect(merged['general.soundOnFinish']).toBeUndefined()
+    expect(merged['advanced.restoreSessions']).toBeUndefined()
+  })
+
+  it('carries a value written two builds ago, not just one', () => {
+    /*
+     * `notifications.sound` predates both regroups: it became
+     * `general.soundOnFinish` and is now `notifications.onFinishSound`.
+     * `mergeSettings` applies the table exactly once and does not chase chains,
+     * so the entry for the oldest name has to point at the *current* id rather
+     * than at the intermediate one. That is the mistake this asserts against —
+     * it would leave a value sitting under a key nothing owns.
+     */
+    expect(mergeSettings({ 'notifications.sound': true })['notifications.onFinishSound']).toBe(true)
+  })
+
+  it('reads an old id through the accessors, because App.tsx still uses three', () => {
+    /*
+     * `App.tsx` and `useSessionNotifier.ts` read settings by id, and `App.tsx`
+     * is a file no single agent may edit while several are working in this
+     * repository. `booleanSetting('advanced.restoreSessions')` used to throw
+     * "no setting" the moment that row moved — a blank window rather than a
+     * failed test. The accessors resolve through this table, and this is what
+     * keeps that true.
+     */
+    const values = mergeSettings({ 'general.restoreSessions': false })
+    expect(booleanSetting(values, 'advanced.restoreSessions')).toBe(false)
+    expect(booleanSetting(values, 'general.restoreSessions')).toBe(false)
+    expect(stringSetting(mergeSettings({}), 'general.defaultProvider')).toBe('claude')
   })
 })
 
@@ -131,13 +181,20 @@ describe('the prefs-backed settings', () => {
   })
 
   it('offers exactly the provider ids store.ts accepts', () => {
-    const provider = find('general.defaultProvider') as SelectSetting
+    const provider = find('agents.defaultProvider') as SelectSetting
     expect(provider.options.map((o) => o.value)).toEqual(['claude', 'codex', 'gemini', 'shell'])
   })
 
   it('names a distinct prefsKey for each', () => {
+    // Order follows the table, which follows the rail, which changed when the
+    // window was regrouped by subject — the *set* is what matters here.
     const keys = SETTINGS.filter((s) => s.store === 'prefs').map((s) => s.prefsKey)
-    expect(keys).toEqual(['defaultProvider', 'theme', 'notifyOnComplete', 'restoreSessions'])
+    expect([...keys].sort()).toEqual([
+      'defaultProvider',
+      'notifyOnComplete',
+      'restoreSessions',
+      'theme',
+    ])
   })
 })
 
@@ -293,8 +350,8 @@ describe('valuesFromPreferences', () => {
       }),
     ).toEqual({
       'appearance.theme': 'light',
-      'general.defaultProvider': 'codex',
-      'advanced.restoreSessions': false,
+      'agents.defaultProvider': 'codex',
+      'general.restoreSessions': false,
       'notifications.onComplete': false,
     })
   })

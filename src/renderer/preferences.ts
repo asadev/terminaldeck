@@ -15,6 +15,9 @@
  */
 
 import type { Preferences, ProviderId } from '@shared/types'
+// Relative, not '@shared/…': vitest runs without the electron-vite alias, so a
+// *value* import through it resolves in the app and throws in a test.
+import { isCustomProviderId } from '../shared/custom-agents'
 import { isThemePreference } from './theme'
 
 export type { Preferences, ProviderId }
@@ -27,8 +30,30 @@ export const PREFERENCE_DEFAULTS: Preferences = {
   notifyOnComplete: true,
 }
 
+/**
+ * Is this a provider this window can act on?
+ *
+ * The four names this build ships, **or** an id somebody added — and the second
+ * half is not tidiness, it is the fix for a row that could never be selected.
+ * `installedProviders` filters the detection answer through this, and
+ * `providers:detect` merges the added agents into that answer, so while this
+ * named only the four an added agent came back reported-installed by the main
+ * process and dropped here: the New-session dialog drew it greyed out, saying
+ * the machine could not start a command it had just resolved, and starting a
+ * session on it was impossible.
+ *
+ * The custom half is tested rather than listed for the reason `types.ts` gives
+ * at length: the set is per machine, so there is no list to check against, and
+ * `isCustomProviderId` is the single place the prefix is spelled.
+ */
 export function isProviderId(value: unknown): value is ProviderId {
-  return value === 'claude' || value === 'codex' || value === 'gemini' || value === 'shell'
+  return (
+    value === 'claude' ||
+    value === 'codex' ||
+    value === 'gemini' ||
+    value === 'shell' ||
+    isCustomProviderId(value)
+  )
 }
 
 /**

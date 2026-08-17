@@ -27,6 +27,23 @@ function readNumber(key: string, fallback: number): number {
 }
 
 /**
+ * Which view the window shows after somebody asks for one.
+ *
+ * A one-line function with a name, because the line it replaces was a bug and
+ * a bug this shape has to stay killed. See `selectPanel` for the whole account;
+ * the short version is that this used to answer `null` when the requested view
+ * was already open, and every navigation in the app — including the Files
+ * page's own "open this file" — went through it.
+ *
+ * Pure and exported so it can be pinned: there is no DOM in this project's
+ * tests, so a hook cannot be driven, and the decision has to live somewhere a
+ * test can reach it.
+ */
+export function panelAfterSelect(current: PanelId | null, asked: PanelId): PanelId {
+  return current === asked ? current : asked
+}
+
+/**
  * The sidebar's width, whether it is pinned, whether it is being peeked at, and
  * which view it has selected.
  *
@@ -78,16 +95,48 @@ export function useSidebar() {
   useEffect(() => cancelPeekTimer, [cancelPeekTimer])
 
   /**
-   * Open a view in the window. Picking the one already open closes it again.
+   * Open a view in the window. Asking for the one already open keeps it open.
    *
-   * It used to un-collapse the sidebar as a side effect. That has to go with
+   * ## This used to be a toggle, and the toggle was the thrashing
+   *
+   * `setPanel(current === next ? null : next)` reads as a tidy convenience and
+   * it was the whole of the bug Asad recorded — a minute of the window
+   * alternating between Files and a terminal, the sidebar highlighting Files
+   * while the pane showed a blank shell. In his words: *"if I'm clicking on the
+   * files from overview to files, for a second, it brought me to this session…
+   * If I double click, it should not move to the other one. It should stay
+   * there."*
+   *
+   * Two things were wrong with it, and only the first is the one people notice.
+   *
+   *  1. **A double click closed the page it had just opened.** Two clicks on a
+   *     row is one gesture as far as a person is concerned, and it landed them
+   *     back on a terminal they had not asked for.
+   *
+   *  2. **Every programmatic navigation went through it too, and one of them
+   *     was a loop.** `App.tsx` routes *all* of them through `showPanel`:
+   *     Source control handing a changed file to Files, the command palette
+   *     opening a file, a dashboard tile, an alert's button — and the Files
+   *     page itself, whose tree calls `onOpenFile` for every row you click.
+   *     So clicking a file *while already on Files* meant `selectPanel('files')`
+   *     with `files` already current, which closed the page and threw the
+   *     window back to the session. That is reproducible in three clicks and it
+   *     is what the recording caught: the page was not slow, it was leaving.
+   *
+   * So opening is idempotent, and it is the only meaning this function has.
+   * Leaving a view is a separate act with its own name — `clearPanel`, which is
+   * what selecting a session or a page in the rail calls — because "show me
+   * this" and "stop showing me this" are two intentions and one of them must
+   * not be able to happen by accident on the way to the other.
+   *
+   * It also used to un-collapse the sidebar as a side effect. That went with
    * the peek: opening a view from a *peeked* sidebar would have pinned it, so
    * glancing at the rail and clicking one row would permanently rearrange the
    * window — a gesture writing a preference, which is the one thing the two
    * states exist to keep apart.
    */
   const selectPanel = useCallback((next: PanelId) => {
-    setPanel((current) => (current === next ? null : next))
+    setPanel((current) => panelAfterSelect(current, next))
   }, [])
 
   /** Leave the views and go back to the open session or page. */

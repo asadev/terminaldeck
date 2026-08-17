@@ -68,10 +68,52 @@ const ON_WINDOWS = process.platform === 'win32'
 let root: string
 let context: HookContext
 
-const ENDPOINT = { port: 51234, token: 'a'.repeat(48) }
+/**
+ * A stand-in endpoint whose address does not move, which is the point.
+ *
+ * `socketPath` and `configPath` are the only two values that reach a hook
+ * command now, and both are stable for the life of an install. The token is on
+ * the endpoint because `hook-server.ts` still mints one; it just never reaches
+ * the command, and one of the tests below asserts exactly that.
+ */
+const ENDPOINT = {
+  socketPath: '/tmp/terminaldeck-test/hook.sock',
+  configPath: '/tmp/terminaldeck-test/hook-endpoint.conf',
+  token: 'a'.repeat(48),
+}
+
+/** An install written by another copy of the app — a different data directory. */
+const OTHER_COPY = {
+  socketPath: '/tmp/terminaldeck-other/hook.sock',
+  configPath: '/tmp/terminaldeck-other/hook-endpoint.conf',
+  token: 'old',
+}
+
+/**
+ * A short, fixed-width unique suffix.
+ *
+ * `Math.random().toString(36).slice(2)` was here, and it is why this file failed
+ * roughly every other run on this Mac and passed on its own every time it was
+ * re-run to check. That expression has no fixed length — it is however many
+ * base-36 digits the double happened to need, usually eleven and sometimes
+ * thirteen — and one of the tests below opens a real unix socket inside this
+ * directory. macOS puts `tmpdir()` at
+ * `/var/folders/xx/…………………………………/T/`, 49 bytes of it, so the whole path landed
+ * within a byte or two of the 100-byte ceiling `hook-server.ts` enforces and
+ * crossed it whenever the random part came out long. A flake in a release gate
+ * is worse than a failure: it teaches whoever is watching to run it again.
+ *
+ * Eight characters, always, padded rather than trimmed — `toString(36)` of a
+ * small number is short, and slicing a long one is what produced the collision
+ * risk this is guarding against in the first place.
+ */
+const shortUnique = (): string =>
+  Math.floor(Math.random() * 36 ** 8)
+    .toString(36)
+    .padStart(8, '0')
 
 beforeEach(() => {
-  root = join(tmpdir(), `terminaldeck-hooks-test-${process.pid}-${Math.random().toString(36).slice(2)}`)
+  root = join(tmpdir(), `td-hooks-${process.pid}-${shortUnique()}`)
   mkdirSync(root, { recursive: true })
   context = { home: root, backupDir: join(root, 'backups'), endpoint: ENDPOINT }
 })
@@ -153,9 +195,28 @@ describe('ownership', () => {
   it('builds a command that consumes stdin, tags itself and cannot fail the session', () => {
     const command = hookCommand('claude', 'Stop', ENDPOINT)
     expect(command).toContain('--data-binary @-')
-    expect(command).toContain(`http://127.0.0.1:${ENDPOINT.port}/hook/claude/Stop`)
+    expect(command).toContain('http://localhost/hook/claude/Stop')
     expect(command).toContain('|| true')
     expect(command.endsWith(HOOK_MARKER)).toBe(true)
+  })
+
+  /**
+   * The staleness fix, pinned as a property of the string itself.
+   *
+   * Every launch used to mint a new port and a new token and write both into
+   * this command, so every launch invalidated every installed hook: all three
+   * providers reported "Needs reinstalling" forever and lifecycle events —
+   * session-finished among them — silently stopped arriving. Nothing here may
+   * ever go back to interpolating a per-run value, so the command is compared
+   * across two endpoints that differ only in their tokens.
+   */
+  it('is identical for two runs of the same install, and carries no token', () => {
+    const laterRun = { ...ENDPOINT, token: 'b'.repeat(48) }
+    expect(hookCommand('claude', 'Stop', laterRun)).toBe(hookCommand('claude', 'Stop', ENDPOINT))
+    expect(hookCommand('claude', 'Stop', ENDPOINT)).not.toContain(ENDPOINT.token)
+    // The token is read from here at call time instead, so it never lands in a
+    // provider config — two of the three are mode 0644.
+    expect(hookCommand('claude', 'Stop', ENDPOINT)).toContain(`-K '${ENDPOINT.configPath}'`)
   })
 
   /**
@@ -166,8 +227,8 @@ describe('ownership', () => {
    */
   it.skipIf(ON_WINDOWS)('cannot be broken out of by a value that carries a quote', async () => {
     const command = hookCommand('claude', 'Stop', {
-      port: 9,
-      token: "x'; touch /tmp/terminaldeck-hook-injection; echo '",
+      ...ENDPOINT,
+      configPath: "/tmp/x'; touch /tmp/terminaldeck-hook-injection; echo '",
     })
     // The probe goes on its own line: the command ends with a shell comment, so
     // anything appended after it on the same line is never reached.
@@ -205,14 +266,14 @@ describe('applyInstall', () => {
     expect(allEntries(twice).filter(isOurs)).toHaveLength(HOOK_PROVIDERS.claude.events.length)
   })
 
-  it('replaces an install pointing at a previous run', () => {
-    const old = applyInstall({}, HOOK_PROVIDERS.claude, { port: 1111, token: 'old' })
+  it('replaces an install pointing at another copy of the app', () => {
+    const old = applyInstall({}, HOOK_PROVIDERS.claude, OTHER_COPY)
     const fresh = applyInstall(old, HOOK_PROVIDERS.claude, ENDPOINT)
     const commands = allEntries(fresh)
       .filter(isOurs)
       .map((entry) => entry.command as string)
-    expect(commands.every((command) => command.includes(`:${ENDPOINT.port}/`))).toBe(true)
-    expect(commands.some((command) => command.includes(':1111/'))).toBe(false)
+    expect(commands.every((command) => command.includes(ENDPOINT.configPath))).toBe(true)
+    expect(commands.some((command) => command.includes(OTHER_COPY.configPath))).toBe(false)
   })
 
   it('cleans up an event an older version installed and this one does not', () => {
@@ -467,13 +528,31 @@ describe('readStatus', () => {
     expect(status.backupPath).not.toBe(null)
   })
 
-  it('reports stale when the install points at a previous run', () => {
+  it('reports stale when the install points at another copy of the app', () => {
     writeClaude()
-    installHooks({ ...context, endpoint: { port: 1111, token: 'old' } }, 'claude')
+    installHooks({ ...context, endpoint: OTHER_COPY }, 'claude')
     const status = readStatus(context, 'claude')
     expect(status.state).toBe('stale')
     expect(status.staleEvents).toEqual(HOOK_PROVIDERS.claude.events)
-    expect(status.message).toContain('previous run')
+    expect(status.message).toContain('somewhere other than this copy')
+  })
+
+  /**
+   * The regression this whole change is about, at the level a user meets it.
+   *
+   * Reinstall, then read the status back as if the app had been restarted — a
+   * second run of the same install, which differs only in its token. Before,
+   * this answered `stale` for all ten events every single time, which is why
+   * the Hooks page never left "Needs reinstalling" and why nothing downstream
+   * of a hook ever fired.
+   */
+  it('is still complete after a restart, because only the token changed', () => {
+    writeClaude()
+    installHooks(context, 'claude')
+    const nextRun = { ...context, endpoint: { ...ENDPOINT, token: 'c'.repeat(48) } }
+    const status = readStatus(nextRun, 'claude')
+    expect(status.state).toBe('complete')
+    expect(status.staleEvents).toEqual([])
   })
 
   it('reports partial when only some events are installed', () => {
@@ -519,21 +598,30 @@ describe('the command we write actually works', () => {
    * exactly the way a provider CLI does: payload on stdin, session id in the
    * environment.
    */
-  it.skipIf(ON_WINDOWS)('posts stdin to the endpoint when run through a shell', async () => {
-    const seen: HookEvent[] = []
-    const endpoint = await startHookServer({ onEvent: (event) => seen.push(event) })
-    const command = hookCommand('claude', 'PostToolUse', endpoint)
-
+  /** Run a hook command the way a provider CLI does: stdin in, env set. */
+  async function runHook(command: string, payload: string): Promise<{ code: number; stderr: string }> {
     const child = spawn('/bin/sh', ['-c', command], {
       env: { ...process.env, [BRAND.sessionEnvVar]: 'session-from-env' },
       stdio: ['pipe', 'pipe', 'pipe'],
     })
-    child.stdin.end(JSON.stringify({ session_id: 'cli-42', tool_name: 'Write' }))
-
+    let stderr = ''
+    child.stderr.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString()
+    })
+    child.stdin.end(payload)
     const code = await new Promise<number>((resolve) => child.on('close', resolve))
+    return { code, stderr }
+  }
+
+  it.skipIf(ON_WINDOWS)('posts stdin to the endpoint when run through a shell', async () => {
+    const seen: HookEvent[] = []
+    const endpoint = await startHookServer({ dir: root, onEvent: (event) => seen.push(event) })
+    const command = hookCommand('claude', 'PostToolUse', endpoint)
+
+    const run = await runHook(command, JSON.stringify({ session_id: 'cli-42', tool_name: 'Write' }))
 
     // Exit 0 always: a hook that fails must never fail the user's turn.
-    expect(code).toBe(0)
+    expect(run.code).toBe(0)
     expect(seen).toHaveLength(1)
     expect(seen[0]).toMatchObject({
       provider: 'claude',
@@ -544,27 +632,61 @@ describe('the command we write actually works', () => {
     })
   })
 
-  it.skipIf(ON_WINDOWS)('exits cleanly when the app is not listening', async () => {
-    // Nothing is bound here — the port is one the endpoint never took.
-    const command = hookCommand('claude', 'Stop', { port: 9, token: 'x' })
-    const child = spawn('/bin/sh', ['-c', command], { stdio: ['pipe', 'pipe', 'pipe'] })
-    let stderr = ''
-    child.stderr.on('data', (chunk: Buffer) => {
-      stderr += chunk.toString()
-    })
-    child.stdin.end('{}')
+  /**
+   * The whole point of this change, proved the only way it can honestly be
+   * proved: write the command once, restart the endpoint, and run **the very
+   * same string** — no reinstall, no repair, nothing touched in between.
+   *
+   * The second run mints a different token and rewrites the config file the
+   * command reads, so this also proves the indirection works rather than merely
+   * that the path happens to be the same. Before this change the second half of
+   * this test could not pass at all: the command carried a port from the first
+   * run, and after the restart that port belonged to nobody.
+   */
+  it.skipIf(ON_WINDOWS)('still reaches the endpoint after a restart, unchanged', async () => {
+    const first: HookEvent[] = []
+    const before = await startHookServer({ dir: root, onEvent: (event) => first.push(event) })
+    const command = hookCommand('claude', 'Stop', before)
+    expect((await runHook(command, '{"session_id":"first"}')).code).toBe(0)
+    expect(first).toHaveLength(1)
 
-    const code = await new Promise<number>((resolve) => child.on('close', resolve))
-    expect(code).toBe(0)
+    await stopHookServer()
+
+    const second: HookEvent[] = []
+    const after = await startHookServer({ dir: root, onEvent: (event) => second.push(event) })
+    // A genuinely new run: same address, different secret.
+    expect(after.socketPath).toBe(before.socketPath)
+    expect(after.token).not.toBe(before.token)
+    // And the command that was written for the first run is byte-identical.
+    expect(hookCommand('claude', 'Stop', after)).toBe(command)
+
+    const run = await runHook(command, '{"session_id":"second"}')
+    expect(run.code).toBe(0)
+    expect(run.stderr).toBe('')
+    expect(second).toHaveLength(1)
+    expect(second[0]).toMatchObject({ provider: 'claude', event: 'Stop', cliSessionId: 'second' })
+  })
+
+  it.skipIf(ON_WINDOWS)('exits cleanly and silently when the app is not listening', async () => {
+    // Nothing has ever run here, so neither the socket nor the config exists —
+    // which is exactly the state a quit app leaves behind.
+    const command = hookCommand('claude', 'Stop', {
+      socketPath: join(root, 'never', 'hook.sock'),
+      configPath: join(root, 'never', 'hook-endpoint.conf'),
+      token: 'x',
+    })
+    const run = await runHook(command, '{}')
+
+    expect(run.code).toBe(0)
     // Anything on stderr becomes hook-failure noise in the user's session.
-    expect(stderr).toBe('')
+    expect(run.stderr).toBe('')
   })
 })
 
 describe('syncInstalledHooks', () => {
   it('re-points a stale install and leaves an uninstalled provider alone', () => {
     writeClaude()
-    installHooks({ ...context, endpoint: { port: 1111, token: 'old' } }, 'claude')
+    installHooks({ ...context, endpoint: OTHER_COPY }, 'claude')
 
     const statuses = syncInstalledHooks(context)
     const claude = statuses.find((status) => status.id === 'claude')

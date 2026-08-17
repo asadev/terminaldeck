@@ -130,6 +130,23 @@ interface BrowserDef {
   name: string
   /** Relative to the home directory. */
   darwin: string
+  /**
+   * The application bundle's name on macOS, for asking whether it is installed.
+   *
+   * This exists because a user-data directory is not evidence that a browser is
+   * on the machine. Measured here: `/Applications` holds Google Chrome and no
+   * other browser at all, `mdfind` finds no Edge, Brave, Vivaldi, Arc or
+   * Chromium bundle anywhere — and yet
+   * `~/Library/Application Support/Microsoft Edge` and
+   * `.../BraveSoftware/Brave-Browser` both exist, left behind by installs that
+   * are long gone, and both are protected by macOS so they read as EPERM rather
+   * than as empty. The Browser pane consequently printed three identical Full
+   * Disk Access warnings, two of them about software that is not here.
+   *
+   * See {@link isInstalled} for why the answer is only used to suppress a
+   * warning and never to hide a browser we can actually read.
+   */
+  darwinApp: string
   /** Relative to the home directory. Unverified on this machine. */
   linux?: string
   /** Relative to %LOCALAPPDATA%. Unverified on this machine. */
@@ -149,6 +166,7 @@ export const BROWSERS: readonly BrowserDef[] = [
     id: 'chrome',
     name: 'Chrome',
     darwin: 'Library/Application Support/Google/Chrome',
+    darwinApp: 'Google Chrome.app',
     linux: '.config/google-chrome',
     win32: 'Google/Chrome/User Data',
   },
@@ -156,12 +174,14 @@ export const BROWSERS: readonly BrowserDef[] = [
     id: 'chrome-canary',
     name: 'Chrome Canary',
     darwin: 'Library/Application Support/Google/Chrome Canary',
+    darwinApp: 'Google Chrome Canary.app',
   },
-  { id: 'arc', name: 'Arc', darwin: 'Library/Application Support/Arc/User Data' },
+  { id: 'arc', name: 'Arc', darwin: 'Library/Application Support/Arc/User Data', darwinApp: 'Arc.app' },
   {
     id: 'edge',
     name: 'Edge',
     darwin: 'Library/Application Support/Microsoft Edge',
+    darwinApp: 'Microsoft Edge.app',
     linux: '.config/microsoft-edge',
     win32: 'Microsoft/Edge/User Data',
   },
@@ -169,6 +189,7 @@ export const BROWSERS: readonly BrowserDef[] = [
     id: 'brave',
     name: 'Brave',
     darwin: 'Library/Application Support/BraveSoftware/Brave-Browser',
+    darwinApp: 'Brave Browser.app',
     linux: '.config/BraveSoftware/Brave-Browser',
     win32: 'BraveSoftware/Brave-Browser/User Data',
   },
@@ -176,6 +197,7 @@ export const BROWSERS: readonly BrowserDef[] = [
     id: 'vivaldi',
     name: 'Vivaldi',
     darwin: 'Library/Application Support/Vivaldi',
+    darwinApp: 'Vivaldi.app',
     linux: '.config/vivaldi',
     win32: 'Vivaldi/User Data',
   },
@@ -183,6 +205,7 @@ export const BROWSERS: readonly BrowserDef[] = [
     id: 'chromium',
     name: 'Chromium',
     darwin: 'Library/Application Support/Chromium',
+    darwinApp: 'Chromium.app',
     linux: '.config/chromium',
     win32: 'Chromium/User Data',
   },
@@ -387,6 +410,30 @@ function looksLikeProfile(dir: string): boolean {
   return exists(join(dir, 'Preferences'))
 }
 
+/**
+ * Is the browser itself on this machine, as opposed to its leftovers?
+ *
+ * macOS only, and non-committal by design: it answers `true` for "yes" and for
+ * "cannot tell", and `false` only when the bundle is genuinely nowhere the
+ * standard locations reach. A browser installed somewhere unusual must not
+ * disappear from this pane because of a lookup, so the caller uses a `false`
+ * *only* to stop warning about something it also cannot read — never to hide a
+ * browser whose profiles it can actually see.
+ *
+ * `/Applications` and `~/Applications` are the two places macOS installers use.
+ * A Spotlight query would find a bundle dragged elsewhere, but it means spawning
+ * `mdfind` on every call from a settings pane, and it answers nothing on a
+ * machine with indexing off — a slower way to be unsure.
+ */
+export function isInstalled(
+  def: BrowserDef,
+  platform: Platform = currentPlatform(),
+  home: string = homedir(),
+): boolean {
+  if (platform !== 'darwin') return true
+  return exists(join('/Applications', def.darwinApp)) || exists(join(home, 'Applications', def.darwinApp))
+}
+
 /** Every browser this machine has, with what can be reached inside it. */
 export function detectBrowsers(): DetectedBrowser[] {
   const out: DetectedBrowser[] = []
@@ -448,6 +495,25 @@ export function detectBrowsers(): DetectedBrowser[] {
     // A blocked one is still listed, because "nothing here" would be a lie
     // when the truth is "not allowed to look".
     if (profiles.length === 0 && access !== 'blocked') continue
+
+    /*
+     * A blocked directory belonging to a browser that is not installed is a
+     * leftover, and warning about it is noise the user cannot act on.
+     *
+     * This is the "ask what is installed before warning about it" rule, and it
+     * is narrow on purpose. It only fires when *both* are true: the app is not
+     * on the machine, and we could not read the directory anyway — so there is
+     * nothing to lose by dropping the row, because there was nothing in it. A
+     * browser whose profiles we can see stays listed no matter where its bundle
+     * lives, which is what keeps an unusual install from vanishing.
+     *
+     * Measured here: `/Applications` holds Google Chrome and nothing else, but
+     * `~/Library/Application Support/Microsoft Edge` and the Brave directory
+     * both survive and both read EPERM — so this pane printed three identical
+     * Full Disk Access warnings, and two of them named software that has been
+     * uninstalled.
+     */
+    if (access === 'blocked' && !isInstalled(def)) continue
 
     out.push({
       id: def.id,

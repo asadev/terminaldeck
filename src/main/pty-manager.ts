@@ -169,6 +169,22 @@ export class PtyManager {
       ...(spawnSpec.profile
         ? { profileId: spawnSpec.profile.id, profileName: spawnSpec.profile.name }
         : {}),
+      /*
+       * Who wanted this session, copied straight off the request.
+       *
+       * Read from `input` rather than from the spawn spec because it is not a
+       * property of *how* the session runs — the command, the environment and
+       * the confinement are all identical whoever asked — it is a property of
+       * who asked. `startSession` resolves the spec and deliberately does not
+       * touch this.
+       *
+       * Spread conditionally so a session nobody labelled carries no key at
+       * all: `origin: undefined` and "no origin" are the same thing to a
+       * renderer, and only one of them survives JSON.
+       */
+      ...(input.origin ? { origin: input.origin } : {}),
+      ...(input.originRoutineId ? { originRoutineId: input.originRoutineId } : {}),
+      ...(input.originRunId ? { originRunId: input.originRunId } : {}),
     }
 
     // Built before the spawn rather than inline, because one step of it is a

@@ -1,14 +1,13 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { ChatComposer } from '../components/ChatComposer'
-import { FeaturesSection } from '../settings/sections/FeaturesSection'
 import { ModeSwitch } from '../shell/ModeSwitch'
 import { Sidebar } from '../shell/Sidebar'
 import { PANELS } from '../shell/panels'
 import { FeatureOffer } from './FeatureOffer'
 import { FeaturesProvider } from './FeaturesProvider'
 import { useControlOffer } from './offer'
-import { FEATURES, feature, featureOwningPanel } from './registry'
+import { feature, featureOwningControl, featureOwningPanel } from './registry'
 import {
   defaultFeatureState,
   everythingOff,
@@ -58,6 +57,11 @@ function Rail({ state }: { state: FeatureState }) {
     const owner = featureOwningPanel(panel.id)
     return owner === null || isOn(state, owner)
   })
+  // The bell is a control rather than a panel, so it is gated by its own
+  // question — the same one `App.tsx` asks. Mirrored here rather than hardcoded
+  // for the reason the comment above gives about the globe's wording: a copy
+  // can agree with itself while the app does something else.
+  const alertsOwner = featureOwningControl('sidebar.alerts')
   const offer = useControlOffer('sidebar.browser')
   return (
     <Sidebar
@@ -69,6 +73,7 @@ function Rail({ state }: { state: FeatureState }) {
       activePanel={null}
       panels={panels}
       browser={isOn(state, 'browser')}
+      alerts={alertsOwner === null || isOn(state, alertsOwner)}
       onSelectTab={noop}
       onCloseTab={noop}
       onSelectPanel={noop}
@@ -77,6 +82,7 @@ function Rail({ state }: { state: FeatureState }) {
       onOpenProject={noop}
       onCloseProject={noop}
       onOpenSettings={noop}
+      onOpenAlerts={noop}
       onToggleCollapsed={noop}
       onPeekStart={noop}
       onPeekEnd={noop}
@@ -89,20 +95,6 @@ function sidebar(state: FeatureState): string {
   return withFeatures(state, <Rail state={state} />)
 }
 
-function section(state: FeatureState): string {
-  return withFeatures(
-    state,
-    <FeaturesSection
-      values={{}}
-      save={noop}
-      bridge={{}}
-      loading={false}
-      goTo={noop}
-      reload={noop}
-    />,
-  )
-}
-
 describe('the sidebar with everything off', () => {
   const html = sidebar(everythingOff())
 
@@ -110,6 +102,16 @@ describe('the sidebar with everything off', () => {
     for (const panel of PANELS.filter((entry) => featureOwningPanel(entry.id) !== null)) {
       expect(html, panel.id).not.toContain(`>${panel.label}</span>`)
     }
+  })
+
+  it('takes the bell with the Alerts feature', () => {
+    /*
+     * Alerts is not in `PANELS` any more — it is a pop-up, not a view — so the
+     * loop above cannot see it, and losing this claim is exactly how a feature
+     * ends up half switched off: no page, no palette row, and a bell still
+     * sitting on the rail opening a sheet for something the app does not have.
+     */
+    expect(html).not.toContain('Alerts')
   })
 
   it('still lists everything core, so the app is a whole app', () => {
@@ -144,10 +146,24 @@ describe('the sidebar with everything on', () => {
   const html = sidebar(everythingOn())
 
   it('draws every row exactly once, wherever it belongs', () => {
+    /*
+     * This matched on the accessible name as well as on the label text while
+     * Alerts was a panel in an `icon` group — a glyph on the Settings line
+     * whose name lived in `aria-label` rather than in text. Alerts is a pop-up
+     * now and not a panel at all, so the loop is back to what it was always
+     * about: the rows the rail lists. The bell it used to cover is asserted
+     * separately below, because dropping it from `PANELS` without putting a
+     * claim somewhere else is how this sweep would have gone quietly vacuous.
+     */
     for (const panel of PANELS) {
       const rows = html.match(new RegExp(`>${panel.label}</span>`, 'g')) ?? []
       expect(rows, `${panel.id} appears ${rows.length} times`).toHaveLength(1)
     }
+  })
+
+  it('draws the bell exactly once, beside Settings', () => {
+    const named = html.match(/aria-label="Alerts(?: \(\d+\))?"/g) ?? []
+    expect(named, `the bell appears ${named.length} times`).toHaveLength(1)
   })
 
   it('offers the browser button', () => {
@@ -155,78 +171,22 @@ describe('the sidebar with everything on', () => {
   })
 })
 
-describe('the store', () => {
-  it('puts every feature in one of the two lists, and never in both', () => {
-    const html = section(defaultFeatureState())
-    for (const entry of FEATURES) {
-      const shown = html.match(new RegExp(`>${entry.name}</span>`, 'g')) ?? []
-      expect(shown, `${entry.id} appears ${shown.length} times`).toHaveLength(1)
-    }
-  })
-
-  it('says what each one is, for somebody who does not already know', () => {
-    const html = section(defaultFeatureState())
-    for (const entry of FEATURES) expect(html, entry.id).toContain(entry.summary)
-  })
-
-  it('offers an install for everything with nothing installed', () => {
-    const html = section(everythingOff())
-    expect(html).toContain('Nothing is installed')
-    const installs = html.match(/>Install</g) ?? []
-    expect(installs).toHaveLength(FEATURES.length)
-  })
-
-  it('says so rather than showing an empty list when everything is installed', () => {
-    const html = section(everythingOn())
-    expect(html).toContain('Everything is installed')
-    expect(html).not.toContain('>Install<')
-  })
-
-  it('tells the reader that off and uninstalled are not the same thing', () => {
-    // The one fact somebody has to have before they press either control, and
-    // the one they cannot learn any other way than by losing something.
-    expect(section(defaultFeatureState())).toContain('off keeps its settings')
-    // And the row itself says it again, in the state where it matters: a
-    // feature that is switched off looks identical to one that was never
-    // installed unless the row says which of the two it is.
-    const off = section(withStatus(defaultFeatureState(), 'github', 'off'))
-    expect(off).toContain('your settings are kept')
-  })
-
-  it('offers the way back only once something has been changed', () => {
-    expect(section(defaultFeatureState())).not.toContain('Back to the starter set')
-    expect(section(withStatus(defaultFeatureState(), 'hooks', 'on'))).toContain(
-      'Back to the starter set',
-    )
-  })
-})
-
-describe('an uninstall that is a decision rather than a shrug', () => {
-  /*
-   * "Are you sure?" asks for a decision while withholding the fact the decision
-   * turns on. What is asserted here is the opposite: the settings named, the
-   * data named, and — for the features that store nothing — the fact that
-   * nothing goes, which is exactly what somebody hovering wants to know.
-   *
-   * The confirmation is opened by a click this environment cannot make, so the
-   * words themselves are checked at their source and the row is checked for the
-   * control that opens them.
-   */
-  it('puts an uninstall on every installed row', () => {
-    const html = section(everythingOn())
-    const buttons = html.match(/>Uninstall</g) ?? []
-    expect(buttons).toHaveLength(FEATURES.length)
-  })
-
-  it('gives the on/off switch the feature’s own name to be labelled by', () => {
-    // Two controls sit on every row and only one of them carries text. A switch
-    // announced as "switch" is the row somebody turns off by mistake.
-    const html = section(everythingOn())
-    const labels = [...html.matchAll(/aria-labelledby="([^"]+)"/g)].map((match) => match[1])
-    expect(labels).toHaveLength(FEATURES.length)
-    for (const id of labels) expect(html).toContain(`<span class="feat-name" id="${id}">`)
-  })
-})
+/**
+ * The store is gone.
+ *
+ * There were two `describe` blocks here — one for the ten-row shopfront and one
+ * for the uninstall confirmation that named what it was about to delete — and
+ * both went with `FeaturesSection` when the store was removed on 2026-08-17:
+ *
+ *   > "they are all necessary basic, they don't need to have uninstall and
+ *   > install button, enable and disable thing. Instead of only voice
+ *   > dictation."
+ *
+ * What replaced them is `settings/nothing-dropped.test.tsx`, which asserts that
+ * every feature now ships on, so nothing can be stranded by the absence of a
+ * shop to turn it on in — the exact failure removing the store could have
+ * caused, and the only one worth a test now that there is nothing to render.
+ */
 
 describe('the offer that stands where a feature would have been', () => {
   it('names the thing, says what it is, and says where it will be', () => {
@@ -235,30 +195,6 @@ describe('the offer that stands where a feature would have been', () => {
     expect(html).toContain(feature('github').summary)
     expect(html).toContain(feature('github').where)
     expect(html).toContain('>Install<')
-  })
-
-  it('spends the accent on nothing in the list', () => {
-    /*
-     * Every available row used to draw a filled accent Install. In the light
-     * theme that put six blue buttons on screen at once, plus the dialog's own
-     * blue Done — and "a screen where four things are blue has no accent at
-     * all". The accent marks *the* action of a screen; this screen has ten
-     * equal ones.
-     */
-    const html = section(everythingOff())
-    expect(html).toContain('Install')
-    expect(html).not.toContain('data-tone="primary"')
-  })
-
-  it('says nothing under a row whose switch already says it', () => {
-    // Every installed row printed a literal "On" under its description, six
-    // hundred pixels from the switch that was already saying so.
-    const html = section(everythingOn())
-    expect(html).not.toContain('>On</span>')
-    // Off and uninstalled keep their line: neither is obvious from a switch.
-    expect(section(withStatus(everythingOn(), 'alerts', 'off'))).toContain(
-      'Off — your settings are kept',
-    )
   })
 
   it('does not offer to install something that is merely switched off', () => {
@@ -306,13 +242,27 @@ describe('split view, where it would have been', () => {
 describe('the chat box', () => {
   const props = { onSend: noop, cwd: '/tmp/project' }
 
-  it('offers the microphone back where it would have been', () => {
+  it('has no microphone at all while voice dictation is off', () => {
+    /*
+     * This asserted the opposite until the store was removed: a ghost
+     * microphone offering to install the feature, because the store's rule was
+     * "where a feature would have been, offer it".
+     *
+     * Both halves of that stopped being true at once. There is no store to
+     * install from, and the reason voice dictation ships off is that this app
+     * cannot transcribe — so a microphone-shaped button in the corner of the
+     * box is precisely the promise that must not be made:
+     *
+     *   > "we also might don't need this mic button until we don't have a
+     *   > proper feature for transcription… otherwise it will not come here."
+     */
     const html = withFeatures(everythingOff(), <ChatComposer {...props} />)
-    // Not the real button…
     expect(html).not.toContain('aria-label="Dictate using macOS Dictation"')
-    // …and not nothing, either, which is what it used to be.
-    expect(html).toContain('Voice dictation — not installed. Press to install it.')
-    expect(html).toContain('data-offer="true"')
+    expect(html).not.toContain('Press to install it')
+    expect(html).not.toContain('data-offer="true"')
+    // The rest of the row is untouched: this is one control disappearing, not
+    // the composer losing its footer.
+    expect(html).toContain('cc-send')
   })
 
   it('keeps the menu on a shell and changes what it offers, whatever is installed', () => {

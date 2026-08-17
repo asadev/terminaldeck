@@ -1,13 +1,21 @@
-import { createServer, request, type IncomingMessage } from 'node:http'
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { request, type IncomingMessage } from 'node:http'
+import { createServer as createSocketServer } from 'node:net'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { afterEach, describe, expect, it } from 'vitest'
+import { ownPorts, resetOwnPortsForTests } from './own-ports'
 import {
+  CONFIG_FILE,
   SESSION_HEADER,
   TOKEN_HEADER,
   currentHookEndpoint,
+  hostIsLocal,
   onHookEvent,
   parseHookPath,
   readBody,
+  SOCKET_FILE,
   startHookServer,
   stopHookServer,
   toHookEvent,
@@ -17,21 +25,36 @@ import {
 
 /**
  * The endpoint is the one part of this feature that opens a socket, so the
- * tests are about what it refuses: a request without the token, a request with
- * a rebound Host, a path that is not a hook route. Each is driven over a real
- * loopback connection rather than by calling the handler directly — a check
- * that only holds when you call the function the right way is not a check.
+ * tests are about what it refuses: a request without the token, a request that
+ * addresses somebody else, a path that is not a hook route. Each is driven over
+ * a real connection rather than by calling the handler directly — a check that
+ * only holds when you call the function the right way is not a check.
+ *
+ * The address is a unix socket now, and the tests that matter most are the two
+ * that pin *why*: the endpoint keeps the same address across a restart, and it
+ * binds no TCP port at all. Both of those are the fix for hooks going stale on
+ * every launch, and both are the kind of property that is quietly undone by a
+ * later "let's just bind a port, it is simpler" change.
  */
 
 let live: HookEndpoint | null = null
+const dirs: string[] = []
+
+/** A short-lived directory per test, so two tests never share a socket path. */
+function scratch(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'td-hook-'))
+  dirs.push(dir)
+  return dir
+}
 
 afterEach(async () => {
   await stopHookServer()
   live = null
+  while (dirs.length > 0) rmSync(dirs.pop() as string, { recursive: true, force: true })
 })
 
-async function start(onEvent?: (event: HookEvent) => void): Promise<HookEndpoint> {
-  live = await startHookServer(onEvent ? { onEvent } : {})
+async function start(onEvent?: (event: HookEvent) => void, dir = scratch()): Promise<HookEndpoint> {
+  live = await startHookServer(onEvent ? { onEvent, dir } : { dir })
   return live
 }
 
@@ -45,9 +68,10 @@ interface PostOptions {
 }
 
 /**
- * Raw http.request rather than fetch: `Host` is a forbidden header for fetch,
- * which silently rewrites it — so the rebinding test would pass against a
- * server that had no Host check at all.
+ * Raw http.request over the socket rather than fetch: `Host` is a forbidden
+ * header for fetch, which silently rewrites it — so the Host test would pass
+ * against a server that had no Host check at all. `fetch` also cannot address a
+ * unix socket, which is itself one of the properties being relied on.
  */
 function post(endpoint: HookEndpoint, options: PostOptions = {}): Promise<number> {
   const headers: Record<string, string> = { 'content-type': 'application/json' }
@@ -58,8 +82,7 @@ function post(endpoint: HookEndpoint, options: PostOptions = {}): Promise<number
   return new Promise((resolve, reject) => {
     const req = request(
       {
-        host: '127.0.0.1',
-        port: endpoint.port,
+        socketPath: endpoint.socketPath,
         method: options.method ?? 'POST',
         path: options.path ?? '/hook/claude/Stop',
         headers,
@@ -168,19 +191,116 @@ describe('readBody', () => {
   })
 })
 
+describe('hostIsLocal', () => {
+  it('accepts a loopback name with or without a port and refuses anything else', () => {
+    expect(hostIsLocal('localhost')).toBe(true)
+    expect(hostIsLocal('localhost:80')).toBe(true)
+    expect(hostIsLocal('127.0.0.1')).toBe(true)
+    expect(hostIsLocal('[::1]:8080')).toBe(true)
+    expect(hostIsLocal('evil.example.com')).toBe(false)
+    expect(hostIsLocal(undefined)).toBe(false)
+  })
+})
+
 describe('the endpoint', () => {
-  it('listens on loopback and reports its port', async () => {
-    const endpoint = await start()
-    expect(endpoint.port).toBeGreaterThan(0)
+  it('listens on a socket inside the directory it was given', async () => {
+    const dir = scratch()
+    const endpoint = await start(undefined, dir)
+    expect(endpoint.socketPath).toBe(join(dir, SOCKET_FILE))
+    expect(endpoint.configPath).toBe(join(dir, CONFIG_FILE))
     expect(currentHookEndpoint()).toEqual(endpoint)
   })
 
-  it('mints a fresh token every run', async () => {
-    const first = (await start()).token
+  /**
+   * The defect this whole change exists to fix, stated as an assertion.
+   *
+   * The address used to be an ephemeral port, so every restart moved it and
+   * every hook already written into `~/.claude/settings.json` pointed at a
+   * socket that no longer existed. All three providers reported "Needs
+   * reinstalling" on every launch, forever, and a user who did not press it got
+   * no session-finished events at all. A test that only checked "it starts"
+   * passed the entire time.
+   */
+  it('comes back on the same address after a restart', async () => {
+    const dir = scratch()
+    const first = await start(undefined, dir)
     await stopHookServer()
-    const second = (await start()).token
-    expect(second).not.toBe(first)
-    expect(second).toMatch(/^[0-9a-f]{48}$/)
+    const second = await start(undefined, dir)
+    expect(second.socketPath).toBe(first.socketPath)
+    expect(second.configPath).toBe(first.configPath)
+  })
+
+  /**
+   * No port, and the absence is the feature.
+   *
+   * A unix socket cannot be reached from a network stack, so there is nothing
+   * for `remote/tunnel.ts` to offer a phone by accident, nothing for a page in
+   * a browser to address, and no number the kernel can hand to somebody else
+   * once we let go of it. `own-ports.ts` exists to keep this app's own loopback
+   * listeners out of a phone's port list; an empty registry after the endpoint
+   * has started is the machine-checkable form of "it has no port to keep out".
+   */
+  it('binds no TCP port at all', async () => {
+    resetOwnPortsForTests()
+    const endpoint = await start()
+    expect(existsSync(endpoint.socketPath)).toBe(true)
+    expect(ownPorts()).toEqual([])
+  })
+
+  it('mints a fresh token every run and keeps it out of world-readable files', async () => {
+    const dir = scratch()
+    const first = await start(undefined, dir)
+    const firstToken = first.token
+    await stopHookServer()
+
+    // Gone with the run it belonged to, so a hook firing at a closed app has no
+    // credential to present to whatever binds that path next.
+    expect(existsSync(first.configPath)).toBe(false)
+
+    const second = await start(undefined, dir)
+    expect(second.token).not.toBe(firstToken)
+    expect(second.token).toMatch(/^[0-9a-f]{48}$/)
+
+    // The config curl reads at call time: this run's token, owner-only.
+    const config = readFileSync(second.configPath, 'utf8')
+    expect(config).toContain(`${TOKEN_HEADER}: ${second.token}`)
+    expect(config).toContain(`unix-socket = "${second.socketPath}"`)
+    expect(statSync(second.configPath).mode & 0o777).toBe(0o600)
+    expect(statSync(second.socketPath).mode & 0o777).toBe(0o600)
+  })
+
+  /**
+   * A crash leaves the socket file behind, and the next launch has to survive it
+   * — otherwise one hard quit costs the user their hooks until they find and
+   * delete a file nobody has told them about.
+   */
+  it('clears a dead file left at the socket path and binds anyway', async () => {
+    const dir = scratch()
+    writeFileSync(join(dir, SOCKET_FILE), 'left behind by a crash')
+
+    const endpoint = await startHookServer({ dir })
+    expect(endpoint.socketPath).toBe(join(dir, SOCKET_FILE))
+    expect(await post(endpoint)).toBe(204)
+  })
+
+  /**
+   * The other half of the same decision, and the one that must not be "helpful".
+   *
+   * Unlinking a socket somebody is actively serving would not stop them serving
+   * it — their listener holds the open inode — but it *would* silently take
+   * every hook on the machine away from them. So a live socket is a refusal,
+   * with the reason in the message, and the second copy's Settings pane is left
+   * able to say what happened.
+   */
+  it('refuses to take a socket another copy is still serving', async () => {
+    const dir = scratch()
+    const other = createSocketServer()
+    await new Promise<void>((resolve) => other.listen(join(dir, SOCKET_FILE), () => resolve()))
+
+    await expect(startHookServer({ dir })).rejects.toThrow(/another copy/)
+    expect(currentHookEndpoint()).toBe(null)
+
+    await new Promise<void>((resolve) => other.close(() => resolve()))
   })
 
   it('forgets the endpoint when stopped, so nothing can post into a dead run', async () => {
@@ -222,7 +342,7 @@ describe('the endpoint', () => {
     expect(seen).toHaveLength(0)
   })
 
-  it('rejects a Host that is not loopback, which is what DNS rebinding produces', async () => {
+  it('rejects a request addressed to somebody else', async () => {
     const endpoint = await start()
     expect(await post(endpoint, { host: 'evil.example.com' })).toBe(403)
   })
@@ -245,20 +365,21 @@ describe('the endpoint', () => {
   /**
    * `startHookServer` awaits `listen`, so two callers arriving before it
    * resolved each used to build a server. The second overwrote the first in the
-   * module state and the first stayed bound to its port for the life of the
-   * process — invisible, unstoppable, and holding a socket that hooks from a
-   * previous install could still reach.
+   * module state and the first stayed bound for the life of the process —
+   * invisible, unstoppable, and holding a socket that hooks from a previous
+   * install could still reach.
    */
   it('gives two racing callers the same server, not two', async () => {
-    const [first, second] = await Promise.all([startHookServer(), startHookServer()])
-    expect(second.port).toBe(first.port)
+    const dir = scratch()
+    const [first, second] = await Promise.all([startHookServer({ dir }), startHookServer({ dir })])
+    expect(second.socketPath).toBe(first.socketPath)
     expect(second.token).toBe(first.token)
 
     await stopHookServer()
 
-    // If a second server had been started, its port would still accept.
+    // If a second server had been started, the path would still answer.
     const refused = await new Promise<string>((resolve) => {
-      const req = request({ host: '127.0.0.1', port: first.port, method: 'POST', path: '/hook/a/b' })
+      const req = request({ socketPath: first.socketPath, method: 'POST', path: '/hook/a/b' })
       req.on('error', (error) => resolve((error as NodeJS.ErrnoException).code ?? 'error'))
       req.on('response', (res) => {
         res.resume()
@@ -266,24 +387,21 @@ describe('the endpoint', () => {
       })
       req.end('{}')
     })
-    expect(refused).toBe('ECONNREFUSED')
+    expect(refused).toMatch(/ENOENT|ECONNREFUSED/)
   })
 
   it('can still start after a failed bind', async () => {
-    // Occupy a port, then ask the endpoint for that exact one.
-    const blocker = createServer()
-    const taken = await new Promise<number>((resolve) => {
-      blocker.listen(0, '127.0.0.1', () => resolve((blocker.address() as { port: number }).port))
-    })
+    // A directory that cannot be created, because a regular file is in its way.
+    const parent = scratch()
+    writeFileSync(join(parent, 'in-the-way'), 'not a directory')
+    const dir = join(parent, 'in-the-way', 'below-it')
 
-    await expect(startHookServer({ port: taken })).rejects.toThrow()
+    await expect(startHookServer({ dir })).rejects.toThrow()
     expect(currentHookEndpoint()).toBe(null)
 
     // The failed attempt must not have poisoned the module state.
-    const endpoint = await startHookServer()
-    expect(endpoint.port).toBeGreaterThan(0)
-
-    await new Promise<void>((resolve) => blocker.close(() => resolve()))
+    const endpoint = await startHookServer({ dir: scratch() })
+    expect(existsSync(endpoint.socketPath)).toBe(true)
   })
 
   it('answers an oversized body with 413 instead of dropping the connection', async () => {
@@ -293,8 +411,7 @@ describe('the endpoint', () => {
     const outcome = await new Promise<string>((resolve) => {
       const req = request(
         {
-          host: '127.0.0.1',
-          port: endpoint.port,
+          socketPath: endpoint.socketPath,
           method: 'POST',
           path: '/hook/claude/Stop',
           headers: { [TOKEN_HEADER]: endpoint.token },

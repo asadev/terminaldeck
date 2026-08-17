@@ -2,10 +2,26 @@
    Pane tree — the model behind split panes.
 
    A binary tree: every interior node splits its area between exactly two
-   children, every leaf is a pane that shows one session. Two children rather
-   than N because a binary tree makes "close this pane" unambiguous — the
+   children, every leaf is a pane that shows one *open window*. Two children
+   rather than N because a binary tree makes "close this pane" unambiguous — the
    sibling simply takes the parent's place — where an N-ary node has to decide
    how to redistribute the freed space among the survivors.
+
+   ## Why a leaf holds a `tabId` and not a `sessionId`
+
+   It held a `sessionId` until 2026-08-17, and that name was not a detail: it
+   was the reason a browser page could not be shown in a pane at all. Every
+   route to one had to refuse — `selectTab` returned early for an id that was
+   not a session's, and the one place that tried it anyway put a page in a pane
+   and watched the whole split collapse on the next render, because the prune
+   below was told the session list and correctly concluded that the pane was
+   holding something dead.
+
+   Nothing in this file ever cared. A leaf holds an id and hands it back; the
+   geometry is the same whatever is drawn in the rectangle. So the fix is not a
+   capability this file gained, it is a claim it stops making — the id is the
+   id of *something the window has open*, which the shell calls a tab, and it is
+   the shell's job to know whether a given one is a terminal or a page.
 
    Everything here is pure. Each operation returns a new layout, and returns
    the *same reference* when nothing changed, so React can skip re-rendering
@@ -25,8 +41,15 @@ export type FocusDirection = 'left' | 'right' | 'up' | 'down'
 export interface PaneLeaf {
   readonly type: 'leaf'
   readonly id: string
-  /** The session rendered here, or null for a pane waiting to be filled. */
-  readonly sessionId: string | null
+  /**
+   * What is drawn here — a session's terminal, a browser page — or null for a
+   * pane waiting to be filled.
+   *
+   * An id from the shell's one list of open windows, and deliberately nothing
+   * narrower: see the note at the top of this file for what naming it after
+   * sessions cost.
+   */
+  readonly tabId: string | null
 }
 
 export interface PaneSplit {
@@ -80,8 +103,8 @@ export function emptyLayout(): PaneLayout {
 }
 
 /** A layout of a single pane, focused. */
-export function createLayout(sessionId: string | null = null, paneId?: string): PaneLayout {
-  const leaf: PaneLeaf = { type: 'leaf', id: paneId ?? mintId('pane-'), sessionId }
+export function createLayout(tabId: string | null = null, paneId?: string): PaneLayout {
+  const leaf: PaneLeaf = { type: 'leaf', id: paneId ?? mintId('pane-'), tabId }
   return { root: leaf, focusedPaneId: leaf.id }
 }
 
@@ -119,18 +142,39 @@ export function focusedPane(layout: PaneLayout): PaneLeaf | null {
   return layout.focusedPaneId ? findPane(layout, layout.focusedPaneId) : null
 }
 
-export function focusedSessionId(layout: PaneLayout): string | null {
-  return focusedPane(layout)?.sessionId ?? null
+export function focusedTabId(layout: PaneLayout): string | null {
+  return focusedPane(layout)?.tabId ?? null
 }
 
-/** Every pane showing this session — a session may be open in more than one. */
-export function panesForSession(layout: PaneLayout, sessionId: string): PaneLeaf[] {
-  return listPanes(layout).filter((p) => p.sessionId === sessionId)
+/**
+ * The host: the pane the window was already about before anybody split it.
+ *
+ * First in visual order, which is the pane the eye reads first and — because a
+ * split always divides a pane you are already in — the one that was there
+ * first. Everything opened beside it is a guest.
+ *
+ * This is a load-bearing distinction rather than a cosmetic one, and it is
+ * named here so that there is exactly one answer to "which pane is the host".
+ * Two things read it and they must never disagree: `SplitView` draws the host
+ * flush with the window and boxes every guest, and `App.tsx` leaves the host's
+ * name, folder and account in the window's own toolbar while each guest states
+ * its own in its own bar. If those two ever picked different panes the window
+ * would be showing one pane's box around another pane's chrome, which is worse
+ * than either arrangement on its own. `listPanes(layout)[0]` written out twice
+ * is precisely how that happens.
+ */
+export function primaryPane(layout: PaneLayout): PaneLeaf | null {
+  return listPanes(layout)[0] ?? null
 }
 
-export function sessionIds(layout: PaneLayout): string[] {
+/** Every pane showing this tab — one tab may be open in more than one. */
+export function panesForTab(layout: PaneLayout, tabId: string): PaneLeaf[] {
+  return listPanes(layout).filter((p) => p.tabId === tabId)
+}
+
+export function tabIds(layout: PaneLayout): string[] {
   const seen = new Set<string>()
-  for (const pane of listPanes(layout)) if (pane.sessionId) seen.add(pane.sessionId)
+  for (const pane of listPanes(layout)) if (pane.tabId) seen.add(pane.tabId)
   return [...seen]
 }
 
@@ -211,8 +255,8 @@ function claimId(taken: Set<string>, wanted: string | undefined, prefix: string)
 }
 
 export interface SplitOptions {
-  /** Session for the pane being created. */
-  sessionId?: string | null
+  /** What the pane being created shows. Null leaves it empty. */
+  tabId?: string | null
   /** Share for the first child. Defaults to an even split. */
   ratio?: number
   /** Put the new pane left of / above the existing one instead of after it. */
@@ -226,7 +270,7 @@ export interface SplitOptions {
 }
 
 /**
- * Turn one pane into two. The existing pane keeps its identity and session —
+ * Turn one pane into two. The existing pane keeps its identity and its tab —
  * only the new pane is new — so a terminal never remounts because its
  * neighbour appeared.
  */
@@ -250,7 +294,7 @@ export function splitPane(
   const created: PaneLeaf = {
     type: 'leaf',
     id: claimId(taken, options.paneId, 'pane-'),
-    sessionId: options.sessionId ?? null,
+    tabId: options.tabId ?? null,
   }
   const splitId = claimId(taken, options.splitId, 'split-')
   const ratio = clampRatio(options.ratio ?? 0.5)
@@ -307,28 +351,28 @@ function focusAfterClose(
   return (closedIndex === 0 ? leaves[0] : leaves[leaves.length - 1]).id
 }
 
-/** Close every pane showing this session — used when its process exits. */
-export function closePanesForSession(layout: PaneLayout, sessionId: string): PaneLayout {
+/** Close every pane showing this tab — used when its process or page ends. */
+export function closePanesForTab(layout: PaneLayout, tabId: string): PaneLayout {
   let next = layout
   for (;;) {
-    const pane = panesForSession(next, sessionId)[0]
+    const pane = panesForTab(next, tabId)[0]
     if (!pane) return next
     next = closePane(next, pane.id)
   }
 }
 
-/** Point a pane at a different session, keeping the geometry. */
-export function setPaneSession(
+/** Point a pane at a different tab, keeping the geometry. */
+export function setPaneTab(
   layout: PaneLayout,
   paneId: string,
-  sessionId: string | null,
+  tabId: string | null,
 ): PaneLayout {
   if (!layout.root) return layout
   const pane = findPane(layout, paneId)
-  if (!pane || pane.sessionId === sessionId) return layout
+  if (!pane || pane.tabId === tabId) return layout
 
   const root = mapNode(layout.root, paneId, (found) =>
-    found.type === 'leaf' ? { ...found, sessionId } : found,
+    found.type === 'leaf' ? { ...found, tabId } : found,
   )
   return root ? { ...layout, root } : layout
 }
@@ -357,9 +401,9 @@ export function focusPane(layout: PaneLayout, paneId: string): PaneLayout {
   return { ...layout, focusedPaneId: paneId }
 }
 
-/** Focus the first pane showing a session, if any. */
-export function focusSession(layout: PaneLayout, sessionId: string): PaneLayout {
-  const pane = panesForSession(layout, sessionId)[0]
+/** Focus the first pane showing a tab, if any. */
+export function focusTab(layout: PaneLayout, tabId: string): PaneLayout {
+  const pane = panesForTab(layout, tabId)[0]
   return pane ? focusPane(layout, pane.id) : layout
 }
 
@@ -372,7 +416,7 @@ export interface Rect {
 
 export interface PaneRect extends Rect {
   readonly paneId: string
-  readonly sessionId: string | null
+  readonly tabId: string | null
 }
 
 /**
@@ -388,7 +432,7 @@ export function computeRects(root: PaneNode | null, bounds: Rect = UNIT_RECT): P
 
 function layoutNode(node: PaneNode, rect: Rect, out: PaneRect[]): void {
   if (node.type === 'leaf') {
-    out.push({ paneId: node.id, sessionId: node.sessionId, ...rect })
+    out.push({ paneId: node.id, tabId: node.tabId, ...rect })
     return
   }
   if (node.direction === 'horizontal') {
@@ -544,9 +588,9 @@ function parseNode(value: unknown, seen: Set<string>, depth: number): PaneNode |
   seen.add(value.id)
 
   if (value.type === 'leaf') {
-    const sessionId = value.sessionId
-    if (sessionId !== null && typeof sessionId !== 'string') return null
-    return { type: 'leaf', id: value.id, sessionId }
+    const tabId = value.tabId
+    if (tabId !== null && typeof tabId !== 'string') return null
+    return { type: 'leaf', id: value.id, tabId }
   }
 
   if (value.type !== 'split') return null

@@ -69,6 +69,15 @@ class FakeElement {
   readonly children: FakeElement[] = []
   parentElement: FakeElement | null = null
   textContent = ''
+  /**
+   * What a real browser would *render*.
+   *
+   * Left undefined by default so most cases exercise the `textContent` fallback,
+   * which is what a node with no layout gives. The cases that set it are the
+   * ones about the difference between the two, which is a real bug: a wrapper
+   * around a hidden country list reported its whole list as the element's text.
+   */
+  innerText?: string
   value?: string
   rect = { left: 0, top: 0, width: 0, height: 0 }
   readonly style = new FakeStyle()
@@ -355,6 +364,41 @@ describe('guest preload highlighting', () => {
     expect(overlay.style.display).toBe('none')
   })
 
+  it('draws a one-pixel outline and no fill over the element', () => {
+    // What this replaced was a 2px border over a 16% wash, and a 38% wash once
+    // an element was captured. On camera that reads as the element being
+    // *replaced* by a pale blue rectangle — the text under it washes out and a
+    // card-shaped element turns solid blue. You cannot see what you are pointing
+    // at, which is the one thing an element picker is for.
+    let target = new FakeElement('div')
+    const h = boot((body) => {
+      target = listPage(body)
+    })
+    h.setInspect(true)
+    const overlay = h.overlay() as FakeElement
+
+    expect(overlay.style.border).toBe('1px solid #3b8fee')
+    expect(overlay.style.background).toBe('transparent')
+
+    h.fire('document', 'mouseover', { target })
+    expect(overlay.style.boxShadow).toBe('none')
+  })
+
+  it('rings a captured element from outside rather than filling it', () => {
+    let target = new FakeElement('div')
+    const h = boot((body) => {
+      target = listPage(body)
+    })
+    h.setInspect(true)
+    h.fire('document', 'click', clickEvent(target).event)
+
+    const overlay = h.overlay() as FakeElement
+    // `box-shadow` paints beyond the box, so the element keeps all of its own
+    // contrast and still reads as the one that was picked.
+    expect(overlay.style.boxShadow).toBe('0 0 0 3px rgba(59, 143, 238, 0.35)')
+    expect(overlay.style.background).toBe('transparent')
+  })
+
   it('never highlights its own overlay', () => {
     const h = boot(listPage)
     h.setInspect(true)
@@ -498,6 +542,77 @@ describe('guest preload capture', () => {
     const capture = parseCapture(message?.payload, 'http://localhost:3000/login')
     expect(capture?.attributes.value).toBeUndefined()
     expect(capture?.label).toBe('Password')
+  })
+
+  it('reports the element’s box, so the popup can open at it', () => {
+    let target = new FakeElement('div')
+    const h = boot((body) => {
+      target = listPage(body)
+    })
+    h.setInspect(true)
+    target.rect = { left: 41.4, top: 60.6, width: 200, height: 24 }
+    h.fire('document', 'click', clickEvent(target).event)
+
+    const message = h.sent.find((m) => m.channel === GUEST_ELEMENT_CHANNEL)
+    // Rounded, because these end up in an inline `style` on our own page.
+    expect((message?.payload as { rect: unknown }).rect).toEqual({
+      x: 41,
+      y: 61,
+      width: 200,
+      height: 24,
+    })
+  })
+
+  it('reports the text a person can see, not every hidden descendant', () => {
+    // The fault, verbatim from the recording: a container whose textContent ran
+    // a collapsed country list together into one unbroken word, reported as the
+    // element's name. innerText is what is rendered.
+    let target = new FakeElement('div')
+    const h = boot((body) => {
+      target = listPage(body)
+      target.textContent = 'CountryAfghanistanAlbaniaAlgeriaAndorraAngola'
+      target.innerText = 'Country'
+    })
+    h.setInspect(true)
+    h.fire('document', 'click', clickEvent(target).event)
+
+    const message = h.sent.find((m) => m.channel === GUEST_ELEMENT_CHANNEL)
+    expect((message?.payload as { text: string }).text).toBe('Country')
+  })
+
+  it('collapses the line breaks innerText puts between blocks', () => {
+    let target = new FakeElement('div')
+    const h = boot((body) => {
+      target = listPage(body)
+      target.innerText = 'Sign in\nForgot your password?'
+    })
+    h.setInspect(true)
+    h.fire('document', 'click', clickEvent(target).event)
+
+    const message = h.sent.find((m) => m.channel === GUEST_ELEMENT_CHANNEL)
+    // Spaces, not newlines: this string ends up on one line in a prompt.
+    expect((message?.payload as { text: string }).text).toBe('Sign in Forgot your password?')
+  })
+
+  it('reports no text at all for a form control', () => {
+    // A <select>'s text is the concatenation of its options — the city picker
+    // in a real recording came back named `DubaiLahore`. Its naming attributes
+    // still travel, so it is labelled by those instead.
+    let target = new FakeElement('div')
+    const h = boot((body) => {
+      const page = listPage(body)
+      const select = makeElement('select', { attrs: { 'aria-label': 'City' }, text: 'DubaiLahore' })
+      page.appendChild(select)
+      target = select
+    })
+    h.setInspect(true)
+    h.fire('document', 'click', clickEvent(target).event)
+
+    const message = h.sent.find((m) => m.channel === GUEST_ELEMENT_CHANNEL)
+    expect((message?.payload as { text: string }).text).toBe('')
+    const capture = parseCapture(message?.payload, 'http://localhost:3000/')
+    expect(capture?.label).toBe('City')
+    expect(capture?.labelSource).toBe('aria-label')
   })
 
   it('does not walk a huge textContent end to end', () => {

@@ -79,6 +79,56 @@
   animation: account-chip-reveal var(--dur) var(--ease-emphasis);
 }
 
+/* --------------------------------------------------------- who, not which */
+
+/*
+  An address the agent's own CLI named, versus a state this app composed.
+
+  The chip prints whichever of the two it has — see `accountIdentity` — and they
+  are not the same kind of claim: "app.imatch.ae@gmail.com" was read out of
+  `claude auth status --json`, while "Checking…" and "Not signed in" are this
+  app describing itself. Separated by weight and by one step of colour rather
+  than by a badge or a border, which is the same distinction the menu already
+  draws between a name and its right-hand column.
+
+  Specificity 0,2,0 so it beats `.account-chip-name` in `shell.css` whichever
+  order the two sheets end up in — stylesheet order across two files is a
+  bundler's decision, not a design one, and a rule that only wins by accident is
+  a rule that will lose one day.
+*/
+.account-chip .account-chip-name[data-verified] {
+  color: var(--text-secondary);
+  font-weight: var(--w-medium);
+}
+
+/*
+  An address is longer than a name. 18ch cuts "app.imatch.ae@gmail.com" at
+  "app.imatch.ae@gma…", which is the half that identifies nobody; 26ch carries
+  an ordinary address whole and still stops well short of the mode switch on the
+  other side of the bar. Longer than that is still ellipsised, and the whole
+  thing is in the chip's title either way.
+*/
+.account-chip .account-chip-name {
+  max-width: 26ch;
+}
+
+/*
+  The tick's slot, drawn or not.
+
+  Fixed width so every name in the list starts on the same x — a mark that
+  indents only its own row turns a scannable column into a ragged one, which
+  costs more than the mark gains.
+*/
+.account-menu-tick {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  color: var(--accent);
+}
+
 /* ------------------------------------------------------------------ renaming */
 
 /*
@@ -160,4 +210,22 @@
 
 .account-menu-input:disabled {
   opacity: 0.6;
+}
+
+/*
+  Why the name did not take, directly under the field it was typed into.
+
+  A collision — two accounts of one agent with the same name — is refused by the
+  main process, and the only thing that crosses back is a rejected `invoke`. Put
+  at the foot of the menu, as it was, the sentence sat below three other
+  people's accounts and read as a fact about the list rather than about the box
+  the cursor is still in. `--color-critical` because it is a refusal; the row
+  above it keeps its field, its focus and everything typed into it.
+*/
+.account-menu-problem {
+  margin: 0;
+  padding: var(--sp-1) var(--sp-3) var(--sp-2);
+  font-size: var(--t-caption);
+  line-height: 1.4;
+  color: var(--color-critical);
 }

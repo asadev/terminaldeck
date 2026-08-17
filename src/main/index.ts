@@ -11,9 +11,10 @@ import {
   shell,
 } from 'electron'
 import { BRAND } from '../shared/brand'
-import type { CreateSessionInput } from '../shared/types'
+import type { CreateSessionInput, SessionMeta } from '../shared/types'
 import { createHostCore } from './host-core'
-import { detectProviders, PROVIDERS } from './providers'
+import { detectProviders } from './providers'
+import { lookupCommand, registerCustomAgentsIpc } from './custom-agents'
 import { currentPlatform } from './platform/host'
 import { electronPaths, installPaths } from './platform/paths'
 import {
@@ -24,6 +25,7 @@ import {
   type RestoreDecision,
 } from './session-restore'
 import { store, type Preferences } from './store'
+import { pickerStartDirectory } from './project-picker'
 import { pinUserData } from './user-data'
 import { refreshCostWatchers, registerCostIpc } from './cost-ipc'
 import { registerGitIpc, stopAllGitWatches } from './git'
@@ -51,6 +53,7 @@ import {
   notePlanResize,
   registerPlanLimitIpc,
 } from './plan-limit'
+import { dropUsageSession, registerUsageIpc } from './usage-ipc'
 import { registerGitHubIpc } from './github'
 import { registerReadinessIpc } from './readiness'
 import { registerDashboardIpc } from './dashboard-store'
@@ -59,13 +62,18 @@ import { registerSessionSearchIpc } from './session-search'
 import { registerAlertsIpc } from './alerts'
 import { registerProfilesIpc, getState as profilesState, resolveProfile } from './profiles'
 import { registerSignInIpc } from './profiles-signin'
+import { registerCopilotIpc } from './copilot-session'
+import { registerCopilotInspectIpc } from './copilot-inspect'
+import { registerDeckControlIpc, type DeckControlHandle } from './deck-control'
 import { registerDeckignoreIpc } from './deckignore'
-import { registerHooksIpc } from './hooks'
+import { defaultContext, registerHooksIpc, syncInstalledHooks } from './hooks'
 import { registerHookServer, stopHookServer } from './hook-server'
 import { registerMcpIpc } from './mcp-client'
 import { registerBrowserIpc } from './browser-tab'
 import { registerChromeImportIpc } from './chrome-import'
 import { registerPrerequisitesIpc } from './prerequisites'
+import { registerAttachOutsideIpc } from './attach-outside'
+import { boundaryFor } from './session-boundary'
 import {
   registerSettingsIpc,
   clearBrowserDataIfNotPersisting,
@@ -87,6 +95,8 @@ import { registerSetupIpc } from './setup'
 import { registerCookieImportIpc } from './cookie-import'
 import { registerBrowserIsolationIpc } from './browser-isolation'
 import { linuxPathFromUnc, registerWslIpc } from './wsl'
+import { createRoutines, registerRoutinesIpc } from './routines'
+import { DEFAULT_GLOBAL_MAX_RUNS_PER_HOUR } from './routines/engine'
 import type { SessionStatus } from '../shared/types'
 
 /*
@@ -218,6 +228,19 @@ const liveStatus = new Map<string, { status: SessionStatus; at: number }>()
 let updates: ReturnType<typeof registerUpdateIpc> | null = null
 
 /**
+ * The copilot's tool surface, once its loopback server is listening.
+ *
+ * Held so `before-quit` can close it. Null until the start below resolves, and
+ * null forever if it failed — which is a state the app runs in perfectly well,
+ * because everything except the copilot's tools works without it. See the
+ * header of `deck-control/index.ts` for why it starts at boot rather than when
+ * somebody opens the copilot: a permission gate that has only ever run in the
+ * case somebody was watching is a gate that has never run in the case that
+ * matters.
+ */
+let deckControl: DeckControlHandle | null = null
+
+/**
  * Held so the wake lock and the battery watch can be let go of on quit.
  *
  * `stop()` releases what *this process* holds and deliberately leaves the
@@ -263,6 +286,7 @@ export const WSL_DISTRO_KEY = 'wsl.distro'
  */
 const core = createHostCore({
   storageDir: remoteStorageDir(),
+  userData: app.getPath('userData'),
   /*
    * Where the machine's WSL distribution is remembered.
    *
@@ -290,36 +314,68 @@ const core = createHostCore({
   onExit: (id, exitCode) => {
     liveStatus.delete(id)
     dropPlanSession(id)
+    // The usage report for a session outlives its screen reading otherwise: the
+    // aggregator holds a Codex watcher and a plan subscription of its own, and
+    // a dead session must stop costing an fs watch.
+    dropUsageSession(id)
     // A dev server *is* a session, so its death is this event and nothing else.
     // Without this the row keeps a `url` for a server that is gone — the one
     // genuinely wrong thing this feature can put on screen.
     devServers.noteExit(id)
+    // Two routine triggers are this one event: `session-finished` is a zero
+    // exit and `session-failed` is anything else. Told here rather than from a
+    // watcher of its own — the engine subscribes, it does not poll.
+    routines.engine.noteSessionExit(id, exitCode)
     send('session:exit', id, exitCode)
   },
   onStatus: (id, status) => {
     liveStatus.set(id, { status, at: Date.now() })
+    // And `session-idle N` is this one: the engine arms a countdown when a
+    // session goes quiet and cancels it the moment it says anything.
+    routines.engine.noteSessionStatus(id, status)
     send('session:status', id, status)
+  },
+  /*
+   * Every session, so a routine can be refused when its own work would start it.
+   *
+   * Not `onSessionCreated` below, which deliberately only fires for sessions
+   * this window did not ask for. The loop guard needs the complete set — see
+   * `HostCoreOptions.onSessionStarted`.
+   */
+  onSessionStarted: (meta) => {
+    routines.engine.noteSessionStarted(meta)
   },
   // The window has to be told, or a session a phone started is running on this
   // Mac and only the phone knows about it.
-  onSessionCreated: (meta) => {
-    send(SESSION_CREATED_CHANNEL, meta)
-    /*
-     * And the cost pane has to be told where to look.
-     *
-     * A session a device started runs confined, with a home of its own, so its
-     * transcript is written under that home rather than under `~/.claude`. The
-     * first session a *new* device starts creates a store that every open cost
-     * pane has already finished looking for — and this is the moment the app
-     * knows it exists, because the app is what made it.
-     *
-     * Wired here, at the hook that already fires for exactly these sessions,
-     * rather than behind a timer that re-reads the disk hoping to find one. See
-     * `refreshCostWatchers`.
-     */
-    refreshCostWatchers()
-  },
+  onSessionCreated: (meta) => announceSession(meta),
 })
+
+/**
+ * Tell the window about a session it did not ask for.
+ *
+ * Two things start one: a paired device, through the core's own
+ * `onSessionCreated`, and the copilot, through `sessions.start`. Both produce a
+ * running process on this Mac that the window has no other way to learn about —
+ * the tab list is built from what the window itself requested — so without this
+ * the app that owns the session is the last thing to know it exists.
+ *
+ * A named function rather than the closure it used to be, because the second
+ * caller arrived: `deck-control` is handed a `startSession` that calls this on
+ * the way out. Two hand-written announcements would be two chances for one of
+ * them to forget the cost watcher below.
+ *
+ * The cost pane has to be told where to look, and that is the second half. A
+ * session a device started runs confined, with a home of its own, so its
+ * transcript is written under that home rather than under `~/.claude`. The
+ * first session a *new* device starts creates a store that every open cost pane
+ * has already finished looking for — and this is the moment the app knows it
+ * exists, because the app is what made it. Wired at the event rather than
+ * behind a timer that re-reads the disk hoping to find one.
+ */
+function announceSession(meta: SessionMeta): void {
+  send(SESSION_CREATED_CHANNEL, meta)
+  refreshCostWatchers()
+}
 
 /*
  * The names the rest of this file already used, pointed at the core.
@@ -329,6 +385,68 @@ const core = createHostCore({
  * seven hundred lines of incidental churn.
  */
 const { ptys, wsl, sessions: remoteSessions, ledger, startSession, statablePath } = core
+
+/**
+ * How many routine runs this whole app may start in an hour, across every
+ * routine there is.
+ *
+ * Kept in `settings.json` rather than in any routine file, and that is the
+ * point: a routine sets its own ceiling within limits `format.ts` clamps to,
+ * and the copilot can write a routine — so the ceiling that is not negotiable
+ * has to live somewhere no routine and no tool can reach. This is that place.
+ * It is not in the renderer's settings schema yet; until a control exists,
+ * `DEFAULT_GLOBAL_MAX_RUNS_PER_HOUR` is what everybody gets, and a hand edit of
+ * `settings.json` is the way to change it.
+ */
+export const ROUTINES_CEILING_KEY = 'routines.maxRunsPerHour'
+
+/**
+ * Routines: saved instructions that run on their own.
+ *
+ * Constructed at module scope beside the core, because the core's own
+ * callbacks above feed it — and a routine engine that only existed once a
+ * settings pane had been opened would be a set of automations that run while
+ * you are looking at them. `engine.start()` happens in `whenReady`, once the
+ * IPC channels exist.
+ *
+ * `runner` is deliberately absent. Routines run *through the copilot* — see
+ * `COPILOT-DESIGN.md` — and until `copilot-session.ts` grows a way to hand it a
+ * prompt and be told when the turn is done, there is nothing on the other end.
+ * Every routine reports itself unarmed with that sentence attached rather than
+ * sitting there looking ready, which is the honest state of a half-built
+ * feature and the only one that cannot be mistaken for a working one.
+ */
+const routines = createRoutines({
+  /*
+   * Where a routine may run, and it is not "anywhere".
+   *
+   * `in:` is an absolute path out of a file anybody can edit, and in phase 2
+   * out of a `routines.create` call the copilot makes. Without this a routine
+   * could name `/` and this app would attach a recursive file watch to the
+   * whole disk on its behalf. The answer is the same set the phone's folder
+   * picker falls back to: the projects this desktop has open, plus the folders
+   * sessions are actually running in.
+   */
+  allowFolder: (folder) => {
+    const known = [
+      ...store().getProjects().map((project) => project.path),
+      ...ptys.list().map((session) => session.cwd),
+    ]
+    if (known.includes(folder)) return { ok: true }
+    return {
+      ok: false,
+      reason: `${folder} is not one of this app's projects, so nothing is watching it.`,
+    }
+  },
+  globalMaxRunsPerHour: () => {
+    const stored = storedValue(ROUTINES_CEILING_KEY)
+    return typeof stored === 'number' && stored > 0 ? stored : DEFAULT_GLOBAL_MAX_RUNS_PER_HOUR
+  },
+  // Which emitters this shell has actually hooked up. Declared rather than
+  // assumed: a trigger nothing is subscribed to reports itself that way instead
+  // of looking armed and never firing.
+  wired: ['session-finished', 'session-failed', 'session-idle', 'alert'],
+})
 
 /**
  * The dev servers this window has started, one per project folder.
@@ -594,7 +712,11 @@ async function hydrateRenderer(): Promise<void> {
             // losing a day's tabs and explaining it with a sentence that is not
             // true.
             folderExists: (cwd) => folderExists(statablePath(cwd)),
-            canContinue: (provider) => PROVIDERS[provider].resumeArgs.length > 0,
+            // `core.canContinue`, not `PROVIDERS[provider].resumeArgs`: the
+            // table has only the agents this build ships, so a restored session
+            // on an agent the person added threw a `TypeError` here and took
+            // the whole restore — every other tab included — down with it.
+            canContinue: core.canContinue,
             /*
              * Resolved exactly the way `startSession` resolves it, and that is
              * the point: the directory searched for a conversation has to be the
@@ -696,6 +818,19 @@ function registerIpc(): void {
       properties: ['openDirectory', 'createDirectory'],
       title: 'Open project',
       buttonLabel: 'Open',
+      /*
+       * Where the panel stands when it opens, and it must always be said.
+       *
+       * Omitting it does not mean "no preference" — AppKit then restores the
+       * directory it was last left in, from a bookmark in the app's own user
+       * defaults that nothing here writes and nobody can see. On the machine
+       * this was recorded on that bookmark pointed at an empty folder, so the
+       * picker listed nothing, four openings in a row, with `Open` greyed out.
+       * `project-picker.ts` has the measurement and the reasoning for the
+       * answer; the short version is that the parent of the newest project is
+       * the one directory that cannot be empty.
+       */
+      defaultPath: pickerStartDirectory(store().getProjects(), app.getPath('home')),
     })
     if (canceled || filePaths.length === 0) return null
     /*
@@ -729,9 +864,31 @@ function registerIpc(): void {
    * `startSession` does not come through here. It knows the folder, so it asks
    * about that folder's own side — see the comment there.
    */
-  ipcMain.handle('providers:detect', () =>
-    detectProviders(currentPlatform(), wsl.defaultTarget()),
-  )
+  /*
+   * The added agents are merged on top, and they are asked a different question
+   * from the shipped four.
+   *
+   * `detectProviders` runs each catalogue agent once to prove it starts, because
+   * a `codex` that resolves on PATH and then dies is the bug that put a Node
+   * stack trace in front of the user. That probe needs a version flag, and the
+   * catalogue records which flag each agent has. An added agent has none
+   * recorded — guessing `--version` would report a perfectly good CLI without
+   * that flag as broken — so the honest question for it is the one the spawn
+   * itself will ask: does this command resolve on the login PATH. `customEntry`
+   * says as much by leaving `versionArgs` null, and `lookupCommand` is the same
+   * function `startSession` re-checks with, so the picker and the spawn cannot
+   * disagree about what is startable.
+   */
+  ipcMain.handle('providers:detect', async () => {
+    const builtin = await detectProviders(currentPlatform(), wsl.defaultTarget())
+    const added = await Promise.all(
+      core.agents.list().map(async (agent) => {
+        const found = await lookupCommand(agent.command, currentPlatform())
+        return [agent.id, found !== null] as const
+      }),
+    )
+    return { ...builtin, ...Object.fromEntries(added) }
+  })
 
   ipcMain.handle('projects:list', () => store().getProjects())
   ipcMain.handle('projects:add', (_e, path: string) => store().addProject(path))
@@ -756,6 +913,10 @@ function registerIpc(): void {
   })
 
   // Feature modules own their own channels; each registers in one line.
+  // Against the core's store, not a second one: `startSession` reads that
+  // instance, and two would be two in-memory copies of one file with the picker
+  // adding to one and the spawn reading the other.
+  registerCustomAgentsIpc(ipcMain, core.agents)
   registerCostIpc(ipcMain)
   registerGitIpc(ipcMain)
   registerFsIpc(ipcMain)
@@ -800,6 +961,14 @@ function registerIpc(): void {
   // module reports 'unwired' and the strip hides the control rather than
   // offering a button that does nothing.
   registerPlanLimitIpc(ipcMain, { write: (id, data) => ptys.write(id, data) })
+  // The read side of the same feature, with Codex's rollout numbers folded in
+  // and every reading tagged with the account it describes. `PtyManager` is
+  // asked which login a session resolved to rather than that answer being
+  // recomputed — see `usage-ipc.ts`, where getting it wrong means two accounts
+  // sharing one bar.
+  registerUsageIpc(ipcMain, {
+    describeSession: (id) => ptys.list().find((meta) => meta.id === id) ?? null,
+  })
   // Checks on a delay after launch and then occasionally; never installs on its
   // own. An unsigned build reports that it cannot self-update rather than
   // checking forever — see updates/updater.ts.
@@ -910,6 +1079,16 @@ function registerIpc(): void {
     // for the same reason: TCP will not admit it for minutes. One event, both
     // halves.
     machines.wake()
+    /*
+     * And a schedule that came due while the lid was shut.
+     *
+     * `setTimeout` does not run while a Mac is suspended and does not make up
+     * the time when it wakes, so a routine due at 03:00 on a laptop that was
+     * closed would fire whenever the timer eventually caught up — hours late,
+     * with nothing on screen saying so. This is the same event, already being
+     * listened to, rather than one more timer asking what the clock says.
+     */
+    routines.engine.wake()
   })
   // The GitHub sign-in stores a token of its own when the user connects from
   // inside the app, so this registration is the one that needs to know where
@@ -923,12 +1102,55 @@ function registerIpc(): void {
   // The one profile question that cannot be answered by reading a directory:
   // whether an account is signed in. See `profiles-signin.ts`.
   registerSignInIpc(ipcMain)
+  /*
+   * The copilot: one session, in a folder of its own, held inside it.
+   *
+   * Handed the core's own `startSession` rather than a starter of its own,
+   * because the whole design rests on the copilot being an ordinary session —
+   * that is what makes `sessions.list`, the transcript viewer, chat mode and
+   * the cost pane work on it with no changes. `copilot-session.ts` decides
+   * where it runs and what it may reach; it does not decide what a session is.
+   */
+  registerCopilotIpc(ipcMain, {
+    startSession,
+    isAlive: (id) => ptys.list().some((meta) => meta.id === id && meta.exitCode === null),
+    stop: (id) => ptys.kill(id),
+    userData: () => app.getPath('userData'),
+    storageDir: remoteStorageDir,
+    accountHome: () => app.getPath('home'),
+  })
+  /*
+   * Looking at the copilot, which is a different job from running it.
+   *
+   * Registered as its own module so the one above can keep the promise its
+   * header makes — every handler there takes no arguments. These take a memory
+   * file name and a place key, both checked in `copilot-inspect.ts`, and mixing
+   * the two sets would make that sentence false in the file that relies on it.
+   */
+  registerCopilotInspectIpc(ipcMain, { userData: () => app.getPath('userData') })
+  registerRoutinesIpc(ipcMain, routines.api)
   registerDeckignoreIpc(ipcMain)
   registerHooksIpc(ipcMain)
   registerMcpIpc(ipcMain)
   registerBrowserIpc(ipcMain)
   registerChromeImportIpc(ipcMain)
   registerPrerequisitesIpc(ipcMain)
+  /*
+   * Attaching something that is not in the open project.
+   *
+   * The project-scoped picker stays the default and keeps its own argument —
+   * `renderer/chat/attach/AttachPicker.tsx` makes it, and it is a good one. This
+   * is the escape hatch beside it: the real open panel, a drop target on the
+   * composer, and a paste. `boundaryOf` is what stops it being offered to a
+   * session that is held inside a folder and could not read the file anyway;
+   * `session-boundary.ts` explains why that question has to be asked here.
+   */
+  registerAttachOutsideIpc(ipcMain, {
+    window: () => mainWindow,
+    pasteDir: join(app.getPath('userData'), 'pasted'),
+    home: () => app.getPath('home'),
+    boundaryOf: (sessionId) => boundaryFor(sessionId),
+  })
   registerSetupIpc(ipcMain)
   registerCookieImportIpc(ipcMain)
   registerBrowserIsolationIpc(ipcMain)
@@ -963,6 +1185,18 @@ function registerIpc(): void {
           provider: meta.provider,
         })),
     defaultProvider: () => store().getPreferences().defaultProvider,
+    /*
+     * The `alert` trigger, and the one subscription that is worth a sentence.
+     *
+     * Alerts have no push side: the panel asks and `alerts.ts` answers. Rather
+     * than give routines a scanner of their own — which would be a second
+     * expensive pass over every transcript, on a timer, which is exactly what
+     * "events, not polling" objects to — the engine overhears the answers
+     * somebody else already asked for. The cost of that is real and the engine
+     * reports it: on a machine where nothing ever opens the alerts panel, no
+     * report is produced and no `alert` routine fires.
+     */
+    onReport: (report) => routines.engine.noteAlertReport(report),
   })
 
   ipcMain.handle('session:create', (_e, input: CreateSessionInput) => startSession(input))
@@ -1059,12 +1293,104 @@ app.whenReady().then(() => {
    * stopped distribution stays stopped. It is a no-op off Windows.
    */
   void wsl.refresh().then(() => wsl.resolveHome().catch(() => null))
-  // Bound to 127.0.0.1 with a per-run token. Started early so hooks installed
-  // into a provider's config have somewhere to report to; failure is not fatal
-  // because everything except hook callbacks still works without it.
-  void registerHookServer(ipcMain).catch((err) =>
-    console.error('[hook-server] failed to start, hook callbacks disabled:', err),
-  )
+  /*
+   * The hook endpoint, and — the half that was missing — the repair that has to
+   * follow it.
+   *
+   * A unix socket inside this app's own data directory, `chmod 0600`, with a
+   * per-run token in a config file beside it. Started early so hooks installed
+   * into a provider's config have somewhere to report to; failure is not fatal
+   * because everything except hook callbacks still works without it.
+   *
+   * `syncInstalledHooks` runs the moment it is listening, and it is the whole
+   * reason this is two statements instead of one. The endpoint address is stable
+   * now, so on an ordinary restart this rewrites nothing — but an install left
+   * behind by a build that baked the port into the command reads as stale, and
+   * this is what quietly re-points it. Without a call here the only repair in
+   * the app is a button in Settings, which is exactly the "built, and never
+   * wired to boot" failure this file keeps a paragraph about.
+   *
+   * Best-effort by construction: `syncInstalledHooks` swallows a per-provider
+   * failure and the panel still shows the real state, so a config we could not
+   * rewrite cannot stop the app starting.
+   */
+  void registerHookServer(ipcMain, { dir: app.getPath('userData') })
+    .then(() => syncInstalledHooks(defaultContext()))
+    .catch((err) =>
+      console.error('[hook-server] failed to start, hook callbacks disabled:', err),
+    )
+  /*
+   * `deck-control`: the copilot's view of this app, and the gate in front of it.
+   *
+   * Started here rather than when a window opens the copilot, for the reason
+   * that module's own header gives at length — a routine can call a tool before
+   * anybody has clicked anything, and a surface that has only ever come up in
+   * the attended case has never been exercised in the one that matters.
+   *
+   * Two things make this safe to have listening from boot. The socket is
+   * loopback-only behind a per-run bearer token that is rewritten on every
+   * start; and the alter tier is closed until a window says otherwise —
+   * `isApprover` names exactly one window, and with none attached every
+   * confirmation is refused as `no-approver` rather than waved through.
+   *
+   * `void … .catch`, like the hook server above: the app is entirely usable
+   * without it, and taking the launch down because a loopback port could not be
+   * bound would be the wrong trade by a wide margin.
+   */
+  void registerDeckControlIpc(ipcMain, {
+    ptys,
+    /*
+     * The one session starter, shared with the window and with a paired phone —
+     * with the announcement the window needs wrapped around it.
+     *
+     * `startSession` on its own is what `session:create` calls, and it
+     * deliberately does not broadcast: the window is about to be handed the same
+     * `SessionMeta` as the return value of its own call, and a consumer that
+     * added a tab on both would show two. A copilot-started session is the other
+     * case — nobody in the window asked for it — so it needs exactly the
+     * announcement a phone's session gets, and for the same reason.
+     *
+     * Without this the copilot could start a session that ran on this Mac with
+     * no row in the sidebar until somebody reloaded the renderer: a process
+     * spending money, holding a pty, and unreachable from the app that started
+     * it. Found by watching it happen.
+     */
+    startSession: async (input) => {
+      const meta = await startSession(input)
+      announceSession(meta)
+      return meta
+    },
+    sessionStatus: (id) => liveStatus.get(id),
+    /*
+     * Exactly one window may answer a confirmation, and it is this app's own.
+     *
+     * Identity, not a capability check: `webContents` for a browser tab's page,
+     * or for any other frame this process ends up hosting, must never be able
+     * to approve an alter-tier call. There is no default for this argument in
+     * `DeckControlDeps` precisely so the question is answered here, where the
+     * answer is known.
+     */
+    isApprover: (contents) => mainWindow !== null && contents === mainWindow.webContents,
+    broadcast: (channel, ...args) => send(channel, ...args),
+  })
+    .then((handle) => {
+      deckControl = handle
+    })
+    .catch((err) => console.error('[deck-control] failed to start, copilot tools disabled:', err))
+  /*
+   * Read the routines folder and arm everything in it — at launch, before any
+   * window has painted.
+   *
+   * This is the one wiring decision in the whole feature that could be got
+   * wrong invisibly. A routine engine started when its settings pane opens is a
+   * set of automations that run only while you are watching them, which is the
+   * exact opposite of what a routine is for, and it would look completely
+   * correct in every test that opens the pane first.
+   *
+   * After `registerIpc`, because starting reads the folder and a routine can
+   * fire on the first event that arrives.
+   */
+  routines.engine.start()
   createWindow()
   buildMenu(() => mainWindow)
 
@@ -1094,7 +1420,22 @@ app.on('before-quit', () => {
   quitting = true
   rendererAlive = false
   ptys.killAll()
+  // Before `stopAllGitWatches`, because the engine holds git watches of its own
+  // and releasing them is how the reference counts stay honest — and it writes
+  // its run counters out, which is what stops a relaunch handing every routine
+  // a fresh budget.
+  void routines.stop()
   stopAllGitWatches()
+  /*
+   * The copilot's tool surface, closed.
+   *
+   * `stop()` refuses every outstanding confirmation before it shuts the socket,
+   * which is the ordering that matters: an alter-tier call waiting on a dialog
+   * must not be able to land halfway through a teardown, and the window it was
+   * asked in is already going. The bearer-token file goes with it, so nothing
+   * is left on disk holding a token that authenticates a server that has gone.
+   */
+  void deckControl?.stop()
   updates?.stop()
   lidAwake?.stop()
   void stopHookServer()

@@ -34,7 +34,6 @@ const CWD = '/Users/apple/Projects/terminaldeck'
  * when the question is how the panel lays out a readout that is present.
  */
 function Usage() {
-  const cost = { input: 0.42, output: 1.9, cacheWrite: 0.31, cacheRead: 0.08, total: 2.71 }
   return (
     <UsageStripView
       session={{
@@ -44,7 +43,6 @@ function Usage() {
         models: ['claude-opus-5[1m]'],
         requests: 37,
         usage: { input: 18_400, output: 6_210, cacheWrite5m: 44_000, cacheWrite1h: 0, cacheRead: 512_000 },
-        cost: { cost, byModel: { 'claude-opus-5[1m]': cost }, unpricedModels: [], usedLegacyRate: false },
         context: { tokens: 96_400, window: 200_000, percent: 48, remaining: 103_600, level: 'ok' },
         warnings: [],
         preContextTokens: 12_000,
@@ -53,7 +51,7 @@ function Usage() {
         startedAt: Date.now() - 3_600_000,
         lastActivityAt: Date.now() - 60_000,
       }}
-      today={{ total: 11.4, sessions: 3, carriedOver: 0, hasUnpriced: false }}
+      today={{ tokens: 11_400_000, sessions: 3, carriedOver: 0 }}
       plan={null}
       scanning={false}
       now={Date.now()}

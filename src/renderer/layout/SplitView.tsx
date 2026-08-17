@@ -10,6 +10,7 @@ import {
   MIN_PANE_RATIO,
   clampRatio,
   focusPane,
+  primaryPane,
   resizeSplit,
   type PaneLayout,
   type PaneNode,
@@ -64,8 +65,38 @@ export function dividerRatio({
 export interface PaneRenderArgs {
   paneId: string
   /** Null while a pane is waiting to be filled — render a placeholder. */
-  sessionId: string | null
+  tabId: string | null
   focused: boolean
+  /**
+   * The window's own pane — the first one in visual order — rather than one of
+   * the panes opened beside it.
+   *
+   * The two are deliberately not symmetrical, and the asymmetry is the request:
+   *
+   *   > *"The first view, main view, can be on the left side with the overall
+   *   > same background, everything. The other one — the new split view,
+   *   > secondary view — it can be only inside a box, and the other one will not
+   *   > be inside a box."*
+   *
+   * The primary keeps the window's ground and its edges; every other pane is a
+   * bounded card sitting on it. With three panes the rule does not stop making
+   * sense, it simply reads as one host and two guests, which is what the
+   * arrangement is: you split a window you were already working in.
+   *
+   * The caller takes it further than the container. The host's name, folder and
+   * account stay in the *window's* toolbar, exactly where they sat before the
+   * split, and only the guests draw a bar of their own — which is what makes
+   * the box mean something. Asad, 2026-08-17: *"If we make both exactly the
+   * same placement — if the name and the account come down — then there is no
+   * reason to keep one of them in a box, because all the sizes, everything, is
+   * the same."* See `App.tsx`'s `renderPane` and `PaneBar`.
+   *
+   * Decided here rather than by the caller because it is a fact about the tree
+   * — `primaryPane` reads `listPanes`, which is left-before-right,
+   * top-before-bottom — and a caller that had to work it out would be a second
+   * copy of the same traversal that could disagree with this one.
+   */
+  primary: boolean
 }
 
 export interface SplitViewProps {
@@ -114,11 +145,19 @@ export function SplitView({
 
   if (!layout.root) return <div className="split-view split-view-empty">{empty}</div>
 
+  // Visual order, so "primary" is the pane at the top-left however the tree
+  // happens to be nested — the one the eye reads first, which is the one the
+  // window is about. Asked of `pane-tree` rather than worked out here, because
+  // `App.tsx` has to reach the same answer to know whose name belongs in the
+  // window's toolbar; see `primaryPane`.
+  const primaryPaneId = primaryPane(layout)?.id ?? null
+
   return (
     <div className="split-view">
       <SplitNode
         node={layout.root}
         focusedPaneId={layout.focusedPaneId}
+        primaryPaneId={primaryPaneId}
         renderPane={renderPane}
         onFocusPane={focusPaneById}
         onResize={resize}
@@ -131,6 +170,7 @@ export function SplitView({
 interface NodeProps {
   node: PaneNode
   focusedPaneId: string | null
+  primaryPaneId: string | null
   renderPane(args: PaneRenderArgs): ReactNode
   onFocusPane(paneId: string): void
   onResize(splitId: string, ratio: number): void
@@ -138,22 +178,29 @@ interface NodeProps {
 }
 
 function SplitNode(props: NodeProps) {
-  const { node, focusedPaneId, renderPane, onFocusPane } = props
+  const { node, focusedPaneId, primaryPaneId, renderPane, onFocusPane } = props
 
   if (node.type === 'leaf') {
     const focused = node.id === focusedPaneId
+    const primary = node.id === primaryPaneId
     return (
       <div
         className="pane-leaf"
         data-pane-id={node.id}
         data-focused={focused}
+        // Read by the stylesheet, which is where the whole difference lives:
+        // the primary pane is flush with the window and every other one is a
+        // card inset into it. An attribute rather than a second class name so
+        // both states are addressable — `[data-primary='false']` is what the
+        // box is drawn on, and a class would leave that case as a `:not()`.
+        data-primary={primary}
         // Capture phase: a click landing inside a terminal still counts as
         // reaching for that pane, and xterm stops the event before it bubbles.
         onPointerDownCapture={() => onFocusPane(node.id)}
         onFocusCapture={() => onFocusPane(node.id)}
       >
         <div className="pane-leaf-body">
-          {renderPane({ paneId: node.id, sessionId: node.sessionId, focused })}
+          {renderPane({ paneId: node.id, tabId: node.tabId, focused, primary })}
         </div>
       </div>
     )

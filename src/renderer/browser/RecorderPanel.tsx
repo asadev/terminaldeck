@@ -1,13 +1,16 @@
+import { oneLine } from './capture-text'
+import { SendToAgent } from './SendToAgent'
 import type { RecordedStep, RecordingState } from './bridge'
+import type { AgentTarget } from './useAgentTarget'
 
 interface Props {
   state: RecordingState
+  /** The session this browser window sends to — chosen, never guessed. */
+  agent: AgentTarget
   onStop(): void
   onClear(): void
   onCopy(): void
   copied: boolean
-  /** Absent when no session is focused. */
-  onSend: ((text: string) => void) | undefined
 }
 
 /** One word per kind, so the eye can scan the left edge of the list. */
@@ -48,27 +51,34 @@ function stepDetail(step: RecordedStep): string {
  * panel says so at the top in a way that does not scroll away, because the
  * other indicator is inside the page and the page is what you are looking at.
  */
-export function RecorderPanel({ state, onStop, onClear, onCopy, copied, onSend }: Props) {
+export function RecorderPanel({ state, agent, onStop, onClear, onCopy, copied }: Props) {
   const empty = state.steps.length === 0
 
   return (
     <div className="bw-panel">
+      {/*
+        No "Flow" badge and no step count here.
+
+        The strip above this already reads `Flow (8)` — it is the only thing left
+        in what used to be a two-tab bar — so a badge saying Flow and a line
+        saying "8 steps" underneath it was the same fact three times in two
+        centimetres. What is left is the one thing the heading cannot say: that
+        recording is live, or that there is nothing in the list yet and why.
+      */}
       <div className="bw-panel-head">
-        {state.recording ? (
+        {state.recording && (
           <span className="bw-recording" role="status">
             <span className="bw-recording-dot" aria-hidden="true" />
             Recording
           </span>
-        ) : (
-          <span className="bw-badge">Flow</span>
         )}
-        <span className="bw-muted">
-          {empty
-            ? state.recording
+        {empty && (
+          <span className="bw-muted">
+            {state.recording
               ? 'Use the page — every click, entry and navigation lands here.'
-              : 'Nothing recorded yet.'
-            : `${state.steps.length} step${state.steps.length === 1 ? '' : 's'}`}
-        </span>
+              : 'Nothing recorded yet.'}
+          </span>
+        )}
         {state.truncated && <span className="bw-warn">stopped at the step limit</span>}
         <span className="bw-spacer" />
         {state.recording && (
@@ -100,19 +110,27 @@ export function RecorderPanel({ state, onStop, onClear, onCopy, copied, onSend }
         </ol>
       )}
 
-      <div className="bw-send">
-        <span className="bw-muted bw-grow">
-          {onSend ? 'Hand the whole flow to the agent as one line.' : 'Open a session to send this to.'}
-        </span>
-        <button
-          type="button"
-          className="bw-primary"
-          disabled={empty || !onSend}
-          onClick={() => onSend?.(state.line)}
-        >
-          Send flow to agent
-        </button>
-      </div>
+      {/*
+        The same picker the element popup uses, over the same per-window choice.
+        A flow that went to whichever session happened to be focused is the exact
+        complaint the picker exists for, and having two senders disagree about
+        where "the agent" is would be worse than either.
+
+        Nothing to send is a different state from nowhere to send it, so the row
+        goes when the list is empty rather than offering a disabled button under
+        a picker that would work.
+      */}
+      {!empty && (
+        <SendToAgent
+          agent={agent}
+          compose={(instruction) => {
+            const lead = oneLine(instruction)
+            return lead ? `${lead} ${state.line}` : state.line
+          }}
+          placeholder="Anything to say about this flow?"
+          action="Send flow"
+        />
+      )}
     </div>
   )
 }

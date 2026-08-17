@@ -67,7 +67,6 @@ import {
   type RestoreDecision,
 } from '../main/session-restore'
 import { getState as profilesState, resolveProfile } from '../main/profiles'
-import { PROVIDERS } from '../main/providers'
 import { store } from '../main/store'
 import { ChannelDesk } from './desk'
 import {
@@ -335,6 +334,7 @@ export async function createHeadlessHost(
 
   const core = createHostCore({
     storageDir: remoteStorageDir,
+    userData: stateDir,
     platform,
     // No shell to tell. A session a phone starts is announced to every attached
     // device by the fanout; there is no second audience here, and inventing one
@@ -477,7 +477,7 @@ export async function createHeadlessHost(
    * The parts idle mode actually switches off, and only the ones that are real.
    *
    * The specification lists file watchers, transcript tailing, port scanning,
-   * cost polling and status detection. Three of those are renderer features this
+   * usage polling and status detection. Three of those are renderer features this
    * build has never started, and claiming to have stopped them would be the
    * status output lying about work it never did — so they are reported under
    * `neverRunning` instead, and only these are registered.
@@ -519,7 +519,7 @@ export async function createHeadlessHost(
    * fatal — everything except hook callbacks works without it — which is the
    * same decision `index.ts` makes.
    */
-  await startHookServer().catch((error: unknown) => {
+  await startHookServer({ dir: stateDir }).catch((error: unknown) => {
     logger.warn('headless', 'the hook endpoint did not start; hook callbacks are off', {
       error: error instanceof Error ? error.message : String(error),
     })
@@ -556,7 +556,7 @@ export async function createHeadlessHost(
       neverRunning: [
         'file watchers (a window feature; this build has no project tree)',
         'transcript tailing (a window feature; the clients read their own)',
-        'cost polling (a window feature; nothing here draws a chart)',
+        'usage polling (a window feature; nothing here draws a chart)',
       ],
       publicHost: publicHost?.sentence() ?? null,
     }
@@ -601,7 +601,10 @@ export async function createHeadlessHost(
         plan: (sessions) =>
           planRestore(sessions, {
             folderExists: (cwd) => folderExists(core.statablePath(cwd)),
-            canContinue: (provider) => PROVIDERS[provider].resumeArgs.length > 0,
+            // The core's, so a session on an added agent is planned the same
+            // way here as in the window — and so an id the shipped table has
+            // never had answers false instead of throwing mid-restore.
+            canContinue: core.canContinue,
             configDir: (session) =>
               resolveProfile(profilesState(), {
                 sessionProfileId: session.profileId ?? undefined,

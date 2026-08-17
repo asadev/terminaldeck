@@ -251,7 +251,21 @@ describe('readSignIn', () => {
     expect(runs).toBe(2)
   })
 
-  it('says an agent it cannot isolate is not applicable, and why', async () => {
+  /**
+   * Gemini answers, and it answers without spawning anything.
+   *
+   * This case used to expect `unsupported` — no state, no button, nothing to do
+   * — because the only question anyone asked was whether Gemini could hold a
+   * *second* login. It cannot, and the row it therefore never got is the whole
+   * of the reported bug: *"I want to bring only one login for Gemini… but here
+   * currently I cannot even bring one login."*
+   *
+   * So the assertion is now the opposite one: a real signed-in / signed-out
+   * answer, read from the machine rather than from a CLI that has no `auth`
+   * subcommand to ask. Nothing is spawned, which is also the reason the answer
+   * is safe to compute while a settings pane is painting.
+   */
+  it('answers Gemini from the machine, without spawning the CLI', async () => {
     resetSignInCache()
     let spawned = false
     const report = await readSignIn(profile, {
@@ -265,21 +279,55 @@ describe('readSignIn', () => {
       },
     })
 
-    expect(report.state).toBe('unsupported')
-    // Nothing is run: there is no verified way to point this agent at another
-    // config directory, so any answer would be about the machine's own login.
+    expect(['signed-in', 'signed-out']).toContain(report.state)
+    expect(report.state).not.toBe('unsupported')
     expect(spawned).toBe(false)
-    /*
-     * The reason has to name *this* agent's problem.
-     *
-     * It used to say "Separate accounts are Claude-only for now", which was one
-     * sentence covering three agents and is now wrong about two of them: Codex
-     * does have a verified mechanism, and Gemini's problem was never that
-     * nothing had been checked — it is that its config variable moves the
-     * settings and leaves the OAuth token in one shared keychain slot.
-     */
-    expect(report.detail).toContain('keychain')
-    expect(report.detail).not.toContain('Claude-only')
+    // No command is quoted, because none was run. An invented one would be the
+    // single thing on this screen a person could not reproduce themselves.
+    expect(report.command).toBe('')
+  })
+
+  /**
+   * "Installed but will not start" is a sentence, not a stack trace.
+   *
+   * The worst moment in the 2026-08-16 recording, pinned. The npm `@openai/codex`
+   * launcher on that machine fails to spawn its own missing native binary, and
+   * the row printed the Node error verbatim — `Error: spawn …/codex ENOENT` —
+   * next to a Sign in button that opened a session which died the same way.
+   */
+  it('says a broken binary is broken, and never pastes its stack trace', async () => {
+    resetSignInCache()
+    let spawned = false
+    const report = await readSignIn(profile, {
+      provider: 'codex',
+      platform: 'darwin',
+      path: '/usr/bin:/bin',
+      refresh: true,
+      binary: {
+        id: 'codex',
+        bin: 'codex',
+        onPath: '/opt/homebrew/bin/codex',
+        runnable: null,
+        version: null,
+        broken: true,
+        said: "Error: spawn /opt/homebrew/lib/node_modules/@openai/codex/…/codex ENOENT",
+        usedAlternate: false,
+        checkedAt: Date.now(),
+      },
+      exec: async () => {
+        spawned = true
+        return probe({ stdout: SIGNED_IN })
+      },
+    })
+
+    // Not signed-out: nothing was asked, so nothing may be concluded about the
+    // login. `unknown` is the state that sends a person somewhere useful.
+    expect(report.state).toBe('unknown')
+    // And nothing was run against a binary already known not to run.
+    expect(spawned).toBe(false)
+    expect(report.detail).toContain('will not start')
+    expect(report.detail).toContain('npm install -g @openai/codex')
+    expect(report.detail).not.toContain('ENOENT')
   })
 
   it('never rejects, whatever the spawn does', async () => {

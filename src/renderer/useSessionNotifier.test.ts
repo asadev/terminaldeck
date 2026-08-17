@@ -28,7 +28,7 @@ describe('notifyPolicy', () => {
     expect(noFinish.banner('input')).toBe(true)
 
     const noAttention = notifyPolicy(
-      withSettings({ 'general.notifyOnAttention': false }),
+      withSettings({ 'notifications.onNeedsInput': false }),
       false,
     )
     expect(noAttention.banner('completed')).toBe(true)
@@ -54,7 +54,7 @@ describe('notifyPolicy', () => {
     // folding them together would make the sound switch a no-op whenever
     // notifications were off.
     const sound = notifyPolicy(
-      withSettings({ 'general.soundOnFinish': true, 'notifications.onComplete': false }),
+      withSettings({ 'notifications.onFinishSound': true, 'notifications.onComplete': false }),
       false,
     )
     expect(sound.sound).toBe(true)
@@ -66,7 +66,7 @@ describe('notifyPolicy', () => {
   it('does not silence the sound just because the window is in front', () => {
     // `onlyWhenUnfocused` says "notify", meaning the banner. A ding while you
     // are looking at another tab of the same app is the point of the setting.
-    const policy = notifyPolicy(withSettings({ 'general.soundOnFinish': true }), true)
+    const policy = notifyPolicy(withSettings({ 'notifications.onFinishSound': true }), true)
     expect(policy.sound).toBe(true)
   })
 })

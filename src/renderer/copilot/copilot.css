@@ -1,0 +1,404 @@
+/* ============================================================================
+   The copilot: its pinned row in the rail, its page, and its confirmation.
+
+   Every value here is a token. The brief's order for separating things is
+   followed throughout — space first, then a tint, and only then a line — so
+   there is exactly one border rule in this file, on the notice that has to read
+   as a warning, and even that one is a tint with a leading edge rather than a
+   box.
+   ============================================================================ */
+
+/* ------------------------------------------------------ the pinned entry -- */
+
+/*
+  The block the copilot sits in, above the views and above what you have open.
+
+  It has no heading, unlike every other run in the rail, and the absence is the
+  design: a label reading "Copilot" over a single row that also reads "Copilot"
+  is the same word twice in eleven pixels of vertical space. The gap under it is
+  what separates it from the Project run below — space, before a tint, before a
+  line.
+*/
+.sb-pinned {
+  margin-bottom: var(--sp-4);
+}
+
+/*
+  The row itself, drawn as one of the rail's nav rows with one difference: the
+  status dot sits at the trailing edge, where the session rows put their
+  account. It is the same component, so it says the same words on hover, and
+  keeping it at the end means the copilot's condition is read in the same column
+  the sessions' identities are — rather than in front of the label, where it
+  would be the only row in the rail whose glyph is a coloured dot.
+*/
+.sb-copilot .status-dot {
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+/* --------------------------------------------------------------- the page -- */
+
+.copilot-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  height: 100%;
+  min-height: 0;
+  padding: var(--sp-4) var(--sp-5) var(--sp-4);
+}
+
+/*
+  The page's own control row.
+
+  It deliberately does not repeat the word "Copilot": the window's toolbar,
+  three centimetres above, is already headed with it and with the page's blurb.
+  What is here is what the toolbar cannot know — whether it is running, who it
+  is signed in as, which of its two views you are looking at, and how to stop it.
+*/
+.cp-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  flex-shrink: 0;
+}
+
+.cp-identity {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.cp-state {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--t-callout);
+  color: var(--text-secondary);
+}
+
+.cp-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-shrink: 0;
+}
+
+/* The same segmented control the session bar uses for Terminal/Chat: a tinted
+   trough with the selected segment lifted onto the page's own surface. */
+.cp-switch {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-05);
+  padding: var(--sp-05);
+  border-radius: var(--radius-sm);
+  background: var(--fill-quaternary);
+}
+
+.cp-switch-btn {
+  height: var(--control-h-sm);
+  padding: 0 var(--sp-3);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: var(--t-callout);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.cp-switch-btn:hover {
+  color: var(--text-primary);
+}
+
+.cp-switch-btn[aria-pressed='true'] {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-weight: var(--w-medium);
+  box-shadow: var(--shadow-sm);
+}
+
+.cp-btn {
+  height: var(--control-h-sm);
+  padding: 0 var(--sp-3);
+  border-radius: var(--radius-sm);
+  background: var(--fill-tertiary);
+  color: var(--text-primary);
+  font-size: var(--t-callout);
+  font-weight: var(--w-medium);
+  transition: background var(--dur-fast) var(--ease), opacity var(--dur-fast) var(--ease);
+}
+
+.cp-btn:hover {
+  background: var(--fill-secondary);
+}
+
+.cp-btn.primary {
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+.cp-btn.primary:hover {
+  background: var(--accent-dim);
+}
+
+.cp-btn[disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* ------------------------------------------------------------- the notices -- */
+
+/*
+  The first-run explanation, and the two shorter ones beside it.
+
+  A fill with a radius and a leading edge, not an outlined box: the brief calls
+  a card a fill with a radius, and the 3px edge is the one place in this file a
+  line earns its place, because it is what distinguishes an explanation from a
+  warning without spending a second colour on the whole panel.
+*/
+.cp-notice {
+  flex-shrink: 0;
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--radius-md);
+  border-left: 3px solid var(--accent-line);
+  background: var(--accent-soft);
+  color: var(--text-secondary);
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+}
+
+.cp-notice h2 {
+  margin: 0 0 var(--sp-1);
+  font-size: var(--t-headline);
+  font-weight: var(--w-semibold);
+  color: var(--text-primary);
+}
+
+.cp-notice p {
+  margin: 0;
+  /* The measure every reading column in this app is held to. A three-line
+     paragraph across a 1400px window is a paragraph nobody finishes. */
+  max-width: var(--content-measure);
+}
+
+.cp-notice p + p {
+  margin-top: var(--sp-2);
+}
+
+/* Something is wrong rather than merely worth explaining, so the edge and the
+   fill change and nothing else does. */
+.cp-notice[data-kind='problem'] {
+  border-left-color: var(--color-critical);
+  background: color-mix(in srgb, var(--color-critical) 10%, transparent);
+}
+
+/* --------------------------------------------------------------- the turn -- */
+
+/*
+  "Why does this exist", answered — the action-log row for the turn that started
+  the session somebody clicked through from.
+
+  A tint rather than the accent used above: this is a record, not an
+  instruction, and reserving the accent for the notices keeps the one thing that
+  needs reading now distinguishable from the one that explains the past.
+*/
+.cp-turn {
+  flex-shrink: 0;
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--radius-md);
+  background: var(--fill-quaternary);
+}
+
+.cp-turn-detail {
+  margin: 0;
+  max-width: var(--content-measure);
+  font-size: var(--t-callout);
+  line-height: var(--lh-body);
+  color: var(--text-primary);
+}
+
+.cp-turn-when {
+  margin: var(--sp-1) 0 0;
+  font-size: var(--t-footnote);
+  color: var(--text-muted);
+}
+
+.cp-turn-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+}
+
+/* ------------------------------------------------------------- the panes -- */
+
+.cp-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--radius-lg);
+  background: var(--terminal-bg);
+  overflow: hidden;
+}
+
+/*
+  The terminal stays mounted while the conversation is in front, so the login
+  prompt and the scrollback survive a trip through Chat — the same promise the
+  session views make. `display: none` rather than an offscreen position: a
+  hidden xterm must not be measured, or it fits itself to a zero-width box and
+  reflows every line when it comes back.
+*/
+.cp-pane {
+  display: none;
+  flex: 1;
+  min-height: 0;
+}
+
+.cp-pane[data-shown='true'] {
+  display: flex;
+  flex-direction: column;
+}
+
+/* ------------------------------------------------- sessions it has started -- */
+
+.cp-started {
+  flex-shrink: 0;
+}
+
+.cp-started-label {
+  margin: 0 0 var(--sp-1);
+  font-size: var(--t-footnote);
+  font-weight: var(--w-semibold);
+  color: var(--text-muted);
+}
+
+.cp-started-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cp-link {
+  height: var(--control-h-sm);
+  padding: 0 var(--sp-3);
+  border-radius: var(--radius-pill);
+  background: var(--fill-quaternary);
+  color: var(--text-primary);
+  font-size: var(--t-callout);
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.cp-link:hover {
+  background: var(--fill-secondary);
+}
+
+/* --------------------------------------------------- the consent dialog -- */
+
+.cc-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+/*
+  The sentence the tool wrote about these arguments — the thing being approved.
+
+  Set at title size because it is the question. Everything under it is
+  supporting detail, and a dialog whose supporting detail is the same weight as
+  its question is one people answer without reading either.
+*/
+.cc-summary {
+  margin: 0;
+  font-size: var(--t-title3);
+  letter-spacing: var(--t-title3-ls);
+  line-height: var(--lh-tight);
+  color: var(--text-primary);
+}
+
+/* Every argument, verbatim. A two-column grid rather than a table: the names
+   are short and the values are not, so the value column has to be the one that
+   wraps. */
+.cc-args {
+  display: grid;
+  gap: var(--sp-15);
+  margin: 0;
+  padding: var(--sp-3);
+  border-radius: var(--radius-md);
+  background: var(--fill-quaternary);
+}
+
+.cc-arg {
+  display: grid;
+  grid-template-columns: minmax(64px, 22%) 1fr;
+  gap: var(--sp-3);
+  align-items: baseline;
+}
+
+.cc-arg dt {
+  font-size: var(--t-footnote);
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.cc-arg dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
+  color: var(--text-primary);
+  /* Agent-authored text with no spaces in it — a path, a token-shaped string —
+     must wrap rather than push the dialog wider than the window. */
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.cc-tool {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin: 0;
+}
+
+/* The tier, as a word rather than a colour. `alter` is the only tier that
+   reaches this dialog, so the pill is not distinguishing between three things —
+   it is naming the one that is true, next to the tool it is true of. */
+.cc-tier {
+  padding: 0 var(--sp-15);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--color-warning) 18%, transparent);
+  color: var(--color-warning);
+  font-size: var(--t-caption);
+  font-weight: var(--w-semibold);
+  letter-spacing: var(--t-caption-ls);
+  text-transform: uppercase;
+}
+
+.cc-tool-id {
+  font-family: var(--font-mono);
+  font-size: var(--t-footnote);
+  color: var(--text-muted);
+}
+
+/* What happens if you say nothing. It becomes critical in the last ten
+   seconds, because by then the number is the message. */
+.cc-timeout {
+  margin: 0;
+  font-size: var(--t-footnote);
+  color: var(--text-muted);
+}
+
+.cc-timeout[data-urgent='true'] {
+  color: var(--color-critical);
+  font-weight: var(--w-medium);
+}
+
+.cc-waiting {
+  margin: 0;
+  font-size: var(--t-footnote);
+  color: var(--text-muted);
+}

@@ -2,9 +2,12 @@ import { describe, expect, it } from 'vitest'
 import {
   cleanTitleText,
   deriveSessionTitle,
+  distinguishingIdLength,
   folderName,
   isUsableTitle,
   MAX_TITLE_LENGTH,
+  MIN_ID_CHARS,
+  shortSessionId,
   stripAnsi,
   titleFromOutput,
   titleFromTranscript,
@@ -207,6 +210,60 @@ describe('folderName', () => {
 
   it('falls back to the whole string when there is no segment', () => {
     expect(folderName('/')).toBe('/')
+  })
+})
+
+/**
+ * How much of a session id a row has to print.
+ *
+ * The id qualifier used to be the whole first block of the UUID, and eight
+ * monospaced characters cost 50px of a 237px sidebar row — which was paid for
+ * by the session's name, cut to its 8ch floor and reading `Update Cl…`. The
+ * length is decided here now, and the only thing that must never happen is the
+ * one this function exists to prevent: two rows printing the same qualifier,
+ * which is a qualifier that answers nothing while looking like an answer.
+ */
+describe('distinguishingIdLength', () => {
+  const uuid = (head: string): string => `${head}-0000-4000-8000-000000000001`
+
+  it('cuts to the floor when the floor already separates them', () => {
+    expect(distinguishingIdLength([uuid('7f3c9a21'), uuid('b4e1d508')])).toBe(MIN_ID_CHARS)
+  })
+
+  it('grows only as far as it has to when the heads agree', () => {
+    // Five characters in common: four is a collision, five is still one, six
+    // separates. The answer is six and not "the whole block".
+    expect(distinguishingIdLength([uuid('7f3c9a21'), uuid('7f3c9b40')])).toBe(6)
+  })
+
+  it('gives up the whole head rather than printing two of the same', () => {
+    // Ids differing only in the last character of the block. There is no
+    // shorter honest answer, so the full eight is the answer.
+    expect(distinguishingIdLength([uuid('7f3c9a21'), uuid('7f3c9a22')])).toBe(8)
+  })
+
+  it('asks nothing of a single row', () => {
+    expect(distinguishingIdLength([uuid('7f3c9a21')])).toBe(MIN_ID_CHARS)
+  })
+
+  it('answers a length even when asked about nothing', () => {
+    expect(distinguishingIdLength([])).toBe(MIN_ID_CHARS)
+  })
+
+  it('never asks for more of an id than the id has', () => {
+    // Not every id in this app is a UUID from `randomUUID`: a session restored
+    // from a partly-written store can carry anything, and a length past the end
+    // of the string would ask a row to print characters that do not exist.
+    expect(distinguishingIdLength(['ab', 'cd'])).toBe(2)
+  })
+
+  it('never asks for more than the block the rest of the app prints', () => {
+    // The ceiling is `shortSessionId`, not the whole UUID. Past the first block
+    // a row would be printing a hyphen and then four zeroes, which separates
+    // nothing and is the point at which two sessions genuinely share an id —
+    // impossible, since it is the key React draws them by.
+    const ids = [uuid('7f3c9a21'), uuid('7f3c9a22')]
+    expect(distinguishingIdLength(ids)).toBeLessThanOrEqual(shortSessionId(ids[0]).length)
   })
 })
 

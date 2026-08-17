@@ -250,7 +250,7 @@ const status = (patch: Partial<HostStatus> = {}): HostStatus => ({
   devices: [device()],
   folders: [],
   sessions: [],
-  neverRunning: ['cost polling (a window feature)'],
+  neverRunning: ['usage polling (a window feature)'],
   // Null is what every host anybody owns answers. A test whose default was the
   // demo sentence would have every unrelated assertion running against the one
   // machine in the world this build treats differently.
@@ -268,7 +268,7 @@ describe('renderStatus', () => {
   })
 
   it('lists what was never running here, so a reader who counts is not misled', () => {
-    expect(renderStatus(status(), 0)).toContain('n/a       cost polling')
+    expect(renderStatus(status(), 0)).toContain('n/a       usage polling')
   })
 
   it('prints the WSL warning where somebody will read it', () => {

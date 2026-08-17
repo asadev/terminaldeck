@@ -1,12 +1,22 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { GitFile, GitFileGroup } from '../components/GitPanel'
 import {
+  cacheHitRate,
+  changeLabel,
+  formatPercent,
   formatTokens,
   getWidgetDefinition,
   listWidgetDefinitions,
   plural,
   readSection,
+  usageLines,
+  UsageReadout,
   visibleGitFiles,
+  WIDGET_DEADLINE_MS,
+  type UsageView,
 } from './widgets'
 import { isRetiredWidget, WIDGET_TYPES } from './layout'
 
@@ -192,5 +202,292 @@ describe('registry', () => {
   it('does not resolve inherited object properties as widgets', () => {
     expect(getWidgetDefinition('constructor' as never)).toBeUndefined()
     expect(getWidgetDefinition('toString' as never)).toBeUndefined()
+  })
+})
+
+/* ---------------------------------------------------------- the usage tile */
+
+/**
+ * The tile shows no money at all, and this is what keeps it that way.
+ *
+ * It used to carry two figures, `$100–200 on plan` beside `$2 on API`, and then
+ * a single `$4558 at API rates` once the plan half was deleted. Asad on the
+ * survivor: *"people are using subscription and we are showing API price. So if
+ * we cannot show the both, let's not show any of them completely."* The full
+ * argument is at the bottom of `src/main/cost.ts`.
+ *
+ * These pin the absence by name — the failure mode is somebody re-adding the
+ * tile and reaching for the mirror table that used to feed it, and deleting the
+ * symbols is what makes that reach fail at the import rather than at review.
+ */
+describe('the usage tile prices nothing', () => {
+  const source = readFileSync(join(__dirname, 'widgets.tsx'), 'utf8')
+  const code = source.replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, '')
+
+  it('exports nothing that prices anything', () => {
+    for (const name of [
+      'formatUsd',
+      'formatRate',
+      'costLines',
+      'CostReadout',
+      'RATES_VERIFIED_ON',
+      'planKey',
+      'planName',
+      'PLAN_PRICES',
+      'planFee',
+      'billingMonths',
+      'formatUsdRange',
+    ]) {
+      const present =
+        source.includes(`export function ${name}`) ||
+        source.includes(`export const ${name}`) ||
+        source.includes(`export interface ${name}`)
+      expect({ name, present }).toEqual({ name, present: false })
+    }
+  })
+
+  it('has no currency symbol left in its code', () => {
+    // Comments are stripped: this file explains at length what was deleted, and
+    // the explanation necessarily writes the figures down. `$${`, `$0` and a
+    // `$` beside a quote or a space are what money looks like; a bare `$` is
+    // also a regex anchor and a template brace, which is why the test is not
+    // one.
+    expect(code).not.toMatch(/\$\$\{|\$\d|\$['"`\s]/)
+  })
+})
+
+/**
+ * The totals have to add up in public.
+ *
+ * This suite was `the API figure explains itself`, and it existed because
+ * `$2.33` beside `2.07M tokens` read as a bug to anybody who knows what Opus
+ * costs per million. The money is gone; the property that survives it is the
+ * one that made the breakdown worth having — every line is part of one whole,
+ * and the parts sum to it.
+ */
+describe('the token breakdown explains itself', () => {
+  const tokens = { input: 2000, output: 2540, cacheWrite: 21_857, cacheRead: 30_415 }
+
+  it('itemises the total in the order a request is recorded', () => {
+    // Fixed order, not sorted by size: a statement that reorders itself between
+    // two viewings is one nobody can compare.
+    expect(usageLines(tokens).map((line) => line.label)).toEqual([
+      'Fresh input',
+      'Cache writes',
+      'Cache reads',
+      'Output',
+    ])
+  })
+
+  it('adds back up to the total it explains', () => {
+    const lines = usageLines(tokens)
+    const summed = lines.reduce((total, line) => total + line.tokens, 0)
+    expect(summed).toBe(tokens.input + tokens.output + tokens.cacheWrite + tokens.cacheRead)
+    expect(lines.reduce((total, line) => total + line.share, 0)).toBeCloseTo(1, 12)
+  })
+
+  it('gives an empty session shares of zero rather than a division by zero', () => {
+    const empty = usageLines({ input: 0, output: 0, cacheWrite: 0, cacheRead: 0 })
+    expect(empty.every((line) => line.share === 0)).toBe(true)
+  })
+
+  it('reports the cache hit rate that makes the counts the shape they are', () => {
+    // 90% hits is the whole reason a folder shows millions of prompt tokens
+    // across a couple of hundred requests.
+    expect(cacheHitRate({ input: 250, output: 9999, cacheWrite: 0, cacheRead: 750 })).toBeCloseTo(
+      0.75,
+      10,
+    )
+    expect(cacheHitRate({ input: 0, output: 0, cacheWrite: 0, cacheRead: 0 })).toBe(0)
+    // Output is not part of the prompt, so it cannot dilute the hit rate.
+    expect(cacheHitRate({ input: 0, output: 9999, cacheWrite: 0, cacheRead: 100 })).toBe(1)
+  })
+
+  it('never rounds a real cache hit down to nothing', () => {
+    expect(formatPercent(0.004)).toBe('<1%')
+    expect(formatPercent(0)).toBe('0%')
+    expect(formatPercent(0.9)).toBe('90%')
+    expect(formatPercent(1)).toBe('100%')
+  })
+})
+
+/* ------------------------------------------------------- the tile, rendered */
+
+/**
+ * The tile as a person actually reads it.
+ *
+ * Every figure below is verbatim from `cost:project` for this repo on this
+ * machine on 2026-08-17 — 35 requests over 9 transcripts, 2,066,852 tokens of
+ * which 1,920,129 were cache reads. That is the session Asad was looking at
+ * when he called the tile inaccurate, so it is the one the copy has to survive
+ * being read on.
+ *
+ * `UsageReadout` takes its data as a prop precisely so this is possible:
+ * effects do not run under `renderToStaticMarkup`, so the fetching component
+ * could only ever be rendered mid-load and none of the wording below would be
+ * reachable.
+ */
+describe('the usage tile, rendered on a real project', () => {
+  const DATA: UsageView = {
+    tokens: { input: 70, output: 18_888, cacheWrite: 127_765, cacheRead: 1_920_129 },
+    requests: 35,
+    sessions: 9,
+    context: {
+      id: 'ec925921-12f2-47cf-b9b0-a6c06dd6dc4b',
+      model: 'claude-opus-5',
+      percent: 3.1836,
+      tokens: 31_836,
+      window: 1_000_000,
+    },
+    models: ['claude-opus-5', 'claude-sonnet-5'],
+    scanning: false,
+    perSession: [
+      { id: 'eb23b15c-0000-0000-0000-000000000000', requests: 20, tokens: 1_500_000, model: 'claude-opus-5' },
+      { id: '554a0694-0000-0000-0000-000000000000', requests: 4, tokens: 120_000, model: 'claude-opus-5' },
+    ],
+  }
+
+  function render(overrides: Partial<UsageView> = {}, expanded = false): string {
+    return renderToStaticMarkup(
+      <UsageReadout data={{ ...DATA, ...overrides }} expanded={expanded} onToggle={() => undefined} />,
+    )
+  }
+
+  it('shows no dollar figure, expanded or collapsed', () => {
+    // The whole point. `$4558.00` was false for the man reading it, and no
+    // label rescues a four-figure sum nobody was charged.
+    for (const expanded of [false, true]) {
+      const markup = render({}, expanded)
+      expect(markup).not.toMatch(/[$]/)
+      expect(markup).not.toMatch(/spent/i)
+      expect(markup).not.toMatch(/\bcost\b/i)
+      expect(markup).not.toMatch(/API rates/i)
+    }
+  })
+
+  it('leads with the tokens and says where they came from', () => {
+    const markup = render()
+    expect(markup).toContain('2.07M')
+    expect(markup).toContain('tokens')
+    expect(markup).toContain('counted from the Claude Code transcripts in this folder')
+  })
+
+  it('puts the cache hit rate beside the counts it explains', () => {
+    // 1,920,129 of 2,047,964 prompt tokens came from cache. Without it on
+    // screen, two million tokens across thirty-five requests reads as a bug.
+    const markup = render()
+    expect(markup).toContain('94%')
+    expect(markup).toContain('from cache')
+    expect(markup).toContain('re-read each turn rather than sent again')
+  })
+
+  it('names the models the folder’s work ran on', () => {
+    const markup = render()
+    expect(markup).toContain('Models seen: claude-opus-5, claude-sonnet-5')
+  })
+
+  it('says which model’s window the context percent is measured against', () => {
+    // PLAN-LOCAL-FIRST §G: "context window must say whose". 3% of 200k and 3%
+    // of a million are the same reading of two different situations.
+    const markup = render()
+    expect(markup).toContain('session ec925921')
+    expect(markup).toContain('on claude-opus-5')
+    expect(markup).toContain('31.8k of its 1M window')
+  })
+
+  it('still names the window when the transcript never named a model', () => {
+    // The old copy dropped the whole caption when the model id was missing,
+    // which took the denominator with it and left a bare percentage.
+    const markup = render({ context: { ...DATA.context!, model: '' } })
+    expect(markup).toContain('31.8k of a 1M window')
+    expect(markup).not.toContain('on claude-opus-5')
+  })
+
+  it('says nothing about a subscription plan', () => {
+    // The tile used to probe the signed-in account so it could caption the API
+    // figure with "this account is on Max, which is not billed per token".
+    // With no figure to caption, the probe and the caption both went.
+    const markup = render()
+    expect(markup).not.toMatch(/\bMax\b/)
+    expect(markup).not.toMatch(/\bPro\b/)
+    expect(markup).not.toMatch(/per token/i)
+    expect(markup).not.toMatch(/month/i)
+  })
+
+  it('itemises the counts when the tile is opened', () => {
+    const markup = render({}, true)
+    for (const label of ['Fresh input', 'Cache writes', 'Cache reads', 'Output', 'Total']) {
+      expect(markup).toContain(label)
+    }
+    // Cache reads are 93% of everything this folder moved, which is the line
+    // that makes the total legible.
+    expect(markup).toContain('93%')
+    expect(markup).toContain('heaviest first')
+  })
+
+  it('withholds the context meter entirely rather than drawing an anonymous one', () => {
+    // A percent that cannot name its session is not a fact anybody can act on.
+    const markup = render({ context: null })
+    expect(markup).not.toContain('Context window')
+  })
+
+  it('says nothing recorded rather than a row of zeroes', () => {
+    const markup = render({ requests: 0 })
+    expect(markup).toContain('Nothing recorded yet')
+  })
+})
+
+/* ------------------------------------------------------------- git status word */
+
+describe('git status reads as a word', () => {
+  it('says Untracked rather than a bare question mark', () => {
+    // His question, on a column of them: "what are these question marks?"
+    expect(changeLabel('untracked', '?')).toBe('Untracked')
+    expect(changeLabel('modified', 'M')).toBe('Modified')
+    expect(changeLabel('added', 'A')).toBe('Added')
+    expect(changeLabel('deleted', 'D')).toBe('Deleted')
+    expect(changeLabel('conflicted', 'UU')).toBe('Conflict')
+  })
+
+  it('keeps git’s own letter for a code it does not recognise', () => {
+    // Inventing English for something unrecognised is worse than showing what
+    // git actually said.
+    expect(changeLabel('unknown', 'X')).toBe('X')
+    expect(changeLabel('unknown', '')).toBe('?')
+  })
+})
+
+/* ------------------------------------------------------------ nothing hangs -- */
+
+/**
+ * Two of the tiles on this page were caught in the recording still saying
+ * "Reading transcripts…" and "Reading the repo…" long after the page had
+ * settled. `useBridgeData` had four states and could only ever *leave*
+ * `loading` if the bridge's promise settled — which is not a property of
+ * `ipcRenderer.invoke`.
+ *
+ * There is no DOM in this project's tests, so the hook cannot be driven here;
+ * `deadline.test.ts` proves the mechanism and this pins the two things about it
+ * that are a judgement rather than a mechanism: that a deadline exists at all,
+ * and that every widget hands over its own words for the sentence it prints.
+ */
+describe('every widget read is bounded', () => {
+  it('gives a tile long enough for a real scan and no longer', () => {
+    // The cost tile totals a project's transcripts in the main process under
+    // its own budget; past this it has not started rather than not finished.
+    expect(WIDGET_DEADLINE_MS).toBeGreaterThanOrEqual(10_000)
+    expect(WIDGET_DEADLINE_MS).toBeLessThanOrEqual(30_000)
+  })
+
+  it('names the read in the widget’s words, never a bridge method', () => {
+    const source = readFileSync(join(__dirname, 'widgets.tsx'), 'utf8')
+    const named = [...source.matchAll(/\{ (?:enabled: [^,]+, )?what: '([^']+)' \}/g)].map((m) => m[1])
+    // One per widget that fetches. A tile added without one falls back to a
+    // generic sentence, which is honest but says nothing about which tile.
+    expect(named.length).toBe(5)
+    for (const phrase of named) {
+      expect(phrase).not.toMatch(/^(get|list|scan)[A-Z]/)
+      expect(phrase.endsWith('…')).toBe(false)
+    }
   })
 })

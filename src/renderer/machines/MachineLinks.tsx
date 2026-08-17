@@ -81,6 +81,19 @@ export interface MachinesHalf {
   view: MachinesView
   /** The first read has not landed. Only the list waits on it. */
   reading: boolean
+  /**
+   * Why the read failed, in a sentence. Null while it has not.
+   *
+   * The list used to have two states, reading and read, and a read that never
+   * came back therefore had no state at all — it stayed on "Reading the
+   * machines this desktop knows…" for the rest of the session. The caller now
+   * puts a deadline on the read, and a deadline needs somewhere to land: it is
+   * this. Printing "No other machine yet" instead would be a claim, and a read
+   * that did not answer is no evidence for one.
+   */
+  error?: string | null
+  /** Ask for the list again, for the button beside {@link error}. */
+  retry?: () => void
   entry: CodeEntryState
   open: { machineId: string; sessionId: string } | null
   /** The live terminal for {@link open}, or nothing in a static render. */
@@ -168,7 +181,16 @@ export function MachineLinks({ half, platform }: { half: MachinesHalf; platform?
         // "Reading…" for a moment is a section whose first frame is one nobody
         // can start a pairing on — including, on a cold window, the code
         // somebody has walked over to type.
+        //
+        // "for a moment" is now true rather than hoped for: the caller reads
+        // under a deadline, so this line always resolves into a list, an empty
+        // list or the notice below it.
         <p className="settings-prose">Reading the machines this desktop knows…</p>
+      ) : half.error != null ? (
+        <Notice tone="warn">
+          {half.error}{' '}
+          {half.retry && <Button onClick={half.retry}>Try again</Button>}
+        </Notice>
       ) : view.machines.length === 0 ? (
         <p className="settings-prose">
           No other machine yet. Type its code above and its sessions appear here.

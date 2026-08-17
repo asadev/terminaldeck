@@ -232,6 +232,23 @@ button.board-card.wants-you:hover {
   line-clamp: 2;
 }
 
+/* The head of a session id, on a card whose name, folder and account are all
+   identical to another card's. Only then — a mark on every card is a mark on no
+   card, the same rule the rail's qualifier follows.
+
+   Inside the heading rather than beside it so the two wrap and clamp as one
+   line of text: the title is already a two-line clamp, and a sibling element
+   would sit outside that box and be the one thing on the card that never gives.
+   Mono because it is an identifier, and the same eight characters the rail and
+   the Inspector print for that session. */
+.board-title-id {
+  margin-left: var(--sp-1);
+  font-family: var(--font-mono);
+  font-size: var(--t-caption);
+  font-weight: var(--w-regular);
+  color: var(--text-muted);
+}
+
 .board-state {
   margin: 0;
   color: var(--text-secondary);

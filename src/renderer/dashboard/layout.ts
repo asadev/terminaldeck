@@ -94,6 +94,24 @@ export interface WidgetSpec {
  */
 export const WIDGET_SPECS: Readonly<Record<WidgetType, WidgetSpec>> = {
   sessions: { type: 'sessions', w: 6, h: 6, minW: 3, minH: 3, allowMultiple: false },
+  /*
+   * Back to six, level with its neighbours.
+   *
+   * It was seven for one round, because the tile then carried a dollar figure
+   * and everything needed to believe it: a sentence saying the figure was not a
+   * bill, a line dating the rate card, and two conditional caveats about
+   * historical and unpriced rates. At six rows the last of those fell below the
+   * fold, and a shelf-life marker nobody scrolls to is a shelf-life marker
+   * nobody has.
+   *
+   * None of that survives the deletion of the money, so the extra row was
+   * holding 133px of nothing — measured, in the running app, at 1500px wide.
+   * Six is what the remaining content wants and it puts the tile back level
+   * with Git beside it instead of leaving a step in the top row.
+   *
+   * The key is `cost` and the tile is called Usage; see `WIDGET_DEFINITIONS` in
+   * `widgets.tsx` for why the stored id was left alone.
+   */
   cost: { type: 'cost', w: 6, h: 6, minW: 3, minH: 3, allowMultiple: false },
   git: { type: 'git', w: 6, h: 6, minW: 3, minH: 3, allowMultiple: false },
   readiness: { type: 'readiness', w: 8, h: 7, minW: 4, minH: 4, allowMultiple: false },
@@ -281,13 +299,14 @@ export function isRetiredWidget(type: WidgetType): boolean {
  * rather than an empty one.
  *
  * This used to be three, led by Sessions. The session board took that job and
- * does it properly, so the seed starts at Cost. The hole is not filled with
+ * does it properly, so the seed starts at Usage. The hole is not filled with
  * Readiness or GitHub for the reason above: a tidy grid is not worth a tile
  * that says nothing.
  */
 export function defaultLayout(projectPath: string): DashboardLayout {
   const base = createLayout(projectPath)
   const seed: Array<[WidgetType, number, number]> = [
+    // `cost` is the stored id of the Usage tile — see `WIDGET_DEFINITIONS`.
     ['cost', 0, 0],
     ['git', 6, 0],
   ]

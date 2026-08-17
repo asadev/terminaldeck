@@ -35,9 +35,10 @@ vi.mock('react-dom', async (importOriginal) => {
 // The stubbed portal ignores its container, so this only has to exist.
 ;(globalThis as { document?: unknown }).document = { body: {} }
 
-const { NewSessionDialog } = await import('./NewSessionDialog')
+const { NewSessionDialog, ProjectRow } = await import('./NewSessionDialog')
 const { CloseSessionConfirm } = await import('./CloseSessionConfirm')
 const { JoinRemoteDialog } = await import('./JoinRemoteDialog')
+const { Modal } = await import('./Modal')
 
 const noop = (): void => {}
 
@@ -88,6 +89,130 @@ describe('NewSessionDialog', () => {
     ]) {
       expect(html).not.toContain(claim)
     }
+  })
+
+  /**
+   * The five lines of helper prose that went.
+   *
+   * *"Let's give only one liner or two liner descriptions… not more than one or
+   * two lines because it's being too big for them."* Each of these restated the
+   * label directly above it, or covered a case the row now reports as a fact —
+   * "Not signed in" on the login it applies to, rather than a standing warning
+   * about logins in general. They are pinned as absences because prose is what
+   * grows back, one defensible clause at a time.
+   */
+  it('does not restate its own labels underneath them', () => {
+    for (const gone of [
+      'Which Claude login this session should run as',
+      'A new conversation with no prior context',
+      'A login you have not used before asks you to sign in here',
+      'Picks up the most recent session in this folder',
+    ]) {
+      expect(html).not.toContain(gone)
+    }
+  })
+
+  /**
+   * The Login pop-up never says "Default".
+   *
+   * That word is `systemProfileId`'s generated key for the machine's own
+   * install, and this is the control whose whole job is saying which login a
+   * session will run as — it was printing the key one line under the address
+   * itself. This is the first paint, before any bridge has answered, so what is
+   * on screen here is the placeholder option: with no account list, what the
+   * session runs as is whatever login the agent already has, and saying so is
+   * both true and not a slug.
+   */
+  it('never offers a login called "Default"', () => {
+    expect(html).toContain('The agent’s own login')
+    expect(html).not.toMatch(/>Default</)
+  })
+
+  it('is on screen while nothing else has taken the screen', () => {
+    // The other half of the Browse fix — see the Modal describe below.
+    expect(html).not.toContain('data-hidden')
+  })
+})
+
+/**
+ * The folder shortlist's rows.
+ *
+ * Rendered directly rather than through the dialog, because the project list
+ * arrives in an effect and effects do not run under `react-dom/server`: a
+ * rendered dialog has no rows in it at all.
+ */
+describe('ProjectRow', () => {
+  const project = {
+    path: '/Users/apple/Tclaude/untitled folder',
+    name: 'untitled folder',
+    lastOpenedAt: 1,
+  }
+
+  function render(liveSessions: number, confirming = false): string {
+    return renderToStaticMarkup(
+      <ProjectRow
+        project={project}
+        radioName="p"
+        selected={false}
+        liveSessions={liveSessions}
+        confirming={confirming}
+        onSelect={noop}
+        onAskRemove={noop}
+        onRemove={noop}
+        onKeep={noop}
+      />,
+    )
+  }
+
+  it('offers a way out of the list, which is the whole complaint', () => {
+    /*
+     * An `untitled folder` created by a stray New Folder in the picker was
+     * described as "now permanent". It was not quite — the sidebar's project
+     * header has a ✕ — but that is a hover-revealed glyph labelled *Close
+     * project*, and this panel, where the row is actually being looked at, had
+     * nothing at all.
+     */
+    const html = render(0)
+    expect(html).toContain('Remove untitled folder from this list')
+  })
+
+  it('promises only what it does: the folder stays on disk', () => {
+    expect(render(0)).toContain('the folder is not deleted')
+  })
+
+  it('asks first when removing would close something that is running', () => {
+    // Removing a project kills every pty in it. Silently, from a picker, that
+    // is the same loss as closing every one of those tabs by hand.
+    expect(render(3, true)).toContain('Close 3 sessions?')
+    expect(render(1, true)).toContain('Close 1 session?')
+  })
+})
+
+describe('Modal', () => {
+  function render(hidden: boolean): string {
+    return renderToStaticMarkup(
+      <Modal open title="New session" hidden={hidden} onClose={noop}>
+        <p>body</p>
+      </Modal>,
+    )
+  }
+
+  /**
+   * `Browse…` opens an `NSOpenPanel` as a sheet on the window — a native window
+   * over every pixel the renderer draws, and smaller than a `lg` dialog, so the
+   * two were on screen at once with the panel's own buttons landing across the
+   * agent cards. No z-index reaches a surface that is not in the page, so the
+   * dialog steps aside instead, and comes back with its answers intact.
+   */
+  it('can step aside for a native panel without being closed', () => {
+    const html = render(true)
+    expect(html).toContain('data-hidden="true"')
+    // Hidden, not unmounted: everything already chosen is still there.
+    expect(html).toContain('body')
+  })
+
+  it('carries no such marker the rest of the time', () => {
+    expect(render(false)).not.toContain('data-hidden')
   })
 })
 

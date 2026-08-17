@@ -2,8 +2,13 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import {
   AccountsView,
+  agentCanStart,
+  agentProblem,
+  canHaveMore,
   createAccount,
+  createdAccountId,
   signInRequest,
+  signInToNewAccount,
   type AccountsViewProps,
 } from './AccountsSection'
 import { buildAccountProviderRows } from '../../components/ProviderPicker'
@@ -78,6 +83,16 @@ const signedOut: SignInView = {
 
 const noop = (): void => {}
 
+/**
+ * The agent list on a healthy machine, and on the one from the recording.
+ *
+ * `detectProviders` answers a record, and its meaning changed with this pass: it
+ * is now "can a session on this agent actually start", not "is the name on
+ * PATH". `codex: false` below is therefore the machine in the recording exactly
+ * — the binary was there, `which` found it, and it died on spawn.
+ */
+const ALL_RUNNABLE = buildAccountProviderRows({ claude: true, codex: true, gemini: true })
+
 function render(over: Partial<AccountsViewProps> = {}): string {
   return renderToStaticMarkup(
     <AccountsView
@@ -90,7 +105,7 @@ function render(over: Partial<AccountsViewProps> = {}): string {
       providerRows={PROVIDERS}
       onSignIn={noop}
       onCheck={noop}
-      onCreate={noop}
+      onSignInNew={noop}
       onRename={noop}
       onRemove={noop}
       onMakeDefault={noop}
@@ -102,7 +117,8 @@ function render(over: Partial<AccountsViewProps> = {}): string {
 describe('AccountsView', () => {
   it('lists every account with the directory that makes it separate', () => {
     const html = render()
-    expect(html).toContain('Default')
+    // Named by its login, not by the key it is filed under — see below.
+    expect(html).toContain('me@example.com')
     expect(html).toContain('Work')
     // Two names can look alike; two config directories cannot. The path is what
     // proves the accounts are actually separate logins.
@@ -113,6 +129,62 @@ describe('AccountsView', () => {
   it('shows the address the agent named, for the account it named it for', () => {
     const html = render()
     expect(html).toContain('me@example.com')
+  })
+
+  /**
+   * The generated key, off the rows.
+   *
+   * Read live in the running app: `Default`, `Default (Codex CLI)`, `Default
+   * (Gemini CLI)`, one under the other — which is also the shape of his
+   * complaint that this list gives no way to tell which login is which. Every
+   * one of those is a key `systemProfileId` mints for the machine's own install;
+   * none of them is a name anybody chose, and all three are identical on every
+   * install of this app.
+   *
+   * The badge is a different thing and stays: it is a *comparison* — this is the
+   * one the fallback chain ends on — and it only appears when there is another
+   * account for it to be the default of.
+   */
+  it('names a row by its login rather than by the profile key', () => {
+    const threeSystems: AccountsSnapshot = {
+      accounts: [
+        ACCOUNTS.accounts[0],
+        {
+          id: 'system:codex',
+          name: 'Default (Codex CLI)',
+          provider: 'codex',
+          configDir: '/Users/me/.codex',
+          system: true,
+          color: '--status-completed',
+          lastUsedAt: null,
+        },
+      ],
+      defaultId: null,
+      projectDefaults: {},
+    }
+    // Nothing has answered about Codex, so it reaches the install rung — which
+    // names the agent, and is therefore still different from the row above it.
+    const html = render({ snapshot: threeSystems, signIn: { system: signedIn } })
+    expect(html).toContain('me@example.com')
+    expect(html).toContain('Your own Codex CLI install')
+    expect(html).not.toContain('Default (Codex CLI)')
+    // The name is the text right after the row's provider mark. The badge that
+    // still says "Default" is a different element and a different claim.
+    expect(html).not.toContain('</svg>Default')
+    expect(html).toContain('</svg>me@example.com')
+  })
+
+  it('does not print "your own install" twice on one line', () => {
+    /*
+     * The quiet badge says the same thing the third rung of the label says. With
+     * no address to show they collide — "Your own Claude Code install" followed
+     * by a badge reading "Your own install" — so the badge is only drawn when
+     * the label is an address and has therefore said something else.
+     */
+    const unread = render({ signIn: {} })
+    expect(unread).toContain('Your own Claude Code install')
+    expect(unread).not.toContain('settings-badge quiet')
+    expect(render()).toContain('settings-badge quiet')
   })
 
   it('marks a verified sign-in, and marks the other one differently', () => {
@@ -151,14 +223,19 @@ describe('AccountsView', () => {
   })
 
   it('does not offer Sign in for an account that already is', () => {
+    // The *row* button, which is a plain `type="button"`. The form at the foot
+    // of the pane now also says Sign in — that is the two-step Add-then-Sign-in
+    // collapsed into one press — so matching the words alone would match it too.
     const html = render({ signIn: { system: signedIn, work: signedIn } })
-    expect(html).not.toContain('Sign in<')
+    expect(html).not.toContain('type="button" class="settings-btn" data-tone="primary">Sign in')
   })
 
   it('draws no Sign in button at all when nothing can start a session', () => {
     // A hover state is a promise; a button that cannot do its job is worse
     // than no button.
-    expect(render({ onSignIn: null })).not.toContain('Sign in<')
+    expect(render({ onSignIn: null })).not.toContain(
+      'type="button" class="settings-btn" data-tone="primary">Sign in',
+    )
   })
 
   it('says where signing in actually happens', () => {
@@ -302,6 +379,44 @@ describe('what the Accounts pane asks the rest of the app for', () => {
     expect(render()).toContain('settings-badge">Default')
   })
 
+  /**
+   * One default badge, not one per agent.
+   *
+   * Every agent with a login now has a "your own install" row — Claude's,
+   * Codex's and Gemini's — and the old rule badged all three whenever no default
+   * had been set, next to three rows already *named* "Default (…)". The word
+   * appeared six times on a fresh machine.
+   */
+  it('badges exactly one row when no default has been chosen', () => {
+    const threeSystems: AccountsSnapshot = {
+      accounts: [
+        ACCOUNTS.accounts[0],
+        {
+          id: 'system:codex',
+          name: 'Default (Codex CLI)',
+          provider: 'codex',
+          configDir: '/Users/me/.codex',
+          system: true,
+          color: '--status-completed',
+          lastUsedAt: null,
+        },
+        {
+          id: 'system:gemini',
+          name: 'Default (Gemini CLI)',
+          provider: 'gemini',
+          configDir: '/Users/me/.gemini',
+          system: true,
+          color: '--status-waiting',
+          lastUsedAt: null,
+        },
+      ],
+      defaultId: null,
+      projectDefaults: {},
+    }
+    const html = render({ snapshot: threeSystems, providerRows: ALL_RUNNABLE })
+    expect(html.split('settings-badge">Default').length - 1).toBe(1)
+  })
+
   it('never offers to remove the account that is your own install', () => {
     // It is the user's real Claude install, and the resolution chain ends on it.
     const html = render({ snapshot: { ...ACCOUNTS, accounts: [ACCOUNTS.accounts[0]] } })
@@ -317,5 +432,168 @@ describe('what the Accounts pane asks the rest of the app for', () => {
     expect(render({ error: 'Could not read your accounts.' })).toContain(
       'Could not read your accounts.',
     )
+  })
+})
+
+/**
+ * Signing in when the agent cannot run — the worst thing in the 2026-08-16
+ * recording, and the part of this screen that has no second chance.
+ *
+ * He pressed Add on a Codex account. A blank session opened and printed
+ * `Error: spawn …/@openai/codex-darwin-arm64/vendor/…/codex ENOENT` and exited.
+ * He tried again and got the same trace. By the end five orphan sessions sat in
+ * the sidebar, their names clipped to `Se…`, and nothing had been cleaned up.
+ *
+ * Every case below is one link of that chain, broken.
+ */
+describe('an agent that will not start', () => {
+  /** Codex found and unrunnable; the other two fine. */
+  const CODEX_BROKEN = buildAccountProviderRows({ claude: true, codex: false, gemini: true })
+
+  it('says which agent cannot start, and what to type', () => {
+    const problem = agentProblem(CODEX_BROKEN, 'codex')
+    expect(problem?.text).toContain('Codex CLI')
+    expect(problem?.text).toContain('will not start')
+    expect(problem?.install).toBe('npm install -g @openai/codex')
+    // Never the launcher's own words. That string is what used to be the whole
+    // error message, and the report it produced was a person saying it was "not
+    // understandable for me as not a technical actual coder".
+    expect(problem?.text).not.toContain('ENOENT')
+    expect(problem?.text).not.toContain('spawn')
+  })
+
+  it('draws no Sign in button beside an account whose agent cannot start', () => {
+    const html = renderToStaticMarkup(
+      <AccountsView
+        snapshot={ACCOUNTS}
+        signIn={{ system: signedIn, work: signedOut }}
+        loading={false}
+        error={null}
+        available
+        busy={false}
+        providerRows={CODEX_BROKEN}
+        onSignIn={noop}
+        onCheck={noop}
+        onSignInNew={noop}
+        onRename={noop}
+        onRemove={noop}
+        onMakeDefault={noop}
+      />,
+    )
+    // The Codex row is the second one, and it is signed out — which is exactly
+    // when the button used to appear and open a session that died.
+    expect(html).toContain('will not start on this machine')
+    expect(html).toContain('npm install -g @openai/codex')
+    expect(html).not.toContain('type="button" class="settings-btn" data-tone="primary">Sign in')
+  })
+
+  it('still offers Sign in when the agent runs', () => {
+    // The other half. A guard that blocked everything would also "fix" the bug.
+    const html = renderToStaticMarkup(
+      <AccountsView
+        snapshot={ACCOUNTS}
+        signIn={{ system: signedIn, work: signedOut }}
+        loading={false}
+        error={null}
+        available
+        busy={false}
+        providerRows={ALL_RUNNABLE}
+        onSignIn={noop}
+        onCheck={noop}
+        onSignInNew={noop}
+        onRename={noop}
+        onRemove={noop}
+        onMakeDefault={noop}
+      />,
+    )
+    expect(html).toContain('type="button" class="settings-btn" data-tone="primary">Sign in')
+  })
+
+  it('agentCanStart answers per agent, not for the machine', () => {
+    expect(agentCanStart(CODEX_BROKEN, 'codex')).toBe(false)
+    expect(agentCanStart(CODEX_BROKEN, 'claude')).toBe(true)
+    // An account whose agent the main process did not name is not blocked: this
+    // screen has no grounds to refuse something it cannot identify.
+    expect(agentCanStart(CODEX_BROKEN, null)).toBe(true)
+  })
+})
+
+/**
+ * One press, and nothing left behind when it fails.
+ *
+ * Add-then-Sign-in was two steps with a half-made account in between: *"right
+ * away it should actually take me to sign in rather than add button. There
+ * should not be any add button."*
+ */
+describe('signing in to a new account', () => {
+  it('creates the account and starts a session on its own agent', async () => {
+    const createProfile = vi.fn(async () => ({ id: 'work-2' }))
+    const start = vi.fn(() => undefined)
+    const result = await signInToNewAccount({ createProfile }, start, 'Work', 'codex')
+
+    expect(result.ok).toBe(true)
+    expect(createProfile).toHaveBeenCalledWith('Work', { provider: 'codex' })
+    // The agent travels with the account. Without it the session opened on
+    // whatever the default coding tool was, so a Codex account was signed in by
+    // Claude's login screen.
+    expect(start).toHaveBeenCalledWith({ profileId: 'work-2', provider: 'codex' })
+  })
+
+  it('removes the account again when the session will not start', async () => {
+    const createProfile = vi.fn(async () => ({ id: 'work-2' }))
+    const deleteProfile = vi.fn(async () => undefined)
+    const start = vi.fn(() => {
+      throw new Error('no pty')
+    })
+
+    const result = await signInToNewAccount({ createProfile, deleteProfile }, start, 'Work', 'codex')
+
+    expect(result.ok).toBe(false)
+    // The cleanup. Five failed attempts left five rows in the sidebar in the
+    // recording; a failed attempt must leave none.
+    expect(deleteProfile).toHaveBeenCalledWith('work-2')
+    expect(result.error).toContain('sign in')
+  })
+
+  it('creates nothing at all when the window cannot open a session', async () => {
+    const createProfile = vi.fn(async () => ({ id: 'work-2' }))
+    const result = await signInToNewAccount({ createProfile }, null, 'Work', 'codex')
+
+    expect(result.ok).toBe(false)
+    expect(createProfile).not.toHaveBeenCalled()
+  })
+
+  it('reads the created id, and refuses an answer it cannot read', () => {
+    expect(createdAccountId({ id: 'work-2' })).toBe('work-2')
+    expect(createdAccountId({ id: '' })).toBeNull()
+    expect(createdAccountId(null)).toBeNull()
+    expect(createdAccountId('work-2')).toBeNull()
+  })
+})
+
+/**
+ * Gemini: one login, offered once.
+ *
+ * *"I want to bring only one login for Gemini… but here currently I cannot even
+ * bring one login."* Both halves are pinned, because fixing either one alone
+ * recreates a different bug — no row at all, or an Add button that would
+ * overwrite the login the machine already has.
+ */
+describe('an agent with exactly one login', () => {
+  const ROWS = ALL_RUNNABLE
+  const gemini = ROWS.find((row) => row.id === 'gemini')
+
+  it('is signable but not addable', () => {
+    expect(gemini?.canSignIn).toBe(true)
+    expect(gemini?.canAdd).toBe(false)
+  })
+
+  it('says why there is no second one, in its own words', () => {
+    expect(gemini?.note).toContain('keychain')
+  })
+
+  it('offers no "use by default" where there is only one to choose from', () => {
+    expect(canHaveMore(ROWS, 'gemini')).toBe(false)
+    expect(canHaveMore(ROWS, 'claude')).toBe(true)
   })
 })

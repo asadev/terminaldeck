@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { readFailure, withDeadline } from '../deadline'
+import { recall, remember } from '../panel-cache'
 import { panelSpec } from '../shell/panels'
 import { PageEmpty, PageNote } from './PageEmpty'
 import './GitPanel.css'
@@ -133,6 +135,41 @@ function describe(file: GitFile): string {
   return file.path
 }
 
+/**
+ * What git's status letter means, in a word.
+ *
+ * This column printed exactly what porcelain prints — `M`, `A`, `D`, and for an
+ * untracked file a bare `?`. Asad, on a page of question marks: *"what are
+ * these question marks? Is this normal? Is this like for all of the other tools
+ * are also doing like this?"* `?` is porcelain's code for untracked, and the
+ * fact that it needs that sentence to explain is the whole argument for not
+ * showing it. `src/main/git.ts` already turns every code into a `kind`; nothing
+ * was reading it.
+ *
+ * The letter survives in one case: a code this app does not recognise keeps its
+ * own character, because inventing a word for something unrecognised is worse
+ * than showing what git actually said. It is also still in the row's `title`,
+ * so the raw status is one hover away for anybody who wants it.
+ *
+ * Kept in step with the dashboard tile's copy of the same table by
+ * `GitPanel.test.tsx`, which asserts the two produce the same word.
+ */
+const CHANGE_WORD: Record<GitChangeKind, string> = {
+  added: 'Added',
+  modified: 'Modified',
+  deleted: 'Deleted',
+  renamed: 'Renamed',
+  copied: 'Copied',
+  typechange: 'Type',
+  untracked: 'Untracked',
+  conflicted: 'Conflict',
+  unknown: '',
+}
+
+export function changeLabel(kind: GitChangeKind, code: string): string {
+  return CHANGE_WORD[kind] || code.trim() || '?'
+}
+
 const UNAVAILABLE_COPY: Record<GitUnavailableReason, string> = {
   'not-a-repo': 'This folder is not a git repository.',
   'git-missing': 'git was not found on your PATH.',
@@ -163,12 +200,39 @@ interface Group {
  */
 export const MAX_ROWS_PER_GROUP = 500
 
+/**
+ * How long the first `git status` has to come back.
+ *
+ * `git.ts` runs the tool with its own timeout, so a slow repository is already
+ * handled below this line. What is not handled below this line is the read
+ * never returning at all — a channel this build never registered, a handler
+ * awaiting something that does not finish — and before this the page answered
+ * that by printing "Reading repository…" until the app was quit. Fifteen
+ * seconds is comfortably longer than `git status` on a large working tree and
+ * short enough that nobody sits looking at a dead page.
+ */
+const WATCH_DEADLINE_MS = 15_000
+
+function statusKey(cwd: string): string {
+  return `git:status:${cwd}`
+}
+
 /* -------------------------------------------------------------- component -- */
 
 export function GitPanel({ cwd, onSelectFile, selectedPath, bridge, focusGroup }: GitPanelProps) {
   const api = useMemo(() => bridge ?? resolveBridge(), [bridge])
   const [status, setStatus] = useState<GitStatusResult | null>(null)
   const [loading, setLoading] = useState(true)
+  /**
+   * Why the first read failed, in words.
+   *
+   * There was nowhere for this to go before: the `.catch` swallowed the error
+   * and cleared `loading`, which dropped the page into the generic "this folder
+   * is not a git repository" empty state — a sentence that is simply false when
+   * what actually happened is that the read never came back. A page that
+   * misreports its own failure is worse than one that admits it.
+   */
+  const [failure, setFailure] = useState<string | null>(null)
   /** The folder currently on screen, so a slow reply for an old one is dropped. */
   const shownCwd = useRef<string | null>(null)
   const focusRef = useRef<HTMLDivElement | null>(null)
@@ -181,24 +245,42 @@ export function GitPanel({ cwd, onSelectFile, selectedPath, bridge, focusGroup }
 
     let live = true
     shownCwd.current = cwd
-    setLoading(true)
-    setStatus(null)
+    setFailure(null)
+
+    /*
+     * The status this folder had the last time this page was open.
+     *
+     * Painted immediately, so returning to Source control shows the repository
+     * rather than "Reading repository…" while `git status` runs again. Always
+     * re-read behind it — this page carries a live watcher and correctness here
+     * is a number of staged files, so the cached copy is a seed and never an
+     * answer. `recall` with no window is exactly that: paint it, then check.
+     */
+    const held = recall<GitStatusResult>(statusKey(cwd))
+    setStatus(held?.value ?? null)
+    setLoading(!held)
 
     // Subscribed before the first read, so a change landing during that read
     // is not dropped in the gap.
     const off = api.onGitStatus((path, next) => {
-      if (live && path === cwd) setStatus(next)
+      if (!live || path !== cwd) return
+      remember(statusKey(cwd), next)
+      setStatus(next)
     })
 
-    api
-      .watchGit(cwd)
+    withDeadline(api.watchGit(cwd), 'Reading this repository', WATCH_DEADLINE_MS)
       .then((first) => {
+        remember(statusKey(cwd), first)
         if (!live) return
         setStatus(first)
         setLoading(false)
       })
-      .catch(() => {
-        if (live) setLoading(false)
+      .catch((error: unknown) => {
+        if (!live) return
+        setLoading(false)
+        // A failed re-read behind a status that is already drawn leaves it
+        // alone; there is nothing better on offer than what is on screen.
+        if (!held) setFailure(readFailure(error))
       })
 
     return () => {
@@ -215,12 +297,18 @@ export function GitPanel({ cwd, onSelectFile, selectedPath, bridge, focusGroup }
   const refresh = useCallback(() => {
     if (!api) return
     const asked = cwd
-    void api
-      .gitStatus(cwd)
+    setFailure(null)
+    void withDeadline(api.gitStatus(cwd), 'Reading this repository', WATCH_DEADLINE_MS)
       .then((next) => {
+        remember(statusKey(asked), next)
         if (shownCwd.current === asked) setStatus(next)
       })
-      .catch(() => undefined)
+      .catch((error: unknown) => {
+        // A refresh that fails behind a status already on screen says so and
+        // leaves the numbers alone; one that fails with nothing on screen is
+        // the page's whole state, and it must not go back to being silent.
+        if (shownCwd.current === asked) setFailure(readFailure(error))
+      })
   }, [api, cwd])
 
   /**
@@ -263,6 +351,28 @@ export function GitPanel({ cwd, onSelectFile, selectedPath, bridge, focusGroup }
         <PageNote page busy>
           Reading repository…
         </PageNote>
+      </section>
+    )
+  }
+
+  /*
+   * The read itself failed, which is a different thing from "not a repository".
+   *
+   * These were the same state before: the `.catch` cleared `loading` with
+   * `status` still null and the page fell into the empty state below, which
+   * says "This folder is not a git repository". For a read that timed out or a
+   * bridge that threw, that sentence is a guess, and a wrong one.
+   */
+  if (!status && failure) {
+    return (
+      <section className="git-panel" aria-label="Git status">
+        <PageEmpty
+          icon={panelSpec('git').icon}
+          title="Could not read this repository"
+          action={{ label: 'Try again', onClick: refresh, primary: true }}
+        >
+          {failure}
+        </PageEmpty>
       </section>
     )
   }
@@ -381,10 +491,13 @@ export function GitPanel({ cwd, onSelectFile, selectedPath, bridge, focusGroup }
                       className="git-row"
                       data-selected={file.path === selectedPath}
                       onClick={() => onSelectFile?.(file)}
-                      title={describe(file)}
+                      title={`${describe(file)} — git status ${file.code.trim() || '?'}`}
                     >
-                      <span className="git-code" data-kind={file.kind} aria-hidden="true">
-                        {file.code}
+                      {/* No longer `aria-hidden`. It was hidden because a lone
+                          `M` read aloud is noise; a word is the one part of the
+                          row that says what happened to the file. */}
+                      <span className="git-code" data-kind={file.kind}>
+                        {changeLabel(file.kind, file.code)}
                       </span>
                       <span className="git-name">{baseName(file.path)}</span>
                       <span className="git-dir">

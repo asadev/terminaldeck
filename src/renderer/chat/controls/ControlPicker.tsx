@@ -96,6 +96,28 @@ export function ControlPicker({ control, name, reading, options, reach, busy, di
         aria-expanded={open}
         aria-controls={open ? menuId : undefined}
         disabled={disabled || busy}
+        /*
+         * Unavailable, but still hoverable and still pressable.
+         *
+         * `disabled` is the wrong attribute for a control that has a *reason*,
+         * and the reason is a hard fact about the platform rather than a
+         * preference: a disabled button receives no pointer events, so the
+         * window's own tooltip layer — which listens on the document and is
+         * what draws every hover label in this app (see `Tooltips.tsx`) —
+         * never hears about it, and the sentence explaining why the control
+         * cannot act is unreachable. A greyed chip that explains nothing when
+         * you hover it and does nothing when you press it is the dead control
+         * this repository is audited for, wearing a disabled attribute as an
+         * alibi.
+         *
+         * So a blocked chip is announced disabled to assistive technology,
+         * drawn back by `[data-blocked]`, and still opens — onto the reason,
+         * in place of the options, which is the only thing there is to say.
+         * `disabled` is kept for the states with nothing to explain: a
+         * different control mid-change, and this one mid-change.
+         */
+        aria-disabled={blocked !== null ? true : undefined}
+        data-blocked={blocked !== null ? '' : undefined}
         title={blocked ?? `${name}: ${value} — ${note}`}
         onClick={() => setOpen((was) => !was)}
       >

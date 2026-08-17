@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import type { App } from 'electron'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { BRAND } from '../shared/brand'
-import { pinUserData } from './user-data'
+import { pinUserData, userDataFlag } from './user-data'
 
 let root: string
 
@@ -72,5 +72,50 @@ describe('pinUserData', () => {
     pinUserData(app)
 
     expect(current()).toBe(pinned)
+  })
+})
+
+describe('an explicit --user-data-dir', () => {
+  /*
+   * The flag that was silently discarded.
+   *
+   * A second copy of the app was launched with its own `--user-data-dir` so it
+   * could not disturb the installed one. Electron folded the flag into
+   * `getPath('userData')`, `pinUserData` rewrote that to
+   * `dirname(flag)/terminaldeck`, and both processes ended up on the same
+   * `relay-identity.json` — then spent hours evicting each other at the relay.
+   * The visible symptom was a phone that could never pair, with nothing
+   * anywhere reporting an error.
+   */
+  it('is read from argv, in both spellings', () => {
+    expect(userDataFlag(['electron', '--user-data-dir=/tmp/probe'])).toBe('/tmp/probe')
+    expect(userDataFlag(['electron', '--user-data-dir', '/tmp/probe'])).toBe('/tmp/probe')
+  })
+
+  it('is absent when it is not given, or given nothing', () => {
+    expect(userDataFlag(['electron', '.'])).toBeNull()
+    expect(userDataFlag(['electron', '--user-data-dir='])).toBeNull()
+    // A following flag is not a path — this is the case that would otherwise
+    // steal the next argument and pin userData to something like `--inspect`.
+    expect(userDataFlag(['electron', '--user-data-dir', '--inspect'])).toBeNull()
+  })
+
+  it('stops pinUserData from moving the directory the caller named', () => {
+    const argv = process.argv
+    process.argv = ['electron', '--user-data-dir=/tmp/td-explicit']
+    try {
+      let asked: string | null = null
+      const app = {
+        getPath: () => '/tmp/td-explicit',
+        setPath: (_k: string, value: string) => {
+          asked = value
+        },
+      } as unknown as Parameters<typeof pinUserData>[0]
+      pinUserData(app)
+      // Not merely "pinned to the right place" — not touched at all.
+      expect(asked).toBeNull()
+    } finally {
+      process.argv = argv
+    }
   })
 })

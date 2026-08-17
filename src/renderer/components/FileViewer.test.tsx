@@ -5,9 +5,13 @@ import {
   formatBytes,
   HIGHLIGHT_MAX_CHARS,
   languageOf,
+  MAX_CACHED_BYTES,
   renderTokens,
   tokenize,
+  viewerBody,
+  viewerMeta,
   type Language,
+  type ViewState,
 } from './FileViewer'
 
 /**
@@ -206,6 +210,61 @@ describe('FileViewer', () => {
     expect(html).toContain('Contents of index.ts')
     expect(html).toContain('index.ts')
     expect(html).toContain('TS')
+  })
+})
+
+/* ------------------------------------------------------ one thing at a time -- */
+
+/**
+ * From the recording: the pane printed **"Loading…" twice at the same moment**
+ * — small in the top-right, from the header's meta slot, and large in the
+ * middle, from the body. Two expressions written at different times over the
+ * same state, each right on its own.
+ */
+describe('the pane says one thing about progress', () => {
+  const LOADING: ViewState = { status: 'loading', path: 'README.md' }
+  const READY: ViewState = {
+    status: 'ready',
+    path: 'README.md',
+    read: { kind: 'text', relPath: 'README.md', text: 'hello\n', bytes: 6, lines: 1 },
+  }
+
+  it('puts the loading sentence in the body and nothing in the header', () => {
+    expect(viewerBody(LOADING, false)).toEqual({ kind: 'notice', text: 'Loading…' })
+    expect(viewerMeta(LOADING, null)).toBe('')
+  })
+
+  it('states the file’s facts in the header only once they are facts', () => {
+    expect(viewerMeta(READY, 1)).toBe('1 lines · 6 B')
+    expect(viewerBody(READY, false)).toEqual({ kind: 'doc' })
+  })
+
+  it('renders the loading sentence exactly once', () => {
+    // The whole markup, counted — the two copies lived in different elements,
+    // so nothing short of counting would have caught them.
+    const html = renderToStaticMarkup(<FileViewer root="/p" path="README.md" />)
+    expect(html.split('Loading…').length - 1).toBeLessThanOrEqual(1)
+  })
+
+  it('gives a failed read a reason rather than a permanent spinner', () => {
+    const failed: ViewState = { status: 'error', path: 'README.md', message: 'EACCES' }
+    expect(viewerBody(failed, false)).toEqual({ kind: 'error', text: 'EACCES' })
+  })
+
+  it('holds the empty state back until the grace period has passed', () => {
+    expect(viewerBody({ status: 'empty' }, false)).toEqual({ kind: 'nothing' })
+    expect(viewerBody({ status: 'empty' }, true)).toEqual({ kind: 'empty' })
+  })
+})
+
+describe('MAX_CACHED_BYTES', () => {
+  it('is well under what the main process will hand over', () => {
+    // The read cap is 2 MB and the cache holds 64 entries, so an unbounded
+    // one could park a hundred megabytes of text in the renderer to save a few
+    // milliseconds. This covers every source file in this repository and
+    // nothing like the worst case.
+    expect(MAX_CACHED_BYTES).toBeLessThan(2 * 1024 * 1024)
+    expect(MAX_CACHED_BYTES).toBeGreaterThanOrEqual(64 * 1024)
   })
 })
 

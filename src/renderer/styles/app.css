@@ -6,6 +6,15 @@
    stylesheet. What is here is what would otherwise be repeated forty times.
    ============================================================================ */
 
+/* The one rule that crosses every stylesheet in the app: text that quotes a
+   file, a process or a path is drawn with the characters it actually has. It
+   is imported rather than pasted here because it is a list of ninety-odd
+   selectors that `styles/verbatim.test.ts` regenerates and compares, and
+   because `main.tsx` is shared ground — every entry point, the app's and the
+   four in `.harness/`, already pulls in this sheet. An `@import` has to be the
+   first rule in the file, which is why it sits above the reset. */
+@import './verbatim.css';
+
 *,
 *::before,
 *::after {

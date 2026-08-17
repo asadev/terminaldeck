@@ -1,11 +1,11 @@
 /**
  * Session inspector data — what one session actually did, turn by turn.
  *
- * `cost.ts` owns the money and context maths and `transcript.ts` owns the
+ * `cost.ts` owns the token and context maths and `transcript.ts` owns the
  * session totals; neither looks at the *shape* of the work. This module reads
  * the same JSONL transcript a second way and answers the questions a totals
- * line cannot: which request was expensive, which tool is being hammered, which
- * one keeps failing, and how the context window filled up over time.
+ * line cannot: which request was the heavy one, which tool is being hammered,
+ * which one keeps failing, and how the context window filled up over time.
  *
  * Everything below the reader is pure, so the aggregation can be tested against
  * hand-built lines with no filesystem in the way.
@@ -20,7 +20,6 @@ import { open, stat } from 'node:fs/promises'
 import { basename, resolve } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 import {
-  aggregateCost,
   cacheHitRate,
   contextUsage,
   contextWarning,
@@ -28,7 +27,6 @@ import {
   effectiveContextWindow,
   emptyUsage,
   isBillableModel,
-  mergeAggregates,
   normalizeModelId,
   preContextWarning,
   promptTokens,
@@ -36,10 +34,8 @@ import {
   totalTokens,
   addUsage,
   SYNTHETIC_MODEL,
-  type AggregateCost,
   type BloatWarning,
   type ContextUsage,
-  type CostBreakdown,
   type TokenUsage,
 } from './cost'
 import {
@@ -70,10 +66,11 @@ function str(value: unknown): string | undefined {
 /**
  * Ceiling on any one token count, ~1000x the largest session ever seen here.
  *
- * `cost.ts` prices with `tokens * rate / 1e6`, so it multiplies before it
- * divides: a corrupt `output_tokens: 1e308` is finite and survives
- * `parseUsage`, then overflows that multiply to `Infinity` and the whole
- * session total — and every row of the table — renders as `$Infinity`.
+ * A transcript is a plain file, and a corrupt `output_tokens: 1e308` is finite
+ * enough to survive `parseUsage`. Left unclamped it makes every share in the
+ * per-model table zero, every total read `Infinity`, and the context meter
+ * meaningless — one bad line takes down a whole panel of otherwise good
+ * numbers.
  */
 const MAX_TOKENS = 1e12
 
@@ -153,7 +150,7 @@ export interface InsightLine {
 /**
  * Parse one JSONL line, or null when it holds nothing the inspector reports.
  *
- * Deliberately not `transcript.ts`'s `parseEventLine`: that one exists to price
+ * Deliberately not `transcript.ts`'s `parseEventLine`: that one exists to total
  * a session and throws away every line without a `usage` block, which is
  * precisely the set of lines — tool calls and their results — this module is
  * built to read.
@@ -283,10 +280,11 @@ export function shortToolName(toolName: string): string {
 }
 
 /**
- * Bucket key for one rate card, mirroring `transcript.ts`.
+ * Bucket key for one model at one speed, mirroring `transcript.ts`.
  *
- * Fast mode is a separate rate card (2x on Opus 5), so it cannot share a bucket
- * with the standard rate — `priceFor` splits the suffix back off.
+ * Fast mode is a different service from the same model and the transcript says
+ * which one ran, so the two keep separate buckets. `contextWindowFor` strips
+ * the suffix back off — the window does not change with the speed.
  */
 function rateKey(normalizedModel: string, speed: 'standard' | 'fast'): string {
   if (speed !== 'fast' || normalizedModel.endsWith('-fast')) return normalizedModel
@@ -313,16 +311,15 @@ export interface TimelineEntry {
   streamMs: number
   /** Gap since the previous request finished: the user thinking, or tools running. */
   sinceLastMs: number
-  /** Rate-card key, e.g. `claude-opus-5` or `claude-opus-5-fast`. */
+  /** Bucket key, e.g. `claude-opus-5` or `claude-opus-5-fast`. */
   model: string
   speed: 'standard' | 'fast'
   usage: TokenUsage
   /** Full prompt size, cache included — not the `input_tokens` remainder. */
   promptTokens: number
   outputTokens: number
-  /** Null when the model has no published rate; never 0, which would read as free. */
-  cost: CostBreakdown | null
-  costUsd: number | null
+  /** Prompt and output together — what `heaviest` ranks on. */
+  totalTokens: number
   /** Context occupancy at this request, or null for a sub-agent's own context. */
   contextPercent: number | null
   isSidechain: boolean
@@ -356,12 +353,15 @@ export interface ModelStat {
   usage: TokenUsage
   promptTokens: number
   outputTokens: number
-  cost: CostBreakdown | null
-  costUsd: number | null
-  /** Share of the session's priced cost, 0–1. */
+  /**
+   * Share of the session's tokens, 0–1.
+   *
+   * This used to be a share of the session's *priced cost*, which quietly made
+   * the column answer a different question for every reader: a Haiku bucket and
+   * an Opus bucket of the same size showed wildly different bars because the
+   * rate cards differed. A share of tokens is the same question for every row.
+   */
   share: number
-  /** Priced from a historical rate that is no longer published. */
-  legacyRate: boolean
 }
 
 export interface CompactionMarker {
@@ -405,19 +405,18 @@ export interface SessionInsights {
   /** Requests dropped off the front of `timeline` to bound the payload. */
   omittedRequests: number
   /**
-   * The priciest requests in the session, most expensive first.
+   * The largest requests in the session by total tokens, heaviest first.
    *
    * Computed over *every* request, not over `timeline`: a long session trims
    * its timeline to the newest few hundred rows, and the request that actually
-   * cost the money is usually not one of them.
+   * moved the tokens is usually not one of them.
    */
-  costliest: TimelineEntry[]
+  heaviest: TimelineEntry[]
   tools: ToolStat[]
   toolCalls: number
   toolFailures: number
   models: ModelStat[]
   usage: TokenUsage
-  cost: AggregateCost
   /** Share of prompt tokens served from cache, 0–1. */
   cacheHitRate: number
   context: ContextUsage | null
@@ -445,8 +444,8 @@ export interface BuildOptions {
 
 export const DEFAULT_MAX_TIMELINE_ENTRIES = 750
 
-/** How many requests `costliest` reports. */
-export const COSTLIEST_COUNT = 5
+/** How many requests `heaviest` reports. */
+export const HEAVIEST_COUNT = 5
 
 /**
  * Cap on `contextSeries`, which rides the same IPC bridge as the timeline.
@@ -499,15 +498,16 @@ interface MutableRequest {
 }
 
 /**
- * Bucket key for a request no rate card covers.
+ * Bucket key for a request whose model id is not a model.
  *
- * The distinction matters to `aggregateCost`, which skips non-billable ids
- * entirely but reports unknown ones as unpriced. Claude Code writes
- * `<synthetic>` for locally generated messages — interrupts and API errors —
- * and those carry no tokens, so flagging them would put an "unpriced models"
- * caveat on nearly every session that ever hit an error. A request with real
- * tokens and no model id is the opposite case: it must be visible, because the
- * total is then a floor rather than the answer.
+ * Two cases that must not be confused, and only one of them is anonymous.
+ * Claude Code writes a literal `<synthetic>` for locally generated messages —
+ * interrupts and API errors — which normalises to itself and keeps its own
+ * bucket: those requests happened, and a row saying so with no tokens on it is
+ * the honest record of an interrupted turn. A request with *no* id at all and
+ * real tokens is the anonymous case, and it lands under `unknown` because its
+ * tokens have to appear somewhere or the per-model table stops adding up to the
+ * session.
  */
 function unbillableBucket(request: RequestLine): string {
   const normalized = normalizeModelId(request.model)
@@ -678,8 +678,7 @@ export function buildSessionInsights(
 
   const entries: TimelineEntry[] = []
   const contextSeries: ContextPoint[] = []
-  const byModel = new Map<string, { usage: TokenUsage; requests: number; costs: AggregateCost[] }>()
-  const perRequestCost: AggregateCost[] = []
+  const byModel = new Map<string, { usage: TokenUsage; requests: number }>()
   let generatingMs = 0
   let sidechainRequests = 0
   let previousEnd = 0
@@ -687,18 +686,9 @@ export function buildSessionInsights(
   let lastMainPrompt = 0
 
   for (const request of requests) {
-    // Price each request against when *it* ran, not when the panel opened.
-    // Summing these then gives a session total that agrees with the rows the
-    // user is looking at, even across a time-boxed rate change.
-    const priced = aggregateCost([[request.model, request.usage] as const], {
-      at: request.at > 0 ? request.at : lastActivityAt,
-    })
-    perRequestCost.push(priced)
-
-    const bucket = byModel.get(request.model) ?? { usage: emptyUsage(), requests: 0, costs: [] }
+    const bucket = byModel.get(request.model) ?? { usage: emptyUsage(), requests: 0 }
     bucket.usage = addUsage(bucket.usage, request.usage)
     bucket.requests += 1
-    bucket.costs.push(priced)
     byModel.set(request.model, bucket)
 
     const prompt = promptTokens(request.usage)
@@ -710,7 +700,6 @@ export function buildSessionInsights(
       lastMainPrompt = prompt
     }
 
-    const hasCost = Object.keys(priced.byModel).length > 0
     // Sub-agents hold their own context, so measuring them against the main
     // thread's window would report a number that means nothing.
     const percent =
@@ -728,8 +717,7 @@ export function buildSessionInsights(
       usage: request.usage,
       promptTokens: prompt,
       outputTokens: request.usage.output,
-      cost: hasCost ? priced.cost : null,
-      costUsd: hasCost ? priced.cost.total : null,
+      totalTokens: totalTokens(request.usage),
       contextPercent: percent,
       isSidechain: request.isSidechain,
       stopReason: request.stopReason,
@@ -742,28 +730,29 @@ export function buildSessionInsights(
     if (request.endedAt > previousEnd) previousEnd = request.endedAt
   }
 
-  const cost = mergeAggregates(perRequestCost)
-  const totalPriced = cost.cost.total
+  const sessionTokens = [...byModel.values()].reduce(
+    (sum, bucket) => sum + totalTokens(bucket.usage),
+    0,
+  )
 
   const models: ModelStat[] = [...byModel.entries()]
     .map(([model, bucket]) => {
-      const merged = mergeAggregates(bucket.costs)
-      const priced = Object.keys(merged.byModel).length > 0
+      const bucketTokens = totalTokens(bucket.usage)
       return {
         model,
         requests: bucket.requests,
         usage: bucket.usage,
         promptTokens: promptTokens(bucket.usage),
         outputTokens: bucket.usage.output,
-        cost: priced ? merged.cost : null,
-        costUsd: priced ? merged.cost.total : null,
-        share: priced && totalPriced > 0 ? merged.cost.total / totalPriced : 0,
-        legacyRate: merged.usedLegacyRate,
+        share: sessionTokens > 0 ? bucketTokens / sessionTokens : 0,
       }
     })
-    // Money first — that is what the tab is for. Unpriced models sort by tokens
-    // among themselves rather than all colliding at zero.
-    .sort((a, b) => (b.costUsd ?? 0) - (a.costUsd ?? 0) || b.promptTokens - a.promptTokens)
+    // Heaviest first, which is what the tab is for. The tiebreak keeps the order
+    // stable for two buckets that moved the same number of tokens.
+    .sort(
+      (a, b) =>
+        totalTokens(b.usage) - totalTokens(a.usage) || a.model.localeCompare(b.model),
+    )
 
   const totalCalls = [...toolStats.values()].reduce((sum, stat) => sum + stat.calls, 0)
   const tools: ToolStat[] = [...toolStats.values()]
@@ -809,12 +798,12 @@ export function buildSessionInsights(
   // `index` keeps saying where each row sits in the whole session.
   const timeline = entries.length > max ? entries.slice(entries.length - max) : entries
 
-  // Sorted over every request, then trimmed — see `costliest`. Sorting a copy:
+  // Sorted over every request, then trimmed — see `heaviest`. Sorting a copy:
   // `entries` is already sliced into `timeline`, which must stay chronological.
-  const costliest = entries
-    .filter((entry) => entry.costUsd !== null)
-    .sort((a, b) => (b.costUsd ?? 0) - (a.costUsd ?? 0) || a.index - b.index)
-    .slice(0, COSTLIEST_COUNT)
+  const heaviest = entries
+    .filter((entry) => entry.totalTokens > 0)
+    .sort((a, b) => b.totalTokens - a.totalTokens || a.index - b.index)
+    .slice(0, HEAVIEST_COUNT)
 
   const contextPoints = downsampleContext(
     contextSeries,
@@ -834,13 +823,12 @@ export function buildSessionInsights(
     sidechainRequests,
     timeline,
     omittedRequests: entries.length - timeline.length,
-    costliest,
+    heaviest,
     tools,
     toolCalls: totalCalls,
     toolFailures: tools.reduce((sum, tool) => sum + tool.failures, 0),
     models,
     usage,
-    cost,
     cacheHitRate: cacheHitRate(usage),
     context,
     contextSeries: contextPoints,
@@ -874,7 +862,7 @@ const MAX_LINE_BYTES = 8 * 1024 * 1024
  * the full pass costs ~680 ms and ~160 MB of peak RSS.
  *
  * `transcript.ts`'s `TranscriptTail` is not reused here because it is a
- * cost-only filter — see `parseInsightLine`.
+ * usage-only filter — see `parseInsightLine`.
  */
 export async function readInsightLines(path: string): Promise<InsightLine[]> {
   let size: number

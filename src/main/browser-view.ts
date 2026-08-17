@@ -12,6 +12,7 @@ import { BRAND } from '../shared/brand'
 import { guestSession } from './browser-session'
 import { isIsolatedGuestSession } from './browser-isolation'
 import { GUEST_RECORD_CHANNEL, GUEST_STEP_CHANNEL, safeAccent } from './browser-record-preload'
+import { decodePngDataUrl, markedName } from './marked-image'
 import {
   appendStep,
   flowLine,
@@ -78,7 +79,87 @@ export interface ScreenshotResult {
   path: string
   width: number
   height: number
+  /**
+   * The shot itself, as a `data:image/png` URL, small enough to put in an
+   * `<img>` without moving megabytes through the bridge on every capture.
+   *
+   * A screenshot the user cannot see is a filename, and that is exactly what
+   * they got: a one-line banner reading *"Saved 3072 x 1496 to …png"* with
+   * Reveal and Dismiss beside it. His words on 2026-08-16 — *"maybe it should
+   * take a screenshot and give us a pop up to type and send to the agent"* — so
+   * the popup needs the picture, and the renderer has no filesystem to read it
+   * back with.
+   *
+   * Empty when the resize or the encode failed. The renderer then shows the path
+   * and the send box without a picture, which is what this screen already was.
+   */
+  preview: string
 }
+
+/**
+ * How wide the preview is, in device pixels.
+ *
+ * A full-resolution capture on this machine is 3072 x 1496; as base64 that is
+ * several megabytes crossing the bridge for a thumbnail that is drawn inside a
+ * popup a few hundred pixels wide. 1200 is comfortably more than the popup can
+ * show on a Retina display and roughly a sixth of the bytes.
+ */
+const PREVIEW_WIDTH = 1200
+
+/**
+ * A photograph of a page, handed to the renderer to be drawn on.
+ *
+ * Distinct from {@link ScreenshotResult} because nothing has been saved: this is
+ * the frame draw mode marks up, and until the user presses Send there is no file
+ * and no reason for one. Writing a plain capture to Pictures every time somebody
+ * opened the draw tool would leave two files per annotation, one of which nobody
+ * asked for.
+ */
+export interface PageFrame {
+  /** The page as a lossless `data:image/png` URL — the base of the composite. */
+  image: string
+  width: number
+  height: number
+  /** Where the page was, from the main process rather than from the page. */
+  url: string
+}
+
+/**
+ * What was written after the user marked a frame up.
+ *
+ * A {@link ScreenshotResult} without the `preview`, because the renderer drew
+ * these pixels and still has them: sending them back would be the same three
+ * megabytes crossing the bridge a second time. The `url` is here and not on a
+ * plain screenshot because this is the one that goes to an agent as evidence —
+ * *"we can send it to the agent like this"* — and a picture of a bug with no
+ * address on it is a picture an agent cannot act on.
+ *
+ * The width and the height are read out of the PNG's own header, never taken
+ * from the renderer: what the popup shows, what the agent is told and what is on
+ * disk are then the same three numbers by construction.
+ */
+export interface MarkedShot {
+  path: string
+  width: number
+  height: number
+  url: string
+}
+
+/**
+ * How wide the frame handed to draw mode is, in device pixels.
+ *
+ * Larger than {@link PREVIEW_WIDTH}, because this one is not a thumbnail: it is
+ * the base of the PNG that gets written to disk and opened by an agent, so text
+ * in it has to stay readable. A stage of about a thousand CSS pixels captures at
+ * two thousand on a Retina display, so this rarely bites at all — it is a bound
+ * on the string crossing the bridge, not a resampling anybody will see.
+ *
+ * Lossless, unlike the JPEG `browser-tab.ts` uses to freeze the page behind a
+ * popup. That one is a backdrop; this one is evidence in a bug report, and JPEG
+ * ringing around body text is exactly the kind of artefact that sends an agent
+ * looking at the wrong thing.
+ */
+const FRAME_WIDTH = 2000
 
 interface ViewEntry {
   tabId: string
@@ -97,6 +178,38 @@ interface ViewEntry {
   /** Listener removals, run when the tab is released or the view dies. */
   detach: Array<() => void>
 }
+
+/* --------------------------------------------------------------- channels -- */
+
+/**
+ * The two channels this module *pushes* on, and the second half of why the flow
+ * recorder recorded nothing.
+ *
+ * They used to be `browser-view:recording` and `browser-view:progress`, and the
+ * preload subscribes to `browser:recording` and `browser:progress`. Nothing ever
+ * failed: `webContents.send` on a channel nobody listens to is a no-op, and
+ * `ipcRenderer.on` for a channel nobody sends is a no-op, so both sides looked
+ * correct in isolation and neither could see the other. The preload even carries
+ * a comment explaining that "no main-process emitter exists for these two yet",
+ * written while the emitters were sitting in this file.
+ *
+ * The visible result was a Flow counter frozen at one step across forty clicks
+ * on 2026-08-16 — the opening `Go <url>`, which comes back from the *invoke*, and
+ * then nothing, because every step after it travelled by push. The load-progress
+ * bar was dead for the same reason and nobody had noticed at all.
+ *
+ * `browser:*` is the right half of the pair to keep: `browser-tab.ts` already
+ * pushes `browser:state-changed` and `browser:element`, so every push the
+ * browser makes now shares one prefix, and the `browser-view:*` names stay on
+ * the invoke channels, which are this module's own.
+ *
+ * Named constants rather than literals, and exported, because
+ * `browser-view.channels.test.ts` reads them against the preload's `ipcRenderer.on`
+ * calls. A mismatch across an `unknown` seam is invisible to the type checker;
+ * the only thing that can see it is a test that reads both files.
+ */
+export const RECORDING_CHANNEL = 'browser:recording'
+export const PROGRESS_CHANNEL = 'browser:progress'
 
 /* --------------------------------------------------------------- registry -- */
 
@@ -193,7 +306,7 @@ function stateOf(entry: ViewEntry): RecordingState {
 }
 
 function pushRecording(entry: ViewEntry): void {
-  send(entry, 'browser-view:recording', stateOf(entry))
+  send(entry, RECORDING_CHANNEL, stateOf(entry))
 }
 
 function record(entry: ViewEntry, step: RecordedStep | null): void {
@@ -232,7 +345,7 @@ function isFromMainFrame(event: IpcMainEvent, wc: WebContents): boolean {
 /* ------------------------------------------------------------- attachment -- */
 
 function progress(entry: ViewEntry, phase: LoadPhase, fraction: number): void {
-  send(entry, 'browser-view:progress', { phase, fraction } satisfies LoadProgress)
+  send(entry, PROGRESS_CHANNEL, { phase, fraction } satisfies LoadProgress)
 }
 
 function attach(entry: ViewEntry): void {
@@ -354,13 +467,18 @@ export function clampZoom(value: unknown): number {
  * - `browser-view:zoom`         (invoke, id, factor)      → number
  * - `browser-view:devtools`     (invoke, id)              → boolean (now open?)
  * - `browser-view:screenshot`   (invoke, id)              → {@link ScreenshotResult}
+ * - `browser-view:frame`        (invoke, id)              → {@link PageFrame}
+ * - `browser-view:screenshot-marked` (invoke, id, pngUrl) → {@link MarkedShot}
  * - `browser-view:reveal`       (invoke, path)            → void
  * - `browser-view:user-agent`   (invoke, id, ua | null)   → string
  * - `browser-view:record`       (invoke, id, {on, accent})→ {@link RecordingState}
  * - `browser-view:record-clear` (invoke, id)              → {@link RecordingState}
  *
- * Emits `browser-view:progress` (id, {@link LoadProgress}) and
- * `browser-view:recording` (id, {@link RecordingState}).
+ * Emits {@link PROGRESS_CHANNEL} (id, {@link LoadProgress}) and
+ * {@link RECORDING_CHANNEL} (id, {@link RecordingState}) — `browser:progress`
+ * and `browser:recording`, which are the names the preload subscribes to. Those
+ * two disagreed with this file for the whole life of the feature; see the
+ * comment on the constants.
  */
 export function registerBrowserViewIpc(ipcMain: IpcMain): void {
   watchCreations()
@@ -430,7 +548,84 @@ export function registerBrowserViewIpc(ipcMain: IpcMain): void {
     await mkdir(dir, { recursive: true })
     const path = join(dir, screenshotName(entry.wc.getURL(), new Date()))
     await writeFile(path, image.toPNG())
-    return { path, width: size.width, height: size.height } satisfies ScreenshotResult
+
+    // The file on disk is always the full-resolution shot. This is a second,
+    // smaller encode purely so the popup has something to draw; failing to make
+    // one must not fail the capture that already succeeded.
+    let preview = ''
+    try {
+      const small = size.width > PREVIEW_WIDTH ? image.resize({ width: PREVIEW_WIDTH }) : image
+      preview = small.toDataURL()
+    } catch {
+      preview = ''
+    }
+
+    return { path, width: size.width, height: size.height, preview } satisfies ScreenshotResult
+  })
+
+  /*
+   * The frame draw mode marks up.
+   *
+   * Deliberately not `browser-view:screenshot`. That one writes a file, and
+   * entering draw mode is not a decision to keep anything — most of the time the
+   * user is about to press Escape. So this captures and returns, and the only
+   * thing that ever reaches Pictures is the composite the user actually sent.
+   *
+   * Same precondition as a screenshot and for the same verified reason: on
+   * Electron 41 `capturePage` on a view whose window is hidden fails with
+   * "Current display surface not available for capture", and `stayHidden` does
+   * not rescue it. So the renderer has to take this frame *before* it parks the
+   * page to put its canvas over the top, not after.
+   */
+  ipcMain.handle('browser-view:frame', async (_event, tabId: unknown) => {
+    const entry = entryFor(tabId)
+    const image = await entry.wc.capturePage().catch(() => null)
+    const size = image?.getSize()
+    if (!image || !size || size.width === 0 || size.height === 0) {
+      throw new Error('The page has to be on screen to capture it.')
+    }
+    const scaled = size.width > FRAME_WIDTH ? image.resize({ width: FRAME_WIDTH }) : image
+    const shrunk = scaled.getSize()
+    return {
+      image: scaled.toDataURL(),
+      width: shrunk.width,
+      height: shrunk.height,
+      // The main process's idea of the URL, never the page's. A page can lie
+      // about its own address and this string goes into an agent's prompt.
+      url: entry.wc.getURL(),
+    } satisfies PageFrame
+  })
+
+  /*
+   * The marked frame, saved.
+   *
+   * The composite is made in the renderer because a canvas is the only thing in
+   * this app that can draw a line, so the bytes come back as a string and are
+   * checked rather than trusted — see `marked-image.ts`, which is where every
+   * one of those rules lives and is tested.
+   *
+   * Everything downstream of here is the screenshot path, unchanged: the same
+   * folder, the same filename rule with `-marked` on it, the same
+   * {@link ScreenshotResult} the popup already knows how to show, and therefore
+   * the same Reveal, the same session picker and the same one line typed into an
+   * agent's prompt. Draw mode adds a picture, not a second way to send one.
+   */
+  ipcMain.handle('browser-view:screenshot-marked', async (_event, tabId: unknown, png: unknown) => {
+    const entry = entryFor(tabId)
+    const decoded = decodePngDataUrl(png)
+    if (!decoded) throw new Error('That drawing could not be read as an image, so nothing was saved.')
+
+    const dir = screenshotDir()
+    await mkdir(dir, { recursive: true })
+    const url = entry.wc.getURL()
+    const path = join(dir, markedName(screenshotName(url, new Date())))
+    await writeFile(path, decoded.bytes)
+
+    // No preview: the renderer composed these pixels and still has them on the
+    // canvas it drew them on. Sending three megabytes of base64 back to the
+    // process it just came from would be the same picture crossing the bridge
+    // twice for no one's benefit.
+    return { path, width: decoded.width, height: decoded.height, url } satisfies MarkedShot
   })
 
   ipcMain.handle('browser-view:reveal', (_event, path: unknown) => {

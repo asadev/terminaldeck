@@ -1,5 +1,23 @@
 # The feature store
 
+> **Withdrawn on 2026-08-17.** The storefront is gone from Settings; the registry
+> that backs it stays, and every feature now ships on except voice dictation.
+> Asad, after walking through the built app:
+>
+> > *"still I think they doesn't make any sense to be as a feature. Use or not
+> > use. So maybe let's keep them all installed and all active always and remove
+> > this section… they are all necessary basic, they don't need to have uninstall
+> > and install button, enable and disable thing. Instead of only voice
+> > dictation. So features or maybe tools, let's actually call it tools."*
+>
+> What survives, and why it was worth keeping: `features/registry.ts` is still
+> the one table every consumer asks before drawing something optional, so a
+> feature cannot be half-switched-off — and voice dictation, the one entry that
+> is a real choice, still has its switch, on **Settings → Tools**. The rest of
+> this document is the reasoning behind the store, kept because the rules in it
+> (a feature is independent; where a feature would have been, offer it; no dead
+> controls) are still how this app is built.
+
 Asad, 2026-08-15. The app has a lot of features and the UI is paying for it. The
 fix is not to cut features — it is to let each person choose which ones exist for
 them.

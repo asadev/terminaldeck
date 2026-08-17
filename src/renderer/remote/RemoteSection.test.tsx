@@ -1,5 +1,5 @@
 import { renderToStaticMarkup } from 'react-dom/server'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   attachedFor,
   canMintCode,
@@ -9,6 +9,7 @@ import {
   deviceLabel,
   deviceStateAfter,
   missingRemoteMethods,
+  READ_DEADLINE_MS,
   remoteActions,
   RemoteSection,
   RemoteView,
@@ -32,6 +33,7 @@ import {
   type RemoteTunnel,
   type RemoteViewProps,
 } from './RemoteSection'
+import { withDeadline } from '../deadline'
 import type { MachineActions, MachinesHalf } from '../machines/MachineLinks'
 import type { Machine, MachineLinkState } from '../machines/types'
 import { CODE_LENGTH } from '../../shared/short-code'
@@ -61,8 +63,7 @@ const NOW = Date.UTC(2026, 7, 13, 12, 0, 0)
 
 const NOTHING: RemoteActions = {
   enable: () => {},
-  confirmEnable: () => {},
-  dismissEnable: () => {},
+  reread: () => {},
   pair: () => {},
   closePairing: () => {},
   approve: () => {},
@@ -213,7 +214,6 @@ function render(props: Partial<RemoteViewProps> = {}): string {
       pairing={null}
       secondsLeft={null}
       busy={null}
-      confirmEnable={false}
       machines={machinesHalf()}
       actions={NOTHING}
       now={NOW}
@@ -242,11 +242,22 @@ describe('off', () => {
   const html = render({ state: { ...RUNNING, running: false, url: null, reason: null } })
 
   it('says what is behind the switch before it is pressed', () => {
-    expect(html).toMatch(/<strong>shell<\/strong>/)
+    // The word, in the switch's own help line rather than in a paragraph under
+    // it. There is no confirmation step behind this switch any more, so the one
+    // sentence a person reads before pressing has to carry the one word that
+    // decides it.
+    expect(html).toContain('gets a shell here')
     // Not "off by default" any more — the app dials out on launch, and a help
     // line describing the opposite of the switch beside it is worse than none.
-    expect(html).toContain('Turn it off and nothing can')
     expect(html).not.toContain('Off by default')
+  })
+
+  it('is one paragraph shorter than the screen it replaced', () => {
+    // The six-line "What you are turning on" block is behind the row's ⓘ. The
+    // heading it used to carry must not be back on the page — that is the
+    // regression, and it is the shape of the whole complaint about this screen.
+    expect(html).not.toContain('What you are turning on')
+    expect(html).toContain('class="settings-info"')
   })
 
   it('leaves the switch off', () => {
@@ -292,31 +303,56 @@ describe('asked for, but not serving', () => {
 describe('serving, with nothing paired', () => {
   const html = render({ state: RUNNING })
 
-  it('shows the address the phone should open, and the tailnet address behind it', () => {
-    expect(html).toContain('https://asads-macbook-pro-1.taile59277.ts.net:8443')
-    expect(html).toContain('100.86.107.119')
-    expect(html).toContain('same tailnet')
+  /**
+   * The tailnet is off this screen, on a machine that has one.
+   *
+   * `RUNNING` is the state of a Mac with a working direct route — a URL, a
+   * tailnet IP, the lot — and none of it is drawn. That is the assertion, not a
+   * side effect of one: the card came back four times, most recently wearing a
+   * green **Ready** badge, and a green badge on the route almost nobody has
+   * reads as the recommended one. See the comment on the paths group.
+   */
+  it('draws no tailnet card, even on a machine that has a tailnet', () => {
+    expect(html).not.toContain('Direct on your tailnet')
+    expect(html).not.toContain('>Ready<')
+    expect(html).not.toContain('https://asads-macbook-pro-1.taile59277.ts.net:8443')
+    expect(html).not.toContain('100.86.107.119')
+    expect(html).not.toContain('same tailnet')
   })
 
-  it('draws both ways in, each with its own state, and the relay first', () => {
-    expect(html).toContain('Direct on your tailnet')
+  it('draws the relay, and the relay is the whole of "how a device gets here"', () => {
     expect(html).toContain('Through the relay')
-    expect(html).toContain('>Ready<')
     expect(html).toContain('>Connected<')
-    // Order is an argument about what matters. The relay is what carries almost
-    // every phone and needs nothing installed, so it leads even on the machine
-    // that has both.
-    expect(html.indexOf('Through the relay')).toBeLessThan(html.indexOf('Direct on your tailnet'))
+    // One row. Two `remote-path` items here means a second route has been put
+    // back on the page.
+    expect(html.match(/class="remote-path"/g)).toHaveLength(1)
   })
 
-  it('names this Mac at the relay, and the key a phone will check it by', () => {
-    expect(html).toContain(RELAY.hostId)
-    expect(html).toContain(RELAY.fingerprint)
+  it('prints neither the host id nor the fingerprint on the resting card', () => {
+    // The fingerprint was on screen twice at once. It belongs where the
+    // comparison happens — beside a live code — and nowhere else; the host id
+    // is this machine's name at the rendezvous and there is nothing to do with
+    // it. Both are still in the state and both are deliberately unread here.
+    expect(html).not.toContain(RELAY.hostId)
+    expect(html).not.toContain(RELAY.fingerprint)
   })
 
-  it('says the lists are empty rather than showing empty lists', () => {
-    expect(html).toContain('No device has been paired')
-    expect(html).toContain('Nothing is attached')
+  it('draws no empty rosters at all', () => {
+    /*
+     * The wall of text, as a test.
+     *
+     * With nothing paired this page used to carry a Devices heading over "No
+     * device has been paired", an "Attached now" heading over "Nothing is
+     * attached", three paragraphs of folder policy ending in "there is nothing
+     * to choose for", and a machines block ending in "No other machine yet" —
+     * four headings and five paragraphs about things that did not exist. His
+     * words: *"until there is nothing activated or something or no device is
+     * connected… this only text doesn't make any sense."*
+     */
+    expect(html).not.toContain('No device has been paired')
+    expect(html).not.toContain('Nothing is attached')
+    expect(html).not.toContain('Attached now')
+    expect(html).not.toContain('Devices')
   })
 
   it('offers pairing, and says a code alone lets nothing in', () => {
@@ -371,7 +407,10 @@ describe('reachable only through the relay', () => {
   it('shows the relay, connected, as the whole answer', () => {
     expect(html).toContain('Through the relay')
     expect(html).toContain('>Connected<')
-    expect(html).toContain(RELAY.hostId)
+    // The host id used to be printed here. It is this machine's name at the
+    // rendezvous — nothing a person can act on — and it went with the duplicate
+    // fingerprint beside it.
+    expect(html).not.toContain(RELAY.hostId)
   })
 })
 
@@ -550,8 +589,11 @@ describe('a phone with a page open on one of this Mac’s ports', () => {
   })
 
   it('says what Stop does, so nobody leaves a page open rather than risk it', () => {
+    // The line stays; the paragraph after it is behind an ⓘ, which renders it
+    // into the button's `title` — so the words are still on the page, one hover
+    // or one click from where they were.
     expect(html).toMatch(/<strong>Stop closes the page, and nothing else\.<\/strong>/)
-    expect(html).toContain('The session keeps running')
+    expect(html).toContain('leaves the session running')
   })
 
   it('leaves the attached row itself exactly as it was', () => {
@@ -629,7 +671,11 @@ describe('a live pairing code', () => {
       pairing,
       secondsLeft: 45,
     })
-    expect(tailnet).toContain('only a device already on your tailnet can use this code')
+    // The direct address is printed here and *only* here. This is the single
+    // state where the tailnet is the only way in and therefore the only thing
+    // the reader can act on, which is why it survived the card's removal.
+    expect(tailnet).toContain('only a device already on your tailnet can use it')
+    expect(tailnet).toContain('https://asads-macbook-pro-1.taile59277.ts.net:8443')
     expect(tailnet).toContain('>482913<')
   })
 
@@ -725,7 +771,7 @@ describe('a code the rendezvous never took', () => {
     const html = render({ state: RUNNING, pairing: unfindable, secondsLeft: 45 })
     expect(html).toContain('>482913<')
     expect(html).toContain('Nothing can look this code up')
-    expect(html).toContain('only a device already on your tailnet can use this code')
+    expect(html).toContain('only a device already on your tailnet can use it')
   })
 
   it('says nothing about findability when the main process did not say', () => {
@@ -784,7 +830,6 @@ describe('a code that expired while the panel was open', () => {
         pairing={pairing}
         secondsLeft={0}
         busy={null}
-        confirmEnable={false}
         machines={machinesHalf()}
         actions={actions}
         now={NOW}
@@ -980,11 +1025,34 @@ describe('the merge', () => {
     expect(older).toMatch(/<input[^>]*class="machine-entry-box"[^>]*disabled/)
   })
 
-  it('says the list is empty rather than showing an empty list', () => {
-    expect(render({ state: RUNNING })).toContain('No other machine yet')
-    expect(render({ state: RUNNING, machines: machinesHalf({ reading: true }) })).toContain(
-      'Reading the machines this desktop knows',
-    )
+  it('draws nothing at all when there is no other machine', () => {
+    // Not "says the list is empty" any more. A heading, two lines about pairing
+    // going both ways and a sentence saying there is nothing in the list is
+    // three paragraphs describing an absence, on the page whose complaint was
+    // that it describes too much. The way to get a machine — "Add another
+    // computer" — is in the pairing block above.
+    const empty = render({ state: RUNNING })
+    expect(empty).not.toContain('Machines you can reach')
+    expect(empty).not.toContain('No other machine yet')
+  })
+
+  it('waits out loud while the first read is running, and stops waiting', () => {
+    const reading = render({ state: RUNNING, machines: machinesHalf({ reading: true }) })
+    expect(reading).toContain('Reading the machines this desktop knows')
+
+    // The half of this that was missing. That sentence stood on screen for the
+    // length of a 47-minute recording, because a read that never settles has no
+    // state to move to. It has one now — see `READ_DEADLINE_MS`.
+    const failed = render({
+      state: RUNNING,
+      machines: machinesHalf({
+        error: 'The machines this desktop knows did not answer within 8 seconds.',
+        retry: () => {},
+      }),
+    })
+    expect(failed).toContain('did not answer within 8 seconds')
+    expect(failed).toContain('Try again')
+    expect(failed).not.toContain('No other machine yet')
   })
 
   it('puts the folder chooser between the devices and the machines', () => {
@@ -1014,7 +1082,6 @@ describe('the merge', () => {
         pairing={null}
         secondsLeft={null}
         busy={null}
-        confirmEnable={false}
         machines={machinesHalf({
           view: { machines: [STUDIO], links: [STUDIO_LINK], blocked: null },
         })}
@@ -1035,6 +1102,44 @@ describe('when the read itself fails', () => {
     expect(html).toContain('may be out of date')
   })
 
+  it('offers the read again, so the failure is not another dead end', () => {
+    // A failure with nothing to press is the loading line again, one sentence
+    // longer. This is the other end of the deadline below: the read now always
+    // finishes, and every way it can finish has a way out of it.
+    const html = render({ state: null, problem: 'The remote access state did not answer.' })
+    expect(html).toContain('Try again')
+  })
+
+  it('stops waiting for a read that never answers', async () => {
+    /*
+     * The bug this closes, and it is not a slow read — it is a read that never
+     * settles at all. `ipcRenderer.invoke` against a handler that never returns
+     * neither resolves nor rejects, so "Reading the current state…" had no
+     * state to move to and stood on screen for the whole of a 47-minute
+     * recording.
+     *
+     * A fake clock rather than a real wait: eight seconds of real time in a
+     * test suite is eight seconds nobody gets back, and what is being checked
+     * is the deadline, not the machine's ability to count.
+     */
+    vi.useFakeTimers()
+    try {
+      const never = new Promise<never>(() => {})
+      const raced = withDeadline(never, 'The remote access state', READ_DEADLINE_MS)
+      const landed = vi.fn()
+      void raced.catch(landed)
+
+      await vi.advanceTimersByTimeAsync(READ_DEADLINE_MS - 1)
+      expect(landed).not.toHaveBeenCalled()
+
+      await vi.advanceTimersByTimeAsync(2)
+      expect(landed).toHaveBeenCalledOnce()
+      expect(String(landed.mock.calls[0][0])).toContain('did not answer')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('claims nothing about devices before the first answer arrives', () => {
     const html = render({ state: null })
     expect(html).toContain('Reading the current state')
@@ -1043,11 +1148,35 @@ describe('when the read itself fails', () => {
 })
 
 describe('turning it on', () => {
-  it('asks a second time, and says what is being handed over', () => {
-    const html = render({ state: { ...RUNNING, running: false }, confirmEnable: true })
-    expect(html).toContain('Turn on remote access?')
-    expect(html).toContain('shell on this Mac')
-    expect(html).toContain('Leave it off')
+  /**
+   * The confirmation step is gone, and these are what replaced it.
+   *
+   * The old test asserted a second dialogue — "Turn on remote access?" with a
+   * "Leave it off" beside it — and it is deliberately deleted rather than
+   * skipped: the two-press flow was removed on the owner's instruction, and a
+   * test that still demanded it would be a test arguing with the product.
+   *
+   * What the confirmation *said* had to survive, and does. The word `shell` is
+   * on the switch's own row, where it is read before the press rather than
+   * after it, and the rest of that paragraph is behind the row's ⓘ.
+   */
+  it('says what is being handed over before the switch is pressed, not after', () => {
+    const html = render({ state: { ...RUNNING, running: false } })
+    expect(html).toContain('gets a shell here')
+    expect(html).not.toContain('Turn on remote access?')
+    expect(html).not.toContain('Leave it off')
+  })
+
+  it('keeps every clause of the paragraph the confirmation used to carry', () => {
+    const html = render({ state: { ...RUNNING, running: false } })
+    for (const clause of [
+      'type into any session running here',
+      'your files, your keys, your git remotes',
+      'sealed end to end',
+      'an approval you give here',
+    ]) {
+      expect(html).toContain(clause)
+    }
   })
 })
 
@@ -1075,7 +1204,6 @@ describe('the noun for the machine', () => {
     },
     pairing: { token: '482913', expiresAt: NOW + 60_000, findable: true } as RemotePairing,
     secondsLeft: 42,
-    confirmEnable: true,
   }
 
   const mac = render(busy)
@@ -1083,9 +1211,8 @@ describe('the noun for the machine', () => {
 
   it('says Mac on a Mac', () => {
     expect(mac).toContain('Drive this Mac from a phone')
-    expect(mac).toContain('a paired phone can always reach this Mac')
-    expect(mac).toContain('shell on this Mac')
-    expect(mac).toContain('A rendezvous service this Mac dials out to')
+    expect(mac).toContain('this Mac dials out to it')
+    expect(mac).toContain('whatever types it finds this Mac there')
     expect(mac).toContain('This Mac’s fingerprint')
     expect(mac).toContain('served from this Mac to that phone’s browser')
     expect(mac).toContain('the row below shows what this Mac received')
@@ -1093,9 +1220,8 @@ describe('the noun for the machine', () => {
 
   it('says PC on Windows, in every one of those sentences', () => {
     expect(pc).toContain('Drive this PC from a phone')
-    expect(pc).toContain('a paired phone can always reach this PC')
-    expect(pc).toContain('shell on this PC')
-    expect(pc).toContain('A rendezvous service this PC dials out to')
+    expect(pc).toContain('this PC dials out to it')
+    expect(pc).toContain('whatever types it finds this PC there')
     expect(pc).toContain('This PC’s fingerprint')
     expect(pc).toContain('served from this PC to that phone’s browser')
     expect(pc).toContain('the row below shows what this PC received')
@@ -1391,7 +1517,8 @@ interface Harness {
   calls: string[]
   notices: Array<{ ok: boolean; text: string }>
   pairing: RemotePairing | null
-  confirming: boolean
+  /** How many times the panel was asked to re-read. */
+  rereads: number
   settled(): Promise<void>
 }
 
@@ -1428,15 +1555,15 @@ function fakeBridge(
 function harness(bridge: Partial<RemoteBridge>, pairing: RemotePairing | null = null): Harness {
   const notices: Harness['notices'] = []
   const pending: Array<Promise<void>> = []
-  const state = { pairing, confirming: false }
+  const state = { pairing, rereads: 0 }
   const actions = remoteActions({
     bridge,
     pairing,
     setPairing: (next) => {
       state.pairing = next
     },
-    setConfirmEnable: (next) => {
-      state.confirming = next
+    reread: () => {
+      state.rereads += 1
     },
     run: (_key, work, done) => {
       pending.push(
@@ -1459,8 +1586,8 @@ function harness(bridge: Partial<RemoteBridge>, pairing: RemotePairing | null = 
     get pairing() {
       return state.pairing
     },
-    get confirming() {
-      return state.confirming
+    get rereads() {
+      return state.rereads
     },
     settled: async () => {
       await Promise.all(pending)
@@ -1478,30 +1605,38 @@ const PENDING_DEVICE: RemoteDevice = {
 }
 
 describe('the switch', () => {
-  it('starts nothing on the first press — turning it on takes two', async () => {
-    const { bridge, calls } = fakeBridge()
-    const h = harness(bridge)
-    h.actions.enable(true)
-    await h.settled()
-    // The press that matters is the second one. If this ever passes with
-    // `startRemote()` in `calls`, the confirmation has been deleted.
-    expect(calls).toEqual([])
-    expect(h.confirming).toBe(true)
-    expect(h.notices).toEqual([])
-  })
-
-  it('starts on the second press, and only then', async () => {
+  /**
+   * One press, each way.
+   *
+   * There were two presses on the way on, and this file used to pin them: a
+   * first press that armed a confirmation and a second that started the server.
+   * Asad removed it — *"don't give two step of this like turn on… only this one
+   * is good enough, and if I click on that, it turns on."* — and the reason it
+   * is safe to remove is that the confirmation was never the gate. Nothing can
+   * connect until a device is handed a sixty-second code and then approved by
+   * hand on this screen, and those two acts are pinned further down this file.
+   */
+  it('starts on the first press, because the confirmation was never the gate', async () => {
     const { bridge, calls } = fakeBridge({ startRemote: { running: true, url: 'https://h.ts.net' } })
     const h = harness(bridge)
     h.actions.enable(true)
-    h.actions.confirmEnable()
     await h.settled()
     expect(calls).toEqual(['startRemote()'])
-    expect(h.confirming).toBe(false)
     expect(h.notices).toEqual([{ ok: true, text: expect.stringContaining('Remote access is on') }])
   })
 
-  it('turns off in one press, because the safe direction must not be the slow one', async () => {
+  it('says, on turning on, that nothing can connect yet', async () => {
+    // The sentence carries what the deleted confirmation used to say. Turning
+    // this on opens onto another door, and the notice has to say so or one
+    // press reads as "my machine is now reachable by anybody".
+    const { bridge } = fakeBridge({ startRemote: { running: true } })
+    const h = harness(bridge)
+    h.actions.enable(true)
+    await h.settled()
+    expect(h.notices[0].text).toContain('pair and approve a device')
+  })
+
+  it('turns off in one press too', async () => {
     const { bridge, calls } = fakeBridge({ stopRemote: { running: false } })
     const h = harness(bridge)
     h.actions.enable(false)
@@ -1526,7 +1661,7 @@ describe('the switch', () => {
     const reason = 'Tailscale is installed but this Mac is logged out of the tailnet.'
     const { bridge } = fakeBridge({ startRemote: { running: false, reason } })
     const h = harness(bridge)
-    h.actions.confirmEnable()
+    h.actions.enable(true)
     await h.settled()
     // `remote:start` resolves rather than throwing, so a start that failed
     // arrives looking like a success. It must not be printed as one.
@@ -1672,7 +1807,7 @@ describe('a channel this build does not have', () => {
     // server that is still serving.
     const h = harness({})
     h.actions.enable(false)
-    h.actions.confirmEnable()
+    h.actions.enable(true)
     h.actions.pair()
     h.actions.closePairing()
     h.actions.approve(PENDING_DEVICE)

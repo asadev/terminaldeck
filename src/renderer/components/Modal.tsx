@@ -38,6 +38,26 @@ interface Props {
    * to be a layout of its own, with its own scrolling regions.
    */
   size?: 'md' | 'lg' | 'xl'
+  /**
+   * Take the whole dialog off the screen without closing it.
+   *
+   * There is exactly one thing that can appear over an HTML dialog and cannot be
+   * re-stacked under it: a native window. `dialog.showOpenDialog` opens an
+   * `NSOpenPanel` as a sheet on the *window*, so it is a separate `NSWindow`
+   * above every pixel the renderer draws — and a sheet is only 880×448, anchored
+   * to the top of the window, so a `lg` dialog underneath it still shows through
+   * on all four sides. In the recorded walkthrough that read as two dialogs
+   * interleaved: the New-session panel's agent cards sitting in the middle of
+   * the folder picker, with the picker's own Cancel and Open buttons drawn
+   * across them.
+   *
+   * No z-index can fix that, because one of the two surfaces is not in the page.
+   * So the dialog steps aside for as long as the system panel is up, and comes
+   * back with the answer. Hidden rather than closed: closing it would throw away
+   * the agent, login and first message somebody had already chosen, which is a
+   * worse trade than a moment of the workspace showing through.
+   */
+  hidden?: boolean
 }
 
 /**
@@ -47,20 +67,26 @@ interface Props {
  * Rendered through a portal into <body> so it escapes the app's flex layout
  * and any stacking context the workspace panes create.
  */
-export function Modal({ open, title, description, onClose, children, footer, size = 'md' }: Props) {
+export function Modal({
+  open,
+  title,
+  description,
+  onClose,
+  children,
+  footer,
+  size = 'md',
+  hidden = false,
+}: Props) {
   const panelRef = useRef<HTMLDivElement>(null)
   const restoreRef = useRef<HTMLElement | null>(null)
   const titleId = useId()
   const descriptionId = useId()
 
-  // Move focus in on open, hand it back on close.
+  // Remember what had focus, and hand it back on close.
   useEffect(() => {
     if (!open) return
 
     restoreRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
-    // The panel itself rather than its first control: screen readers then
-    // announce the dialog and its title before any individual field.
-    panelRef.current?.focus()
 
     return () => {
       const previous = restoreRef.current
@@ -69,6 +95,26 @@ export function Modal({ open, title, description, onClose, children, footer, siz
       if (previous?.isConnected) previous.focus()
     }
   }, [open])
+
+  /*
+   * Put focus in the panel — on open, and again every time it comes back from
+   * being hidden.
+   *
+   * The panel itself rather than its first control: screen readers then
+   * announce the dialog and its title before any individual field.
+   *
+   * The second half of that is what `hidden` needs. A `display: none` subtree
+   * cannot hold focus, so the moment the dialog steps aside for a system panel
+   * the browser drops the caret onto <body> — and it does not put it back when
+   * the subtree reappears. Without this, coming back from Browse left a dialog
+   * on screen with nothing focused in it: Tab started from the top of the
+   * *document*, and the ⌘⏎ its own footer advertises went to whatever the
+   * workspace had bound that chord to.
+   */
+  useEffect(() => {
+    if (!open || hidden) return
+    panelRef.current?.focus()
+  }, [open, hidden])
 
   // Escape is bound on the window, not the panel, so it still fires if focus
   // has drifted to <body> (a click on the scrim, an iframe stealing it).
@@ -125,7 +171,17 @@ export function Modal({ open, title, description, onClose, children, footer, siz
   }
 
   return createPortal(
-    <div className="modal-overlay" onMouseDown={onScrimMouseDown} onKeyDown={trapTab}>
+    <div
+      className="modal-overlay"
+      // An attribute rather than a second class name, so the stylesheet reads
+      // as one rule about one state. `display: none` is what it resolves to —
+      // which also takes the whole subtree out of the tab order and out of the
+      // accessibility tree, both of which are correct while a system panel owns
+      // the screen.
+      data-hidden={hidden ? 'true' : undefined}
+      onMouseDown={onScrimMouseDown}
+      onKeyDown={trapTab}
+    >
       <div
         ref={panelRef}
         className="modal-panel"

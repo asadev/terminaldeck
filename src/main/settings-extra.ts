@@ -243,6 +243,98 @@ export function storedValue(key: string): StoredValue | undefined {
   return load()[key]
 }
 
+/* --------------------------------------------------------------- last good -- */
+
+/** Sits beside `settings.json`, so somebody looking for one finds the other. */
+export const SETTINGS_SNAPSHOT_FILE = 'settings.last-good.json'
+
+/** Format tag, so a future reader can tell this file's shape from a settings file. */
+export const SETTINGS_SNAPSHOT_VERSION = 1
+
+export interface SettingsSnapshotFile {
+  version: number
+  /** ISO 8601, matching the convention the action log already uses. */
+  at: string
+  /** What was about to happen. Free text; this is a file a person reads. */
+  reason: string
+  /**
+   * The whole of `settings.json` as it was parsed off disk — envelope, unknown
+   * keys and all — or the live values when the file could not be read.
+   */
+  settings: unknown
+  /** `state.json`'s preferences block. The other half of "the settings". */
+  preferences: unknown
+  /** True when `settings.json` was missing or unparseable and this is the cache. */
+  fromCache: boolean
+}
+
+export function settingsSnapshotPath(): string {
+  return join(app.getPath('userData'), SETTINGS_SNAPSHOT_FILE)
+}
+
+/**
+ * Write the last-good copy of both settings stores.
+ *
+ * One invalid value cost OpenClaw its entire gateway — `tools.profile: "none"`,
+ * outside the enum, and recovery needed a different application on a different
+ * machine to hand-edit JSON. They keep `.bak`, `.bak.1`…`.bak.4`, `.last-good`
+ * and `.prebridge` now. This app needs far less than that because
+ * `patchStoredSettings` already keeps a `.bak-<timestamp>` for the case it was
+ * written for — a file that could not be *parsed* — but that case is not this
+ * one. A perfectly parseable file full of values that break the window is
+ * exactly what a confirmed-but-wrong copilot write produces, and nothing here
+ * kept a copy of the state before it.
+ *
+ * Both stores in one file rather than a copy per store, because "put my settings
+ * back" is one intention and answering it from two files with two timestamps
+ * invites putting half of them back. The settings half is the raw parsed file
+ * rather than the sanitised cache, so keys written by a newer build — which
+ * `load()` deliberately carries but does not interpret — survive a restore.
+ *
+ * A single generation, overwritten each time, and that is a real limit worth
+ * stating: two bad writes in a row and the snapshot is of the state after the
+ * first one. It is the same trade `DEFAULT_KEEP = 1` makes in the action log,
+ * and the alternative — a rolling set — is a thing that has to be pruned,
+ * measured and explained in the settings pane. The copilot's writes are
+ * confirmed one at a time by a person at the keyboard, so the second-bad-write
+ * case has a human in it who has already been shown the first one.
+ *
+ * Throws rather than reporting failure, because every caller must treat a
+ * missing snapshot as a reason not to proceed.
+ */
+export function writeSettingsSnapshot(preferences: unknown, reason: string): { path: string; at: number } {
+  const file = settingsSnapshotPath()
+  mkdirSync(dirname(file), { recursive: true })
+
+  let settings: unknown
+  let fromCache = false
+  try {
+    settings = JSON.parse(readFileSync(settingsFile(), 'utf8'))
+  } catch {
+    // Missing (first run, nothing written yet) or unparseable. The in-memory
+    // envelope is then the best true statement about what the app is using, and
+    // `fromCache` says so rather than letting a reader assume it is the file.
+    settings = { version: SETTINGS_FILE_VERSION, values: { ...load() } }
+    fromCache = true
+  }
+
+  const at = Date.now()
+  const payload: SettingsSnapshotFile = {
+    version: SETTINGS_SNAPSHOT_VERSION,
+    at: new Date(at).toISOString(),
+    reason,
+    settings,
+    preferences,
+    fromCache,
+  }
+  // Temp file plus rename, like every other write here: a snapshot truncated by
+  // a crash is worse than no snapshot, because it looks like one.
+  const tmp = `${file}.tmp`
+  writeFileSync(tmp, `${JSON.stringify(payload, null, 2)}\n`, 'utf8')
+  renameSync(tmp, file)
+  return { path: file, at }
+}
+
 /* ------------------------------------------------------------ config paths -- */
 
 export interface ConfigPath {
@@ -274,6 +366,17 @@ export function configPaths(): ConfigPath[] {
       label: 'Settings',
       purpose: 'The options in this window.',
       path: join(userData, 'settings.json'),
+      kind: 'file',
+    },
+    {
+      // Listed even before anything has written one, for the same reason
+      // `ipcTrace` below is: the value of a way back is knowing it is there
+      // *before* you need it, and a row that only appears once the copilot has
+      // already changed something is a row nobody finds in time.
+      key: 'settingsLastGood',
+      label: 'Settings — last good',
+      purpose: 'A copy of your settings taken before the copilot changed any. Written only then.',
+      path: join(userData, SETTINGS_SNAPSHOT_FILE),
       kind: 'file',
     },
     {

@@ -256,7 +256,6 @@ describe('workFromSummary', () => {
         sessionId: 'abc',
         requests: 12,
         usage,
-        cost: { cost: { total: 1.25 }, byModel: { 'claude-opus-5': {} } },
         context: { percent: 62 },
         lastActivityAt: NOW,
       }),
@@ -264,31 +263,15 @@ describe('workFromSummary', () => {
       '/t/abc.jsonl',
     )
     expect(work?.tokens).toBe(43_500)
-    expect(work?.costUsd).toBe(1.25)
+    expect(work?.requests).toBe(12)
     expect(work?.contextPercent).toBe(62)
-  })
-
-  /**
-   * An unpriced session totals zero, and `$0.00` beside forty thousand tokens
-   * is a claim that the work was free rather than an admission that it could
-   * not be priced. Null is the only honest answer, and the card then omits the
-   * figure entirely.
-   */
-  it('reports no cost rather than $0.00 when nothing could be priced', () => {
-    const work = workFromSummary(
-      summaryWith({ sessionId: 'abc', requests: 3, usage, cost: { cost: { total: 0 }, byModel: {} } }),
-      'abc',
-      '/t/abc.jsonl',
-    )
-    expect(work?.costUsd).toBeNull()
-    expect(work?.tokens).toBe(43_500)
   })
 
   it('reports no context reading before the first request', () => {
     // Reading a percent off a missing block yields 0, and "0% of the window" is
     // a reading, not an absence.
     const work = workFromSummary(
-      summaryWith({ sessionId: 'abc', requests: 1, usage, cost: { cost: { total: 1 }, byModel: { m: {} } } }),
+      summaryWith({ sessionId: 'abc', requests: 1, usage }),
       'abc',
       '/t/abc.jsonl',
     )

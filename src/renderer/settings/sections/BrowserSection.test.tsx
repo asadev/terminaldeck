@@ -1,7 +1,9 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import {
+  blockedNote,
   BrowserSection,
+  browserButtonLabel,
   groupSources,
   importedCountText,
   importedSummary,
@@ -11,6 +13,7 @@ import {
   toCookieImportReport,
   toCookieImportStatus,
   toCookieSources,
+  type DetectedBrowser,
   type SettingsBridge,
 } from '../settings-bridge'
 import { SETTINGS } from '../settings-schema'
@@ -214,5 +217,66 @@ describe('narrowing what the main process sends', () => {
   it('keeps the keychain outcome, which separates "none" from "you said no"', () => {
     expect(toCookieImportReport({ keychain: 'denied' }).keychain).toBe('denied')
     expect(toCookieImportReport({ keychain: 7 }).keychain).toBeNull()
+  })
+})
+
+/* ------------------------------------------------- the blocked-browser copy -- */
+
+/**
+ * Three identical warnings, and a count advertised on a dead control.
+ *
+ * Both were live on this machine. `/Applications` holds Google Chrome and no
+ * other browser, `mdfind` finds no Edge or Brave bundle anywhere — and this pane
+ * still printed a Full Disk Access paragraph for each of Chrome, Edge and Brave,
+ * word for word the same but for the name, because the two uninstalled browsers
+ * left protected directories behind. Above them sat "Chrome (14 profiles)" on a
+ * segment that could not be pressed, while the real profile picker was three
+ * hundred pixels lower in another group.
+ */
+describe('what the pane says about a browser it cannot read', () => {
+  const browser = (over: Partial<DetectedBrowser>): DetectedBrowser => ({
+    id: 'chrome',
+    name: 'Chrome',
+    userDataDir: '/x',
+    access: 'ok',
+    profiles: [],
+    ...over,
+  })
+
+  it('says the remedy once, and names every browser it applies to', () => {
+    const note = blockedNote([
+      browser({ id: 'chrome', name: 'Chrome', access: 'blocked' }),
+      browser({ id: 'edge', name: 'Edge', access: 'blocked' }),
+      browser({ id: 'brave', name: 'Brave', access: 'blocked' }),
+    ])
+    expect(note).toContain('Chrome, Edge and Brave')
+    // One instruction, not three.
+    expect(note?.match(/Full Disk Access/g)).toHaveLength(1)
+    expect(note).toContain('One grant covers all of them')
+  })
+
+  it('keeps a single browser’s own reason rather than a generic one', () => {
+    const note = blockedNote([
+      browser({ access: 'blocked', note: 'Chrome’s Local State could not be read (EPERM).' }),
+    ])
+    expect(note).toBe('Chrome’s Local State could not be read (EPERM).')
+  })
+
+  it('says nothing when nothing is blocked', () => {
+    expect(blockedNote([])).toBe(null)
+  })
+
+  it('does not advertise profiles behind a segment that cannot be pressed', () => {
+    const profiles = Array.from({ length: 14 }, (_, i) => ({
+      browserId: 'chrome' as const,
+      browserName: 'Chrome',
+      id: `Profile ${i}`,
+      name: `Profile ${i}`,
+      path: `/x/Profile ${i}`,
+      access: 'blocked' as const,
+    }))
+    expect(browserButtonLabel(browser({ access: 'blocked', profiles }))).toBe('Chrome')
+    // And still says it where the button works and the number means something.
+    expect(browserButtonLabel(browser({ access: 'ok', profiles }))).toBe('Chrome (14 profiles)')
   })
 })

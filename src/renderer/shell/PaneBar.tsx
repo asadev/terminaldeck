@@ -1,0 +1,250 @@
+import type { ReactNode } from 'react'
+import type { ProviderId, SessionStatus } from '@shared/types'
+import { StatusDot } from '../components/StatusDot'
+import { AccountChip } from './AccountChip'
+import { FolderTitle } from './FolderChip'
+import { SessionTitle } from './SessionTitle'
+
+/**
+ * A **guest** pane's own chrome, above that pane's own content.
+ *
+ * ## The bug this exists for
+ *
+ * The window had a single bar describing a single session, and the window can
+ * show two. Asad, 2026-08-17:
+ *
+ *   > *"In a split view, it can be from two different projects, two different
+ *   > folders, two different accounts. That's why the accounts and other things
+ *   > related to it should not be always above — above the view, not inside the
+ *   > view. So they can be different, and it can still be showing something for
+ *   > one of them or maybe the other one. So it can be a problem, it can be a
+ *   > confusion — which one it is showing right now."*
+ *
+ * That is a correctness complaint and not a preference. The account chip states
+ * a fact about **a session** — which config directory the agent process was
+ * handed at spawn — and it was drawn once, for a **window**, spanning both
+ * halves of a split. Whatever it said was wrong for at least one pane, and
+ * there was nothing on screen to say which one it was right for. The same is
+ * true of the folder, which is the pty's `cwd` and is fixed for that one
+ * process, and of the session's name.
+ *
+ * ## Which panes get one, and why it is not all of them
+ *
+ * For a day it was all of them: every pane grew this bar, the window's toolbar
+ * was emptied of any heading, and the secondary panes were boxed. Asad, on
+ * seeing that:
+ *
+ *   > *"The reason why we kept the main section in its place, like on surface,
+ *   > is because we did not want to move its drop-downs, its name and
+ *   > everything — we wanted to keep it in the top bar, under the pills of
+ *   > windows, so it feels like a main session and the other ones like
+ *   > secondary sessions. If we make both exactly the same placement — if the
+ *   > name and the account come down — then there is no reason to keep one of
+ *   > them in a box, because all the sizes, everything, is the same."*
+ *
+ * He is right, and the argument is sharper than the one it corrects. The
+ * per-session reasoning above holds for a **guest**: a pane opened beside the
+ * one you were working in has no other place on screen to state its cwd and its
+ * login, so it states them here. It does not hold for the **host**, because the
+ * window's toolbar is not ambiguous about which pane it means — the host is the
+ * pane the window is about, it is the one drawn flush with no box, and the bar
+ * sits directly on top of it. Bringing its identity down here would make the
+ * two panes the same shape, at the same size, saying the same things in the
+ * same place, and at that point the box around one of them is decoration.
+ *
+ * So `App.tsx` renders this for `!primary` only, and the host's name, folder
+ * and account stay exactly where they sat before anybody split anything. See
+ * `WindowToolbar`.
+ *
+ * ## Not the same bar twice
+ *
+ * With one pane on screen there is no guest and this component is not used:
+ * `App.tsx` renders the ordinary toolbar exactly as before. Rendering both for
+ * one session would put its name, folder and account on screen twice, forty
+ * pixels apart.
+ *
+ * ## What is deliberately not here
+ *
+ * The Terminal/Chat/Split switch. Two of its three segments are per session and
+ * the third is per window, but the control is one control, and the one thing it
+ * has to be able to do while a window is split is get you *out* of the split —
+ * which is a window-level act. A copy in every pane would be three controls
+ * offering the same window-level segment, and a Chat segment in a pane would be
+ * promising a conversation view the split renderer does not draw.
+ *
+ * The account chip is given no `session`, and that is on purpose rather than an
+ * omission: with one, `chipMode` draws Run Claude at a plain shell and draws
+ * *nothing at all* for the few hundred milliseconds before the agent's presence
+ * has been read. A bar whose entire job is to say which account this pane is
+ * running as must not begin life by saying nothing. The window's bar has always
+ * passed no session for the same reason; this is that behaviour relocated, not
+ * a new one.
+ */
+
+/** What a pane is showing, as much of it as its bar has to state. */
+export type PaneSubject =
+  | {
+      kind: 'session'
+      /** The pty, and what the heading renames. */
+      id: string
+      title: string
+      status: SessionStatus
+      /** The folder the pty was spawned in. Null for a session with no project. */
+      folder: string | null
+      /** The account it is actually running as, when the main process named one. */
+      account: { id: string; name: string; provider?: ProviderId } | null
+      /** The agent a session started from this pane's chip would run. */
+      provider?: ProviderId
+      onPickAccount(accountId: string, runAs?: ProviderId): void
+      onManageAccounts(): void
+    }
+  /**
+   * A browser page.
+   *
+   * It has no account, no model and no effort — there is no agent and no config
+   * directory — so its bar says the one true thing there is to say about it,
+   * which is what the page is called. Borrowing the session bar and leaving the
+   * chips blank would read as a session whose account failed to load.
+   */
+  | { kind: 'page'; title: string }
+  /** A pane the user made and has not filled. */
+  | { kind: 'empty' }
+
+interface Props {
+  paneId: string
+  subject: PaneSubject
+  /** The pane the sidebar fills and the keyboard reaches. */
+  focused: boolean
+  /**
+   * The slot the running session's controls will be composed into: model,
+   * effort, and the usage window.
+   *
+   * Empty today, and deliberately empty rather than filled with a picker that
+   * does not change anything — two other passes are building the mechanisms
+   * (a pty write path so choosing a model reaches the running agent, and the
+   * usage state over IPC), and this is the place they land. It is rendered even
+   * while nothing is in it so that the follow-up is composition rather than
+   * another layout pass through every one of these files.
+   *
+   * Only a session gets one. A page has nothing to put in it.
+   */
+  controls?: ReactNode
+  onClose(paneId: string): void
+}
+
+const PANE_CLOSE = 'M6.5 6.5l11 11M17.5 6.5l-11 11'
+
+/** A page, in the same 24×24 grid everything else in this window is drawn on. */
+const GLOBE =
+  'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Zm0 0c-2.5 2.3-3.8 5.3-3.8 9s1.3 6.7 3.8 9m0-18c2.5 2.3 3.8 5.3 3.8 9s-1.3 6.7-3.8 9M3.4 9h17.2M3.4 15h17.2'
+
+export function PaneBar({ paneId, subject, focused, controls, onClose }: Props) {
+  return (
+    <header
+      className="pane-cell-head"
+      data-empty={subject.kind === 'empty' || undefined}
+      /*
+       * Which pane the keyboard and the sidebar are pointed at.
+       *
+       * Read here as well as on the pane itself, because dimming a pane's
+       * *identity* is the one focus mark every pane can wear — the guest boxes
+       * also ring their own border, and the host, which is flush with the
+       * window by design, has no border to ring and dims its heading in the
+       * window's toolbar instead. So an unfocused bar is drawn back and a
+       * focused one is at full strength, and the toolbar does the same thing at
+       * the same weight; see `.toolbar-heading[data-focused]` in `shell.css`.
+       */
+      data-focused={focused}
+    >
+      {subject.kind === 'session' && (
+        <>
+          <StatusDot status={subject.status} />
+          {/* The same renameable heading the window's bar carries, at the
+              pane's scale. Double-click and F2 both still open it — see
+              `SessionTitle`, and note that this one never had to give up a
+              drag region for the gesture, because a pane is not the window's
+              title bar. */}
+          <SessionTitle title={subject.title} sessionId={subject.id} scale="pane" />
+          {subject.folder && (
+            /* Where, and who — the same pair, in the same order, with the same
+               separator the window's bar uses, because they are the same two
+               statements about the same session. `.toolbar-chips` is shared
+               rather than copied: two spellings of one row is how the two
+               would come to disagree about spacing. */
+            <div className="toolbar-chips">
+              <FolderTitle path={subject.folder} />
+              <span className="toolbar-chip-sep" aria-hidden="true" />
+              <AccountChip
+                current={subject.account}
+                projectPath={subject.folder}
+                provider={subject.provider}
+                onPick={subject.onPickAccount}
+                onManage={subject.onManageAccounts}
+              />
+            </div>
+          )}
+        </>
+      )}
+
+      {subject.kind === 'page' && (
+        <>
+          <svg
+            className="pane-cell-kind"
+            width="13"
+            height="13"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <path d={GLOBE} />
+          </svg>
+          <span className="pane-cell-title">{subject.title}</span>
+        </>
+      )}
+
+      {subject.kind === 'empty' && (
+        <span className="pane-cell-title pane-cell-waiting">Empty pane</span>
+      )}
+
+      {/* Pushes the close button to the far edge whatever is on the left, and
+          holds the session's controls when there are any. A page and an empty
+          pane get the spacer without the slot: there is nothing about either of
+          them that a model or an effort could describe. */}
+      {subject.kind === 'session' ? (
+        <div className="pane-cell-slot" data-slot="session-controls">
+          {controls}
+        </div>
+      ) : (
+        <div className="pane-cell-slot" aria-hidden="true" />
+      )}
+
+      <button
+        type="button"
+        className="pane-cell-close"
+        aria-label="Close this pane"
+        // Closing the second-to-last pane puts the window back to a single
+        // session rather than leaving a "split view" with one pane in it, which
+        // is the ordinary view wearing a divider.
+        title="Close this pane"
+        onClick={() => onClose(paneId)}
+      >
+        <svg
+          width="13"
+          height="13"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.6"
+          strokeLinecap="round"
+          aria-hidden="true"
+        >
+          <path d={PANE_CLOSE} />
+        </svg>
+      </button>
+    </header>
+  )
+}

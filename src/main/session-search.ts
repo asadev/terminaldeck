@@ -10,7 +10,7 @@
  * `transcript.ts` owns transcript *discovery* and this module reuses all of it
  * (`transcriptDir`, `listTranscripts`, `claudeConfigDir`). What it cannot reuse
  * is `TranscriptTail.read()`: that reader gates every line through
- * `mayCarryCost`, which keeps only lines carrying a `usage` block. Measured on
+ * `mayCarryUsage`, which keeps only lines carrying a `usage` block. Measured on
  * a real 15,738-line transcript here, that filter throws away 100% of the user
  * prompts and every tool result — precisely the text a search exists to find.
  * The same reasoning is already recorded in `session-insights.ts`, whose

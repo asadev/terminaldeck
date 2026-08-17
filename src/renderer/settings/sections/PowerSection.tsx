@@ -204,6 +204,19 @@ export interface MachineShape {
   hasLid?: boolean
 }
 
+/** What {@link idleBlockedNote} needs beyond the machine's shape. */
+export interface IdleNoteShape extends MachineShape {
+  /**
+   * Is the system-wide lid setting on — `true`, `false`, or `null` for "the
+   * machine would not say"?
+   *
+   * Three-valued rather than a boolean, because the pane genuinely has three
+   * states and collapsing the unknown one into `false` is how a screen ends up
+   * asserting something about a setting it could not read.
+   */
+  lidAwake?: boolean | null
+}
+
 /**
  * `osName` at the start of a sentence.
  *
@@ -270,27 +283,61 @@ export function lidAwakeCaution(platform: UiPlatform, { hasLid = true }: Machine
 }
 
 /**
- * The one line about what the app is already doing on its own.
+ * The one line about what the app is already doing on its own — or nothing,
+ * when saying it would argue with the switch above it.
  *
- * Short on purpose — Asad's broadest note on the whole recording was *"we don't
- * need this much of big descriptions under each"* — but it earns its place,
- * because without it this screen has only the switch to speak with and a switch
- * that is off reads as "nothing is protecting my session". That was true until
- * the wake lock was decoupled from the privileged setting, and the sentence is
- * what makes the change visible instead of merely correct.
+ * ## The contradiction this signature exists to end
  *
- * Both halves are load-bearing and both are literally true of
- * `powerSaveBlocker.start('prevent-app-suspension')`: it stops the machine
- * dropping off by itself, and it stops nothing else — a closed lid, the Sleep
- * menu item and a critical battery all still sleep it. Promising more than that
- * is the failure this module's own header spends four paragraphs on.
+ * This note used to be rendered whenever the wake lock was held, which is
+ * always, and it used to end *"Closing the lid or choosing Sleep still does."*
+ * So on a machine where the switch above it was **on**, the pane read:
+ *
+ *     [ ●] Keep running with the lid closed
+ *          Close the lid and the screen goes off while this Mac keeps running.
+ *
+ *          While Terminal Deck is open, this Mac will not fall asleep on its
+ *          own. Closing the lid or choosing Sleep still does.
+ *
+ * Two sentences, twenty pixels apart, saying opposite things about a closed lid.
+ * That is the bug Asad reported, printed in the pane by the pane itself, and it
+ * was not a copy slip: the note describes `powerSaveBlocker`, the switch drives
+ * the privileged `disablesleep` setting, and neither half of the screen knew the
+ * other existed.
+ *
+ * The label is not the wrong half. `sudo pmset -a disablesleep 1` is precisely
+ * the setting that holds a Mac awake through a lid close — it is why this module
+ * takes an administrator password at all, and the whole of its header is about
+ * having measured that `powerSaveBlocker` cannot. So the switch keeps its
+ * promise and the note learns when to keep quiet.
+ *
+ * ## Three states, because there are three
+ *
+ *  - **`lidAwake === true`** — the strong, system-wide protection is on. The
+ *    wake lock is still held and is now redundant; its own sentence would only
+ *    be there to qualify a promise that is being kept. Nothing is drawn. The
+ *    switch's help line is the description of what happens, and it is correct.
+ *  - **`lidAwake === false`** — the honest and useful case, and the reason this
+ *    note was written. The app is holding idle sleep off for free, a person
+ *    should know that, and they should equally know it does not cover a lid.
+ *  - **`lidAwake === null`** — the machine did not answer. Saying "a closed lid
+ *    still sleeps it" would be a claim about a setting nobody could read, so the
+ *    lid clause is dropped and only the part we measured ourselves is said.
+ *    `unknownStateNote` is already on screen underneath explaining the silence.
  */
-export function idleBlockedNote(platform: UiPlatform, { hasLid = true }: MachineShape = {}): string {
+export function idleBlockedNote(
+  platform: UiPlatform,
+  { hasLid = true, lidAwake = null }: IdleNoteShape = {},
+): string | null {
+  if (lidAwake === true) return null
+
+  const held = `While ${BRAND.name} is open, ${thisMachine(platform)} will not fall asleep on its own.`
+  if (lidAwake === null) return held
+
   // Lid-aware for the same reason `lidAwakeHelp` is: a Mac mini has no lid, and
   // a sentence naming one on a machine that has none is the kind of thing that
   // is invisible in the source and obvious on screen.
   const still = hasLid ? 'Closing the lid or choosing Sleep still does.' : 'Choosing Sleep still does.'
-  return `While ${BRAND.name} is open, ${thisMachine(platform)} will not fall asleep on its own. ${still}`
+  return `${held} ${still}`
 }
 
 /** What the switch is allowed to say when the machine could not be read. */
@@ -341,6 +388,9 @@ export function PowerView({
   const on = known && state?.on === true
   const hasLid = state?.battery === null || state?.battery?.present !== false
   const caution = lidAwakeCaution(platform, { hasLid })
+  // `known` first: an unread machine is not an off one, and the note has a
+  // separate, quieter thing to say about each. See `idleBlockedNote`.
+  const idleNote = idleBlockedNote(platform, { hasLid, lidAwake: known ? on : null })
 
   /*
    * Has the machine actually answered yet?
@@ -419,9 +469,12 @@ export function PowerView({
         and then staying silent about the thing it *is* doing was the shape of
         the original complaint.
       */}
-      {state?.idleBlocked === true && (
-        <Notice tone="info">{idleBlockedNote(platform, { hasLid })}</Notice>
-      )}
+      {/*
+        And silent when the switch above is on, which is the fix rather than an
+        omission: `idleBlockedNote` returns null in that state because its own
+        sentence would contradict the control it sits under. See that function.
+      */}
+      {state?.idleBlocked === true && idleNote !== null && <Notice tone="info">{idleNote}</Notice>}
 
       {!unavailable && caution && <Explain title="Heat and battery">{caution}</Explain>}
 
@@ -459,15 +512,23 @@ export function PowerView({
       )}
 
       {/*
-        Someone else's doing, said out loud. `disablesleep` survives a restart
-        and can be set by a terminal, so an on switch at first launch is not
-        necessarily this app's work — and a user who sees one has every right to
-        wonder what turned it on.
+        Why the switch was already on, said out loud — and now naming the likely
+        answer instead of shrugging at it.
+
+        It used to read "…so something else may have set it", which is true and
+        lands as a disclaimer: a box under an on switch, implying the app is not
+        sure the setting is really its doing. The most likely "something else" is
+        knowable and is this app's own previous run — `disablesleep` survives a
+        quit, which is exactly why the password is asked for once and never
+        again, and that is stated three paragraphs into this module's header. So
+        the sentence names that first and keeps the other possibilities, which
+        are real: a terminal, or another app.
       */}
       {on && state?.preexisting === true && (
         <Notice tone="info">
-          This was already on before the app started — it is a setting on the {machineNoun(platform)}, so
-          something else may have set it.
+          This was already on before the app started. It is a setting on the {machineNoun(platform)} and
+          survives a quit, so it is usually this app's own last run — though a terminal or another app can
+          set it too.
         </Notice>
       )}
 

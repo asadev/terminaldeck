@@ -480,9 +480,21 @@
    `flex-shrink: 0`, unlike the account beside it, and that is the whole point of
    having both: the account is a fact you can get at elsewhere, so it gives its
    pixels up first; this is the only thing on the line saying *which* of the two
-   rows you are looking at, so it holds its eight characters. It is set in the
-   mono face because it is an identifier and reads as one — the same eight
-   characters the Inspector prints, so the two can be matched by eye. */
+   rows you are looking at, and half an identifier identifies nothing. It is set
+   in the mono face for the same reason — it is a prefix of what the Inspector
+   prints, so the two can be matched by eye, and a prefix has to be read
+   character by character.
+
+   What changed on 2026-08-17 is not this rule but what it is holding. It used
+   to hold eight characters, which cost 50px of a 237px row and left the name at
+   its 8ch floor printing **Update Cl…** — a name losing to what sits next to
+   it, which is the complaint the account caption already earned once. The id is
+   now cut to the shortest length that still separates the run (four, unless the
+   ids in play collide there), the 25px it gives back go to `.sb-label` with no
+   rule needed because that is what `flex: 1 1 auto` does, and the argument for
+   the length lives on `distinguishingIdLength`. Which is why there is still no
+   floor written here: the length is decided in TypeScript, where it can be
+   checked against the ids, not in CSS, where it could only be guessed. */
 .sb-qualifier {
   flex-shrink: 0;
   font-family: var(--font-mono);
@@ -1247,6 +1259,33 @@
   text-overflow: ellipsis;
 }
 
+/*
+  The one line under a page's name. Only a page's: a session's heading fills
+  this slot with the folder and account chips instead (`meta` in
+  `WindowToolbar`), which is what the cap below outlived.
+
+  The cap used to be `46ch` and its note read "long project paths must not push
+  the actions off the right edge" — written when the path *was* this line. The
+  path became `FolderChip` and the number stayed, and it is not big enough for
+  the app's own copy: on a 2880px-wide window, with 842px of empty bar to the
+  right of it, the Copilot page rendered *"…the diffs, the p…"*. A cap sized for
+  content that no longer appears here, clipping content that does.
+
+  It is not deleted, because deleting it is the other defect: this is a caption
+  under a title, and a caption run out to the full width of a wide window is a
+  line the eye cannot track back from. What replaces the guess is a reading
+  measure. 75 characters is the top of the classic 45–75 range, and at
+  `--t-caption` this copy measures 4.91px per character against a `ch` of
+  6.61px — so 75 characters is 56ch, and that is the number. The longest blurb
+  the app ships is 68 characters and lands at 334px with room to spare.
+
+  Neither this nor the actions depend on the cap to stay put: `.toolbar-heading`
+  and `.toolbar-lead` above both carry `min-width: 0`, so a narrow window
+  shrinks the heading and ellipsises here while every control on the bar holds
+  its position — which is the behaviour Asad asked for and the thing the cap was
+  wrongly credited with. `finish.test.ts` holds the copy inside the measure, so
+  the next blurb someone writes cannot quietly re-open this.
+*/
 .toolbar-subtitle {
   margin: 0;
   font-size: var(--t-caption);
@@ -1255,8 +1294,7 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  /* Long project paths must not push the actions off the right edge. */
-  max-width: 46ch;
+  max-width: 56ch;
 }
 
 /* ---------------------------------------------------------- folder title -- */

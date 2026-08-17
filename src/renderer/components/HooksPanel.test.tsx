@@ -117,8 +117,8 @@ describe('bridgeCalls', () => {
         this.calls.push(`remove:${id}`)
         return { ok: true, message: 'ok', status: status() }
       }
-      async hookServerInfo(): Promise<{ port: number | null; running: boolean }> {
-        return { port: 1, running: true }
+      async hookServerInfo(): Promise<{ address: string | null; running: boolean }> {
+        return { address: '/tmp/terminaldeck/hook.sock', running: true }
       }
     }
 
@@ -195,7 +195,7 @@ describe('what this page says about itself', () => {
       hooksStatus: async () => [],
       installHooks: async () => ({ ok: true, message: 'ok', status: status() }),
       removeHooks: async () => ({ ok: true, message: 'ok', status: status() }),
-      hookServerInfo: async () => ({ port: 8123, running: true }),
+      hookServerInfo: async () => ({ address: '/tmp/terminaldeck/hook.sock', running: true }),
     }
     const html = renderToStaticMarkup(<HooksPanel bridge={bridge} />)
     const sub = /<p class="hooks-sub">([^<]*)<\/p>/.exec(html)?.[1] ?? ''
@@ -214,12 +214,19 @@ describe('what this page says about itself', () => {
 
   it('states the endpoint address and stops there', () => {
     // It used to go on to explain that the address and its token rotate every
-    // launch, which is a description of our own implementation.
-    expect(endpointLine({ port: 8123, running: true })).toBe('Listening on 127.0.0.1:8123.')
+    // launch. That was a description of our own implementation, and — worse —
+    // of a defect: the rotation is what invalidated every installed hook on
+    // every launch. Neither half is true now, so neither is on screen.
+    expect(endpointLine({ address: '/tmp/terminaldeck/hook.sock', running: true })).toBe(
+      'Listening on /tmp/terminaldeck/hook.sock.',
+    )
+    expect(endpointLine({ address: '/tmp/terminaldeck/hook.sock', running: true })).not.toMatch(
+      /every run|previous run|new port/i,
+    )
   })
 
   it('still says what a stopped endpoint costs, rather than only that it is stopped', () => {
-    expect(endpointLine({ port: null, running: false })).toContain('nowhere to report to')
+    expect(endpointLine({ address: null, running: false })).toContain('nowhere to report to')
     expect(endpointLine(null)).toContain('nowhere to report to')
   })
 })

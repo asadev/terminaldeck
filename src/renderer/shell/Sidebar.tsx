@@ -1,16 +1,22 @@
-import { useRef, useState, type DragEvent, type MouseEvent, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type DragEvent, type MouseEvent, type ReactNode } from 'react'
+import { ALERTS_GLYPH } from '../components/AlertsPanel'
 import { StatusDot } from '../components/StatusDot'
 import type { Project } from '../state/store'
 import { useSessionRename } from '../state/session-rename'
-import { MAX_TITLE_LENGTH } from '../session-title'
+import { folderName, MAX_TITLE_LENGTH } from '../session-title'
 import { tip } from '../keymap'
 import { demote, MAX_PROMOTED, promote, usePromotedOrder } from '../browser/workspace-strip'
+import { accountRail, useKnownSignIns } from '../accounts'
+import { CopilotEntry } from '../copilot/CopilotEntry'
+import type { CopilotStage, CopilotStateView } from '../copilot/copilot-model'
+import { partitionByOrigin, turnOf } from '../copilot/session-origin'
 import { PANEL_GROUPS, PANELS, type PanelId, type PanelSpec } from './panels'
 import {
   accountsWorthShowing,
   KIND_ICON,
   sessionLabel,
   startTabDrag,
+  tabQualifiers,
   type WorkspaceTab,
 } from './workspace-tabs'
 
@@ -52,15 +58,54 @@ interface Props {
    * have open, and every decision about what exists is made one level up.
    */
   browserOffer?: string | null
+  /**
+   * Whether to draw the bell beside Settings — i.e. whether the Alerts feature
+   * is installed and on.
+   *
+   * A boolean here and the question asked in `App.tsx`, exactly like `browser`
+   * above: this component is the window's inventory of what you have open, and
+   * every decision about what *exists* is made one level up, next to the rest
+   * of the gating. It defaults to true so a `Sidebar` rendered on its own shows
+   * the app rather than a subset of it.
+   *
+   * Unlike the globe, an absent bell is not drawn as an offer. The globe is the
+   * only way into the browser pane; Alerts is still reachable by name from the
+   * command palette, which is where the offer to install it appears.
+   */
+  alerts?: boolean
+  /**
+   * How many alerts are waiting, for the dot on the bell and for its
+   * accessible name.
+   *
+   * Zero draws no dot — a mark that is always lit is a mark that says nothing.
+   * Nothing in `App.tsx` feeds this yet and that is deliberate rather than
+   * unfinished: the only thing that knows the number is a scan that reads every
+   * transcript in the project, and running that on a timer for a dot nobody
+   * asked for is a cost the window should not pay by default. The contract is
+   * here, drawn and tested, for whatever ends up owning that scan.
+   */
+  alertCount?: number
   /** Session ids with output nobody has looked at yet. */
   unread?: readonly string[]
   /**
-   * Where the top strip's promoted order is kept. Injectable for tests, and
-   * spelled the same way as `WorkspaceTabStrip`'s own prop on purpose: the two
-   * components have to meet on one store, so a test that gives one of them a
-   * stand-in has to be able to give the other the same one.
+   * Where the top strip's promoted order is kept — session storage, so an
+   * arrangement survives a renderer reload and not an app restart; see
+   * `defaultStorage`. Injectable for tests, and spelled the same way as
+   * `WorkspaceTabStrip`'s own prop on purpose: the two components have to meet
+   * on one store, so a test that gives one of them a stand-in has to be able to
+   * give the other the same one.
    */
   storage?: Storage | null
+  /**
+   * A count on a panel row, drawn as `.sb-badge`.
+   *
+   * Nothing in `App.tsx` has ever passed this, and until 2026-08-17 the only
+   * thing that exercised it was the Alerts test — Alerts was the one view with
+   * a number, and it is a dialog now with a dot of its own (`alertCount`). So
+   * this is a facility for the nine remaining rows that no row currently uses.
+   * Left in place rather than deleted because removing it is a decision about
+   * those rows, not about Alerts, and this change is about Alerts.
+   */
   badges?: Partial<Record<PanelId, number>>
   /**
    * Showing because the pointer is near the edge, rather than because it is
@@ -78,29 +123,64 @@ interface Props {
    * anything to do with the work in the middle of the window.
    */
   update?: ReactNode
+  /**
+   * What this window knows about the copilot, for the pinned row at the top.
+   *
+   * Optional, and absent is a real state rather than a missing prop: the row is
+   * still drawn and still opens the page — it simply carries no status dot and
+   * makes no claim. That is what a `Sidebar` mounted on its own in a test or in
+   * `.harness/` should show, for the same reason `panels` defaults to all of
+   * them: the component is the window's inventory, and rendering it bare should
+   * show the app rather than a subset of it.
+   */
+  copilot?: { stage: CopilotStage; state: CopilotStateView | null } | null
+  /**
+   * Open the copilot's page, optionally landing on one turn of its action log.
+   *
+   * The `focus` argument is what makes the copilot-sessions group's "why does
+   * this exist" a real link rather than a heading: it is the id of the turn
+   * that started the session, and it travels through the same `showPanel(id,
+   * focus)` every dashboard tile uses to land on the thing it counted.
+   */
+  onOpenCopilot?(focus?: string | null): void
   onSelectTab(id: string): void
   onCloseTab(id: string): void
   onSelectPanel(id: PanelId): void
-  onNewSession(projectPath?: string, resume?: boolean): void
   /**
-   * Open the New session dialog instead of starting one immediately.
+   * Start a session — or, for every caller here except Continue, *ask* how.
    *
-   * Optional, and the control is absent rather than inert without it — this
-   * component cannot open that dialog itself, it is mounted in `App.tsx`, and a
-   * chevron that did nothing would be worse than no chevron.
+   * The rail says nothing about which of those two it is, and that is the
+   * point: the decision is one line in `App.tsx`, where the dialog is mounted,
+   * and it went the other way on 2026-08-17. Asad: *"if we click directly on
+   * the whole button it opens a quick window. We don't want this quick window
+   * at all. We just always wanted this pop-up to come up so we choose which
+   * type of terminal we want to open."*
    *
-   * Why it belongs beside the button at all: pressing New session spawns a
-   * session on the remembered folder and the default agent, with nothing on
-   * screen saying which either of them is. That is the right default — a
-   * dialog in front of ⌘T was removed on purpose — but the panel that *does*
-   * say is reachable only from the command palette, so the one place in the
-   * window where sessions are started offers no way to ask.
+   * So there is one prop and one press. A `onNewSessionOptions` used to sit
+   * beside this one, drawn as the chevron half of a split button, and it is
+   * gone: *"remove this drop-down button at all from the side panel."* Two
+   * controls one pixel apart that start a session in two different ways is
+   * precisely the thing he was objecting to, and the fix is not to relabel the
+   * second one.
+   *
+   * `resume` is the exception and stays immediate. Continuing the last
+   * conversation in a folder is not a question about which kind of terminal to
+   * open — it is a named command with one answer.
    */
-  onNewSessionOptions?: () => void
+  onNewSession(projectPath?: string, resume?: boolean): void
   onNewBrowserTab(): void
   onOpenProject(): void
   onCloseProject(path: string): void
   onOpenSettings(): void
+  /**
+   * Open the alerts pop-up.
+   *
+   * Beside `onOpenSettings` and not part of `onSelectPanel`, because that is
+   * the difference the whole change is about: *"notifications should be a
+   * pop-up just like settings, not a full page."* Selecting a panel navigates
+   * the window; these two open something over it and leave the window alone.
+   */
+  onOpenAlerts(): void
   /** Keep it open (peeking) or put it away (pinned). */
   onToggleCollapsed(): void
   onPeekStart(): void
@@ -147,27 +227,37 @@ const DISCLOSURE = 'M9.5 6.5l5.5 5.5-5.5 5.5'
  */
 const CHEVRON_LEFT = 'M14.5 6.5 9 12l5.5 5.5'
 const CHEVRON_RIGHT = 'M9.5 6.5 15 12l-5.5 5.5'
-const CHEVRON_DOWN = 'M6.5 9.5 12 15l5.5-5.5'
 const RESUME = 'M4 12a8 8 0 1 0 2.7-6M4 4.5v4h4'
 const CLOSE = 'M6.5 6.5l11 11M17.5 6.5l-11 11'
 /**
- * Rename. A pencil lying on the 45° diagonal — nib at the bottom-left, a
- * rounded ferrule at the top-right, and the band across it that says which end
- * is which. Drawn here rather than borrowed, like every other glyph in this
- * file, and at the same 1.5 stroke as its neighbours so the row does not gain a
- * heavier mark than the one that closes it.
- */
-const PENCIL = 'M4.5 19.5 5.4 16.4 16.4 5.4a1.55 1.55 0 0 1 2.2 2.2L7.6 18.6zM14.4 7.4 16.6 9.6'
-/**
- * Send this window to the top strip: an arrow rising into a bar.
+ * Send this window to the top strip: an arrow to the top-right corner.
  *
- * The mirror image of the fold-away glyph on a strip tab, which is an arrow
- * going left into a bar — one gesture drawn twice so the pair reads as out and
- * back rather than as two unrelated controls. Not a pin, not a star: both of
- * those mean "favourite" everywhere else, and this is a placement, not a
- * rating.
+ * There was a pencil next to this until 2026-08-17 and there is not any more —
+ * Asad: *"I don't want this edit button here. Just double click should make it
+ * editable. That's it."* Losing it moved this control into the slot the pencil
+ * was in, which is where he asked for it, and it took the glyph with it:
+ * *"it should be some arrow like to the corner to maybe right top corner, not
+ * straight to up and without this line above there."*
+ *
+ * So: a diagonal shaft with a corner bracket at its head, and no bar over the
+ * top. The strip tab's fold-away control is the exact mirror of this through the
+ * diagonal, so the pair reads as out and back rather than as two unrelated
+ * marks. Not a pin, not a star: both of those mean "favourite" everywhere else,
+ * and this is a placement, not a rating.
  */
-const TO_STRIP = 'M5 4.5h14M12 20V9M8 13l4-4 4 4'
+const TO_STRIP = 'M7.5 16.5 16.5 7.5M10.5 7.5H16.5V13.5'
+/**
+ * "Why does this exist" — a question mark in a ring, on a copilot-started row.
+ *
+ * A question mark rather than an info `i`, because the row is answering a
+ * question a person actually asks out loud when a tab they did not open appears
+ * in their sidebar. It only ever appears on a row that *has* an answer: a
+ * copilot session whose spawning turn is not known — one restored from a
+ * previous run of the app, where the origin survives on the session metadata and
+ * the log row is not loaded — draws no button rather than one that lands
+ * nowhere.
+ */
+const WHY = 'M12 3.5a8.5 8.5 0 1 0 0 17 8.5 8.5 0 0 0 0-17M9.6 9.4a2.5 2.5 0 0 1 4.85.8c0 1.7-2.45 2.05-2.45 3.55M12 17.1h.01'
 const GEAR =
   'M12 15.1a3.1 3.1 0 1 0 0-6.2 3.1 3.1 0 0 0 0 6.2zM19.3 14.6a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5v.2a2 2 0 1 1-4 0v-.1a1.6 1.6 0 0 0-1.1-1.5 1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1h-.2a2 2 0 1 1 0-4h.1a1.6 1.6 0 0 0 1.5-1.1 1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5v-.2a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1h.2a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z'
 
@@ -193,20 +283,24 @@ export function Sidebar({
   panels = PANELS,
   browser = true,
   browserOffer = null,
+  alerts = true,
+  alertCount = 0,
   unread = [],
   storage,
   badges,
   peeking = false,
   update,
+  copilot = null,
+  onOpenCopilot,
   onSelectTab,
   onCloseTab,
   onSelectPanel,
   onNewSession,
-  onNewSessionOptions,
   onNewBrowserTab,
   onOpenProject,
   onCloseProject,
   onOpenSettings,
+  onOpenAlerts,
   onToggleCollapsed,
   onPeekStart,
   onPeekEnd,
@@ -288,8 +382,31 @@ export function Sidebar({
     )
   }
 
+  /**
+   * Whether the *user* has done anything since the rename field opened.
+   *
+   * This exists because of a focus steal that is invisible in a screenshot and
+   * was found by driving the real app. Double-clicking a row that is not already
+   * the open session does two things: the first click switches to that session,
+   * and the second opens the field. The terminal for the newly-selected session
+   * then focuses its own textarea — measured, with timestamps, in the running
+   * window: the field appears at t+73ms, `xterm-helper-textarea` takes focus at
+   * t+75ms, and the field is gone at t+76ms, because a blur means "save and
+   * close" and the field never got to see a keystroke. Renaming worked on the
+   * row you were already in and silently did nothing on any other, which is the
+   * worst shape a bug can have.
+   *
+   * `relatedTarget` cannot tell the two cases apart on its own — a real click
+   * into the terminal reports the same element as the steal does. What does tell
+   * them apart is that a click or a keypress is a thing the user *did*, and it
+   * arrives before the focus moves. So a blur with no user action behind it is
+   * not a dismissal, and the field takes its focus back instead of closing.
+   */
+  const userActed = useRef(false)
+
   const beginRename = (id: string, label: string): void => {
     editing.current = true
+    userActed.current = false
     setRenaming({ id, draft: label })
   }
 
@@ -303,6 +420,28 @@ export function Sidebar({
     setRenaming(null)
   }
 
+  /*
+   * Mark anything the user does while a rename field is open.
+   *
+   * On the document and in the capture phase, so it sees the action wherever it
+   * lands — including the click that dismisses the field, which by definition
+   * happens somewhere other than the field. Registered only while a field is
+   * open, and reset by `beginRename`, so the double-click that *opened* it does
+   * not count as an action taken since.
+   */
+  useEffect(() => {
+    if (!renaming) return
+    const mark = (): void => {
+      userActed.current = true
+    }
+    document.addEventListener('pointerdown', mark, true)
+    document.addEventListener('keydown', mark, true)
+    return () => {
+      document.removeEventListener('pointerdown', mark, true)
+      document.removeEventListener('keydown', mark, true)
+    }
+  }, [renaming])
+
   /** Folded projects, by path. Local: it is a view state, not a preference. */
   const [folded, setFolded] = useState<ReadonlySet<string>>(new Set())
   const toggleFold = (path: string) =>
@@ -313,10 +452,28 @@ export function Sidebar({
     })
 
   const browserTabs = tabs.filter((tab) => tab.kind === 'browser')
+
+  /**
+   * Yours, and the copilot's, split once.
+   *
+   * A session the copilot started is an ordinary session in every way that
+   * matters — same folder, same account, same confinement, same ✕ — and it is
+   * not ordinary in one: nobody in this window asked for it. Dropping it into
+   * the run under your project heading, between two sessions you opened
+   * yourself, with nothing saying where it came from, is the one thing an app
+   * that can start processes on its own must not do. So they come out here and
+   * go under a heading of their own, below.
+   *
+   * Split in one pass rather than filtered twice, because the two halves have
+   * to partition: a session in neither is a row missing from the rail, and one
+   * in both is a row drawn twice. See `copilot/session-origin.ts`.
+   */
+  const { mine: ownTabs, copilot: copilotTabs } = partitionByOrigin(tabs)
+
   const sessionsIn = (path: string) =>
-    tabs.filter((tab) => tab.kind === 'session' && tab.projectPath === path)
+    ownTabs.filter((tab) => tab.kind === 'session' && tab.projectPath === path)
   /** Sessions whose project has been closed out from under them. */
-  const orphaned = tabs.filter(
+  const orphaned = ownTabs.filter(
     (tab) =>
       tab.kind === 'session' && !projects.some((project) => project.path === tab.projectPath),
   )
@@ -325,13 +482,75 @@ export function Sidebar({
     tab.kind === 'session' ? sessionLabel(tab.label, index, projectName) : tab.label
 
   /**
+   * One run of rows, with a qualifier on any that its name alone cannot
+   * identify.
+   *
+   * Per run rather than over the whole rail, because a run is what a person
+   * compares: two sessions called "Session 1" under two different project
+   * headings are already told apart by the heading, and qualifying those would
+   * put the folder name on a row three pixels below the same word. Inside one
+   * run the folder is by definition no help either — which is why
+   * `tabQualifiers` falls through it to the session id.
+   */
+  /**
+   * `projectName` is a string for a run that sits under one project heading,
+   * and a function for one that does not.
+   *
+   * The Copilot sessions group is the second kind: it is one flat run that can
+   * hold sessions from several folders, so there is no single heading to be
+   * redundant with — and without a folder name per row, `sessionLabel` finds a
+   * session still wearing its folder's name, decides that name is worth
+   * showing, and prints **terminaldeck** where the copilot's own page prints
+   * **Session 1**. Two names for one session, twenty pixels apart. Seen on
+   * screen, which is the only way this class of thing ever gets found here.
+   */
+  const rowsFor = (
+    run: WorkspaceTab[],
+    projectName?: string | ((tab: WorkspaceTab) => string | undefined),
+  ) => {
+    const nameOf = typeof projectName === 'function' ? projectName : () => projectName
+    const labels = run.map((tab, index) => labelFor(tab, index, nameOf(tab)))
+    // `showAccounts`, not `namesAccounts`: the question is whether the caption
+    // is on the line, and on a rail too narrow to carry one it is not — so
+    // there the account separates nothing and the id still has to.
+    const qualifiers = tabQualifiers(run, labels, { accountsShown: showAccounts })
+    return run.map((tab, index) => tabRow(tab, labels[index], qualifiers[index]))
+  }
+
+  /**
    * Whether the rows have to name the account each session belongs to.
    *
    * Only once more than one is in play — see `accountsWorthShowing`. Two
    * sessions in the same folder under two logins are otherwise the same row
    * twice, which is the thing this app must never make someone guess about.
+   *
+   * Two answers, not one, and the difference is the whole of the fix for a name
+   * cut down to `S…`. `namesAccounts` is whether the fact is worth stating at
+   * all; `showAccounts` is whether this rail is wide enough to state it on the
+   * line without eating the session's name. When they disagree the fact moves
+   * into the row's tooltip, because the name is the thing the row exists to
+   * carry and the account is the thing that gives.
    */
-  const showAccounts = accountsWorthShowing(tabs)
+  const namesAccounts = accountsWorthShowing(tabs)
+  const showAccounts = accountsWorthShowing(tabs, width)
+
+  /**
+   * The sign-in answers this window has already read, and not one probe more.
+   *
+   * The rail is the hard case for identity: it draws a row per session, it is on
+   * screen for the whole life of the window, and asking who an account is signed
+   * in as spawns that agent's CLI. A hook per row would start a process per row
+   * on every mount — which is why the account chip probes exactly one account
+   * and its menu probes the list only when opened.
+   *
+   * So this asks nobody. `useKnownSignIns` is a read of the answers those two
+   * surfaces already paid for, and rows fall to the lower rungs of
+   * `accountRail` — a chosen name, or nothing plus a tooltip — until one lands.
+   * The payoff is the bug itself: the rail said `Default` while the chip forty
+   * pixels above it said `app.imatch.ae@gmail.com`, and both now read the same
+   * answer out of the same store in the same frame.
+   */
+  const knownSignIns = useKnownSignIns()
 
   /**
    * Whether this row offers a rename.
@@ -345,7 +564,7 @@ export function Sidebar({
   const canRename = (tab: WorkspaceTab): boolean =>
     tab.kind === 'session' && sessionRename.available
 
-  const tabRow = (tab: WorkspaceTab, label: string) => {
+  const tabRow = (tab: WorkspaceTab, label: string, qualifier: string | null = null) => {
     /*
      * The row, become a field.
      *
@@ -398,7 +617,23 @@ export function Sidebar({
               // it lives inside a menu that dismisses itself; this one has
               // nothing to dismiss it, so without this it would sit open for as
               // long as the app ran.
-              onBlur={() => endRename(true)}
+              //
+              // Unless nothing the user did caused the blur — see `userActed`.
+              // The terminal of a session you have just switched to focuses
+              // itself a couple of milliseconds after this field appears, and
+              // treating that as "clicked away" closed the field before a
+              // single key could be typed. The focus is taken back on the next
+              // frame rather than inside the handler, because a `focus()` in
+              // the middle of a `blur` is a fight the browser arbitrates and
+              // Chromium does not always give to the caller.
+              onBlur={(event) => {
+                if (!userActed.current) {
+                  const field = event.currentTarget
+                  requestAnimationFrame(() => field.focus())
+                  return
+                }
+                endRename(true)
+              }}
             />
           </form>
         </li>
@@ -428,6 +663,46 @@ export function Sidebar({
      * contents are somewhere else.
      */
     const promoted = promotedOrder.includes(tab.id)
+    const renameable = canRename(tab)
+    /** The copilot turn that started this session, or null. See `WHY`. */
+    const turn = turnOf(tab)
+    /*
+     * What the row says about itself on hover.
+     *
+     * The rename hint is in here because the gesture that opens it is now a
+     * double-click, and a gesture leaves nothing on screen. The button that used
+     * to advertise it has gone — *"I don't want this edit button here"* — so the
+     * only honest way to keep a hidden gesture discoverable is to say it in the
+     * one place a person already looks when they wonder what a row can do. F2 is
+     * named beside it because a double-click cannot be performed from a
+     * keyboard, and losing the pencil must not mean losing the rename for anyone
+     * who does not use a mouse.
+     */
+    /*
+     * Who the row is running as, in words nobody generated.
+     *
+     * `tab.account.name` used to be printed here and on the line — the profile
+     * *key* the main process mints for the machine's own install, so every row
+     * in the rail read "Default" while the chip above the terminal read the
+     * address. His words, and the reason this pass exists: *"Inside the terminal
+     * page it is still showing selected account as Default and not showing the
+     * email ID."*
+     *
+     * `accountRail` returns both halves off one rung, so the caption and this
+     * sentence can never describe different things: the mailbox on the line, the
+     * whole address in the tooltip, and — where the login has no address and no
+     * name a person chose — nothing on the line and the install named in full
+     * here. Which is the same trade the narrow rail already makes.
+     */
+    const rail = tab.account ? accountRail(tab.account, knownSignIns[tab.account.id]) : null
+    const rowTitle = [
+      label,
+      qualifier,
+      namesAccounts && rail ? rail.note : null,
+      renameable ? 'double-click or F2 to rename' : null,
+    ]
+      .filter(Boolean)
+      .join(' — ')
     return (
       <li key={tab.id}>
         <div
@@ -442,11 +717,36 @@ export function Sidebar({
           <button
             type="button"
             className="sb-row-main"
-            title={
-              showAccounts && tab.account ? `${label} — signed in as ${tab.account.name}` : label
-            }
+            title={rowTitle}
             aria-current={!activePanel && tab.id === activeTabId}
             onClick={() => onSelectTab(tab.id)}
+            /*
+             * The rename, in place of the button that used to open it.
+             *
+             * A double-click on a name that turns it into a field is the gesture
+             * every file manager and every editor sidebar already has, which is
+             * why he expected it here and was surprised to find a pencil
+             * instead. The row's single click is unaffected: the browser
+             * dispatches both clicks of a double-click as well, so this opens
+             * the field on a row that has already been selected — which is the
+             * right order anyway.
+             */
+            onDoubleClick={renameable ? () => beginRename(tab.id, label) : undefined}
+            /*
+             * The same thing from the keyboard. F2 rather than Return, because
+             * Return on a focused button is "press it" and stealing that would
+             * make the row unopenable without a mouse — the opposite of the
+             * problem this is solving.
+             */
+            onKeyDown={
+              renameable
+                ? (event) => {
+                    if (event.key !== 'F2') return
+                    event.preventDefault()
+                    beginRename(tab.id, label)
+                  }
+                : undefined
+            }
           >
             {tab.kind === 'session' ? (
               <StatusDot status={tab.status ?? 'idle'} />
@@ -454,14 +754,64 @@ export function Sidebar({
               <Glyph path={KIND_ICON.browser} size={15} />
             )}
             <span className="sb-label">{label}</span>
-            {showAccounts && tab.account && (
-              <span className="sb-account">{tab.account.name}</span>
+            {/*
+              The fact that tells this row from the one beside it, and only when
+              there is one to tell. Two sessions in a folder whose agents wrote
+              the same sentence are the same row twice — reported exactly that
+              way — and after the name, the folder and the account have all
+              failed to separate them, the head of the session id is what is
+              left. It reads as an identifier rather than as a word because it
+              is one; `.sb-qualifier` sets it in the mono face for that reason.
+            */}
+            {qualifier && <span className="sb-qualifier">{qualifier}</span>}
+            {/*
+              And not both. Measured on the rendered rail at 264px: a row
+              carrying a name, an eight-character id and an account caption has
+              about 200px of line for roughly 250px of content, so the name was
+              cut to `Update Cl…` and the account to **`a…`** — the same
+              two-character stub the account column was reported for at a narrow
+              width, arrived at from the other direction.
+
+              The qualifier is what gives nothing up, because a row only has one
+              when nothing else on it identifies it — including the account,
+              which by then has already failed to separate this row from its
+              twin (see `tabQualifiers`). So on those rows the caption is the
+              least informative thing on the line, and it goes where it goes
+              whenever this rail runs out of room: into the row's tooltip.
+            */}
+            {showAccounts && !qualifier && rail?.short && (
+              <span className="sb-account">{rail.short}</span>
             )}
           </button>
           {/* Mail's idiom: a dot for a row with something new in it. It hides
               under the close button on hover, because at that point the pointer
               is on its way somewhere else. */}
           {unread.includes(tab.id) && <span className="sb-unread" aria-label="Unread output" />}
+          {/*
+            The link back to the turn that started this session.
+
+            Half of the promise that "why does this exist" is one click in
+            either direction — the copilot's own page holds the other half,
+            listing what it started. It travels as a `focus` through the same
+            `showPanel(id, focus)` a dashboard tile uses to land on the rows it
+            counted, so this is an existing road rather than a new one.
+
+            Drawn only when there is a turn to open. A copilot session restored
+            from a previous run carries its origin on its metadata and has no
+            log row loaded to point at, and a button that lands nowhere is worse
+            than an absent one.
+          */}
+          {turn !== null && onOpenCopilot && (
+            <button
+              type="button"
+              className="sb-row-action"
+              aria-label={`Why ${label} exists — open the copilot turn that started it`}
+              title="Started by the copilot — open that turn"
+              onClick={() => onOpenCopilot(turn)}
+            >
+              <Glyph path={WHY} size={13} />
+            </button>
+          )}
           {/*
             The same promotion, without the drag.
 
@@ -497,23 +847,35 @@ export function Sidebar({
           >
             <Glyph path={TO_STRIP} size={13} />
           </button>
-          {canRename(tab) && (
-            <button
-              type="button"
-              className="sb-row-action sb-rename"
-              aria-label={`Rename ${label}`}
-              title={`Rename ${label}`}
-              onClick={() => beginRename(tab.id, label)}
-            >
-              <Glyph path={PENCIL} size={13} />
-            </button>
-          )}
+          {/*
+            The ✕ that actually ends things — and the one place in the window
+            where that is true.
+
+            There is a second ✕ in this window, on the tab in the top bar, and
+            since 2026-08-17 it does something entirely different: it takes the
+            tab off the bar and leaves the session running, right here, in this
+            list. *"it should not delete the session… side panel will have
+            everything inside, and above we just set a view which one we want to
+            see."*
+
+            Two identical glyphs with two outcomes, one of which is
+            irreversible, is not a difference a person can be expected to
+            remember. So this one says the consequence in its tooltip rather
+            than naming the verb, and it turns `--color-critical` under the
+            pointer while the strip's stays grey — see `.sb-close:hover`. The
+            confirmation behind it is the third layer and the only one that
+            catches somebody who was not looking.
+          */}
           {tab.closable && (
             <button
               type="button"
               className="sb-row-action sb-close"
               aria-label={`Close ${label}`}
-              title={`Close ${label}`}
+              title={
+                tab.kind === 'session'
+                  ? `Close ${label} — ends the session`
+                  : `Close ${label}`
+              }
               onClick={() => onCloseTab(tab.id)}
             >
               <Glyph path={CLOSE} size={13} />
@@ -566,34 +928,27 @@ export function Sidebar({
           type="button"
           className="sb-new"
           onClick={() => onNewSession()}
-          title={tip('New session', 'session.new')}
+          // The ellipsis is the promise that a question is coming, which is the
+          // whole of what changed here — the same word with no ellipsis used to
+          // mean a session appearing with no questions asked.
+          title={tip('New session…', 'session.new')}
         >
           <Glyph path={PLUS} size={16} />
           <span>New session</span>
         </button>
         {/*
-          The second half of a split button: press for a session, press the
-          chevron to be asked. The press itself is untouched — one click, the
-          remembered folder, the default agent — because the dialog that used
-          to stand in front of it was removed on purpose. What was missing is
-          any way to ask *from here*: the panel that names the folder and the
-          agent is behind a command-palette entry, so the one place in the
-          window where sessions get started could not reach it.
+          There was a chevron here until 2026-08-17 — the second half of a split
+          button, where the press started a session and the chevron asked how.
+          It is gone, and by name: *"remove this drop-down button at all from
+          the side panel."*
 
-          Drawn only when a host wired it, since this component cannot open
-          that dialog itself. See `onNewSessionOptions`.
+          It was answering a real problem the wrong way round. Pressing New
+          session spawned into the remembered folder on the default agent with
+          nothing on screen saying which either of them was, so a way to ask was
+          added *beside* it. The answer he wanted was for the button itself to
+          ask. It does; there are two actions on this line now, and they are the
+          two kinds of window this app opens.
         */}
-        {onNewSessionOptions && (
-          <button
-            type="button"
-            className="sb-new-more"
-            onClick={onNewSessionOptions}
-            aria-label="New session with options"
-            title={tip('New session with options', 'session.newDialog')}
-          >
-            <Glyph path={CHEVRON_DOWN} size={14} />
-          </button>
-        )}
         {/*
           Drawn whether or not the feature is installed, and it does the right
           thing either way: with the browser pane on it opens a tab, without it
@@ -616,7 +971,47 @@ export function Sidebar({
         )}
       </div>
 
-      <div className="sidebar-scroll">
+      {/*
+        `scroll-fade` because this is the rail's own scroll edge, and it was the
+        sixth surface in the app found slicing a row in half at one.
+
+        Measured on the rendered window: the region ended at y=832 with a
+        session row sitting at 817, so the bottom row read as a horizontal cut
+        through the middle of its letters, three pixels above the Remote and
+        Settings foot. Every other scrolling region in this app already answers
+        that with the one class in `app.css`, whose mask is driven by the scroll
+        position so an unscrolled rail does not dim its own first row. There was
+        no argument for the rail being the exception — only that nobody had put
+        it on. `finish.test.ts` now lists this file beside the other five, so a
+        seventh cannot be added without one.
+      */}
+      <div className="sidebar-scroll scroll-fade">
+        {/*
+          The pinned block, above the views and above what you have open.
+
+          `pinned` is not in `PANEL_GROUPS`, so the loop below never draws it —
+          that array is the list of *labelled* runs, and this one has no label
+          on purpose. It is placed by hand, here, which is what `panels.ts` says
+          a group outside that array means.
+        */}
+        {panels
+          .filter((panel) => panel.group === 'pinned')
+          .map((spec) => (
+            <CopilotEntry
+              key={spec.id}
+              spec={spec}
+              stage={copilot?.stage ?? null}
+              state={copilot?.state ?? null}
+              active={activePanel === spec.id}
+              // `onSelectPanel`, not a route of its own: the copilot is one of
+              // the window's views, so opening it is the same navigation every
+              // other row performs and it lands in the same place after a
+              // relaunch. `onOpenCopilot` exists for the one caller that needs
+              // to land on a *turn*, which is a row below, not this one.
+              onOpen={() => onSelectPanel(spec.id)}
+            />
+          ))}
+
         {PANEL_GROUPS.map((group) => {
           const inGroup = panels.filter((panel) => panel.group === group.id)
           // A heading over nothing. Uninstalling every integration used to leave
@@ -725,31 +1120,52 @@ export function Sidebar({
               </div>
               {!folded.has(project.path) && (
                 <ul className="sb-list sb-sessions">
-                  {sessionsIn(project.path).map((tab, index) =>
-                    tabRow(tab, labelFor(tab, index, project.name)),
-                  )}
+                  {rowsFor(sessionsIn(project.path), project.name)}
                 </ul>
               )}
             </div>
           ))}
 
-          {orphaned.length > 0 && (
-            <ul className="sb-list">
-              {orphaned.map((tab, index) => tabRow(tab, labelFor(tab, index)))}
-            </ul>
-          )}
+          {orphaned.length > 0 && <ul className="sb-list">{rowsFor(orphaned)}</ul>}
           {browserTabs.length > 0 && (
             <ul className="sb-list">{browserTabs.map((tab) => tabRow(tab, tab.label))}</ul>
           )}
         </section>
+
+        {/*
+          What the copilot started, under a heading of its own.
+
+          Below "Open" rather than above it, because these are still windows you
+          have open and the list you scan first is your own work. What the
+          heading buys is that no row in your projects is a session you did not
+          ask for — see `partitionByOrigin` — and that a person can tell at a
+          glance whether the machine has been busy on its own.
+
+          Rendered only when there are any. A heading over nothing reads as a
+          list that failed to load, which is the same argument the Integrations
+          run makes a few lines up.
+        */}
+        {copilotTabs.length > 0 && (
+          <section className="sb-group">
+            <h2 className="sb-group-label">Copilot sessions</h2>
+            {/* The folder per row, because this run spans folders — see
+                `rowsFor`. `tabQualifiers` then adds the folder name to any two
+                rows the numbering alone cannot separate. */}
+            <ul className="sb-list">
+              {rowsFor(copilotTabs, (tab) =>
+                tab.projectPath ? folderName(tab.projectPath) : undefined,
+              )}
+            </ul>
+          </section>
+        )}
       </div>
 
       {/*
         The foot: the app talking about itself, in the order you would want to
-        hear it. An update is news and goes on top; Alerts is a standing list
-        and goes under it; Settings is where you go when you have decided to
-        change something, and stays at the bottom-left where every app of this
-        shape puts it.
+        hear it. An update is news and goes on top; Settings is where you go
+        when you have decided to change something, and stays at the bottom-left
+        where every app of this shape puts it, with the bell at the end of its
+        line.
 
         All three used to be somewhere else — the update strip across the top of
         the work, Alerts in the toolbar's right-hand corner competing with the
@@ -777,15 +1193,54 @@ export function Sidebar({
           )
         })}
 
-        <button
-          type="button"
-          className="sb-row sb-settings"
-          onClick={onOpenSettings}
-          title={tip('Settings', 'app.preferences')}
-        >
-          <Glyph path={GEAR} />
-          <span className="sb-label">Settings</span>
-        </button>
+        {/*
+          The last line of the rail: two things you open, neither of which is a
+          place you go.
+
+          *"For the alerts icon, let's not keep it a complete separate pill.
+          Let's make it a small icon next to the settings pill… if we click on
+          it, it just opens the notifications."* — and then, about what "opens"
+          had to mean: *"and notifications should be a pop-up just like
+          settings, not a full page."* So the bell sits at the end of the
+          Settings line and both controls do the same kind of thing: put a sheet
+          over the window and leave the window exactly where it was.
+
+          Which is why neither of them has an `active` state. A row in the rail
+          is drawn as current because a page is filling the window and you need
+          to know which; a dialog closes and there is nothing to have been
+          current about. Marking the bell while its sheet is open would be the
+          rail claiming a navigation that never happened.
+
+          What the bell must not lose is the count. A notification list whose
+          only mark is inside itself is a list nobody opens — so the number is a
+          dot on the glyph, and the number itself is spoken in the label,
+          because a 30px glyph has nowhere to print "3" and a mark with no text
+          is a mark a screen reader cannot report at all.
+        */}
+        <div className="sidebar-settings">
+          <button
+            type="button"
+            className="sb-row sb-settings"
+            onClick={onOpenSettings}
+            title={tip('Settings', 'app.preferences')}
+          >
+            <Glyph path={GEAR} />
+            <span className="sb-label">Settings</span>
+          </button>
+
+          {alerts && (
+            <button
+              type="button"
+              className="sb-icon"
+              aria-label={alertCount > 0 ? `Alerts (${alertCount})` : 'Alerts'}
+              title="Alerts"
+              onClick={onOpenAlerts}
+            >
+              <Glyph path={ALERTS_GLYPH} size={16} />
+              {alertCount > 0 && <span className="sb-icon-dot" aria-hidden="true" />}
+            </button>
+          )}
+        </div>
       </div>
 
       <div

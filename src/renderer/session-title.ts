@@ -175,6 +175,86 @@ export function isUsableTitle(text: string): boolean {
   return !NOT_A_TASK.some((pattern) => pattern.test(text))
 }
 
+/**
+ * Enough of a session id to tell two apart, and short enough to sit on a row.
+ *
+ * Both kinds of id in this app are UUIDs — the pty's, minted by `randomUUID` in
+ * `pty-manager.ts`, and the conversation's, minted by Claude Code — and the
+ * first block of one is already unique across every session or conversation a
+ * person will ever have. The whole id stays in whatever `title` sits beside it,
+ * because that is the string you would paste into `claude --resume`.
+ *
+ * Here rather than beside the dialog it was written for because it is now also
+ * the last resort in {@link tabQualifiers}: when two rows carry the same name in
+ * the same folder, this is the fact that separates them, and it is the same
+ * eight characters the Inspector and the debug panel already print for that
+ * session. `NewSessionDialog.tsx` re-exports it so its callers did not move.
+ */
+export function shortSessionId(id: string): string {
+  return id.split('-')[0] ?? id
+}
+
+/**
+ * The floor for {@link distinguishingIdLength}.
+ *
+ * Four, because that is where a hex string stops reading as a fragment of
+ * something and starts reading as a label you can hold in your head long enough
+ * to find it again two rows down — the same reason a short git hash is not one
+ * character. Below it the saving is a few pixels and the cost is a qualifier
+ * nobody can repeat back.
+ */
+export const MIN_ID_CHARS = 4
+
+/**
+ * The fewest characters of {@link shortSessionId} that still separate a run.
+ *
+ * ## Why anything shorter than the block
+ *
+ * Measured on the rendered rail, which is 264px: a session row that has fallen
+ * through to its id gives 7px to the status dot, 50px to eight monospaced hex
+ * characters and 60px to the two hover actions it keeps space for — and the
+ * name, the only thing on the line a person actually reads, was left at its
+ * 8ch floor and printed **Update Cl…**. Asad has objected to a name losing to
+ * what sits beside it once already, in those words, about the account chip
+ * shrinking a name to `S…`; this is the same failure with a different
+ * neighbour, and the neighbour here is a number.
+ *
+ * So the id gives its pixels back. Four characters cost 25px instead of 50,
+ * which is a quarter of the row's text column handed to the name.
+ *
+ * ## Why it is computed rather than simply cut to four
+ *
+ * The whole reason this qualifier is drawn is that nothing else on the row
+ * separates it from the row above. A blind four-character cut would be a
+ * qualifier that *can* collide — 1 in 65536 for any pair, which is small and is
+ * not zero — and a colliding qualifier leaves the two rows exactly as
+ * indistinguishable as it found them, while looking like it answered. So the
+ * length is the shortest at which every id being printed differs from every
+ * other, and it is one length for the whole run: these sit in a column at the
+ * end of rows whose names are all cut to the same width, and a ragged column of
+ * 4s and 6s reads as data rather than as an identifier.
+ *
+ * In practice this returns {@link MIN_ID_CHARS} every time — the lengthening is
+ * a backstop, not a behaviour anybody will see. What it buys is that the claim
+ * "these two rows are different" is checked instead of assumed.
+ *
+ * Still a prefix of the same block the Inspector and the debug panel print, so
+ * matching a row against an inspector by eye is unchanged: it was always a
+ * prefix comparison, and it now compares four characters instead of eight.
+ */
+export function distinguishingIdLength(ids: readonly string[]): number {
+  // Nothing to separate. Answered with the floor rather than with zero so that
+  // a caller who asks before it knows whether it has any rows gets a length it
+  // could actually cut with, instead of one that silently prints nothing.
+  if (ids.length === 0) return MIN_ID_CHARS
+  const heads = ids.map(shortSessionId)
+  const longest = heads.reduce((most, head) => Math.max(most, head.length), 0)
+  for (let length = MIN_ID_CHARS; length < longest; length += 1) {
+    if (new Set(heads.map((head) => head.slice(0, length))).size === heads.length) return length
+  }
+  return longest
+}
+
 /** Last path segment — the fallback title, and what the sidebar calls a project. */
 export function folderName(path: string): string {
   const segments = path.split('/').filter(Boolean)

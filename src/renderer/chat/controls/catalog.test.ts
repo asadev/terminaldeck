@@ -3,6 +3,8 @@ import {
   controlName,
   describeControl,
   displayValue,
+  unreadLabel,
+  unreadNote,
   EFFORT_OPTIONS,
   isCurrent,
   MENU_CONTROLS,
@@ -12,6 +14,7 @@ import {
   PRIMARY_CONTROLS,
   reachOf,
   sourceNote,
+  unsupportedProviderNote,
   type ControlId,
   type ControlReading,
 } from './catalog'
@@ -138,6 +141,39 @@ describe('never showing a value that was not read', () => {
     expect(displayValue(undefined)).toBe('Unknown')
   })
 
+  /**
+   * Asad, watching the composer: the model "eventually resolves", permission
+   * "never does". It was not slow — the footer only prints the mode when it
+   * *changes*, so a session nobody had cycled had no source at all, and the
+   * control sat on "Unknown" for its whole life.
+   *
+   * `readPermissionDefault` in the main process now settles it from the same
+   * settings files the CLI reads. What survives here is the case where nothing
+   * anywhere has said, and the word for that is not "Unknown" — "Unknown" in
+   * this row means a read failed, and nothing failed.
+   */
+  it('says a silent permission mode was not reported, not that it is unknown', () => {
+    expect(displayValue({ value: null, label: null, source: null }, 'permission')).toBe(
+      'Not reported',
+    )
+    expect(displayValue(undefined, 'permission')).toBe('Not reported')
+    expect(unreadLabel('permission')).toBe('Not reported')
+  })
+
+  it('keeps Unknown for the two controls where silence really is a failure', () => {
+    // Model is painted in the footer *and* recoverable from the transcript;
+    // effort is persisted. Neither answering means something went wrong.
+    expect(unreadLabel('model')).toBe('Unknown')
+    expect(unreadLabel('effort')).toBe('Unknown')
+  })
+
+  it('explains a silent permission mode and says what to do about it', () => {
+    const note = unreadNote('permission')
+    expect(note).not.toBeNull()
+    expect(note).toMatch(/only when it changes/i)
+    expect(note).toMatch(/pick one/i)
+  })
+
   it('names the source so a read value and an assumed one are told apart', () => {
     expect(sourceNote('screen')).toMatch(/this session/i)
     expect(sourceNote('transcript')).toMatch(/last reply/i)
@@ -176,5 +212,43 @@ describe('which option gets the tick', () => {
     const asDefault = reading('Opus 5 (1M context) (default)', 'Opus 5 (1M context) (default)')
     expect(isCurrent(asDefault, { id: 'default', label: 'Default' })).toBe(true)
     expect(isCurrent(asDefault, { id: 'opus', label: 'Opus' })).toBe(false)
+  })
+})
+
+
+describe('an agent CLI this build has not learned', () => {
+  it('says nothing about Claude, which is the one it does speak', () => {
+    expect(unsupportedProviderNote('claude')).toBeNull()
+  })
+
+  it('leaves a session whose CLI is unknown alone, because the screen answers that', () => {
+    // `undefined` is an agent started by hand inside a shell session. The main
+    // process decides that one from the screen — the markers it matches are
+    // Claude Code's own — so pre-empting it here would withdraw the controls
+    // from the very case they were extended to cover.
+    expect(unsupportedProviderNote(undefined)).toBeNull()
+  })
+
+  it('leaves the shell to its own sentence rather than borrowing this one', () => {
+    // "There is no model in a shell" and "this build has not learned this CLI's
+    // commands" are different facts, and merging them would make the shell case
+    // read as an unfinished feature.
+    expect(unsupportedProviderNote('shell')).toBeNull()
+  })
+
+  it('names Codex and Gemini, and says the mechanism is unestablished rather than absent', () => {
+    for (const [provider, name] of [
+      ['codex', 'Codex'],
+      ['gemini', 'Gemini'],
+    ]) {
+      const note = unsupportedProviderNote(provider)
+      expect(note, provider).toContain(name)
+      // Neither could be driven on the machine this was written on — the Codex
+      // binary is missing and Gemini stops on an auth picker — so this build
+      // has no evidence either way. Claiming they *cannot* do it would be
+      // inventing a fact to sound final.
+      expect(note, provider).not.toMatch(/cannot|impossible|does not support/i)
+      expect(note, provider).toMatch(/has not been shown/i)
+    }
   })
 })

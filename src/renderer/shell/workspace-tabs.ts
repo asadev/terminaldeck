@@ -1,5 +1,5 @@
 import type { ProviderId, SessionStatus } from '@shared/types'
-import { folderName } from '../session-title'
+import { distinguishingIdLength, folderName, shortSessionId } from '../session-title'
 
 /**
  * A tab in the top header.
@@ -43,14 +43,46 @@ export interface WorkspaceTab {
    * it spawns a process per account.
    */
   account?: { id: string; name: string; provider: ProviderId }
+  /**
+   * Who wanted this session — carried straight off `SessionMeta.origin`.
+   *
+   * Absent on every session a person started, and the absence is the answer
+   * rather than a gap: `shared/types.ts` states that nothing may read it as
+   * unknown. The rail groups `'copilot'` under its own heading, because a tab
+   * that appeared in the middle of your own work with nothing saying where it
+   * came from is the one thing an app that starts processes on its own must not
+   * produce. See `renderer/copilot/session-origin.ts`.
+   *
+   * It is a label and never a permission. A copilot-started session runs in the
+   * same folder, under the same account and inside the same confinement as one
+   * you started — `src/main/session-origin.test.ts` pins that.
+   */
+  origin?: string
+  /** The action-log row of the copilot turn that started it, when one did. */
+  originRunId?: string
   /** True for tabs the user can close. */
   closable: boolean
 }
 
 /**
- * Whether a list of tabs needs to say which account each session belongs to.
+ * The narrowest rail that can hold a session's name *and* an account beside it.
  *
- * Only when they do not all agree. On the ordinary install there is one
+ * Measured rather than guessed, off the rail this was written in. A row is 8px
+ * of left pad, a 15px status dot, an 8px gap and 6px of right pad, so a 240px
+ * rail leaves 203px of line. The account is capped at 12 characters of caption
+ * type — about 84px — which leaves 119px, or roughly seventeen characters, for
+ * the name. Seventeen is enough to read "Update the parser"; below it the row
+ * starts cutting words in half, and the thing that gets cut is always the name.
+ */
+export const ACCOUNT_NEEDS_RAIL = 240
+
+/**
+ * Whether a list of tabs needs to say which account each session belongs to —
+ * and whether there is room to say it.
+ *
+ * ## The first half: is it worth saying
+ *
+ * Only when the tabs do not all agree. On the ordinary install there is one
  * account, every row would carry the same word, and a label that is on every
  * row carries no information — the same reason the Accounts screen hides its
  * "Default" badge when there is only one account to be the default of. The
@@ -61,8 +93,31 @@ export interface WorkspaceTab {
  * Sessions with no account are not counted. A plain shell tab appearing beside
  * an agent tab is not a disagreement about accounts, and letting it flip every
  * row into carrying a name would make the label mean "you opened a shell".
+ *
+ * ## The second half: is there room, and what gives when there is not
+ *
+ * From the frames of his 2026-08-16 recording — the sidebar read
+ * `Session 1, Session 2, Sess…, Session 4, Session 5`, and further in, a name
+ * cut to the single character **`S…`**. The row was doing exactly what it was
+ * told: the account had a fixed width and the name was the only flexible thing
+ * on the line, so the name absorbed every pixel the metadata wanted. That is
+ * the identifier losing to the label, which is backwards — a row whose name is
+ * one character has stopped identifying anything, while the account name it
+ * made room for is a fact you can still get at.
+ *
+ * So below {@link ACCOUNT_NEEDS_RAIL} the chip goes and the name stays whole.
+ * Nothing is lost: the row's tooltip names the account either way, which is
+ * where the fact belongs once the line is too short to carry it. Decided here,
+ * from a width, rather than in CSS, because the alternative is a container
+ * query — and giving the rail a containment context to answer a question that
+ * is already a number in a prop would change what `position: fixed` means for
+ * everything inside it, including the drag ghost.
  */
-export function accountsWorthShowing(tabs: readonly WorkspaceTab[]): boolean {
+export function accountsWorthShowing(
+  tabs: readonly WorkspaceTab[],
+  railWidth = Number.POSITIVE_INFINITY,
+): boolean {
+  if (railWidth < ACCOUNT_NEEDS_RAIL) return false
   const seen = new Set<string>()
   for (const tab of tabs) {
     if (tab.kind !== 'session' || !tab.account) continue
@@ -135,6 +190,226 @@ export function tabLabel(tab: WorkspaceTab, tabs: readonly WorkspaceTab[]): stri
     index === -1 ? 0 : index,
     tab.projectPath ? folderName(tab.projectPath) : undefined,
   )
+}
+
+/**
+ * A tab's name, and — only when it needs one — the thing that tells it apart
+ * from the tab beside it with the same name.
+ *
+ * The `qualifier` is null on the ordinary tab, and that is the point: a strip
+ * where every tab carries its project name is a strip where the project name
+ * carries no information, the same argument {@link accountsWorthShowing} makes
+ * about accounts. It appears exactly when the name alone has stopped answering
+ * "which one is this".
+ */
+export interface TabIdentity {
+  /** What the tab is called. Never shortened to make room for the qualifier. */
+  label: string
+  /**
+   * The fact that distinguishes it — the folder, or failing that the head of
+   * its session id — and null when the name alone already does.
+   */
+  qualifier: string | null
+}
+
+/**
+ * The character {@link tabIdentities} joins a label to its qualifier with,
+ * written as an escape rather than as the byte itself.
+ *
+ * NUL is the right separator on the merits: it cannot occur in a POSIX path and
+ * it cannot occur in a title, so no pair of genuinely different tabs can be made
+ * to look identical by the joining itself. A space or a slash could not promise
+ * that, because both occur in the very strings being joined.
+ *
+ * It is spelled `\u0000` because for a while it was not. A literal NUL byte sat
+ * in this file, and one NUL is all it takes for `file`(1) to call a source file
+ * `data` and for `grep`(1) to classify it as binary — at which point grep matches
+ * it silently and prints nothing at all unless you pass `-a`. The damage is not
+ * that a search runs slower; it is that a search *lies*. Running
+ * `grep -rn ACCOUNT_NEEDS_RAIL src/` returned the four places that reference the
+ * constant and not the one line in this file that declares it, so the honest
+ * reading of that output was "the symbol is imported from somewhere else" — a
+ * wrong conclusion drawn from a tool that gave no hint it had skipped anything.
+ * That cost real time here before anyone thought to check the encoding.
+ *
+ * The escape compiles to the identical one-character string, so nothing about
+ * the behaviour depends on which spelling is used and there is no cost to
+ * preferring the one every tool can read. `encoding.test.ts` fails if a raw
+ * control byte comes back, in this file or any other.
+ */
+const PAIR_SEP = '\u0000'
+
+/**
+ * Names for a run of tabs, with duplicates disambiguated.
+ *
+ * ## The failure this exists for
+ *
+ * Seen in his own recording of 2026-08-16 and reported as part of "session
+ * identity is broken": two projects open, each with an unnamed first session,
+ * and a tab strip reading `Session 1  Session 2  Session 1  Session 2`. Both
+ * halves are individually correct — {@link sessionLabel} numbers a session
+ * *within its project*, which is right in the sidebar because the project's
+ * name is the heading three pixels above the row. The strip has no headings. It
+ * is one flat row, so the same two labels arrive in it with nothing left to tell
+ * them apart, and the window is asking the user to guess.
+ *
+ * ## Why the project, and why only sometimes
+ *
+ * The project is what actually differs, so it is what gets printed. And it is
+ * printed only on the tabs that collide, and only where the project is genuinely
+ * the thing that separates them — see {@link tabQualifiers}, which owns the
+ * ladder and the reasoning for both rungs.
+ *
+ * `all` is the whole tab list rather than just the ones being drawn, because
+ * {@link tabLabel} counts a session's siblings in its project to number it, and
+ * that number must not change depending on which tabs happen to be on the strip.
+ */
+export function tabIdentities(
+  shown: readonly WorkspaceTab[],
+  all: readonly WorkspaceTab[] = shown,
+): Map<string, TabIdentity> {
+  const base = shown.map((tab) => tabLabel(tab, all))
+  const qualifiers = tabQualifiers(shown, base)
+
+  const out = new Map<string, TabIdentity>()
+  shown.forEach((tab, index) => {
+    out.set(tab.id, { label: base[index], qualifier: qualifiers[index] })
+  })
+  return out
+}
+
+/**
+ * The qualifiers alone, for a list that already knows what its rows are called.
+ *
+ * Split out of {@link tabIdentities} for the sidebar, which numbers a session
+ * against the siblings in its own project heading and so composes its own
+ * labels. Handing it `tabIdentities` would have meant two functions deriving the
+ * same name two ways, and the whole subject here is a window that shows one
+ * thing two names.
+ *
+ * `labels` is positional against `tabs` — index for index. The caller supplies
+ * both because only the caller knows how it named things.
+ *
+ * ## The ladder, and why each rung is where it is
+ *
+ * **The folder, but only when the folder actually separates them.** It used to
+ * be applied to every colliding tab that had a project at all, which is right
+ * across two projects and useless within one: two sessions in `terminaldeck`
+ * whose agents wrote the same title both got the qualifier `terminaldeck`, so
+ * the pair went from identical to identically qualified, and the pass that was
+ * meant to be the last resort became the only one doing any work. Now the
+ * question asked of a colliding group is whether its folders differ; if they do
+ * not, the folder is not the distinguishing fact and is not printed. This is
+ * also exactly what the sidebar needs, where the folder is the heading three
+ * pixels above the row and could never have distinguished anything.
+ *
+ * **Then the account, but only where the caller is drawing it.** Nothing is
+ * printed for this rung — the row has its own column for the account — but a
+ * pair the caption already separates must not also be given an id, or the row
+ * carries two answers to a question that had one. See `separator` below.
+ *
+ * **Then the session's own id, cut to the length that separates this run.** The
+ * pass this replaces appended an ordinal — `(1)`, `(2)` — and an ordinal is not
+ * a fact about a session. It is a fact about a list: close the first of the two
+ * and the second silently becomes `(1)`, so the one label a person had learned
+ * to recognise now belongs to nothing, and neither number can be looked up
+ * anywhere else in the app. The head of the id is stable for the life of the
+ * session and is a prefix of what the Inspector and the debug panel print for
+ * it, so a row and an inspector can still be matched by eye.
+ *
+ * How much of that head gets printed is `distinguishingIdLength`'s question,
+ * and it is asked rather than assumed: eight characters cost a 264px rail 50px
+ * of the line its session name lives on, and the name was the thing paying. See
+ * that function for the measurements and for why the length is checked against
+ * the ids in play instead of fixed.
+ *
+ * Reported as *"two sidebar rows with the same visible name and the same
+ * account chip, indistinguishable"*: `Update Claude Code terminal to new…`
+ * twice, in one folder, both on the same account. Neither the name, nor the
+ * folder, nor the account could separate them, and the app had one fact left.
+ */
+export function tabQualifiers(
+  tabs: readonly WorkspaceTab[],
+  labels: readonly string[],
+  options: { accountsShown?: boolean } = {},
+): (string | null)[] {
+  const count = (keys: readonly string[]): Map<string, number> => {
+    const seen = new Map<string, number>()
+    for (const key of keys) seen.set(key, (seen.get(key) ?? 0) + 1)
+    return seen
+  }
+
+  /*
+   * Which folders each name is spread across. A name held by tabs in two
+   * folders — or by one tab with a folder and one without, which is an orphaned
+   * session beside its twin — is a name the folder can separate. A name whose
+   * tabs are all in one folder is not, and printing it there would put the same
+   * word on both rows.
+   */
+  const folders = new Map<string, Set<string>>()
+  tabs.forEach((tab, index) => {
+    const set = folders.get(labels[index]) ?? new Set<string>()
+    set.add(tab.projectPath ?? '')
+    folders.set(labels[index], set)
+  })
+
+  const byLabel = count(labels)
+  const qualified = tabs.map((tab, index) =>
+    (byLabel.get(labels[index]) ?? 0) > 1 &&
+    (folders.get(labels[index])?.size ?? 0) > 1 &&
+    tab.projectPath
+      ? folderName(tab.projectPath)
+      : null,
+  )
+
+  /*
+   * The account, when the caller is already drawing it.
+   *
+   * Not a qualifier this function ever prints — the row prints the account
+   * itself, in its own column — but a fact that has to be *counted*, because a
+   * pair of rows the account already separates needs nothing further and an id
+   * appended to them would be a second identifier for a question that has been
+   * answered. The rail is where this matters: two sessions in one folder under
+   * two logins are told apart by the caption they each carry.
+   *
+   * It is a parameter rather than an assumption because the same list is drawn
+   * both ways. `accountsWorthShowing` takes the caption off a narrow rail and
+   * off a rail where every session is on one account, and a fact that is not on
+   * screen cannot distinguish anything — so there, the id is still needed.
+   */
+  const separator = (index: number): string =>
+    options.accountsShown ? tabs[index].account?.id ?? '' : ''
+
+  // The second pass. See {@link PAIR_SEP} for why the parts are joined with a
+  // NUL, and why it is spelled as an escape.
+  const key = (index: number): string =>
+    `${labels[index]}${PAIR_SEP}${qualified[index] ?? ''}${PAIR_SEP}${separator(index)}`
+  const byKey = count(labels.map((_, index) => key(index)))
+
+  /*
+   * How much of the id each of those rows has to print.
+   *
+   * Asked of the rows that reach this rung and no others, because that is the
+   * set the answer has to separate: an id nobody is printing cannot be confused
+   * with one that is. Handed to `distinguishingIdLength` rather than cut to a
+   * fixed width here — the length has to be *checked* against the ids in play,
+   * and that argument, with the measurements behind it, lives on that function.
+   *
+   * One length for the whole run, not one per colliding group. These land in a
+   * column at the ends of rows whose names have all been cut to the same width,
+   * and a column of ids that are four characters on one row and six on the next
+   * reads as a value that varies rather than as an identifier.
+   */
+  const needsId = tabs.map((_, index) => (byKey.get(key(index)) ?? 0) > 1)
+  const idChars = distinguishingIdLength(
+    tabs.filter((_, index) => needsId[index]).map((tab) => tab.id),
+  )
+
+  return tabs.map((tab, index) => {
+    if (!needsId[index]) return qualified[index]
+    const id = shortSessionId(tab.id).slice(0, idChars)
+    return qualified[index] ? `${qualified[index]} · ${id}` : id
+  })
 }
 
 /**

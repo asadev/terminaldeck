@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { portSummary, readPorts, StartPage, type StartPageBridge } from './StartPage'
+import { portSummary, readPorts, splitOwnPorts, StartPage, type StartPageBridge } from './StartPage'
 
 /**
  * The recording of 2026-08-16: a new tab on Windows opened onto Chromium's red
@@ -23,8 +23,8 @@ describe('readPorts', () => {
         { port: 57211, process: 'Terminal', guessed: false },
       ]),
     ).toEqual([
-      { port: 5037, process: 'adb', guessed: false },
-      { port: 57211, process: 'Terminal', guessed: false },
+      { port: 5037, process: 'adb', guessed: false, ours: false },
+      { port: 57211, process: 'Terminal', guessed: false, ours: false },
     ])
   })
 
@@ -46,22 +46,26 @@ describe('readPorts', () => {
 
   it('takes a numeric string, because JSON is not a type system', () => {
     expect(readPorts([{ port: '3000', process: 'node' }])).toEqual([
-      { port: 3000, process: 'node', guessed: false },
+      { port: 3000, process: 'node', guessed: false, ours: false },
     ])
   })
 })
 
 describe('portSummary', () => {
   it('reads the way the operating system named it', () => {
-    // "5037 adb" and "57211 Terminal" are literally what `lsof -nP -iTCP
-    // -sTCP:LISTEN` printed on the machine this was written on, which is why
-    // nothing here prettifies or maps the name through a table of frameworks.
-    expect(portSummary({ port: 5037, process: 'adb', guessed: false })).toBe('5037 adb')
-    expect(portSummary({ port: 57211, process: 'Terminal', guessed: false })).toBe('57211 Terminal')
+    // "5037 adb" and "57211 Terminal Deck" are literally what
+    // `lsof -nP -iTCP -sTCP:LISTEN -FpcRtn` printed on the machine this was
+    // written on, which is why nothing here prettifies or maps the name through
+    // a table of frameworks. The column form of the same scan clamps the second
+    // one to `Terminal`, and eight rows of that is the list he was shown.
+    expect(portSummary({ port: 5037, process: 'adb', guessed: false, ours: false })).toBe('5037 adb')
+    expect(
+      portSummary({ port: 57211, process: 'Terminal Deck', guessed: false, ours: true }),
+    ).toBe('57211 Terminal Deck')
   })
 
   it('says the port alone rather than inventing a name for it', () => {
-    expect(portSummary({ port: 9000, process: '', guessed: true })).toBe('9000')
+    expect(portSummary({ port: 9000, process: '', guessed: true, ours: false })).toBe('9000')
   })
 })
 
@@ -125,5 +129,40 @@ describe('a build with no port discovery', () => {
     // no explanation of why it is empty.
     const html = renderToStaticMarkup(<StartPage onOpen={() => undefined} bridge={noPorts} />)
     expect(html).toContain('Looking for dev servers')
+  })
+})
+
+/**
+ * The nine-port list from the 2026-08-16 recording, eight of them this app's
+ * own and all eight reading `Terminal`. He clicked one and got a black page
+ * saying "that is not how to ask" — our pairing server refusing a plain GET.
+ *
+ * The rule is one line, so it is held to one line: a port this app is holding
+ * is never a page.
+ */
+describe('splitOwnPorts', () => {
+  const rows = readPorts([
+    { port: 5037, process: 'adb', guessed: false, ours: false },
+    { port: 8443, process: 'Terminal Deck', guessed: false, ours: true },
+    { port: 9444, process: 'Electron', guessed: false, ours: true },
+    { port: 5173, process: 'node', guessed: false, ours: false },
+  ])
+
+  it('offers only the ports that are not ours', () => {
+    expect(splitOwnPorts(rows).open.map((row) => row.port)).toEqual([5037, 5173])
+  })
+
+  it('keeps our own, so the list is not lying by omission', () => {
+    // Folded away rather than deleted. They really are listening, and a list
+    // that silently drops rows cannot be reconciled with `lsof`.
+    expect(splitOwnPorts(rows).ours.map((row) => row.port)).toEqual([8443, 9444])
+  })
+
+  it('says nothing about ownership when the main process did not', () => {
+    // An older main process sends no `ours` at all. Everything stays offered,
+    // which is exactly how this page behaved before the field existed.
+    const old = readPorts([{ port: 3000, process: 'node', guessed: false }])
+    expect(splitOwnPorts(old).ours).toEqual([])
+    expect(splitOwnPorts(old).open).toHaveLength(1)
   })
 })

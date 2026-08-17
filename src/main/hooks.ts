@@ -59,9 +59,15 @@ import { currentHookEndpoint, type HookEndpoint } from './hook-server'
 export type HookProviderId = 'claude' | 'codex' | 'gemini'
 
 /**
- * `stale` is the state that matters most in practice: the hooks are installed
- * and tagged as ours, but they point at a port and token from a previous run,
- * so they fire into nothing. It is a one-click fix, not an error.
+ * `stale` means the hooks are installed and tagged as ours but aimed somewhere
+ * other than this app's endpoint, so they fire into nothing.
+ *
+ * It used to be the *normal* state, on every launch, because the command
+ * carried a port and a token that were minted fresh each run. It is now a rare
+ * one, and the three things that can still cause it are all real: an install
+ * written by an older version of this app, an install written by a different
+ * copy of it (a packaged build and a dev build keep separate data directories),
+ * or a hand-edited config. All three are a one-click fix, not an error.
  */
 export type HookInstallState = 'none' | 'partial' | 'complete' | 'stale' | 'error'
 
@@ -240,8 +246,14 @@ export const EVENT_STATUS: Record<HookProviderId, Record<string, SessionStatus>>
 /** The tag that makes an entry ours. Built from the brand, never spelled out. */
 export const HOOK_MARKER = `# ${BRAND.id}-hook`
 
-/** Header names the endpoint checks, kept in step with the brand. */
-export const TOKEN_HEADER = `x-${BRAND.id}-token`
+/**
+ * The one header this module still writes into a command.
+ *
+ * The token header used to be here too. It is not any more, and it is not
+ * declared here unused either: `hook-server.ts` owns it now, because it is the
+ * module that writes the curl config the token lives in. A constant kept in two
+ * files for a value only one of them uses is the shape of a fact that drifts.
+ */
 export const SESSION_HEADER = `x-${BRAND.id}-session`
 
 /** Somebody else's marker, e.g. `# vibeyard-hook`, so we can name the owner. */
@@ -278,6 +290,45 @@ function shellQuote(value: string): string {
  * has to succeed unconditionally: `|| true` means a hook firing while the app
  * is closed is silence, not an error in the user's session.
  *
+ * ## Every value in here is stable across runs, and that is the feature
+ *
+ * This command used to contain the endpoint's port and its token, both of which
+ * are minted fresh on every launch. So every launch invalidated every installed
+ * hook: the file still held a tagged, well-formed command aimed at a socket that
+ * no longer existed. All three providers reported "Needs reinstalling" forever,
+ * and a user who did not press it three times per launch got no lifecycle events
+ * at all — no session-finished, and nothing built on it.
+ *
+ * Now there are exactly two interpolated values and neither ever changes:
+ *
+ *  - `--unix-socket` comes out of the config file, not out of here.
+ *  - `-K <configPath>` names a file in the app's own data directory. The token
+ *    is inside it, rewritten on every start, read by curl at call time. The
+ *    hook command therefore holds no secret at all, which also takes a 48-hex
+ *    credential back out of `~/.gemini/settings.json` (mode 0644).
+ *
+ * The consequence worth stating plainly: an install written today is still
+ * correct after a restart, an upgrade, and a reboot. `readStatus` compares the
+ * installed command against this one, so "stale" stops being the normal state
+ * and starts meaning what it says.
+ *
+ * ## What happens when the app is not running
+ *
+ * The config file and the socket are both deleted on shutdown, so curl fails to
+ * read its config and exits 26 without connecting to anything. `2>/dev/null`
+ * keeps that off the agent's screen and `|| true` keeps it out of the session's
+ * exit status, so a hook firing against a closed app is silence — which is the
+ * same behaviour as before, arrived at more safely. The old form could still
+ * *connect*: a recycled port number belonging to some other program would have
+ * been handed the agent's tool input. A path this app owns cannot be reassigned
+ * to a stranger by the kernel.
+ *
+ * Measured rather than assumed: with `-K` naming a file that does not exist,
+ * curl still drains stdin before exiting, so the CLI writing the event never
+ * sees EPIPE. That was checked against the real `/usr/bin/curl` on this machine
+ * with a 200 KB payload, because it is exactly the kind of detail that is
+ * obvious once it breaks somebody's session and invisible until then.
+ *
  * ## POSIX-only, and there is no Windows form of it yet
  *
  * Every piece of this is POSIX shell: an absolute `/usr/bin/curl`, `|| true`,
@@ -298,7 +349,11 @@ export function hookCommand(
   event: string,
   endpoint: HookEndpoint,
 ): string {
-  const url = `http://127.0.0.1:${endpoint.port}/hook/${provider}/${event}`
+  // `localhost` is a placeholder the socket makes meaningless — curl needs a
+  // host to build a request line and a Host header, and connects to the path
+  // from the config file instead of resolving this. The path segments are what
+  // actually route the event.
+  const url = `http://localhost/hook/${provider}/${event}`
   return [
     CURL,
     '-s',
@@ -307,14 +362,19 @@ export function hookCommand(
     '--max-time 3',
     '-X POST',
     "-H 'content-type: application/json'",
-    `-H ${shellQuote(`${TOKEN_HEADER}: ${endpoint.token}`)}`,
     // Double-quoted so the shell expands it: the PTY injects this per session,
     // which is what ties a hook back to the tab the user is looking at. Inside
     // double quotes `$VAR` expands but its *value* is never re-evaluated, so a
     // session id is data here no matter what it contains.
     `-H "${SESSION_HEADER}: $${BRAND.sessionEnvVar}"`,
+    // The socket path and this run's token, read at call time. Everything that
+    // changes between runs is on the far side of this one stable path.
+    `-K ${shellQuote(endpoint.configPath)}`,
     '--data-binary @-',
     shellQuote(url),
+    // curl's config-file errors are written before `-s` can suppress them, and
+    // a missing config file is the ordinary state of a closed app.
+    '2>/dev/null',
     '|| true',
     HOOK_MARKER,
   ].join(' ')
@@ -711,9 +771,11 @@ function errorStatus(
 /**
  * What is actually in the file right now.
  *
- * `stale` is decided by comparing the installed command against the one we
- * would write today: the port and token change every run, so an install from
- * yesterday is present, tagged, and firing into a closed socket.
+ * `stale` is decided by comparing the installed command against the one we would
+ * write today, byte for byte. That comparison is only useful because the command
+ * no longer contains anything that changes between runs — when it held a port
+ * and a token, this test answered "stale" for every provider on every launch and
+ * so told the user nothing.
  */
 export function readStatus(context: HookContext, id: HookProviderId): HookProviderStatus {
   const spec = HOOK_PROVIDERS[id]
@@ -800,7 +862,7 @@ function describe(
     case 'complete':
       return `All ${spec.events.length} events are installed and pointing at this run.`
     case 'stale':
-      return `Installed, but ${staleCount} event${staleCount === 1 ? '' : 's'} still point at a previous run of the app. Reinstall to aim them at this one.`
+      return `Installed, but ${staleCount} event${staleCount === 1 ? '' : 's'} point somewhere other than this copy of the app. Reinstall to aim them here.`
     case 'partial':
       return 'Only some events are installed, so parts of a session go unreported.'
     default:
@@ -901,9 +963,17 @@ export function removeHooks(context: HookContext, id: HookProviderId): HookWrite
 /**
  * Re-point every provider that already has our hooks at the current endpoint.
  *
- * Called once the hook server is listening. Without it, yesterday's install
- * quietly posts to a port this run does not own — which, on a machine where
- * something else has since taken that port, is worse than silence.
+ * Called from `src/main/index.ts` once the hook server is listening — which is
+ * the wiring that was missing, and the reason this function existed for weeks
+ * without ever running. `grep installHooks src/main/` used to find only the
+ * renderer: the repair was a button in Settings and nothing else, so the app
+ * could only fix itself if somebody opened a settings pane and pressed it.
+ *
+ * With a stable endpoint address this is a no-op on an ordinary restart, because
+ * the installed command already matches the one we would write. What it still
+ * does is migrate: an install written by a version of this app that baked the
+ * port in reads as `stale` exactly once, gets rewritten once, and is correct
+ * from then on without anybody being told to press anything.
  */
 export function syncInstalledHooks(context: HookContext): HookProviderStatus[] {
   const out: HookProviderStatus[] = []

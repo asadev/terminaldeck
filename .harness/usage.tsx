@@ -7,10 +7,14 @@
  * Renders the presentational half against fixtures, in both themes, in a column
  * the width of a real chat pane — because a strip that typechecks and passes
  * its tests can still wrap into three lines or lose its meter on screen.
+ *
+ * The subscription limit is no longer one of these cases. It moved to the
+ * session's own chrome, beside the account — `usagebar.html` in this folder is
+ * the board for it.
  */
 import { createRoot } from 'react-dom/client'
 import { UsageStripView } from '../src/renderer/chat/usage/UsageStrip'
-import type { PlanLimitSnapshot, SessionSummary, TokenUsage } from '../src/renderer/chat/usage/types'
+import type { SessionSummary, TokenUsage } from '../src/renderer/chat/usage/types'
 import '../src/renderer/styles/tokens.css'
 
 const NOW = Date.now()
@@ -27,12 +31,6 @@ function session(over: Partial<SessionSummary> = {}): SessionSummary {
     models: ['claude-opus-5'],
     requests: 47,
     usage: usage({ input: 1240, output: 34_100, cacheRead: 1_240_000, cacheWrite1h: 88_400 }),
-    cost: {
-      cost: { input: 0.01, output: 0.85, cacheWrite: 0.88, cacheRead: 0.12, total: 1.86 },
-      byModel: {},
-      unpricedModels: [],
-      usedLegacyRate: false,
-    },
     context: { tokens: 142_000, window: 200_000, percent: 71, remaining: 58_000, level: 'warning' },
     warnings: [{ kind: 'context-window', level: 'warning', percent: 71, message: 'Context 71% full.' }],
     preContextTokens: 24_000,
@@ -44,27 +42,13 @@ function session(over: Partial<SessionSummary> = {}): SessionSummary {
   }
 }
 
-const plan: PlanLimitSnapshot = {
-  sessionId: 'pty-1',
-  available: true,
-  source: 'usage-panel',
-  message: null,
-  capturedAt: NOW - 4 * 60_000,
-  reason: null,
-  limits: [
-    { id: 'session', label: 'Current session', scope: 'session', percent: 5, resetsAt: '4am (Asia/Dubai)' },
-    { id: 'week', label: 'Current week (all models)', scope: 'week', percent: 80, resetsAt: 'Aug 14 at 2pm (Asia/Dubai)' },
-    { id: 'week:fable', label: 'Current week (Fable)', scope: 'week', percent: 100, resetsAt: 'Aug 14 at 2pm (Asia/Dubai)' },
-  ],
-}
-
 const CASES: Array<{ title: string; node: React.ReactNode }> = [
   {
-    title: 'Typical — healthy session, plan read from /usage',
-    node: <UsageStripView session={session()} today={{ total: 4.1, sessions: 3, carriedOver: 0, hasUnpriced: false }} plan={plan} scanning={false} now={NOW} />,
+    title: 'Typical — healthy session',
+    node: <UsageStripView session={session()} today={{ tokens: 4_180_000, sessions: 3, carriedOver: 0 }} scanning={false} />,
   },
   {
-    title: 'Context over the limit, compacted twice, unpriced model, today carried over',
+    title: 'Context over the limit, compacted twice, today carried over',
     node: (
       <UsageStripView
         session={session({
@@ -78,51 +62,9 @@ const CASES: Array<{ title: string; node: React.ReactNode }> = [
               message: 'Context 104% full — compaction is imminent, and quality drops before it lands.',
             },
           ],
-          cost: {
-            cost: { input: 0.02, output: 1.4, cacheWrite: 2.2, cacheRead: 0.4, total: 4.02 },
-            byModel: {},
-            unpricedModels: ['claude-experimental-9'],
-            usedLegacyRate: true,
-          },
         })}
-        today={{ total: 12.44, sessions: 5, carriedOver: 2, hasUnpriced: true }}
-        plan={{ ...plan, source: 'warning', message: "You've used 92% of your weekly limit · resets Aug 14 at 2pm", capturedAt: NOW - 40 * 60_000, limits: [{ id: 'week', label: 'weekly limit', scope: 'week', percent: 92, resetsAt: 'Aug 14 at 2pm' }] }}
+        today={{ tokens: 12_440_000, sessions: 5, carriedOver: 2 }}
         scanning={false}
-        now={NOW}
-      />
-    ),
-  },
-  {
-    title: 'Plan limit not available — with the Check control wired',
-    node: (
-      <UsageStripView
-        session={session({ compactions: 1 })}
-        today={{ total: 0.004, sessions: 1, carriedOver: 0, hasUnpriced: false }}
-        plan={null}
-        scanning={false}
-        now={NOW}
-        canRefreshPlan
-        onRefreshPlan={() => {}}
-      />
-    ),
-  },
-  {
-    title: 'Plan limit named without a number, refusal explained',
-    node: (
-      <UsageStripView
-        session={session()}
-        today={{ total: 4.1, sessions: 3, carriedOver: 0, hasUnpriced: false }}
-        plan={{
-          ...plan,
-          source: 'warning',
-          message: 'Approaching weekly limit',
-          limits: [{ id: 'week', label: 'weekly limit', scope: 'week', percent: null, resetsAt: null }],
-        }}
-        scanning={false}
-        now={NOW}
-        canRefreshPlan
-        onRefreshPlan={() => {}}
-        refreshReason="The session is working — try again once it is idle."
       />
     ),
   },
@@ -130,10 +72,10 @@ const CASES: Array<{ title: string; node: React.ReactNode }> = [
     title: 'No request yet / still scanning / nothing recorded / unwired',
     node: (
       <>
-        <UsageStripView session={session({ context: null, warnings: [], compactions: 0 })} today={{ total: 0, sessions: 1, carriedOver: 0, hasUnpriced: false }} plan={null} scanning={false} now={NOW} />
-        <UsageStripView session={null} today={{ total: 0, sessions: 0, carriedOver: 0, hasUnpriced: false }} plan={null} scanning now={NOW} />
-        <UsageStripView session={null} today={{ total: 0, sessions: 0, carriedOver: 0, hasUnpriced: false }} plan={null} scanning={false} now={NOW} />
-        <UsageStripView session={null} today={{ total: 0, sessions: 0, carriedOver: 0, hasUnpriced: false }} plan={null} scanning={false} now={NOW} unwired />
+        <UsageStripView session={session({ context: null, warnings: [], compactions: 0 })} today={{ tokens: 0, sessions: 1, carriedOver: 0 }} scanning={false} />
+        <UsageStripView session={null} today={{ tokens: 0, sessions: 0, carriedOver: 0 }} scanning />
+        <UsageStripView session={null} today={{ tokens: 0, sessions: 0, carriedOver: 0 }} scanning={false} />
+        <UsageStripView session={null} today={{ tokens: 0, sessions: 0, carriedOver: 0 }} scanning={false} unwired />
       </>
     ),
   },

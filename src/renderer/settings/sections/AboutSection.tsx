@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
-import { Button, Group, LinkOut, Notice, SectionHead } from '../controls'
+import { Button, Info, LinkOut, MoreBody, Notice, SectionHead, useMore } from '../controls'
 import { sectionMeta } from '../settings-schema'
 import { asRecord, toAbout, type AboutInfo, type SectionProps } from '../settings-bridge'
 
@@ -17,6 +17,22 @@ import { asRecord, toAbout, type AboutInfo, type SectionProps } from '../setting
  * update feed beside a packaged app when a publish target is configured — both
  * facts are checked in the main process. So the button says what would actually
  * happen instead of spinning and reporting "you're up to date".
+ *
+ * ## It does not scroll, and that is the design
+ *
+ *   > "about is fine but it is scrollable for this much of information. Let's
+ *   > make it not scrollable and enough to be in one page and important things
+ *   > only. And more professional."
+ *
+ * It had three headed groups — Build, Licence and source, Updates — carrying
+ * eight fact rows and a paragraph about third-party licences, which is a
+ * scrolling page to answer "what version am I on". Four facts survive: version,
+ * licence, where the source is, and whether there is an update. The build
+ * numbers a bug report needs are one line rather than four, and the licensing
+ * sentence is behind the ⓘ on the row it is about.
+ *
+ * Nothing was deleted. Every string that was on this pane is still on it or one
+ * hover away, which is the rule the whole reorganisation is held to.
  */
 
 /** Releases pages are a GitHub convention; anywhere else it would be a guess. */
@@ -30,11 +46,43 @@ function releasesUrl(repository: string | null): string | null {
   }
 }
 
-function Fact({ label, children }: { label: string; children: ReactNode }) {
+/**
+ * Electron, Chromium and Node on one line.
+ *
+ * These were four labelled rows, which is four rows of vertical space for a
+ * string somebody pastes into a bug report once a year. Joined with the
+ * separator the rest of the app uses for compound facts, and only for the parts
+ * that are actually known — "unknown · unknown · unknown" is worse than a
+ * shorter line.
+ */
+export function buildLine(about: AboutInfo): string {
+  const parts = [
+    about.electron && `Electron ${about.electron}`,
+    about.chromium && `Chromium ${about.chromium}`,
+    about.node && `Node ${about.node}`,
+    about.platform && `${about.platform} ${about.arch}`.trim(),
+  ].filter((part): part is string => Boolean(part))
+  return parts.length === 0 ? 'Not reported by this build.' : parts.join(' · ')
+}
+
+function Fact({ label, more, children }: { label: string; more?: string; children: ReactNode }) {
+  const rest = useMore()
   return (
-    <div className="settings-fact">
-      <span className="settings-fact-label">{label}</span>
-      <span className="settings-fact-value">{children}</span>
+    <div className="settings-fact" data-open={rest.open || undefined}>
+      <span className="settings-fact-label">
+        <span className="settings-label-line">
+          {label}
+          {more && (
+            <Info label={label} open={rest.open} onToggle={rest.toggle}>
+              {more}
+            </Info>
+          )}
+        </span>
+      </span>
+      <span className="settings-fact-value">
+        {children}
+        {more && rest.open && <MoreBody>{more}</MoreBody>}
+      </span>
     </div>
   )
 }
@@ -76,8 +124,7 @@ export function AboutSection({ bridge }: SectionProps) {
    * twenty pixels above its own sentence explaining that there is nothing to
    * update — and pressing it re-set the note to the string already on screen,
    * so nothing at all changed. A hover state is a promise; this one had nothing
-   * behind it. The reason is left in the notice underneath, where it already
-   * was, and the button now matches it.
+   * behind it.
    */
   const checkable = about?.updates?.checkable ?? false
 
@@ -105,55 +152,51 @@ export function AboutSection({ bridge }: SectionProps) {
 
       {!about && <Notice tone="warn">The build details are not readable here.</Notice>}
 
-      {about && (
-        <Group title="Build">
-          <Fact label="Electron">{about.electron || 'unknown'}</Fact>
-          <Fact label="Chromium">{about.chromium || 'unknown'}</Fact>
-          <Fact label="Node">{about.node || 'unknown'}</Fact>
-          <Fact label="Platform">
-            {about.platform} · {about.arch}
-          </Fact>
-        </Group>
-      )}
+      <div className="settings-facts">
+        <Fact
+          label="Licence"
+          /* The paragraph that used to close this pane, kept whole. It is a
+             licensing statement about somebody else's software, which is
+             precisely the kind of thing that has to remain readable and does
+             not have to be on screen. */
+          more="The agent CLIs are separate programs under their own licences — nothing here bundles or modifies them."
+        >
+          {about?.license || 'Not recorded in package.json.'}
+        </Fact>
 
-      <Group title="Licence and source">
-        {about?.license ? (
-          <Fact label="Licence">{about.license}</Fact>
-        ) : (
-          <Fact label="Licence">Not recorded in package.json.</Fact>
-        )}
-        {about?.repository ? (
-          <Fact label="Repository">
+        <Fact label="Source">
+          {about?.repository ? (
             <LinkOut href={about.repository}>{about.repository}</LinkOut>
-          </Fact>
-        ) : (
-          <Fact label="Repository">Not recorded in package.json.</Fact>
-        )}
+          ) : (
+            'Not recorded in package.json.'
+          )}
+        </Fact>
+
         {about?.homepage && (
-          <Fact label="Homepage">
+          <Fact label="Website">
             <LinkOut href={about.homepage}>{about.homepage}</LinkOut>
           </Fact>
         )}
-        {/* Kept, halved. It is a licensing statement rather than a description,
-            and "we do not bundle or modify them" is the half that answers the
-            question somebody reading a licence panel actually has. */}
-        <p className="settings-prose">
-          The agent CLIs are separate programs under their own licences — nothing here bundles or
-          modifies them.
-        </p>
-      </Group>
 
-      <Group title="Updates">
-        <div className="settings-actions">
-          <Button onClick={check} disabled={about !== null && !checkable}>
-            Check for updates
-          </Button>
-          {releases && <LinkOut href={releases}>Releases</LinkOut>}
-        </div>
-        <Notice tone="info">
+        {about && (
+          <Fact
+            label="Build"
+            more="Paste this line into a bug report. It is what the four separate rows here used to say, and it changes only when the app is rebuilt."
+          >
+            <span className="settings-about-build">{buildLine(about)}</span>
+          </Fact>
+        )}
+      </div>
+
+      <div className="settings-actions">
+        <Button onClick={check} disabled={about !== null && !checkable}>
+          Check for updates
+        </Button>
+        {releases && <LinkOut href={releases}>Releases</LinkOut>}
+        <span className="settings-help">
           {updateNote ?? about?.updates?.detail ?? 'Press the button to check.'}
-        </Notice>
-      </Group>
+        </span>
+      </div>
     </>
   )
 }

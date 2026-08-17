@@ -10,6 +10,7 @@ import { NewSessionDialog } from './components/NewSessionDialog'
 import { HelpDialog } from './components/HelpPanel'
 import { JoinRemoteDialog } from './components/JoinRemoteDialog'
 import { SessionInspector } from './components/SessionInspector'
+import { AlertsWindow } from './components/AlertsPanel'
 import {
   CloseSessionConfirm,
   CONFIRM_CLOSE_KEY,
@@ -21,7 +22,6 @@ import { Onboarding } from './components/Onboarding'
 import { ChatView } from './components/ChatView'
 import { PageEmpty } from './components/PageEmpty'
 import { BRAND } from '@shared/brand'
-import { StatusDot } from './components/StatusDot'
 import { UpdateBanner } from './updates/UpdateBanner'
 import { ModeSwitch, type SessionViewMode, type WorkspaceMode } from './shell/ModeSwitch'
 import { BrowserWorkspace } from './browser/BrowserWorkspace'
@@ -30,22 +30,29 @@ import { SplitView } from './layout/SplitView'
 import {
   closePane,
   emptyLayout,
-  focusedSessionId,
+  focusedTabId,
   moveFocus,
+  primaryPane,
   type PaneLayout,
 } from './layout/pane-tree'
 import {
   closePaneOrCollapse,
   isSplit,
-  pruneClosedSessions,
+  pruneClosedPanes,
   seedSplit,
   showInFocusedPane,
   splitFocused,
 } from './layout/panes'
+import { CopilotConsent } from './copilot/CopilotConsent'
+import { useConsent } from './copilot/useConsent'
+import { useCopilot } from './copilot/useCopilot'
+import { partitionByOrigin, startedByCopilot, turnOf } from './copilot/session-origin'
 import { Sidebar } from './shell/Sidebar'
 import { WindowToolbar } from './shell/WindowToolbar'
-import { FolderChip } from './shell/FolderChip'
+import { FolderTitle } from './shell/FolderChip'
 import { AccountChip } from './shell/AccountChip'
+import { PaneBar } from './shell/PaneBar'
+import { SessionControls } from './shell/SessionControls'
 import { PanelView } from './shell/PanelView'
 import { useSidebar } from './shell/useSidebar'
 import { PANELS, panelSpec, type PanelId } from './shell/panels'
@@ -53,6 +60,7 @@ import { FeaturesProvider, useFeatures } from './features/FeaturesProvider'
 import { useControlOffer } from './features/offer'
 import { availableFeatures } from './features/state'
 import { nextActiveId, sessionLabel, type WorkspaceTab } from './shell/workspace-tabs'
+import { keepNewWindowInStrip, stripIsPresent } from './browser/workspace-strip'
 import { ErrorBoundary } from './shell/ErrorBoundary'
 import { Tooltips } from './shell/Tooltips'
 import { UnreadTracker } from './unread'
@@ -77,12 +85,10 @@ function folderNameOf(path: string | undefined): string | undefined {
   return parts[parts.length - 1]
 }
 
-const PANE_CLOSE = 'M6.5 6.5l11 11M17.5 6.5l-11 11'
-
 function Workspace() {
   const {
-    projects,
-    sessions,
+    projects: storedProjects,
+    sessions: storedSessions,
     activeSessionId,
     addProject,
     addSession,
@@ -130,6 +136,71 @@ function Workspace() {
    */
   const browserOffer = useControlOffer('sidebar.browser')
 
+  /**
+   * The window's one connection to the copilot, held here because three places
+   * have to agree about it and must not each ask separately: the pinned row in
+   * the rail, the page it opens, and the filter below that keeps the copilot's
+   * *own* session out of the ordinary session list.
+   *
+   * It starts nothing. `useCopilot` only reads; the copilot is spawned when its
+   * page is opened, which is the moment somebody has said they want to talk to
+   * it — an agent CLI bills for what it does, and a standing charge for opening
+   * the app is not something anybody agreed to.
+   */
+  const copilot = useCopilot()
+
+  /**
+   * Everything open, minus the copilot itself.
+   *
+   * The copilot **is** a session — that is the whole design, and it is what
+   * makes the transcript viewer, chat mode, the cost pane and the alert watcher
+   * work on it with no changes at all. The cost of that is right here: it is in
+   * `session:list` like any other, so a window that drew what it was handed
+   * would put the copilot's folder in the sidebar as a project, its session as a
+   * row inside it, and its terminal in the workspace — all while the pinned
+   * entry at the top of the rail claims to be the one place the copilot lives.
+   * Two things on screen contradicting each other, and one of them a second
+   * xterm bound to a pty another view is already resizing.
+   *
+   * So it comes out here, once, by id and by folder. By **both**, because the
+   * two answers arrive at different moments: the id identifies the running
+   * process, and the folder catches the row for a copilot session that has
+   * exited but is still in the list, and catches the project heading its cwd
+   * would otherwise create. Neither is guessed — both come from
+   * `copilot:state`, which is the module that decides where the copilot lives.
+   *
+   * Until that answer lands, nothing is filtered and the row is briefly visible.
+   * That is the honest trade: the alternative is holding the whole session list
+   * back on an IPC round trip, which would delay every session a person cares
+   * about in order to hide one they do not.
+   */
+  const copilotSessionId = copilot.state?.sessionId ?? null
+  const copilotRoot = copilot.state?.paths?.root ?? null
+  const sessions = useMemo(
+    () =>
+      storedSessions.filter(
+        (session) => session.id !== copilotSessionId && session.projectPath !== copilotRoot,
+      ),
+    [storedSessions, copilotSessionId, copilotRoot],
+  )
+  const projects = useMemo(
+    () => storedProjects.filter((project) => project.path !== copilotRoot),
+    [storedProjects, copilotRoot],
+  )
+
+  /**
+   * This window, registered as the one that answers the copilot's alter-tier
+   * confirmations.
+   *
+   * Mounted unconditionally rather than with the copilot's page, and that is the
+   * whole point of it being here. `deck-control` refuses every alter call with
+   * `no-approver` until a window has volunteered, and the copilot can be asked
+   * to do something — by a routine, by a paired device — while nobody is looking
+   * at its page. A gate whose answerer only exists on one screen is a gate that
+   * is shut everywhere else.
+   */
+  const consent = useConsent()
+
   const sidebar = useSidebar()
   const { panel, selectPanel, clearPanel } = sidebar
   const [extraTabs, setExtraTabs] = useState<WorkspaceTab[]>([])
@@ -171,9 +242,31 @@ function Workspace() {
   /** Which settings section opens. Reset whenever Settings is opened plainly. */
   const [prefsSection, setPrefsSection] = useState<SectionId>('general')
   const [newSessionOpen, setNewSessionOpen] = useState(false)
+  /**
+   * The folder the New session dialog should open on, when the press that
+   * opened it named one.
+   *
+   * Null means "wherever I am", which the dialog resolves to `activeProjectPath`
+   * — the answer for ⌘T, for the rail's own button and for the terminal glyph in
+   * the strip. The ＋ on a project heading is the one press that means a
+   * *specific* folder, and it used to spawn straight into it; now that every
+   * route goes through the dialog, that intent has to survive the trip or the
+   * press quietly changes which project it is about.
+   */
+  const [newSessionPath, setNewSessionPath] = useState<string | null>(null)
   const [helpOpen, setHelpOpen] = useState(false)
   const [joinOpen, setJoinOpen] = useState(false)
   const [inspectorOpen, setInspectorOpen] = useState(false)
+  /**
+   * The alerts sheet.
+   *
+   * A dialog flag beside the other six rather than a `PanelId`, and that is the
+   * whole of the change: *"and notifications should be a pop-up just like
+   * settings, not a full page."* Every route in — the bell on the rail, the
+   * command palette's row, the menu command that lands in `run` — sets this.
+   * Nothing navigates.
+   */
+  const [alertsOpen, setAlertsOpen] = useState(false)
   const [paletteMode, setPaletteMode] = useState<'files' | 'commands' | 'sessions' | null>(null)
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
   const [onboardingDone, setOnboardingDone] = useState(false)
@@ -214,7 +307,13 @@ function Workspace() {
    */
   const anyModalOpen =
     prefsOpen || newSessionOpen || helpOpen || joinOpen || inspectorOpen || shortcutsOpen ||
-    pendingClose !== null || paletteMode !== null
+    alertsOpen || pendingClose !== null || paletteMode !== null ||
+    // The copilot's confirmation counts, and it is the one that would fail
+    // worst without it: a browser page is a native WebContentsView layered
+    // above the HTML, so a permission dialog opened while a page was on screen
+    // would be *behind* the page — invisible, unanswerable, and refused two
+    // minutes later by a timeout nobody could have prevented.
+    consent.question !== null
 
   /** Sessions first, then anything else the user opened, in one list. */
   const tabs: WorkspaceTab[] = [
@@ -241,6 +340,14 @@ function Workspace() {
             },
           }
         : {}),
+      // Who wanted this session, and which copilot turn started it. Carried
+      // straight off `SessionMeta` — the main process writes both at spawn —
+      // so the rail can group what the copilot started under its own heading
+      // and link each row back to the turn that explains it. Conditional, so
+      // "no origin" crosses into the tab as an absent key rather than as
+      // `undefined`, which is the same distinction `PtyManager` preserves.
+      ...(session.origin ? { origin: session.origin } : {}),
+      ...(session.originRunId ? { originRunId: session.originRunId } : {}),
       closable: true,
     })),
     /*
@@ -271,8 +378,19 @@ function Workspace() {
    */
   const labelOf = (tab: WorkspaceTab): string => {
     if (tab.kind !== 'session') return tab.label
+    /*
+     * Siblings are the sessions listed *beside* this one, which since the
+     * copilot got its own group means sessions of the same origin as well as
+     * the same folder.
+     *
+     * Counting across both would number a copilot session by its position in a
+     * list it is not drawn in — "Session 13" here, "Session 1" in the rail's
+     * Copilot sessions group — which is one session wearing two names in two
+     * places on the same screen.
+     */
+    const own = startedByCopilot(tab)
     const siblings = tabs.filter(
-      (t) => t.kind === 'session' && t.projectPath === tab.projectPath,
+      (t) => t.kind === 'session' && t.projectPath === tab.projectPath && startedByCopilot(t) === own,
     )
     return sessionLabel(
       tab.label,
@@ -282,12 +400,39 @@ function Workspace() {
   }
 
   /**
+   * The sessions the copilot started, named the way the rail names them.
+   *
+   * The forward half of "why does this exist": the rail's Copilot sessions
+   * group is the list, and the copilot's own page carries this so a person
+   * standing in front of the thing that started them can open each one. Named
+   * through `labelOf` rather than off `tab.label` so the page and the row say
+   * the same words — an untitled session is "Session 3" in both places or in
+   * neither.
+   */
+  const copilotStarted = partitionByOrigin(tabs).copilot.map((tab) => ({
+    id: tab.id,
+    label: labelOf(tab),
+    runId: turnOf(tab),
+  }))
+
+  /**
    * Latest sessions and switches, for the callbacks that must not re-register.
    * Assigned during render, so an effect that runs after it always sees the
    * values of the render it belongs to.
    */
   const sessionsRef = useRef(sessions)
   sessionsRef.current = sessions
+  /*
+   * Everything open, for the same reason and read the same way.
+   *
+   * The prune and the Split command both need the *whole* list — a pane can
+   * hold a page as readily as a session — and both run from callbacks that must
+   * not re-register on every render. `tabs` is rebuilt each render by design,
+   * so a ref is what lets an effect see the current one without making the
+   * array itself a dependency.
+   */
+  const tabsRef = useRef(tabs)
+  tabsRef.current = tabs
   const autoNameRef = useRef(autoNameSessions)
   autoNameRef.current = autoNameSessions
 
@@ -327,7 +472,7 @@ function Workspace() {
    * asks this and not `activeTab`, so there is no second place for the two
    * models to disagree.
    */
-  const focusedId = splitting ? focusedSessionId(panes) : activeTab?.id ?? null
+  const focusedId = splitting ? focusedTabId(panes) : activeTab?.id ?? null
   const focusedSession = focusedId
     ? sessions.find((session) => session.id === focusedId) ?? null
     : null
@@ -335,17 +480,25 @@ function Workspace() {
   useEffect(() => unread.subscribe((snapshot) => setUnreadIds(snapshot.ids)), [unread])
 
   /**
-   * A pane naming a session that no longer exists is a hole with no
-   * explanation, and `focusedSessionId` would keep answering with an id the
-   * store has already forgotten — so the toolbar and the inspector would be
-   * reading a dead session's name. Driven off the session list rather than off
+   * A pane naming something that no longer exists is a hole with no
+   * explanation, and `focusedTabId` would keep answering with an id the
+   * store has already forgotten — so the chrome and the inspector would be
+   * reading a dead session's name. Driven off the open list rather than off
    * each close path, because a session can leave four different ways (⌘W, the
    * row's ✕, the process exiting, a whole project closing) and only one of them
    * is a place a caller could remember to prune.
+   *
+   * **`tabs`, not `sessions`.** A pane may hold a browser page, and handed the
+   * session list this call declares that pane dead and collapses the whole
+   * hand-made layout on the render after the page was opened — which is exactly
+   * what happened when the globe was first wired to the focused pane, and why
+   * it was backed out. `layout/panes.ts` carries the long version. The deps are
+   * the two lists `tabs` is built from plus the feature registry that filters
+   * it, because `tabs` itself is a fresh array on every render.
    */
   useEffect(() => {
-    setPanes((current) => pruneClosedSessions(current, sessions))
-  }, [sessions])
+    setPanes((current) => pruneClosedPanes(current, tabsRef.current))
+  }, [sessions, extraTabs, features])
 
   /**
    * A layout that belongs to a feature that has just gone.
@@ -580,6 +733,17 @@ function Workspace() {
       void window.deck.addProject(path)
       addSession(meta)
       showTab(meta.id)
+      /*
+       * And keep it up there. *"If I want to remove it from there and keep only
+       * side panel, I should have to do it myself specifically."*
+       *
+       * Without this the new session did appear on the bar — `shownTabs` always
+       * draws the tab you are looking at — but as a *transient* tab, which is
+       * gone the moment you click another one. See `keepInStrip`, which is also
+       * where the reasoning lives for why this is at the three places a window
+       * is *created* and not wherever one becomes active.
+       */
+      keepNewWindowInStrip(meta.id)
     },
     [addProject, addSession, showTab, settings],
   )
@@ -644,6 +808,79 @@ function Workspace() {
     [activeProjectPath, newSessionIn, openProjectAs],
   )
 
+  /**
+   * Every route to a new session, and there is now exactly one of them.
+   *
+   * Asad, 2026-08-17: *"if we click directly on the whole button it opens a
+   * quick window. We don't want this quick window at all. We just always wanted
+   * this pop-up to come up so we choose which type of terminal we want to
+   * open… 'Remember these choices for this project' is good enough."*
+   *
+   * That last clause is what makes this affordable. A dialog in front of every
+   * ⌘T is a tax if it asks the same four questions every time; it is not one if
+   * it remembers what you answered for this folder and reduces to a single
+   * confirmation. `NewSessionDialog` already stores that per project and
+   * pre-fills from it, and `⌘↵` starts without touching the mouse — so the
+   * cost of losing the quick path is one keystroke, and what is bought back is
+   * that the app never again spawns an agent nobody named.
+   *
+   * The direct spawn is *not* deleted — `newSession` above is still what the
+   * dialog's Start, Continue-last-session, the account chip and the sign-in
+   * flow all call. What is gone is any *button* that reaches it without asking.
+   */
+  const openNewSessionDialog = useCallback((path?: string) => {
+    setNewSessionPath(path ?? null)
+    setNewSessionOpen(true)
+  }, [])
+
+  /**
+   * A tab has been taken off the top bar and it was the one on screen.
+   *
+   * Deliberately not `selectTab`. That one is a navigation and clears whatever
+   * view is covering the window, which is right for a click on a tab and wrong
+   * here: pressing ✕ on the tab you will come back to, while you are reading
+   * Files, must leave you in Files. Everything else it does — the store's
+   * active session, the focused pane in a split — still has to happen, or the
+   * terminal on screen and the tab that names it disagree.
+   *
+   * `null` is a real answer and not a failure: it means nothing is left on the
+   * bar to fall back to. It does not blank the window — `activeTab` above has
+   * resolved a null selection to `tabs[0]` since long before this bar existed,
+   * so the last tab you take off is replaced by the first session you have
+   * open, drawn as a transient tab. That is the right outcome and not an
+   * accident of the fallback: a window that is showing a terminal must have a
+   * tab naming it, which is the whole reason `shownTabs` always draws the
+   * active one.
+   */
+  const showInstead = useCallback(
+    (id: string | null) => {
+      setActiveTabId(id)
+      if (id === null) return
+      if (sessionsRef.current.some((session) => session.id === id)) setActiveSession(id)
+      setPanes((current) => (isSplit(current) ? showInFocusedPane(current, id) : current))
+    },
+    [setActiveSession],
+  )
+
+  /**
+   * A page reporting what it is called, which is what its tab and its pane bar
+   * both print.
+   *
+   * Lifted out of the panel's `onTitle` because there are two panels now — one
+   * filling the window, one inside a pane — and a second copy of the
+   * same-array-back rule is how the two would come to differ about whether an
+   * unchanged title is a state change. It is not: `prev.map` always builds a new
+   * array, a new array is a new state, a new state is a render, and the render
+   * reports the title again.
+   */
+  const renameBrowserTab = useCallback((id: string, title: string) => {
+    setExtraTabs((prev) =>
+      prev.some((entry) => entry.id === id && entry.label !== title)
+        ? prev.map((entry) => (entry.id === id ? { ...entry, label: title } : entry))
+        : prev,
+    )
+  }, [])
+
   const newBrowserTab = useCallback(() => {
     /*
      * Asking for a browser tab you do not have installs the pane and opens one.
@@ -658,27 +895,59 @@ function Workspace() {
     const id = `browser:${Date.now()}`
     setExtraTabs((prev) => [...prev, { id, kind: 'browser', label: 'New tab', closable: true }])
     showTab(id)
+    /*
+     * Started while the window is split: the page belongs in the pane you are
+     * looking at, which is the same rule `newSessionIn` follows.
+     *
+     * This line was written once before and taken straight back out, because it
+     * did select the tab and it also destroyed the split — a pane holding an id
+     * that was not in the *session* list was a dead pane, and the prune
+     * collapsed the layout on the next render. It was pinned as "never call
+     * `setPanes` from here", which pinned the workaround.
+     *
+     * What made it safe is not this call site. It is that a pane holds a tab
+     * rather than a session and the prune is told about pages — see
+     * `layout/panes.ts` — so there is no longer anything special about a page
+     * for the layout to choke on. Without this, a page opened from the globe
+     * while split arrives on the bar unselected and stays behind the split,
+     * which is where the whole defect was first seen.
+     */
+    setPanes((current) => (isSplit(current) ? showInFocusedPane(current, id) : current))
+    // Kept on the bar, exactly as a new session is — *"if I open any new session
+    // and any new browser from the header, it should automatically open in the
+    // top bar"*. The globe at the end of the strip is one of this function's
+    // three callers; the sidebar's globe and the palette's New browser tab are
+    // the others, and all three open a window in the same sense, so all three
+    // keep it. See `keepInStrip`.
+    keepNewWindowInStrip(id)
   }, [showTab, features])
 
   const selectTab = useCallback(
     (id: string) => {
       showTab(id)
-      // Terminals key off the store's active session; keep the two in step or
-      // switching to a session shows the previously focused terminal.
-      if (!sessions.some((session) => session.id === id)) return
-      setActiveSession(id)
       /*
-       * While the window is split, a sidebar row fills the pane you are looking
-       * at rather than taking the whole window back.
+       * While the window is split, a sidebar row or a tab fills the pane you
+       * are looking at rather than taking the whole window back.
        *
-       * This is the sentence that makes the two models one model. The sidebar
-       * keeps meaning exactly what it always meant — "show me this session" —
-       * and the only thing that changed is where "show" happens to be. It is
+       * This is the sentence that makes the two models one model. The list
+       * keeps meaning exactly what it always meant — "show me this" — and the
+       * only thing that changed is where "show" happens to be. It is
        * deliberately not "open it in a new pane": the sidebar is a list of what
        * you have open, not a layout editor, and a click that quietly multiplied
        * your panes would be the list fighting the layout.
+       *
+       * This used to sit *after* an early return for anything that was not a
+       * session, so while split there was no route to a browser page at all:
+       * picking one selected a tab whose content the window had nowhere to
+       * draw. That early return was not a rule about navigation, it was the
+       * pane model refusing to hold a page — see `layout/panes.ts`.
        */
       setPanes((current) => (isSplit(current) ? showInFocusedPane(current, id) : current))
+      // Terminals key off the store's active session; keep the two in step or
+      // switching to a session shows the previously focused terminal. A page
+      // has no session to make active, and must not overwrite the one that is.
+      if (!sessions.some((session) => session.id === id)) return
+      setActiveSession(id)
     },
     [sessions, setActiveSession, showTab],
   )
@@ -845,6 +1114,23 @@ function Workspace() {
     [showPanel],
   )
 
+  /**
+   * Where the Connectors chip in a session's controls goes.
+   *
+   * The app already has one connector surface — the MCP servers view, with its
+   * add form, its inspector and its account of what each server exposes — and
+   * what was missing was a way to reach it from the session you are running in.
+   * So the chip opens that view rather than growing a second list of servers in
+   * a popover, which would be a second MCP system drifting from the first from
+   * the day it shipped.
+   *
+   * Null when the view is not installed in this build, which is what makes the
+   * chip say so instead of quietly doing nothing: a feature can be uninstalled
+   * here, and a control that would have opened it must admit that rather than
+   * vanish. See `SessionControls.tsx`.
+   */
+  const openConnectors = features.panelOn('mcp') ? () => showPanel('mcp') : null
+
   /* --------------------------------------------------------------- panes -- */
 
   /**
@@ -860,7 +1146,10 @@ function Workspace() {
     clearPanel()
     setSwarm(false)
     setPanes((current) =>
-      isSplit(current) ? splitFocused(current) : seedSplit(sessionsRef.current, focusedId),
+      // `tabsRef`, not `sessionsRef`: pressing Split while a page is in front
+      // used to seed the first pane from the session list, so the page you were
+      // reading simply disappeared the moment you split the window.
+      isSplit(current) ? splitFocused(current) : seedSplit(tabsRef.current, focusedId),
     )
   }, [clearPanel, focusedId])
 
@@ -922,15 +1211,40 @@ function Workspace() {
    */
   const closePaneAt = useCallback(
     (paneId: string) => {
-      const survivor = focusedSessionId(closePane(panes, paneId))
+      const survivor = focusedTabId(closePane(panes, paneId))
       const next = closePaneOrCollapse(panes, paneId)
       setPanes(next)
       if (isSplit(next) || !survivor) return
       setActiveTabId(survivor)
-      setActiveSession(survivor)
+      // The survivor can be a page, which the store has no session for.
+      if (sessionsRef.current.some((session) => session.id === survivor)) {
+        setActiveSession(survivor)
+      }
     },
     [panes, setActiveSession],
   )
+
+  /**
+   * Close whichever pane has the keyboard — the only way to close the *host*.
+   *
+   * Every guest pane draws its own ✕, in its own bar. The host has neither, and
+   * that is deliberate: its chrome lives in the window's toolbar so that the
+   * split reads as one main session with something beside it, and a bar drawn
+   * for the host purely to hold a close button would put back the symmetry the
+   * whole arrangement exists to avoid.
+   *
+   * What it must not do is leave the host unclosable. With two panes there is
+   * an equivalent route — focus the guest, press Terminal, and the split
+   * collapses onto it — but with three there is none, and "you can only ever
+   * close the panes you added" is a rule nobody would guess. So the act gets a
+   * name in the palette instead of a glyph on the screen, which is where people
+   * look for a capability they cannot see. It is offered only while there is a
+   * split, because outside one it would be a row that does nothing.
+   */
+  const closeFocusedPane = useCallback(() => {
+    const paneId = panes.focusedPaneId
+    if (paneId) closePaneAt(paneId)
+  }, [panes.focusedPaneId, closePaneAt])
 
   /**
    * While the window is split, the focused pane *is* the active session.
@@ -943,10 +1257,19 @@ function Workspace() {
    */
   useEffect(() => {
     if (!splitting) return
-    const id = focusedSessionId(panes)
+    const id = focusedTabId(panes)
     if (!id) return
     setActiveTabId(id)
-    setActiveSession(id)
+    /*
+     * Only a session reaches the store.
+     *
+     * A pane can hold a browser page now, and `activeSessionId` is what the
+     * composer, the chat bridge and "send this to the agent" all write to —
+     * handed a `browser:…` id they would address a pty that does not exist.
+     * Leaving it on the last session pane that had focus is not a fallback, it
+     * is the right answer: a page beside a terminal sends to that terminal.
+     */
+    if (sessionsRef.current.some((session) => session.id === id)) setActiveSession(id)
   }, [panes, splitting, setActiveSession])
 
   const commands = useMemo<PaletteCommand[]>(() => {
@@ -968,16 +1291,39 @@ function Workspace() {
      * rather than something invented.
      */
     const rows: Omit<PaletteCommand, 'shortcut'>[] = [
-      { id: 'session.new', title: 'New session', group: 'Session', run: () => newSession() },
+      // ⌘T, and it opens the dialog. There is no second "New session with
+      // options…" row any more: it was the same destination under a second
+      // name, which is exactly the two-doors-one-room shape this app keeps
+      // removing. ⌘⇧T and the application menu's "New Session…" still work —
+      // they arrive as `session.newDialog` and are aliased in `run` below,
+      // because that accelerator is printed by an Electron menu in the main
+      // process and a chord this window silently stopped answering to would be
+      // worse than a duplicate row.
+      { id: 'session.new', title: 'New session…', group: 'Session', run: () => openNewSessionDialog() },
       { id: 'session.resume', title: 'Continue last session', group: 'Session', run: () => newSession(undefined, true) },
-      // The only way to reach the dialog that picks an agent, a prompt and a
-      // login was the app menu. A menu is a control, but it is not a findable
-      // one, and this is the screen where a session is configured.
-      { id: 'session.newDialog', title: 'New session with options…', group: 'Session', run: () => setNewSessionOpen(true) },
       { id: 'project.open', title: 'Open a project', group: 'Project', run: () => void openProject() },
       { id: 'palette.quickOpen', title: 'Open a file…', group: 'Project', run: () => setPaletteMode('files') },
       { id: 'view.browser', title: 'New browser tab', group: 'View', run: () => newBrowserTab() },
       { id: 'pane.split', title: 'Split the window', group: 'View', run: () => splitPanes() },
+      /*
+       * Only while there is a split, because outside one it would be a row that
+       * runs and does nothing — the exact shape the note beside ⌘D calls
+       * indistinguishable from a broken command.
+       *
+       * It exists at all because the host pane has no ✕ of its own: its chrome
+       * is up in the window's toolbar, which is what makes the split read as a
+       * main session with a guest beside it. See `closeFocusedPane`.
+       */
+      ...(splitting
+        ? [
+            {
+              id: 'pane.close',
+              title: 'Close the focused pane',
+              group: 'View',
+              run: closeFocusedPane,
+            },
+          ]
+        : []),
       {
         id: 'view.swarm',
         title: 'Every session at once',
@@ -996,6 +1342,12 @@ function Workspace() {
       // to. The row used to call itself `view.overview` and print that chord
       // anyway: the chord worked, via an alias in the switch below, but the
       // palette was printing a shortcut for a command it was not the entry for.
+      // No chord, deliberately. The rail's pinned row is one press away at the
+      // very top of the window, so a shortcut would be a third route to
+      // something already reachable in one — and every chord spent is one fewer
+      // left for the sessions this app is actually about. The palette row still
+      // earns its place: it is where somebody looks for a thing by name.
+      { id: 'view.copilot', title: 'Copilot', group: 'View', run: () => showPanel('copilot') },
       { id: 'view.dashboard', title: 'Overview', group: 'View', run: () => showPanel('overview') },
       { id: 'view.files', title: 'Files', group: 'View', run: () => showPanel('files') },
       // `view.search` keeps its id, and therefore its ⌘⇧F chord, while what it
@@ -1007,7 +1359,14 @@ function Workspace() {
       { id: 'view.artifacts', title: 'Artifacts', group: 'View', run: () => showPanel('artifacts') },
       { id: 'view.git', title: 'Source control', group: 'View', run: () => showPanel('git') },
       { id: 'view.github', title: 'GitHub', group: 'View', run: () => showPanel('github') },
-      { id: 'view.alerts', title: 'Alerts', group: 'View', run: () => showPanel('alerts') },
+      // The id stays `view.alerts`, and what it opens has moved — the same
+      // trade `view.search` above makes, for the same reason. The id is what
+      // the feature registry gates on and what a chord would bind to; renaming
+      // it to `app.alerts` would drop it out of the registry's `commands` list
+      // and out of whatever menu item lands on it, to describe a change the
+      // user cannot see. What they can see is that the row no longer takes the
+      // window away.
+      { id: 'view.alerts', title: 'Alerts', group: 'View', run: () => setAlertsOpen(true) },
       { id: 'view.readiness', title: 'AI readiness', group: 'View', run: () => showPanel('readiness') },
       { id: 'view.mcp', title: 'MCP servers', group: 'View', run: () => showPanel('mcp') },
       { id: 'view.hooks', title: 'Hooks', group: 'View', run: () => showPanel('hooks') },
@@ -1057,11 +1416,14 @@ function Workspace() {
   }, [
     newSession,
     newBrowserTab,
+    openNewSessionDialog,
     openProject,
     showPanel,
     openSettings,
     sidebar,
     splitPanes,
+    splitting,
+    closeFocusedPane,
     closeSplit,
     features,
   ])
@@ -1096,6 +1458,12 @@ function Workspace() {
       switch (id) {
         case 'session.close':
           if (activeTab) closeTab(activeTab.id)
+          return true
+        // ⌘⇧T, and the application menu's "New Session…". One destination with
+        // two chords is fine; two destinations would not be. See the palette
+        // rows above for why the second row went and this alias stayed.
+        case 'session.newDialog':
+          openNewSessionDialog()
           return true
         // Travel between panes without reaching for the mouse. Geometric, via
         // `moveFocus` — of the panes that share an edge with this one, the
@@ -1152,6 +1520,7 @@ function Workspace() {
       closeTab,
       cycleTab,
       showPanel,
+      openNewSessionDialog,
       openSettings,
       selectTab,
       sessions,
@@ -1217,58 +1586,33 @@ function Workspace() {
           // Source control, so the click did nothing you could see.
           onOpenFile={showFile}
           focus={panelFocus}
-          showInsights={booleanSetting(settings, 'general.showInsightAlerts')}
           /*
-           * Every alert's button, given somewhere to go. Each of the five kinds
-           * names a target the app can already show; the panel raised them and
-           * nothing listened, so pressing one re-ran the scan behind it and
-           * left you exactly where you were.
-           */
-          onAlertAction={(action) => {
-            /*
-             * A session-targeted alert names Claude's own conversation id,
-             * taken from the transcript — not this window's tab id, which the
-             * main process mints. They coincide only when the app started the
-             * session. So the match is attempted, and where it fails the action
-             * lands on the inspector, which reads the project's transcripts and
-             * can therefore show the very session the alert is about. What it
-             * never does is guess: `/compact` is a write, and a write to the
-             * wrong session is worse than a button that took you somewhere
-             * slightly broader.
-             */
-            const openSession = sessions.find((session) => session.id === action.target)
-            switch (action.kind) {
-              case 'open-git':
-                showPanel('git')
-                return
-              case 'focus-session':
-                if (openSession) selectTab(openSession.id)
-                else setInspectorOpen(true)
-                return
-              case 'open-inspector':
-                setInspectorOpen(true)
-                return
-              case 'compact-session':
-                // The agent's own command, typed into the session it is about —
-                // the same channel chat mode writes through. Focus follows it,
-                // because a command sent to a terminal you cannot see is a
-                // command you cannot tell ran.
-                if (openSession) {
-                  selectTab(openSession.id)
-                  window.deck.writeToSession(openSession.id, '/compact\r')
-                } else {
-                  setInspectorOpen(true)
-                }
-                return
-              case 'install-provider':
-                // Setup is the section that lists what is installed and what is
-                // missing; landing on General would be a page about something
-                // else (rule 1.5).
-                setPrefsSection('setup')
-                setPrefsOpen(true)
-                return
-            }
+            What the copilot's page can reach. Spelled out as an object like
+            `dashboard` below, and for the same reason: every one of these is a
+            thing the page cannot work out for itself, and passing it here is
+            what stops the page growing a second connection to the copilot that
+            would disagree with the rail's.
+
+            The terminal settings are the same three the session terminals read,
+            so the copilot's terminal is not a differently-shaped terminal.
+          */
+          copilot={{
+            copilot,
+            startedSessions: copilotStarted,
+            onOpenSession: selectTab,
+            fontSize: terminalFontSize,
+            fontFamily: terminalFontFamily,
+            copyOnSelect,
           }}
+          /* `showInsights` and `onAlertAction` used to be handed down here.
+             They belong to the AlertsWindow sheet now — mounted at the bottom
+             of this file — because Alerts is a dialog over the window rather
+             than one of the views inside it.
+
+             Written without angle brackets on purpose: `wiring.test.ts` finds a
+             component's opening tag by searching for the first `<Name` in the
+             file, so a comment naming one as JSX hands it a tag with no props
+             in it and every seam it guards silently reports "missing". */
           // What makes the dashboard's numbers doors rather than decoration.
           // Every one of these was undefined until now, which is why the
           // sessions list rendered its rows disabled and the git tile hid its
@@ -1359,50 +1703,114 @@ function Workspace() {
           // Focus and geometry both arrive here; the effect above is what
           // carries a focus change on to the store.
           onLayoutChange={setPanes}
-          renderPane={({ paneId, sessionId, focused }) => {
-            const session = sessionId
-              ? sessions.find((entry) => entry.id === sessionId) ?? null
+          renderPane={({ paneId, tabId, focused, primary }) => {
+            /*
+             * A pane holds a *tab*, which is a session or a page.
+             *
+             * It held a session id until 2026-08-17, and that is the whole of
+             * why a browser page in a pane was impossible: the prune effect
+             * above is driven off the open list, and a pane naming something
+             * that was not in it was a dead pane. See `layout/panes.ts`.
+             *
+             * Only the tabs a pane actually holds are mounted here. That is the
+             * same bargain the terminals have always made in this branch —
+             * entering a split remounts, and the main process holds each
+             * session's scrollback so a remount is a redraw from a buffer. For
+             * a page it is not free: a page open on the bar but not in a pane
+             * has no view while the split is up, and comes back at its start
+             * address when the split is closed. That is not a regression (this
+             * branch used to mount no pages at all, which is why none of them
+             * could be seen) but it is the next thing to fix here, and it wants
+             * the split kept mounted behind a sidebar page rather than a change
+             * in this expression.
+             */
+            const paneTab = tabId ? tabs.find((entry) => entry.id === tabId) ?? null : null
+            const sessionTab = paneTab?.kind === 'session' ? paneTab : null
+            const pageTab = paneTab?.kind === 'browser' ? paneTab : null
+            const session = sessionTab
+              ? sessions.find((entry) => entry.id === sessionTab.id) ?? null
               : null
-            const index = session
-              ? sessions.filter((s) => s.projectPath === session.projectPath).indexOf(session)
-              : 0
+
             return (
-              <div className="pane-cell" data-focused={focused}>
-                <header className="pane-cell-head" data-empty={!session || undefined}>
-                  {session ? (
-                    <>
-                      <StatusDot status={session.status} />
-                      <span className="pane-cell-title">
-                        {sessionLabel(session.title, index, folderNameOf(session.projectPath))}
-                      </span>
-                    </>
-                  ) : (
-                    <span className="pane-cell-title pane-cell-waiting">Empty pane</span>
-                  )}
-                  <button
-                    type="button"
-                    className="pane-cell-close"
-                    aria-label="Close this pane"
-                    // Closing the second-to-last pane puts the window back to a
-                    // single session rather than leaving a "split view" with one
-                    // pane in it, which is the ordinary view wearing a divider.
-                    title="Close this pane"
-                    onClick={() => closePaneAt(paneId)}
-                  >
-                    <svg
-                      width="13"
-                      height="13"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="1.6"
-                      strokeLinecap="round"
-                      aria-hidden="true"
-                    >
-                      <path d={PANE_CLOSE} />
-                    </svg>
-                  </button>
-                </header>
+              <div className="pane-cell" data-focused={focused} data-primary={primary}>
+                {/*
+                  A *guest* pane's own chrome, describing that pane's content.
+
+                  The account chip used to be drawn once for the whole window
+                  while the window could show two sessions from two projects
+                  under two accounts — so whatever it said was wrong for at
+                  least one of them, with nothing on screen to say which.
+
+                  `!primary` is the correction of 2026-08-17. A first pass gave
+                  every pane one of these and emptied the window's bar out, and
+                  that threw away the thing that made one pane read as the
+                  session: *"If we make both exactly the same placement — if the
+                  name and the account come down — then there is no reason to
+                  keep one of them in a box, because all the sizes, everything,
+                  is the same. So let's keep the main."* The host's name, folder
+                  and account stay upstairs in the window's toolbar, where they
+                  sat before anybody split anything, and the window's bar is
+                  unambiguous about *which* pane it means precisely because the
+                  host is the pane with no box and no bar of its own.
+
+                  The per-pane argument survives for the guests, unchanged: a
+                  pty has one cwd and one config directory, fixed at spawn, and
+                  a guest has no other place on screen to say so.
+                */}
+                {!primary && (
+                  <PaneBar
+                    paneId={paneId}
+                    focused={focused}
+                    onClose={closePaneAt}
+                    subject={
+                      session && sessionTab
+                        ? {
+                            kind: 'session',
+                            id: session.id,
+                            title: labelOf(sessionTab),
+                            status: session.status,
+                            folder: session.projectPath ?? null,
+                            // The account this session is actually running as,
+                            // off its own `SessionMeta` — not the window's, and
+                            // not the other pane's.
+                            account: sessionTab.account ?? null,
+                            // Spelled as a plain prop for the same reason the
+                            // window's bar spells it out: `wiring.test.ts`
+                            // cannot see through a conditional spread, and this
+                            // is the seam it watches.
+                            provider: isProviderId(defaultProvider) ? defaultProvider : undefined,
+                            onPickAccount: (accountId, runAs) =>
+                              newSession(session.projectPath ?? undefined, false, accountId, runAs),
+                            onManageAccounts: () => openSettings('profiles'),
+                          }
+                        : pageTab
+                          ? { kind: 'page', title: pageTab.label }
+                          : { kind: 'empty' }
+                    }
+                    /*
+                      This guest's own model, effort, fast mode and connectors,
+                      acting on this guest's own pty.
+
+                      The same component the window's bar carries for the host —
+                      mounted once per pane, each with its own `sessionId`, which
+                      is what makes "which session is this the model of" have the
+                      same answer as "which terminal is it drawn over". `provider`
+                      is the session's own, not `defaultProvider`: the chip above
+                      is about the account a *new* session would use, and this is
+                      about the CLI already running in this one.
+                    */
+                    controls={
+                      session ? (
+                        <SessionControls
+                          sessionId={session.id}
+                          cwd={session.projectPath ?? null}
+                          provider={session.provider}
+                          onOpenConnectors={openConnectors}
+                        />
+                      ) : undefined
+                    }
+                  />
+                )}
                 <div className="pane-cell-body">
                   {session ? (
                     <TerminalView
@@ -1415,6 +1823,41 @@ function Workspace() {
                       fontSize={terminalFontSize}
                       fontFamily={terminalFontFamily}
                       copyOnSelect={copyOnSelect}
+                    />
+                  ) : pageTab ? (
+                    /*
+                     * A live page, in a pane, beside a terminal.
+                     *
+                     * The panel measures its own rectangle and pushes it to the
+                     * main process — the page is a native view floating over
+                     * this tree — so it needs nothing from the split beyond
+                     * being mounted inside it. Dragging the divider resizes the
+                     * stage, the ResizeObserver in there fires, and the view
+                     * follows.
+                     *
+                     * `visible` is the pane's own answer and not the window's:
+                     * a sidebar page covering the window has to park it, the
+                     * same as it does for a page filling the window.
+                     */
+                    <BrowserWorkspace
+                      key={`${paneId}:${pageTab.id}`}
+                      visible={!showingPanel}
+                      parkPage={anyModalOpen}
+                      startUrl={stringSetting(settings, 'browser.startUrl')}
+                      onStartUrl={(url) => {
+                        applySettings({ ...settings, 'browser.startUrl': url })
+                        void window.deck.setSettings({ 'browser.startUrl': url })
+                      }}
+                      onTitle={(title) => renameBrowserTab(pageTab.id, title)}
+                      onSendToAgent={(context) => {
+                        // The store's active session, which while the window is
+                        // split is the last *session* pane that had focus — a
+                        // page taking focus deliberately does not overwrite it
+                        // (see the effect that mirrors focus into the store).
+                        // So "send to the agent" from a page beside a terminal
+                        // reaches that terminal.
+                        if (activeSessionId) window.deck.writeToSession(activeSessionId, context)
+                      }}
                     />
                   ) : (
                     // An instruction, not a placeholder. The sidebar fills the
@@ -1462,18 +1905,7 @@ function Workspace() {
                 void window.deck.setSettings({ 'browser.startUrl': url })
               }}
               // Otherwise every browser row in the sidebar reads "New tab".
-              onTitle={(title) =>
-                setExtraTabs((prev) =>
-                  // The same array back when nothing changed. `prev.map` always
-                  // builds a new one, and a new array is a new state, which is
-                  // a re-render, which reports the title again.
-                  prev.some((entry) => entry.id === tab.id && entry.label !== title)
-                    ? prev.map((entry) =>
-                        entry.id === tab.id ? { ...entry, label: title } : entry,
-                      )
-                    : prev,
-                )
-              }
+              onTitle={(title) => renameBrowserTab(tab.id, title)}
               onSendToAgent={(context) => {
                 if (activeSessionId) window.deck.writeToSession(activeSessionId, context)
               }}
@@ -1524,17 +1956,91 @@ function Workspace() {
   }
 
   /**
+   * The pane the window's own bar is about, while the window is split.
+   *
+   * The **host** — first in visual order, the one `SplitView` draws flush with
+   * the window and does not box — and deliberately not the focused one. The bar
+   * has to belong to a pane a reader can point at, and the only pane it can
+   * belong to without being ambiguous is the one that has no box and no bar of
+   * its own. A heading that followed focus would be the original bug in a
+   * costume: still one heading over two sessions, just changing its mind.
+   *
+   * `primaryPane` rather than `listPanes(panes)[0]` because `SplitView` asks
+   * the same question to decide which pane to box, and the two answers have to
+   * be the same answer.
+   */
+  const hostPane = splitting ? primaryPane(panes) : null
+
+  /**
    * The tab the window's heading is about.
    *
-   * While the window is split that is the *focused pane's* session, not the tab
-   * that happened to be active before the split — the title, the folder chip
-   * and the session-details dialog all read from here, so they follow the pane
-   * you are working in the way everything else does.
+   * Split, that is whatever the host pane holds — a session, a page, or nothing
+   * at all while a pane is waiting to be filled. Unsplit it is simply the tab
+   * in front, and nothing here has changed from what it always was.
+   *
+   * No fallback to `activeTab` while split, and that is not an oversight: the
+   * fallback would put the *guest's* name in the window's bar the moment the
+   * host pane was empty, which is exactly the claim this bar must never make.
+   * An empty host says so in its own body — `PageEmpty` below — and this bar
+   * says nothing.
    */
   const headingTab = splitting
-    ? tabs.find((tab) => tab.id === focusedId) ?? activeTab
+    ? (hostPane?.tabId ? tabs.find((tab) => tab.id === hostPane.tabId) ?? null : null)
     : activeTab
 
+  /**
+   * Whether the pane the bar is naming has the keyboard.
+   *
+   * Always true unsplit — there is nowhere else for focus to be. Split, it is
+   * how the host pane says it is focused at all: it has no border to hang a
+   * ring on, by design, so its identity dims instead, to exactly the weight an
+   * unfocused guest's bar dims to. Watching the two swap as you click between
+   * panes is what teaches "the top bar is the pane with no box", which is
+   * otherwise a convention a first-time user has to guess.
+   */
+  const headingFocused = !splitting || (hostPane !== null && hostPane.id === panes.focusedPaneId)
+
+  /**
+   * The running session the window's bar is about, when it is about one.
+   *
+   * The bar's own controls — model, effort, fast mode, connectors — act on this
+   * and on nothing else. Resolved from the *same* `headingTab` the bar's name,
+   * folder and account come from, deliberately: the controls have to belong to
+   * whichever session that bar is claiming, or the window would be naming one
+   * session and setting the model of another, which is the confusion the split
+   * chrome was reorganised to end.
+   *
+   * The tab is not enough on its own. `provider` — what is actually running in
+   * the pty — lives on the session record rather than on the tab, and it is the
+   * thing that decides whether these are offered at all: a `/bin/zsh -l` has no
+   * model to set. Null while a sidebar view is filling the window, where the
+   * bar's heading is a page's name and there is no session under it.
+   */
+  const headingSession =
+    !showingPanel && headingTab?.kind === 'session'
+      ? sessions.find((entry) => entry.id === headingTab.id) ?? null
+      : null
+
+  /**
+   * What the window's own bar says — and while the window is split, it says the
+   * *host* pane's name, folder and account.
+   *
+   * This was emptied out for a day. Every pane grew a bar of its own and this
+   * one was left with the mode switch, on the argument that a name, a folder
+   * and an account are facts about one session and this bar spans two. The
+   * facts part is true and is why the guests keep their bars. What it missed is
+   * that the host is not one of two interchangeable halves — Asad, 2026-08-17:
+   *
+   *   > *"We wanted to keep it in the top bar, under the pills of windows, so
+   *   > it feels like a main session and the other ones like secondary
+   *   > sessions. If we make both exactly the same placement — if the name and
+   *   > the account come down — then there is no reason to keep one of them in
+   *   > a box, because all the sizes, everything, is the same."*
+   *
+   * So the host's chrome never moves. Unsplit and split are the same expression
+   * for it, which is the point: splitting a window does not relocate the
+   * session you were already working in, it puts something beside it.
+   */
   const heading = showingPanel && panel
     ? { title: panelSpec(panel).label, subtitle: panelSpec(panel).blurb, folder: null, account: null }
     : headingTab
@@ -1548,12 +2054,18 @@ function Workspace() {
           // account a *new* session here would use.
           account: headingTab.kind === 'session' ? headingTab.account ?? null : null,
         }
-      // No subtitle. "Nothing open yet." is the sidebar's line, and it is there to
-      // explain why the list beneath it is empty — a job this heading does not
-      // share. Saying it here too put the same sentence on screen twice, a few
-      // centimetres apart, while the page in the middle was already explaining
-      // the same emptiness with a button. The title alone is enough.
-      : { title: BRAND.name, subtitle: null, folder: null, account: null }
+      : splitting
+        // A split whose host pane has not been filled. There is no name to
+        // print, and printing the app's own name over an empty pane would read
+        // as "nothing is open" while two sessions are running beside it. The
+        // pane's body already says what it is; the bar keeps the mode switch.
+        ? { title: null, subtitle: null, folder: null, account: null }
+        // No subtitle. "Nothing open yet." is the sidebar's line, and it is there to
+        // explain why the list beneath it is empty — a job this heading does not
+        // share. Saying it here too put the same sentence on screen twice, a few
+        // centimetres apart, while the page in the middle was already explaining
+        // the same emptiness with a button. The title alone is enough.
+        : { title: BRAND.name, subtitle: null, folder: null, account: null }
 
   /**
    * The folder the heading's two chips act on.
@@ -1577,6 +2089,35 @@ function Workspace() {
     : focusedId
       ? sessionView[focusedId] ?? 'terminal'
       : 'terminal'
+
+  /**
+   * Whether there is a tab strip, and therefore which bar is the window's top
+   * band.
+   *
+   * Asked once, here, and handed to both — the strip only draws itself when
+   * this is true, and the session bar only reserves room for the traffic lights
+   * and draws the reveal button when it is false. Two components deciding it
+   * separately is how you get two reveal buttons, or none.
+   */
+  const hasStrip = stripIsPresent(tabs)
+
+  /**
+   * The session bar, absent inside a browser page.
+   *
+   * *"If I am inside the browser, this whole bar header is useless."* It is: the
+   * bar's four contents are a session's name, its folder, its login and whether
+   * it is drawn as a terminal or a conversation, and a web page has none of
+   * those. A sidebar view still gets it, because a view has a name and that name
+   * is the heading of the page underneath.
+   *
+   * A *split* always gets it, whatever the host pane holds. Two reasons, and
+   * either one on its own would be enough. The bar carries the host session's
+   * name, folder and account, which is the whole of how a reader tells the two
+   * panes' logins apart. And it carries the mode switch, which is the only way
+   * back out of a split — dropping the bar because the host pane happens to
+   * hold a web page would shut the door behind the user.
+   */
+  const showSessionBar = showingPanel || splitting || headingTab?.kind !== 'browser'
 
   return (
     <div className="app" data-sidebar-peek={sidebar.peeking || undefined}>
@@ -1607,26 +2148,56 @@ function Workspace() {
           panels={PANELS.filter((entry) => features.panelOn(entry.id))}
           browser={features.on('browser')}
           browserOffer={browserOffer?.title ?? null}
+          /*
+            The bell beside Settings, and whether there is one.
+
+            Asked here rather than in the rail for the same reason `panels` and
+            `browser` are: every decision about what exists is made next to the
+            rest of the gating. `controlOn` rather than `on('alerts')` because
+            the bell is what the registry declares — `sidebar.alerts` — and
+            naming the surface keeps the question true if the surface ever
+            changes hands.
+          */
+          alerts={features.controlOn('sidebar.alerts')}
           unread={unreadIds}
           peeking={sidebar.peeking && sidebar.collapsed}
           // Above Settings, in the foot. Mounted here rather than inside the
           // sidebar so the component stays where the wiring test can see it and
           // where its bridge subscription belongs.
           update={<UpdateBanner />}
+          /* The pinned row's status dot and its sentence. One connection, read
+             here, so the rail and the page it opens cannot disagree about
+             whether the copilot is running. */
+          copilot={{ stage: copilot.stage, state: copilot.state }}
+          /* Only the rows that link back to a turn use this; the pinned row
+             navigates through `onSelectPanel` like every other view. */
+          onOpenCopilot={(focus) => showPanel('copilot', focus ?? null)}
           onSelectTab={selectTab}
           onCloseTab={closeTab}
           onSelectPanel={showPanel}
-          onNewSession={newSession}
-          // The chevron half of the split button. The press beside it still starts a
-          // session immediately in the remembered folder — that one-click path was
-          // deliberate and is unchanged; this opens the options dialog, which until now
-          // was reachable only from the command palette. Without this prop the chevron
-          // is absent rather than dead, which is the honest failure and is pinned.
-          onNewSessionOptions={() => setNewSessionOpen(true)}
+          /*
+            One route, and it is the dialog — including the ＋ on a project
+            heading, which is why the folder is carried through rather than
+            dropped. *"We just always wanted this pop-up to come up so we choose
+            which type of terminal we want to open."*
+
+            Continue-last-session is the exception and is deliberately still
+            immediate: it is not a question about what kind of terminal to open,
+            it is a named command with one answer, and putting a dialog in front
+            of it would be a second thing he did not ask for.
+          */
+          onNewSession={(projectPath, resume) =>
+            resume ? newSession(projectPath, true) : openNewSessionDialog(projectPath)
+          }
           onNewBrowserTab={newBrowserTab}
           onOpenProject={openProject}
           onCloseProject={closeProject}
           onOpenSettings={() => openSettings()}
+          // Opens the sheet. It does not touch `panel`, which is what makes the
+          // bell a pop-up rather than a navigation: whatever you were looking
+          // at is still on screen behind it, and closing puts you back with
+          // nothing to restore.
+          onOpenAlerts={() => setAlertsOpen(true)}
           onToggleCollapsed={sidebar.toggleCollapsed}
           onPeekStart={sidebar.beginPeek}
           onPeekEnd={sidebar.endPeek}
@@ -1635,111 +2206,185 @@ function Workspace() {
       )}
 
       <main className="main">
-        <WindowToolbar
-          title={heading.title}
-          subtitle={heading.subtitle}
-          meta={
-            headingFolder ? (
-              /* Where, and who — one line, both one click away, both before
-                 anything has been typed. New session still starts immediately
-                 in the last folder; these are how that decision is changed. */
-              <div className="toolbar-chips">
-                <FolderChip
-                  path={headingFolder}
-                  options={projects}
-                  onPick={(path) => newSession(path)}
-                  onBrowse={() => void openProject()}
-                />
-                <span className="toolbar-chip-sep" aria-hidden="true" />
-                <AccountChip
-                  current={heading.account}
-                  projectPath={headingFolder}
-                  /*
-                   * The agent a session started from this chip would run — the
-                   * same setting `newSessionIn` sends, read the same way, so the
-                   * menu cannot promise an account that the spawn then drops.
-                   * Undefined when the stored value is not a provider id, which
-                   * is the honest answer to "which agent" and leaves the menu
-                   * saying nothing rather than explaining a reason it has not
-                   * established. Spelled as a plain prop rather than a
-                   * conditional spread so `wiring.test.ts` can see it: a spread
-                   * is invisible to that guard, and this is exactly the seam it
-                   * was written to watch.
-                   */
-                  provider={isProviderId(defaultProvider) ? defaultProvider : undefined}
-                  /* The account *and* the agent it is a login of. The menu
-                     lists accounts of every agent now, so picking a Codex one
-                     and starting the default agent would hand a Codex config
-                     directory to Claude — which `resolveProfileId` declines,
-                     leaving the click with nothing to show for itself. */
-                  onPick={(accountId, runAs) =>
-                    newSession(headingFolder, false, accountId, runAs)
-                  }
-                  onManage={() => openSettings('profiles')}
-                />
-              </div>
-            ) : null
-          }
-          /*
-           * The *pinned* state, not the visible one.
-           *
-           * A peeked rail floats over the toolbar rather than taking room from
-           * it, so the traffic lights are still sitting on the toolbar and it
-           * still needs their 82px of clearance. Passing `!revealed` here made
-           * that padding come and go with the peek, which slid the window's
-           * title 66px sideways every time a pointer brushed the left edge.
-           * The reveal button goes with it and is simply covered by the rail
-           * while it is out — the same control, in the same place, either way.
-           */
-          sidebarHidden={sidebar.collapsed}
-          // Which page is under the toolbar, so the heading can line up with
-          // it. Null for a session, whose terminal fills the window.
-          page={showingPanel ? panel : null}
-          onRevealSidebar={sidebar.pin}
-          onEdgeEnter={sidebar.beginPeek}
-        >
-          {/*
-            One control, and only where it means something.
-
-            Swarm draws every terminal at once, so "how is *the* session shown"
-            has no session to be about; a view from the sidebar is not a session
-            at all. In both cases the switch is absent rather than disabled —
-            there is nothing to say about a mode for something that is not on
-            screen.
-          */}
-          {(activeSession || splitting) && !showingPanel && !swarm ? (
-            <ModeSwitch mode={mode} onChange={setMode} splitOffer={!features.on('split')} />
-          ) : null}
-        </WindowToolbar>
-
         {/*
-          The promoted windows, as a strip, the way a browser does it.
-          Asad: "we should be able to just drag and drop in the top whatever we
-          want to see in the top, and the rest we can fold inside the side
-          panel." So the sidebar keeps everything and this shows the subset you
-          promoted — sessions and browser windows alike, since both are just
-          windows you are working in.
+          The tab strip, and it is the window's top band now — Asad, 2026-08-16:
+          "this tabs should be upside, and this session and all this whole bar
+          including chat, split, terminal should be under this, not above,
+          because if I am inside the browser this whole bar header is useless."
 
-          It renders between the toolbar and the panes because that is where a
-          tab strip belongs: under the window's own chrome, above the content it
-          switches. It draws nothing at all until something has been promoted,
-          so a user who never drags anything never gains a bar.
+          The two bars answer different questions and that is why the order
+          matters. This one is the *window's*: what you have open, true whatever
+          is on screen. The one under it is the *session's*, and inside a browser
+          page it is not rendered at all rather than emptied — so this bar also
+          takes on what a top band has to do, which is hold the traffic lights,
+          move the window, and carry the control that brings a pinned-away rail
+          back. See `hasStrip`, which is the one place that decides which of the
+          two is first.
 
-          `closeTab` rather than `closeTabNow`: the strip's close button is a
-          real close, and closing a session with unsaved work has to go through
-          the same confirmation the sidebar's does. Handing it the unguarded one
-          would make the same button mean two different things depending on
-          which copy of it you clicked.
+          `focusedId ?? activeTab?.id`: the same expression the sidebar and the
+          heading below are given. Passing `activeTab?.id` alone was the reason a
+          split window's title named one session while the strip highlighted
+          another — and, further back, why the title could name a session with no
+          tab in the strip at all. `shownTabs` closes the other half of that by
+          always drawing the active tab, promoted or not.
+
+          There is no `onClose` on this bar any more, and its absence is the
+          behaviour change of 2026-08-17. The ✕ on a tab takes the tab off the
+          strip and stops: *"it should not delete the session… side panel will
+          have everything inside, and above we just set a view which one we want
+          to see."* The only ✕ that ends a session is the rail's, which still
+          goes through `closeTab` and its confirmation.
         */}
-        <WorkspaceTabStrip
-          tabs={tabs}
-          activeTabId={activeTab?.id ?? null}
-          onSelect={selectTab}
-          onClose={closeTab}
-        />
+        {hasStrip && (
+          <WorkspaceTabStrip
+            tabs={tabs}
+            activeTabId={focusedId ?? activeTab?.id ?? null}
+            /* A sidebar view is filling the window, so none of these tabs is
+               what is on screen — the bar below is headed with the view's name.
+               The tab stays drawn, because it is what you will come back to;
+               it just stops claiming to be the selected one. */
+            covered={showingPanel}
+            onSelect={selectTab}
+            onShowInstead={showInstead}
+            /* The two icons after the last tab. The terminal opens the dialog,
+               not a session — the same single route the rail's button takes —
+               and the globe opens a page on the start page. */
+            onNewSession={() => openNewSessionDialog()}
+            onNewBrowserTab={newBrowserTab}
+            sidebarHidden={sidebar.collapsed}
+            onRevealSidebar={sidebar.pin}
+            onEdgeEnter={sidebar.beginPeek}
+          />
+        )}
+
+        {showSessionBar && (
+          <WindowToolbar
+            title={heading.title}
+            /* Which session that title is the name of, so the heading can be
+               renamed where it is written rather than only in the rail — see
+               `SessionTitle`. Null for a sidebar view, whose heading is the
+               app's word for a page and not anybody's session.
+
+               Split makes no difference here and must not: the heading is the
+               host session's, in the same place, so double-click and F2 rename
+               it in the same place. A guest's name is renamed in the guest's
+               own bar, which carries the same control. */
+            sessionId={
+              !showingPanel && headingTab?.kind === 'session' ? headingTab.id : null
+            }
+            /* The host pane's focus, said in the host pane's chrome — which is
+               up here. Without it the pane drawn flush with the window has no
+               focus mark at all, because it deliberately has no border to ring. */
+            headingFocused={headingFocused}
+            subtitle={heading.subtitle}
+            meta={
+              headingFolder ? (
+                /* Where, and who. The folder is a plain title — a pty has one
+                   working directory for its whole life, so a menu here could
+                   only ever have offered to start a different session, and he
+                   asked for the word instead. The account beside it keeps its
+                   menu, because picking a login *is* a real decision about the
+                   session you are about to start. */
+                <div className="toolbar-chips">
+                  <FolderTitle path={headingFolder} />
+                  <span className="toolbar-chip-sep" aria-hidden="true" />
+                  <AccountChip
+                    current={heading.account}
+                    projectPath={headingFolder}
+                    /*
+                     * The agent a session started from this chip would run — the
+                     * same setting `newSessionIn` sends, read the same way, so the
+                     * menu cannot promise an account that the spawn then drops.
+                     * Undefined when the stored value is not a provider id, which
+                     * is the honest answer to "which agent" and leaves the menu
+                     * saying nothing rather than explaining a reason it has not
+                     * established. Spelled as a plain prop rather than a
+                     * conditional spread so `wiring.test.ts` can see it: a spread
+                     * is invisible to that guard, and this is exactly the seam it
+                     * was written to watch.
+                     */
+                    provider={isProviderId(defaultProvider) ? defaultProvider : undefined}
+                    /* The account *and* the agent it is a login of. The menu
+                       lists accounts of every agent now, so picking a Codex one
+                       and starting the default agent would hand a Codex config
+                       directory to Claude — which `resolveProfileId` declines,
+                       leaving the click with nothing to show for itself. */
+                    onPick={(accountId, runAs) =>
+                      newSession(headingFolder, false, accountId, runAs)
+                    }
+                    onManage={() => openSettings('profiles')}
+                  />
+                </div>
+              ) : null
+            }
+            /*
+             * The *pinned* state, not the visible one.
+             *
+             * A peeked rail floats over the bar rather than taking room from
+             * it, so the traffic lights are still sitting on the chrome and it
+             * still needs their 82px of clearance. Passing `!revealed` here made
+             * that padding come and go with the peek, which slid the window's
+             * title 66px sideways every time a pointer brushed the left edge.
+             * The reveal button goes with it and is simply covered by the rail
+             * while it is out — the same control, in the same place, either way.
+             */
+            sidebarHidden={sidebar.collapsed}
+            /* With a strip above, none of that is this bar's job any more: the
+               lights are up there and so is the one reveal button. */
+            underStrip={hasStrip}
+            // Which page is under the bar, so the heading can line up with
+            // it. Null for a session, whose terminal fills the window.
+            page={showingPanel ? panel : null}
+            onRevealSidebar={sidebar.pin}
+            onEdgeEnter={sidebar.beginPeek}
+          >
+            {/*
+              One control, and only where it means something.
+
+              Swarm draws every terminal at once, so "how is *the* session shown"
+              has no session to be about; a view from the sidebar is not a session
+              at all. In both cases the switch is absent rather than disabled —
+              there is nothing to say about a mode for something that is not on
+              screen.
+            */}
+            {/*
+              The host session's own controls, on the window's own bar.
+
+              Asad, twice: *"the model selection, all of the things that a chat
+              session used to have. I mean efforts, fast mode, model selection,
+              and add plugin connectors … they should be on the top bar."* They
+              existed and were folded into the chat composer, which a session
+              drawn as a terminal never shows — so the model could not be seen,
+              let alone changed, without switching the whole pane to Chat first.
+
+              Before the mode switch, because these are facts about the session
+              and that is a fact about the window, and the window's is the one
+              that must never move: it is how you get back out of a split.
+
+              Absent in swarm, for the same reason the mode switch is: every
+              terminal is drawn at once and there is no single session for a
+              model to be the model of.
+            */}
+            {headingSession && !swarm ? (
+              <SessionControls
+                sessionId={headingSession.id}
+                cwd={headingSession.projectPath ?? null}
+                provider={headingSession.provider}
+                onOpenConnectors={openConnectors}
+              />
+            ) : null}
+            {(activeSession || splitting) && !showingPanel && !swarm ? (
+              <ModeSwitch mode={mode} onChange={setMode} splitOffer={!features.on('split')} />
+            ) : null}
+          </WindowToolbar>
+        )}
 
         <div className="panes">
-          <ErrorBoundary label={heading.title}>{mainView()}</ErrorBoundary>
+          {/* Named for whatever the bar above is naming, which is the host
+              session. The fallback catches the one case with no name at all: a
+              split whose host pane is still empty, where "Split view" describes
+              the arrangement rather than pretending to name a session in it. */}
+          <ErrorBoundary label={heading.title ?? 'Split view'}>{mainView()}</ErrorBoundary>
         </div>
       </main>
 
@@ -1804,13 +2449,36 @@ function Workspace() {
       />
       <NewSessionDialog
         open={newSessionOpen}
-        projectPath={activeProjectPath}
+        /* The folder the press named, or the one you are in. The ＋ on a project
+           heading is the only caller that names one, and before this dialog
+           became the single route it did not have to — it spawned into that
+           folder directly. Dropping the argument here would have turned "new
+           session in terminaldeck" into "new session in whatever is on screen",
+           which is a press that quietly does something else. */
+        projectPath={newSessionPath ?? activeProjectPath}
         onClose={() => setNewSessionOpen(false)}
         onStart={async (request) => {
           setNewSessionOpen(false)
           const meta = await window.deck.createSession(request)
           addSession(meta)
           showTab(meta.id)
+          /*
+             The bar keeps it — and this is the one that answers what he asked
+             for, because the strip's terminal glyph opens *this* dialog rather
+             than a session (*"we just always wanted this pop-up to come up so we
+             choose which type of terminal we want to open"*).
+
+             Which means the rail's New session button, the ＋ on a project
+             heading and ⌘T all land here too, and all of them keep their window
+             as well. That is deliberate rather than incidental: they are the
+             same act, arrived at from four places, and a session that stays on
+             the bar when it was started from the header and vanishes when it was
+             started from the rail would be the window disagreeing with itself
+             about what a new session is. Restoring a reload's sessions and
+             accepting one started on a paired phone are *not* this act, and
+             neither of them promotes anything.
+          */
+          keepNewWindowInStrip(meta.id)
         }}
       />
       <HelpDialog open={helpOpen} onClose={() => setHelpOpen(false)} />
@@ -1830,6 +2498,107 @@ function Workspace() {
         sessionTitle={focusedSession?.title}
       />
       <ShortcutsSheet open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
+      {/*
+        The copilot's alter-tier confirmation.
+
+        Mounted here with the rest of the dialogs, and — unlike every one of
+        them — not behind a flag this window sets. The question comes from the
+        main process, so it can arrive while somebody is deep in a terminal with
+        no thought of the copilot at all. That is exactly the case it exists for:
+        `deck-control` will not write a setting, stop one of your sessions or
+        create a routine unless this appears and somebody presses Allow.
+
+        It is not gated on a feature either. There is no "copilot" switch in the
+        feature store, and if there ever is, the gate belongs on the tools rather
+        than on the dialog: a build that can be asked and cannot draw the
+        question is a build where the answer is decided by a timeout.
+      */}
+      <CopilotConsent
+        question={consent.question}
+        waiting={consent.waiting}
+        titles={consent.titles}
+        onAnswer={consent.answer}
+      />
+      <AlertsWindow
+        /*
+         * Gated on the feature here, not only on the bell.
+         *
+         * The page this replaces was gated twice — the rail dropped the row and
+         * `PanelView` drew the offer for anyone who was already on it when the
+         * feature went off — and the sheet needs the same second half. Without
+         * it, switching Alerts off in Settings while the sheet is open leaves a
+         * dialog on screen for something the app no longer has. `open` is
+         * resolved on render rather than repaired in an effect, for the reason
+         * the settings rail gives about its own selected pane: the wrong thing
+         * must not be shown for even one frame.
+         */
+        open={alertsOpen && features.on('alerts')}
+        onClose={() => setAlertsOpen(false)}
+        projectPath={activeProjectPath}
+        showInsights={booleanSetting(settings, 'general.showInsightAlerts')}
+        /*
+         * Every alert's button, given somewhere to go. Each of the five kinds
+         * names a target the app can already show; the panel raised them and
+         * nothing listened, so pressing one re-ran the scan behind it and left
+         * you exactly where you were.
+         */
+        onAction={(action) => {
+          /*
+           * The sheet closes first, whatever the action turns out to be.
+           *
+           * All five of them act on the window *behind* this dialog — a panel,
+           * a tab, a terminal, another sheet — and a modal is precisely the
+           * thing that makes those unreachable while it is up. Leaving it open
+           * would have been the same defect the actions were given handlers to
+           * fix: press the button, something happens somewhere you cannot see,
+           * and the surface in front of you is unchanged.
+           */
+          setAlertsOpen(false)
+          /*
+           * A session-targeted alert names Claude's own conversation id, taken
+           * from the transcript — not this window's tab id, which the main
+           * process mints. They coincide only when the app started the session.
+           * So the match is attempted, and where it fails the action lands on
+           * the inspector, which reads the project's transcripts and can
+           * therefore show the very session the alert is about. What it never
+           * does is guess: `/compact` is a write, and a write to the wrong
+           * session is worse than a button that took you somewhere slightly
+           * broader.
+           */
+          const openSession = sessions.find((session) => session.id === action.target)
+          switch (action.kind) {
+            case 'open-git':
+              showPanel('git')
+              return
+            case 'focus-session':
+              if (openSession) selectTab(openSession.id)
+              else setInspectorOpen(true)
+              return
+            case 'open-inspector':
+              setInspectorOpen(true)
+              return
+            case 'compact-session':
+              // The agent's own command, typed into the session it is about —
+              // the same channel chat mode writes through. Focus follows it,
+              // because a command sent to a terminal you cannot see is a
+              // command you cannot tell ran.
+              if (openSession) {
+                selectTab(openSession.id)
+                window.deck.writeToSession(openSession.id, '/compact\r')
+              } else {
+                setInspectorOpen(true)
+              }
+              return
+            case 'install-provider':
+              // Setup is the section that lists what is installed and what is
+              // missing; landing on General would be a page about something
+              // else (rule 1.5).
+              setPrefsSection('setup')
+              setPrefsOpen(true)
+              return
+          }
+        }}
+      />
       <CommandPalette
         open={paletteMode !== null}
         mode={paletteMode ?? 'commands'}

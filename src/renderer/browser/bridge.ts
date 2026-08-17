@@ -37,6 +37,14 @@ export interface BrowserTabState {
 /** Mirrors `LabelSource` in `src/main/selector.ts`. */
 export type LabelSource = 'text' | 'value' | 'aria-label' | 'alt' | 'placeholder' | 'title' | 'none'
 
+/** Mirrors `CaptureRect` in `src/main/browser-tab.ts`. */
+export interface CaptureRect {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
 /** Mirrors `BrowserCapture` in `src/main/browser-tab.ts`. */
 export interface BrowserCapture {
   selector: string
@@ -47,6 +55,24 @@ export interface BrowserCapture {
   attributes: Record<string, string>
   /** The composed single-line context, already sanitised by the main process. */
   context: string
+  /**
+   * The page as it looked at the instant of the click, as a `data:` image.
+   *
+   * Painted on the page's own rectangle while the capture popup is open. The
+   * popup is HTML and the page is a native view composited above the renderer,
+   * so opening the popup necessarily hides the page; without this the website
+   * appears to vanish the moment you click it. Empty when the main process
+   * could not take one, or when it predates the field.
+   */
+  pageImage: string
+  /**
+   * Where the element sat inside the page when it was clicked, in CSS pixels.
+   *
+   * The capture popup is placed against it. Null when the page reported nothing
+   * usable — and null is also what an older main process sends, which is why
+   * `popup-anchor.ts` has a defined answer for it rather than a crash.
+   */
+  rect: CaptureRect | null
 }
 
 export interface Bounds {
@@ -90,6 +116,35 @@ export interface ScreenshotResult {
   path: string
   width: number
   height: number
+  /**
+   * The shot as a `data:image/png` URL, resized to something a popup can draw.
+   *
+   * Empty when the main process could not encode one, and empty from any main
+   * process written before the field existed. The popup shows the path and the
+   * send box either way — a screenshot the user cannot see is a filename, which
+   * is exactly what this screen used to be.
+   */
+  preview: string
+  /**
+   * The page this is a picture of, when the sender knew it.
+   *
+   * Present on a frame the user marked up in draw mode and absent on a plain
+   * capture, and the difference is what the picture is *for*. A marked frame is
+   * evidence in a bug report — *"we can send it to the agent like this"* — and a
+   * picture of a bug with no address on it is one an agent cannot act on: it
+   * cannot open the page, cannot reproduce it, cannot tell which of three dev
+   * servers it is looking at.
+   */
+  url?: string
+  /**
+   * How many marks are on it, when it was drawn on.
+   *
+   * Said out loud to the agent rather than left for it to notice, because a red
+   * circle in a screenshot is easy to read as part of the site. One number is
+   * enough: it tells the agent the marks exist and are the user's, and the
+   * picture says everything else.
+   */
+  marks?: number
 }
 
 /** Mirrors `CookieSummary` in `src/main/browser-session.ts`. Note: no value. */
@@ -242,6 +297,35 @@ export function resolveBrowserBridge(): BrowserBridge | null {
   const host = (window as unknown as { deck?: unknown }).deck
   if (!host || missingBridgeMethods(host).length > 0) return null
   return host as BrowserBridge
+}
+
+/**
+ * What went wrong, as the sentence the main process wrote.
+ *
+ * Everything here crosses `ipcRenderer.invoke`, and Electron rejects a failed
+ * invoke with the handler's message wrapped in its own:
+ *
+ *     Error invoking remote method 'browser-view:frame': Error: The page has to
+ *     be on screen to capture it.
+ *
+ * The panel prints that straight into its notice band, so a plain precondition —
+ * one the main process is careful to phrase as a sentence for exactly this
+ * reason — reaches the user wearing a channel name and the word Error twice.
+ * This peels off the two prefixes Electron added and leaves the sentence.
+ *
+ * The class prefix is only stripped when the invoke prefix was there, so a
+ * message that legitimately begins "Error: " on its way from somewhere else is
+ * left alone. Anything unrecognised comes back untouched: a wrapped message is
+ * still far better than a swallowed one.
+ */
+const INVOKE_PREFIX = /^Error invoking remote method '[^']*':\s*/
+const ERROR_CLASS_PREFIX = /^[A-Za-z]*Error:\s*/
+
+export function humanError(cause: unknown): string {
+  const raw = cause instanceof Error ? cause.message : String(cause)
+  const unwrapped = raw.replace(INVOKE_PREFIX, '')
+  if (unwrapped === raw) return raw
+  return unwrapped.replace(ERROR_CLASS_PREFIX, '') || raw
 }
 
 /**

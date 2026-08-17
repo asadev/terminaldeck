@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { SettingsPanel } from './SettingsWindow'
+import { ShortcutsPopover } from './ShortcutsPopover'
 import { noteFor } from './sections/BrowserSection'
 import { numberOnLeaving, numberWhileTyping } from './controls'
 import {
@@ -237,11 +238,26 @@ describe('a scan result off the wire', () => {
 })
 
 describe('the sections that are not settings', () => {
-  it('renders the keymap itself in Shortcuts rather than a copy of it', () => {
-    const html = render('shortcuts')
+  it('renders the keymap itself in the shortcut popover rather than a copy of it', () => {
+    /*
+     * Shortcuts stopped being a pane in the 2026-08-17 regroup — it was the
+     * longest one in the window and nothing on it can be changed, which is a
+     * reference rather than a setting. It is a popover off the rail's footer
+     * now, so it is rendered directly here.
+     */
+    const html = renderToStaticMarkup(<ShortcutsPopover onClose={() => {}} />)
     // Straight from KEYMAP; a hand-written list is what this replaces.
     expect(html).toContain('New session')
     expect(html).toContain('Interrupt the agent')
+  })
+
+  it('offers the popover and the website from the rail, not from the rail list', () => {
+    const html = render('general')
+    expect(html).toContain('aria-label="Keyboard shortcuts"')
+    // Neither is a tab: a button inside the tab list would be walked onto by
+    // the arrow keys that move between sections.
+    expect(html).not.toContain('data-section="shortcuts"')
+    expect(html).not.toContain('data-section="help"')
   })
 
   it('names the app from the bridge rather than a literal', () => {

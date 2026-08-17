@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { ProviderBadge, hasProviderMark } from './ProviderBadge'
@@ -97,5 +98,55 @@ describe('sizing', () => {
     // One viewBox for every mark, so four different drawings sit at the same
     // optical weight beside 13px type whatever size they are rendered at.
     expect(html(<ProviderBadge provider="shell" size={20} />)).toContain('viewBox="0 0 16 16"')
+  })
+})
+
+/* ------------------------------------------------------------ brand colour */
+
+/**
+ * The marks wear their own colours, and the colours live in one file.
+ *
+ * They were monochrome. Asad asked for *real provider logos in their real
+ * colours*, and the reason he is right is that colour is what makes a mark
+ * identify a service at 14px — a grey burst, a grey sparkle and a grey hexagon
+ * are three grey shapes.
+ *
+ * The interesting constraint is *where* the values may live. `tokens.test.ts`
+ * forbids `#d97757` in the token sheet, because that is Anthropic's brand
+ * orange and this product used to wear it as its own accent. Identifying Claude
+ * with it and being painted in it are different acts, and only the first one is
+ * allowed — so the colour belongs to this component and nowhere else.
+ */
+describe('the brand colours', () => {
+  const css = readFileSync(new URL('./ProviderBadge.css', import.meta.url), 'utf8')
+  const tokens = readFileSync(
+    new URL('../styles/tokens.css', import.meta.url),
+    'utf8',
+  )
+
+  it('paints Claude in Anthropic’s clay and Gemini in Google’s blue', () => {
+    expect(css).toMatch(/\[data-provider='claude'\][^}]*color:\s*#d97757/)
+    expect(css).toMatch(/\[data-provider='gemini'\][^}]*color:\s*#4285f4/)
+  })
+
+  it('leaves Codex monochrome, because monochrome is what OpenAI’s mark is', () => {
+    // Not an omission. Painting it something would be less accurate than
+    // `currentColor`, which resolves to black on paper and white on the dark
+    // chrome — exactly the two forms that mark ships in.
+    expect(css).not.toContain("[data-provider='codex']")
+    expect(html(<ProviderBadge provider="codex" />)).toContain('currentColor')
+  })
+
+  it('does not smuggle a brand colour into the app’s palette', () => {
+    // The product must not wear Anthropic's orange. A mark identifying Claude
+    // may; `tokens.css` may not, and `tokens.test.ts` enforces the other half
+    // of this from the palette's side.
+    expect(tokens.toLowerCase()).not.toMatch(/^\s*--[a-z-]+:\s*#d97757/m)
+  })
+
+  it('keeps the markup free of hex, so both themes stay one definition', () => {
+    // The colour is applied by the stylesheet, not baked into the SVG, which is
+    // what lets a mark on an accent-tinted row still inherit sensibly.
+    expect(html(<ProviderBadge provider="claude" />)).not.toMatch(/#[0-9a-fA-F]{3,8}/)
   })
 })

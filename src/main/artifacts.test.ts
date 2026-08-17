@@ -4,6 +4,8 @@ import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
 import { encodeProjectPath } from './transcript'
 import {
+  ARTIFACTS_CHANGES_CHANNEL,
+  ARTIFACTS_LIST_CHANNEL,
   artifactHistory,
   isRecordedAbsolute,
   listArtifacts,
@@ -11,6 +13,7 @@ import {
   mayCarryFileWrite,
   parseToolTouches,
   relativeToRoot,
+  ScanSlots,
 } from './artifacts'
 
 /**
@@ -318,6 +321,61 @@ describe('listArtifacts', () => {
     expect(all.outsideProject).toBe(1)
   })
 
+  it('reads only its own folder out of a scoped store, however wide the scope', async () => {
+    /*
+     * The fifth reader of the transcript stores, and the one that cannot be
+     * filtered by project.
+     *
+     * `scope: 'all'` deliberately walks every project directory in every store,
+     * because a transcript in one folder records writes into another — that is
+     * the whole reason the wider scope exists. It attributes a `Write` by the
+     * path recorded *in the call*, so a store whose owner can write arbitrary
+     * files into it can claim to have written anywhere.
+     *
+     * The copilot's confined home is exactly such a store, and it is the only
+     * directory on the machine the copilot may write to. Under the old
+     * behaviour it could drop a transcript naming any project's files and have
+     * them appear on the panel a person uses to review what their agents did.
+     * `homeScopeFor` narrows that store to the one folder it belongs to; a
+     * paired device's store is not scoped and is walked whole, as before.
+     */
+    const { configDir, project } = await makeProject()
+    const homes = await mkdtemp(join(tmpdir(), 'terminaldeck-homes-'))
+    temps.push(homes)
+
+    const copilotFolder = join(homes, 'user-data', 'copilot')
+    const copilotHome = join(homes, 'device-home', 'copilot')
+    const phoneHome = join(homes, 'device-home', 'a1b2c3d4e5f60718')
+    for (const home of [copilotHome, phoneHome]) {
+      await mkdir(join(home, '.claude', 'projects'), { recursive: true })
+    }
+
+    // The copilot, claiming in its own store to have written the person's code.
+    await writeTranscript(join(copilotHome, '.claude'), project, 'fabricated', [
+      toolLine('2026-08-16T11:00:00.000Z', [write(join(project, 'src/forged.ts'), 'never happened\n')]),
+    ])
+    // The copilot's real conversation, in the folder it actually runs in.
+    await writeTranscript(join(copilotHome, '.claude'), copilotFolder, 'real', [
+      toolLine('2026-08-16T11:01:00.000Z', [write(join(copilotFolder, 'memory/a.md'), 'ok\n')]),
+    ])
+    // A paired phone that genuinely wrote in the project. Nothing about this
+    // changes, and the assertion below is what says so.
+    await writeTranscript(join(phoneHome, '.claude'), project, 'phone', [
+      toolLine('2026-08-16T11:02:00.000Z', [write(join(project, 'src/real.ts'), 'from a phone\n')]),
+    ])
+
+    const all = await listArtifacts(project, {
+      configDir,
+      deviceHomes: join(homes, 'device-home'),
+      homeScopes: [{ home: copilotHome, folder: copilotFolder }],
+      scope: 'all',
+      skipDiskCheck: true,
+    })
+
+    expect(all.artifacts.map((artifact) => artifact.relPath)).toEqual(['src/real.ts'])
+    expect(all.sessions.map((session) => session.sessionId)).toEqual(['phone'])
+  })
+
   it('is empty, and says so honestly, for a project no agent has written in', async () => {
     const { configDir, project } = await makeProject()
     const result = await listArtifacts(project, { configDir, deviceHomes: null })
@@ -415,5 +473,86 @@ describe('artifactHistory', () => {
       deviceHomes: null,
     })
     expect(history.changes).toEqual([])
+  })
+})
+
+/* --------------------------------------------------------------- cancelling -- */
+
+/**
+ * The bug that made the Artifacts page hang, and the reason it is tested here
+ * rather than through a scan.
+ *
+ * The in-flight map was keyed on the window alone, so a request on *either*
+ * channel aborted whatever else that window had asked for. The panel fires both
+ * in the same commit whenever the scope is toggled or the project changes — the
+ * list effect first, then the history effect, which still sees the previous
+ * selection — so `artifacts:changes` aborted the `artifacts:list` beside it
+ * every single time. The list handler then answered `cancelled`, which the
+ * panel ignored, and the page sat on "Reading this project’s history…" until
+ * the app was restarted.
+ *
+ * None of that is visible from a scan of a real project: the bookkeeping is the
+ * whole of it.
+ */
+describe('ScanSlots', () => {
+  const WINDOW = 7
+
+  it('lets a list and a changes scan run at the same time', () => {
+    const slots = new ScanSlots()
+    const list = slots.begin(WINDOW, ARTIFACTS_LIST_CHANNEL)
+    const changes = slots.begin(WINDOW, ARTIFACTS_CHANGES_CHANNEL)
+
+    expect(list.signal.aborted).toBe(false)
+    expect(changes.signal.aborted).toBe(false)
+    expect(slots.size).toBe(2)
+  })
+
+  it('still retires the previous scan on the same channel', () => {
+    // The original intent, and it stays: the user has moved to another project
+    // or toggled the scope, and two passes over the same history only slow
+    // each other down.
+    const slots = new ScanSlots()
+    const first = slots.begin(WINDOW, ARTIFACTS_LIST_CHANNEL)
+    const second = slots.begin(WINDOW, ARTIFACTS_LIST_CHANNEL)
+
+    expect(first.signal.aborted).toBe(true)
+    expect(second.signal.aborted).toBe(false)
+    expect(slots.size).toBe(1)
+  })
+
+  it('keeps one window’s scans clear of another’s', () => {
+    const slots = new ScanSlots()
+    const mine = slots.begin(WINDOW, ARTIFACTS_LIST_CHANNEL)
+    const theirs = slots.begin(WINDOW + 1, ARTIFACTS_LIST_CHANNEL)
+    expect(mine.signal.aborted).toBe(false)
+    expect(theirs.signal.aborted).toBe(false)
+  })
+
+  it('stops everything a window asked for when the window goes', () => {
+    const slots = new ScanSlots()
+    const list = slots.begin(WINDOW, ARTIFACTS_LIST_CHANNEL)
+    const changes = slots.begin(WINDOW, ARTIFACTS_CHANGES_CHANNEL)
+    const other = slots.begin(WINDOW + 1, ARTIFACTS_LIST_CHANNEL)
+
+    slots.cancelAll(WINDOW)
+
+    expect(list.signal.aborted).toBe(true)
+    expect(changes.signal.aborted).toBe(true)
+    expect(other.signal.aborted).toBe(false)
+    expect(slots.size).toBe(1)
+  })
+
+  it('does not forget a slot a newer scan has already taken', () => {
+    // `end` runs in a `finally`, so a scan that was superseded finishes *after*
+    // its replacement started. Deleting the key there would leave the newer
+    // scan unreachable — nothing could cancel it, including the window closing.
+    const slots = new ScanSlots()
+    const first = slots.begin(WINDOW, ARTIFACTS_LIST_CHANNEL)
+    const second = slots.begin(WINDOW, ARTIFACTS_LIST_CHANNEL)
+    slots.end(WINDOW, ARTIFACTS_LIST_CHANNEL, first)
+
+    expect(slots.size).toBe(1)
+    slots.cancelAll(WINDOW)
+    expect(second.signal.aborted).toBe(true)
   })
 })

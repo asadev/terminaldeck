@@ -33,61 +33,86 @@ import type { UiPlatform } from '../platform'
 
 /* ------------------------------------------------------------- sections -- */
 
+/**
+ * ## The rail, and the rule that shapes it
+ *
+ * Thirteen sections became nine, after one sentence that is worth quoting
+ * because it is the whole test a rail entry now has to pass:
+ *
+ *   > "every part relative parts should be connected to each other… if this is
+ *   > related to agent, it should be either inside the agents… everything should
+ *   > be in one place so they don't have to think, always they need to go for
+ *   > one piece of information into general and for the other piece in agents."
+ *
+ * Agents, Accounts and Setup were one subject in three places, and General was
+ * holding a coding-tool picker (with a link to Agents) and two notification
+ * switches whose own help text pointed at Notifications. So the rule is: a
+ * section is a *subject*, not a screen, and a row lives where somebody would go
+ * looking for its subject — never where it happened to be built.
+ *
+ * The sections that left the rail are not gone. Accounts and Setup are groups
+ * inside Agents, Shortcuts is a popover off the rail's own footer, and Help is
+ * the link beside it. `MERGED_SECTIONS` below is what keeps every old name
+ * pointing at wherever its contents actually went.
+ */
 export const SECTIONS = [
   {
     id: 'general',
     label: 'General',
     blurb: 'How sessions behave day to day.',
   },
-  /*
-   * The store. Second in the rail rather than first: someone who never opens it
-   * should never notice it exists, and the fresh-install defaults are what make
-   * that true. It sits above the sections it can take away — Browser is one of
-   * them — because the order of the rail is the order of the questions, and
-   * "which features do I have" comes before "how is that one set up".
-   */
-  {
-    id: 'features',
-    label: 'Features',
-    blurb: 'What this app has. Everything ships inside it; installing one switches it on.',
-  },
   {
     id: 'appearance',
     label: 'Appearance',
     blurb: 'Theme, density and the terminal typeface.',
   },
+  /*
+   * Everything the app says without being asked, in one place. It used to be
+   * split down the middle — General owned "should we interrupt you at all" and
+   * this section owned "how" — which meant the two switches people look for
+   * were on a different screen from the sound they play and the banner rules
+   * they obey. That split is exactly what the quote above is about.
+   */
   {
     id: 'notifications',
     label: 'Notifications',
-    blurb: 'How a banner and a sound are delivered, once something has asked for one.',
+    blurb: 'What the app tells you, and how.',
   },
+  /*
+   * One subject, one place: which agent runs, the logins it runs as, and what
+   * this machine actually has installed. Three rail entries before this —
+   * Agents, Accounts, Setup — each of which spent a paragraph pointing at the
+   * other two.
+   *
+   * The pane is assembled from the three files that used to be those sections
+   * rather than rewritten into one, so nothing had to be re-typed to be moved,
+   * which is the failure mode he named: *"when you reorganize you mostly miss
+   * the things and you drop some stuff."*
+   */
   {
     id: 'agents',
     label: 'Agents',
-    blurb: 'What is installed, and which login a session runs as.',
+    blurb: 'The agents, the logins they run as, and what this machine has.',
   },
   /*
-   * "Accounts", not "Profiles", and next to Agents rather than buried between
-   * Shortcuts and Advanced.
+   * The id stays `features` and the label says Tools.
    *
-   * The id stays `profiles` because that is what the main process calls them,
-   * and renaming it would only move the translation somewhere less visible. The
-   * *label* and the *position* are what matter: the feature was built, shipped
-   * and then reported missing — "I don't see any kind of feature that I can use
-   * to have multiple accounts in one application" — by someone looking at a
-   * rail that offered him Profiles, tenth of fourteen. A person with two logins
-   * goes looking for the word they would use for them, near the agent settings
-   * they were already reading.
+   * The store is gone — *"they are all necessary basic, they don't need to have
+   * uninstall and install button, enable and disable thing"* — and what is left
+   * is the one entry he wanted kept: *"instead of only voice dictation… so
+   * features or maybe tools, let's actually call it tools and keep this voice
+   * dictation here."*
+   *
+   * The id is storage and routing, the label is what a person reads, and those
+   * two do not have to agree: `profiles`/"Accounts" made the same trade for the
+   * same reason. Here it is load-bearing rather than cosmetic — `App.tsx` names
+   * this id, and `App.tsx` is a file no single agent may edit while others are
+   * working in this repo.
    */
   {
-    id: 'profiles',
-    label: 'Accounts',
-    blurb: 'Sign in with more than one account, and choose which one a session uses.',
-  },
-  {
-    id: 'setup',
-    label: 'Setup',
-    blurb: 'What this app needs on your machine, and what it found.',
+    id: 'features',
+    label: 'Tools',
+    blurb: 'Extra tools a session can use.',
   },
   /*
    * Windows only, and gated below rather than always drawn. A rail entry
@@ -103,6 +128,31 @@ export const SECTIONS = [
     id: 'browser',
     label: 'Browser',
     blurb: 'The built-in browser tab and what it remembers.',
+  },
+  /*
+   * The one section in this rail that declares no settings at all, and it is
+   * not an oversight — it is the point.
+   *
+   * *"we should be able to see all of his files, the things it reads before it
+   * starts and all those things… so we can see and learn how our copilot is
+   * working."* Everything on that pane is a **reading**: the files it loads at
+   * startup, its memory, the log of what it did, the boundary the kernel holds
+   * it inside, the routines it cannot author. There is nothing to store,
+   * because the copilot's folder, its account and its confinement are all
+   * decided in the main process precisely so that no page can point them
+   * somewhere else.
+   *
+   * It is its own rail entry rather than a group inside Agents on the rule this
+   * table is built on — a section is a *subject*. Agents is "which agent runs,
+   * as which login, with what installed". The copilot is one specific agent
+   * whose files, memory and audit log a person opens Settings to inspect, and
+   * folding six blocks of that under Agents would bury the answer to the
+   * question the whole feature exists to answer.
+   */
+  {
+    id: 'copilot',
+    label: 'Copilot',
+    blurb: 'Its files, its memory, what it did, and what it can reach.',
   },
   /*
    * There is no GitHub section here, and that is a decision rather than a gap.
@@ -138,20 +188,23 @@ export const SECTIONS = [
     label: 'Power',
     blurb: 'Keep this machine running when you close it.',
   },
-  {
-    id: 'shortcuts',
-    label: 'Shortcuts',
-    blurb: 'Every key the app answers to.',
-  },
+  /*
+   * Shortcuts is not a rail entry any more; it is a popover off the rail's
+   * footer. *"This is a huge shortcut page — maybe rather than this we can have
+   * another pop-up by clicking on this… only an icon here where we click and
+   * see the shortcut as pop-up."* It was the longest pane in the window and the
+   * one nobody scrolls twice, which is the shape of a reference rather than of
+   * a settings screen. See `ShortcutsPopover`.
+   *
+   * Help is not one either. *"Maybe we can make it like help button. When they
+   * click on it, it should take to terminal website… instead of inside the
+   * application."* The generated in-app help is still one keystroke away in the
+   * main window (⌘?), so nothing was lost by taking the duplicate out of here.
+   */
   {
     id: 'advanced',
     label: 'Advanced',
-    blurb: 'Launch behaviour, diagnostics, files on disk, and starting over.',
-  },
-  {
-    id: 'help',
-    label: 'Help',
-    blurb: 'How this works, and what to do when it does not.',
+    blurb: 'Diagnostics, files on disk, and starting over.',
   },
   {
     id: 'about',
@@ -160,9 +213,50 @@ export const SECTIONS = [
   },
 ] as const
 
-export type SectionId = (typeof SECTIONS)[number]['id']
+/** A section that has a pane of its own. */
+export type LiveSectionId = (typeof SECTIONS)[number]['id']
 
-export const SECTION_IDS: readonly SectionId[] = SECTIONS.map((section) => section.id)
+/**
+ * Sections that no longer have a pane, and the pane that absorbed each.
+ *
+ * This is the half of a reorganisation that is normally left out, and leaving
+ * it out is how a link somewhere else in the app quietly starts landing on the
+ * wrong screen. Every id that ever named a section still names a real
+ * destination: `App.tsx` opens Settings at `setup` from the application menu
+ * and at `profiles` from the account chip, and both of those now mean Agents,
+ * because that is where their contents went.
+ *
+ * Kept in the `SectionId` union rather than deleted so those call sites keep
+ * compiling — `App.tsx` may not be edited while several agents are working in
+ * this repository, and a union that no longer contains the id they pass would
+ * fail the build in a file nobody is allowed to fix.
+ */
+export const MERGED_SECTIONS = {
+  /** Accounts is a group inside Agents. */
+  profiles: 'agents',
+  /** Setup is two groups inside Agents. */
+  setup: 'agents',
+  /** A popover off the rail's footer, not a pane. */
+  shortcuts: 'general',
+  /** A link off the rail's footer; the pane it had said what About says. */
+  help: 'about',
+} as const satisfies Readonly<Record<string, LiveSectionId>>
+
+export type MergedSectionId = keyof typeof MERGED_SECTIONS
+
+/** Any id that has ever named a section. Every one of them resolves to a pane. */
+export type SectionId = LiveSectionId | MergedSectionId
+
+function isMerged(id: SectionId): id is MergedSectionId {
+  return Object.prototype.hasOwnProperty.call(MERGED_SECTIONS, id)
+}
+
+/** The pane an id names today, following the merge table exactly once. */
+export function resolveSection(id: SectionId): LiveSectionId {
+  return isMerged(id) ? MERGED_SECTIONS[id] : id
+}
+
+export const SECTION_IDS: readonly LiveSectionId[] = SECTIONS.map((section) => section.id)
 
 export type Section = (typeof SECTIONS)[number]
 
@@ -177,7 +271,7 @@ export type Section = (typeof SECTIONS)[number]
  * to say elsewhere. Power is on both platforms and says different things on
  * each, so it is not here; Linux genuinely does not exist off Windows.
  */
-const SECTION_PLATFORMS: Partial<Record<SectionId, readonly UiPlatform[]>> = {
+const SECTION_PLATFORMS: Partial<Record<LiveSectionId, readonly UiPlatform[]>> = {
   linux: ['windows'],
 }
 
@@ -189,8 +283,10 @@ export function sectionsFor(platform: UiPlatform): readonly Section[] {
   })
 }
 
-export function sectionMeta(id: SectionId): (typeof SECTIONS)[number] {
-  const found = SECTIONS.find((section) => section.id === id)
+/** The pane's own title and blurb. A merged id answers with the pane it went to. */
+export function sectionMeta(id: SectionId): Section {
+  const live = resolveSection(id)
+  const found = SECTIONS.find((section) => section.id === live)
   // Unreachable through the typed API; a runtime id off the wire is not typed.
   if (!found) throw new Error(`settings: no section "${id}"`)
   return found
@@ -208,10 +304,33 @@ export type SettingValue = boolean | string | number
 interface SettingBase {
   /** Stable storage key. Dotted by section so a raw settings.json reads clearly. */
   id: string
-  section: SectionId
+  section: LiveSectionId
   label: string
-  /** One sentence under the label. Says what changes, not what the control is. */
+  /**
+   * One sentence under the label. Says what changes, not what the control is.
+   *
+   * Capped at {@link MAX_HELP_LENGTH} by `settingsSchemaProblems`, which is a
+   * rule rather than a suggestion for the reason the cap exists at all:
+   *
+   *   > "we don't need this much of big descriptions under each. The whole page
+   *   > is going to be used just because of the big descriptions… let's give
+   *   > only one liner or two liner descriptions and one eye buttons next to
+   *   > them so they can click or hover over there and they can read the full
+   *   > description."
+   *
+   * Every long line in this table was defensible on its own, which is precisely
+   * how they accumulated. The second half of that sentence is `more`.
+   */
   help: string
+  /**
+   * The rest of the explanation, behind the ⓘ beside the label.
+   *
+   * Not a place to put something a person needs before they touch the control —
+   * anything load-bearing belongs in `help`, where it is on screen without a
+   * hover. This is for the paragraph that used to be under every row: the
+   * mechanism, the caveat, the second case.
+   */
+  more?: string
   store: SettingStore
   /**
    * The matching key in `store.ts`'s Preferences. Present exactly when
@@ -261,6 +380,26 @@ export type Setting = ToggleSetting | SelectSetting | NumberSetting | TextSettin
 /** Longest string this schema will store. A settings file is not a document. */
 export const MAX_TEXT_LENGTH = 512
 
+/**
+ * The longest a `help` line may be.
+ *
+ * Measured rather than chosen: at this window's reading measure, 120 characters
+ * is two lines of `--t-caption` and the row still reads as a label with a note
+ * under it. One character more and the third line starts, which is the point at
+ * which a list of settings starts looking like a document — the complaint this
+ * whole pass came from. Everything beyond it goes in `more`.
+ */
+export const MAX_HELP_LENGTH = 120
+
+/**
+ * The longest a `more` may be.
+ *
+ * A tooltip is read in one glance or not at all, and this window's bubble wraps
+ * at a fixed measure. Anything past this is a paragraph that has been moved off
+ * the pane rather than cut, which is the trick this budget exists to prevent.
+ */
+export const MAX_MORE_LENGTH = 220
+
 /* ---------------------------------------------------------------- the table -- */
 
 /**
@@ -281,55 +420,70 @@ export const SOUND_OPTIONS: readonly SelectOption[] = [
 export const SETTINGS: readonly Setting[] = [
   /* ------------------------------------------------------------- general -- */
   /*
-   * The order below is the order on screen, and it is the one thing about this
-   * block that is not free to drift: General is the first thing anyone opens,
-   * so it lists the choice you make once (language, which tool) before the ones
-   * you change while working.
+   * What is left in General once every row that belonged to another subject has
+   * gone to it: the language, and how a *session* behaves while you work.
+   *
+   * Three rows left this block in this pass. The coding-tool picker went to
+   * Agents, where the list of installed agents and the login each one uses
+   * already were — it had been sitting here with a link to Agents underneath
+   * it, which is the shape of a row in the wrong section. The sound and the
+   * banner went to Notifications, whose own help text had been pointing back at
+   * Notifications from inside General.
+   *
+   * One row arrived: "Pick up where you left off" came *back* from Advanced.
+   * *"Pick up where you left off on launch — I don't know if this one also need
+   * to be not here, it is somewhere at wrong place."* It is: what happens to
+   * your sessions is the subject of this section, and diagnostics is not.
    */
   {
     id: 'general.language',
     section: 'general',
     label: 'Language',
-    help: 'English is the only one there is — no other language has been translated yet.',
+    help: 'English is the only one there is.',
+    more: 'No other language has been translated yet. The row is here to answer the question rather than to leave you hunting for it.',
     store: 'extra',
     kind: 'select',
     default: 'en',
-    // Deliberately one option. A picker that says "English" and nothing else is
-    // an honest answer to "can I have this in my language"; hiding the row until
-    // a second language exists just makes people ask.
+    /*
+     * Deliberately one option, and deliberately not drawn as a dropdown.
+     *
+     * The row earns its place: "can I have this in my language" wants an answer,
+     * and hiding the row until a second language exists just makes people ask.
+     * What it must not do is answer with a *control* — an enabled `<select>`
+     * holding one entry, beside prose saying English is the only one there is,
+     * which is something that looks pressable and can never do anything.
+     *
+     * `SettingControl` handles that from the option count rather than from this
+     * row's id, so the day a translation lands the picker comes back by itself.
+     */
     options: [{ value: 'en', label: 'English' }],
   },
   {
-    id: 'general.defaultProvider',
+    id: 'general.restoreSessions',
+    /*
+     * Twice wrong before this, and once misfiled.
+     *
+     * It first said "Restore sessions on launch" and reopened nothing at all —
+     * the value was stored and no code on either side of the bridge read it. It
+     * was then narrowed to the projects, with help text that stated flatly that
+     * sessions are not reopened, on the reasoning that a pty dies with the app.
+     *
+     * That reasoning was about the wrong thing. The pty does die; the
+     * *conversation* does not. Claude Code writes it to a transcript on disk,
+     * and `--continue` reads it back, so a session can genuinely be picked up
+     * where it was left. `src/main/session-restore.ts` is that, and this label
+     * had to stop denying it the moment that shipped.
+     *
+     * Worded as an outcome rather than a mechanism on purpose. "Continues where
+     * you left off" is what happens; "resumes the transcript" is plumbing, and
+     * this app does not narrate its plumbing at people.
+     */
     section: 'general',
-    label: 'Default coding tool',
-    help: 'Runs when you start a session, unless the project or the new-session dialog says otherwise.',
+    label: 'Pick up where you left off',
+    help: 'Reopens the projects and sessions you had open, continuing each conversation.',
+    more: 'Rather than starting each one over. A session whose folder or conversation is gone opens clean instead of failing.',
     store: 'prefs',
-    prefsKey: 'defaultProvider',
-    kind: 'select',
-    default: 'claude',
-    options: [
-      { value: 'claude', label: 'Claude Code' },
-      { value: 'codex', label: 'Codex CLI' },
-      { value: 'gemini', label: 'Gemini CLI' },
-      { value: 'shell', label: 'Plain shell' },
-    ],
-  },
-  {
-    id: 'general.soundOnFinish',
-    section: 'general',
-    label: 'Play sound when session finishes work',
-    help: 'A short sound the moment an agent stops working. Which sound it plays is under Notifications.',
-    store: 'extra',
-    kind: 'toggle',
-    default: false,
-  },
-  {
-    id: 'general.notifyOnAttention',
-    section: 'general',
-    label: 'Desktop notifications when sessions need attention',
-    help: 'A banner when a session is waiting on you — a permission prompt, or a question.',
-    store: 'extra',
+    prefsKey: 'restoreSessions',
     kind: 'toggle',
     default: true,
   },
@@ -343,19 +497,11 @@ export const SETTINGS: readonly Setting[] = [
    * built, this row comes back with it.
    */
   {
-    id: 'general.showInsightAlerts',
-    section: 'general',
-    label: 'Show insight alerts',
-    help: 'What the Alerts panel raises without being asked — a session filling its context window, a tool failing repeatedly, work that has stalled.',
-    store: 'extra',
-    kind: 'toggle',
-    default: true,
-  },
-  {
     id: 'general.autoNameSessions',
     section: 'general',
-    label: 'Auto-name sessions from conversation title',
-    help: 'The tab keeps the folder name until the conversation has a title of its own, then takes that.',
+    label: 'Name sessions from the conversation',
+    help: 'A tab takes the conversation’s title once it has one.',
+    more: 'Until then it keeps the folder name. Renaming a tab yourself always wins — this only fills in a name nobody has chosen.',
     store: 'extra',
     kind: 'toggle',
     default: true,
@@ -363,8 +509,9 @@ export const SETTINGS: readonly Setting[] = [
   {
     id: 'general.confirmCloseWorking',
     section: 'general',
-    label: 'Confirm closing an active session',
-    help: 'A session still running gets a confirmation step. An idle one always closes straight away.',
+    label: 'Confirm closing a working session',
+    help: 'A session that is still running asks before it closes.',
+    more: 'An idle session always closes straight away, whichever way this is set.',
     store: 'extra',
     kind: 'toggle',
     default: true,
@@ -373,7 +520,8 @@ export const SETTINGS: readonly Setting[] = [
     id: 'general.copyOnSelect',
     section: 'general',
     label: 'Copy on select',
-    help: 'Selecting text in a session copies it, the way a Unix terminal does.',
+    help: 'Selecting text in a session copies it.',
+    more: 'The way a Unix terminal does. It applies to session terminals only, not to the chat box.',
     store: 'extra',
     kind: 'toggle',
     default: false,
@@ -399,7 +547,8 @@ export const SETTINGS: readonly Setting[] = [
     id: 'appearance.density',
     section: 'appearance',
     label: 'Density',
-    help: 'Compact tightens rows and spacing without changing the text size.',
+    help: 'Compact tightens rows and spacing.',
+    more: 'The text size does not change with it — only the space around it.',
     store: 'extra',
     kind: 'select',
     default: 'comfortable',
@@ -437,48 +586,106 @@ export const SETTINGS: readonly Setting[] = [
 
   /* ------------------------------------------------------- notifications -- */
   /*
-   * What is left here after the two headline switches moved to General: whether
-   * a *finished* session also earns a banner, when banners are allowed at all,
-   * and which sound General's switch plays. General says whether to interrupt
-   * you; this section says how.
+   * All six of them, in one place, for the first time.
+   *
+   * The split this replaces put "should the app interrupt you" in General and
+   * "how" here, so the two switches everybody looks for were on a different
+   * screen from the sound they play and the rule about when a banner is
+   * allowed. Both of the General rows even said the word *Notifications* in
+   * their own help text, which is a row telling you it is in the wrong place.
+   *
+   * The order is when-to-tell-you first, then how: three switches about the
+   * three moments something is worth saying, then the two that shape delivery.
    */
+  {
+    id: 'notifications.onNeedsInput',
+    section: 'notifications',
+    label: 'Tell me when a session needs me',
+    help: 'A banner when a session is waiting on you.',
+    more: 'A permission prompt, or a question the agent has asked. This is the one worth leaving on: a session waiting on an answer is a session doing nothing.',
+    store: 'extra',
+    kind: 'toggle',
+    default: true,
+  },
   {
     id: 'notifications.onComplete',
     section: 'notifications',
-    label: 'Notify when a session finishes',
-    help: 'A desktop notification the moment an agent stops working, alongside the sound.',
+    label: 'Tell me when a session finishes',
+    help: 'A banner the moment an agent stops working.',
     store: 'prefs',
     prefsKey: 'notifyOnComplete',
     kind: 'toggle',
     default: true,
   },
   {
-    id: 'notifications.onlyWhenUnfocused',
+    id: 'notifications.showInsightAlerts',
     section: 'notifications',
-    label: 'Only notify when the app is in the background',
-    help: 'Off means you also get a banner for a tab you are not looking at while the window is in front.',
+    label: 'Raise insight alerts',
+    help: 'What the Alerts panel notices on its own.',
+    more: 'A session filling its context window, a tool failing repeatedly, work that has stalled. These appear in the Alerts panel rather than as desktop banners.',
     store: 'extra',
     kind: 'toggle',
     default: true,
   },
   {
+    id: 'notifications.onFinishSound',
+    section: 'notifications',
+    label: 'Play a sound when a session finishes',
+    help: 'A short sound the moment an agent stops working.',
+    more: 'Independent of the banner above: you can have the sound without the banner, or the banner without the sound.',
+    store: 'extra',
+    kind: 'toggle',
+    default: false,
+  },
+  {
     id: 'notifications.soundName',
     section: 'notifications',
     label: 'Sound',
-    help: 'Played when a session finishes. Synthesised by the app — nothing is downloaded or read from your sound library.',
+    help: 'Which sound a finished session plays.',
+    more: 'Synthesised by the app — nothing is downloaded, and nothing is read from your sound library.',
     store: 'extra',
     kind: 'select',
     default: 'chime',
     options: SOUND_OPTIONS,
   },
+  {
+    id: 'notifications.onlyWhenUnfocused',
+    section: 'notifications',
+    label: 'Only when the app is in the background',
+    help: 'Off also banners a tab you are not looking at.',
+    more: 'While the window itself is in front. On, nothing interrupts you while you are already looking at the app.',
+    store: 'extra',
+    kind: 'toggle',
+    default: true,
+  },
 
   /* -------------------------------------------------------------- agents -- */
   /*
-   * Nothing is stored here any more. The default tool moved to General, and
-   * everything the section still shows is either discovered (`prerequisites.ts`)
-   * or owned by `profiles.ts`, which is why it stays in the list rather than
-   * being deleted along with its one setting.
+   * Back where it started, and this time with the things it talks about.
+   *
+   * This row lived in Agents, moved to General when General was rebuilt around
+   * "the settings people reach for", and spent that time sitting under a line
+   * of help that had to explain that the list of installed tools was on another
+   * screen. That is the exact arrangement the reorganisation was asked for:
+   * *"default coding tool, agents, accounts are one place thing."*
    */
+  {
+    id: 'agents.defaultProvider',
+    section: 'agents',
+    label: 'Default coding tool',
+    help: 'Runs when you start a session.',
+    more: 'Unless the project or the new-session dialog says otherwise. A tool that is not on your PATH is greyed out here rather than offered and then failing to start.',
+    store: 'prefs',
+    prefsKey: 'defaultProvider',
+    kind: 'select',
+    default: 'claude',
+    options: [
+      { value: 'claude', label: 'Claude Code' },
+      { value: 'codex', label: 'Codex CLI' },
+      { value: 'gemini', label: 'Gemini CLI' },
+      { value: 'shell', label: 'Plain shell' },
+    ],
+  },
 
   /* ------------------------------------------------------------- browser -- */
   {
@@ -508,7 +715,8 @@ export const SETTINGS: readonly Setting[] = [
     id: 'browser.persistSession',
     section: 'browser',
     label: 'Keep cookies and logins between runs',
-    help: 'Off clears the browser tab’s cookies and storage when you quit, so every run starts signed out.',
+    help: 'Off signs the browser tab out every time you quit.',
+    more: 'It clears the browser tab’s cookies and storage on quit, so every run starts signed out of everything.',
     store: 'extra',
     kind: 'toggle',
     default: true,
@@ -516,37 +724,11 @@ export const SETTINGS: readonly Setting[] = [
 
   /* ------------------------------------------------------------ advanced -- */
   {
-    id: 'advanced.restoreSessions',
-    section: 'advanced',
-    /*
-     * Twice wrong before this. It first said "Restore sessions on launch" and
-     * reopened nothing at all — the value was stored and no code on either side
-     * of the bridge read it. It was then narrowed to the projects, with help
-     * text that stated flatly that sessions are not reopened, on the reasoning
-     * that a pty dies with the app.
-     *
-     * That reasoning was about the wrong thing. The pty does die; the
-     * *conversation* does not. Claude Code writes it to a transcript on disk,
-     * and `--continue` reads it back, so a session can genuinely be picked up
-     * where it was left. `src/main/session-restore.ts` is that, and this label
-     * had to stop denying it the moment that shipped.
-     *
-     * Worded as an outcome rather than a mechanism on purpose. "Continues where
-     * you left off" is what happens; "resumes the transcript" is plumbing, and
-     * this app does not narrate its plumbing at people.
-     */
-    label: 'Pick up where you left off',
-    help: 'Reopens the projects and sessions you had open, continuing each conversation rather than starting it over. A session whose folder or conversation is gone opens clean.',
-    store: 'prefs',
-    prefsKey: 'restoreSessions',
-    kind: 'toggle',
-    default: true,
-  },
-  {
     id: 'advanced.debugMode',
     section: 'advanced',
     label: 'Debug mode',
-    help: 'Shows the raw stored settings and extra diagnostics in this window.',
+    help: 'Shows the raw stored settings and extra diagnostics here.',
+    more: 'An IPC trace, the process table, the tail of the log and a support bundle, all inside this window. Nothing is sent anywhere.',
     store: 'extra',
     kind: 'toggle',
     default: false,
@@ -557,11 +739,33 @@ export const SETTINGS: readonly Setting[] = [
 
 const BY_ID = new Map<string, Setting>(SETTINGS.map((setting) => [setting.id, setting]))
 
-export function getSetting(id: string): Setting | undefined {
-  return BY_ID.get(id)
+/**
+ * A setting by id, old names included.
+ *
+ * The second lookup is not politeness, it is what makes a reorganisation
+ * survivable. A setting's id carries its section, so moving a row between
+ * sections renames it — and the readers of that row live all over the renderer,
+ * in files a single agent is not allowed to edit while others are working here.
+ * `App.tsx` alone reads three of the ids this pass moved. Resolving through the
+ * rename table means those keep working, permanently and correctly, instead of
+ * throwing `no setting "general.defaultProvider"` at the first render.
+ *
+ * The value is always read under the setting's *current* id, because
+ * `mergeSettings` has already rewritten the stored keys. So an old name is an
+ * alias for the row, never a second copy of it.
+ */
+function lookup(id: string): Setting | undefined {
+  const direct = BY_ID.get(id)
+  if (direct) return direct
+  const renamed = RENAMED_IDS[id]
+  return renamed === undefined ? undefined : BY_ID.get(renamed)
 }
 
-export function settingsIn(section: SectionId): Setting[] {
+export function getSetting(id: string): Setting | undefined {
+  return lookup(id)
+}
+
+export function settingsIn(section: LiveSectionId): Setting[] {
   return SETTINGS.filter((setting) => setting.section === section)
 }
 
@@ -616,31 +820,38 @@ export function coerce(setting: Setting, value: unknown): SettingValue | null {
 /* ------------------------------------------------------------ accessors -- */
 
 function declared(id: string, kind: SettingKind): Setting {
-  const setting = BY_ID.get(id)
+  const setting = lookup(id)
   if (!setting) throw new Error(`settings: no setting "${id}"`)
   if (setting.kind !== kind) throw new Error(`settings: "${id}" is a ${setting.kind}, not a ${kind}`)
   return setting
 }
 
+/*
+ * All three read `values[setting.id]`, never `values[id]`. The difference only
+ * shows for a caller using an old name, and there it is the whole point: the
+ * merged values are keyed by current ids, so looking up the id the caller
+ * happened to type would find nothing and quietly return the default.
+ */
+
 export function booleanSetting(values: SettingValues, id: string): boolean {
   const setting = declared(id, 'toggle')
-  const value = coerce(setting, values[id])
+  const value = coerce(setting, values[setting.id])
   return typeof value === 'boolean' ? value : (setting.default as boolean)
 }
 
 export function stringSetting(values: SettingValues, id: string): string {
-  const setting = BY_ID.get(id)
+  const setting = lookup(id)
   if (!setting) throw new Error(`settings: no setting "${id}"`)
   if (setting.kind !== 'select' && setting.kind !== 'text') {
     throw new Error(`settings: "${id}" is a ${setting.kind}, not text`)
   }
-  const value = coerce(setting, values[id])
+  const value = coerce(setting, values[setting.id])
   return typeof value === 'string' ? value : setting.default
 }
 
 export function numberSetting(values: SettingValues, id: string): number {
   const setting = declared(id, 'number')
-  const value = coerce(setting, values[id])
+  const value = coerce(setting, values[setting.id])
   return typeof value === 'number' ? value : (setting.default as number)
 }
 
@@ -663,21 +874,37 @@ export const SETTINGS_VERSION = 1
  * `mergeSettings` applies this before defaults are filled in, and takes an
  * override so a test can prove the mechanism independently of the real table.
  *
- * The four below are one change: General was rebuilt to hold the nine settings
- * people actually reach for, which pulled the default tool out of Agents and
- * the two headline switches out of Notifications, and pushed launch restore
- * into Advanced.
+ * This is the table the regrouping turns on, and it is why *"when you reorganize
+ * you mostly miss the things and you drop some stuff"* is a worry this pass can
+ * answer with a mechanism rather than with care. Every id below carries a value
+ * somebody chose; without its entry, the first launch of the new build reads
+ * their file, finds a key no setting owns, and shows them the default while
+ * their choice sits in the file next to it.
  *
- * A prefs-backed id (`defaultProvider`, `restoreSessions`) keeps its value
- * regardless — `valuesFromPreferences` reads it by `prefsKey`, not by id — but
- * it is listed anyway, because a settings.json written by any build that
- * mirrored those keys would otherwise arrive as an unknown key and sit there.
+ * Four of these are the reverse of an earlier move. General was once rebuilt to
+ * hold "the settings people reach for", which pulled the default tool out of
+ * Agents and the two notification switches out of Notifications, and pushed
+ * launch restore into Advanced. All four are back where their subject is, so
+ * their original ids are declared again and their entries have gone — which is
+ * exactly what a rename table doing its job looks like from the outside.
+ *
+ * A prefs-backed id (`defaultProvider`, `restoreSessions`, `notifyOnComplete`)
+ * keeps its value regardless — `valuesFromPreferences` reads it by `prefsKey`,
+ * not by id — but it is listed anyway, because a settings.json written by any
+ * build that mirrored those keys would otherwise arrive as an unknown key and
+ * sit there.
  */
 export const RENAMED_IDS: Readonly<Record<string, string>> = {
-  'agents.defaultProvider': 'general.defaultProvider',
-  'notifications.sound': 'general.soundOnFinish',
-  'notifications.onNeedsInput': 'general.notifyOnAttention',
-  'general.restoreSessions': 'advanced.restoreSessions',
+  /* Two builds ago the finish sound was `notifications.sound`; it is not called
+     that now because `notifications.soundName` — which sound — is beside it,
+     and two keys a character apart is a bug waiting for a tired reader. */
+  'notifications.sound': 'notifications.onFinishSound',
+  /* This pass: the four rows that moved to the section their subject is in. */
+  'general.soundOnFinish': 'notifications.onFinishSound',
+  'general.notifyOnAttention': 'notifications.onNeedsInput',
+  'general.showInsightAlerts': 'notifications.showInsightAlerts',
+  'general.defaultProvider': 'agents.defaultProvider',
+  'advanced.restoreSessions': 'general.restoreSessions',
 }
 
 export interface MergeOptions {
@@ -760,7 +987,11 @@ export function splitPatch(patch: Readonly<Record<string, unknown>>): SettingsSp
   const unknown: string[] = []
 
   for (const [id, raw] of Object.entries(patch)) {
-    const setting = BY_ID.get(id)
+    // Through `lookup`, so a write under an old name lands on the row it now
+    // belongs to rather than being rejected as unknown. The value is stored
+    // under `setting.id` below either way, so an alias can never split one
+    // setting into two keys on disk.
+    const setting = lookup(id)
     if (!setting) {
       unknown.push(id)
       continue
@@ -813,6 +1044,34 @@ export function settingsSchemaProblems(settings: readonly Setting[] = SETTINGS):
     }
     if (setting.help.trim() === '') problems.push(`${setting.id}: no help text`)
     if (setting.label.trim() === '') problems.push(`${setting.id}: no label`)
+
+    /*
+     * The word budget, enforced from the table rather than from a render test.
+     *
+     * A ceiling here is the only version of this rule that cannot be worked
+     * around by accident: the rows are generated, so the *only* place a long
+     * description can come from is this field, and a new setting written with a
+     * paragraph in it fails the build instead of quietly making the pane taller
+     * than the last person left it. `more` is the pressure valve, and it is
+     * capped too — a tooltip nobody can read in one go is a paragraph that has
+     * moved rather than one that has been cut.
+     */
+    if (setting.help.length > MAX_HELP_LENGTH) {
+      problems.push(
+        `${setting.id}: help is ${setting.help.length} characters; the cap is ${MAX_HELP_LENGTH} — put the rest in \`more\``,
+      )
+    }
+    if (setting.more !== undefined) {
+      if (setting.more.trim() === '') problems.push(`${setting.id}: \`more\` is empty`)
+      if (setting.more.length > MAX_MORE_LENGTH) {
+        problems.push(
+          `${setting.id}: \`more\` is ${setting.more.length} characters; the cap is ${MAX_MORE_LENGTH}`,
+        )
+      }
+      if (setting.more.trim() === setting.help.trim()) {
+        problems.push(`${setting.id}: \`more\` only repeats \`help\``)
+      }
+    }
 
     const hasPrefsKey = setting.prefsKey !== undefined
     if (setting.store === 'prefs' && !hasPrefsKey) problems.push(`${setting.id}: prefs-backed but no prefsKey`)

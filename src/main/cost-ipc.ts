@@ -1,5 +1,10 @@
 /**
- * IPC surface for cost and context tracking.
+ * IPC surface for token and context tracking.
+ *
+ * The channels are still spelled `cost:*`. They carry no cost — see "why this
+ * app shows no prices" at the bottom of `cost.ts` — and the names stay because
+ * a channel name is a contract with the preload bridge and the renderer on the
+ * other side of it, not a label anybody reads.
  *
  * One-line wiring from the main process:
  *
@@ -13,17 +18,7 @@
 
 import type { IpcMain, IpcMainInvokeEvent, WebContents } from 'electron'
 import { resolve } from 'node:path'
-import {
-  addUsage,
-  emptyUsage,
-  formatTokens,
-  formatUsd,
-  mergeAggregates,
-  priceFor,
-  sumUsage,
-  type ResolvedPrice,
-  type TokenUsage,
-} from './cost'
+import { addUsage, emptyUsage, formatTokens, sumUsage, type TokenUsage } from './cost'
 import {
   DEFAULT_MAX_AGE_MS,
   DEFAULT_MAX_SESSIONS,
@@ -181,8 +176,13 @@ export function refreshCostWatchers(): void {
  *  - `cost:sessions` (cwd)            -> TranscriptFile[] what's on disk
  *  - `cost:watch`    (cwd)            -> ProjectSummary   subscribe; pushes `cost:update`
  *  - `cost:unwatch`  (cwd)            -> void
- *  - `cost:pricing`  (modelId)        -> ResolvedPrice | null
- *  - `cost:format`   ({usd?, tokens?})-> formatted strings
+ *  - `cost:format`   ({tokens?})      -> formatted strings
+ *
+ * Two channels were removed with the pricing: `cost:pricing`, which answered a
+ * model's per-million rates, and the `usd` half of `cost:format`. Neither had a
+ * caller — `cost:format`'s did not even type-check, passing a bare number where
+ * the handler read `value.usd` — and a main process that keeps computing money
+ * for a renderer that no longer draws it is arithmetic that can only go stale.
  */
 export function registerCostIpc(ipcMain: IpcMain): void {
   ipcMain.handle('cost:project', async (_e: IpcMainInvokeEvent, cwd: string) => {
@@ -253,18 +253,9 @@ export function registerCostIpc(ipcMain: IpcMain): void {
     release(projectKey(cwd), event.sender)
   })
 
-  ipcMain.handle(
-    'cost:pricing',
-    (_e: IpcMainInvokeEvent, model: string): ResolvedPrice | null => priceFor(model),
-  )
-
-  ipcMain.handle(
-    'cost:format',
-    (_e: IpcMainInvokeEvent, value: { usd?: number; tokens?: number }) => ({
-      usd: typeof value.usd === 'number' ? formatUsd(value.usd) : undefined,
-      tokens: typeof value.tokens === 'number' ? formatTokens(value.tokens) : undefined,
-    }),
-  )
+  ipcMain.handle('cost:format', (_e: IpcMainInvokeEvent, value: { tokens?: number }) => ({
+    tokens: typeof value?.tokens === 'number' ? formatTokens(value.tokens) : undefined,
+  }))
 }
 
 /** Roll session summaries up into a project summary without a watcher. */
@@ -273,8 +264,8 @@ function summarizeStandalone(cwd: string, sessions: SessionSummary[]): ProjectSu
     .filter((session) => session.requests > 0)
     .sort((a, b) => b.lastActivityAt - a.lastActivityAt)
 
-  // Rebuild per-model totals so mixed-model projects price correctly, then let
-  // the shared aggregator do the money.
+  // Rebuild per-model totals so a mixed-model project reports each model's
+  // share rather than one undifferentiated heap.
   const byModel = new Map<string, TokenUsage>()
   let requests = 0
   for (const session of ordered) {
@@ -289,9 +280,7 @@ function summarizeStandalone(cwd: string, sessions: SessionSummary[]): ProjectSu
     transcriptDir: transcriptDir(cwd),
     sessions: ordered,
     usage: sumUsage(byModel.values()),
-    // Sum the sessions' already-priced money — re-pricing the pooled tokens
-    // would value historical work at today's rates.
-    cost: mergeAggregates(ordered.map((session) => session.cost)),
+    usageByModel: Object.fromEntries(byModel),
     requests,
     activeSessionId: ordered[0]?.sessionId ?? null,
     scanning: false,

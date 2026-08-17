@@ -2,12 +2,15 @@ import { execFile } from 'node:child_process'
 import { createConnection } from 'node:net'
 import { promisify } from 'node:util'
 import type { IpcMain } from 'electron'
+import { BRAND } from '../shared/brand'
 import { currentPlatform, isWindows, type Platform } from './platform/host'
 import {
   LSOF,
+  LSOF_FIELDS,
   NETSTAT,
   TASKLIST,
   parseLsof,
+  parseLsofFields,
   parseNetstat,
   parseTasklist,
   windowsOwners,
@@ -22,6 +25,22 @@ export interface DevPort {
   process: string
   /** True when we could not name the process and only know the port answers. */
   guessed: boolean
+  /**
+   * This port is Terminal Deck's own, so it is not a page anybody can open.
+   *
+   * The recording of 2026-08-16 is the whole reason this field exists. Eight of
+   * the nine ports the start page offered were this app's — every one of them
+   * labelled `Terminal`, because `lsof`'s column output clamps COMMAND to nine
+   * characters and `Terminal Deck` does not fit. Clicking one loaded the
+   * pairing server's refusal for a plain GET: a black page reading
+   * *"that is not how to ask"*, shown to a user who had done nothing wrong.
+   *
+   * Marked rather than dropped, because a port that is listening is a true fact
+   * about the machine and silently removing rows makes a list nobody can
+   * reconcile with `lsof`. What must not happen is *offering it as a page*, and
+   * that is the start page's job — see `StartPage.tsx`.
+   */
+  ours: boolean
 }
 
 /**
@@ -49,9 +68,41 @@ export interface DevPortDetail extends DevPort {
   families: PortFamilies
 }
 
+/**
+ * Is this process Terminal Deck?
+ *
+ * Two independent tests, because they catch different things and neither
+ * catches both.
+ *
+ * The **pid test** is exact and answers for the process actually running this
+ * code: `pid` is our own, or `ppid` is — Electron's renderer, GPU and utility
+ * processes are direct children of the main process, and any of them can hold a
+ * socket. It is the only test that works in development, where the executable
+ * is called `Electron` and matching that name would claim every Electron app on
+ * the machine.
+ *
+ * The **name test** catches a *second copy* of Terminal Deck, which the pid test
+ * cannot see and which produces exactly the same dead click. `lsof`'s field mode
+ * prints the untruncated command, so this compares against the real product
+ * name rather than the nine characters the column output would have left. The
+ * ` ` suffix case is the packaged helpers, which macOS names
+ * `Terminal Deck Helper (Renderer)` and friends.
+ */
+function isOurs(owner: { process: string | null; pid?: number; ppid?: number }): boolean {
+  if (owner.pid === process.pid || owner.ppid === process.pid) return true
+  const name = owner.process
+  if (name === null) return false
+  return name === BRAND.name || name.startsWith(`${BRAND.name} `)
+}
+
 /** Drop the fields the phone must not be sent. */
 function toWire(detail: DevPortDetail): DevPort {
-  return { port: detail.port, process: detail.process, guessed: detail.guessed }
+  return {
+    port: detail.port,
+    process: detail.process,
+    guessed: detail.guessed,
+    ours: detail.ours,
+  }
 }
 
 /**
@@ -95,18 +146,57 @@ const NOT_A_DEV_SERVER = new Set([
   'com.docker.backend',
 ])
 
+/**
+ * Does the exclusion list above cover this process, under any of the spellings
+ * the operating system might have printed?
+ *
+ * Three, and every one of them is a real spelling seen on this machine:
+ *
+ *  - the name as printed — `sshd`, `node`;
+ *  - the first word of it — field-mode `lsof` prints `Google Chrome` where the
+ *    column output printed `Google`, and the list was written against the
+ *    column output;
+ *  - the first nine characters — the column output's own clamp, which is how
+ *    `ControlCenter` came to be listed as `ControlCe`.
+ *
+ * Checking all three means switching `lsof` to field mode cannot quietly
+ * *un-exclude* half the list. It did on the first attempt: Chrome's port 9333
+ * reappeared as a suggested dev server the moment the names stopped being
+ * truncated.
+ */
+function isExcluded(name: string): boolean {
+  if (NOT_A_DEV_SERVER.has(name)) return true
+  const firstWord = name.split(' ')[0]
+  if (firstWord !== name && NOT_A_DEV_SERVER.has(firstWord)) return true
+  return name.length > 9 && NOT_A_DEV_SERVER.has(name.slice(0, 9))
+}
+
 /** Runtimes that usually ARE serving a page, listed before anything else. */
 const LIKELY_DEV = ['node', 'bun', 'deno', 'python', 'python3', 'ruby', 'php', 'java', 'dotnet', 'caddy', 'nginx']
 
 function rank(entry: DevPort): number {
   const name = entry.process.toLowerCase()
   const likely = LIKELY_DEV.findIndex((candidate) => name.startsWith(candidate))
+  // Our own ports below everything, including the ones nobody could name: they
+  // are the only rows on the list that are guaranteed not to be a page.
+  if (entry.ours) return 2000
   // Known runtime first (in list order), then everything else, then unnamed.
   if (entry.guessed) return 1000
   return likely === -1 ? 500 : likely
 }
 
 const SCAN_TIMEOUT_MS = 5000
+
+/**
+ * One listening socket, from whichever form of the scan produced it.
+ *
+ * `pid` and `ppid` are optional because only two of the three code paths below
+ * carry them: field-mode `lsof` has both, `netstat` has the pid, and the
+ * column-mode `lsof` fallback has neither. A row with neither simply fails the
+ * pid half of {@link isOurs} and is judged by its name, which is the same
+ * answer this module gave before the field existed.
+ */
+type ScannedOwner = PortOwner & { pid?: number; ppid?: number }
 
 /**
  * Ask the operating system what is listening.
@@ -120,7 +210,7 @@ const SCAN_TIMEOUT_MS = 5000
  * still real, still answering, and still worth offering — they arrive without a
  * name and land on screen as guesses, which is what `guessed` is for.
  */
-async function listeningOwners(platform: Platform): Promise<PortOwner[]> {
+async function listeningOwners(platform: Platform): Promise<ScannedOwner[]> {
   const options = { timeout: SCAN_TIMEOUT_MS, windowsHide: true } as const
 
   if (isWindows(platform)) {
@@ -128,7 +218,23 @@ async function listeningOwners(platform: Platform): Promise<PortOwner[]> {
       run(NETSTAT.command, NETSTAT.args, options),
       run(TASKLIST.command, TASKLIST.args, options).catch(() => ({ stdout: '' })),
     ])
-    return windowsOwners(parseNetstat(connections.stdout), parseTasklist(processes.stdout))
+    const rows = parseNetstat(connections.stdout)
+    const names = parseTasklist(processes.stdout)
+    // `netstat -ano` already knows the owning pid, so the exact half of the
+    // ownership test is free here; there is no parent pid, which is why the
+    // name test in `isOurs` matters more on Windows than it does on macOS.
+    return windowsOwners(rows, names).map((owner, index) => ({ ...owner, pid: rows[index].pid }))
+  }
+
+  // Field mode first — it is the only form that prints the untruncated command
+  // and the parent pid, and both are load-bearing. The column form stays as the
+  // fallback rather than being deleted: `-F` is old and universal, but this is a
+  // spawn of somebody else's binary, and a build of `lsof` that refuses these
+  // fields should cost the *names* rather than the whole list.
+  const fielded = await run(LSOF_FIELDS.command, LSOF_FIELDS.args, options).catch(() => null)
+  if (fielded) {
+    const owners = parseLsofFields(fielded.stdout)
+    if (owners.length > 0) return owners
   }
 
   const { stdout } = await run(LSOF.command, LSOF.args, options)
@@ -158,7 +264,12 @@ async function listeningPorts(platform: Platform): Promise<DevPortDetail[]> {
   const found = new Map<number, DevPortDetail>()
 
   for (const owner of await listeningOwners(platform)) {
-    if (owner.process !== null && NOT_A_DEV_SERVER.has(owner.process)) continue
+    // Ours is decided before the exclusion, and survives it. A port this app is
+    // holding is worth *saying so about* even when the process behind it would
+    // otherwise be filtered out — the alternative is a row that vanishes with no
+    // explanation, which is how "why is nothing listening on 8443?" starts.
+    const ours = isOurs(owner)
+    if (!ours && owner.process !== null && isExcluded(owner.process)) continue
     const already = found.get(owner.port)
     if (already) {
       if (owner.family === 4) already.families.v4 = true
@@ -171,6 +282,7 @@ async function listeningPorts(platform: Platform): Promise<DevPortDetail[]> {
       // and flagging it beats either inventing a name or hiding the port.
       process: owner.process ?? 'unknown',
       guessed: owner.process === null,
+      ours,
       families: { v4: owner.family === 4, v6: owner.family === 6 },
     })
   }
@@ -317,7 +429,16 @@ async function runScan(platform: Platform): Promise<DevPortDetail[]> {
     )
     ports = probed
       .filter((entry) => entry.families.v4 || entry.families.v6)
-      .map((entry) => ({ port: entry.port, process: 'unknown', guessed: true, families: entry.families }))
+      .map((entry) => ({
+        port: entry.port,
+        process: 'unknown',
+        guessed: true,
+        // A probe learns that something answered and nothing else. Claiming a
+        // port is ours on that evidence would hide a real dev server, so this
+        // path always says no and the row stays offered.
+        ours: false,
+        families: entry.families,
+      }))
   }
 
   return ports.sort((a, b) => rank(a) - rank(b) || a.port - b.port)

@@ -1,13 +1,23 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   accountForFolder,
+  accountIdentity,
   accountLabel,
+  accountRail,
   accountsBridge,
   errorMessage,
+  forgetSignIns,
+  isSystemAccountId,
+  knownSignIns,
   parseAccount,
   parseSignIn,
   parseSnapshot,
+  profileLoginLabel,
   signInLabel,
+  signInStateSummary,
+  signInSummary,
   type AccountsSnapshot,
 } from './accounts'
 
@@ -155,6 +165,288 @@ describe('accountLabel', () => {
     // must not be shown as though that account can start a session.
     expect(accountLabel(parseSignIn({ state: 'signed-out', account: 'a@b.com' }))).toBeNull()
     expect(accountLabel(undefined)).toBeNull()
+  })
+})
+
+describe('isSystemAccountId', () => {
+  it('knows the ids the main process generates for an agent’s own install', () => {
+    /*
+     * Read out of `main/profiles.ts` rather than trusted, because these two
+     * files have no import between them — the renderer must not pull in a
+     * module that imports Electron — and a silent drift here does not fail to
+     * compile, it puts the word "Default" back on the chip.
+     */
+    const source = readFileSync(join(__dirname, '../main/profiles.ts'), 'utf8')
+    expect(source).toContain("export const SYSTEM_PROFILE_ID = 'system'")
+    expect(source).toContain(
+      "return provider === 'claude' ? SYSTEM_PROFILE_ID : `${SYSTEM_PROFILE_ID}:${provider}`",
+    )
+
+    expect(isSystemAccountId('system')).toBe(true)
+    expect(isSystemAccountId('system:codex')).toBe(true)
+    expect(isSystemAccountId('system:gemini')).toBe(true)
+    expect(isSystemAccountId('work')).toBe(false)
+    // Not a prefix match on the word: an account a person called "systems" is
+    // theirs, and its name is an identity.
+    expect(isSystemAccountId('systems')).toBe(false)
+  })
+})
+
+describe('signInSummary', () => {
+  /**
+   * What each agent actually answers, measured on this machine rather than
+   * assumed — the whole reason this has three shapes instead of one. See the
+   * probes in `main/profiles-signin.ts`.
+   */
+  it('gives the address when the CLI named one, and marks it as read', () => {
+    // `claude auth status --json` → {"loggedIn":true,"email":"…","subscriptionType":"max"}
+    const claude = signInSummary(
+      parseSignIn({ state: 'signed-in', account: 'a@b.com', plan: 'max', detail: 'Signed in as a@b.com · max' }),
+    )
+    expect(claude).toEqual({ label: 'a@b.com', detail: 'Signed in as a@b.com · max', verified: true })
+  })
+
+  it('says how a login was made when the CLI will not say who it is', () => {
+    // `codex login status` → "Logged in using ChatGPT". There is no address in
+    // that output and this app does not open `auth.json` to find one.
+    const codex = signInSummary(
+      parseSignIn({ state: 'signed-in', plan: 'ChatGPT', detail: 'Signed in using ChatGPT' }),
+    )
+    expect(codex.label).toBe('Signed in · ChatGPT')
+    expect(codex.verified).toBe(false)
+    expect(codex.detail).toContain('does not print an email address')
+  })
+
+  it('separates “not signed in” from “could not tell”', () => {
+    expect(signInSummary(parseSignIn({ state: 'signed-out' })).label).toBe('Not signed in')
+    expect(signInSummary(parseSignIn({ state: 'unknown' })).label).toBe('Account unknown')
+    // Nothing has answered yet. Not the same as an answer of "unknown": one of
+    // these resolves on its own and the other does not.
+    expect(signInSummary(undefined).label).toBe('Checking…')
+  })
+
+  it('never claims an address for an account that is not signed in', () => {
+    // A leftover address from an older read, on a login that has since expired.
+    const stale = signInSummary(parseSignIn({ state: 'signed-out', account: 'a@b.com' }))
+    expect(stale.label).toBe('Not signed in')
+    expect(stale.verified).toBe(false)
+  })
+})
+
+describe('accountIdentity', () => {
+  /**
+   * The complaint this exists for, in his words:
+   *
+   *   > "inside the terminal page it is still showing selected account as
+   *   > Default and not showing the email ID. … It should show clearly which
+   *   > one is actually selected there. It just says Default."
+   */
+  const own = { id: 'system', name: 'Default', system: true }
+
+  it('shows the address instead of the profile key', () => {
+    const identity = accountIdentity(own, parseSignIn({ state: 'signed-in', account: 'a@b.com' }))
+    expect(identity.label).toBe('a@b.com')
+    expect(identity.verified).toBe(true)
+  })
+
+  it('never falls back to the generated name, in any state', () => {
+    for (const signIn of [
+      undefined,
+      parseSignIn({ state: 'unknown' }),
+      parseSignIn({ state: 'signed-out' }),
+      parseSignIn({ state: 'signed-in' }),
+      parseSignIn({ state: 'unsupported' }),
+    ]) {
+      expect(accountIdentity(own, signIn).label).not.toContain('Default')
+      expect(accountIdentity({ id: 'system:codex', name: 'Default (Codex CLI)', system: true }, signIn).label)
+        .not.toContain('Default')
+    }
+  })
+
+  it('invents nothing when there is no address to show', () => {
+    // The rule: say something true about the state, never a stand-in that reads
+    // like an address.
+    expect(accountIdentity(own, parseSignIn({ state: 'signed-out' }))).toEqual({
+      label: 'Not signed in',
+      detail: 'This account’s sign-in state could not be read.',
+      verified: false,
+    })
+    expect(accountIdentity(own, undefined).label).toBe('Checking…')
+    expect(accountIdentity(own, undefined).verified).toBe(false)
+  })
+
+  it('keeps a name a person chose, because that one is an identity', () => {
+    // "Work" was typed by somebody and tells two logins apart; "Default" was
+    // generated and is the same word on every machine.
+    const named = { id: 'work', name: 'Work', system: false }
+    expect(accountIdentity(named, parseSignIn({ state: 'signed-out' })).label).toBe('Work')
+    expect(accountIdentity(named, undefined).label).toBe('Work')
+    // The address still wins where there is one — it is the only label that
+    // tells two accounts apart with certainty, and it is what he asked for.
+    expect(accountIdentity(named, parseSignIn({ state: 'signed-in', account: 'a@b.com' })).label).toBe(
+      'a@b.com',
+    )
+  })
+
+  it('reads “system” off the id until the account list has been read', () => {
+    // The chip's first second: it has an id from the session and no list yet.
+    expect(accountIdentity({ id: 'system', name: 'Default' }, parseSignIn({ state: 'signed-out' })).label).toBe(
+      'Not signed in',
+    )
+    expect(accountIdentity({ id: 'work', name: 'Work' }, parseSignIn({ state: 'signed-out' })).label).toBe('Work')
+  })
+
+  it('says the neutral word when there is no account at all', () => {
+    expect(accountIdentity(null, undefined).label).toBe('Account')
+  })
+})
+
+describe('signInStateSummary', () => {
+  /**
+   * The ladder without its top rung, for the one row that prints both halves.
+   *
+   * The chip's menu carries the login on the left and the state on the right.
+   * Once the left stopped printing the profile key and started printing the
+   * address, both halves came off the same function and resolved to the same
+   * string — a row reading `a@b.com … a@b.com`, with the state, which is what
+   * says whether that account can start a session, printed nowhere.
+   */
+  it('reports the state even for a login whose address is known', () => {
+    const signIn = parseSignIn({
+      state: 'signed-in',
+      account: 'a@b.com',
+      plan: 'max',
+      detail: 'Signed in as a@b.com · max',
+    })
+    expect(signInSummary(signIn).label).toBe('a@b.com')
+    expect(signInStateSummary(signIn).label).toBe('Signed in · max')
+  })
+
+  it('does not tell somebody their CLI prints no address while printing one', () => {
+    // The lower rung's sentence is written for Codex, whose `login status`
+    // genuinely never names anybody. Said next to an address it would be the
+    // app calling its own label a fabrication.
+    const withAddress = parseSignIn({ state: 'signed-in', account: 'a@b.com', detail: 'Signed in.' })
+    const without = parseSignIn({ state: 'signed-in', plan: 'ChatGPT', detail: 'Signed in.' })
+    expect(signInStateSummary(withAddress).detail).not.toContain('does not print an email')
+    expect(signInStateSummary(without).detail).toContain('does not print an email')
+  })
+
+  it('is the same ladder below the address, so the two cannot drift', () => {
+    for (const state of ['signed-out', 'unknown', 'unsupported'] as const) {
+      const signIn = parseSignIn({ state })
+      expect(signInStateSummary(signIn)).toEqual(signInSummary(signIn))
+    }
+    expect(signInStateSummary(undefined)).toEqual(signInSummary(undefined))
+  })
+})
+
+describe('accountRail', () => {
+  /**
+   * The sidebar's account column, which is twelve characters wide.
+   *
+   * Every screenshot of the rail showed rows reading `Default` — the word he
+   * objected to, in the most visible list in the app, while the chip forty
+   * pixels above the same session read the address. The column cannot hold an
+   * address, so it holds the half of one that differs.
+   */
+  const own = { id: 'system', name: 'Default', provider: 'claude' as const }
+
+  it('prints the mailbox, because the domain is the half that is shared', () => {
+    const rail = accountRail(own, parseSignIn({ state: 'signed-in', account: 'app.imatch.ae@gmail.com' }))
+    expect(rail.short).toBe('app.imatch.ae')
+    // The whole address is still said where there is room to say it.
+    expect(rail.note).toBe('signed in as app.imatch.ae@gmail.com')
+  })
+
+  it('keeps a name a person chose', () => {
+    const rail = accountRail({ id: 'work', name: 'Work', provider: 'claude' }, undefined)
+    expect(rail.short).toBe('Work')
+    expect(rail.note).toBe('signed in as Work')
+  })
+
+  it('says nothing on the line rather than an abbreviation that identifies nothing', () => {
+    /*
+     * There is no twelve-character way to say "your own Codex CLI install" that
+     * still separates it from "your own Claude Code install", and a caption
+     * that dropped the agent would put one word on two rows that are not the
+     * same account — which is the failure being fixed, not a smaller version of
+     * it. The fact moves into the tooltip, the same trade the narrow rail makes.
+     */
+    const claude = accountRail(own, undefined)
+    expect(claude.short).toBeNull()
+    expect(claude.note).toBe('on your own Claude Code install')
+
+    const codex = accountRail({ id: 'system:codex', name: 'Default (Codex CLI)', provider: 'codex' }, undefined)
+    expect(codex.note).toBe('on your own Codex CLI install')
+  })
+
+  it('never prints the generated key, in any state', () => {
+    for (const signIn of [
+      undefined,
+      parseSignIn({ state: 'unknown' }),
+      parseSignIn({ state: 'signed-out' }),
+      parseSignIn({ state: 'signed-in' }),
+      // The trap: an expired Claude login still reports its email.
+      parseSignIn({ state: 'signed-out', account: 'a@b.com' }),
+    ]) {
+      const rail = accountRail(own, signIn)
+      expect(rail.short ?? '').not.toContain('Default')
+      expect(rail.note).not.toContain('Default')
+    }
+  })
+
+  it('does not hand back an empty caption for an address it cannot split', () => {
+    // `profiles-signin.ts` passes through whatever the CLI printed. A line with
+    // no mailbox in it must not become a column that reads as a failed value.
+    const rail = accountRail(own, parseSignIn({ state: 'signed-in', account: '@example.com' }))
+    expect(rail.short).toBe('@example.com')
+  })
+})
+
+describe('profileLoginLabel', () => {
+  /**
+   * Pinned here as well as in `ProfilePicker.test.ts`, and deliberately: that
+   * file imports it through the dialog it used to live in, so the pair proves
+   * the re-export still resolves as well as that the rungs still hold.
+   */
+  it('is the same function the pickers import', () => {
+    expect(profileLoginLabel({ id: 'system', name: 'Default', provider: 'gemini' }, undefined)).toBe(
+      'Your own Gemini CLI install',
+    )
+    expect(profileLoginLabel({ id: 'work', name: 'Work' }, undefined)).toBe('Work')
+    expect(
+      profileLoginLabel({ id: 'system', name: 'Default' }, parseSignIn({ state: 'signed-in', account: 'a@b.com' })),
+    ).toBe('a@b.com')
+  })
+
+  it('reads an explicit `system: false` on a generated id as generated', () => {
+    /*
+     * `||`, not `??`, and this is the case that decides it. Every list carrying
+     * this flag types it as a required boolean, so a payload from a build that
+     * predates the flag arrives as `false` rather than as "unknown" — and a
+     * `??` would read that as somebody having named their account
+     * "Default (Gemini CLI)".
+     */
+    expect(
+      profileLoginLabel({ id: 'system:gemini', name: 'Default (Gemini CLI)', provider: 'gemini', system: false }, undefined),
+    ).toBe('Your own Gemini CLI install')
+  })
+})
+
+describe('the answers a list is allowed to read', () => {
+  /**
+   * The store that lets the rail show an address without asking for one.
+   *
+   * Asking spawns the agent's CLI, so the surfaces that can ask do — one
+   * account for the chip, the whole list when a menu opens — and every other
+   * surface reads what they found. There is no probe anywhere in this file's
+   * store; what is pinned here is that it starts empty and can be emptied,
+   * which is what keeps one test's answer out of the next one's render.
+   */
+  it('knows nothing until something has asked', () => {
+    forgetSignIns()
+    expect(knownSignIns()).toEqual({})
   })
 })
 

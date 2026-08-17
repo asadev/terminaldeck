@@ -1,13 +1,19 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { ModeSwitch } from './ModeSwitch'
-import { FolderChip, folderLabel } from './FolderChip'
+import { FolderTitle, folderLabel } from './FolderChip'
 import { AccountChip } from './AccountChip'
 import { WindowToolbar } from './WindowToolbar'
 import { Sidebar } from './Sidebar'
 import { PANELS } from './panels'
 import { placeMenu } from './chip-menu'
-import { accountsWorthShowing, type WorkspaceTab } from './workspace-tabs'
+import {
+  ACCOUNT_NEEDS_RAIL,
+  accountsWorthShowing,
+  tabIdentities,
+  tabQualifiers,
+  type WorkspaceTab,
+} from './workspace-tabs'
 
 /**
  * The window chrome, actually rendered.
@@ -23,9 +29,12 @@ import { accountsWorthShowing, type WorkspaceTab } from './workspace-tabs'
  *      lives beside the window buttons in both states — in the rail's gutter
  *      when the rail is out, in the toolbar when it is away. Two of them, or
  *      one that moves, is what this replaced.
- *   3. The folder chip says what it does. It starts a session somewhere; it
- *      does not move the one you are in, and the copy must not imply that it
- *      does, because the app cannot tell whether that would lose work.
+ *   3. The folder is a title and not a control, and it says why. A pty has one
+ *      working directory for its whole life, so a menu there could only ever
+ *      offer to start a *different* session — and a chevron that implies
+ *      otherwise is the app promising something it cannot do.
+ *   4. A name is never cut down to make room for a caption beside it. That is
+ *      how the rail came to print `S…`.
  *
  * `react-dom/server`, like every other render test here: this project has no
  * DOM in its test setup, deliberately.
@@ -68,10 +77,8 @@ describe('ModeSwitch', () => {
   })
 })
 
-describe('FolderChip', () => {
-  const html = renderToStaticMarkup(
-    <FolderChip path={projects[0].path} options={projects} onPick={noop} onBrowse={noop} />,
-  )
+describe('FolderTitle', () => {
+  const html = renderToStaticMarkup(<FolderTitle path={projects[0].path} />)
 
   it('shows the folder rather than the whole path', () => {
     expect(html).toContain('terminaldeck')
@@ -79,22 +86,37 @@ describe('FolderChip', () => {
   })
 
   it('carries the full path where there is room for it', () => {
-    // The button is one word wide and two projects called `web` is not an
-    // unusual thing to have open, so the title is the disambiguator.
+    // The line is one word wide and two projects called `web` is not an unusual
+    // thing to have open, so the tooltip is the disambiguator.
     expect(html).toContain('title="/Users/apple/Projects/terminaldeck')
   })
 
   it('sets the path in the mono face, because a path is data', () => {
-    // The rule is `.folder-chip-path` in shell.css. What is pinned here is that
-    // the element keeps the hook — there is a bare `mono` class in the
-    // dashboard's stylesheet and it is scoped to that file, so borrowing the
-    // name here would have styled nothing at all.
-    expect(html).toContain('class="folder-chip-path"')
+    // The rule is `.folder-title` in shell.css. What is pinned here is that the
+    // element keeps the hook — there is a bare `mono` class in the dashboard's
+    // stylesheet and it is scoped to that file, so borrowing the name here
+    // would have styled nothing at all.
+    expect(html).toContain('class="folder-title"')
   })
 
-  it('is closed until it is asked for', () => {
+  it('is not a control at all any more', () => {
+    /*
+     * The whole of the change he asked for: *"just title is good enough for us
+     * to know which folder we are in right now. That's it. Dropdown will be
+     * only for the accounts."* A dropdown here could only ever have offered to
+     * start a *different* session, because a pty has one working directory for
+     * its whole life — so it was a chevron promising something the app cannot
+     * do, in the one place a person would look for it.
+     */
+    expect(html).not.toContain('<button')
+    expect(html).not.toContain('aria-haspopup')
     expect(html).not.toContain('folder-menu')
-    expect(html).toContain('aria-expanded="false"')
+  })
+
+  it('says why there is no dropdown, rather than leaving it a mystery', () => {
+    // The fact, in the one place somebody goes looking for the control that is
+    // not there. It is a statement about how sessions work, not an apology.
+    expect(html).toContain('keeps this folder for its whole life')
   })
 
   it('never claims it will move the running session', () => {
@@ -182,12 +204,13 @@ describe('AccountChip', () => {
    */
   it('explains itself on the button when the agent has no login to isolate', () => {
     for (const [provider, expected] of [
-      // "A shell has no login to sign in to", not the older "no login to
-      // isolate". The copy pass replaced the mechanism (isolating a config
-      // directory) with the consequence, which is the standard the whole
-      // settings sweep was edited to. The assertion follows the shipped copy
-      // rather than the copy being reverted to satisfy it.
-      ['shell', 'no login to sign in to'],
+      // "A plain shell has no account to sign in to", which has now moved into
+      // `shared/agent-catalog.ts` and lost the word "login" on the way — the
+      // copy pass replaced the mechanism (isolating a config directory) with the
+      // consequence, and then replaced "login" with the plainer "account". The
+      // assertion follows the shipped copy rather than the copy being reverted
+      // to satisfy it, which is the rule this line has already survived twice.
+      ['shell', 'no account to sign in to'],
       // Gemini is the interesting one, and its sentence is not "only apply to
       // Claude" any more because that was never the real reason. `GEMINI_CLI_HOME`
       // exists and moves settings — what it does not move is the OAuth token,
@@ -195,7 +218,7 @@ describe('AccountChip', () => {
       // home. So two "accounts" address one keychain item and `setPassword`
       // overwrites: signing into a second would not share the first login, it
       // would destroy it. That is why it is refused rather than offered.
-      ['gemini', 'a second account cannot be pointed at'],
+      ['gemini', 'would replace the first rather than sit beside it'],
       // `codex` is deliberately NOT in this list any more — see the test below.
     ] as const) {
       const blocked = renderToStaticMarkup(
@@ -242,8 +265,8 @@ describe('AccountChip', () => {
         />,
       )
       expect(invited, provider).toContain('Choose which account a new session here uses')
-      expect(invited, provider).not.toContain('no login to sign in to')
-      expect(invited, provider).not.toContain('cannot be pointed at')
+      expect(invited, provider).not.toContain('no account to sign in to')
+      expect(invited, provider).not.toContain('would replace the first')
     }
   })
 })
@@ -305,6 +328,224 @@ describe('accountsWorthShowing', () => {
     // shell".
     expect(accountsWorthShowing([session('a', work), session('b')])).toBe(false)
   })
+
+  /**
+   * The name wins. The chip is what gives.
+   *
+   * From the frames of the 2026-08-16 recording: a rail reading
+   * `Session 1, Session 2, Sess…, Session 4, Session 5`, and deeper in, a name
+   * cut to the single character **`S…`** — because the account caption held a
+   * fixed width and the name was the only flexible thing on the line. A row
+   * whose name is one character has stopped identifying anything, while the
+   * account it made room for is a fact the tooltip still carries.
+   */
+  it('drops the account rather than the name once the rail is too narrow', () => {
+    const two = [session('a', work), session('b', home)]
+    expect(accountsWorthShowing(two, ACCOUNT_NEEDS_RAIL)).toBe(true)
+    expect(accountsWorthShowing(two, ACCOUNT_NEEDS_RAIL - 1)).toBe(false)
+    // A rail at the app's own narrow cap is well under it, which is the case
+    // that produced `S…`.
+    expect(accountsWorthShowing(two, 148)).toBe(false)
+  })
+
+  it('assumes there is room when nobody says how wide the rail is', () => {
+    // The default keeps every caller that does not measure — the harness, a
+    // test — on the behaviour it had.
+    expect(accountsWorthShowing([session('a', work), session('b', home)])).toBe(true)
+  })
+})
+
+describe('tabIdentities', () => {
+  /**
+   * *"Two tabs both labelled Session 1."*
+   *
+   * Both halves were individually right: `sessionLabel` numbers a session
+   * within its project, which is correct in the sidebar because the project's
+   * name is the heading three pixels above the row. The strip has no headings —
+   * it is one flat row — so the two arrive in it with nothing left to tell them
+   * apart, and the window is asking the user to guess.
+   */
+  const inProject = (id: string, path: string, label = ''): WorkspaceTab => ({
+    id,
+    kind: 'session',
+    label,
+    projectPath: path,
+    closable: true,
+  })
+
+  it('leaves a name that is already unique completely alone', () => {
+    const tabs = [inProject('a', '/w/app', 'Fix the parser'), inProject('b', '/w/site', 'Ship it')]
+    const ids = tabIdentities(tabs)
+    expect(ids.get('a')).toEqual({ label: 'Fix the parser', qualifier: null })
+    expect(ids.get('b')).toEqual({ label: 'Ship it', qualifier: null })
+  })
+
+  it('qualifies the exact pair he saw, and by the thing that differs', () => {
+    const tabs = [inProject('a', '/w/app'), inProject('b', '/w/site')]
+    const ids = tabIdentities(tabs)
+    expect(ids.get('a')).toEqual({ label: 'Session 1', qualifier: 'app' })
+    expect(ids.get('b')).toEqual({ label: 'Session 1', qualifier: 'site' })
+  })
+
+  it('qualifies only the tabs that collide, not every tab in the row', () => {
+    // A qualifier on every tab is noise on every tab — the same argument
+    // `accountsWorthShowing` makes about accounts.
+    const tabs = [
+      inProject('a', '/w/app'),
+      inProject('b', '/w/site'),
+      inProject('c', '/w/app', 'Fix the parser'),
+    ]
+    const ids = tabIdentities(tabs)
+    expect(ids.get('a')?.qualifier).toBe('app')
+    expect(ids.get('b')?.qualifier).toBe('site')
+    expect(ids.get('c')?.qualifier).toBeNull()
+  })
+
+  it('falls back to the session id when even the project cannot separate them', () => {
+    /*
+     * Two agents given the same task write the same sentence. Reported from the
+     * rail: `Update Claude Code terminal to new…` twice, in one folder, on one
+     * account — nothing on screen told them apart.
+     *
+     * The project is the same for both, so it is not printed at all: a
+     * qualifier both rows share leaves them exactly as identical as it found
+     * them, and the pass meant to be the last resort was left doing all the
+     * work. What is printed instead is the head of each session's own id — a
+     * fact about the session rather than about the list, which is the whole
+     * difference from the ordinal this replaces. Close the first of the two and
+     * the second's label does not silently become the first's.
+     *
+     * Four characters of it, not eight: `distinguishingIdLength` cuts the head
+     * to the shortest length that still separates the run, because on a 264px
+     * rail the other four characters were being paid for by the session's name.
+     */
+    const tabs = [
+      inProject('7f3c9a21-0000-4000-8000-000000000001', '/w/app', 'Fix the parser'),
+      inProject('b4e1d508-0000-4000-8000-000000000002', '/w/app', 'Fix the parser'),
+    ]
+    const ids = tabIdentities(tabs)
+    expect(ids.get(tabs[0].id)).toEqual({ label: 'Fix the parser', qualifier: '7f3c' })
+    expect(ids.get(tabs[1].id)).toEqual({ label: 'Fix the parser', qualifier: 'b4e1' })
+  })
+
+  /**
+   * The length is asked, not assumed.
+   *
+   * Two sessions whose ids agree for their first five characters. Cut blindly
+   * to four, both rows would read `7f3c` and the qualifier — the one thing on
+   * those rows whose entire job is to separate them — would have left them
+   * exactly as identical as it found them while looking like it had answered.
+   *
+   * Both rows lengthen, not just the pair that collided, because these sit in a
+   * column at the ends of rows cut to the same width and one row wearing six
+   * characters beside another wearing four reads as a value that varies rather
+   * than as an identifier.
+   */
+  it('lengthens the id when four characters of it would collide', () => {
+    const tabs = [
+      inProject('7f3c9a21-0000-4000-8000-000000000001', '/w/app', 'Fix the parser'),
+      inProject('7f3c9b40-0000-4000-8000-000000000002', '/w/app', 'Fix the parser'),
+    ]
+    const ids = tabIdentities(tabs)
+    expect(ids.get(tabs[0].id)?.qualifier).toBe('7f3c9a')
+    expect(ids.get(tabs[1].id)?.qualifier).toBe('7f3c9b')
+  })
+
+  /**
+   * And it is asked of the rows that print one, not of every row in the run.
+   *
+   * The third tab here has a name of its own and so never reaches this rung. It
+   * shares four characters with the first, and if it were counted the pair that
+   * *is* ambiguous would be given six characters each to separate them from an
+   * id nobody can see — a wider column bought with the name's pixels to answer
+   * a question the screen never asks.
+   */
+  it('sizes the id against the rows drawing one, not against the whole run', () => {
+    const tabs = [
+      inProject('7f3c9a21-0000-4000-8000-000000000001', '/w/app', 'Fix the parser'),
+      inProject('b4e1d508-0000-4000-8000-000000000002', '/w/app', 'Fix the parser'),
+      inProject('7f3cd0e7-0000-4000-8000-000000000003', '/w/app', 'Rename the columns'),
+    ]
+    const ids = tabIdentities(tabs)
+    expect(ids.get(tabs[0].id)?.qualifier).toBe('7f3c')
+    expect(ids.get(tabs[1].id)?.qualifier).toBe('b4e1')
+    expect(ids.get(tabs[2].id)?.qualifier).toBeNull()
+  })
+
+  it('keeps the project as the qualifier when the project is what differs', () => {
+    // Three tabs, one name: two in one folder and one in another. The folder
+    // separates the third and cannot separate the first two, so it is printed
+    // on all three and the pair that is still ambiguous takes its id as well.
+    // The alternative — dropping the folder because it did not finish the job —
+    // would qualify a tab by an id when a folder name was available and true.
+    const tabs = [
+      inProject('7f3c9a21-0000-4000-8000-000000000001', '/w/app', 'Fix the parser'),
+      inProject('b4e1d508-0000-4000-8000-000000000002', '/w/app', 'Fix the parser'),
+      inProject('c9a70b64-0000-4000-8000-000000000003', '/w/site', 'Fix the parser'),
+    ]
+    const ids = tabIdentities(tabs)
+    expect(ids.get(tabs[0].id)?.qualifier).toBe('app · 7f3c')
+    expect(ids.get(tabs[1].id)?.qualifier).toBe('app · b4e1')
+    expect(ids.get(tabs[2].id)?.qualifier).toBe('site')
+  })
+
+  it('numbers a session against every sibling, not just the ones on the strip', () => {
+    /*
+     * The number in "Session 3" counts siblings in a folder. If it were counted
+     * over the drawn subset instead, promoting the second of three sessions
+     * would relabel it "Session 1" up top while the rail still called it
+     * "Session 2" — the two halves of the window disagreeing about a name,
+     * which is the whole class of defect this change is closing.
+     */
+    const all = [inProject('a', '/w/app'), inProject('b', '/w/app'), inProject('c', '/w/app')]
+    expect(tabIdentities([all[2]], all).get('c')?.label).toBe('Session 3')
+  })
+
+  it('says nothing about the folder a session does not have', () => {
+    /*
+     * An orphaned session — its project closed out from under it — has no
+     * folder to be qualified by. It is left bare beside its qualified twin
+     * rather than given an empty qualifier or a number: "Session 1" against
+     * "Session 1 app" is already two different things on screen, and an empty
+     * qualifier reads as a value that failed to load.
+     */
+    const orphan: WorkspaceTab = { id: 'x', kind: 'session', label: 'Session 1', closable: true }
+    const ids = tabIdentities([orphan, inProject('a', '/w/app')])
+    expect(ids.get('x')).toEqual({ label: 'Session 1', qualifier: null })
+    expect(ids.get('a')?.qualifier).toBe('app')
+  })
+
+  /**
+   * The account is a rung too — but only where the caller is drawing it.
+   *
+   * The rail prints the account beside the name, so two rows it separates need
+   * nothing further and an id on them would be a second answer to a question
+   * already answered. The strip prints no account, and below
+   * `ACCOUNT_NEEDS_RAIL` neither does the rail — and a fact that is not on
+   * screen has never told anybody anything apart.
+   */
+  it('leaves a pair the account already separates alone, where the account is shown', () => {
+    const withAccount = (id: string, account: string): WorkspaceTab => ({
+      ...inProject(id, '/w/app', 'Fix the parser'),
+      account: { id: account, name: account, provider: 'claude' },
+    })
+    const tabs = [withAccount('7f3c9a21-aaaa', 'work'), withAccount('b4e1d508-bbbb', 'home')]
+    const labels = tabs.map(() => 'Fix the parser')
+
+    expect(tabQualifiers(tabs, labels, { accountsShown: true })).toEqual([null, null])
+    // And with the column gone, the id is needed again.
+    expect(tabQualifiers(tabs, labels)).toEqual(['7f3c', 'b4e1'])
+  })
+
+  it('still separates a pair on one account, whether or not the column is drawn', () => {
+    const sameAccount = (id: string): WorkspaceTab => ({
+      ...inProject(id, '/w/app', 'Fix the parser'),
+      account: { id: 'work', name: 'Work', provider: 'claude' },
+    })
+    const tabs = [sameAccount('7f3c9a21-aaaa'), sameAccount('b4e1d508-bbbb')]
+    const labels = tabs.map(() => 'Fix the parser')
+    expect(tabQualifiers(tabs, labels, { accountsShown: true })).toEqual(['7f3c', 'b4e1'])
+  })
 })
 
 describe('WindowToolbar', () => {
@@ -350,6 +591,44 @@ describe('WindowToolbar', () => {
     expect(actions).toContain('mode-switch')
     expect(actions).not.toContain('<svg')
   })
+
+  /**
+   * There is exactly one control in the window that brings a pinned-away rail
+   * back, and which bar draws it depends on which bar is the top one.
+   *
+   * The strip took the top band on 2026-08-17, and with it the traffic lights,
+   * the window drag and this button. Leaving a copy here as well is not a
+   * cosmetic duplicate: they are 48px apart in the same corner, both say "Show
+   * sidebar", and the lower one is the one you would reach for and the upper one
+   * is the one the pointer arrives at first.
+   */
+  const underStrip = renderToStaticMarkup(
+    <WindowToolbar
+      title="Wire up split panes"
+      sidebarHidden
+      underStrip
+      onRevealSidebar={noop}
+      onEdgeEnter={noop}
+    >
+      <ModeSwitch mode="terminal" onChange={noop} />
+    </WindowToolbar>,
+  )
+
+  it('gives the reveal button up to the strip when there is one', () => {
+    expect(underStrip).not.toContain('Show sidebar')
+  })
+
+  it('says so in the markup, because the room it holds is decided in CSS', () => {
+    // `.toolbar[data-sidebar-collapsed]:not([data-under-strip])` is what keeps
+    // 118px of traffic-light reserve out of a bar that has nothing above it.
+    expect(underStrip).toContain('data-under-strip="true"')
+    expect(hidden).not.toContain('data-under-strip')
+  })
+
+  it('still names the session, because that is the half that is still its job', () => {
+    expect(underStrip).toContain('Wire up split panes')
+    expect(underStrip).toContain('mode-switch')
+  })
 })
 
 describe('Sidebar', () => {
@@ -369,6 +648,7 @@ describe('Sidebar', () => {
       onOpenProject={noop}
       onCloseProject={noop}
       onOpenSettings={noop}
+      onOpenAlerts={noop}
       onToggleCollapsed={noop}
       onPeekStart={noop}
       onPeekEnd={noop}
@@ -399,6 +679,7 @@ describe('Sidebar', () => {
         onOpenProject={noop}
         onCloseProject={noop}
         onOpenSettings={noop}
+        onOpenAlerts={noop}
         onToggleCollapsed={noop}
         onPeekStart={noop}
         onPeekEnd={noop}
@@ -417,10 +698,121 @@ describe('Sidebar', () => {
     expect(foot.indexOf('upd-banner')).toBeLessThan(foot.indexOf('Settings'))
   })
 
-  it('puts Alerts down there too, and out of the toolbar', () => {
+  it('puts Alerts on the Settings line as a glyph, not a row', () => {
+    /*
+     * *"For the alerts icon, let's not keep it a complete separate pill. Let's
+     * make it a small icon next to the settings pill… if we click on it, it just
+     * opens the notifications."*
+     *
+     * Two things have to be true at once and they pull against each other: the
+     * row is gone, and the control is still there — exactly one of it, at the
+     * end of the Settings line, with its name in `aria-label` because a glyph
+     * has no room for text.
+     */
     const foot = /class="sidebar-foot">([\s\S]*?)<div\s+class="sidebar-resize"/.exec(html)?.[1] ?? ''
-    expect(foot).toContain('Alerts')
-    expect(foot.indexOf('Alerts')).toBeLessThan(foot.indexOf('Settings'))
+    expect(foot, 'the foot was not found — has the sidebar changed shape?').not.toBe('')
+    expect(foot).toContain('class="sidebar-settings"')
+    expect(foot).toContain('aria-label="Alerts"')
+    // A glyph, so no label text beside it — and after Settings on the line,
+    // which is what "next to the settings pill" means.
+    expect(foot).not.toContain('>Alerts</span>')
+    expect(foot.indexOf('Settings')).toBeLessThan(foot.indexOf('aria-label="Alerts"'))
+  })
+
+  it('does not draw the bell as a place you can be', () => {
+    /*
+     * The second half of *"and notifications should be a pop-up just like
+     * settings, not a full page."*
+     *
+     * A rail control is drawn `active` and carries `aria-current` when the view
+     * it names is filling the window. The bell opens a sheet over the window,
+     * so there is no such state to be in — and neither has the gear one pixel
+     * to its left, which has opened a dialog since it was written. A bell that
+     * marked itself current would be the rail claiming a navigation that never
+     * happened, which is the mistake this whole change is undoing.
+     *
+     * Scoped to the Settings line rather than to the whole rail, because
+     * `aria-current` is exactly right on the panel rows above and this must not
+     * be read as a rule against it.
+     */
+    const line = /class="sidebar-settings">([\s\S]*?)<\/div>/.exec(html)?.[1] ?? ''
+    expect(line, 'the Settings line was not found — has the foot changed shape?').not.toBe('')
+    expect(line).toContain('aria-label="Alerts"')
+    expect(line, 'a dialog is not somewhere you are').not.toContain('aria-current')
+    expect(line, 'nor is it somewhere you can be active in').not.toContain('sb-icon active')
+  })
+
+  it('takes the bell away with the feature, rather than leaving a dead one', () => {
+    /*
+     * The gating the page used to get for free by being a `PanelId`: the rail
+     * filtered uninstalled views out of `panels`, so Alerts simply had no row.
+     * It is a control now, asked about one level up in `App.tsx`, and this is
+     * the half of that the rail is responsible for.
+     */
+    const off = renderToStaticMarkup(
+      <Sidebar
+        width={264}
+        projects={[]}
+        tabs={[]}
+        activeTabId={null}
+        activePanel={null}
+        alerts={false}
+        onSelectTab={noop}
+        onCloseTab={noop}
+        onSelectPanel={noop}
+        onNewSession={noop}
+        onNewBrowserTab={noop}
+        onOpenProject={noop}
+        onCloseProject={noop}
+        onOpenSettings={noop}
+        onOpenAlerts={noop}
+        onToggleCollapsed={noop}
+        onPeekStart={noop}
+        onPeekEnd={noop}
+        onStartResize={noop}
+      />,
+    )
+    expect(off).not.toContain('Alerts')
+    // And Settings is still there, holding the line on its own — the two are
+    // separate controls, not one with a decoration on the end.
+    expect(off).toContain('Settings')
+  })
+
+  it('keeps the unread count on the glyph, in a mark and in words', () => {
+    /*
+     * The row it replaced carried a numeric badge. A 30px glyph has nowhere to
+     * put one, so the number moves into the accessible name and what is left on
+     * screen is a dot — but *something* has to be left, or a notification list
+     * whose only mark is inside itself is a list nobody opens.
+     */
+    const withAlerts = renderToStaticMarkup(
+      <Sidebar
+        width={264}
+        projects={[]}
+        tabs={[]}
+        activeTabId={null}
+        activePanel={null}
+        alertCount={3}
+        onSelectTab={noop}
+        onCloseTab={noop}
+        onSelectPanel={noop}
+        onNewSession={noop}
+        onNewBrowserTab={noop}
+        onOpenProject={noop}
+        onCloseProject={noop}
+        onOpenSettings={noop}
+        onOpenAlerts={noop}
+        onToggleCollapsed={noop}
+        onPeekStart={noop}
+        onPeekEnd={noop}
+        onStartResize={noop}
+      />,
+    )
+    expect(withAlerts).toContain('aria-label="Alerts (3)"')
+    expect(withAlerts).toContain('class="sb-icon-dot"')
+    // And nothing at all when there is nothing waiting: a dot that is always
+    // lit is a dot that says nothing.
+    expect(html).not.toContain('sb-icon-dot')
   })
 
   it('tells two sessions in one folder apart by their account', () => {
@@ -462,6 +854,7 @@ describe('Sidebar', () => {
         onOpenProject={noop}
         onCloseProject={noop}
         onOpenSettings={noop}
+        onOpenAlerts={noop}
         onToggleCollapsed={noop}
         onPeekStart={noop}
         onPeekEnd={noop}
@@ -471,6 +864,58 @@ describe('Sidebar', () => {
     expect(twoAccounts).toContain('class="sb-account">Work<')
     expect(twoAccounts).toContain('class="sb-account">Home<')
     expect(twoAccounts).toContain('signed in as Work')
+  })
+
+  it('keeps the name whole on a narrow rail and drops the account instead', () => {
+    /*
+     * `S…`. That is what the rail printed in his recording, and this is the
+     * exact arrangement that produced it: two accounts in play, so every row
+     * wanted a caption, on a rail with no room for one. The name is what the
+     * row exists to carry, so the caption is what goes — and the fact is not
+     * lost, it moves into the tooltip, which the assertion below insists on.
+     */
+    const twoOnANarrowRail = renderToStaticMarkup(
+      <Sidebar
+        width={168}
+        projects={projects}
+        tabs={[
+          {
+            id: 's1',
+            kind: 'session',
+            label: 'Fix the parser',
+            projectPath: projects[0].path,
+            account: { id: 'work', name: 'Work', provider: 'claude' },
+            closable: true,
+          },
+          {
+            id: 's2',
+            kind: 'session',
+            label: 'Ship the release',
+            projectPath: projects[0].path,
+            account: { id: 'home', name: 'Home', provider: 'claude' },
+            closable: true,
+          },
+        ]}
+        activeTabId={null}
+        activePanel={null}
+        onSelectTab={noop}
+        onCloseTab={noop}
+        onSelectPanel={noop}
+        onNewSession={noop}
+        onNewBrowserTab={noop}
+        onOpenProject={noop}
+        onCloseProject={noop}
+        onOpenSettings={noop}
+        onOpenAlerts={noop}
+        onToggleCollapsed={noop}
+        onPeekStart={noop}
+        onPeekEnd={noop}
+        onStartResize={noop}
+      />,
+    )
+    expect(twoOnANarrowRail).not.toContain('sb-account')
+    expect(twoOnANarrowRail).toContain('>Fix the parser<')
+    expect(twoOnANarrowRail).toContain('signed in as Work')
   })
 
   it('says nothing about accounts while there is only one', () => {
@@ -498,6 +943,7 @@ describe('Sidebar', () => {
         onOpenProject={noop}
         onCloseProject={noop}
         onOpenSettings={noop}
+        onOpenAlerts={noop}
         onToggleCollapsed={noop}
         onPeekStart={noop}
         onPeekEnd={noop}
@@ -507,17 +953,173 @@ describe('Sidebar', () => {
     expect(oneAccount).not.toContain('sb-account')
   })
 
+  /**
+   * The word he objected to, off the rail.
+   *
+   *   > "Inside the terminal page it is still showing selected account as
+   *   > Default and not showing the email ID."
+   *
+   * Every screenshot of the sidebar showed rows reading `Default` — the key
+   * `profiles.ts` mints for the machine's own install — while the chip forty
+   * pixels above the same session read `app.imatch.ae@gmail.com`. One account,
+   * two names, one frame.
+   *
+   * A static render resolves no promises and this window has no bridge, so
+   * nothing has been read about any login here. That is the worst case and the
+   * point of testing it: it is the state in which falling back to the record's
+   * own name is most tempting, and the rail must still not do it.
+   */
+  it('never prints the profile key on a row, even before anything is read', () => {
+    const rail = renderToStaticMarkup(
+      <Sidebar
+        width={264}
+        projects={projects}
+        tabs={[
+          {
+            id: 's1',
+            kind: 'session',
+            label: 'Fix the parser',
+            projectPath: projects[0].path,
+            account: { id: 'system', name: 'Default', provider: 'claude' },
+            closable: true,
+          },
+          {
+            id: 's2',
+            kind: 'session',
+            label: 'Ship the release',
+            projectPath: projects[0].path,
+            account: { id: 'work', name: 'Work', provider: 'claude' },
+            closable: true,
+          },
+        ]}
+        activeTabId={null}
+        activePanel={null}
+        onSelectTab={noop}
+        onCloseTab={noop}
+        onSelectPanel={noop}
+        onNewSession={noop}
+        onNewBrowserTab={noop}
+        onOpenProject={noop}
+        onCloseProject={noop}
+        onOpenSettings={noop}
+        onOpenAlerts={noop}
+        onToggleCollapsed={noop}
+        onPeekStart={noop}
+        onPeekEnd={noop}
+        onStartResize={noop}
+      />,
+    )
+    expect(rail).not.toContain('Default')
+    // The chosen name still fits the column and still identifies a login.
+    expect(rail).toContain('class="sb-account">Work<')
+    // With nothing read and no name anybody chose, the column says nothing at
+    // all rather than an abbreviation that identifies nothing — and the fact
+    // moves into the row's tooltip, which is where it goes on a narrow rail too.
+    expect(rail).toContain('on your own Claude Code install')
+    expect(rail).toContain('signed in as Work')
+  })
+
+  /**
+   * Two rows that were the same row twice.
+   *
+   * Read live off the rail: `Update Claude Code terminal to new…` twice, in one
+   * folder, both on the same account — same visible name, same account caption,
+   * nothing to tell them apart. The folder cannot separate them (it is the
+   * heading directly above both), and neither can the account, so what is left
+   * is the head of each session's own id.
+   */
+  it('separates two rows whose name and account are identical', () => {
+    const twins = renderToStaticMarkup(
+      <Sidebar
+        width={264}
+        projects={projects}
+        tabs={[
+          {
+            id: '7f3c9a21-0000-4000-8000-000000000001',
+            kind: 'session',
+            label: 'Update Claude Code terminal',
+            projectPath: projects[0].path,
+            account: { id: 'work', name: 'Work', provider: 'claude' },
+            closable: true,
+          },
+          {
+            id: 'b4e1d508-0000-4000-8000-000000000002',
+            kind: 'session',
+            label: 'Update Claude Code terminal',
+            projectPath: projects[0].path,
+            account: { id: 'work', name: 'Work', provider: 'claude' },
+            closable: true,
+          },
+          {
+            id: 'c9a70b64-0000-4000-8000-000000000003',
+            kind: 'session',
+            label: 'Ship the release',
+            projectPath: projects[0].path,
+            account: { id: 'work', name: 'Work', provider: 'claude' },
+            closable: true,
+          },
+        ]}
+        activeTabId={null}
+        activePanel={null}
+        onSelectTab={noop}
+        onCloseTab={noop}
+        onSelectPanel={noop}
+        onNewSession={noop}
+        onNewBrowserTab={noop}
+        onOpenProject={noop}
+        onCloseProject={noop}
+        onOpenSettings={noop}
+        onOpenAlerts={noop}
+        onToggleCollapsed={noop}
+        onPeekStart={noop}
+        onPeekEnd={noop}
+        onStartResize={noop}
+      />,
+    )
+    expect(twins).toContain('class="sb-qualifier">7f3c<')
+    expect(twins).toContain('class="sb-qualifier">b4e1<')
+    // And on nothing else. A qualifier on every row is noise on every row — the
+    // same argument `accountsWorthShowing` makes about the account itself.
+    expect(twins.match(/class="sb-qualifier"/g)).toHaveLength(2)
+  })
+
   it('renders every panel exactly once, wherever it belongs', () => {
     /*
      * The trap this catches: `foot` is a group the scrolling list deliberately
      * does not render, so a view moved into it is drawn by a different loop.
-     * Getting that wrong draws Alerts twice, or not at all — and the "not at
+     * Getting that wrong draws Remote twice, or not at all — and the "not at
      * all" version still passes `reachable.test.ts`, because the panel does
-     * have a case in `PanelView`; it just has no row anybody can click.
+     * have a case in `PanelView`; it just has no control anybody can click.
+     *
+     * There used to be a third group, `icon`, and this sweep matched on
+     * `aria-label` as well as on the label text to cover the one member it had.
+     * Both are gone: Alerts is a dialog rather than a view, so it is not in
+     * `PANELS` at all and the loop below would sweep past it silently. That is
+     * the vacuous version of this test, and the test underneath is what stops
+     * it being one — every control on the rail is still counted, this loop
+     * counts the views and that one counts the bell.
      */
     for (const panel of PANELS) {
-      const rows = html.match(new RegExp(`>${panel.label}</span>`, 'g')) ?? []
-      expect(rows, `${panel.id} appears ${rows.length} times in the sidebar`).toHaveLength(1)
+      const hits = html.match(new RegExp(`>${panel.label}</span>`, 'g')) ?? []
+      expect(hits, `${panel.id} appears ${hits.length} times in the sidebar`).toHaveLength(1)
     }
+  })
+
+  it('renders the bell exactly once, and it is not one of the panels', () => {
+    /*
+     * The other half of the sweep above, kept as a test of its own rather than
+     * folded into the loop, because the two are now different claims: that one
+     * is about a list, and this one is about a control that is deliberately not
+     * in the list. Both failure modes are still covered — drawn twice (a loop
+     * and a hand-written button both claiming it) and drawn not at all (moved
+     * out of `PANELS` and nothing put in its place, which is exactly what this
+     * change could have shipped).
+     */
+    const named = html.match(/aria-label="Alerts(?: \(\d+\))?"/g) ?? []
+    expect(named, `the bell appears ${named.length} times in the sidebar`).toHaveLength(1)
+    expect(
+      PANELS.some((panel) => panel.label === 'Alerts'),
+      'Alerts is back in PANELS, which gives it a page again — see the note on PanelId',
+    ).toBe(false)
   })
 })

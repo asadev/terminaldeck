@@ -87,16 +87,256 @@ export function stripTabs(
 }
 
 /**
- * Drop the ids of tabs that no longer exist.
+ * A tab as the strip draws it: the window, and whether it is *kept* there.
+ *
+ * The distinction is the whole of {@link shownTabs}. A promoted tab stays in
+ * the strip whatever you are looking at; the other kind is in it only because
+ * it is what you are looking at right now.
+ */
+export interface ShownTab {
+  tab: WorkspaceTab
+  /** True when the tab is in the promoted order, i.e. pinned there by the user. */
+  promoted: boolean
+}
+
+/**
+ * Everything the strip draws: what you kept, plus what you are in.
+ *
+ * ## The failure this exists for
+ *
+ * From the frames of his 2026-08-16 recording: **the title bar names a session
+ * that has no tab in the strip.** That was not a bug in either half — the
+ * heading names the session you are in, and the strip holds the subset you
+ * dragged there, and those are two different questions with two different right
+ * answers. But the two are stacked one above the other at the top of the same
+ * window, so a reader is entitled to read them as one thing, and read as one
+ * thing they were contradicting each other.
+ *
+ * The strip is the one that has to give, because the heading cannot: refusing
+ * to name the session you are in is not an option. So the active tab is always
+ * drawn, and when it is not promoted it is drawn as *transient* — present
+ * because you are in it, gone the moment you leave it, and carrying a control
+ * that offers to keep it. Every tabbed editor that has a preview tab arrived at
+ * the same answer for the same reason.
+ *
+ * Appended at the end rather than inserted anywhere clever: the promoted order
+ * is a hand-made arrangement and a tab that pushed into the middle of it would
+ * move the tabs the user placed. A stale or unknown `activeId` adds nothing —
+ * it is resolved against the live tab list, like everything else here.
+ */
+export function shownTabs(
+  order: readonly string[],
+  tabs: readonly WorkspaceTab[],
+  activeId: string | null,
+): ShownTab[] {
+  const shown: ShownTab[] = stripTabs(order, tabs).map((tab) => ({ tab, promoted: true }))
+  if (activeId === null || shown.some((entry) => entry.tab.id === activeId)) return shown
+  const active = tabs.find((tab) => tab.id === activeId)
+  return active ? [...shown, { tab: active, promoted: false }] : shown
+}
+
+/**
+ * What taking a tab off the strip does — to the arrangement, and to what the
+ * window is showing.
+ *
+ * `select` is deliberately three-valued. `undefined` means *do not touch the
+ * selection*, which is the answer for a tab you were not looking at; a string
+ * names the tab to show instead; and `null` means there is nothing left in the
+ * strip to show, which is a real state rather than an error — the session is
+ * still running and still listed in the side panel, and the window falls back
+ * to its empty view.
+ */
+export interface Removal {
+  order: string[]
+  select?: string | null
+}
+
+/**
+ * Take a tab off the strip. **Not** a close.
+ *
+ * Asad, on the ✕ that sits on a tab: *"it should not delete the session… side
+ * panel will have everything inside, and above we just set a view which one we
+ * want to see."* So the strip is a set of views onto things that are open, and
+ * the ✕ removes a view. Nothing here touches the session: the pty keeps
+ * running, the sidebar keeps its row, and the row's own ✕ — which does end it —
+ * is a different control in a different place with a different hover.
+ *
+ * ## Why the selection has to move as well
+ *
+ * Because {@link shownTabs} always draws the tab you are looking at, promoted
+ * or not. Demote the active tab and it comes straight back as a *transient*
+ * tab: the user presses ✕, the tab does not go away, and the strip looks
+ * broken. It is not broken — the invariant is deliberate, and it is the fix for
+ * the title bar naming a session with no tab — so the other half has to give:
+ * removing the tab you are in means the window shows something else.
+ *
+ * The neighbour rule is {@link nextActiveId}'s, over the *promoted* list rather
+ * than over every open window: falling to the right, then the left, then to
+ * nothing. Chosen from what is left in the strip rather than from `tabs`,
+ * because pulling some session you never promoted up into the bar to replace
+ * the one you just took out of it would be the strip putting a tab back the
+ * moment you removed one.
+ *
+ * A transient active tab — one that is in the strip only because you are in it
+ * — has no place in the order to be a neighbour of, so the first remaining
+ * promoted tab is the answer. That is also the case where the arrangement does
+ * not change at all and the selection is the entire effect of the press.
+ */
+export function removeFromStrip(
+  order: readonly string[],
+  tabs: readonly WorkspaceTab[],
+  id: string,
+  activeId: string | null,
+): Removal {
+  const next = demote(order, id)
+  if (id !== activeId) return { order: next }
+
+  const index = stripTabs(order, tabs).findIndex((tab) => tab.id === id)
+  const remaining = stripTabs(next, tabs)
+  const select =
+    index === -1
+      ? (remaining[0]?.id ?? null)
+      : (remaining[index]?.id ?? remaining[index - 1]?.id ?? remaining[0]?.id ?? null)
+  return { order: next, select }
+}
+
+/*
+ * `newcomer` used to live here and does not any more.
+ *
+ * It was the other half of the ＋ that sat on every tab: starting a session is
+ * asynchronous, so a click had to record the ids that existed at the time and
+ * recognise the arrival afterwards in order to place it *next to* the tab that
+ * was pressed. There is no ＋ on a tab now — Asad, 2026-08-17: *"pills of the
+ * windows will not show that plus button inside"* — so nothing opens a window
+ * at a chosen position any more, and a pure function with a test and no caller
+ * is exactly the kind of thing that reads as a feature and is not one.
+ *
+ * It is worth being clear about what it was *not*, because the name invites the
+ * guess: it was never what put a new window in the strip. Nothing was. Until
+ * {@link keepInStrip} below, no code path in this app promoted a window at the
+ * moment it was created — a new session appeared up here only because
+ * {@link shownTabs} always draws the tab you are looking at, which made it a
+ * *transient* tab: italic, and gone the moment you looked at something else.
+ */
+
+/**
+ * Keep a window that has just been opened, at the end of the bar.
+ *
+ * ## What was wrong
+ *
+ * Asad, 2026-08-17: *"if I open any new session and any new browser from the
+ * header, it should automatically open in the top bar, in the top header, come
+ * next to it in the top there. If I want to remove it from there and keep only
+ * side panel, I should have to do it myself specifically."*
+ *
+ * Before this, opening a session from the strip's terminal glyph put a tab on
+ * the bar that *looked* right and was not kept: {@link shownTabs} draws the
+ * active tab whether or not it is promoted, so the new window rode up as a
+ * transient tab and evaporated the first time the user clicked a different one.
+ * The two halves of his sentence are one requirement — a thing that arrives on
+ * its own and leaves on its own is not something you remove "specifically".
+ *
+ * ## Why it is not "promote whatever is active"
+ *
+ * That would have been one line in the component and it would have been the
+ * wrong feature. This file's opening comment is explicit that the strip holds
+ * what the user *chose*, and clicking a sidebar row to look at a session is not
+ * choosing to keep it on the bar — a strip that filled itself up as you browsed
+ * the rail is the automatic strip that was rejected in the first place.
+ * Creating a window is the deliberate act; this is called there and nowhere
+ * else.
+ *
+ * ## The two edges
+ *
+ * A window that is somehow already promoted stays exactly where it is rather
+ * than being moved to the end: re-anchoring a tab the user placed, in response
+ * to something that is not a drag, is the strip rearranging itself.
+ *
+ * At {@link MAX_PROMOTED} the bar refuses, like every other route in. The new
+ * window is still visible up there — transient, by `shownTabs` — so the press
+ * is not silent; it just does not evict a tab the user kept to make room, which
+ * is the same bargain {@link promote} already strikes for a drop.
+ */
+export function keepInStrip(order: readonly string[], id: string): string[] {
+  if (order.includes(id)) return [...order]
+  return promote(order, id, order.length)
+}
+
+/**
+ * The same thing, against the shared store, for a caller that is not a
+ * component.
+ *
+ * Every window in this app is opened from an event handler in `App.tsx` — a
+ * click on the strip's terminal or globe, the dialog's Start button, the rail's
+ * button, ⌘T — and none of those is a render, so none of them can read the
+ * order out of {@link usePromotedOrder}. They reach the same store the strip
+ * subscribes to, which is the entire reason that store exists; see
+ * {@link promotedStore}. Two lines, kept here beside the function they are
+ * built on rather than spread across four call sites in the largest file in the
+ * renderer.
+ */
+export function keepNewWindowInStrip(id: string, storage: Storage | null = defaultStorage()): void {
+  const store = promotedStore(storage)
+  store.set(keepInStrip(store.get(), id))
+}
+
+/**
+ * Whether the window has a tab strip at all.
+ *
+ * One predicate, read by both ends, because the answer decides two things that
+ * must not disagree: whether {@link shownTabs} has anything to draw, and — since
+ * the strip became the window's top band — whether the *session bar below it* is
+ * the top band instead. Getting those two out of step puts the macOS traffic
+ * lights on top of a session's title, or leaves an 82-pixel hole where they are
+ * not.
+ */
+export function stripIsPresent(tabs: readonly WorkspaceTab[]): boolean {
+  return tabs.length > 0
+}
+
+/**
+ * Drop the ids of tabs this window has watched close.
  *
  * Only worth calling when something is about to be written to storage — reading
- * goes through {@link stripTabs}, which ignores them anyway. Kept separate so a
- * transient absence (a tab list that has not loaded yet) cannot permanently
- * erase somebody's strip.
+ * goes through {@link stripTabs}, which ignores dead ids anyway. What this is
+ * for is keeping the stored arrangement from filling up with the ids of windows
+ * that are gone.
+ *
+ * ## The `seen` argument, and the bug it exists for
+ *
+ * Measured, not imagined. Promote five sessions, reload the renderer, and one
+ * of them is gone from the strip for good — reproduced four times out of four,
+ * with the write caught in the act: a single `setItem` during the load, holding
+ * four ids where storage had five, at a moment when the sidebar had not drawn a
+ * single row yet.
+ *
+ * The cause is that a reload does not restore the session list in one step. The
+ * renderer comes up empty, asks the main process which ptys are still running,
+ * and fills the list as the answers land — so for a few frames `tabs` is a
+ * *partial* view of what is open. Pruning against a partial list deletes the
+ * ids that have not arrived yet, and because the result is written straight
+ * through to storage, the deletion is permanent. The `tabs.length === 0` guard
+ * at the call site was written for exactly this hazard and only covers the
+ * empty case, which is the one frame of it that is easy to think of.
+ *
+ * So an id is forgotten only when this window has actually *seen* its tab alive
+ * and then seen it go. An id that has never appeared is left alone: it costs
+ * nothing to keep — {@link stripTabs} ignores it — and it is the only way to
+ * tell "closed" apart from "still on its way". That is safe against filling up
+ * with rubbish because the order does not survive an app restart at all; see
+ * {@link defaultStorage}.
+ *
+ * The default makes `seen` optional and means "everything in the order has been
+ * seen", which is the old behaviour and the right answer for a caller that
+ * genuinely knows the list is complete.
  */
-export function pruneOrder(order: readonly string[], tabs: readonly WorkspaceTab[]): string[] {
+export function pruneOrder(
+  order: readonly string[],
+  tabs: readonly WorkspaceTab[],
+  seen: ReadonlySet<string> = new Set(order),
+): string[] {
   const live = new Set(tabs.map((tab) => tab.id))
-  return order.filter((id) => live.has(id))
+  return order.filter((id) => live.has(id) || !seen.has(id))
 }
 
 /**
@@ -121,13 +361,14 @@ export function dropIndex(rects: ReadonlyArray<{ left: number; width: number }>,
 /* ------------------------------------------------------------- storage -- */
 
 /**
- * The strip, as it was left last time.
+ * The strip, as it was left before the last reload.
  *
- * Ids of sessions are not stable across a restart — a pty does not survive
- * quitting — so most of what is read back will be gone by the time
- * {@link stripTabs} looks for it, and that is fine: it costs nothing, and it is
- * what makes the strip survive the far more common case of a renderer reload
- * with everything still running.
+ * The thing worth surviving is a renderer reload — ⌘R, a recovered crash, a
+ * rebuild while the app is running — where every pty is still alive and every
+ * id still names something. An app restart is not: the ptys are gone and so are
+ * their ids. {@link defaultStorage} is what draws that line, and it draws it
+ * with the storage's own lifetime rather than with a rule this file would have
+ * to remember to apply.
  */
 export function readPromoted(storage: Storage | null): string[] {
   if (!storage) return []
@@ -219,7 +460,27 @@ export function createPromotedStore(storage: Storage | null): PromotedStore {
 }
 
 /**
- * `window.localStorage`, when this window has one.
+ * `window.sessionStorage`, when this window has one.
+ *
+ * ## Why session storage and not local
+ *
+ * Because it already has exactly the lifetime this arrangement wants, and
+ * `localStorage` had one that was too long by a whole class of problem.
+ *
+ * A promoted tab is identified by a session id, and a session is a pty in this
+ * main process. Quit the app and every one of those ids names nothing for ever
+ * — so an order kept in `localStorage` accumulates, run after run, twelve dead
+ * ids at a time, and {@link promote} counts them against its cap. Two runs of
+ * that and the cap is full of ghosts: the strip looks empty and refuses to
+ * accept anything, with no way for the user to see why. Nothing about the
+ * strip's behaviour after a restart changes by moving here, because
+ * {@link stripTabs} was already resolving those ids to nothing.
+ *
+ * What the arrangement genuinely has to survive is a **renderer reload** — ⌘R,
+ * a crash React recovered from, a rebuild during development — where the main
+ * process and every pty are still running and the ids are still good. Session
+ * storage survives exactly that and nothing more. Verified in the running app
+ * rather than taken from the specification: written, reloaded, read back.
  *
  * Reading the property can itself throw where storage is disabled by policy,
  * so this is a try/catch and not a `typeof` test alone — the same guard
@@ -227,7 +488,7 @@ export function createPromotedStore(storage: Storage | null): PromotedStore {
  */
 export function defaultStorage(): Storage | null {
   try {
-    return typeof window === 'undefined' ? null : window.localStorage
+    return typeof window === 'undefined' ? null : window.sessionStorage
   } catch {
     return null
   }
@@ -238,7 +499,7 @@ export function defaultStorage(): Storage | null {
  *
  * Keyed on the storage object rather than kept as a single global, so a test
  * that hands the strip its own `Storage` stand-in gets its own order and cannot
- * leak it into the next test. The real app passes `window.localStorage` every
+ * leak it into the next test. The real app passes `window.sessionStorage` every
  * time, which is one object, so the sidebar and the strip meet on one store.
  */
 const stores = new WeakMap<Storage, PromotedStore>()

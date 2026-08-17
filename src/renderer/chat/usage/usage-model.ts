@@ -1,14 +1,13 @@
 /**
  * Everything the usage strip needs to decide what to say, with no React in it.
  *
- * The arithmetic all happens in `src/main/cost.ts` — per-model rates, context
- * occupancy, the thresholds. This module only *reads* what came across the
+ * The arithmetic all happens in `src/main/cost.ts` — context occupancy, the
+ * thresholds, the token splits. This module only *reads* what came across the
  * bridge and picks the numbers for one strip: which session the chat view is
- * looking at, what the project spent today, and how to word an absence.
+ * looking at, what the project has moved today, and how to word an absence.
  *
- * Nothing here recomputes a total. Where main says a figure is a floor
- * (unpriced models) or priced from a retired rate, that caveat is carried
- * through rather than dropped.
+ * Nothing here recomputes a total, and nothing here is money. See "why this app
+ * shows no prices" at the bottom of `src/main/cost.ts`.
  */
 
 import type {
@@ -51,21 +50,19 @@ function readUsage(raw: unknown): TokenUsage {
   }
 }
 
-function readCost(raw: unknown): SessionSummary['cost'] {
-  const source = isRecord(raw) ? raw : {}
-  const cost = isRecord(source.cost) ? source.cost : {}
-  return {
-    cost: {
-      input: num(cost.input),
-      output: num(cost.output),
-      cacheWrite: num(cost.cacheWrite),
-      cacheRead: num(cost.cacheRead),
-      total: num(cost.total),
-    },
-    byModel: {},
-    unpricedModels: strings(source.unpricedModels),
-    usedLegacyRate: source.usedLegacyRate === true,
-  }
+/**
+ * The project's tokens keyed by model.
+ *
+ * Read defensively one model at a time rather than cast, for the same reason
+ * every other field here is: the payload crosses the bridge as `unknown`, and a
+ * `Record<string, TokenUsage>` whose values are actually `undefined` fails at
+ * the point of *use*, several components away from the line that trusted it.
+ */
+function readUsageByModel(raw: unknown): Record<string, TokenUsage> {
+  if (!isRecord(raw)) return {}
+  const out: Record<string, TokenUsage> = {}
+  for (const [model, usage] of Object.entries(raw)) out[model] = readUsage(usage)
+  return out
 }
 
 const LEVELS: ContextLevel[] = ['ok', 'warning', 'critical']
@@ -94,7 +91,6 @@ function readSession(raw: unknown): SessionSummary | null {
     models: strings(raw.models),
     requests: num(raw.requests),
     usage: readUsage(raw.usage),
-    cost: readCost(raw.cost),
     context: readContext(raw.context),
     warnings: warnings.filter(isRecord).map((warning) => ({
       kind: str(warning.kind) === 'pre-context' ? ('pre-context' as const) : ('context-window' as const),
@@ -118,7 +114,7 @@ export function readProjectSummary(raw: unknown): ProjectSummary | null {
     cwd: str(raw.cwd),
     sessions,
     usage: readUsage(raw.usage),
-    cost: readCost(raw.cost),
+    usageByModel: readUsageByModel(raw.usageByModel),
     requests: num(raw.requests),
     activeSessionId: typeof raw.activeSessionId === 'string' ? raw.activeSessionId : null,
     scanning: raw.scanning === true,
@@ -172,8 +168,8 @@ export interface SessionKey {
  * The chat view is addressed by transcript path when it has one and by project
  * folder otherwise, and the watcher sorts sessions by last activity — so the
  * newest is the live one. Matching on the path first matters when the user is
- * reading back an older session: the strip must describe *that* session's cost,
- * not the one currently running.
+ * reading back an older session: the strip must describe *that* session's
+ * numbers, not the one currently running.
  */
 export function pickSession(summary: ProjectSummary | null, key: SessionKey = {}): SessionSummary | null {
   if (!summary) return null
@@ -195,18 +191,18 @@ export function pickSession(summary: ProjectSummary | null, key: SessionKey = {}
   return sessions[0]
 }
 
-export interface TodaySpend {
-  total: number
+export interface TodayUsage {
+  /** Every token class summed across the sessions active today. */
+  tokens: number
   /** Sessions that were active today. */
   sessions: number
   /**
-   * How many of those began before today. Their whole spend is counted, because
-   * a `ProjectSummary` carries one total per session and no per-day split — so
-   * the figure is an upper bound whenever this is non-zero, and says so.
+   * How many of those began before today. Their whole token count is included,
+   * because a `ProjectSummary` carries one total per session and no per-day
+   * split — so the figure is an upper bound whenever this is non-zero, and the
+   * strip says so.
    */
   carriedOver: number
-  /** True when a session in the total contains tokens no rate card covers. */
-  hasUnpriced: boolean
 }
 
 export function startOfDay(now: number): number {
@@ -216,25 +212,24 @@ export function startOfDay(now: number): number {
 }
 
 /**
- * What this project spent today.
+ * What this project has moved today.
  *
- * Sums the sessions' already-priced money rather than re-pricing pooled tokens,
- * for the same reason `mergeAggregates` exists in `cost.ts`: each session is
- * priced against the moment its work ran, and re-pricing values yesterday's
- * work at today's rates.
+ * This used to be `spendToday`, summing each session's already-priced money.
+ * The money is gone — see the bottom of `src/main/cost.ts` — and the question
+ * the item answers is unchanged: how much work happened today, in the unit the
+ * transcript actually recorded.
  */
-export function spendToday(summary: ProjectSummary | null, now: number): TodaySpend {
-  const empty: TodaySpend = { total: 0, sessions: 0, carriedOver: 0, hasUnpriced: false }
+export function usageToday(summary: ProjectSummary | null, now: number): TodayUsage {
+  const empty: TodayUsage = { tokens: 0, sessions: 0, carriedOver: 0 }
   if (!summary) return empty
   const dayStart = startOfDay(now)
 
   return summary.sessions.reduce((acc, session) => {
     if (session.lastActivityAt < dayStart) return acc
     return {
-      total: acc.total + session.cost.cost.total,
+      tokens: acc.tokens + tokenTotals(session.usage).total,
       sessions: acc.sessions + 1,
       carriedOver: acc.carriedOver + (session.startedAt > 0 && session.startedAt < dayStart ? 1 : 0),
-      hasUnpriced: acc.hasUnpriced || session.cost.unpricedModels.length > 0,
     }
   }, empty)
 }
@@ -250,11 +245,11 @@ export interface TokenTotals {
 }
 
 /**
- * Split a session's tokens the way the bill is split.
+ * Split a session's tokens the way the API reports them.
  *
  * `input` is only the uncached remainder — on a warm session it reads as a
  * handful of tokens against a 900k prompt — so the cache columns are shown
- * beside it rather than folded in. They are most of the money.
+ * beside it rather than folded in. They are most of the traffic.
  */
 export function tokenTotals(usage: TokenUsage): TokenTotals {
   const cacheWrite = usage.cacheWrite5m + usage.cacheWrite1h
@@ -270,20 +265,6 @@ export function tokenTotals(usage: TokenUsage): TokenTotals {
 }
 
 /* ------------------------------------------------------------- formatting -- */
-
-/**
- * Mirrors `formatUsd` in `src/main/cost.ts` — same reason the types are
- * mirrored, and the reasoning for the shape is written out there: two decimal
- * places, because "$2.101" reads as a four-figure sum to anybody whose
- * thousands separator is a full stop. A spend too small to show says so in
- * words rather than rounding to `$0.00`.
- */
-export function formatUsd(usd: number): string {
-  const abs = Math.abs(usd)
-  if (abs === 0) return '$0.00'
-  if (abs < 0.005) return usd < 0 ? '-<$0.01' : '<$0.01'
-  return `$${usd.toFixed(2)}`
-}
 
 /**
  * One tier beyond `cost.ts`: a long session reads over a billion prompt tokens

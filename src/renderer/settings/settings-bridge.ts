@@ -16,6 +16,7 @@
  */
 
 import type { ProviderId } from '@shared/types'
+import { isProviderId } from '../preferences'
 import type { SettingValues } from './settings-schema'
 
 /* -------------------------------------------------------------- sections -- */
@@ -107,6 +108,15 @@ export interface ToolStatus {
   version?: string
   purpose: string
   remedy?: string
+  /**
+   * True even when nothing is wrong — a caveat, not a fix.
+   *
+   * Carried because of one case that is otherwise invisible: an agent that runs
+   * from somewhere other than the copy on your PATH. Saying nothing would be
+   * simpler and would also be what makes a person distrust the app later, when
+   * `codex` fails in their own terminal and works here.
+   */
+  note?: string
   url?: string
   required: boolean
 }
@@ -121,6 +131,17 @@ export interface Prerequisites {
 export interface ProfileSummary {
   id: string
   name: string
+  /**
+   * Which agent this is a login of, or null when the payload did not say.
+   *
+   * Carried because the label a list prints for the machine's own install names
+   * the agent — "Your own Codex CLI install" — and without this every system row
+   * in the "Run them as" picker would read "Your own install", which is three
+   * identical options for three different installs. Null rather than a guess:
+   * a snapshot from a build that predates accounts having providers genuinely
+   * does not know, and naming Claude there would put the wrong agent on a row.
+   */
+  provider: ProviderId | null
   configDir: string
   system: boolean
   /** A custom property name from tokens.css — the UI wraps it in `var()`. */
@@ -477,6 +498,7 @@ export function toPrerequisites(raw: unknown): Prerequisites | null {
         version: asOptionalString(tool.version),
         purpose: asString(tool.purpose),
         remedy: asOptionalString(tool.remedy),
+        note: asOptionalString(tool.note),
         url: asOptionalString(tool.url),
         required: asBoolean(tool.required),
       },
@@ -507,6 +529,11 @@ export function toProfiles(raw: unknown): ProfilesSnapshot | null {
       {
         id: profile.id,
         name: asString(profile.name, profile.id),
+        // Narrowed rather than cast: `profiles.json` is a file a person can
+        // edit, and an unrecognised string would reach the label as an agent
+        // this build has no name for. Null draws the generic sentence, which
+        // is the honest answer for both cases.
+        provider: isProviderId(profile.provider) ? profile.provider : null,
         configDir: asString(profile.configDir),
         system: asBoolean(profile.system),
         color: CUSTOM_PROPERTY.test(asString(profile.color)) ? (profile.color as string) : '--accent',

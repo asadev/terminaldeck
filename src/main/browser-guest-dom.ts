@@ -155,6 +155,45 @@ export const GUEST_DOM_HELPERS_SOURCE = `
     return out
   }
 
+  /**
+   * The text a person can actually read on this element.
+   *
+   * \`innerText\`, not \`textContent\`, and the difference is a bug he hit on
+   * camera. \`textContent\` concatenates every descendant — including ones the
+   * page has hidden — and puts no separator between them, so a wrapper around a
+   * collapsed country picker came back as one unbroken word: the whole list of
+   * countries, run together, as the element's "text". \`innerText\` is what is
+   * rendered: hidden subtrees are excluded and block boundaries become line
+   * breaks, which \`terminaldeckFlatten\` then turns into ordinary spaces.
+   *
+   * Form controls report no text at all. A \`<select>\`'s is the concatenation of
+   * its options, a \`<textarea>\`'s is whatever it was seeded with, and neither
+   * names the field — \`browser-steps.ts\` learned that from a real recording
+   * where the city picker came back called \`DubaiLahore\`. The naming attributes
+   * are still carried, so such an element is labelled by its aria-label or its
+   * placeholder instead, which is what a person would read off the screen.
+   *
+   * The size guard is not tidiness. \`innerText\` forces a layout pass and builds
+   * the whole rendered string before anything can be sliced, and clicking
+   * \`<body>\` while inspecting asks for exactly that on a page whose text may be
+   * megabytes. Past that size the cheap slice-then-collapse of \`textContent\`
+   * wins: the result is a worse label, on an element nobody meant to pick.
+   */
+  function terminaldeckVisibleText(el) {
+    var tag = typeof el.localName === 'string' ? el.localName : ''
+    if (tag === 'select' || tag === 'textarea' || tag === 'input' || tag === 'option') return ''
+    var raw = typeof el.textContent === 'string' ? el.textContent : ''
+    if (raw.length <= 20000) {
+      try {
+        if (typeof el.innerText === 'string' && el.innerText !== '') raw = el.innerText
+      } catch (err) {
+        // A detached or exotic node can throw here. The textContent above is
+        // already a true, if uglier, answer.
+      }
+    }
+    return terminaldeckFlatten(raw, TERMINALDECK_MAX_TEXT)
+  }
+
   function terminaldeckDescribeElement(el) {
     var path = []
     var node = el
@@ -167,7 +206,7 @@ export const GUEST_DOM_HELPERS_SOURCE = `
     return {
       v: 1,
       path: path,
-      text: terminaldeckFlatten(el.textContent, TERMINALDECK_MAX_TEXT),
+      text: terminaldeckVisibleText(el),
       attributes: terminaldeckAttributes(el)
     }
   }

@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { SettingsPanel } from '../SettingsWindow'
-import type { SectionId } from '../settings-schema'
+import { sectionsFor, type SectionId } from '../settings-schema'
 import type { SettingsBridge } from '../settings-bridge'
 
 /**
@@ -29,31 +29,39 @@ import type { SettingsBridge } from '../settings-bridge'
  * shared with sections other people own, and a budget enforced from here would
  * fail on somebody else's edit.
  *
- * Only the sections whose copy was actually rewritten, for the same reason.
- * General, Features, Power, Setup and Remote are owned elsewhere and are left
- * out on purpose rather than by oversight.
- *
  * Accounts joined the list when its copy was rewritten. It is the pane that
  * shows why the budget is not pedantry: it carried three headed blocks, one of
  * them ("Claude only, and why") a paragraph of mechanism that had also become
  * *untrue* — separate Codex logins work now — and the reason it survived that
  * long is that every clause in it was defensible on its own.
  *
+ * ## Every pane is budgeted now
+ *
+ * The list used to be partial, and the note here said so: General, Features,
+ * Power, Setup and Remote were "owned elsewhere and left out on purpose". That
+ * exemption is what let the panes nobody was measuring keep their walls of
+ * text, and it did not survive the walkthrough:
+ *
+ *   > "we don't have to give this big descriptions… let's give only one liner
+ *   > or two liner descriptions and one eye buttons next to them, but not more
+ *   > than one or two lines because it's being too big for them. I'm talking
+ *   > about all of the options and overall all of the sections, not only this
+ *   > one."
+ *
+ * So the list below is now derived from the rail rather than typed out: every
+ * pane the window can show is measured, and a new one is measured the day it is
+ * added. Agents is the interesting entry — it is three former panes rendered
+ * together, so it is the pane where the budget does the most work.
+ *
  * Static markup, like every other test in this window — there is no DOM here.
  */
 
-/** Sections whose standing prose this budget covers. */
-const BUDGETED: readonly SectionId[] = [
-  'appearance',
-  'notifications',
-  'agents',
-  'browser',
-  'linux',
-  'advanced',
-  'about',
-  'shortcuts',
-  'profiles',
-]
+/**
+ * Every pane in the rail, on the platform that has all of them.
+ *
+ * Derived, so nothing can be left out "on purpose" again.
+ */
+const BUDGETED: readonly SectionId[] = sectionsFor('windows').map((section) => section.id)
 
 /**
  * The longest a single standing paragraph may be.
@@ -89,7 +97,14 @@ function render(section: SectionId, bridge: SettingsBridge = {}): string {
   const host = globalThis as { deck?: unknown }
   const had = 'deck' in host
   const previous = host.deck
-  if (section === 'profiles') host.deck = { listProfiles: () => Promise.resolve({ profiles: [] }) }
+  // Accounts is drawn inside Agents and needs something on `globalThis.deck`
+  // before it will draw its copy at all: with no accounts bridge it renders a
+  // single warning and stops, so a budget measured against that would pass by
+  // measuring nothing — which is the shape of a guard that quietly stops
+  // guarding. This is the smallest object `accountsBridge()` accepts.
+  if (section === 'agents' || section === 'profiles') {
+    host.deck = { listProfiles: () => Promise.resolve({ profiles: [] }) }
+  }
   try {
     return renderToStaticMarkup(
       <SettingsPanel bridge={bridge} platform="windows" initialSection={section} />,
@@ -189,17 +204,42 @@ describe('what the cut was not allowed to take with it', () => {
   })
 
   /**
-   * An account is two logins, and only one agent honours the choice. The old
-   * wording explained the config-directory trick that makes it work; what a
-   * person needs is which agents it applies to.
+   * An account is two logins, and only one agent honours the *default*. The
+   * original wording explained the config-directory trick that makes it work;
+   * what a person needs is which agents it applies to — and after the regroup
+   * that answer sits on the row it is about, behind its ⓘ, rather than in a
+   * headed paragraph three groups further down.
    */
-  it('still says which agents an account applies to, without naming a config directory', () => {
+  it('still says which agents the default account applies to, without naming a config directory', () => {
     const html = render('agents', {
       listProfiles: async () => ({ profiles: [{ id: 'system', name: 'Your install', system: true }], defaultProfileId: 'system' }),
     })
     expect(html).toContain('Claude Code only')
-    expect(html).toContain('Other agents ignore this and use their own login')
+    expect(html).toContain('Other agents ignore this')
     expect(html).not.toContain('config directory')
+  })
+
+  /**
+   * The three panes that merged each kept the block that was theirs.
+   *
+   * This is the assertion the whole regroup turns on — *"when you reorganize
+   * you mostly miss the things and you drop some stuff"* — checked from the
+   * outside, on the rendered pane, rather than by reading the diff.
+   */
+  it('draws all three former panes on the one Agents page', () => {
+    const html = render('agents', {
+      checkPrerequisites: async () => ({ tools: [] }),
+      setupStatus: async () => null,
+      listProfiles: async () => ({ profiles: [], defaultProfileId: null }),
+    })
+    // Agents' own two questions.
+    expect(html).toContain('Default coding tool')
+    expect(html).toContain('What is installed')
+    // Accounts — its own heading, and the group that adds one.
+    expect(html).toContain('>Accounts<')
+    expect(html).toContain('Sign in to another account')
+    // Setup.
+    expect(html).toContain('Other coding tools')
   })
 
   /**

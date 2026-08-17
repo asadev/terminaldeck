@@ -96,6 +96,7 @@ function state(overrides: Partial<ProfilesState> = {}): ProfilesState {
     profiles: [profile('work'), profile('personal')],
     defaultProfileId: null,
     projectDefaults: {},
+    systemNames: {},
     ...overrides,
   }
 }
@@ -439,13 +440,60 @@ describe('crud', () => {
    * `system:codex` and the screen built from this list has no account by that
    * id to name — an account chip with nothing in it. And two rows both called
    * "Default" would defeat the one thing this list exists to do.
+   *
+   * **Gemini is in this list**, and that is the pin that would catch the bug
+   * being fixed rather than a restatement of the ones already fixed. Gemini
+   * cannot hold a *second* login, and while that was the only question anyone
+   * asked, it was left out of the list entirely — so the Accounts screen had no
+   * Gemini row and the machine's one Gemini login could not be signed in from
+   * this app: *"I want to bring only one login for Gemini… but here currently I
+   * cannot even bring one login."* Deleting the row is what regresses that, so
+   * the row is what is asserted.
    */
   it('lists every agent’s own install first, under distinguishable names', () => {
     createProfile('Work')
     const listed = listProfiles()
     expect(listed[0].system).toBe(true)
-    expect(listed.map((p) => p.name)).toEqual(['Default', 'Default (Codex CLI)', 'Work'])
-    expect(listed.map((p) => p.provider)).toEqual(['claude', 'codex', 'claude'])
+    expect(listed.map((p) => p.name)).toEqual([
+      'Default',
+      'Default (Codex CLI)',
+      'Default (Gemini CLI)',
+      'Work',
+    ])
+    expect(listed.map((p) => p.provider)).toEqual(['claude', 'codex', 'gemini', 'claude'])
+  })
+
+  /**
+   * One Gemini login is offered; a second is not.
+   *
+   * The two halves are separate predicates now — `hasSignIn` lists the row,
+   * `supportsAccounts` decides whether Add is offered — and collapsing them back
+   * into one boolean breaks whichever half it is collapsed towards. Both
+   * directions are asserted here so neither can be lost quietly.
+   */
+  it('gives Gemini exactly one account and refuses a second', () => {
+    expect(listProfilesForProvider('gemini').map((p) => p.name)).toEqual([
+      'Default (Gemini CLI)',
+    ])
+    expect(listProfilesForProvider('gemini')[0]?.system).toBe(true)
+    expect(() => createProfile('Second', { provider: 'gemini' })).toThrow(/keychain/)
+  })
+
+  /**
+   * `system:gemini` resolves to something.
+   *
+   * It did not while system ids were matched against the multi-login list, and a
+   * resolution that answers an id no lookup can find is how a session ends up
+   * running as an account the screen cannot name.
+   */
+  it('resolves Gemini’s own install by id', () => {
+    const resolved = resolveProfile(getState(), { provider: 'gemini' })
+    expect(resolved.id).toBe('system:gemini')
+    expect(resolved.provider).toBe('gemini')
+    // Still no environment override: the system profile is the machine's own
+    // login, and `GEMINI_CLI_HOME=$HOME` would move Gemini's home rather than
+    // leave it where the CLI already put it.
+    expect(sessionEnv(resolved, 'gemini')).toEqual({})
   })
 
   it('scopes an account to one agent, and lists only that agent’s', () => {
@@ -512,7 +560,84 @@ describe('crud', () => {
     createProfile('Personal')
     expect(renameProfile(created.id, 'Day Job').name).toBe('Day Job')
     expect(() => renameProfile(created.id, 'Personal')).toThrow(/already exists/)
-    expect(() => renameProfile(SYSTEM_PROFILE_ID, 'Nope')).toThrow(/cannot be renamed/)
+  })
+
+  /**
+   * The rename that used to be refused outright.
+   *
+   * Asad, walking the app: *"And account name also above there — if we want to
+   * change the account name we can change."* On a machine where nobody has
+   * added a second login, **every** account is an agent's own install — so a
+   * blanket refusal of system ids meant the Rename button in the account chip
+   * was drawn on every row and worked on none of them, failing as a rejected
+   * IPC invoke.
+   *
+   * What the old refusal was really protecting is untouched: the id and the
+   * config directory are still generated from the agent list, and nothing here
+   * can reach them. Only the display name is stored.
+   */
+  it('renames an agent’s own install, without moving anything it points at', () => {
+    const before = findProfile(getState(), SYSTEM_PROFILE_ID)
+    expect(renameProfile(SYSTEM_PROFILE_ID, '  Personal Claude  ').name).toBe('Personal Claude')
+
+    const after = findProfile(getState(), SYSTEM_PROFILE_ID)
+    expect(after?.name).toBe('Personal Claude')
+    expect(after?.id).toBe(before?.id)
+    expect(after?.configDir).toBe(before?.configDir)
+    expect(after?.system).toBe(true)
+    // And the list every screen reads shows the same thing, not just `findProfile`.
+    expect(listProfiles().find((p) => p.id === SYSTEM_PROFILE_ID)?.name).toBe('Personal Claude')
+  })
+
+  it('survives a restart, because the name is in the file and not in memory', () => {
+    renameProfile(SYSTEM_PROFILE_ID, 'Personal Claude')
+    resetProfilesCache()
+    expect(findProfile(getState(), SYSTEM_PROFILE_ID)?.name).toBe('Personal Claude')
+  })
+
+  it('treats the generated name as a reset rather than an override', () => {
+    // Storing "Default" would leave a row in `profiles.json` that changes
+    // nothing and goes stale the day the agent's label changes.
+    renameProfile(SYSTEM_PROFILE_ID, 'Personal Claude')
+    expect(renameProfile(SYSTEM_PROFILE_ID, 'Default').name).toBe('Default')
+    expect(getState().systemNames[SYSTEM_PROFILE_ID]).toBeUndefined()
+  })
+
+  it('will not let an install take the name of an account of the same agent', () => {
+    // The collision the UI has to be able to report: same rule as `createProfile`,
+    // scoped to one agent, in both directions.
+    createProfile('Work')
+    expect(() => renameProfile(SYSTEM_PROFILE_ID, 'Work')).toThrow(/already exists/)
+    renameProfile(SYSTEM_PROFILE_ID, 'Personal Claude')
+    expect(() => renameProfile(createProfile('Spare').id, 'personal claude')).toThrow(
+      /already exists/,
+    )
+  })
+
+  it('keeps a hand-edited name out of the list when it is not one', () => {
+    /*
+     * `profiles.json` is a file a person can edit, and this map is the one part
+     * of it drawn as an *identity* — so a name with a right-to-left override in
+     * it would render in the chip as an address it is not. Everything here goes
+     * through the same normaliser a typed name does, and a key that names no
+     * system profile is dropped rather than repaired.
+     */
+    writeFileSync(
+      join(USER_DATA, 'profiles.json'),
+      JSON.stringify({
+        version: 1,
+        profiles: [],
+        systemNames: { system: '  Work‮gro.exe  ', 'not-a-system-id': 'Nope', 'system:codex': '' },
+      }),
+      'utf8',
+    )
+    resetProfilesCache()
+    const state = getState()
+    expect(state.systemNames.system).toBe('Work gro.exe')
+    expect(state.systemNames['not-a-system-id']).toBeUndefined()
+    // Blank is not a name; that row falls back to the one it is generated with.
+    expect(state.systemNames['system:codex']).toBeUndefined()
+    expect(findProfile(state, 'system:codex')?.name).toBe('Default (Codex CLI)')
   })
 
   it('keeps the id stable across a rename so project defaults still point at it', () => {

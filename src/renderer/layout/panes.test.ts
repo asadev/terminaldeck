@@ -3,15 +3,15 @@ import {
   closePane,
   createLayout,
   emptyLayout,
-  focusedSessionId,
+  focusedTabId,
   listPanes,
-  sessionIds,
+  tabIds,
   type PaneLayout,
 } from './pane-tree'
 import {
   closePaneOrCollapse,
   isSplit,
-  pruneClosedSessions,
+  pruneClosedPanes,
   seedSplit,
   showInFocusedPane,
   splitFocused,
@@ -30,7 +30,7 @@ import {
 
 const session = (id: string) => ({ id })
 const ids = (layout: PaneLayout): Array<string | null> =>
-  listPanes(layout).map((pane) => pane.sessionId)
+  listPanes(layout).map((pane) => pane.tabId)
 
 describe('isSplit', () => {
   it('is false for a layout with no root', () => {
@@ -51,7 +51,7 @@ describe('seedSplit', () => {
   it('leaves the keyboard where it was', () => {
     // Pressing Split must not send the next keystroke to the other agent.
     const layout = seedSplit([session('a'), session('b')], 'a')
-    expect(focusedSessionId(layout)).toBe('a')
+    expect(focusedTabId(layout)).toBe('a')
   })
 
   it('falls back to the first session when nothing is focused', () => {
@@ -128,50 +128,50 @@ describe('closePaneOrCollapse', () => {
   })
 })
 
-describe('pruneClosedSessions', () => {
+describe('pruneClosedPanes', () => {
   it('drops a pane whose session has gone', () => {
     const three = splitFocused(seedSplit([session('a'), session('b')], 'a'))
-    expect(sessionIds(three).sort()).toEqual(['a', 'b'])
-    const pruned = pruneClosedSessions(three, [session('a')])
-    expect(sessionIds(pruned)).toEqual(['a'])
+    expect(tabIds(three).sort()).toEqual(['a', 'b'])
+    const pruned = pruneClosedPanes(three, [session('a')])
+    expect(tabIds(pruned)).toEqual(['a'])
   })
 
   it('collapses rather than leaving one pane behind', () => {
     const seeded = seedSplit([session('a'), session('b')], 'a')
-    expect(isSplit(pruneClosedSessions(seeded, [session('a')]))).toBe(false)
+    expect(isSplit(pruneClosedPanes(seeded, [session('a')]))).toBe(false)
   })
 
   it('keeps panes nobody has filled yet', () => {
     // An empty pane is something the user made on purpose; only a pane naming a
     // session that no longer exists is stale.
     const seeded = seedSplit([session('only')], 'only')
-    const pruned = pruneClosedSessions(seeded, [session('only')])
+    const pruned = pruneClosedPanes(seeded, [session('only')])
     expect(ids(pruned)).toEqual(['only', null])
   })
 
   it('never leaves the focused pane pointing at a dead session', () => {
     /*
-     * The bug this exists for: `focusedSessionId` is what the toolbar, the
+     * The bug this exists for: `focusedTabId` is what the toolbar, the
      * inspector and the composer all read, so a pane still naming a closed
      * session means every one of them acts on a session the store has already
      * forgotten.
      */
     const three = splitFocused(seedSplit([session('a'), session('b')], 'a'))
-    const pruned = pruneClosedSessions(three, [session('b')])
-    const focused = focusedSessionId(pruned)
+    const pruned = pruneClosedPanes(three, [session('b')])
+    const focused = focusedTabId(pruned)
     expect(focused === null || focused === 'b').toBe(true)
-    expect(sessionIds(pruned)).not.toContain('a')
+    expect(tabIds(pruned)).not.toContain('a')
   })
 
   it('hands back the same layout when nothing has gone', () => {
     const seeded = seedSplit([session('a'), session('b')], 'a')
-    expect(pruneClosedSessions(seeded, [session('a'), session('b')])).toBe(seeded)
+    expect(pruneClosedPanes(seeded, [session('a'), session('b')])).toBe(seeded)
   })
 
   it('survives every session disappearing at once', () => {
     // Closing a whole project takes several sessions in one go.
     const seeded = seedSplit([session('a'), session('b')], 'a')
-    expect(isSplit(pruneClosedSessions(seeded, []))).toBe(false)
+    expect(isSplit(pruneClosedPanes(seeded, []))).toBe(false)
   })
 })
 
@@ -196,7 +196,7 @@ describe('the sidebar and the layout tell the same story', () => {
   it('closing by hand and pruning end in the same place', () => {
     const seeded = seedSplit([session('a'), session('b')], 'a')
     const byHand = closePaneOrCollapse(seeded, listPanes(seeded)[0].id)
-    const byPrune = pruneClosedSessions(seeded, [session('b')])
+    const byPrune = pruneClosedPanes(seeded, [session('b')])
     expect(isSplit(byHand)).toBe(isSplit(byPrune))
   })
 
@@ -207,5 +207,65 @@ describe('the sidebar and the layout tell the same story', () => {
     const paneId = listPanes(seeded)[0].id
     expect(listPanes(closePane(seeded, paneId))).toHaveLength(1)
     expect(listPanes(closePaneOrCollapse(seeded, paneId))).toHaveLength(0)
+  })
+})
+
+/* ------------------------------------------------- and a pane holds a page -- */
+
+/**
+ * A pane may hold a browser page, and the prune must not take it away.
+ *
+ * This is the defect this seam was rewritten for, and it is worth stating
+ * exactly because the symptom and the cause were three files apart. With the
+ * window split, opening a page put its id into the focused pane; the very next
+ * render called this module's prune with the *session* list; the page's id was
+ * not in it; the pane was declared dead and the whole hand-made split collapsed
+ * back to one window. Reproduced live, backed out, and pinned as "never call
+ * `setPanes` from `newBrowserTab`" — which pinned the workaround rather than the
+ * fix.
+ *
+ * The fix is that the authority is the open-window list. A page id is spelled
+ * `browser:<millis>` by `App.tsx`; nothing here parses it, and that is the
+ * point — these tests use that spelling only so a reader can see which of the
+ * two kinds is which.
+ */
+describe('a pane can hold a page, not only a session', () => {
+  const page = (id: string) => ({ id })
+
+  it('keeps a pane whose page is still open', () => {
+    const split = seedSplit([session('a'), page('browser:1')], 'a')
+    expect(ids(split)).toEqual(['a', 'browser:1'])
+    // The render right after the click, with the same two things still open.
+    expect(pruneClosedPanes(split, [session('a'), page('browser:1')])).toBe(split)
+  })
+
+  it('collapsed the split when the page was missing from the list — the bug', () => {
+    /*
+     * Kept as a test rather than deleted, because it is the *mechanism*: hand
+     * this function a list that is narrower than what is open and it will
+     * cheerfully dismantle the layout. The guard is at the call site, which
+     * must pass `tabs` and never `sessions`.
+     */
+    const split = seedSplit([session('a'), page('browser:1')], 'a')
+    expect(isSplit(pruneClosedPanes(split, [session('a')]))).toBe(false)
+  })
+
+  it('drops a page pane once the page is genuinely closed', () => {
+    const three = splitFocused(seedSplit([session('a'), page('browser:1')], 'a'))
+    const pruned = pruneClosedPanes(three, [session('a'), page('browser:1')])
+    expect(tabIds(pruned).sort()).toEqual(['a', 'browser:1'])
+    // Now the page's tab is closed for real, and the pane goes with it.
+    expect(tabIds(pruneClosedPanes(three, [session('a')]))).toEqual(['a'])
+  })
+
+  it('opens a split on the page you were reading, not on some session', () => {
+    // Seeded from the session list, the page in front of you simply vanished.
+    const split = seedSplit([page('browser:1'), session('a')], 'browser:1')
+    expect(ids(split)).toEqual(['browser:1', 'a'])
+  })
+
+  it('lets a click put a page into the pane you are looking at', () => {
+    const split = seedSplit([session('a'), session('b')], 'a')
+    expect(ids(showInFocusedPane(split, 'browser:1'))).toEqual(['browser:1', 'b'])
   })
 })

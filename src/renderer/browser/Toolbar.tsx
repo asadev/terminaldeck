@@ -26,6 +26,16 @@ interface Props {
   onDevtools(): void
   devtoolsOpen: boolean
   recording: boolean
+  /**
+   * Mark the page up and send the picture to a session.
+   *
+   * Absent when the preload has not wired draw mode's two channels — the button
+   * then explains itself rather than vanishing, the same bargain
+   * `IsolationToggle` makes. See `draw-bridge.ts` for why those two methods are
+   * allowed to be missing at all.
+   */
+  onDraw?: () => void
+  drawing: boolean
   deviceOpen: boolean
   onToggleDevice(): void
   onOpenSession(): void
@@ -69,6 +79,8 @@ export function Toolbar({
   onDevtools,
   devtoolsOpen,
   recording,
+  onDraw,
+  drawing,
   deviceOpen,
   onToggleDevice,
   onOpenSession,
@@ -174,10 +186,23 @@ export function Toolbar({
         )}
       </form>
 
+      {/*
+        Six icons and not one word, was how this read on camera. Every button
+        here now carries its name beside its glyph, the way `IsolationToggle`
+        already did and the way Vibeyard labels all of its — because there is no
+        icon anybody reads correctly for "record a flow", and a row of six
+        unlabelled glyphs is a quiz.
+
+        `word` is the label on screen; `label` stays the longer sentence, and it
+        is still the accessible name and the tooltip. They are separate on
+        purpose: "Inspect" is enough to click, "Inspect an element in the page"
+        is what you want when you have hovered because you are not sure.
+      */}
       <div className="bw-actions">
         <IsolationToggle tab={tab} onToggle={onToggleIsolation} />
         <IconButton
-          label="Inspect an element"
+          label="Inspect an element in the page"
+          word="Inspect"
           pressed={tab?.inspecting === true}
           disabled={!has}
           onClick={onInspect}
@@ -185,7 +210,8 @@ export function Toolbar({
           <path d="M5 3l6.5 17 2.4-6.9 7-2.4z" />
         </IconButton>
         <IconButton
-          label={recording ? 'Stop recording the flow' : 'Record a flow'}
+          label={recording ? 'Stop recording the flow' : 'Record what you do on this page'}
+          word={recording ? 'Stop' : 'Record'}
           pressed={recording}
           disabled={!has}
           onClick={onRecord}
@@ -193,12 +219,39 @@ export function Toolbar({
         >
           {recording ? <rect x="7" y="7" width="10" height="10" rx="1.5" /> : <circle cx="12" cy="12" r="6" />}
         </IconButton>
-        <IconButton label="Screenshot the page" disabled={!has} onClick={onScreenshot}>
+        <IconButton
+          label="Screenshot the page"
+          word="Shot"
+          disabled={!has}
+          onClick={onScreenshot}
+        >
           <path d="M4 8h3l1.5-2h7L17 8h3v11H4z" />
           <circle cx="12" cy="13" r="3.2" />
         </IconButton>
+        {/*
+          Beside Shot, because that is what it is: a screenshot you drew on
+          first, saved next to the plain ones and sent through the same popup.
+          A marker nib rather than a pencil — a pencil is what an app uses for
+          "edit this text", and half this toolbar is already about editing
+          nothing.
+        */}
         <IconButton
-          label="Responsive sizes"
+          label={
+            onDraw
+              ? 'Mark the page up and send it to a session'
+              : 'Marking up the page is not available in this build.'
+          }
+          word="Draw"
+          pressed={drawing}
+          disabled={!has || !onDraw}
+          onClick={() => onDraw?.()}
+        >
+          <path d="M4 20h4l10-10-4-4L4 16z" />
+          <path d="M13.5 6.5l4 4" />
+        </IconButton>
+        <IconButton
+          label="Show the page at a phone or tablet size"
+          word="Size"
           pressed={deviceOpen}
           disabled={!has}
           onClick={onToggleDevice}
@@ -207,14 +260,15 @@ export function Toolbar({
           <path d="M11 18.5h2" />
         </IconButton>
         <IconButton
-          label="Open devtools for the page"
+          label="Open Chrome devtools for the page"
+          word="Devtools"
           pressed={devtoolsOpen}
           disabled={!has}
           onClick={onDevtools}
         >
           <path d="M9 8l-4 4 4 4M15 8l4 4-4 4" />
         </IconButton>
-        <IconButton label="Cookies and site data" onClick={onOpenSession}>
+        <IconButton label="Cookies and site data" word="Cookies" onClick={onOpenSession}>
           <circle cx="12" cy="12" r="8" />
           <path d="M9.5 10h.01M14 9h.01M13 14.5h.01M9.5 14h.01" />
         </IconButton>
@@ -311,7 +365,17 @@ function Glyph({ children }: { children: ReactNode }) {
 }
 
 interface IconButtonProps {
+  /** The full sentence: the accessible name and the tooltip. */
   label: string
+  /**
+   * The one or two words printed beside the glyph.
+   *
+   * Absent leaves an icon-only button, which is right for the four navigation
+   * controls — Back, Forward, Reload, Home are the four glyphs every browser
+   * has used for thirty years, and labelling those would be noise. Everything
+   * on the right-hand group says what it is.
+   */
+  word?: string
   onClick(): void
   disabled?: boolean
   pressed?: boolean
@@ -319,7 +383,7 @@ interface IconButtonProps {
   children: ReactNode
 }
 
-function IconButton({ label, onClick, disabled, pressed, tone, children }: IconButtonProps) {
+function IconButton({ label, word, onClick, disabled, pressed, tone, children }: IconButtonProps) {
   return (
     <button
       type="button"
@@ -329,12 +393,14 @@ function IconButton({ label, onClick, disabled, pressed, tone, children }: IconB
       aria-pressed={pressed}
       data-on={pressed || undefined}
       data-tone={tone}
+      data-labelled={word ? '' : undefined}
       disabled={disabled}
       onClick={onClick}
     >
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
         {children}
       </svg>
+      {word && <span className="bw-icon-word">{word}</span>}
     </button>
   )
 }

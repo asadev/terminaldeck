@@ -63,6 +63,32 @@ const read = (name: string): string => lf(readFileSync(join(HERE, name), 'utf8')
 const SHELL = read('shell.css')
 const MODE_SWITCH = read('ModeSwitch.css')
 const TOOLBAR_TSX = read('WindowToolbar.tsx')
+/**
+ * The tab strip's sheet, read from the folder next door.
+ *
+ * It is in `browser/` for a reason recorded at the top of `WorkspaceTabStrip.tsx`
+ * — six agents were editing one tree and `shell/` belonged to somebody else —
+ * and nothing about it is browser-specific. Since 2026-08-17 it is the window's
+ * *top band*: it holds the macOS traffic lights when the rail is away, it is
+ * what you drag the window by, and while a browser page fills the pane it is the
+ * only chrome on screen. Every claim below that this file was written to guard
+ * therefore applies to it, and it is swept here rather than in a second copy of
+ * this machinery.
+ */
+const STRIP = lf(readFileSync(join(HERE, '..', 'browser', 'WorkspaceTabStrip.css'), 'utf8'))
+const STRIP_TSX = lf(readFileSync(join(HERE, '..', 'browser', 'WorkspaceTabStrip.tsx'), 'utf8'))
+/**
+ * The browser panel's sheet, read here for one reason only.
+ *
+ * "The selected tab and the thing under it are one surface" is a claim about
+ * three sheets, not one — the strip fills the tab, `shell.css` fills the session
+ * bar, and this fills the panel that takes the session bar's place when the tab
+ * holds a page instead of a terminal. Split across three test files the claim
+ * would be three unrelated assertions about three greys, and the seam it exists
+ * to catch is precisely the one that appears when one of them moves. So it is
+ * checked in one place, beside the shape it belongs to.
+ */
+const BROWSER = lf(readFileSync(join(HERE, '..', 'browser', 'BrowserWorkspace.css'), 'utf8'))
 
 /**
  * Source with comment bodies removed.
@@ -135,6 +161,13 @@ const NO_DRAG = [
   [SHELL, '.toolbar-btn'],
   // And the control that sits directly beside the OS's close button.
   [MODE_SWITCH, '.mode-switch'],
+  // The strip's own: a tab, the face you press to switch to it, and the copy
+  // of the reveal button this bar draws while it is the top band. A press on
+  // any of them that moved the window instead would be indistinguishable in a
+  // screenshot from one that worked.
+  [STRIP, '.strip-tab'],
+  [STRIP, '.strip-tab-face'],
+  [STRIP, '.strip-reveal'],
 ] as const
 
 /**
@@ -230,6 +263,260 @@ describe('the bar moves the window, and every control on it does not', () => {
       .filter((classes) => !classes.some((name) => appRegion(SHELL, `.${name}`) === 'no-drag'))
       .map((classes) => classes.join(' '))
     expect(dragging, 'these toolbar buttons are inside the drag region').toEqual([])
+  })
+})
+
+describe('the tab strip is the top band, with everything that implies', () => {
+  /*
+   * All three of a top band's jobs, and none of them is visible in a
+   * screenshot of a broken one.
+   *
+   * The strip moved above the session's bar because he asked for it — "this
+   * tabs should be upside, and this session and all this whole bar including
+   * chat, split, terminal should be under this" — and the bar underneath is not
+   * rendered at all while a browser page fills the pane. So in that state this
+   * is the only chrome in the window: if it does not drag, the window cannot be
+   * moved; if it does not reserve the lights their room, the first tab sits
+   * under the close button; and if it does not draw the reveal control, a
+   * pinned-away sidebar cannot be brought back at all.
+   */
+  it('makes the whole strip a drag region', () => {
+    expect(appRegion(STRIP, '.strip')).toBe('drag')
+  })
+
+  it('has a no-drag rule for every class the strip puts on a button', () => {
+    /*
+     * The same mechanical sweep the toolbar gets, over the other sheet. The two
+     * ways to break it are to add a button with a new class and to move an
+     * existing one out of a rule that opts out.
+     *
+     * `optsOut` rather than `appRegion` because three of these controls share
+     * one rule, and `ruleBody` anchors on an exact selector — it would answer
+     * `undefined` for each of the three and the sweep would fail on a sheet that
+     * is correct. Splitting the selector list is the honest reading, and it is
+     * also what makes a *grouped* rule that quietly loses its declaration fail
+     * here rather than on somebody's Windows machine.
+     */
+    const optsOut = (className: string): boolean =>
+      topLevelRules(STRIP).some(
+        ([selector, body]) =>
+          /-webkit-app-region:\s*no-drag/.test(body) &&
+          selector.split(',').some((one) => one.trim() === `.${className}`),
+      )
+
+    const classes = new Set(
+      [...STRIP_TSX.matchAll(/<button[\s\S]*?className="([^"]+)"/g)].flatMap((match) =>
+        match[1].split(/\s+/),
+      ),
+    )
+    expect(
+      classes.size,
+      'no buttons found in WorkspaceTabStrip.tsx — has it changed shape?',
+    ).toBeGreaterThan(0)
+    /*
+     * The ＋ menu's own rows are exempt, and that is a fact about where they are
+     * painted rather than a convenience. Every floating surface in this
+     * renderer is portalled into `<body>` — see `chip-menu.ts` — so a menu row
+     * is not a descendant of the bar at all and no drag rectangle covers it.
+     * They also wear `shell.css`'s shared `.folder-menu-*` classes, which the
+     * account chip's menu wears too, so a rule for them in this sheet would be
+     * a second owner for somebody else's styling.
+     *
+     * Written as one named prefix rather than "skip anything this sheet does not
+     * style", which would exempt every new button that arrived without CSS —
+     * exactly the mistake this sweep exists to catch.
+     */
+    const dragging = [...classes].filter(
+      (name) => !name.startsWith('folder-menu') && !optsOut(name),
+    )
+    expect(dragging, 'these strip buttons are inside the drag region').toEqual([])
+    // And the sweep can see the sheet at all: a parser that matched nothing
+    // would report no offenders and pass green, which is what CRLF once did to
+    // the block above.
+    expect(optsOut('strip-tab-face')).toBe(true)
+    expect(optsOut('nothing-of-the-sort')).toBe(false)
+  })
+
+  it('reserves the traffic lights their room, and says so for Windows too', () => {
+    // 118px is 82 for the lights plus the reveal button and its gap — the same
+    // arithmetic the toolbar uses, because it is the same button in the same
+    // place, drawn by whichever bar happens to be first.
+    expect(requireRule(STRIP, '.strip[data-sidebar-collapsed]')).toContain('padding-left: 118px')
+    expect(STRIP).toContain(':root[data-window-controls] .strip[data-sidebar-collapsed] {')
+    expect(lightsReserveOffenders(STRIP)).toEqual([])
+    // Not vacuous: the sweep is looking at a sheet it can actually parse.
+    expect(topLevelRules(STRIP).length).toBeGreaterThan(0)
+  })
+
+  it('holds room for the Windows caption buttons on its right', () => {
+    // Drawn over the page in the top-right of whatever bar is first, so with
+    // the strip on top they land on the last tab rather than on the mode switch.
+    expect(requireRule(STRIP, '.strip')).toContain('var(--window-controls-inset, 0px)')
+  })
+
+  it('lines up with the rail’s gutter, so the one hairline crosses the window', () => {
+    /*
+     * The failure recorded on `.sidebar-gutter`: two bars of different heights
+     * put the window's single rule across the content and then stopped it dead
+     * in mid-air at the rail's edge, which reads as a clipping bug rather than
+     * as an edge. Whichever bar is beside the gutter has to be its height and
+     * carry its line.
+     */
+    const strip = requireRule(STRIP, '.strip')
+    expect(strip).toContain('height: var(--toolbar-h)')
+    expect(strip).toContain('inset 0 -1px 0 var(--border-subtle)')
+    expect(requireRule(SHELL, '.sidebar-gutter')).toContain('height: var(--toolbar-h)')
+  })
+
+  it('takes the hairline off the bar underneath, rather than drawing a second one', () => {
+    // Two rules 48px apart read as two stacked applications — the exact fault
+    // `PLAN-0.2.0.md` opens with about the Windows chrome.
+    const under = requireRule(SHELL, '.toolbar[data-under-strip]')
+    expect(under).toContain('box-shadow: none')
+    expect(under).toContain('backdrop-filter: none')
+  })
+
+  it('draws the selected tab as one surface with the pane under it', () => {
+    /*
+     * The Chrome shape, checked as the three claims that make it one rather
+     * than as "it has a radius".
+     *
+     * Asad sent a screenshot of Chrome's tab bar as the reference, and what is
+     * in that picture is a selected tab whose bottom edge does not exist: the
+     * tab is the page's colour, it reaches the bar's own hairline and paints
+     * over it, and two flares at its feet carry that surface out across the
+     * gap. Any one of the three on its own is a rounded rectangle floating on a
+     * bar, which is exactly what this replaced.
+     *
+     * Checked here rather than by looking, because all three are invisible in a
+     * screenshot the moment one of them is subtly wrong — a tab one pixel short
+     * of the bottom, or a flare in an approximation of the bar's colour rather
+     * than the page's, reads as "nearly right" and is the whole defect.
+     */
+    const tab = requireRule(STRIP, '.strip-tab')
+    // Top corners only. A radius at the bottom is a gap between the tab and the
+    // thing it opens.
+    expect(tab).toContain('border-radius: var(--radius-md) var(--radius-md) 0 0')
+    expect(tab).toContain('height: var(--strip-tab-h)')
+    // Sitting on the bar's bottom edge, which is what lets it cover the
+    // hairline `.strip` draws under all of its children.
+    expect(requireRule(STRIP, '.strip-rail')).toContain('align-items: flex-end')
+
+    /*
+     * The surface the tab opens onto, named by its own token in every sheet
+     * that has to meet it.
+     *
+     * `--tab-active` was `--bg-primary` when this was written, and the bar
+     * below said `--bg-primary` too — which was right in the dark theme by
+     * accident and wrong in the light one, where the session under that bar is
+     * `--terminal-bg`. The token is the claim: whatever the tab is filled with,
+     * everything the tab's foot touches is filled with the same thing.
+     * `tokens.test.ts` is what holds that value to the terminal's paper; this
+     * is what holds the three sheets to the token instead of to a colour that
+     * happens to equal it today.
+     */
+    expect(requireRule(STRIP, '.strip-tab[data-active]')).toContain(
+      'background: var(--tab-active)',
+    )
+    expect(
+      requireRule(SHELL, '.toolbar[data-under-strip]'),
+      'the bar under the strip must be the same surface the selected tab is',
+    ).toContain('background-color: var(--tab-active)')
+    expect(
+      requireRule(BROWSER, '.bw'),
+      'with a browser page in the pane there is no session bar, so this panel is what the tab meets',
+    ).toContain('background: var(--tab-active)')
+    // And the two bands of that panel are one ground, not two spellings of it.
+    expect(requireRule(BROWSER, '.bw-bottom')).toContain('background: var(--tab-active)')
+
+    /*
+     * The one place that surface is deliberately *not* continued.
+     *
+     * A page opened from the rail covers the strip's selection — the strip is
+     * passed `covered` and stops drawing any tab as selected — so there is no
+     * tab above this bar to continue, and `.panel-page` under it sits on the
+     * app canvas. Carrying the session's paper across here would move the seam
+     * one band down rather than close it, which is a thing a screenshot of the
+     * session view cannot show.
+     */
+    expect(requireRule(SHELL, '.toolbar[data-under-strip][data-page]')).toContain(
+      'background-color: var(--bg-primary)',
+    )
+
+    // And the flares, in that same colour, cut with a mask rather than filled
+    // with an opaque guess at the bar — the bar is glass, and a patch of
+    // approximated glass shows the moment there is anything behind the window.
+    const skirt = requireRule(
+      STRIP,
+      '.strip-tab[data-active] .strip-tab-skirt::before,\n.strip-tab[data-active] .strip-tab-skirt::after',
+    )
+    expect(skirt).toContain('background: var(--tab-active)')
+    expect(STRIP).toContain('-webkit-mask-image: radial-gradient(')
+    expect(STRIP).toContain('mask-image: radial-gradient(')
+  })
+
+  it('colours the ✕ that ends a session differently from the ✕ that does not', () => {
+    /*
+     * The most dangerous thing in this window as of 2026-08-17: two identical
+     * ✕ glyphs, 260 pixels apart, one of which kills a pty and one of which
+     * only takes a tab off this bar. Asad asked for the second — *"it should
+     * not delete the session"* — and the moment they diverged, looking the same
+     * became a trap.
+     *
+     * Three layers stand between a person and the wrong one: the words in the
+     * two tooltips, which `workspace-strip.test.tsx` pins; the confirmation
+     * behind the destructive one, which `CloseSessionConfirm` owns; and this,
+     * the only one that is visible before the click. It is checked here because
+     * a hover colour cannot be seen from the markup — the sidebar's ✕ has no
+     * distinguishing attribute at rest, and a screenshot of the two side by side
+     * shows nothing until a pointer is on one of them.
+     */
+    expect(requireRule(SHELL, '.sb-close:hover')).toContain('color: var(--color-critical)')
+    expect(requireRule(STRIP, '.strip-tab-close:hover')).not.toContain('--color-critical')
+    expect(requireRule(STRIP, '.strip-tab-close:hover')).toContain('color: var(--text-primary)')
+  })
+
+  it('separates an unselected tab with a tint, and never with a line', () => {
+    /*
+     * This used to read "leaves an unselected tab flat against the bar", and
+     * asserted that the only fill in the row arrived on hover. That was the
+     * reference picture read strictly, and Asad overruled it after looking at
+     * the result: *"let's make the selected tab pill up there, selected and
+     * other tabs' pill, a little bit more white."* An unselected tab measured
+     * rgb(33,33,33) on a bar of rgb(33,33,33), so four fifths of the row had no
+     * pill under it at all.
+     *
+     * What survives is the part of the rule that was never about the fill: the
+     * separation is a tint and it is still not a line, the tab itself carries
+     * no background of its own so nothing paints under the selected tab's, and
+     * the selected tab is exempt from the hover because a hover that changed
+     * its fill would break the join with the pane while the pointer was there.
+     * The shades and the reasoning behind them are pinned in
+     * `browser/workspace-strip.test.tsx`, beside the sheet that sets them.
+     */
+    expect(ruleBody(STRIP, '.strip-tab')).not.toMatch(/^\s*background/m)
+    expect(requireRule(STRIP, '.strip-tab:not([data-active])')).toContain('--fill-quaternary')
+    expect(requireRule(STRIP, '.strip-tab:hover:not([data-active])')).toContain('--fill-tertiary')
+    // A radius is a shape, not a line, so the sweep names the line properties
+    // rather than everything that starts with `border`.
+    const line = /^\s*border(-(top|right|bottom|left|width|style|color))?:/m
+    for (const selector of ['.strip-tab', '.strip-tab:not([data-active])'])
+      expect(requireRule(STRIP, selector), `${selector} draws a line`).not.toMatch(line)
+  })
+
+  it('keeps the lights’ reserve out of a bar that is no longer the top one', () => {
+    /*
+     * Both halves of the same claim. The reserve rules have to be spelled with
+     * `:not([data-under-strip])` — otherwise a session's title starts 118px in
+     * with nothing in the gap — and the Windows counterpart the sweep insists on
+     * has to be a character-for-character mirror, or the sweep sees a rule with
+     * no partner and fails for a reason nobody would guess from the message.
+     */
+    expect(SHELL).toContain('.toolbar[data-sidebar-collapsed]:not([data-under-strip]) {')
+    expect(SHELL).toContain(
+      ':root[data-window-controls] .toolbar[data-sidebar-collapsed]:not([data-under-strip]) {',
+    )
+    expect(lightsReserveOffenders(SHELL)).toEqual([])
   })
 })
 

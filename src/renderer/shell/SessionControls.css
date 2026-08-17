@@ -1,0 +1,411 @@
+/* ============================================================================
+   The session's controls, in the chrome.
+
+   Model, effort, fast mode and connectors, on the window's bar for the session
+   the window is looking at, and on each pane's own bar in a split. The same
+   component in both, so the two cannot drift — see `SessionControls.tsx`.
+
+   Almost nothing is drawn here. The chips are `cc-chip`, the shape every
+   labelled control in this app wears, and their menus and the folded panel are
+   the app's glass, both inherited from `AgentControls.css`, which this file
+   sits beside rather than on top of. What is left below is the three things
+   that are genuinely different about living on a bar: the row must never wrap,
+   the panel opens *downward*, and the sentence the CLI answers with has to hang
+   underneath a band that is one row tall.
+   ============================================================================ */
+
+.session-controls {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-05);
+  /* A flex child's default `min-width: auto` refuses to shrink below its own
+     content, which on a bar means pushing the mode switch — or, in a pane, the
+     close button — off the end rather than giving way. */
+  min-width: 0;
+  /*
+    No wrapping, unlike the composer's copy of this row.
+
+    There the row is inside a box that grows downward, so a second line is
+    merely taller. A bar is one row of fixed height: a wrapped chip is drawn
+    outside it, over the terminal. When this row runs out of room it folds into
+    one chip instead — `data-folded`, decided by measuring the bar.
+  */
+  flex-wrap: nowrap;
+  /*
+    Never wider than the room that exists on this bar.
+
+    `--sc-room` is published by the component on every measurement: the width
+    left before something that cannot give way — the mode switch, a pane's close
+    button — would be covered. See the note beside it in `SessionControls.tsx`.
+    It is a *last* line, not the mechanism: the fold is what keeps the row from
+    ever wanting more than it can have, and this is what happens when the bar is
+    narrower than any arrangement of the row, which a split divider dragged to
+    the edge of the window genuinely produces. Measured before this existed: a
+    124px guest-pane bar drew the folded chip at its full natural width and hung
+    69 pixels past its own end, straight over the close button.
+
+    The fallback is `none` so that a render with nothing measured yet — the
+    server-rendered string this component's own tests read — is the unclamped
+    row rather than a zero-width one.
+  */
+  max-width: var(--sc-room, none);
+  /* Both bars are drag regions for the window, and a drag region covers its
+     children's pixels too — so every control on one has to subtract its own
+     rectangle back out or pressing it moves the window. The window's bar says
+     this on `.toolbar-actions`; a pane's bar does not, and this cluster is the
+     first control to live in one. */
+  -webkit-app-region: no-drag;
+}
+
+/*
+  …and everything in the row has to be *able* to fit inside that.
+
+  A flex item's automatic minimum size is its own content, so a chip that will
+  not go below its words makes the row wider than the box holding it — and this
+  row's box does not clip (the menus hang out of it), so the surplus is painted
+  straight over whatever is next on the bar. Measured live at a 760pt window:
+  the cluster was held to 74px by the clamp above, the usage chip declared
+  `flex-shrink: 0` and stayed at 138, and `Not reported` was drawn thirty-five
+  pixels into the word `Terminal` on the mode switch. The clamp decides how much
+  room there is; this is what makes the row obey it.
+
+  It overrides what the pieces ask for individually, and that is the point
+  rather than an accident. Each of them is right about itself — a usage reading
+  should not be squeezed, a connectors door should keep its one word — and none
+  of them can see the bar. Two exceptions are kept because they are decisions
+  and not preferences: the folded chip keeps its floor (below), because it is
+  the only way in to everything the fold hid; and the connectors chip keeps its
+  width, because it only exists in the full row, and the full row is only ever
+  drawn when the whole of it fits.
+*/
+.session-controls > *:not(.sc-summary, .sc-connectors) {
+  min-width: 0;
+  flex-shrink: 1;
+}
+
+/*
+  Nothing in this cluster may paint outside its own chip. Ever.
+
+  This is the rule the audit was written against, and the screenshots are the
+  argument: three pickers in a split pane measured 51, 51 and 69 pixels wide
+  with `scrollWidth` of 118, 118 and 159, `overflow: visible` and
+  `text-overflow: clip` — so flex shrank the boxes and the text carried on
+  painting sixty-seven pixels into each neighbour. What the reader saw was
+  `UnLltnkoawn/Ultracode`, `FastEsffcodrte`, `NoConnecptorrsted`. Nobody could
+  have told from that frame that there were three separate working controls
+  there.
+
+  Clipping is on the chip and not on the row, and that distinction is the whole
+  reason this works: each picker's menu is a sibling of its chip inside
+  `.ac-picker`, not a child of it, so a chip that clips its own label still
+  opens a menu that hangs freely over the terminal below. A row that clipped
+  would swallow every menu in the cluster.
+
+  With the fold sized to the room, a squeezed chip should now be a state nobody
+  reaches. That is exactly why the rule is here: it costs nothing while the
+  arithmetic is right, and it is the difference between a bug and an illegible
+  window when the arithmetic is one day wrong.
+*/
+.session-controls .cc-chip {
+  overflow: hidden;
+}
+
+/*
+  …and a control's *name* is not what gives way. Ever.
+
+  This was tried the other way first and looked worse than the bug: letting the
+  names ellipsise turned a 568px guest pane bar into `U. No… ⌄  M. U… • E. U… ⌄`,
+  which is three initials and four ellipses where there had been three words.
+  A truncated value still says something — `Opus 5 (1M…` is a model — while a
+  truncated name says nothing at all, and the name is the half that tells you
+  what the control *is*.
+
+  So the value gives way, and past that the chip clips as a whole under the fade
+  below. `Model Unkn…` is a sentence with its end missing; `M. U…` is not a
+  sentence.
+*/
+.session-controls .ac-name {
+  flex-shrink: 0;
+}
+
+/*
+  Values are held shorter on a bar than in the composer.
+
+  The composer allows 16ch, which is right there: the box is as wide as the pane
+  and the row has nothing else on it. A bar is shared with the session's name,
+  its folder, its account and the mode switch, and the model is the one value
+  here that can be enormous — the CLI answers "Opus 5 (1M context) (default)".
+  Measured, that one name alone was the difference between a row of 478px and
+  one of 544px, which is most of the slack a 1440pt window has. Twelve
+  characters still says which model it is, and the hover label carries the whole
+  of it either way.
+*/
+.session-controls .ac-value {
+  max-width: 12ch;
+}
+
+/* --------------------------------------------------------- the folded chip -- */
+
+/*
+  Two named values on one chip: the model and the effort.
+
+  Why both are on it rather than one is argued in `SessionControls.tsx`. What is
+  here is how it gives way, and the order matters: the caret is outside the
+  clipped area, so the control never stops looking like a control, and the words
+  are clipped under a short fade from their trailing edge — which means the
+  model is the last thing to go, because it is first.
+
+  A fade rather than an ellipsis because there are five separate spans in there.
+  `text-overflow` acts on one box's own text; across a row of them it does
+  nothing at all, and the alternative — ellipsising each span on its own — reads
+  as `M… Opus 5 · E… High`, which is four truncations where one would do.
+
+  Nothing inside shrinks, which is what makes the truncation happen at one
+  place: the words keep their own widths and the row they sit in runs out. Let
+  them shrink and every span loses characters at once, which is the mush the
+  `.ac-name` rule above is about.
+*/
+.sc-summary-text {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-15);
+  min-width: 0;
+  overflow: hidden;
+}
+
+.sc-summary .sc-summary-text > * {
+  flex-shrink: 0;
+}
+
+/*
+  The fade, and only when there is something being faded out.
+
+  A mask written unconditionally shaves the last few pixels off the effort value
+  even in a bar with room to spare — seen on screen, `Effort Unknown` with the
+  `n` half gone and nothing wrong. So the component measures the span against
+  its own scroll width and stamps `data-clipped` when the two disagree; this is
+  the one thing in this file that could not be decided in CSS, because CSS has
+  no way to ask whether a box is overflowing.
+*/
+.sc-summary[data-clipped] .sc-summary-text {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent 100%);
+  mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent 100%);
+}
+
+/* The dot between the two pairs. A mark rather than a character so it cannot be
+   read out as punctuation, and the same one the bar already uses between the
+   folder and the account — see `.toolbar-chip-sep`. */
+.sc-summary-sep {
+  flex-shrink: 0;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  opacity: 0.7;
+}
+
+/* The folded chip carries the values and little else, so they may keep a little
+   more than the row's 12ch. */
+.sc-summary .ac-value {
+  max-width: 14ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/*
+  It may be squeezed to almost nothing. It may not disappear.
+
+  At the far end of a divider drag a guest pane's bar is 124px and the cluster
+  is handed about fifty — which, shared out by ordinary flex shrinking, went
+  entirely to the usage reading beside this and left the control with no pixels
+  at all. A reading you cannot read is a nuisance; a control that is not on
+  screen is the dead control this repository is audited for, and this one is the
+  only way in to model, effort, fast mode and connectors once they have folded.
+  Thirty pixels is the chip's own padding plus its caret, so what survives is a
+  sliver of the word "Model" and the mark that says it opens something.
+*/
+.session-controls .sc-summary {
+  min-width: 30px;
+}
+
+/* The caret is the part that says "this opens something", so it is the one part
+   that never gives way and never fades. */
+.sc-summary .ac-caret {
+  flex-shrink: 0;
+}
+
+.sc-connectors {
+  flex-shrink: 0;
+}
+
+/* The connectors chip is a door, not a picker, so its one word is the label
+   rather than the quiet prefix `.ac-name` is elsewhere on this row. */
+.sc-connectors .ac-name {
+  color: var(--text-primary);
+}
+
+.sc-connectors[data-blocked] .ac-name {
+  color: var(--text-muted);
+}
+
+/* ------------------------------------------------------- the folded panel -- */
+
+/*
+  Opens downward, and that is the one structural difference from `.ac-sheet`.
+
+  The composer sits at the bottom of the window so its panel opens upward and is
+  positioned against the box. This hangs off a bar at the *top* of a pane, where
+  upward is the title bar and, in a split, another pane's terminal. Anchored to
+  the right so it grows back across the window rather than off the edge of it:
+  the cluster is the last thing on the bar before the mode switch, so its left is
+  where the room is.
+*/
+.sc-sheet {
+  position: absolute;
+  top: calc(100% + var(--sp-15));
+  right: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+  width: 340px;
+  /* The window can be narrower than the panel is wide — a pane certainly can.
+     `position: fixed` would be needed to escape the pane entirely; capping
+     against the viewport is enough to keep it on screen, and keeps the panel
+     inside the pane it belongs to, which is the more important of the two. */
+  max-width: calc(100vw - var(--sp-6));
+  /* Whatever room there is under the bar, less the bar's own offset and a
+     margin at the foot of the window. Four sections are taller than any window
+     worth capping to, so this decides how much is in view before anyone
+     scrolls rather than how much exists. */
+  max-height: min(560px, calc(100vh - 100% - var(--sp-8)));
+  padding: var(--sp-4) var(--sp-3);
+  overflow-y: auto;
+  border-radius: var(--radius-lg);
+  background-color: var(--material-bg-strong);
+  background-image: var(--material-sheen);
+  -webkit-backdrop-filter: var(--material-filter);
+  backdrop-filter: var(--material-filter);
+  border: 1px solid var(--material-hairline);
+  box-shadow: var(--shadow-lg), inset 0 1px 0 var(--material-edge);
+}
+
+/* The one action inside a section, aligned with the words above it rather than
+   with the panel's own edge — the same `--ac-label` offset every other block in
+   these panels starts at. */
+.sc-sheet-actions {
+  display: flex;
+  padding-left: var(--ac-label);
+}
+
+/* ------------------------------------------------------------- the notice -- */
+
+/*
+  What the CLI said about the last change.
+
+  Under the bar, not in it: these are the CLI's own sentences — "Model is now
+  Sonnet 5 — saved as your default for new sessions", or a refusal long enough
+  to explain itself — and a bar is one row tall. It is glass rather than a plain
+  line because it is floating over a terminal, and unreadable text over
+  scrolling output is the same as no text.
+*/
+.sc-notice {
+  position: absolute;
+  top: calc(100% + var(--sp-1));
+  right: 0;
+  z-index: 30;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-1);
+  margin: 0;
+  width: max-content;
+  max-width: min(360px, calc(100vw - var(--sp-6)));
+  padding: var(--sp-15) var(--sp-1) var(--sp-15) var(--sp-2);
+  border-radius: var(--radius-md);
+  background-color: var(--material-bg-strong);
+  background-image: var(--material-sheen);
+  -webkit-backdrop-filter: var(--material-filter);
+  backdrop-filter: var(--material-filter);
+  border: 1px solid var(--material-hairline);
+  box-shadow: var(--shadow-lg), inset 0 1px 0 var(--material-edge);
+  font-family: var(--font-ui);
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
+  color: var(--text-secondary);
+  /* A pane's bar dims when the pane is not focused (`.pane-cell-head` at 0.55),
+     and the answer to something you just clicked must not be dimmed with it. */
+  opacity: 1;
+}
+
+/*
+  The same sentence, inside the folded panel.
+
+  It is the same element, unpinned: the panel and the bubble hang off the same
+  chip, so left floating it landed squarely on the panel's first section and
+  covered the word "Model". Inside, it is a line at the top of the panel and it
+  loses the glass, because a frosted card inside a frosted card is two surfaces
+  where the eye expects one.
+*/
+.sc-sheet .sc-notice {
+  position: static;
+  width: auto;
+  max-width: none;
+  margin: 0;
+  padding: 0 var(--sp-2) 0 var(--ac-label);
+  border: none;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+.sc-notice-bad {
+  color: var(--color-warning);
+}
+
+.sc-notice-text {
+  min-width: 0;
+}
+
+.sc-notice-close {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.sc-notice-close:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.sc-notice-close:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* ----------------------------------------------------- inside a pane's bar -- */
+
+/*
+  A pane's bar is set at `--t-caption` and dims to 0.55 when the pane is not the
+  focused one. The chips inherit the dimming, which is right — they are that
+  pane's chrome and they should recede with the rest of it — but they must not
+  inherit the smaller type, because a `cc-chip` is a control and the app draws
+  every control at `--t-footnote`. Stated here rather than left to inheritance
+  because `cc-chip` sets its own size and this is the note explaining why the
+  two agree by design and not by accident.
+*/
+.pane-cell-slot .session-controls {
+  font-size: var(--t-footnote);
+  /* The panel and the notice hang out of this box on purpose, so nothing here
+     may clip: the slot itself is what gives way, and the close button beside it
+     never does — closing a pane is the one thing a pane's bar must always be
+     able to do, however narrow it gets. */
+  overflow: visible;
+}

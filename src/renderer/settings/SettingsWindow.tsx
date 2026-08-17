@@ -13,11 +13,14 @@ import { Modal } from '../components/Modal'
 import { applyStoredTheme, applyTheme, isThemePreference } from '../theme'
 import {
   mergeSettings,
+  MERGED_SECTIONS,
+  resolveSection,
   SECTIONS,
   sectionsFor,
   splitPatch,
   stringSetting,
   valuesFromPreferences,
+  type LiveSectionId,
   type SectionId,
   type SettingValues,
 } from './settings-schema'
@@ -31,19 +34,18 @@ import {
 } from './settings-bridge'
 import { useFeatures } from '../features/FeaturesProvider'
 import { GeneralSection } from './sections/GeneralSection'
-import { FeaturesSection } from './sections/FeaturesSection'
+import { ToolsSection } from './sections/ToolsSection'
 import { AppearanceSection } from './sections/AppearanceSection'
 import { NotificationsSection } from './sections/NotificationsSection'
 import { AgentsSection } from './sections/AgentsSection'
-import { SetupSection } from './sections/SetupSection'
 import { BrowserSection } from './sections/BrowserSection'
 import { PowerSection } from './sections/PowerSection'
-import { ShortcutsSection } from './sections/ShortcutsSection'
-import { AccountsSection } from './sections/AccountsSection'
 import { AdvancedSection } from './sections/AdvancedSection'
 import { LinuxSection } from './sections/LinuxSection'
-import { HelpSection } from './sections/HelpSection'
+import { CopilotSection } from './sections/CopilotSection'
 import { AboutSection } from './sections/AboutSection'
+import { ShortcutsPopover } from './ShortcutsPopover'
+import { RailFooter } from './RailFooter'
 import './SettingsWindow.css'
 
 /**
@@ -90,33 +92,63 @@ const PowerSectionView: ComponentType<SectionProps> = () => <PowerSection />
  */
 const LinuxSectionView: ComponentType<SectionProps> = () => <LinuxSection />
 
-const SECTION_VIEWS: Record<SectionId, ComponentType<SectionProps>> = {
+/**
+ * Wrapped for the third time, and for the strongest version of the reason.
+ *
+ * The Copilot pane stores nothing at all. Every one of its channels reads a
+ * folder, a log or a list of automations off `window.deck`, so handing it this
+ * window's `values` and `save` would give it a settings bridge as its own
+ * `bridge` — and it would conclude that none of its capabilities exist in this
+ * build while every method was sitting on the preload. That is exactly the
+ * mistake `RemoteSection` shipped once, and the note above `PowerSectionView`
+ * is the record of it.
+ */
+const CopilotSectionView: ComponentType<SectionProps> = () => <CopilotSection />
+
+/**
+ * One view per pane — and there are four fewer panes than there were views.
+ *
+ * Accounts and Setup are groups inside `AgentsSection` now, so they have no
+ * entry here; Shortcuts is a popover and Help is a link, both off the rail's
+ * footer. Every id that used to name one of them still resolves, through
+ * `MERGED_SECTIONS`, to the pane its contents went to — which is why this map
+ * is keyed on `LiveSectionId` and the props are still typed `SectionId`.
+ */
+const SECTION_VIEWS: Record<LiveSectionId, ComponentType<SectionProps>> = {
   general: GeneralSection,
-  features: FeaturesSection,
   appearance: AppearanceSection,
   notifications: NotificationsSection,
+  // Agents, Accounts and Setup, assembled from the three components that were
+  // the three panes. See the note in `AgentsSection.tsx`.
   agents: AgentsSection,
-  setup: SetupSection,
+  // The id is `features` and the label is "Tools": `App.tsx` names this id and
+  // is a file no agent may edit while others are working here.
+  features: ToolsSection,
   linux: LinuxSectionView,
   browser: BrowserSection,
+  // Reads only, and resolves its own bridge. See `CopilotSectionView`.
+  copilot: CopilotSectionView,
   // Wrapped, not cast. `SectionProps` carries its own `bridge` — the settings
   // bridge — and casting RemoteSection to this type handed it that object as
   // its `bridge` prop, so it decided remote access was "not wired into this
   // build" while every method was sitting on window.deck. RemoteSection
   // resolves its own bridge; it wants none of these props.
   power: PowerSectionView,
-  shortcuts: ShortcutsSection,
-  // The section id stays `profiles` — it is what the main process calls them —
-  // while everything a person reads says "accounts". See `settings-schema.ts`.
-  profiles: AccountsSection,
   advanced: AdvancedSection,
-  // Takes no props: it renders the shared HelpPanel, which reads its own bridge.
-  help: HelpSection,
   about: AboutSection,
 }
 
+/**
+ * Anything that has ever named a section, including the four that merged.
+ *
+ * `goTo` takes a string off a button handler, and a link written before the
+ * merge must still land somewhere real rather than being silently ignored —
+ * which is what a check against the live rail alone would do.
+ */
 function isSectionId(value: unknown): value is SectionId {
-  return SECTIONS.some((section) => section.id === value)
+  if (typeof value !== 'string') return false
+  if (SECTIONS.some((section) => section.id === value)) return true
+  return Object.prototype.hasOwnProperty.call(MERGED_SECTIONS, value)
 }
 
 /**
@@ -200,12 +232,23 @@ export function SettingsPanel({
     () => sectionsFor(platform).filter((entry) => features.sectionOn(entry.id)),
     [platform, features],
   )
-  const [chosen, setSection] = useState<SectionId>(() =>
-    // A section can be asked for that this platform does not have — a deep link,
-    // or a remembered choice from a machine that did have it. Landing on an
-    // empty pane with no rail entry selected is worse than landing on General.
-    sections.some((entry) => entry.id === initialSection) ? initialSection : sections[0].id,
-  )
+  /*
+   * Resolved through the merge table on the way in.
+   *
+   * `App.tsx` opens this window at `setup` from the application menu and at
+   * `profiles` from the account chip inside a session, and neither of those is
+   * a pane any more — both are groups inside Agents. Landing on General because
+   * the requested id is not in the rail would be a menu item that appears to do
+   * nothing, which is worse than the reorganisation it came from.
+   */
+  const [chosen, setSection] = useState<LiveSectionId>(() => {
+    const wanted = resolveSection(initialSection)
+    // A section can also be asked for that this platform does not have — a deep
+    // link, or a remembered choice from a machine that did have it. Landing on
+    // an empty pane with no rail entry selected is worse than landing on
+    // General.
+    return sections.some((entry) => entry.id === wanted) ? wanted : sections[0].id
+  })
   /*
    * What is actually on screen.
    *
@@ -219,6 +262,8 @@ export function SettingsPanel({
   const [values, setValues] = useState<SettingValues>(() => mergeSettings({}))
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
+  /** The shortcut reference, which is a popover now rather than a pane. */
+  const [shortcuts, setShortcuts] = useState(false)
 
   // Reads of the current values from inside a callback, without making every
   // callback depend on them — a save handler that changed identity on every
@@ -359,7 +404,7 @@ export function SettingsPanel({
   )
 
   const goTo = useCallback((next: string) => {
-    if (isSectionId(next)) setSection(next)
+    if (isSectionId(next)) setSection(resolveSection(next))
   }, [])
 
   /**
@@ -397,6 +442,8 @@ export function SettingsPanel({
 
   return (
     <div className="settings" data-loading={loading || undefined}>
+      {shortcuts && <ShortcutsPopover onClose={() => setShortcuts(false)} />}
+      <div className="settings-rail">
       <div
         className="settings-nav"
         role="tablist"
@@ -431,6 +478,22 @@ export function SettingsPanel({
             </button>
           )
         })}
+      </div>
+
+      {/*
+        Two icons where two rail entries used to be.
+
+        Shortcuts was the longest pane in the window and Help was a second copy
+        of the ⌘? panel; both are things you look at rather than things you
+        change, which is the line this rail now draws.
+
+        Deliberately a sibling of the tablist rather than one of its children.
+        The list handles Arrow, Home and End to move between tabs, and a button
+        that is not a tab sitting inside it would either be skipped by those
+        keys or — worse — change the selected pane under somebody who was
+        reaching for the shortcut list.
+      */}
+      <RailFooter bridge={bridge} onShortcuts={() => setShortcuts(true)} />
       </div>
 
       <div

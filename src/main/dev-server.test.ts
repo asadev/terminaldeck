@@ -114,6 +114,9 @@ function harness(options: { script?: DevScript | null; refuse?: string } = {}): 
         port,
         process: 'node',
         guessed: false,
+        // A dev server this app started is still the project's server, not one
+        // of this app's own listeners — `ours` is about who holds the socket.
+        ours: false,
         families: { v4: true, v6: false },
       })),
     dial: async (port, host) => {

@@ -70,6 +70,40 @@ Ticked items were applied directly by me because no agent held the file.
       race flagged in passing. Confirm whether anything reads the result before
       it resolves. *Owner: windows-chrome agent.*
 
+## Owed by the copilot UI pass (2026-08-17)
+
+- [ ] **The copilot session is not launched with `--mcp-config`, so the copilot
+      itself cannot reach its own tools.** `deck-control` is wired at boot now
+      and is genuinely live — proven end to end against the running app: a real
+      MCP `tools/call` over the loopback socket raised a real confirmation, the
+      dialog blocked it, Refuse came back as
+      `settings.write was not approved` with the preferences unchanged, and
+      Allow wrote the change after taking a last-good snapshot. `index.ts`
+      writes `<userData>/copilot/deck-control.json` on every start and
+      `mcpConfigFor` produces exactly the file the CLI wants.
+
+      What is missing is the last link: `copilot-session.ts` calls
+      `startSession` with no way to add `--mcp-config <path> --strict-mcp-config`
+      to the spawn, because `CreateSessionInput` has no argv field — and it must
+      not grow one, since that object crosses the preload bridge from the
+      renderer and an argv field on it would let page code inject CLI flags.
+      The shape that works is a fourth argument on `startSession` (main-process
+      callers only), appended to `wanted` in `host-core.ts` just before
+      `confineSpawn`. `deckControl.configPath` is already returned from
+      `registerDeckControlIpc` and is what has to be passed. *Owner: whoever
+      holds `host-core.ts` — not taken here because that file is core and was
+      being edited concurrently.*
+
+      Until it lands: everything in the copilot UI works and the copilot answers
+      as an ordinary Claude session, but asking it *"which of my sessions is
+      stuck"* gets a model with no `sessions.list` to call.
+
+- [ ] **`src/main/remote/copilot-grants.ts` is still an orphan**, and
+      deliberately: `COPILOT-DESIGN.md` phases remote copilot access last, as the
+      highest-stakes surface in the product. It is listed here so nobody reads
+      the `reachable.test.ts` failure as an accident. Wiring it is a decision to
+      start phase 4, not a tidy-up.
+
 ## Found after wave 1 reported
 
 - [x] **The Tailscale row.** Checked rather than trusted the wording of the

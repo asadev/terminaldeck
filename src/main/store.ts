@@ -110,22 +110,78 @@ class Store {
     return [...this.state.projects].sort((a, b) => b.lastOpenedAt - a.lastOpenedAt)
   }
 
+  /**
+   * Tell me when the *set* of project folders changes.
+   *
+   * An event rather than something to poll, because the recorded preference on
+   * this project is events over timers, and because there is nothing to poll
+   * for: this class is the only writer of the list and knows exactly when it
+   * moved.
+   *
+   * "The set", not "the list": re-opening a project already in it bumps
+   * `lastOpenedAt` and reorders `getProjects()`, and that happens every time
+   * somebody clicks a folder. A listener that fired on it would be a listener
+   * that fires constantly and means nothing. It fires only when a folder is
+   * added that was not there, or one that was there is gone.
+   *
+   * The one listener today is the copilot's, which holds a read grant over
+   * these folders that the operating system fixed when its process started — so
+   * a folder leaving this list has to reach it, and reach it *promptly*, or the
+   * app would be enforcing a grant the person has already withdrawn. See
+   * `copilot-session.ts`.
+   *
+   * Returns its own unsubscribe, the same shape every other listener in this
+   * app uses, so a caller never has to hold the function it registered.
+   */
+  onProjectsChanged(listener: (paths: readonly string[]) => void): () => void {
+    this.projectListeners.add(listener)
+    return () => {
+      this.projectListeners.delete(listener)
+    }
+  }
+
+  private projectListeners = new Set<(paths: readonly string[]) => void>()
+
+  /**
+   * Never throws into the caller.
+   *
+   * The callers are `addProject` and `removeProject`, which are IPC handlers on
+   * the path a person takes to open a folder. A listener that throws must not
+   * turn that into a failure to open the project — the listener's job is a
+   * consequence of the change, not part of it.
+   */
+  private announceProjects(): void {
+    const paths = this.state.projects.map((project) => project.path)
+    for (const listener of this.projectListeners) {
+      try {
+        listener(paths)
+      } catch (err) {
+        console.error('[store] a projects listener threw:', err)
+      }
+    }
+  }
+
   addProject(path: string): PersistedProject {
     const existing = this.state.projects.find((p) => p.path === path)
     if (existing) {
       existing.lastOpenedAt = Date.now()
       this.persist()
+      // Deliberately silent: the set did not change, only its order. See
+      // `onProjectsChanged`.
       return existing
     }
     const project: PersistedProject = { path, lastOpenedAt: Date.now() }
     this.state.projects.push(project)
     this.persist()
+    this.announceProjects()
     return project
   }
 
   removeProject(path: string): void {
+    const before = this.state.projects.length
     this.state.projects = this.state.projects.filter((p) => p.path !== path)
     this.persist()
+    if (this.state.projects.length !== before) this.announceProjects()
   }
 
   /**

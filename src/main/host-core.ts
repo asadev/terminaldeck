@@ -37,25 +37,35 @@
 
 import { join } from 'node:path'
 import { BRAND } from '../shared/brand'
-import type { CreateSessionInput, SessionMeta, SessionStatus } from '../shared/types'
+import type { CreateSessionInput, ProviderId, SessionMeta, SessionStatus } from '../shared/types'
 import { PtyManager } from './pty-manager'
-import { detectProviders, loginPath, providersFor, PROVIDERS } from './providers'
+import {
+  PROVIDERS,
+  customProviderSpec,
+  detectProviders,
+  loginPath,
+  providersFor,
+  resolvedProvidersFor,
+} from './providers'
+import { CustomAgentStore, lookupCommand } from './custom-agents'
+import { isCustomProviderId } from '../shared/custom-agents'
 import { currentPlatform, type Platform } from './platform/host'
 import { homeDir } from './platform/paths'
 import { getState as profilesState, resolveProfile, sessionEnv, supportsProfiles } from './profiles'
 import {
   confineSpawn,
-  confinedEnv,
+  confinedHomeEnv,
   confinementKind,
   deviceHomesRoot,
   installWindowsTools,
   planFor,
   prepareDeviceHome,
-  windowsConfinedEnv,
   windowsToolsFor,
   type DeviceConfinement,
 } from './confine'
-import { installDeviceHomes } from './transcript'
+import { forgetBoundary, noteBoundary } from './session-boundary'
+import { installDeviceHomes, installHomeScopes } from './transcript'
+import { copilotHomeScope } from './copilot-session'
 import { createCredentialProxy, deviceKey, type CredentialProxy } from './remote/credentials'
 import { FolderGrants, foldersForDevice } from './remote/folder-grants'
 import { guestGitDir, HELPER_FILE, type GuestGitEnv } from './remote/git-guest'
@@ -153,6 +163,18 @@ export interface HostCoreOptions {
   /** Everything remote access keeps on disk: the trust store, the identity, the grants. */
   storageDir: string
   /**
+   * This install's own storage directory — `<userData>`.
+   *
+   * Named by the caller rather than derived from {@link storageDir}, even
+   * though the second is the first's `remote/` subdirectory in both shells. The
+   * headless build takes its state directory from a flag, so a `dirname` here
+   * would be this file quietly assuming a layout that a command-line option can
+   * change — and the thing it decides is which folder the copilot's transcript
+   * store is allowed to answer for. A guess in that position is a security rule
+   * that silently stops applying.
+   */
+  userData: string
+  /**
    * Where the chosen WSL distribution is remembered.
    *
    * Optional, and absent is correct for any host that is not Windows: `WslLink`
@@ -170,6 +192,27 @@ export interface HostCoreOptions {
    * nowhere to put it and passes nothing.
    */
   onSessionCreated?(meta: SessionMeta): void
+  /**
+   * **Every** session, the moment it exists — a window's, a phone's, a restored
+   * one, a routine's.
+   *
+   * Not the same hook as `onSessionCreated` above, and the difference is the
+   * whole reason this one exists. That one means "a session appeared that this
+   * shell did not ask for", so it deliberately does not fire for the ordinary
+   * case of somebody pressing New Session. Anything that needs to *know about
+   * sessions* rather than to *draw a tab it is missing* needs the complete set.
+   *
+   * The routine engine is the first such caller: it keeps each session's folder
+   * and its provenance so that, half an hour later when the process exits, it
+   * can tell whether the routine about to be triggered is the one that started
+   * it. A hook that missed the sessions started from the window would leave the
+   * loop guard blind to exactly the sessions a person is most likely to build a
+   * routine around.
+   *
+   * Called after the pty exists and after the ledger has been written, so a
+   * listener that reads either sees the finished state.
+   */
+  onSessionStarted?(meta: SessionMeta): void
   platform?: Platform
 }
 
@@ -179,6 +222,14 @@ export interface HostCore {
   /** The `SessionAccess` the remote server serves, and the `PtySource` behind it. */
   sessions: SessionFanout
   grants: FolderGrants
+  /**
+   * The agents this machine has added.
+   *
+   * On the core rather than owned by a shell, because `startSession` reads it —
+   * see the note where it is built. A shell that draws a UI registers the IPC
+   * against this instance; a shell that does not still starts the same sessions.
+   */
+  agents: CustomAgentStore
   credentials: CredentialProxy
   ledger: OpenSessionLedger
   /**
@@ -199,6 +250,17 @@ export interface HostCore {
   ): Promise<SessionMeta>
   /** A path a Windows API can stat, for a folder that may live inside a distro. */
   statablePath(cwd: string): string
+  /**
+   * Does this agent have a way to continue the last conversation in a folder?
+   *
+   * On the core because it is the one question about a provider that has to be
+   * answered the same way for a shipped agent and an added one, and because
+   * getting it wrong is not a wrong answer but a crash: both shells used to ask
+   * `PROVIDERS[provider].resumeArgs`, which throws outright on an id the table
+   * has never had — a restored session on an added agent taking the whole
+   * restore down with it, and with it every other tab in the list.
+   */
+  canContinue(provider: ProviderId): boolean
 }
 
 /* --------------------------------------------------------------- assembly -- */
@@ -262,6 +324,19 @@ export function createHostCore(options: HostCoreOptions): HostCore {
   const grants = new FolderGrants(options.storageDir)
 
   /**
+   * The agents this machine has added, beyond the four this build ships.
+   *
+   * Built here rather than beside the IPC that lists them, for the reason this
+   * file exists: `startSession` is the one place a session starts, and it has to
+   * be able to answer "what is `custom:my-agent`" whether the request came from
+   * the window, from a paired phone, from the headless daemon or from a restored
+   * tab. A store owned by the Electron shell would make an added agent a
+   * desktop-only row that every other entry point silently downgraded to a plain
+   * shell.
+   */
+  const agents = new CustomAgentStore(options.userData)
+
+  /**
    * The GitHub credential proxy: their account, from their device, never held
    * here.
    *
@@ -289,6 +364,26 @@ export function createHostCore(options: HostCoreOptions): HostCore {
    * shell that could forget it.
    */
   installDeviceHomes(deviceHomesRoot(options.storageDir))
+
+  /*
+   * And tell it that one of those homes is not a paired device's.
+   *
+   * The copilot's home sits in that same root on purpose — that placement is
+   * what makes its conversation visible to every transcript reader with no
+   * change to any of them — but the copilot is an agent this app runs, not a
+   * device a person paired. It can write inside its own home and nowhere else,
+   * and without this line that one writable directory was a way to publish a
+   * fabricated conversation under *any* project's name, to four readers that
+   * had no way to tell. Scoping its store to its own working directory keeps
+   * the real transcript and drops the forged one.
+   *
+   * Here rather than beside the copilot's own wiring, and for the same reason
+   * the line above it is here: the headless build reads transcripts too, a
+   * copilot home left on disk by the desktop is still in that root when it
+   * does, and a shell that had to remember this line would be a shell that
+   * could forget it.
+   */
+  installHomeScopes([copilotHomeScope(options.userData, options.storageDir)])
 
   /*
    * Tell the confinement layer where the Windows launcher and the one-time
@@ -342,12 +437,66 @@ export function createHostCore(options: HostCoreOptions): HostCore {
     // Fall back to a plain shell rather than spawning a binary that isn't there,
     // which would flash a dead tab with no explanation.
     const requested = input.provider ?? 'claude'
-    const provider = available[requested] ? requested : 'shell'
-    // `PROVIDERS` is the table for this machine; a WSL session needs the table
-    // for this machine *and this folder*, because `wsl.exe --cd` is part of the
-    // launch.
+    /*
+     * An agent the person added, if that is what was asked for.
+     *
+     * Looked up rather than detected, because `detectProviders` answers about
+     * the agents in the catalogue and nothing else — that is what keeps a
+     * *shipped* agent from being silently skipped, and it means
+     * `available['custom:my-agent']` is `undefined`. Without this branch every
+     * custom session would take the fallback on the next line, and a person who
+     * added an agent and pressed Start would get a plain shell with nothing
+     * said: the silent downgrade this function warns about twice, arriving
+     * through the one kind of provider it had never been asked about.
+     */
+    const added = isCustomProviderId(requested) ? (agents.get(requested) ?? null) : null
+    /*
+     * Whether that agent can still be started, asked only where it can be asked
+     * honestly.
+     *
+     * On this machine the command is re-resolved, for the same reason the
+     * shipped agents are probed: it resolved on the day it was added and an
+     * agent can be uninstalled afterwards. One `which` against a call that is
+     * about to open a pty is not a cost worth avoiding.
+     *
+     * Inside a distribution it is not asked at all, and the session goes ahead.
+     * The question there is about Ubuntu's PATH, and this side cannot answer it
+     * — `detectInsideDistro` exists precisely because a Windows lookup answers
+     * about the wrong machine. Given a choice between refusing on an answer
+     * about the wrong PATH and launching on none, launching is the one that
+     * fails legibly: the distro's own login shell prints `command not found` in
+     * the tab. `session-create.ts` makes the same argument in the same words —
+     * a name this desktop cannot start is something a person can act on the
+     * moment they are told, and cannot act on at all when the machine quietly
+     * picks something else.
+     */
+    const addedRuns =
+      added !== null && (target !== null || (await lookupCommand(added.command, platform)) !== null)
+    const provider = addedRuns ? requested : available[requested] ? requested : 'shell'
+    /*
+     * The table for this machine, with each agent pointed at a copy that runs.
+     *
+     * `resolvedProvidersFor` rather than `PROVIDERS`, and the difference is one
+     * field on one machine in one situation — which happens to be the situation
+     * in the 2026-08-16 recording. The npm `@openai/codex` launcher on PATH
+     * fails to spawn its own missing native binary, and a complete copy of the
+     * same CLI sits in Codex's plugin directory; without this the session opens
+     * on the broken one and the user reads a Node stack trace. It costs nothing
+     * when nothing is wrong: the probe behind it was already run by
+     * `detectProviders` on the line above and is memoised, and the command it
+     * returns is the bare name unless that name will not execute.
+     *
+     * A WSL session still needs the table for this machine *and this folder*,
+     * because `wsl.exe --cd` is part of the launch — and it is left unresolved,
+     * since the payload of that command line is resolved by the distribution's
+     * own login shell and a host path would name a file that side cannot see.
+     */
     const spec =
-      target === null ? PROVIDERS[provider] : providersFor(platform, process.env, target)[provider]
+      added !== null && addedRuns
+        ? customProviderSpec(added, platform, process.env, target)
+        : target === null
+          ? (await resolvedProvidersFor(platform, process.env))[provider]
+          : providersFor(platform, process.env, target)[provider]
 
     // Resolve the profile the session should run as and hand the PTY its
     // config-dir override. Without this the picker records a choice that never
@@ -420,13 +569,18 @@ export function createHostCore(options: HostCoreOptions): HostCore {
      * files`. The boundary was working perfectly and the session was unusable.
      * With `windowsConfinedEnv`, the same session ran `git status`, `git log`
      * and `git commit`.
+     *
+     * The choice itself moved into `confine/index.ts` as `confinedHomeEnv`
+     * because it was made correctly here and then not made at all in
+     * `copilot-session.ts`, whose sign-in probe called `confinedEnv` directly
+     * and would have run with the owner's `USERPROFILE`. A branch written in
+     * one file and needed in two is a branch that will be half-updated by
+     * whoever adds the third caller.
      */
-    const confinedHomeEnv = (home: string): Record<string, string> =>
-      confinementKind(platform) === 'appcontainer' ? windowsConfinedEnv(home) : confinedEnv(home)
     const profileEnv = {
       ...sessionEnv(profile, provider),
       ...(guest?.set ?? {}),
-      ...(confined && confine ? confinedHomeEnv(confine.home) : {}),
+      ...(confined && confine ? confinedHomeEnv(confine.home, platform) : {}),
     }
     /*
      * The guest's git variables have to cross the WSL boundary too, and they are
@@ -487,28 +641,42 @@ export function createHostCore(options: HostCoreOptions): HostCore {
      * The proof is a real `sandbox-exec` run against a file written outside the
      * plan, not an inspection of the generated profile. See `confine/index.ts`.
      */
-    const launch =
+    /*
+     * The plan is held rather than built inline, and the reason is downstream of
+     * this file.
+     *
+     * It used to be an argument expression inside the `confineSpawn` call, which
+     * meant the only thing that ever knew what this session was allowed to read
+     * was the sandbox. That was enough while nothing else needed the answer. It
+     * stopped being enough when a message could carry a path from outside the
+     * project: a confined session is an ordinary tab in the window, and a
+     * composer offering it a file the OS will refuse produces a chip, a mention
+     * and an agent that says it cannot read the file — three steps that look
+     * like they worked, and one that did not. `session-boundary.ts` carries the
+     * whole argument; this line is where the answer is captured.
+     */
+    const plan =
       confined && confine
-        ? await confineSpawn(
-            planFor({
-              folder: input.cwd,
-              device: confine,
-              accountHome: homeDir(),
-              path,
-              // Absent for the system profile on purpose. `sessionEnv` returns
-              // nothing for it — `profiles.ts` explains why — so the CLI finds
-              // its own default, which with `HOME` redirected is inside the
-              // device's own home, which is exactly where a confined session's
-              // login belongs. A *named* profile is a deliberate choice of which
-              // login this session runs as, kept in a directory the app owns, and
-              // the boundary honours that choice instead of overriding it.
-              ...(profile.system ? {} : { agentConfigDir: profile.configDir }),
-              platform,
-            }),
-            spec.spawn.command,
-            wanted,
+        ? planFor({
+            folder: input.cwd,
+            device: confine,
+            accountHome: homeDir(),
+            path,
+            // Absent for the system profile on purpose. `sessionEnv` returns
+            // nothing for it — `profiles.ts` explains why — so the CLI finds
+            // its own default, which with `HOME` redirected is inside the
+            // device's own home, which is exactly where a confined session's
+            // login belongs. A *named* profile is a deliberate choice of which
+            // login this session runs as, kept in a directory the app owns, and
+            // the boundary honours that choice instead of overriding it.
+            ...(profile.system ? {} : { agentConfigDir: profile.configDir }),
             platform,
-          )
+          })
+        : null
+
+    const launch =
+      plan !== null
+        ? await confineSpawn(plan, spec.spawn.command, wanted, platform)
         : { command: spec.spawn.command, args: [...wanted] }
 
     const meta = ptys.create(input, {
@@ -537,6 +705,17 @@ export function createHostCore(options: HostCoreOptions): HostCore {
       // exist.
       hostCwd: spec.spawn.hostCwd,
     })
+
+    /*
+     * Write down what this session is held inside, now that it has an id.
+     *
+     * Only for a confined one — an unnoted session is one that can read whatever
+     * the account can, which is the truth for every session started at this
+     * keyboard, and inventing an entry saying "unconfined" would mean two ways
+     * of spelling the same fact. Dropped again on exit, where the ledger drops
+     * its own record.
+     */
+    if (plan !== null) noteBoundary(meta.id, plan, platform)
 
     /*
      * Remember the session, so a relaunch can put it back.
@@ -578,6 +757,17 @@ export function createHostCore(options: HostCoreOptions): HostCore {
         rows: input.rows,
         lastSeenAt: Date.now(),
       })
+    }
+
+    // Last, so that anything listening sees a session that is fully built: the
+    // pty is running and the ledger already knows about it. A listener that
+    // throws must not turn a started session into a failed `session:create`,
+    // which the caller would report as "the session did not start" about a
+    // session that is running.
+    try {
+      options.onSessionStarted?.(meta)
+    } catch (error) {
+      console.error('[host-core] a session listener threw:', error)
     }
 
     return meta
@@ -735,6 +925,10 @@ export function createHostCore(options: HostCoreOptions): HostCore {
     },
     (id, exitCode) => {
       ledger.forget(id)
+      // The boundary outlives nothing. A dead session cannot be attached to, and
+      // an entry left behind would answer a question about an id that will never
+      // be asked again — see `session-boundary.ts`.
+      forgetBoundary(id)
       sessions.noteExit(id, exitCode)
       // The key that let this session ask a phone for a GitHub login stops
       // working the moment the session does. A key that outlived its session
@@ -750,5 +944,31 @@ export function createHostCore(options: HostCoreOptions): HostCore {
     },
   )
 
-  return { ptys, wsl, sessions, grants, credentials, ledger, startSession, statablePath }
+  /**
+   * Whether a provider can continue a conversation. See {@link HostCore.canContinue}.
+   *
+   * `?.` on the table and not on the store, because the two absences are
+   * different: an added agent that has been removed is `undefined` here and
+   * false is the right answer, and a *builtin* id the table does not have is a
+   * saved session naming an agent this build no longer ships — also false, and
+   * previously a `TypeError` in the middle of restoring somebody's tabs.
+   */
+  const canContinue = (provider: ProviderId): boolean => {
+    const added = isCustomProviderId(provider) ? agents.get(provider) : undefined
+    if (added !== undefined) return added.resumeArgs.length > 0
+    return (PROVIDERS[provider]?.resumeArgs.length ?? 0) > 0
+  }
+
+  return {
+    ptys,
+    wsl,
+    sessions,
+    grants,
+    agents,
+    credentials,
+    ledger,
+    startSession,
+    statablePath,
+    canContinue,
+  }
 }

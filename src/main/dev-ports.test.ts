@@ -13,6 +13,8 @@ import { resetDevPortsCache, scanDevPorts, scanDevPortsDetailed } from './dev-po
 const state = vi.hoisted(() => ({
   ran: [] as string[],
   lsof: '' as string | Error,
+  /** `lsof -F` output — the form the scan actually asks for first. */
+  lsofFields: '' as string | Error,
   netstat: '' as string | Error,
   tasklist: '' as string | Error,
 }))
@@ -25,9 +27,16 @@ vi.mock('node:child_process', () => {
   const execFile = ((): unknown => undefined) as unknown as Record<symbol, unknown>
   execFile[Symbol.for('nodejs.util.promisify.custom')] = async (
     file: string,
+    args: readonly string[],
   ): Promise<{ stdout: string; stderr: string }> => {
     state.ran.push(file)
-    if (file === 'lsof') return answer(state.lsof)
+    // Both `lsof` calls are the same binary and differ only in their flags, so
+    // the fake has to read the flags too — otherwise the field-mode call is
+    // handed column output, parses to nothing, and every case here silently
+    // exercises the fallback instead of the path that ships.
+    if (file === 'lsof') {
+      return answer(args.includes('-FpcRtn') ? state.lsofFields : state.lsof)
+    }
     if (file === 'netstat.exe') return answer(state.netstat)
     if (file === 'tasklist.exe') return answer(state.tasklist)
     throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' })
@@ -55,9 +64,43 @@ node      12044 apple   17u  IPv6 0x3333333333333333      0t0  TCP [::1]:5173 (L
 Python     6001 apple    4u  IPv4 0x4444444444444444      0t0  TCP 127.0.0.1:9333 (LISTEN)
 `
 
+/**
+ * The same machine as {@link LSOF}, in `lsof -F` field mode.
+ *
+ * One value per line behind a single-letter tag: `p` opens a process set, `R`
+ * is its parent, `c` its untruncated command, then one `f`/`t`/`n` block per
+ * socket. Shaped after real output from `lsof -nP -iTCP -sTCP:LISTEN -FpcRtn`
+ * on the machine this was written on.
+ */
+const LSOF_FIELDS = [
+  'p1',
+  'R0',
+  'claunchd',
+  'f10',
+  'tIPv4',
+  'n*:445',
+  'p12044',
+  'R1',
+  'cnode',
+  'f16',
+  'tIPv4',
+  'n127.0.0.1:5173',
+  'f17',
+  'tIPv6',
+  'n[::1]:5173',
+  'p6001',
+  'R1',
+  'cPython',
+  'f4',
+  'tIPv4',
+  'n127.0.0.1:9333',
+  '',
+].join('\n')
+
 beforeEach(() => {
   state.ran = []
   state.lsof = LSOF
+  state.lsofFields = LSOF_FIELDS
   state.netstat = NETSTAT
   state.tasklist = TASKLIST
   resetDevPortsCache()
@@ -68,8 +111,8 @@ describe('scanning on macOS', () => {
     const ports = await scanDevPorts(true, 'darwin')
     expect(state.ran).toEqual(['lsof'])
     expect(ports).toEqual([
-      { port: 5173, process: 'node', guessed: false },
-      { port: 9333, process: 'Python', guessed: false },
+      { port: 5173, process: 'node', guessed: false, ours: false },
+      { port: 9333, process: 'Python', guessed: false, ours: false },
     ])
   })
 })
@@ -79,10 +122,10 @@ describe('scanning on Windows', () => {
     const ports = await scanDevPorts(true, 'win32')
     expect(state.ran.sort()).toEqual(['netstat.exe', 'tasklist.exe'])
     expect(ports).toEqual([
-      { port: 5173, process: 'node', guessed: false },
+      { port: 5173, process: 'node', guessed: false, ours: false },
       // Nothing named 6001, so the port is offered as a guess rather than
       // dropped or given an invented owner.
-      { port: 9333, process: 'unknown', guessed: true },
+      { port: 9333, process: 'unknown', guessed: true, ours: false },
     ])
   })
 
@@ -110,9 +153,9 @@ describe('scanning on Windows', () => {
     const ports = await scanDevPorts(true, 'win32')
     expect(state.ran).toContain('netstat.exe')
     expect(ports).toEqual([
-      { port: 445, process: 'unknown', guessed: true },
-      { port: 5173, process: 'unknown', guessed: true },
-      { port: 9333, process: 'unknown', guessed: true },
+      { port: 445, process: 'unknown', guessed: true, ours: false },
+      { port: 5173, process: 'unknown', guessed: true, ours: false },
+      { port: 9333, process: 'unknown', guessed: true, ours: false },
     ])
   })
 
@@ -166,11 +209,136 @@ describe('which loopbacks a port answers on', () => {
       '  TCP    [::1]:5173             [::]:0                 LISTENING       12044',
     ].join('\r\n')
     const ports = await scanDevPortsDetailed(true, 'win32')
-    expect(ports).toEqual([{ port: 5173, process: 'node', guessed: false, families: { v4: false, v6: true } }])
+    expect(ports).toEqual([
+      { port: 5173, process: 'node', guessed: false, ours: false, families: { v4: false, v6: true } },
+    ])
   })
 
   it('keeps the families out of the answer the renderer and the phone get', async () => {
     const ports = await scanDevPorts(true, 'darwin')
     expect(ports.every((port) => !('families' in port))).toBe(true)
+  })
+})
+
+/**
+ * The recording of 2026-08-16, at the exact frame the browser's start page came
+ * up: nine ports offered as pages, eight of them Terminal Deck's own, all eight
+ * labelled `Terminal`. Clicking one loaded a black page reading "that is not how
+ * to ask" — the pairing server refusing a plain GET.
+ *
+ * Two separate faults, and these hold both down: `lsof`'s column output clamps
+ * COMMAND to nine characters (so `Terminal Deck` prints as `Terminal`, and eight
+ * different listeners look like one thing), and nothing anywhere knew that those
+ * listeners were ours.
+ */
+describe('this app’s own ports', () => {
+  /** A field-mode scan owned by three processes: ours, our child, and a stranger. */
+  const withOurs = (): string =>
+    [
+      `p${process.pid}`,
+      'R1',
+      'cElectron',
+      'f34',
+      'tIPv4',
+      'n127.0.0.1:9444',
+      // A helper process: a different pid, but our own as its parent. This is
+      // the row a pid-only test with no parent would miss.
+      'p99001',
+      `R${process.pid}`,
+      'cElectron Helper (Renderer)',
+      'f12',
+      'tIPv4',
+      'n127.0.0.1:54292',
+      // A second copy of the packaged app. Nothing links it to this process, so
+      // only the product name can catch it — and it produces the identical dead
+      // click, because it is the same refusal from the same server.
+      'p78868',
+      'R1',
+      'cTerminal Deck',
+      'f38',
+      'tIPv4',
+      'n127.0.0.1:8443',
+      'p12044',
+      'R1',
+      'cnode',
+      'f16',
+      'tIPv4',
+      'n127.0.0.1:5173',
+      '',
+    ].join('\n')
+
+  it('marks the ports this very process is holding', async () => {
+    state.lsofFields = withOurs()
+    const ports = await scanDevPorts(true, 'darwin')
+    expect(ports.find((port) => port.port === 9444)?.ours).toBe(true)
+  })
+
+  it('marks a helper process’s port, by its parent', async () => {
+    state.lsofFields = withOurs()
+    const ports = await scanDevPorts(true, 'darwin')
+    expect(ports.find((port) => port.port === 54292)?.ours).toBe(true)
+  })
+
+  it('marks a second copy of the app, by name', async () => {
+    state.lsofFields = withOurs()
+    const ports = await scanDevPorts(true, 'darwin')
+    expect(ports.find((port) => port.port === 8443)?.ours).toBe(true)
+  })
+
+  it('leaves somebody else’s dev server alone', async () => {
+    state.lsofFields = withOurs()
+    const ports = await scanDevPorts(true, 'darwin')
+    expect(ports.find((port) => port.port === 5173)?.ours).toBe(false)
+  })
+
+  it('sorts our own ports below every port that is a real page', async () => {
+    state.lsofFields = withOurs()
+    const ports = await scanDevPorts(true, 'darwin')
+    expect(ports[0]).toMatchObject({ port: 5173, ours: false })
+    expect(ports.slice(1).every((port) => port.ours)).toBe(true)
+  })
+})
+
+describe('the untruncated process name', () => {
+  it('reads the command field, not the nine characters the columns allow', async () => {
+    // `lsof` pads COMMAND to nine characters in its column output. That is the
+    // whole reason eight different listeners read as one word on his screen.
+    state.lsofFields = [
+      'p751',
+      'R1',
+      'cControlCenter',
+      'f12',
+      'tIPv4',
+      'n*:5000',
+      'p96534',
+      'R1',
+      'cGoogle Chrome',
+      'f48',
+      'tIPv4',
+      'n127.0.0.1:9333',
+      'p12044',
+      'R1',
+      'cnode',
+      'f16',
+      'tIPv4',
+      'n127.0.0.1:5173',
+      '',
+    ].join('\n')
+    const ports = await scanDevPorts(true, 'darwin')
+    // Both of those are on the exclusion list under their *truncated* spellings
+    // — `ControlCe` and `Google` — because the list was written against column
+    // output. Un-truncating the names must not quietly un-exclude them: Chrome's
+    // debugging port reappearing as a suggested dev server is what happened on
+    // the first attempt at this change.
+    expect(ports.map((port) => port.port)).toEqual([5173])
+  })
+
+  it('falls back to the column scan when field mode gives nothing', async () => {
+    // `-F` is old and universal, but this spawns somebody else's binary. A build
+    // that refuses these fields should cost the names, not the list.
+    state.lsofFields = new Error('lsof: unsupported field')
+    const ports = await scanDevPorts(true, 'darwin')
+    expect(state.ran).toEqual(['lsof', 'lsof'])
+    expect(ports.map((port) => port.port)).toEqual([5173, 9333])
   })
 })

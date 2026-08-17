@@ -2,9 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { clampRanges, rankMatches, segmentByRanges, type MatchRange } from '../../fuzzy'
 import { foldersFrom, isImagePath, type Attachment } from './mentions'
 import { detectPlatform, screenshotShortcut, type UiPlatform } from '../../platform'
+import { browseLabel } from './outside'
 
 /**
- * Choosing what to attach, from inside the project.
+ * Choosing what to attach, from inside the project — and, one row up, from
+ * anywhere else.
  *
  * This is a project-scoped picker rather than a native open dialog, and that is
  * a decision rather than a shortcut. A folder mention only behaves when the
@@ -17,6 +19,35 @@ import { detectPlatform, screenshotShortcut, type UiPlatform } from '../../platf
  * It also costs no new IPC: `search:files` already enumerates the project for
  * quick open, honouring .gitignore and skipping node_modules, and the renderer
  * ranks locally on every keystroke the way the palette does.
+ *
+ * ## What was wrong with that, and what changed
+ *
+ * Every word above is still true and none of it was the problem. The problem is
+ * that it was the *only* door, so there was no way at all to attach a screenshot
+ * on the desktop, a PDF in Downloads, or a file from a second checkout:
+ *
+ *   > "I should be able to take anything from my PC to paste here… If I just
+ *   > click, it should just open browse my file manager of the PC or Windows or
+ *   > MacBook, and I should be able to just choose something from there instead
+ *   > of opening something inside. I don't know — it doesn't make any sense to
+ *   > me."
+ *
+ * And, about this panel specifically: *"Add an image also keeps me in the same
+ * folder."*
+ *
+ * So the argument above kept its conclusion — the project list is what opens,
+ * and it is still the fast path — and lost its exclusivity. `Browse…` sits
+ * between the search box and the list, in all three modes, and opens the real
+ * open panel. The one measured caveat travels with the pick rather than being
+ * enforced by hiding the button: a *folder* from outside the project is the case
+ * that gets refused by the model, and `OUTSIDE_FOLDER_CAUTION` in `mentions.ts`
+ * is what the composer says about it. A *file* from outside expands normally —
+ * measured against the CLI, and recorded at the top of `mentions.ts`.
+ *
+ * The one case where the row is genuinely offered and does not work is a session
+ * held inside a folder by the operating system, and there it is disabled with
+ * the reason on it rather than quietly missing. `browseRefusal` carries that
+ * sentence; `main/session-boundary.ts` explains where it comes from.
  */
 
 /** Channels this surface needs. Both are already on the bridge. */
@@ -36,9 +67,32 @@ interface Props {
   root: string
   mode: PickerMode
   attachments: readonly Attachment[]
-  onPick: (relPath: string, isDirectory: boolean) => void
+  /**
+   * A pick, as an **absolute** path.
+   *
+   * It used to be project-relative, and the composer joined it back onto the
+   * root. That stopped working the day a pick could come from outside the
+   * project: there is no relative form of `/Users/apple/Desktop/shot.png` from a
+   * project in `~/Projects`, and inventing one with `../../..` would be a path
+   * that means something different if the session ever changes directory.
+   * Absolute is the form the mention needs anyway — see `mentionFor`.
+   */
+  onPick: (path: string, isDirectory: boolean) => void
+  /** Open the real file browser. The menu owns the call; this row is the door. */
+  onBrowse: () => void
+  /**
+   * Why browsing is refused, when it is. Null means it is not.
+   *
+   * A sentence rather than a boolean, because the only reason it is ever
+   * refused is specific enough to be worth saying: the session is held inside a
+   * folder by the OS and could not read the file. A greyed-out button with no
+   * explanation is the thing this project keeps finding people stuck on.
+   */
+  browseRefusal?: string | null
   onBack: () => void
   bridge?: AttachPickerBridge
+  /** Injected only so the browse label can be asserted for both platforms. */
+  platform?: UiPlatform
 }
 
 type Load =
@@ -121,6 +175,33 @@ function readFiles(response: unknown): Load {
   }
 }
 
+/**
+ * A project-relative row, as the absolute path the rest of the feature wants.
+ *
+ * The guard on a trailing separator is not hypothetical: a project opened at a
+ * volume root is `/Volumes/Work/`, and `${root}/${rel}` there produces a double
+ * slash. POSIX collapses it and the CLI's mention parser is not POSIX.
+ */
+export function joinRoot(root: string, relPath: string): string {
+  const base = root.endsWith('/') ? root.slice(0, -1) : root
+  return `${base}/${relPath}`
+}
+
+/**
+ * What the browse row says in each mode.
+ *
+ * The hint is not decoration — it is the one place the panel admits that the two
+ * halves of it produce different things. The list above hands the agent a short
+ * relative path inside the project; this hands it an absolute path from
+ * somewhere else, which is fine for a file and is the measured exception for a
+ * folder.
+ */
+const BROWSE_HINT: Record<PickerMode, string> = {
+  file: 'Any file on this machine, not only this project',
+  folder: 'Any folder on this machine',
+  image: 'A screenshot on the desktop, a photo, anywhere',
+}
+
 function resolveBridge(injected?: AttachPickerBridge): AttachPickerBridge | null {
   if (injected) return injected
   if (typeof window === 'undefined') return null
@@ -128,7 +209,17 @@ function resolveBridge(injected?: AttachPickerBridge): AttachPickerBridge | null
   return host && typeof host.searchProjectFiles === 'function' ? (host as AttachPickerBridge) : null
 }
 
-export function AttachPicker({ root, mode, attachments, onPick, onBack, bridge }: Props) {
+export function AttachPicker({
+  root,
+  mode,
+  attachments,
+  onPick,
+  onBrowse,
+  browseRefusal = null,
+  onBack,
+  bridge,
+  platform,
+}: Props) {
   const resolved = resolveBridge(bridge)
   const [load, setLoad] = useState<Load>({ state: 'loading' })
   const [query, setQuery] = useState('')
@@ -190,9 +281,12 @@ export function AttachPicker({ root, mode, attachments, onPick, onBack, bridge }
   const choose = useCallback(
     (index: number) => {
       const hit = ranked[index]
-      if (hit) onPick(hit.item.relPath, hit.item.isDirectory)
+      // Joined here rather than in the composer, because this component is the
+      // one that knows these rows are relative to `root` — the other two routes
+      // into the same callback carry absolute paths already.
+      if (hit) onPick(joinRoot(root, hit.item.relPath), hit.item.isDirectory)
     },
-    [ranked, onPick],
+    [ranked, onPick, root],
   )
 
   const onKeyDown = (event: React.KeyboardEvent): void => {
@@ -246,6 +340,42 @@ export function AttachPicker({ root, mode, attachments, onPick, onBack, bridge }
         onChange={(event) => setQuery(event.target.value)}
         onKeyDown={onKeyDown}
       />
+
+      {/*
+        The escape hatch, above the list rather than under it.
+
+        Under the list it would be below the fold on any project with more than
+        nine files in it, which is every project — and "I couldn't find a way to
+        attach anything from outside" is the report this row exists to answer, so
+        it has to be visible without scrolling. It is still second: the search box
+        has focus, Enter still takes the highlighted project row, and reaching
+        this one costs a deliberate click or a Tab.
+
+        It is drawn even when it is refused. `browseRefusal` disables it and puts
+        the reason on it, because a row that vanishes on some sessions teaches the
+        reader that the app cannot do the thing at all.
+      */}
+      <button
+        type="button"
+        className="at-browse"
+        onClick={onBrowse}
+        disabled={browseRefusal !== null}
+        title={browseRefusal ?? BROWSE_HINT[mode]}
+        aria-label={browseRefusal ?? browseLabel(platform ?? detectPlatform())}
+      >
+        <svg className="at-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+          <path
+            d="M3 7a2 2 0 0 1 2-2h3.6l1.8 2H19a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"
+            strokeWidth="1.6"
+            strokeLinejoin="round"
+          />
+          <path d="M12 10v6M9 13h6" strokeWidth="1.6" strokeLinecap="round" />
+        </svg>
+        <span className="at-browse-text">
+          <span className="at-browse-label">{browseLabel(platform ?? detectPlatform())}</span>
+          <span className="at-browse-hint">{browseRefusal ?? BROWSE_HINT[mode]}</span>
+        </span>
+      </button>
 
       {load.state === 'loading' ? <p className="at-note">Reading the project…</p> : null}
       {load.state === 'failed' ? <p className="at-note">{load.message}</p> : null}

@@ -3,8 +3,8 @@ import { useFeatures } from '../features/FeaturesProvider'
 import {
   settingsIn,
   valueOf,
+  type LiveSectionId,
   type NumberSetting,
-  type SectionId,
   type Setting,
   type SettingValues,
 } from './settings-schema'
@@ -42,9 +42,87 @@ export function Group({ title, children }: { title?: string; children: ReactNode
   )
 }
 
+/**
+ * The rest of an explanation, behind an ⓘ.
+ *
+ * This is the second half of the instruction the whole copy pass came from:
+ *
+ *   > "we don't have to give this big descriptions. Let's give only one liner or
+ *   > two liner descriptions and one eye buttons next to them so they can click
+ *   > or hover over there and they can read the full description of the feature,
+ *   > whatever you want to give us more information about that, but not more
+ *   > than one or two lines because it's being too big for them."
+ *
+ * ## Hover *and* click, from one string
+ *
+ * Hover and keyboard focus go through the app's own tooltip layer, which is
+ * delegated off the `title` attribute — see `shell/Tooltips.tsx`. That layer
+ * exists precisely so a control does not have to import anything to get the
+ * app's bubble instead of the OS's yellow box, and `saysSomethingNew` will
+ * always draw this one because the glyph is `aria-hidden`, so the button has no
+ * visible text for the title to be repeating.
+ *
+ * A click cannot use the same path: the tooltip layer treats `pointerdown` as
+ * "you are doing something else now" and dismisses the bubble. So a click opens
+ * the same sentence *inline*, under the row, where it stays until it is closed.
+ * That also answers the reader who does not hover — a touch, a trackpad tap, or
+ * a screen reader following the button — and it is why this is a button rather
+ * than a decorative glyph with a `title` on it, which would be a dead control
+ * for all three of them.
+ *
+ * One string feeds both, so the bubble and the panel can never disagree.
+ */
+export function Info({
+  label,
+  open,
+  onToggle,
+  children,
+}: {
+  label: string
+  open: boolean
+  onToggle(): void
+  children: string
+}) {
+  return (
+    <button
+      type="button"
+      className="settings-info"
+      /* The name a screen reader reads, which also stops the tooltip layer
+         borrowing `title` as the accessible name — see `tooltip.ts`. Without
+         it this button would announce as the whole paragraph. */
+      aria-label={open ? `Hide more about ${label}` : `More about ${label}`}
+      aria-expanded={open}
+      title={children}
+      onClick={onToggle}
+    >
+      <span aria-hidden="true">ⓘ</span>
+    </button>
+  )
+}
+
+/**
+ * The opened text, which every host places *after* its own body copy.
+ *
+ * The state and the placement are the host's rather than `Info`'s, and that is
+ * not indirection for its own sake — the first version kept both inside the
+ * button's component, so the opened paragraph rendered on the label's own line,
+ * above the help text it was expanding. A disclosure has to appear below
+ * everything it is adding to, and only the row knows where that is.
+ */
+export function MoreBody({ children }: { children: string }) {
+  return <span className="settings-info-body">{children}</span>
+}
+
+/** Open state for one ⓘ. A hook so a row and an explanation share the behaviour. */
+export function useMore(): { open: boolean; toggle(): void } {
+  const [open, setOpen] = useState(false)
+  return { open, toggle: () => setOpen((was) => !was) }
+}
+
 export function Row({
   label,
   help,
+  more,
   control,
   labelId,
   helpId,
@@ -52,29 +130,42 @@ export function Row({
 }: {
   label: string
   help?: string
+  /** The rest of the explanation, put behind an ⓘ beside the label. */
+  more?: string
   control: ReactNode
   labelId?: string
   helpId?: string
   /** Set when the control is a single labellable element. */
   htmlFor?: string
 }) {
+  const rest = useMore()
   return (
     <div className="settings-row">
       <div className="settings-row-text">
-        {htmlFor ? (
-          <label className="settings-label" id={labelId} htmlFor={htmlFor}>
-            {label}
-          </label>
-        ) : (
-          <span className="settings-label" id={labelId}>
-            {label}
-          </span>
-        )}
+        <span className="settings-label-line">
+          {htmlFor ? (
+            <label className="settings-label" id={labelId} htmlFor={htmlFor}>
+              {label}
+            </label>
+          ) : (
+            <span className="settings-label" id={labelId}>
+              {label}
+            </span>
+          )}
+          {more && (
+            <Info label={label} open={rest.open} onToggle={rest.toggle}>
+              {more}
+            </Info>
+          )}
+        </span>
         {help && (
           <span className="settings-help" id={helpId}>
             {help}
           </span>
         )}
+        {/* Below the help line, not beside the label: this is the rest of the
+            same explanation, so it reads as the paragraph continuing. */}
+        {more && rest.open && <MoreBody>{more}</MoreBody>}
       </div>
       <div className="settings-row-control">{control}</div>
     </div>
@@ -104,11 +195,40 @@ export function Row({
  * explanation goes inside it as an inline button, exactly as it did in the
  * notices this replaces, so nothing that could be clicked before has moved.
  */
-export function Explain({ title, children }: { title?: string; children: ReactNode }) {
+export function Explain({
+  title,
+  more,
+  children,
+}: {
+  title?: string
+  /**
+   * The paragraph this block used to be, moved behind an ⓘ beside its title.
+   *
+   * Every standing explanation in this window was two or three sentences of
+   * true, well-meant prose, and the pane read as a document. Cutting them to
+   * one line each is only honest if the rest is still reachable, which is what
+   * this is for — the same trade a setting row makes with `help` and `more`.
+   */
+  more?: string
+  children: ReactNode
+}) {
+  const rest = useMore()
   return (
     <div className="settings-explain">
-      {title && <h5 className="settings-explain-title">{title}</h5>}
+      {title && (
+        <h5 className="settings-explain-title">
+          <span className="settings-label-line">
+            {title}
+            {more && (
+              <Info label={title} open={rest.open} onToggle={rest.toggle}>
+                {more}
+              </Info>
+            )}
+          </span>
+        </h5>
+      )}
       <p className="settings-explain-body">{children}</p>
+      {more && rest.open && <MoreBody>{more}</MoreBody>}
     </div>
   )
 }
@@ -131,6 +251,7 @@ export function Button({
   children,
   onClick,
   disabled,
+  title,
   tone = 'default',
   type = 'button',
 }: {
@@ -138,6 +259,13 @@ export function Button({
   /** Omitted for a submit button, whose form owns the action. */
   onClick?(): void
   disabled?: boolean
+  /**
+   * Why this button is greyed, or what it will do — through the app's own
+   * tooltip layer, which is delegated off `title`. A disabled control with no
+   * stated reason is half of a dead control: the app knows why and the person
+   * looking at it does not.
+   */
+  title?: string
   tone?: 'default' | 'primary' | 'danger'
   type?: 'button' | 'submit'
 }) {
@@ -147,6 +275,7 @@ export function Button({
       className="settings-btn"
       data-tone={tone}
       disabled={disabled}
+      title={title}
       onClick={onClick}
     >
       {children}
@@ -418,6 +547,22 @@ export interface SettingControlProps {
    * PATH. The schema declares what exists; only the app knows what works now.
    */
   optionState?(value: string): OptionState
+  /**
+   * Replaces the schema's `help` line while some other setting makes it untrue.
+   *
+   * The same argument as `optionState`, one level up: the schema declares what a
+   * row means in general, and only the app knows whether that is the case right
+   * now. The live example is Notifications — "Which sound a finished session
+   * plays" is a false sentence while the finish sound is switched off, and the
+   * row was sitting there stating it under an off switch. Overriding the line is
+   * the honest fix, because the control itself is not dead: Test previews it
+   * either way, and `finish.test.ts` pins that Test stays pressable.
+   *
+   * Not a schema field, deliberately. A conditional string in the table would be
+   * a `renderCustomThing` by another name, and the condition belongs to the
+   * section that can see both settings.
+   */
+  help?: string
   /** Rendered under the row — a preview, a Test button, an explanation. */
   children?: ReactNode
 }
@@ -428,6 +573,7 @@ export function SettingControl({
   save,
   disabled,
   optionState,
+  help: helpOverride,
   children,
 }: SettingControlProps) {
   const ids = useId()
@@ -435,6 +581,17 @@ export function SettingControl({
   const helpId = setting.help ? `${ids}-help` : undefined
   const controlId = `${ids}-control`
   const current = valueOf(values, setting)
+
+  /*
+   * Does the row have something a `<label for>` may legally point at?
+   *
+   * A switch labels itself, and a one-option select is drawn as a plain value —
+   * a `<span>`. `htmlFor` naming either is invalid HTML and, worse, gives a
+   * screen reader a label attached to nothing, which is a quieter version of
+   * the same "control over nothing" this window is being cleared of.
+   */
+  const labellable =
+    setting.kind !== 'toggle' && !(setting.kind === 'select' && setting.options.length === 1)
 
   const control = ((): ReactNode => {
     switch (setting.kind) {
@@ -449,7 +606,32 @@ export function SettingControl({
           />
         )
 
-      case 'select':
+      case 'select': {
+        /*
+         * A picker with one option is not a picker, so it is not drawn as one.
+         *
+         * `general.language` is the live case: an enabled dropdown holding
+         * exactly "English", beside a help line that already says English is the
+         * only one there is. Opening it changes nothing, choosing the one entry
+         * changes nothing, and a control that looks pressable and can never do
+         * anything is the fault this window is being swept for. The row still
+         * earns its place — the question "can I have this in my language" wants
+         * an answer rather than a missing row — so what is drawn is the answer,
+         * as a value.
+         *
+         * A rule here rather than a special case in `GeneralSection`, because
+         * this has to reverse itself: the day a second language is translated
+         * the schema gains an option and the control comes back, with nobody
+         * having to remember that a section file was hiding it.
+         */
+        const only = setting.options.length === 1 ? setting.options[0] : null
+        if (only) {
+          return (
+            <span className="settings-value" id={controlId}>
+              {only.label}
+            </span>
+          )
+        }
         return (
           <span className="settings-select-wrap">
             <select
@@ -472,6 +654,7 @@ export function SettingControl({
             </select>
           </span>
         )
+      }
 
       case 'number':
         return (
@@ -502,19 +685,27 @@ export function SettingControl({
     }
   })()
 
+  // An override wins outright rather than being appended: it exists because the
+  // schema's sentence is wrong in this state, and printing both would put the
+  // contradiction back on one line.
   const help =
-    setting.kind === 'text' && setting.emptyMeans && String(current) === ''
+    helpOverride ??
+    (setting.kind === 'text' && setting.emptyMeans && String(current) === ''
       ? `${setting.help} ${setting.emptyMeans}`
-      : setting.help
+      : setting.help)
 
   return (
     <div className="settings-item">
       <Row
         label={setting.label}
         help={help}
+        // Straight from the schema, so the long half of a description is
+        // declared in the same place as the short half and cannot drift from
+        // it — and so no section file has to remember to offer one.
+        more={setting.more}
         labelId={labelId}
         helpId={helpId}
-        htmlFor={setting.kind === 'toggle' ? undefined : controlId}
+        htmlFor={labellable ? controlId : undefined}
         control={control}
       />
       {children && <div className="settings-item-extra">{children}</div>}
@@ -525,13 +716,15 @@ export function SettingControl({
 /* --------------------------------------------------------------- section -- */
 
 export interface SettingListProps {
-  section: SectionId
+  section: LiveSectionId
   values: SettingValues
   save(patch: Record<string, unknown>): void
   disabled?: boolean
   /** Trailing content per setting id. */
   extras?: Readonly<Record<string, ReactNode>>
   optionStates?: Readonly<Record<string, (value: string) => OptionState>>
+  /** Replacement help lines by setting id. See `SettingControlProps.help`. */
+  helpFor?: Readonly<Record<string, string>>
   /** Ids to leave out, for a section that places one of its settings by hand. */
   omit?: readonly string[]
 }
@@ -554,6 +747,7 @@ export function SettingList({
   disabled,
   extras,
   optionStates,
+  helpFor,
   omit,
 }: SettingListProps) {
   const features = useFeatures()
@@ -569,6 +763,7 @@ export function SettingList({
             save={save}
             disabled={disabled}
             optionState={optionStates?.[setting.id]}
+            help={helpFor?.[setting.id]}
           >
             {extras?.[setting.id]}
           </SettingControl>

@@ -1,53 +1,53 @@
-import { createPortal } from 'react-dom'
-import { useChipMenu } from './chip-menu'
-
 /**
- * The folder a session is running in, as a control rather than a caption.
+ * The folder a session is running in. A title, and nothing else.
  *
- * Starting a session takes no dialog any more — the button starts one in the
- * folder you were last in and gets out of the way — and the price of that is
- * that the folder is now a decision the app made on your behalf. So it has to
- * be visible, and it has to be changeable without hunting: this is the line
- * under the session's name in the toolbar, and one click on it lists every
- * folder you have open plus a way to reach one you do not.
+ * ## Why this stopped being a control
  *
- * Its neighbour is `AccountChip`, which answers the other half of the same
- * question — *which login* — in the same shape, from the same menu mechanics
- * (`chip-menu.ts`), one click away from the same spot.
+ * It was a dropdown, and the menu it opened did not do what a dropdown beside a
+ * running session implies. Asad, walking the app on 2026-08-16:
  *
- * ## What it does *not* do, and why
+ * > *"If I am already inside a session, if I choose another folder, so what
+ * > happens? Does it create a new one or does it change? … If it makes any
+ * > sense and it can work in the same session, we can bring something by adding
+ * > a folder and that can be useful for the same session, then it makes sense to
+ * > have a dropdown here and add another folder inside the same session. If not,
+ * > then just title is good enough for us to know which folder we are in right
+ * > now. That's it. Dropdown will be only for the accounts."*
  *
- * It does not move the running session. A pty has one working directory for its
- * whole life, so "change the folder of this session" can only mean killing it
- * and starting another — and the app cannot tell whether that is safe, because
- * it cannot see what you have typed. Keystrokes go from xterm straight to the
- * pty; the renderer never sees them, so "nothing has been typed yet" is not a
- * fact this process has. Rather than guess and occasionally throw away work,
- * the menu says what it really does: it starts a session in the folder you
- * pick, and leaves the one you have alone.
+ * It cannot work in the same session, and that is not a limitation of this app.
+ * A pty has one working directory for its whole life: the process was spawned
+ * with a `cwd` and there is no call that changes it from outside. Adding a
+ * second folder to a running agent is not a thing this app is choosing not to
+ * do — there is nowhere to put it. So the honest answer to his question is
+ * "neither: it starts a different session", and once that is the answer, the
+ * chevron is a control offering something the user did not ask for, sitting in
+ * the one place they would look for something the app cannot do.
+ *
+ * Everything the menu used to reach is still reachable and is now in one place
+ * rather than two: the `+` on a project row and the `+` on a tab both start a
+ * session in a named folder, and the ＋ beside the sidebar's *Open* heading
+ * reaches a folder that is not open yet.
+ *
+ * ## Its neighbour, which is still a control
+ *
+ * `AccountChip` sits beside this and keeps its menu, because the answer there
+ * is the opposite: an account is a config directory handed to an agent at
+ * spawn, so picking one is a real decision about the session you are about to
+ * start, and there is one place in the window to make it.
  *
  * The path is set in mono because it is data — the characters are exact and
- * countable — while the menu around it is ordinary UI text. That line runs
+ * countable — while the label around it is ordinary UI text. That line runs
  * through the whole window.
+ *
+ * The file keeps the old name on purpose: `browser/overlay-watch.ts` names it in
+ * prose, and a rename that leaves a stale filename in another agent's comment
+ * costs more than it buys. The export says what the thing is.
  */
-
-export interface FolderOption {
-  path: string
-  name: string
-}
 
 interface Props {
   /** The folder the session on screen is running in. */
   path: string
-  /** Every project currently open, in sidebar order. */
-  options: readonly FolderOption[]
-  /** Start a session in a folder that is already open. */
-  onPick(path: string): void
-  /** Reach a folder that is not open yet. Opens the system's folder chooser. */
-  onBrowse(): void
 }
-
-const CHEVRON = 'M6.5 9.5 10 13l3.5-3.5'
 
 /** Last segment of a path — what a person calls the folder. */
 export function folderLabel(path: string): string {
@@ -55,72 +55,20 @@ export function folderLabel(path: string): string {
   return parts[parts.length - 1] ?? path
 }
 
-export function FolderChip({ path, options, onPick, onBrowse }: Props) {
-  const menu = useChipMenu(options)
-
+export function FolderTitle({ path }: Props) {
   return (
-    <div className="folder-chip" ref={menu.hostRef}>
-      <button
-        type="button"
-        className="folder-chip-button"
-        aria-haspopup="menu"
-        aria-expanded={menu.open}
-        // The full path, because the button only has room for the last segment
-        // and two projects called `web` are not an unusual thing to have open.
-        title={`${path} — start a session somewhere else`}
-        onClick={menu.toggle}
-      >
-        <span className="folder-chip-path">{folderLabel(path)}</span>
-        <svg
-          width="14"
-          height="14"
-          viewBox="0 0 20 20"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.6"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          aria-hidden="true"
-        >
-          <path d={CHEVRON} />
-        </svg>
-      </button>
-
-      {menu.open &&
-        createPortal(
-          <div
-            ref={menu.menuRef}
-            className="folder-menu"
-            role="menu"
-            aria-label="Start a session in"
-            style={{ left: menu.at.left, top: menu.at.top }}
-          >
-            <p className="folder-menu-head">Start a session in</p>
-            {options.map((option) => (
-              <button
-                key={option.path}
-                type="button"
-                role="menuitem"
-                className="folder-menu-item"
-                data-current={option.path === path || undefined}
-                title={option.path}
-                onClick={() => menu.choose(() => onPick(option.path))}
-              >
-                <span className="folder-menu-name">{option.name}</span>
-                <span className="folder-menu-path">{option.path}</span>
-              </button>
-            ))}
-            <button
-              type="button"
-              role="menuitem"
-              className="folder-menu-item folder-menu-browse"
-              onClick={() => menu.choose(onBrowse)}
-            >
-              Another folder…
-            </button>
-          </div>,
-          document.body,
-        )}
-    </div>
+    <span
+      className="folder-title"
+      /*
+       * The whole path, because the line only has room for the last segment and
+       * two projects called `web` are not an unusual thing to have open — and
+       * then the fact behind the missing dropdown, in the one place somebody
+       * would go looking for it. It is a statement about how sessions work, not
+       * an apology: the folder was fixed when the process was spawned.
+       */
+      title={`${path}\nA session keeps this folder for its whole life. Start another to work somewhere else.`}
+    >
+      {folderLabel(path)}
+    </span>
   )
 }

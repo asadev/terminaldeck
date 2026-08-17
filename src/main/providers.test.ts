@@ -1,5 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { PROVIDERS, detectProviders, loginPath, providersFor, resetLoginPathCache } from './providers'
+import {
+  PROVIDERS,
+  detectProviders,
+  loginPath,
+  providersFor,
+  resetLoginPathCache,
+  resolvedProvidersFor,
+} from './providers'
+import { resetAgentBinaryCache } from './agent-binaries'
 
 /**
  * `execFile` is replaced wholesale so the two platforms' *commands* can be
@@ -51,9 +59,16 @@ vi.mock('node:child_process', () => {
 beforeEach(() => {
   calls.ran = []
   resetLoginPathCache()
+  // `detectProviders` now runs each agent once to prove it starts, and that
+  // answer is memoised for twenty seconds. Without this, the second test to ask
+  // gets the first one's answer and finds `calls.ran` empty.
+  resetAgentBinaryCache()
 })
 
-afterEach(() => resetLoginPathCache())
+afterEach(() => {
+  resetLoginPathCache()
+  resetAgentBinaryCache()
+})
 
 describe('the provider table per platform', () => {
   const mac = providersFor('darwin', { SHELL: '/bin/zsh' })
@@ -158,6 +173,21 @@ describe('detecting which agent CLIs are installed', () => {
     ])
   })
 
+  /**
+   * Finding it is not enough — it has to start.
+   *
+   * The whole reason this function changed. `which codex` resolves on a machine
+   * where the npm launcher's vendored binary is missing, so a lookup-only answer
+   * reported Codex installed, the picker offered it, a PTY opened, and the user
+   * read a Node `ENOENT` stack trace in a session they then had to close by
+   * hand. Five times, in one recording.
+   */
+  it('runs each agent once, so a found-but-unstartable binary is not "installed"', async () => {
+    await detectProviders('darwin')
+    const versions = calls.ran.filter((call) => call.args[0] === '--version')
+    expect(versions.map((call) => call.file).sort()).toEqual(['claude', 'codex', 'gemini'])
+  })
+
   it('uses where.exe on Windows', async () => {
     // `which` is not a program there, so the macOS spelling reports every agent
     // as missing and quietly drops every session into a plain shell.
@@ -167,7 +197,13 @@ describe('detecting which agent CLIs are installed', () => {
       gemini: true,
       shell: true,
     })
-    expect(calls.ran.every((call) => call.file === 'where.exe')).toBe(true)
+    // The *lookups* are all `where.exe`; the runnability probe then spawns what
+    // the lookup found, which is the point of it.
+    expect(
+      calls.ran
+        .filter((call) => call.args[0] !== '--version')
+        .every((call) => call.file === 'where.exe'),
+    ).toBe(true)
   })
 
   it('never looks up the shell, which is always there', async () => {
@@ -184,7 +220,40 @@ describe('detecting which agent CLIs are installed', () => {
     expect(shell).toBe('C:\\Windows\\system32\\cmd.exe')
     await detectProviders('win32')
     expect(calls.ran.map((call) => call.args[0])).not.toContain(shell)
-    expect(calls.ran.map((call) => call.args[0]).sort()).toEqual(['claude', 'codex', 'gemini'])
+    expect(
+      calls.ran
+        .filter((call) => call.args[0] !== '--version')
+        .map((call) => call.args[0])
+        .sort(),
+    ).toEqual(['claude', 'codex', 'gemini'])
+    // Nor is it probed: a login shell has no `--version` and no need of one.
+    expect(calls.ran.filter((call) => call.file === shell)).toEqual([])
+  })
+
+  /**
+   * The spawn table points at whatever actually runs.
+   *
+   * `providersFor` stays pure and keeps answering `codex`; this is the version a
+   * session start uses. On a healthy machine — which the mock is, since every
+   * spawn resolves — the two are identical, and asserting that is the pin: a
+   * change that started rewriting `spawn.command` unconditionally would break it
+   * here rather than on somebody's machine.
+   */
+  it('resolves a spawn table that matches the pure one when nothing is broken', async () => {
+    const resolved = await resolvedProvidersFor('darwin', { SHELL: '/bin/zsh' })
+    expect(resolved.codex.spawn.command).toBe('codex')
+    expect(resolved.claude.spawn).toEqual(providersFor('darwin', { SHELL: '/bin/zsh' }).claude.spawn)
+  })
+
+  /**
+   * Inside WSL the command is a `wsl.exe` line whose payload the distribution's
+   * own login shell resolves, so substituting a host path into it would name a
+   * file that side cannot see.
+   */
+  it('leaves a WSL launch line alone', async () => {
+    const target = { distro: 'Ubuntu', cwd: '/home/asad/proj' }
+    const resolved = await resolvedProvidersFor('win32', { COMSPEC: 'cmd.exe' }, target)
+    expect(resolved.codex.spawn.command).toBe('wsl.exe')
   })
 })
 
@@ -297,9 +366,17 @@ describe('detecting agents inside a distribution', () => {
   })
 
   it('asks about the folder’s side only when there is a target', async () => {
-    // No target means the Windows question, unchanged.
+    // No target means the Windows question, unchanged — every *lookup* through
+    // `where.exe`, and nothing through `wsl.exe`. The runnability probe then
+    // spawns what the lookup found, which is a different call and not one this
+    // case is about.
     await detectProviders('win32')
-    expect(calls.ran.every((call) => call.file === 'where.exe')).toBe(true)
+    expect(
+      calls.ran
+        .filter((call) => call.args[0] !== '--version')
+        .every((call) => call.file === 'where.exe'),
+    ).toBe(true)
+    expect(calls.ran.some((call) => call.file === 'wsl.exe')).toBe(false)
   })
 
   it('never claims the shell is missing', async () => {

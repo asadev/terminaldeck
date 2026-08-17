@@ -1,4 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
+// Relative rather than '@shared/brand': vitest runs this file without the
+// electron-vite alias, and the alias is not worth a second module resolver.
+import { BRAND } from '../../shared/brand'
 import { DevServerPanel, type DevServerBridge } from './DevServerPanel'
 import './StartPage.css'
 
@@ -44,6 +47,8 @@ export interface DevPort {
   process: string
   /** True when the process could not be named and only the port answered. */
   guessed: boolean
+  /** Terminal Deck is holding this port itself — see the fold below the list. */
+  ours: boolean
 }
 
 /**
@@ -95,11 +100,30 @@ export function readPorts(value: unknown): DevPort[] {
       port,
       process: typeof rec.process === 'string' ? rec.process : '',
       guessed: rec.guessed === true,
+      // `=== true`, so a main process that predates this field says "not ours"
+      // rather than letting `undefined` become a boolean prop. An older build
+      // then behaves exactly as it did: every port offered, none folded away.
+      ours: rec.ours === true,
     })
   }
   // Named processes first — a port we could not attribute is the least useful
   // row — then by port so the order is stable between scans.
   return out.sort((a, b) => Number(a.guessed) - Number(b.guessed) || a.port - b.port)
+}
+
+/**
+ * Split the scan into the ports somebody can open and the ports this app is
+ * holding.
+ *
+ * Pure and exported because it is the whole of the fix and the only part of it
+ * a test can see: the render below is an effect away from anything, and this is
+ * the rule that decides what is offered as a link.
+ */
+export function splitOwnPorts(ports: readonly DevPort[]): { open: DevPort[]; ours: DevPort[] } {
+  return {
+    open: ports.filter((entry) => !entry.ours),
+    ours: ports.filter((entry) => entry.ours),
+  }
 }
 
 /**
@@ -118,6 +142,8 @@ export function StartPage({ onOpen, failure = null, onRetry, bridge }: Props) {
   const api = bridge ?? (globalThis as { deck?: StartPageBridge }).deck
   const [load, setLoad] = useState<Load>({ state: 'loading' })
   const [address, setAddress] = useState('')
+  /** Whether the fold of this app's own ports is open. Closed is the point. */
+  const [oursOpen, setOursOpen] = useState(false)
 
   const scan = useCallback(
     (force: boolean) => {
@@ -201,33 +227,13 @@ export function StartPage({ onOpen, failure = null, onRetry, bridge }: Props) {
 
         {load.state === 'failed' && <p className="bw-start-note">{load.message}</p>}
 
-        {load.state === 'ready' && load.ports.length === 0 && (
-          <p className="bw-start-note">
-            Nothing is listening on this machine. Start your dev server, then scan again — or type
-            an address above.
-          </p>
-        )}
-
-        {load.state === 'ready' && load.ports.length > 0 && (
-          <>
-            <p className="bw-start-note">Listening on this machine right now:</p>
-            <ul className="bw-start-list">
-              {load.ports.map((p) => (
-                <li key={p.port}>
-                  <button
-                    type="button"
-                    className="bw-start-port"
-                    aria-label={`Open localhost port ${portSummary(p)}`}
-                    onClick={() => onOpen(`http://localhost:${p.port}`)}
-                  >
-                    <span className="bw-start-port-num">:{p.port}</span>
-                    {p.process && <span className="bw-start-port-cmd">{p.process}</span>}
-                    {p.guessed && <span className="bw-start-port-tag">port only</span>}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </>
+        {load.state === 'ready' && (
+          <PortList
+            ports={load.ports}
+            onOpen={onOpen}
+            oursOpen={oursOpen}
+            onToggleOurs={() => setOursOpen((open) => !open)}
+          />
         )}
 
         {/*
@@ -246,5 +252,109 @@ export function StartPage({ onOpen, failure = null, onRetry, bridge }: Props) {
         )}
       </div>
     </div>
+  )
+}
+
+/**
+ * The scan, drawn as two lists rather than one.
+ *
+ * ## Why our own ports are not simply removed
+ *
+ * On the machine in the 2026-08-16 recording, eight of the nine rows this page
+ * offered were Terminal Deck's own listeners and every one of them read
+ * `Terminal` — `lsof`'s column output clamps the command to nine characters and
+ * `Terminal Deck` does not fit. Clicking one loaded the pairing server's answer
+ * to a plain GET: a black page reading *"that is not how to ask"*. So the two
+ * requirements are opposite in shape — the rows must stop being offered, and the
+ * ports must not silently disappear from a list that claims to say what is
+ * listening on this machine.
+ *
+ * A closed fold does both. Nothing in it is a button, so there is no click to
+ * get wrong; opening it says which ports are accounted for and by what.
+ *
+ * Split out and given its own props so the three states it has — nothing at
+ * all, nothing but ours, and a real list — are one component's job rather than
+ * three conditions inline in a page.
+ */
+function PortList({
+  ports,
+  onOpen,
+  oursOpen,
+  onToggleOurs,
+}: {
+  ports: readonly DevPort[]
+  onOpen(url: string): void
+  oursOpen: boolean
+  onToggleOurs(): void
+}) {
+  const { open, ours } = splitOwnPorts(ports)
+
+  return (
+    <>
+      {open.length === 0 ? (
+        <p className="bw-start-note">
+          {ours.length === 0
+            ? 'Nothing is listening on this machine. Start your dev server, then scan again — or type an address above.'
+            : `Nothing is listening here but ${BRAND.name} itself. Start your dev server, then scan again — or type an address above.`}
+        </p>
+      ) : (
+        <>
+          <p className="bw-start-note">Listening on this machine right now:</p>
+          <ul className="bw-start-list">
+            {open.map((p) => (
+              <li key={p.port}>
+                <button
+                  type="button"
+                  className="bw-start-port"
+                  aria-label={`Open localhost port ${portSummary(p)}`}
+                  onClick={() => onOpen(`http://localhost:${p.port}`)}
+                >
+                  <span className="bw-start-port-num">:{p.port}</span>
+                  {p.process && <span className="bw-start-port-cmd">{p.process}</span>}
+                  {p.guessed && <span className="bw-start-port-tag">port only</span>}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+
+      {ours.length > 0 && (
+        <>
+          <button
+            type="button"
+            className="bw-start-fold"
+            aria-expanded={oursOpen}
+            onClick={onToggleOurs}
+          >
+            <svg
+              className="bw-start-fold-caret"
+              width="10"
+              height="10"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.4"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M9 5l7 7-7 7" />
+            </svg>
+            {ours.length} more {ours.length === 1 ? 'port belongs' : 'ports belong'} to {BRAND.name}
+          </button>
+          {oursOpen && (
+            <ul className="bw-start-ours">
+              {ours.map((p) => (
+                <li key={p.port}>
+                  <span className="bw-start-port-num">:{p.port}</span>
+                  <span className="bw-start-port-cmd">{p.process || BRAND.name}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </>
+      )}
+    </>
   )
 }

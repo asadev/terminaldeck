@@ -409,6 +409,56 @@ describe('every colour copied out of the sheet still matches it', () => {
     expect(contrast(ink, paper)).toBeGreaterThan(7)
   })
 
+  /**
+   * The selected tab is painted the surface it opens onto, and that surface is
+   * the terminal's paper.
+   *
+   * This is the same class of bug as the copies above, except that the two
+   * copies are both in this sheet. `--tab-active` was `#ffffff` — a hand-written
+   * `--bg-primary` — and `--bg-primary` *is* `--terminal-bg` in the dark theme,
+   * so the strip's Chrome-shaped tab, the session bar under it and the session
+   * itself all matched there and the arrangement looked deliberate. In the light
+   * theme the terminal is a recessed paper and the chrome is white, so the same
+   * three surfaces were two colours, and the bar in the middle belonged to
+   * neither: *"on dark mode it is actually the same, which I like. But on light
+   * mode it is pure white, and inside the terminal itself it is a little bit
+   * different, like kind of grey."*
+   *
+   * Asserted as equality between the two tokens rather than against a literal,
+   * because the claim is not "the tab is #e8e8e8" — it is "the tab is whatever
+   * the session under it is". Three sheets read `--tab-active` for exactly that
+   * reason (`WorkspaceTabStrip.css`, `shell.css`, `BrowserWorkspace.css`), and
+   * `shell.test.ts` checks that they still name the token rather than a colour
+   * that currently equals it.
+   */
+  it('the selected tab is the surface it opens onto, in both appearances', () => {
+    for (const [name, theme] of THEMES) {
+      expect(get(theme, '--tab-active').toLowerCase(), name).toBe(
+        get(theme, '--terminal-bg').toLowerCase(),
+      )
+    }
+  })
+
+  /**
+   * And the strip it is cut out of is still not that surface.
+   *
+   * The other half of the instruction, and the one a fix for the seam above
+   * could easily have run over: *"but the top header where we see the windows
+   * is different, which is good, which I don't want to change."* The strip
+   * wears `--material-bg`; if that ever equals the tab, the tab stops being a
+   * cut-out and the top band stops being a band.
+   *
+   * Only the dark theme can be compared as a colour — the light `--material-bg`
+   * is an rgba over the app's own gradient, so what it composites to is a
+   * question for a screenshot and not for this file. `rgb()` reads its three
+   * channels, which is enough to say the two are not the same grey.
+   */
+  it('the tab strip is still a different surface from the tab', () => {
+    for (const [name, theme] of THEMES) {
+      expect(rgb(get(theme, '--material-bg')), name).not.toEqual(rgb(get(theme, '--tab-active')))
+    }
+  })
+
   it('the phone client wears the same blue as the desktop', () => {
     // pwa/ is a separate document with its own sheet — there is no import path
     // between them, so this is the only thing holding the two in agreement.
@@ -486,4 +536,115 @@ describe('no retired accent survives anywhere', () => {
       }
     })
   }
+})
+
+/* ------------------------------------------------------------ flat chrome */
+
+/**
+ * The dark theme's chrome is one colour, top to bottom.
+ *
+ * The sidebar and the toolbar are `--material-bg` painted with
+ * `--material-sheen`, over the app's own radial gradient. In the dark theme
+ * those three composited to a 23-level ramp down the height of the rail —
+ * *"lighter at the top, near-black by the footer"* — while the light theme was
+ * already flat, because a white sheen over near-white paper composites to
+ * near-white paper.
+ *
+ * Two claims, because either one alone leaves the surface almost flat, which
+ * reads as a rendering fault rather than as a choice: the fill is opaque, so
+ * nothing shows through it, and the sheen paints nothing on top of it.
+ */
+describe('the dark chrome is flat', () => {
+  const dark = THEMES.find(([name]) => name === 'dark')?.[1]
+  const light = THEMES.find(([name]) => name === 'light')?.[1]
+
+  it('paints the rail and the toolbar with an opaque fill', () => {
+    // Translucent, and the app's `radial-gradient(… --bg-secondary … --bg-sunken)`
+    // shows through it — which is half of the ramp on its own.
+    expect(get(dark!, '--material-bg')).not.toMatch(/rgba|transparent/)
+  })
+
+  it('paints no gradient over it', () => {
+    expect(get(dark!, '--material-sheen')).toBe('none')
+  })
+
+  it('leaves the light theme exactly as it was', () => {
+    // A dark-only regression gets a dark-only fix. The light sheen is what
+    // makes a white dialog read as glass over white paper.
+    expect(get(light!, '--material-sheen')).toContain('linear-gradient')
+    expect(get(light!, '--material-bg')).toContain('rgba')
+  })
+
+  it('keeps the chrome distinguishable from the canvas without a line', () => {
+    // Separate with space, then with a tint, and only then with a line. The
+    // rail is a tint above the canvas; if the two ever meet, the only thing
+    // left marking the edge is a hairline, which is the outcome the brief
+    // spends a paragraph avoiding.
+    expect(get(dark!, '--material-bg')).not.toBe(get(dark!, '--bg-primary'))
+  })
+})
+
+/* --------------------------------------------------------- visible selection */
+
+/**
+ * You can see which row is selected.
+ *
+ * In the dark theme you could not. `--bg-active` was `rgba(255,255,255,0.095)`,
+ * which over the settings rail composites to about twenty levels of separation
+ * — a number that sounds like something and looks, at 3× zoom on the real
+ * screen, like a gap in the list where the current section should be. Every
+ * selected row in the window uses this one token, so all of them were equally
+ * faint: the sidebar's session, the file tree, the git row, the palette.
+ *
+ * Measured as a composite rather than as an alpha, because the alpha on its own
+ * says nothing — 0.095 white is invisible on one surface and loud on another.
+ * What matters is the step it makes on the surface it is actually painted on.
+ *
+ * The numeric floor is asserted for the **dark** theme only, and that is not
+ * the test going easy on the other one. A light selection *darkens* paper, and
+ * the same absolute step is far more visible going down from near-white than
+ * going up from near-black — which is exactly why this was a dark-only fault
+ * and why holding the light theme to a dark theme's number would force a
+ * selection nobody asked for. What the light theme is held to is the thing that
+ * would actually be a bug there: that its selection darkens at all.
+ */
+describe('the selected row is visible on the surface it sits on', () => {
+  /** `rgba(r, g, b, a)` over an opaque base, as an opaque colour. */
+  const over = (tint: string, base: string): number => {
+    const parts = /rgba?\(([^)]+)\)/.exec(tint)
+    if (!parts) throw new Error(`${tint} is not an rgba() value`)
+    const [r, , , a = '1'] = parts[1].split(',').map((piece) => piece.trim())
+    const alpha = Number(a)
+    const [br] = rgb(base)
+    return Math.round(Number(r) * alpha + br * (1 - alpha))
+  }
+
+  /** The chrome each theme actually paints a selected row on: `--material-bg`. */
+  const RAIL: Record<string, string> = { light: '#fafafa', dark: '#212121' }
+
+  const dark = THEMES.find(([name]) => name === 'dark')?.[1]
+  const light = THEMES.find(([name]) => name === 'light')?.[1]
+
+  it('dark selection is at least 24 levels off the rail', () => {
+    const step = Math.abs(over(get(dark!, '--bg-active'), RAIL.dark) - rgb(RAIL.dark)[0])
+    // 0.095 gave 21. The regression is a number just short of visible, so the
+    // floor is written as a number rather than as "looks fine".
+    expect({ step, ok: step >= 24 }).toEqual({ step, ok: true })
+  })
+
+  it('dark selection is clearly stronger than dark hover', () => {
+    // Otherwise the pointer alone looks like the selection, which is the other
+    // half of "you cannot tell where you are".
+    const selected = over(get(dark!, '--bg-active'), RAIL.dark)
+    const hovered = over(get(dark!, '--bg-hover'), RAIL.dark)
+    expect({ apart: selected - hovered >= 12 }).toEqual({ apart: true })
+  })
+
+  it('light selection darkens the paper, and is stronger than its own hover', () => {
+    const rail = rgb(RAIL.light)[0]
+    const selected = over(get(light!, '--bg-active'), RAIL.light)
+    const hovered = over(get(light!, '--bg-hover'), RAIL.light)
+    expect(selected).toBeLessThan(rail)
+    expect(selected).toBeLessThan(hovered)
+  })
 })

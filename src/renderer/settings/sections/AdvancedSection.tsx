@@ -13,13 +13,19 @@ import {
 } from '../settings-bridge'
 
 /**
- * Advanced — launch behaviour, diagnostics, the files on disk, and starting
- * over.
+ * Advanced — diagnostics, the files on disk, and starting over.
  *
- * Restoring sessions on launch landed here when General was cut down to the
- * nine settings people change while working. It is a once-and-forget choice
- * about what the app does before you have touched it, which is the same shape
- * as everything else on this screen.
+ * "Pick up where you left off" has gone back to General. It landed here when
+ * General was cut down to "the settings people change while working", on the
+ * reasoning that it is a once-and-forget launch choice — but the subject of a
+ * setting is not how often you change it:
+ *
+ *   > "Pick up where you left off on launch — I don't know if this one also
+ *   > need to be not here, it is somewhere at wrong place I think, maybe it
+ *   > belongs to some other section."
+ *
+ * It does. What happens to your sessions is General's subject; what is left
+ * here is the pane you open when something is wrong.
  *
  * The paths come from the main process rather than being rebuilt here: only it
  * knows where Electron put `userData` on this machine, and a settings panel
@@ -27,6 +33,88 @@ import {
  * goes by key, never by path, so this is not a channel for opening arbitrary
  * files.
  */
+/**
+ * One row of "where things are kept", split out so its rules can be read.
+ *
+ * `AdvancedSection` fetches the path list in an effect, and this window's tests
+ * are static renders that never run one — so a row tested through the section
+ * could only ever be tested in the state where there are no rows. The same split
+ * `PowerSection` makes, for the same reason: the interesting states are the ones
+ * an effect would have to produce.
+ */
+export function PathRow({
+  entry,
+  canOpen,
+  onCopy,
+  onOpen,
+}: {
+  entry: ConfigPath
+  /** False when this build has no `settings:open-path` channel at all. */
+  canOpen: boolean
+  onCopy(path: string): void
+  onOpen(key: string): void
+}) {
+  return (
+    <li className="settings-path-row">
+      <span className="settings-path-main">
+        <span className="settings-label">
+          {entry.label}
+          {!entry.exists && <span className="settings-badge quiet">not created yet</span>}
+        </span>
+        <span className="settings-help">{entry.purpose}</span>
+        <code className="settings-path">{entry.path}</code>
+      </span>
+      {/*
+        Two buttons that answer two different questions, and only one of them
+        can be answered for a file that is not there yet.
+
+        **Copy** stays live either way, and that is not an oversight: it acts on
+        the *path*, which exists as a string whether or not anything has been
+        written to it. Copying "here is where the debug trace will appear" is a
+        useful thing to be able to do, and the button does exactly what it says.
+
+        **Reveal** cannot. `openConfigPath` refuses a file that does not exist
+        and answers "That file has not been written yet", so before this the row
+        offered a fully-lit button whose only possible outcome was a sentence
+        explaining that it could not work — under a badge already saying so. The
+        badge is the reason, on screen, beside the path: that is what a greyed
+        button here means, and no tooltip is needed to decode it. None would be
+        reachable either, since a disabled button emits no pointer events for
+        the tooltip layer to hang off.
+
+        The Open/Reveal wording is not one action wearing two labels.
+        `openConfigPath` branches on `kind`: a folder goes to `shell.openPath`
+        and opens, a file goes to `shell.showItemInFolder` and is revealed in
+        place — deliberately, so a JSON config is never handed to whatever the
+        OS thinks edits .json. Two verbs for two behaviours, and the titles are
+        what make that legible instead of looking like an inconsistency.
+      */}
+      <span className="settings-path-actions">
+        <Button onClick={() => onCopy(entry.path)} title="Copy this path to the clipboard">
+          Copy
+        </Button>
+        {entry.kind === 'folder' ? (
+          <Button
+            onClick={() => onOpen(entry.key)}
+            disabled={!canOpen}
+            title="Open this folder in your file manager"
+          >
+            Open
+          </Button>
+        ) : (
+          <Button
+            onClick={() => onOpen(entry.key)}
+            disabled={!canOpen || !entry.exists}
+            title={entry.exists ? 'Show this file in your file manager' : undefined}
+          >
+            Reveal
+          </Button>
+        )}
+      </span>
+    </li>
+  )
+}
+
 export function AdvancedSection({ values, save, bridge, loading, reload }: SectionProps) {
   const meta = sectionMeta('advanced')
   const [paths, setPaths] = useState<ConfigPath[] | null>(null)
@@ -119,24 +207,12 @@ export function AdvancedSection({ values, save, bridge, loading, reload }: Secti
     <>
       <SectionHead title={meta.label} blurb={meta.blurb} />
 
-      <Group title="On launch">
-        <SettingList
-          section="advanced"
-          values={values}
-          save={save}
-          disabled={loading}
-          omit={['advanced.debugMode']}
-        />
-      </Group>
-
       <Group title="Diagnostics">
-        <SettingList
-          section="advanced"
-          values={values}
-          save={save}
-          disabled={loading}
-          omit={['advanced.restoreSessions']}
-        />
+        {/* One list again. There were two, with `omit` on each, because two
+            settings on this pane belonged to two different groups; the launch
+            one has gone to General and left this section with a single
+            subject. */}
+        <SettingList section="advanced" values={values} save={save} disabled={loading} />
         <div className="settings-actions">
           <Button onClick={() => open('logs')} disabled={!bridge.openSettingsPath}>
             Open the log folder
@@ -187,32 +263,25 @@ export function AdvancedSection({ values, save, bridge, loading, reload }: Secti
         ) : (
           <ul className="settings-paths">
             {files.map((entry) => (
-              <li key={entry.key} className="settings-path-row">
-                <span className="settings-path-main">
-                  <span className="settings-label">
-                    {entry.label}
-                    {!entry.exists && <span className="settings-badge quiet">not created yet</span>}
-                  </span>
-                  <span className="settings-help">{entry.purpose}</span>
-                  <code className="settings-path">{entry.path}</code>
-                </span>
-                <span className="settings-path-actions">
-                  <Button onClick={() => copy(entry.path)}>Copy</Button>
-                  <Button onClick={() => open(entry.key)} disabled={!bridge.openSettingsPath}>
-                    {entry.kind === 'folder' ? 'Open' : 'Reveal'}
-                  </Button>
-                </span>
-              </li>
+              <PathRow
+                key={entry.key}
+                entry={entry}
+                canOpen={Boolean(bridge.openSettingsPath)}
+                onCopy={copy}
+                onOpen={open}
+              />
             ))}
           </ul>
         )}
       </Group>
 
       <Group title="Start over">
-        {/* Held at two clauses rather than one. "Settings only" is the whole
-            point of the control and "your projects are safe" is the question
-            anybody hovers a red button asking — cutting either would leave a
-            destructive action less clear than it is dangerous. */}
+        {/* Held at two clauses rather than one, and exempt from the cutting
+            that took every other paragraph in this window down to a line.
+            "Settings only" is the whole point of the control and "your projects
+            are safe" is the question anybody hovers a red button asking — a
+            destructive action must never be less clear than it is dangerous,
+            and an ⓘ is a worse place for either than the screen. */}
         <p className="settings-prose">
           Every setting in this window goes back to its default. Projects, sessions and accounts are
           untouched.

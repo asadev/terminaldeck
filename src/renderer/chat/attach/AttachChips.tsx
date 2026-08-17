@@ -9,12 +9,35 @@ import './AttachChips.css'
  * text, a folder as a listing, and an image as an image the model can see. That
  * last one is the surprising one — it was measured rather than assumed — and it
  * is worth the user knowing before they send.
+ *
+ * ## Where it came from is part of what it is
+ *
+ * A chip has always shown a project-relative path, which is short because it is
+ * relative and unambiguous because everything was in one project. Now that a
+ * file can come from anywhere on the disk, `basename` alone would draw
+ * `screenshot.png` for a file in the project and `screenshot.png` for one on the
+ * desktop — the same six words for two different files, in a row whose whole job
+ * is to say what is about to be sent.
+ *
+ * So an outside attachment is marked, and the mark is the word "outside" rather
+ * than a colour: this row is read for its content, and a tint that means
+ * something only to whoever wrote it is not a label. The full path is on the
+ * hover for both, which is where the disambiguation actually lives.
  */
 
+/**
+ * What the agent is being handed, with its article.
+ *
+ * The article is in the table rather than in the sentence because one of the
+ * three words starts with a vowel, and the sentence built with a hard-coded "a"
+ * read "sent as a image reference" on every screenshot ever attached. Three
+ * strings is cheaper than a rule, and it cannot be wrong for a fourth kind
+ * because a fourth kind would have to be added here.
+ */
 const KIND_LABEL: Record<Attachment['kind'], string> = {
-  file: 'file',
-  folder: 'folder',
-  image: 'image',
+  file: 'a file',
+  folder: 'a folder',
+  image: 'an image',
 }
 
 interface Props {
@@ -33,12 +56,17 @@ export function AttachChips({ attachments, onRemove, notice }: Props) {
         <span
           key={attachment.path}
           className={`at-chip at-chip-${attachment.kind}`}
-          title={`${attachment.relPath} — sent as a ${KIND_LABEL[attachment.kind]} reference`}
+          title={
+            attachment.outside === true
+              ? `${attachment.path} — outside this project, sent as ${KIND_LABEL[attachment.kind]} reference`
+              : `${attachment.relPath} — sent as ${KIND_LABEL[attachment.kind]} reference`
+          }
         >
           <span className="at-chip-kind" aria-hidden="true">
             {attachment.kind === 'folder' ? '/' : attachment.kind === 'image' ? '▣' : '·'}
           </span>
           <span className="at-chip-name">{basename(attachment.relPath)}</span>
+          {attachment.outside === true ? <span className="at-chip-out">outside</span> : null}
           <button
             type="button"
             className="at-chip-x"

@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { readFailure, withDeadline } from '../deadline'
+import { recall, remember } from '../panel-cache'
 import { panelSpec } from '../shell/panels'
 import { PageEmpty } from './PageEmpty'
 import './FileViewer.css'
@@ -17,18 +19,55 @@ interface FsBridge {
   readFile(root: string, relPath: string): Promise<FileRead>
 }
 
+/**
+ * How long one file read has to come back.
+ *
+ * The main process caps what it will read at `MAX_FILE_BYTES` and reads it off
+ * a local disk, so a working read is milliseconds. Ten seconds is the line past
+ * which nothing is coming — and before this line existed, the pane simply
+ * printed "Loading…" for the rest of the session.
+ */
+const READ_DEADLINE_MS = 10_000
+
+/**
+ * How long a file already read stays good for without asking again.
+ *
+ * Short, and much shorter than the tree's: a file is the thing an agent is
+ * actively rewriting while you watch, so five seconds only covers switching to
+ * a terminal and straight back. Past it the cached text is still painted — the
+ * pane never goes blank — and the re-read happens underneath it.
+ */
+export const READ_FRESH_MS = 5_000
+
+/**
+ * The biggest file worth keeping in memory to save a re-read.
+ *
+ * The main process will hand over anything up to `MAX_FILE_BYTES` (2 MB), and
+ * the cache holds up to `MAX_ENTRIES` reads — so caching without a ceiling
+ * would let a browse through a few large files park a hundred megabytes of text
+ * in the renderer for the sake of a saving measured in milliseconds. A quarter
+ * of a megabyte covers every source file and README in this repository, which
+ * is the case this exists for; past it the file is read again, which is what it
+ * always did.
+ */
+export const MAX_CACHED_BYTES = 256 * 1024
+
+function cacheKey(root: string, relPath: string): string {
+  return `files:read:${root}|${relPath}`
+}
+
+/** Small enough to be worth holding on to. Anything else is re-read. */
+function worthCaching(read: FileRead): boolean {
+  return read.bytes <= MAX_CACHED_BYTES
+}
+
 function readFile(root: string, relPath: string): Promise<FileRead> {
   const api = (window as unknown as { deck?: Partial<FsBridge> }).deck
   if (!api?.readFile) {
     return Promise.reject(new Error('preload bridge is missing terminaldeck.readFile'))
   }
-  return api.readFile(root, relPath)
-}
-
-/** Electron wraps IPC rejections; the prefix is noise on screen. */
-function messageOf(err: unknown): string {
-  const raw = err instanceof Error ? err.message : String(err)
-  return raw.replace(/^Error invoking remote method '[^']*':\s*/, '')
+  const name = relPath.slice(relPath.lastIndexOf('/') + 1)
+  return withDeadline(api.readFile(root, relPath), `Reading ${name}`, READ_DEADLINE_MS)
 }
 
 export function formatBytes(bytes: number): string {
@@ -423,7 +462,7 @@ export function renderTokens(tokens: readonly Token[]): ReactNode[] {
   )
 }
 
-type ViewState =
+export type ViewState =
   | { status: 'empty' }
   | { status: 'loading'; path: string }
   | { status: 'error'; path: string; message: string }
@@ -437,6 +476,37 @@ type ViewState =
  * "No file open" and then replaces it with a README, which reads as a bug.
  */
 const EMPTY_GRACE_MS = 300
+
+/**
+ * What the pane says in its body, and what it says in its header — decided
+ * once, together, so the two can never contradict each other.
+ *
+ * This is the whole of a report. Asad's frames show the pane printing
+ * **"Loading…" twice at the same moment**: small in the top-right, from the
+ * header's meta slot, and large in the middle, from the body. They were two
+ * independent expressions over the same state, added at different times, each
+ * correct on its own.
+ *
+ * The rule now is that the header carries *facts about the file* — its size,
+ * its line count — and says nothing at all until it has them, and the body
+ * carries *what is happening*. One sentence about progress on screen, in one
+ * place, always.
+ */
+export function viewerBody(
+  view: ViewState,
+  showEmpty: boolean,
+): { kind: 'nothing' | 'empty' | 'notice' | 'error' | 'doc'; text?: string } {
+  if (view.status === 'empty') return showEmpty ? { kind: 'empty' } : { kind: 'nothing' }
+  if (view.status === 'loading') return { kind: 'notice', text: 'Loading…' }
+  if (view.status === 'error') return { kind: 'error', text: view.message }
+  return { kind: 'doc' }
+}
+
+/** The right-hand side of the header. Empty unless there is something to state. */
+export function viewerMeta(view: ViewState, lines: number | null): string {
+  if (view.status !== 'ready' || view.read.kind !== 'text' || lines === null) return ''
+  return `${lines.toLocaleString()} lines · ${formatBytes(view.read.bytes)}`
+}
 
 interface Props {
   /** Absolute path of the project root. */
@@ -465,14 +535,30 @@ export function FileViewer({ root, path, className }: Props) {
     }
 
     let live = true
-    setView({ status: 'loading', path })
+
+    /*
+     * The file as it was last read, before anything is asked for.
+     *
+     * The shell unmounts this whole page whenever a session takes the window,
+     * so without this every return to Files re-read the open file from disk and
+     * flashed a loading state over text that had not changed. A fresh entry is
+     * the answer outright; a stale one is painted and re-read underneath.
+     */
+    const held = recall<FileRead>(cacheKey(root, path), READ_FRESH_MS)
+    if (held) setView({ status: 'ready', path, read: held.value })
+    else setView({ status: 'loading', path })
+    if (held?.fresh) return
 
     readFile(root, path)
       .then((read) => {
+        if (worthCaching(read)) remember(cacheKey(root, path), read)
         if (live) setView({ status: 'ready', path, read })
       })
       .catch((err: unknown) => {
-        if (live) setView({ status: 'error', path, message: messageOf(err) })
+        // A background re-read that fails leaves the text on screen alone —
+        // replacing a file somebody is reading with an error message because a
+        // silent check went wrong would be the refresh doing the damage.
+        if (live && !held) setView({ status: 'error', path, message: readFailure(err) })
       })
 
     // A slower reply for the previous file must not land after this one.
@@ -524,6 +610,7 @@ export function FileViewer({ root, path, className }: Props) {
 
   const name = path ? path.slice(path.lastIndexOf('/') + 1) : ''
   const extension = path ? extensionOf(path).toUpperCase() : ''
+  const body = viewerBody(view, showEmpty)
 
   return (
     <section className={`file-viewer${className ? ` ${className}` : ''}`} aria-label="File viewer">
@@ -533,13 +620,10 @@ export function FileViewer({ root, path, className }: Props) {
             {name}
           </span>
           {extension && <span className="file-viewer-badge">{extension}</span>}
-          <span className="file-viewer-meta">
-            {view.status === 'ready' && view.read.kind === 'text' && doc
-              ? `${doc.count.toLocaleString()} lines · ${formatBytes(view.read.bytes)}`
-              : view.status === 'loading'
-                ? 'Loading…'
-                : ''}
-          </span>
+          {/* Facts about the file, and nothing else — see `viewerMeta`. This
+              slot used to print "Loading…" as well, at the same moment the body
+              was printing it, which is the duplicate Asad's frames caught. */}
+          <span className="file-viewer-meta">{viewerMeta(view, doc?.count ?? null)}</span>
         </header>
       )}
 
@@ -550,16 +634,16 @@ export function FileViewer({ root, path, className }: Props) {
         role="region"
         aria-label={path ? `Contents of ${name}` : 'No file open'}
       >
-        {view.status === 'empty' && showEmpty && (
+        {body.kind === 'empty' && (
           <PageEmpty icon={panelSpec('files').icon} title="Nothing to open">
             This project has no file at its top level to show.
           </PageEmpty>
         )}
 
-        {view.status === 'loading' && <p className="file-viewer-notice">Loading…</p>}
+        {body.kind === 'notice' && <p className="file-viewer-notice">{body.text}</p>}
 
-        {view.status === 'error' && (
-          <p className="file-viewer-notice error">Could not open this file — {view.message}</p>
+        {body.kind === 'error' && (
+          <p className="file-viewer-notice error">Could not open this file — {body.text}</p>
         )}
 
         {view.status === 'ready' && view.read.kind === 'too-large' && (

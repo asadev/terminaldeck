@@ -115,6 +115,11 @@ describe('every declared control has a host that checks it', () => {
     'chat.dictate': 'renderer/components/ChatComposer.tsx',
     'chat.connectors': 'renderer/chat/attach/AttachMenu.tsx',
     'chat.usage': 'renderer/components/ChatView.tsx',
+    // The chrome's usage bar asks for itself rather than being asked for by the
+    // cluster that holds it: `SessionControls` composes it, but the question
+    // "is this feature installed" belongs to the thing that would be left
+    // behind, and that is the bar.
+    'chrome.usage': 'renderer/shell/UsageBar.tsx',
     // Split's segment is drawn by ModeSwitch but decided by the window, which
     // is the file that knows whether the feature is installed.
     'window.split': 'renderer/App.tsx',
@@ -123,6 +128,11 @@ describe('every declared control has a host that checks it', () => {
     // now, which names the control id — the point of the check below is that
     // *something* in the host file asks, not how it phrases the question.
     'sidebar.browser': 'renderer/App.tsx',
+    // And the bell on the Settings line, by the same arrangement again. It used
+    // to be declared as a panel, so the `panels={PANELS.filter(…)}` seam above
+    // covered it; Alerts is a pop-up now and not a view, so the thing that can
+    // be left behind is this control and the window is what asks about it.
+    'sidebar.alerts': 'renderer/App.tsx',
   }
 
   for (const control of CONTROL_IDS) {
@@ -138,20 +148,20 @@ describe('every declared control has a host that checks it', () => {
   }
 })
 
-describe('the store has a way in', () => {
-  it('is a section of the settings window', () => {
-    expect(SECTIONS.map((section) => section.id)).toContain('features')
-    expect(read('renderer/settings/SettingsWindow.tsx')).toContain('features: FeaturesSection')
-  })
-
-  it('is where a command for a missing feature lands', () => {
-    // The store being reachable only from a rail somebody has to already know
-    // about is the difference between a feature store and a hidden one.
-    expect(APP).toContain("openSettings('features')")
-  })
-})
-
-describe('what the store promises about itself', () => {
+/**
+ * The store is gone, and these three tests went with it.
+ *
+ * They pinned the shopfront: that `features` was a settings section rendering
+ * `FeaturesSection`, that a command for a missing feature landed there, and
+ * that its copy said "Nothing is downloaded" and never said "plugin". The
+ * section id survives — it is the pane now labelled **Tools** — but the pane
+ * behind it holds one switch rather than ten rows with Install buttons.
+ *
+ * What is worth pinning now is that nothing was stranded by the removal, and
+ * that is asserted where it can be seen: `registry.test.ts` requires every
+ * feature to ship `on` except the one with a switch of its own.
+ */
+describe('what the app promises about a feature', () => {
   it('never calls any of this a plugin', () => {
     /*
      * "Plugins" promises an ecosystem — third-party authors, an API, code this
@@ -159,15 +169,17 @@ describe('what the store promises about itself', () => {
      * be a promise the app breaks, so it is not in the copy anybody reads.
      */
     const copy = [
-      read('renderer/settings/sections/FeaturesSection.tsx'),
+      read('renderer/settings/sections/ToolsSection.tsx'),
       read('renderer/features/FeatureOffer.tsx'),
       ...FEATURES.flatMap((entry) => [entry.name, entry.summary, entry.where]),
     ].join('\n')
     expect(/plug-?in/i.test(copy)).toBe(false)
   })
 
-  it('says the code never left, because that is why reinstalling is instant', () => {
-    const section = read('renderer/settings/sections/FeaturesSection.tsx')
-    expect(section).toContain('Nothing is downloaded')
+  it('keeps Tools reachable as a section of the settings window', () => {
+    // The id is `features` and the label is "Tools": `App.tsx` names this id
+    // and is a file no agent may edit while others are working here.
+    expect(SECTIONS.map((section) => section.id)).toContain('features')
+    expect(read('renderer/settings/SettingsWindow.tsx')).toContain('features: ToolsSection')
   })
 })

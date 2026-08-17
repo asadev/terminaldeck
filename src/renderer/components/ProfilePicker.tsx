@@ -1,9 +1,13 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type FormEvent } from 'react'
 import type { ProviderId } from '@shared/types'
+import { profileLoginLabel } from '../accounts'
 import { folderName } from '../session-title'
 import { Modal } from './Modal'
 import { ProviderBadge } from './ProviderBadge'
 import { providerOption } from './ProviderPicker'
+// Relative, not '@shared/…': vitest runs without the electron-vite alias, so a
+// *value* import through it resolves in the app and throws in a test.
+import { CUSTOM_LOGINS_NOTE, isCustomProviderId } from '../../shared/custom-agents'
 import './ProfilePicker.css'
 
 /**
@@ -208,6 +212,19 @@ export function profileBadges(
 }
 
 /**
+ * What one login is called in a list you choose it from.
+ *
+ * Declared in `accounts.ts` and re-exported here, where it was written and
+ * where this dialog's callers still import it from. It moved because it stopped
+ * being this dialog's rule: the sidebar rows, the Overview cards, both Settings
+ * lists and the account chip's own menu all print a login now, and a ladder
+ * five screens climb belongs beside the other rungs rather than inside one of
+ * the five. The behaviour is unchanged — see the note on the declaration for
+ * what each rung is and why the third one exists.
+ */
+export { profileLoginLabel }
+
+/**
  * Whether an account applies to this agent at all, and one line saying why not.
  *
  * Read out of the provider catalogue rather than written here, so there is one
@@ -227,6 +244,20 @@ export function profileBadges(
  */
 export function isolationNotice(provider: ProviderId | undefined): string | null {
   if (provider === undefined) return null
+  /*
+   * An agent somebody added, answered before the catalogue is consulted at all.
+   *
+   * `providerOption` reads the *static* catalogue, which cannot hold an agent
+   * that exists only on this machine, so it answers undefined — and the branch
+   * below then returns null, meaning "no claim either way". That is the right
+   * answer for a provider nothing knows, and the wrong one here: this build
+   * knows exactly what it knows about an added agent, which is nothing about its
+   * login. Without this line the New-session dialog left the account picker
+   * enabled and named an account the session would not run as, because
+   * `supportsProfiles` is false for these ids and the main process attaches no
+   * profile at all.
+   */
+  if (isCustomProviderId(provider)) return CUSTOM_LOGINS_NOTE
   const option = providerOption(provider)
   // A provider this build has never heard of: no claim either way, because the
   // alternative is telling somebody their agent has no accounts when the truth
@@ -486,7 +517,13 @@ export function ProfilePicker({ open, projectPath, provider, onClose, onPick }: 
                           clash check is per agent for exactly that reason — so
                           the mark is what tells the rows apart at a glance. */}
                       <ProviderBadge provider={profile.provider} />
-                      {profile.name}
+                      {/* Not `profile.name`: for an agent's own install that is
+                          a generated key — see `profileLoginLabel`. Nothing
+                          here has asked the agent who is signed in, so this
+                          dialog only ever reaches the lower two rungs; the row
+                          under it carries the config directory, which is the
+                          thing that tells two logins apart with certainty. */}
+                      {profileLoginLabel(profile, undefined)}
                       {badges.map((badge) => (
                         <span key={badge} className="profiles-badge">
                           {badge}

@@ -1,0 +1,226 @@
+# The Copilot
+
+> **Scope, sharpened 2026-08-17 — read this before anything below.**
+>
+> Asad: *"This one will not be like a general personal assistant. This one will
+> be more of a personal assistant **of a developer**, to help him get the
+> developments done. Not to do the marketing for him, not to do the emails for
+> him, not those kinds of things — most probably for developers, to get things
+> done for development."*
+>
+> So: no inbox, no calendar, no social, no CRM. Every capability must serve
+> someone trying to ship code. The mechanism described below — a real session
+> with an MCP server, its own memory and an action log — is unchanged and
+> correct; what changes is **what it is good at**.
+>
+> The advantage to build on is the one this app uniquely has: it runs *many*
+> agents at once and owns their ptys, transcripts, git state and lifecycle. A
+> CLI agent knows only its own session. Triaging a fleet, summarising an
+> overnight run, catching a session that is stuck or looping, reviewing a diff
+> before it lands, and turning a vague ask into a properly-scoped prompt for a
+> sub-session are the capabilities worth building first.
+>
+> `COPILOT-CAPABILITIES.md` supersedes this file where the two disagree. Note
+> that the copilot's own `CLAUDE.md`, written by the runtime pass before this
+> constraint was set, will need revising to match.
+
+Asad, 2026-08-17. The whole feature is in one sentence of his:
+
+> *"exactly like you are a commander, exactly like you are working now for me —
+> but now you are working in folders and files, I don't know which files where
+> and all that stuff. Here I can actually see it."*
+
+So this is not "add a chatbot to the sidebar". He already has a commander; what
+he does not have is a **window into one**. Every design decision below is
+settled by asking which option makes the machinery visible.
+
+---
+
+## What it is, mechanically
+
+**The copilot is a real session, pinned above the session list, running the
+Claude CLI with a Terminal Deck MCP server attached and a working directory of
+its own.**
+
+Not an in-process SDK agent, not a bespoke chat backend. A session. The reason
+is his requirement, not elegance:
+
+| He asked for | A session gives it for free |
+|---|---|
+| *"see all of his files"* | Its cwd is a real folder. Open it in Files. |
+| *"whatever files it reads in the beginning… properly organized"* | Its startup reads **are** `CLAUDE.md` + `memory/`. The settings pane lists the actual files. |
+| *"see how it started the session, how it worked for us"* | It has a normal transcript. The transcript viewer already exists. |
+| *"proper memory… its own, not the other sessions'"* | A `memory/` folder that only it writes to. |
+| *"we can connect any Claude"* | The profile system already built. |
+
+Anything bespoke would have to re-implement all five, and would be a black box —
+the exact thing he is asking to escape.
+
+### Layout
+
+```
+<userData>/copilot/          the copilot may write in here
+  CLAUDE.md              instructions — what it is, what it may do
+  memory/                its own memory, one file per fact (the pattern he already uses)
+
+<userData>/routines/      one file per routine, human-readable
+<userData>/copilot-log/   actions.jsonl — every action it took, append-only
+```
+
+All four are shown in **Settings → Copilot**, as files, editable. That pane is
+the answer to *"so we can see and learn how our copilot is working."*
+
+**Two of them moved out of that folder, and the split is the point.** As first
+written, all four sat under `<userData>/copilot/` — which is the one directory
+the copilot's confinement lets it write to. That made a routine file something
+it could author without the confirmation a person is owed, and made the action
+log something the audited party could append to, edit or delete. Neither is a
+thing an instruction can prevent. Routines are now reachable only through
+`routines/ipc.ts` or a confirmed tool call; the log is written by the app alone,
+and the copilot adds a line to it with the `log.note` tool. `copilot-home.ts`
+carries the argument, and `copilot-writable-boundary.test.ts` and
+`copilot-log-boundary.test.ts` prove both refusals against a real `sandbox-exec`.
+
+---
+
+## What it can actually do
+
+Two tool surfaces, and the split matters.
+
+**Native Claude Code tools** (Read/Write/Bash/Edit) — it gets these because it
+is a CLI session. This is also the first real security question: Bash is the
+whole machine. It must run under the folder-confinement already built for
+sessions (macOS Seatbelt, Windows AppContainer) — that work exists and applies
+here unchanged. The copilot is not exempt from it because it is ours.
+
+**A `deck-control` MCP server** — the part that does not exist yet. It exposes
+the app's own IPC surface, which is already large:
+
+- `sessions.list` · `sessions.get` · `sessions.transcript` · `sessions.start` ·
+  `sessions.send` · `sessions.stop`
+- `projects.list` · `git.status`
+- `settings.read` · `settings.write`
+- `alerts.list`
+- `routines.list` · `routines.create` · `routines.delete`
+
+That is nearly the whole request — *"it can tell you about the other sessions
+running, you can ask him about any other session"* is `sessions.list` +
+`sessions.transcript`. *"It can do settings"* is `settings.write`. *"It can
+start sessions"* is `sessions.start`.
+
+Memory needs no tools. It is files, and it already has Read/Write.
+
+### Permission tiers
+
+It can spend money, change settings and delete work, so:
+
+| Tier | Examples | Behaviour |
+|---|---|---|
+| Read | list sessions, read a transcript, read settings | always allowed |
+| Act | start a session, send to a session | allowed, logged, undoable by stopping |
+| Alter | write settings, delete a session, create a routine | **confirmed in the UI**, logged |
+
+Every call lands in `<userData>/copilot-log/actions.jsonl` and gets a row in
+Settings → Copilot → Activity. An agent that can silently rewrite your settings
+is not a assistant, it is a fault — and, by the same argument, neither is one
+that can silently rewrite the record of what it did, which is why that file is
+outside the folder it may write to.
+
+---
+
+## Copilot sessions
+
+Sessions it starts are tagged `origin: 'copilot'` and grouped under **Copilot
+sessions** in the sidebar, separate from your own. Each one links back to the
+copilot turn that spawned it, and that turn links forward to the session — so
+"why does this exist" is one click in either direction.
+
+This needs a new field on session metadata, and the sidebar grouping the
+tab-strip work is already touching. It should land after that settles, not
+alongside it.
+
+---
+
+## Routines
+
+His words: *"people can automate things and run some tasks automatically, some
+routine tasks."*
+
+A routine is **trigger → prompt → where it runs**. One file each, in
+`routines/`, readable and editable by hand.
+
+On triggers, his own standing preference decides the design — recorded from an
+earlier session:
+
+> *"events, not polling — webhooks/APIs/push over crons and timers, they make
+> the system heavier."*
+
+So the trigger list is event-first, and schedule is one entry in it rather than
+the foundation:
+
+- a session finishes, or goes idle N minutes
+- a session fails, or an alert fires
+- git state changes in a project (already watched — `watchGit` exists)
+- a file or folder changes
+- a schedule
+- manual / asked for by name
+
+Everything except schedule is already emitted somewhere in this app. The
+routine engine subscribes; it does not poll.
+
+Routines run **through the copilot**, not beside it — a routine is a saved
+instruction to the same agent, so there is one system to understand and one
+action log to read.
+
+---
+
+## Where you talk to it
+
+Pinned at the top of the sidebar, above the session list, as he described. It
+opens a full chat view rather than a floating box — a floating box would fight
+the tab strip that is being rebuilt right now, and it needs room to show what it
+did, not just what it said.
+
+macOS first. He explicitly deferred other channels: *"let's not think about the
+other channels."*
+
+---
+
+## Remote, and why it is last
+
+*"We might not give this copilot to others… for copilot we need to separately
+connect, because we don't want to give this copilot to others."*
+
+Correct instinct, and the existing model already supports it: pairing grants a
+device access to specific folders. Copilot access becomes a **separate
+capability grant**, off by default, granted per device. A paired phone gets
+terminal access and no copilot unless you say so.
+
+Deliberately phase 4. Remote access to an agent that can rewrite settings and
+spawn sessions is the highest-stakes surface in the product, and it should be
+built last, against a copilot whose permission model has already been used in
+anger locally.
+
+---
+
+## Order
+
+1. **Copilot as a session** — the folder, `CLAUDE.md`, memory, pinned entry, chat
+   view, transcript. Talks, remembers, reads its own files. No powers yet.
+2. **`deck-control` MCP server + permission tiers + action log.** Now it can see
+   and do. This is the bulk of the work.
+3. **Copilot sessions group + routines.** Needs 1 and 2; the grouping also needs
+   the tab-strip work to have settled.
+4. **Remote capability grant.**
+
+---
+
+## Open, and worth his answer before phase 2
+
+- **Cost.** An always-available agent with a wide tool surface bills on every
+  question, and reading a transcript to answer "how is that session doing" is a
+  large prompt. It should show its own spend using the cost work landing now —
+  but it is worth knowing whether he wants a ceiling on it.
+- **Which account.** Any Claude profile, per the profile system. Whether the
+  copilot should be *pinned* to one profile rather than following the app's
+  current account is not obvious; pinned is the safer default.

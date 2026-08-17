@@ -5,7 +5,6 @@ import {
   describeAge,
   formatPercent,
   formatTokens,
-  formatUsd,
   isStale,
   levelOfPercent,
   pickSession,
@@ -13,9 +12,9 @@ import {
   readPlanSnapshot,
   readProjectSummary,
   sameProject,
-  spendToday,
   startOfDay,
   tokenTotals,
+  usageToday,
 } from './usage-model'
 
 const DAY = 24 * 60 * 60 * 1000
@@ -32,13 +31,7 @@ function session(overrides: Partial<SessionSummary> = {}): SessionSummary {
     cwd: '/p',
     models: ['claude-opus-5'],
     requests: 4,
-    usage: usage(),
-    cost: {
-      cost: { input: 0, output: 0, cacheWrite: 0, cacheRead: 0, total: 1 },
-      byModel: {},
-      unpricedModels: [],
-      usedLegacyRate: false,
-    },
+    usage: usage({ output: 1000 }),
     context: null,
     warnings: [],
     preContextTokens: 0,
@@ -76,15 +69,13 @@ describe('reading what the bridge sent', () => {
           requests: 3,
           compactions: 2,
           usage: { input: 10, output: 5, cacheRead: 900, cacheWrite5m: 3, cacheWrite1h: 7 },
-          cost: { cost: { total: 1.5 }, unpricedModels: ['mystery'], usedLegacyRate: true },
           context: { tokens: 10, window: 100, percent: 10, remaining: 90, level: 'ok' },
           warnings: [{ kind: 'context-window', level: 'warning', percent: 72, message: 'Context 72% full.' }],
         },
       ],
     })
     expect(summary?.scanning).toBe(true)
-    expect(summary?.sessions[0].cost.unpricedModels).toEqual(['mystery'])
-    expect(summary?.sessions[0].cost.usedLegacyRate).toBe(true)
+    expect(summary?.sessions[0].usage.cacheRead).toBe(900)
     expect(summary?.sessions[0].compactions).toBe(2)
     expect(summary?.sessions[0].warnings[0].message).toBe('Context 72% full.')
   })
@@ -111,7 +102,7 @@ describe('picking the session the strip is about', () => {
   })
 
   it('prefers the transcript actually open', () => {
-    // Reading back an older session must show that session's cost, not the
+    // Reading back an older session must show that session's numbers, not the
     // live one's.
     expect(pickSession(summary, { transcriptPath: '/t/old.jsonl' })?.sessionId).toBe('old')
   })
@@ -130,7 +121,7 @@ describe('picking the session the strip is about', () => {
   })
 })
 
-describe("today's spend", () => {
+describe('today’s usage', () => {
   const dayStart = startOfDay(NOW)
 
   it('counts only sessions active today', () => {
@@ -141,14 +132,14 @@ describe("today's spend", () => {
         session({ sessionId: 'b', lastActivityAt: dayStart - 1, startedAt: dayStart - DAY }),
       ],
       usage: usage(),
-      cost: { cost: { input: 0, output: 0, cacheWrite: 0, cacheRead: 0, total: 2 }, byModel: {}, unpricedModels: [], usedLegacyRate: false },
+      usageByModel: {},
       requests: 8,
       activeSessionId: 'a',
       scanning: false,
       updatedAt: NOW,
     }
-    const today = spendToday(summary, NOW)
-    expect(today.total).toBe(1)
+    const today = usageToday(summary, NOW)
+    expect(today.tokens).toBe(1000)
     expect(today.sessions).toBe(1)
   })
 
@@ -157,17 +148,17 @@ describe("today's spend", () => {
       cwd: '/p',
       sessions: [session({ startedAt: dayStart - DAY, lastActivityAt: NOW })],
       usage: usage(),
-      cost: { cost: { input: 0, output: 0, cacheWrite: 0, cacheRead: 0, total: 1 }, byModel: {}, unpricedModels: [], usedLegacyRate: false },
+      usageByModel: {},
       requests: 4,
       activeSessionId: null,
       scanning: false,
       updatedAt: NOW,
     }
-    expect(spendToday(summary, NOW).carriedOver).toBe(1)
+    expect(usageToday(summary, NOW).carriedOver).toBe(1)
   })
 
   it('is zero, not a crash, with nothing to add up', () => {
-    expect(spendToday(null, NOW)).toEqual({ total: 0, sessions: 0, carriedOver: 0, hasUnpriced: false })
+    expect(usageToday(null, NOW)).toEqual({ tokens: 0, sessions: 0, carriedOver: 0 })
   })
 })
 
@@ -207,13 +198,6 @@ describe('context readout', () => {
 })
 
 describe('formatting', () => {
-  it('agrees with `cost.ts`: two places, and never $0.00 for a real spend', () => {
-    expect(formatUsd(0.0004)).toBe('<$0.01')
-    expect(formatUsd(0)).toBe('$0.00')
-    expect(formatUsd(2.1013)).toBe('$2.10')
-    expect(formatUsd(12.345)).toBe('$12.35')
-  })
-
   it('has a billion tier, which long sessions reach on cache reads alone', () => {
     expect(formatTokens(1_500_000_000)).toBe('1.5B')
     expect(formatTokens(903_012)).toBe('903k')

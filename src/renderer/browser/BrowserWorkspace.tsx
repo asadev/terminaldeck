@@ -1,11 +1,34 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
-import { CapturePanel } from './CapturePanel'
+import { CapturePopup } from './CapturePopup'
 import { DeviceBar } from './DeviceBar'
+import { DrawLayer, type DrawSurface } from './DrawLayer'
+import { DrawPanel } from './DrawPanel'
 import { RecorderPanel } from './RecorderPanel'
+import { ScreenshotPopup } from './ScreenshotPopup'
 import { SessionModal } from './SessionModal'
 import { Toolbar } from './Toolbar'
 import {
+  modeChanges,
+  modeHint,
+  toggleMode as nextModes,
+  type BrowserMode,
+  type BrowserModes,
+} from './modes'
+import { undoMark, type Mark, type MarkKind } from './marks'
+import {
+  drawAvailable,
+  readFrame,
+  readMarkedShot,
+  resolveDrawApi,
+  type DrawApi,
+  type PageFrame,
+} from './draw-bridge'
+import { anchorInWindow } from './popup-anchor'
+import { useAgentTarget } from './useAgentTarget'
+import type { AgentSessionBridge } from './agent-target'
+import {
   appCanvasColor,
+  humanError,
   missingBridgeMethods,
   recordingAccent,
   resolveBrowserBridge,
@@ -97,10 +120,30 @@ export interface BrowserWorkspaceProps {
   startUrl?: string
   /** Persist a new start page — the panel's own "set as start page" button. */
   onStartUrl?: (url: string) => void
-  /** Receives a single line for the agent. Absent means no session is focused. */
+  /**
+   * Kept for hosts that still pass it; nothing in this panel calls it.
+   *
+   * It used to be the only route out of the browser, and it went to
+   * `activeSessionId` — whichever session happened to be focused behind the
+   * page. That is the "sends to a random session" he reported, and it cannot be
+   * fixed from the host: the host does not know which session *this browser
+   * window* is meant to talk to, because until 2026-08-16 nothing did. The panel
+   * now asks, remembers the answer per window, and writes to that session
+   * itself. See `useAgentTarget`.
+   *
+   * @deprecated Choose a session in the popup instead.
+   */
   onSendToAgent?: (text: string) => void
   /** Injectable for tests; defaults to the preload bridge on `window.deck`. */
   bridge?: BrowserBridge
+  /**
+   * The session-listing half of the preload, injectable for the same reason.
+   *
+   * Separate from `bridge` because it is a different subject — these are the
+   * app's sessions, not this browser's tabs — and because a preload that has
+   * one and not the other should cost the picker rather than the browser.
+   */
+  sessionBridge?: AgentSessionBridge | null
   /**
    * Per-tab isolation, which is optional rather than required.
    *
@@ -108,6 +151,14 @@ export interface BrowserWorkspaceProps {
    * not the whole browser panel — see `isolation-bridge.ts`.
    */
   isolation?: IsolationApi
+  /**
+   * Draw mode's two channels, optional for exactly the same reason.
+   *
+   * Listing them in `BRIDGE_METHODS` would blank the entire browser panel on any
+   * build whose preload predates them, which is every build until the one that
+   * ships this. `draw-bridge.ts` spells that out.
+   */
+  draw?: DrawApi
 }
 
 const EMPTY_RECORDING: RecordingState = {
@@ -161,6 +212,28 @@ export interface PageVisibility {
   sessionOpen: boolean
   /** Some HTML surface is over the page's rectangle — see `overlay-watch.ts`. */
   covered: boolean
+  /**
+   * Draw mode: a canvas is over the page's rectangle.
+   *
+   * Stated here rather than left to `covered`, and the difference is the whole
+   * design of draw mode. `covered` is discovered a frame *after* the surface
+   * appears, because it is geometry read by an observer — fine for a tooltip
+   * drifting over a page, wrong for this, where the one frame in between is the
+   * live website receiving a pointerdown that was meant for the canvas. Parking
+   * it from the state that opened the canvas closes that window entirely, which
+   * is what "the overlay must not receive the page's input while drawing"
+   * actually requires.
+   */
+  drawing: boolean
+  /**
+   * A screenshot popup is up.
+   *
+   * Also technically covered by `covered`, and also not good enough for the same
+   * reason. Draw mode ends by parking the page, saving, and opening this popup:
+   * without this flag the page unparks for the frame between those two states
+   * and the website flashes back over the picture the user is about to send.
+   */
+  shotOpen: boolean
 }
 
 /**
@@ -178,6 +251,9 @@ export interface PageVisibility {
  *  - `covered`: a menu, a tooltip or the peeked rail landing on the page —
  *    the same fault as a dialog, but transient, so it is decided by geometry
  *    rather than by a flag;
+ *  - `drawing` / `shotOpen`: this panel's own surfaces over the page. Both would
+ *    eventually be caught by `covered`, and "eventually" is a frame too late —
+ *    see their comments;
  *  - `onStartPage`: there is no page to show, or the only thing in the view is
  *    Chromium's error document.
  */
@@ -188,6 +264,8 @@ export function pageVisible(tab: WorkspaceTab, state: PageVisibility): boolean {
     !state.parkPage &&
     !state.sessionOpen &&
     !state.covered &&
+    !state.drawing &&
+    !state.shotOpen &&
     !onStartPage(tab)
   )
 }
@@ -247,12 +325,23 @@ export function BrowserWorkspace({
   onTitle,
   startUrl = '',
   onStartUrl,
-  onSendToAgent,
   bridge,
+  sessionBridge,
   isolation,
+  draw,
 }: BrowserWorkspaceProps) {
   const api = useMemo(() => bridge ?? resolveBrowserBridge(), [bridge])
+  /*
+   * One target per browser window, chosen by hand and remembered until changed.
+   *
+   * Deliberately at the top of the workspace rather than inside each popup: the
+   * element popup, the flow panel and the screenshot popup all send to the same
+   * place, and that is the whole of "that specific popup from that browser links
+   * to one session".
+   */
+  const agent = useAgentTarget(sessionBridge)
   const iso = useMemo(() => isolation ?? resolveIsolationApi(), [isolation])
+  const drawApi = useMemo(() => draw ?? resolveDrawApi(), [draw])
   const missing = useMemo(
     () => (bridge ? [] : missingBridgeMethods(typeof window === 'undefined' ? null : (window as unknown as { deck?: unknown }).deck)),
     [bridge],
@@ -272,9 +361,27 @@ export function BrowserWorkspace({
   const [deviceOpen, setDeviceOpen] = useState(false)
   const [mobileUa, setMobileUa] = useState(false)
 
-  const [bottom, setBottom] = useState<'capture' | 'flow'>('capture')
   const [sessionOpen, setSessionOpen] = useState(false)
   const [shot, setShot] = useState<ScreenshotResult | null>(null)
+  /*
+   * Draw mode, as one nullable object plus what is on it.
+   *
+   * The frame is the whole mode: non-null means the page is parked, the canvas
+   * is up and the toolbar button is lit. Keeping it as one value rather than a
+   * boolean beside an image is what makes "drawing with no frame" — a canvas
+   * over the app's empty ground with the website hidden behind it —
+   * unrepresentable rather than merely unlikely.
+   *
+   * Not per tab, unlike captures and recordings. A page you have parked is a page
+   * you are looking at; switching tabs leaves the mode, which is the same
+   * decision the device bar and the cookies dialog already make.
+   */
+  const [frame, setFrame] = useState<PageFrame | null>(null)
+  const [marks, setMarks] = useState<Mark[]>([])
+  const [tool, setTool] = useState<MarkKind>('free')
+  /** True while the composite is being written, so Send cannot be pressed twice. */
+  const [saving, setSaving] = useState(false)
+  const surface = useRef<DrawSurface | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
   const [focusToken, setFocusToken] = useState(0)
@@ -352,6 +459,7 @@ export function BrowserWorkspace({
     const node = stageRef.current
     if (!node || typeof window === 'undefined') return
 
+
     const measure = (): void => {
       const box = rectOf(node)
       // A hidden panel has no box at all. Keeping the last good rectangle means
@@ -372,7 +480,7 @@ export function BrowserWorkspace({
       observer.disconnect()
       window.removeEventListener('resize', measure)
     }
-  }, [tabs.length, deviceOpen, bottom, capture, recording.steps.length, shot, notice])
+  }, [tabs.length, deviceOpen, recording.steps.length, notice])
 
   /*
    * Every HTML surface currently floating over the app.
@@ -409,10 +517,18 @@ export function BrowserWorkspace({
       if (isActive) api.browserBounds(tab.id, bounds)
       api.browserVisible(
         tab.id,
-        pageVisible(tab, { isActive, visible, parkPage, sessionOpen, covered }),
+        pageVisible(tab, {
+          isActive,
+          visible,
+          parkPage,
+          sessionOpen,
+          covered,
+          drawing: frame !== null,
+          shotOpen: shot !== null,
+        }),
       )
     }
-  }, [api, tabs, activeKey, fit, visible, parkPage, sessionOpen, covered])
+  }, [api, tabs, activeKey, fit, visible, parkPage, sessionOpen, covered, frame, shot])
 
   /* -- events from the main process, matched to tabs by id. */
   useEffect(() => {
@@ -424,7 +540,22 @@ export function BrowserWorkspace({
       const tab = tabForId(tabsRef.current, id)
       if (!tab) return
       setCaptures((prev) => ({ ...prev, [tab.key]: next }))
-      setBottom('capture')
+      /*
+       * No `setBottom('capture')` here any more, and its absence is half the
+       * flow-recording fix.
+       *
+       * A capture used to force the bottom strip onto the Element tab. With
+       * Inspect and Record both switched on — which the toolbar allowed, and
+       * which he did — every click in the page produced a capture, so the panel
+       * snapped back to Element on every click while the Flow list stayed at
+       * one step. On camera that is *"it is keep moving to element
+       * automatically… I think it's not working fine"*: two bugs wearing one
+       * symptom.
+       *
+       * The other half is `toggleRecording` and `toggleInspect` below, which now
+       * refuse to be on at once. This half is that a capture no longer competes
+       * for a strip at all — it opens its own popup.
+       */
     })
     const offProgress = api.onBrowserProgress((id, next) => {
       setTabs((prev) => withTabId(prev, id, { progress: next.fraction }))
@@ -434,7 +565,6 @@ export function BrowserWorkspace({
       if (!tab) return
       setRecordings((prev) => ({ ...prev, [tab.key]: state }))
       setTabs((prev) => withTab(prev, tab.key, { recording: state.recording }))
-      if (state.steps.length > 0) setBottom('flow')
     })
     return () => {
       offState()
@@ -617,7 +747,10 @@ export function BrowserWorkspace({
       const id = active?.id
       if (!api || !id) return
       void run(api, id).catch((cause: unknown) => {
-        setNotice(cause instanceof Error ? cause.message : String(cause))
+        // `humanError`, not `cause.message`: a rejected invoke arrives wearing
+        // the channel name and the word Error twice, and every message these
+        // handlers throw was written as a sentence for the person reading it.
+        setNotice(humanError(cause))
       })
     },
     [api, active?.id],
@@ -634,16 +767,156 @@ export function BrowserWorkspace({
     [withId],
   )
 
-  const toggleRecording = useCallback((): void => {
-    const key = activeRef.current
-    const on = !(recordings[key]?.recording ?? false)
-    withId(async (a, id) => {
-      const state = await a.browserRecord(id, { on, accent: recordingAccent() })
-      setRecordings((prev) => ({ ...prev, [key]: state }))
-      setTabs((prev) => withTab(prev, key, { recording: state.recording }))
-      setBottom('flow')
+  /**
+   * Start or stop recording — and turn inspection off if it was on.
+   *
+   * ## Why they cannot both be on, and why that is the bug
+   *
+   * The inspector *swallows* the clicks it sees: `browser-preload.ts` calls
+   * `preventDefault` and `stopImmediatePropagation` on every one, so pointing at
+   * a link does not navigate away from the link. The recorder is the opposite —
+   * it watches the user actually using the page, and it deliberately ignores
+   * every event while the inspector's overlay is in the document, because a
+   * click the page never received is not a step in any flow.
+   *
+   * Both of those are right. What was missing is that the toolbar let both modes
+   * be switched on at once, and the guest then resolved the contradiction
+   * silently in the inspector's favour. On camera that is a Flow counter frozen
+   * at one step across forty clicks, with the panel snapping back to Element
+   * each time — a recorder that says RECORDING, shows its badge in the page, and
+   * records nothing.
+   *
+   * So the two modes are made exclusive here, at the only place that knows both:
+   * turning one on turns the other off. The guard inside the guest recorder
+   * stays as it is — it is the correct behaviour for a state this can no longer
+   * produce, and it costs nothing.
+   */
+  /**
+   * Flip one of the two page modes, and switch the other off if it was on.
+   *
+   * `modes.ts` holds the rule and says at length why it exists; the short
+   * version is that the inspector swallows clicks and the recorder ignores every
+   * event while the inspector is up, so "both on" is a recorder that says
+   * RECORDING and records nothing. That is what the frozen `Flow (1)` counter
+   * was.
+   *
+   * Inspection is turned off *before* recording is turned on, so there is no
+   * instant in which the guest has both. Recording is the noisier of the two —
+   * it puts a badge in the page — and having it announce itself while the
+   * inspector is still eating clicks is the exact lie being fixed.
+   */
+  const toggleMode = useCallback(
+    (mode: BrowserMode): void => {
+      const key = activeRef.current
+      const current: BrowserModes = {
+        inspecting: active?.inspecting === true,
+        recording: recordings[key]?.recording === true,
+        drawing: frame !== null,
+      }
+      const changes = modeChanges(current, nextModes(current, mode))
+
+      /*
+       * Draw off is applied here, before the IPC, and draw on is applied after
+       * the frame arrives.
+       *
+       * Leaving the mode has to be instant: it is what Escape does and what the
+       * Done button does, and a page that stays parked for a round trip after
+       * you asked for it back reads as a hang. Entering cannot be instant,
+       * because there is nothing to draw on until the capture comes back — and
+       * parking the page first would make that capture fail, since `capturePage`
+       * on a hidden view is a hard error on Electron 41.
+       */
+      if (changes.draw === false) {
+        setFrame(null)
+        setMarks([])
+      }
+
+      withId(async (a, id) => {
+        if (changes.inspect === false) {
+          const next = await a.browserInspect(id, false)
+          setTabs((prev) => withTabId(prev, next.id, patchFrom(next)))
+        }
+        if (changes.record !== undefined) {
+          const state = await a.browserRecord(id, {
+            on: changes.record,
+            accent: recordingAccent(),
+          })
+          setRecordings((prev) => ({ ...prev, [key]: state }))
+          setTabs((prev) => withTab(prev, key, { recording: state.recording }))
+        }
+        if (changes.inspect === true) {
+          const next = await a.browserInspect(id, true)
+          setTabs((prev) => withTabId(prev, next.id, patchFrom(next)))
+        }
+        if (changes.draw === true) {
+          const captured = readFrame(await drawApi.browserFrame?.(id))
+          if (!captured) throw new Error('The page could not be captured, so there is nothing to draw on.')
+          setMarks([])
+          setFrame(captured)
+          // The element popup belongs to the mode that just went off, and it is
+          // portalled over the whole window — leaving it up would float a panel
+          // about a selector over a canvas about a picture.
+          setCaptures((prev) => without(prev, key))
+        }
+      })
+    },
+    [active?.inspecting, recordings, frame, drawApi, withId],
+  )
+
+  const toggleRecording = useCallback(() => toggleMode('record'), [toggleMode])
+
+  /**
+   * Save the marked frame, then hand it to the screenshot popup.
+   *
+   * The two halves of *"we can send it to the agent like this"*. The canvas
+   * gives back the exact bitmap on screen, the main process writes it beside the
+   * ordinary screenshots, and what comes back is a `ScreenshotResult` — so from
+   * here on this is the screenshot path, with the same popup, the same Reveal
+   * and the same per-window session choice. There is no second way to send an
+   * image, which is the point: a second one is how the two end up disagreeing
+   * about which session "the agent" is.
+   *
+   * The preview is the canvas' own data URL rather than something the main
+   * process encodes and sends back. It is the same picture, it is already in
+   * memory on this side, and echoing three megabytes of base64 back across the
+   * bridge to look at what we just drew would be absurd.
+   */
+  const sendMarked = useCallback((): void => {
+    const png = surface.current?.toPng() ?? ''
+    const count = marks.length
+    /*
+     * The address of the *photograph*, not of the page as it is now.
+     *
+     * The main process reads the URL again when it writes the file, and that is
+     * the right thing for the filename — but it is the wrong thing to tell an
+     * agent. The page has been parked behind a canvas for as long as the user
+     * has been drawing, and a parked view is still running: a redirect, a
+     * router push or a meta refresh in that window would have the agent sent to
+     * an address this picture is not of. `frame.url` was read at the instant the
+     * pixels were.
+     */
+    const where = frame?.url ?? ''
+    if (!png || count === 0) {
+      setNotice('There was nothing to save — the drawing could not be read back.')
+      return
+    }
+    setSaving(true)
+    // `withId` for the tab id and, more importantly, for its one error path:
+    // a failed save has to become the notice band rather than an unhandled
+    // rejection in a console nobody has open.
+    withId(async (_api, id) => {
+      try {
+        const saved = readMarkedShot(await drawApi.browserScreenshotMarked?.(id, png))
+        if (!saved) throw new Error('The marked page could not be saved.')
+        setShot({ ...saved, url: where || saved.url, preview: png, marks: count })
+        setFrame(null)
+        setMarks([])
+        setNotice(null)
+      } finally {
+        setSaving(false)
+      }
     })
-  }, [recordings, withId])
+  }, [drawApi, frame?.url, marks.length, withId])
 
   /**
    * Copy the flow, and admit it when that fails.
@@ -683,6 +956,21 @@ export function BrowserWorkspace({
       copyTimer.current = null
     }
   }, [])
+
+  /*
+   * A drawing belongs to the page it is a picture of.
+   *
+   * Switching or closing the tab has to end draw mode, and not only for tidiness:
+   * the frame is a photograph of the tab that was open, so a canvas that
+   * survived the switch would show the old page over the new one and park the
+   * new one to do it. Keyed on the view's id rather than on the strip key so it
+   * also fires for a tab that was replaced in place — which is what toggling
+   * isolation does.
+   */
+  useEffect(() => {
+    setFrame(null)
+    setMarks([])
+  }, [active?.id])
 
   const takeScreenshot = useCallback((): void => {
     withId(async (a, id) => {
@@ -729,12 +1017,22 @@ export function BrowserWorkspace({
         act((a, id) => a.browserForward(id))
         return
       }
+      if (event.key === 'Escape' && frame) {
+        // Before the inspect case, and it can never reach it: the modes are
+        // exclusive, so `frame` and `inspecting` are never both set. Ordered
+        // this way anyway, because a page parked behind a canvas is the state
+        // Escape is most urgently for.
+        event.preventDefault()
+        setFrame(null)
+        setMarks([])
+        return
+      }
       if (event.key === 'Escape' && active?.inspecting) {
         event.preventDefault()
         act((a, id) => a.browserInspect(id, false))
       }
     },
-    [act, active?.inspecting],
+    [act, active?.inspecting, frame],
   )
 
   /* -- the unwired case, which is what a half-wired preload actually produces. */
@@ -754,6 +1052,34 @@ export function BrowserWorkspace({
   const resolution = resolveOmnibox(active?.draft ?? '')
   const security = securityOf(active?.url ?? '')
 
+  /*
+   * Which still image stands in for the page while a popup is over it.
+   *
+   * The capture's own photograph first, because a capture popup is anchored to
+   * something on the page and the page has to look unchanged behind it. The
+   * screenshot popup reuses the shot it is already showing, which is a picture
+   * of the same page by definition. Empty in both cases means the main process
+   * could not take one, and then nothing is drawn at all — never a placeholder.
+   */
+  // Nothing while drawing: the canvas paints its own frame, and a second image
+  // of the same page underneath it is a second chance to be a pixel out.
+  const frozen = frame ? '' : capture?.pageImage || (shot ? shot.preview : '') || ''
+
+  /*
+   * The one instruction sentence, decided in `modes.ts` from the mode state.
+   *
+   * Read here rather than inline in the JSX so the rule is one testable function
+   * instead of three conditions in a tree this project's test run cannot render.
+   */
+  const hint = modeHint(
+    {
+      inspecting: active?.inspecting === true,
+      recording: recording.recording,
+      drawing: frame !== null,
+    },
+    { hasCapture: capture !== null },
+  )
+
   return (
     <div className="bw" ref={rootRef} data-visible={visible} onKeyDown={onKeyDown}>
       <Toolbar
@@ -772,7 +1098,7 @@ export function BrowserWorkspace({
         onReload={() => act((a, id) => a.browserReload(id))}
         onStop={() => act((a, id) => a.browserStop(id))}
         onHome={() => navigate(startUrl)}
-        onInspect={() => act((a, id) => a.browserInspect(id, !active?.inspecting))}
+        onInspect={() => toggleMode('inspect')}
         onRecord={toggleRecording}
         onScreenshot={takeScreenshot}
         onDevtools={() =>
@@ -783,6 +1109,8 @@ export function BrowserWorkspace({
         }
         devtoolsOpen={devtools[activeKey] === true}
         recording={recording.recording}
+        onDraw={drawAvailable(drawApi) ? () => toggleMode('draw') : undefined}
+        drawing={frame !== null}
         deviceOpen={deviceOpen}
         onToggleDevice={() => setDeviceOpen((open) => !open)}
         onOpenSession={() => setSessionOpen(true)}
@@ -833,25 +1161,23 @@ export function BrowserWorkspace({
         </p>
       )}
 
-      {shot && (
-        <p className="bw-shot" role="status">
-          Saved {shot.width} x {shot.height} to <code>{shot.path}</code>
-          <button
-            type="button"
-            className="bw-text-button"
-            onClick={() => void api.browserRevealScreenshot(shot.path)}
-          >
-            Reveal
-          </button>
-          <button type="button" className="bw-text-button" onClick={() => setShot(null)}>
-            Dismiss
-          </button>
-        </p>
-      )}
+      {/*
+        One instruction strip, and only while it is the instruction.
 
-      {active?.inspecting && (
+        There were two on screen at once: this line under the toolbar, and the
+        bottom panel's "Turn on Inspect, then click something in the page to
+        capture its selector." The second one told him to do the thing he was
+        already doing. The bottom panel that carried it is gone — an element is a
+        popup now — and adding a third mode was the obvious way to bring the
+        second one back, so the sentence is chosen by `modeHint` rather than by
+        conditions written out here. The modes are exclusive, so that function
+        can only ever return one string; there is no arrangement of state that
+        puts two of these on screen. It goes silent the moment the thing it asked
+        for exists, because the popup, or the mark, is the instruction then.
+      */}
+      {hint && (
         <p className="bw-hint" role="status">
-          Click any element in the page. Escape stops.
+          {hint}
         </p>
       )}
 
@@ -882,6 +1208,61 @@ export function BrowserWorkspace({
             onRetry={active.failed ? () => act((a, id) => a.browserReload(id)) : undefined}
           />
         )}
+        {/*
+          The page, held still, while a popup is over it.
+
+          A popup is HTML and the page is a native layer above the whole
+          renderer, so the page has to be hidden for the popup to be seen at all
+          — `overlay-watch.ts` explains why there is no third option. Hiding it
+          on its own leaves the app's empty canvas where the website was, and a
+          website that disappears when you click it reads as a crash.
+
+          This is a real photograph of that page, taken by the main process at
+          the instant of the click (or, for a screenshot, the shot itself). It
+          is drawn on the same rectangle the view occupies, so the page appears
+          to freeze rather than to go. Nothing here is reconstructed: when there
+          is no image, there is no element, and the canvas shows through as
+          before.
+        */}
+        {frozen && (
+          <img
+            className="bw-freeze"
+            src={frozen}
+            alt=""
+            aria-hidden="true"
+            style={{
+              left: fit.rect.x - stage.x,
+              top: fit.rect.y - stage.y,
+              width: fit.rect.width,
+              height: fit.rect.height,
+            }}
+          />
+        )}
+        {/*
+          Draw mode's canvas, on the page's own rectangle.
+
+          Not over the live page — nothing can be. A browser page is a native
+          view composited above this entire renderer, so the arrangement that
+          works is the one `overlay-watch.ts` describes: park the view and draw a
+          photograph of it. The canvas holds both the photograph and the marks,
+          which is also why the PNG that reaches the agent is exactly what was on
+          screen — it is this element, read back.
+
+          It replaces `bw-freeze` for the duration rather than sitting on top of
+          it: two images of the same page, one of them a JPEG backdrop, would be
+          two chances to be a pixel out.
+        */}
+        {frame && (
+          <DrawLayer
+            frame={frame}
+            marks={marks}
+            tool={tool}
+            rect={fit.rect}
+            origin={stage}
+            onMarks={setMarks}
+            surface={surface}
+          />
+        )}
         {deviceSize !== null && tabs.length > 0 && (
           <span
             className="bw-frame"
@@ -896,26 +1277,28 @@ export function BrowserWorkspace({
         )}
       </div>
 
+      {/*
+        The bottom strip is the recorder's alone now.
+
+        It used to be a two-tab strip — Element and Flow — and that arrangement
+        is what made the recording bug visible: a capture forced the strip to
+        Element, so recording a flow meant watching the panel jump away from the
+        list it was supposed to be filling. An element is a popup at the element
+        now, which leaves nothing to switch between, so there is nothing to
+        switch with. A tab strip of one tab is a label.
+      */}
       <div className="bw-bottom">
-        <div className="bw-bottom-tabs" role="tablist" aria-label="Browser output">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={bottom === 'capture'}
-            data-on={bottom === 'capture' || undefined}
-            onClick={() => setBottom('capture')}
-          >
-            Element
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={bottom === 'flow'}
-            data-on={bottom === 'flow' || undefined}
-            onClick={() => setBottom('flow')}
-          >
-            Flow{recording.steps.length > 0 ? ` (${recording.steps.length})` : ''}
-          </button>
+        <div className="bw-bottom-tabs">
+          {/*
+            One band, whichever mode is on. The modes are exclusive, so a flow
+            and a drawing can never both want it — and a tab strip of one tab is
+            a label, which is what this already is.
+          */}
+          <span className="bw-bottom-title">
+            {frame
+              ? `Marks${marks.length > 0 ? ` (${marks.length})` : ''}`
+              : `Flow${recording.steps.length > 0 ? ` (${recording.steps.length})` : ''}`}
+          </span>
           <span className="bw-spacer" />
           <button
             type="button"
@@ -931,32 +1314,21 @@ export function BrowserWorkspace({
           </button>
         </div>
 
-        {bottom === 'capture' ? (
-          capture ? (
-            <CapturePanel
-              // Remount per element. `sent` and the instruction field belong to
-              // the thing that was clicked, and carrying them over means the
-              // button reads "Sent" about an element nobody has sent, with the
-              // last element's instruction still in the box.
-              key={[activeKey, capture.selector, capture.url].join('|')}
-              capture={capture}
-              onSend={onSendToAgent}
-              onClear={() =>
-                setCaptures((prev) => {
-                  const next = { ...prev }
-                  delete next[activeKey]
-                  return next
-                })
-              }
-            />
-          ) : (
-            <p className="bw-muted bw-bottom-empty">
-              Turn on Inspect, then click something in the page to capture its selector.
-            </p>
-          )
+        {frame ? (
+          <DrawPanel
+            tool={tool}
+            markCount={marks.length}
+            ready={!saving}
+            onTool={setTool}
+            onUndo={() => setMarks(undoMark)}
+            onClear={() => setMarks([])}
+            onSend={sendMarked}
+            onCancel={() => toggleMode('draw')}
+          />
         ) : (
           <RecorderPanel
             state={recording}
+            agent={agent}
             onStop={toggleRecording}
             onClear={() =>
               withId(async (a, id) => {
@@ -966,10 +1338,50 @@ export function BrowserWorkspace({
             }
             onCopy={copyFlow}
             copied={copied}
-            onSend={onSendToAgent}
           />
         )}
       </div>
+
+      {/*
+        The two popups, both anchored to something real on the page: the element
+        that was clicked, and — for a screenshot, which is of the whole page —
+        the top of the page's own rectangle.
+
+        Both are portalled into `<body>`, so `overlay-watch.ts` sees them and the
+        native view parks while they are open. That is not incidental: a
+        `WebContentsView` composites above the entire renderer, so a popup that
+        did *not* park the page would be painted behind the website and could not
+        be seen at all. See `AnchoredPopup`.
+      */}
+      {capture && (
+        <CapturePopup
+          // Remount per element. The typed line and the "Sent" state belong to
+          // the thing that was clicked; carrying them over means the button
+          // reads Sent about an element nobody has sent.
+          key={[activeKey, capture.selector, capture.url].join('|')}
+          capture={capture}
+          anchor={anchorInWindow(capture.rect, fit.rect)}
+          agent={agent}
+          onClose={() =>
+            setCaptures((prev) => {
+              const next = { ...prev }
+              delete next[activeKey]
+              return next
+            })
+          }
+        />
+      )}
+
+      {shot && (
+        <ScreenshotPopup
+          key={shot.path}
+          shot={shot}
+          anchor={{ x: fit.rect.x, y: fit.rect.y, width: fit.rect.width, height: 0 }}
+          agent={agent}
+          onReveal={(path) => void api.browserRevealScreenshot(path)}
+          onClose={() => setShot(null)}
+        />
+      )}
 
       <SessionModal
         open={sessionOpen}

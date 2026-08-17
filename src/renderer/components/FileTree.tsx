@@ -8,6 +8,8 @@ import {
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
 } from 'react'
+import { readFailure, withDeadline } from '../deadline'
+import { recall, remember } from '../panel-cache'
 import './FileTree.css'
 
 /**
@@ -48,6 +50,18 @@ interface FsBridge {
   ): Promise<DirListing>
 }
 
+/**
+ * How long one directory listing has to come back.
+ *
+ * A `readdir` plus a `stat` per row on a local disk is milliseconds. Ten
+ * seconds is not a performance budget, it is the line past which the read has
+ * plainly not happened at all — an unreachable network mount, a channel this
+ * build never registered, a handler awaiting something that never finishes —
+ * and the tree has to say so rather than print "Loading…" until the app is
+ * quit. The whole file panel used to have no such line.
+ */
+const LIST_DEADLINE_MS = 10_000
+
 function listDir(
   root: string,
   relDir: string,
@@ -57,16 +71,41 @@ function listDir(
   if (!api?.listDir) {
     return Promise.reject(new Error('preload bridge is missing terminaldeck.listDir'))
   }
-  return api.listDir(root, relDir, options)
-}
-
-/** Electron wraps IPC rejections; the prefix is noise in a tree row. */
-function messageOf(err: unknown): string {
-  const raw = err instanceof Error ? err.message : String(err)
-  return raw.replace(/^Error invoking remote method '[^']*':\s*/, '')
+  return withDeadline(
+    api.listDir(root, relDir, options),
+    relDir === '' ? 'Reading this folder' : `Reading ${relDir}`,
+    LIST_DEADLINE_MS,
+  )
 }
 
 const ROOT = ''
+
+/**
+ * How long a tree that has already been read stays good for.
+ *
+ * The shell unmounts a view the moment a session takes the window back, so
+ * every trip out and in used to re-`readdir` the project and flash "Loading…"
+ * over a list that had not changed. Ten seconds covers going to a terminal and
+ * coming back — the thing Asad was doing when he watched the page thrash — and
+ * is short enough that a file an agent wrote a moment ago still turns up.
+ * Past it the tree is still painted from what it had; the re-read happens
+ * underneath, with no spinner, and lands when it lands.
+ */
+export const TREE_FRESH_MS = 10_000
+
+/** What the cache holds for one tree, in a shape that survives a round trip. */
+interface CachedTree {
+  children: Array<[string, FsEntry[]]>
+  expanded: string[]
+  truncated: string[]
+  focused: string | null
+  /** The root listing's own answer to "what should open first". */
+  defaultFile: string | null
+}
+
+function treeKey(root: string, showIgnored: boolean): string {
+  return `files:tree:${root}|${showIgnored ? 'all' : 'visible'}`
+}
 
 function parentOf(relPath: string): string {
   const cut = relPath.lastIndexOf('/')
@@ -116,6 +155,7 @@ interface TreeState {
 
 type TreeAction =
   | { type: 'reset' }
+  | { type: 'hydrate'; cached: CachedTree }
   | { type: 'expand'; dir: string }
   | { type: 'collapse'; dir: string }
   | { type: 'load-start'; dir: string }
@@ -130,6 +170,40 @@ const EMPTY: TreeState = {
   errors: new Map(),
   truncated: new Set(),
   focused: null,
+}
+
+/**
+ * What the whole tree amounts to, for whoever is drawing the page around it.
+ *
+ * The Files page is a tree and a viewer side by side, and they used to resolve
+ * independently: the left column said *"Nothing to show."* while the right one
+ * headed a `README.md` over a blank body, at the same moment, on the same
+ * screen. Two components each telling the truth about themselves is not the
+ * same as a page telling the truth, and this type is how the page gets one
+ * answer to reconcile against.
+ *
+ * `error` carries the reason, because "it failed" with no reason is the state
+ * this pass exists to delete.
+ */
+export type TreeRootState =
+  | { status: 'loading' }
+  | { status: 'ready'; count: number }
+  | { status: 'empty' }
+  | { status: 'error'; message: string }
+
+/** The one place the tree's overall condition is decided. Pure, so it is pinned. */
+export function rootStateOf(state: TreeState): TreeRootState {
+  const message = state.errors.get(ROOT)
+  if (message !== undefined) return { status: 'error', message }
+  const entries = state.children.get(ROOT)
+  // Nothing listed yet is "loading" whether or not a request is in flight this
+  // millisecond: the first render happens before the effect that starts one,
+  // and a page that flashed "empty" in that gap and then filled in would be
+  // lying for a frame. Once there *are* entries the answer never goes back to
+  // loading — a background re-read must not blank a list somebody is using.
+  if (entries === undefined) return { status: 'loading' }
+  if (entries.length === 0) return { status: 'empty' }
+  return { status: 'ready', count: entries.length }
 }
 
 function withAdded<T>(set: Set<T>, value: T): Set<T> {
@@ -148,6 +222,24 @@ function reducer(state: TreeState, action: TreeAction): TreeState {
   switch (action.type) {
     case 'reset':
       return EMPTY
+
+    /**
+     * The tree this page had the last time it was open.
+     *
+     * Not an optimisation for its own sake: the shell unmounts a view whenever
+     * a session takes the window, so without this every visit to Files started
+     * from a blank pane with every folder collapsed, however many the reader
+     * had opened a second earlier.
+     */
+    case 'hydrate':
+      return {
+        children: new Map(action.cached.children),
+        expanded: new Set(action.cached.expanded),
+        loading: new Set(),
+        errors: new Map(),
+        truncated: new Set(action.cached.truncated),
+        focused: action.cached.focused,
+      }
 
     case 'expand':
       return { ...state, expanded: withAdded(state.expanded, action.dir) }
@@ -256,6 +348,16 @@ interface Props {
    * something on the user's behalf would answer a question they were asked.
    */
   autoSelect?: boolean
+  /**
+   * Told whenever the tree's overall condition changes — loading, ready, empty
+   * or failed with a reason.
+   *
+   * Optional, because a tree inside a picker is the whole of its own page. The
+   * Files page passes one because it draws a *viewer* beside this, and the two
+   * used to contradict each other on screen: "Nothing to show." on the left and
+   * a file header on the right, at the same instant. See `TreeRootState`.
+   */
+  onRootState?(state: TreeRootState): void
   className?: string
 }
 
@@ -274,6 +376,7 @@ export function FileTree({
   onSelect,
   showIgnored = false,
   autoSelect = true,
+  onRootState,
   className,
 }: Props) {
   const [state, dispatch] = useReducer(reducer, EMPTY)
@@ -298,18 +401,58 @@ export function FileTree({
   selectedRef.current = selected
   /** The root this tree has already opened a file for. Once per project. */
   const openedFor = useRef<string | null>(null)
+  /** The root listing as last read, so it can be cached on the way out. */
+  const rootListing = useRef<DirListing | null>(null)
+
+  /**
+   * Open the file this listing nominates, if the tree is allowed to.
+   *
+   * Lifted out of `load` because a listing now arrives two ways — read from
+   * disk, or recalled from the last time this page was open — and both have to
+   * make the same decision. Missing it on the cached path would mean returning
+   * to Files after a trip to a terminal and finding the viewer empty, which is
+   * the very "the page shows nothing" report `shouldAutoOpen` was written for.
+   */
+  const autoOpen = useCallback(
+    (dir: string, listing: Pick<DirListing, 'entries' | 'defaultFile'>) => {
+      if (
+        !shouldAutoOpen({
+          autoSelect,
+          dir,
+          root,
+          openedFor: openedFor.current,
+          selected: selectedRef.current,
+        })
+      ) {
+        return
+      }
+      openedFor.current = root
+      const first = listing.defaultFile
+        ? listing.entries.find((entry) => entry.relPath === listing.defaultFile)
+        : undefined
+      if (!first) return
+      dispatch({ type: 'focus', relPath: first.relPath })
+      onSelectRef.current?.(first)
+    },
+    [autoSelect, root],
+  )
 
   const load = useCallback(
-    async (dir: string) => {
+    /**
+     * `silent` is a re-read behind a tree that is already on screen: the cache
+     * gave us something stale, we are checking it, and the reader must not
+     * watch their list turn into the word "Loading…" while we do.
+     */
+    async (dir: string, silent = false) => {
       const gen = genRef.current
-      dispatch({ type: 'load-start', dir })
+      if (!silent) dispatch({ type: 'load-start', dir })
       try {
         // Stats on the root level only. They cost a `stat` per row, they are
         // what `defaultFile` is decided from, and no other level needs them.
         const listing = await listDir(root, dir, { showIgnored, withStats: dir === ROOT })
         if (genRef.current !== gen) return
         dispatch({ type: 'load-ok', dir, listing })
-
+        if (dir === ROOT) rootListing.current = listing
         /*
          * Open something.
          *
@@ -319,36 +462,76 @@ export function FileTree({
          * knows what to show — `pickDefaultFile` in `src/main/fs-tree.ts`
          * chooses it, and `shouldAutoOpen` above says when this is allowed to.
          */
-        if (
-          !shouldAutoOpen({
-            autoSelect,
-            dir,
-            root,
-            openedFor: openedFor.current,
-            selected: selectedRef.current,
-          })
-        ) {
-          return
-        }
-        openedFor.current = root
-        const first = listing.defaultFile
-          ? listing.entries.find((entry) => entry.relPath === listing.defaultFile)
-          : undefined
-        if (!first) return
-        dispatch({ type: 'focus', relPath: first.relPath })
-        onSelectRef.current?.(first)
+        autoOpen(dir, listing)
       } catch (err) {
-        if (genRef.current === gen) dispatch({ type: 'load-fail', dir, message: messageOf(err) })
+        if (genRef.current !== gen) return
+        // A silent re-read that fails leaves the tree the reader is looking at
+        // exactly where it was. Replacing a working list with an error because
+        // a background check went wrong would be the refresh doing damage.
+        if (silent) return
+        dispatch({ type: 'load-fail', dir, message: readFailure(err) })
       }
     },
-    [root, showIgnored, autoSelect],
+    [root, showIgnored, autoOpen],
   )
 
   useEffect(() => {
     genRef.current += 1
-    dispatch({ type: 'reset' })
-    void load(ROOT)
-  }, [load])
+    rootListing.current = null
+
+    /*
+     * The tree this page had last time, before anything is asked for.
+     *
+     * Without it, every trip to a session and back re-read the project and
+     * flashed "Loading…" over a list that had not changed — see `TREE_FRESH_MS`.
+     * A fresh entry is the whole answer; a stale one is still painted, and the
+     * re-read that follows is silent.
+     */
+    const held = recall<CachedTree>(treeKey(root, showIgnored), TREE_FRESH_MS)
+    if (!held) {
+      dispatch({ type: 'reset' })
+      void load(ROOT)
+      return
+    }
+
+    dispatch({ type: 'hydrate', cached: held.value })
+    rootListing.current = {
+      relPath: ROOT,
+      entries: held.value.children.find(([dir]) => dir === ROOT)?.[1] ?? [],
+      truncated: held.value.truncated.includes(ROOT),
+      defaultFile: held.value.defaultFile,
+    }
+    autoOpen(ROOT, rootListing.current)
+    if (!held.fresh) void load(ROOT, true)
+  }, [load, autoOpen, root, showIgnored])
+
+  /**
+   * Hand the tree back to the cache on the way out.
+   *
+   * On unmount rather than on every change: the state is a set of Maps that
+   * turn over on each expand, and writing on every one of them would be a
+   * serialisation per keystroke of arrow-key travel. Leaving the page is the
+   * only moment the value is actually wanted.
+   */
+  const stateRef = useRef(state)
+  stateRef.current = state
+  useEffect(() => {
+    const key = treeKey(root, showIgnored)
+    return () => {
+      const current = stateRef.current
+      // Nothing was ever read — an error, or an unmount mid-flight. Caching an
+      // empty tree would make the next visit paint "Nothing to show." for a
+      // project that has plenty in it.
+      if (!current.children.has(ROOT)) return
+      remember<CachedTree>(key, {
+        children: [...current.children],
+        expanded: [...current.expanded],
+        truncated: [...current.truncated],
+        focused: current.focused,
+        defaultFile: rootListing.current?.defaultFile ?? null,
+      })
+    }
+  }, [root, showIgnored])
 
   const rows = useMemo(() => {
     const out: Row[] = []
@@ -460,8 +643,25 @@ export function FileTree({
     event.preventDefault()
   }
 
-  const rootError = state.errors.get(ROOT)
-  const rootLoading = state.loading.has(ROOT)
+  const rootState = rootStateOf(state)
+
+  /*
+   * Tell the page what this tree amounts to.
+   *
+   * In an effect and guarded by a comparison, because the callback is an inline
+   * arrow at the call site and `rootStateOf` builds a fresh object every
+   * render: calling it unguarded would set state in the parent on every frame
+   * and loop. Only a genuine change in the tree's condition travels.
+   */
+  const reportRef = useRef(onRootState)
+  reportRef.current = onRootState
+  const reported = useRef<string>('')
+  useEffect(() => {
+    const encoded = JSON.stringify(rootState)
+    if (encoded === reported.current) return
+    reported.current = encoded
+    reportRef.current?.(rootState)
+  }, [rootState])
 
   return (
     <div
@@ -473,11 +673,20 @@ export function FileTree({
       tabIndex={0}
       onKeyDown={onKeyDown}
     >
-      {rootError && <p className="file-tree-msg error">{rootError}</p>}
-      {!rootError && rootLoading && rows.length === 0 && <p className="file-tree-msg">Loading…</p>}
-      {!rootError && !rootLoading && rows.length === 0 && (
-        <p className="file-tree-msg">Nothing to show.</p>
-      )}
+      {/*
+        One message at a time, chosen by one function.
+
+        These were three independent conditions over two pieces of state, and
+        two of them could disagree: `!rootLoading && rows.length === 0` printed
+        "Nothing to show." during the frame between the reducer's `reset` and
+        the request that follows it, and again for the whole of a re-read whose
+        reply was dropped by the generation guard. A tree that says a project is
+        empty when it has not finished looking is the same class of lie as a
+        spinner that never stops.
+      */}
+      {rootState.status === 'error' && <p className="file-tree-msg error">{rootState.message}</p>}
+      {rootState.status === 'loading' && <p className="file-tree-msg">Loading…</p>}
+      {rootState.status === 'empty' && <p className="file-tree-msg">Nothing to show.</p>}
 
       {rows.map((row, index) => {
         const { entry, depth } = row

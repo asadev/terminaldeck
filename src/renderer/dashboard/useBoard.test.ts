@@ -6,11 +6,11 @@ import { attachWork, folderPlan, type FolderWork, type LiveSession } from './use
  * The half of the board that decides *whose numbers these are*.
  *
  * Everything here is pure, and it is the part most worth pinning, because its
- * failure mode is silent and expensive: a card that shows a stranger's spend
+ * failure mode is silent and expensive: a card that shows a stranger's numbers
  * under this session's name looks exactly like a card that is working. That has
  * already happened once in this app — a tab opened at 16:52 reported 143
- * requests and $18.49 it had never spent, because a `claude` running outside
- * the app had written more recently in the same folder.
+ * requests it had never made, because a `claude` running outside the app had
+ * written more recently in the same folder.
  */
 
 const NOW = Date.parse('2026-08-16T12:00:00.000Z')
@@ -46,7 +46,6 @@ function row(sessionId: string): Record<string, unknown> {
     sessionId,
     requests: 7,
     usage: USAGE,
-    cost: { cost: { total: 0.62 }, byModel: { 'claude-opus-5': {} } },
     context: { percent: 31 },
     lastActivityAt: NOW - MINUTE,
   }
@@ -60,7 +59,7 @@ describe('attachWork', () => {
     const [card] = attachWork([live({ id: 'tab-1' })], folders)
     expect(card.work?.transcriptPath).toBe('/store/own.jsonl')
     expect(card.work?.requests).toBe(7)
-    expect(card.work?.costUsd).toBe(0.62)
+    expect(card.work?.tokens).toBe(10_000)
   })
 
   /**
@@ -95,13 +94,20 @@ describe('attachWork', () => {
   it('carries every field the card renders straight through', () => {
     const folders = new Map([[HERE, work([file('own', NOW - 9 * MINUTE)], [row('own')])]])
     const [card] = attachWork(
-      [live({ id: 'tab-1', title: 'Fix the relay', account: 'Personal', provider: 'codex' })],
+      [
+        live({
+          id: 'tab-1',
+          title: 'Fix the relay',
+          account: { id: 'personal', name: 'Personal' },
+          provider: 'codex',
+        }),
+      ],
       folders,
     )
     expect(card).toMatchObject({
       id: 'tab-1',
       title: 'Fix the relay',
-      account: 'Personal',
+      account: { id: 'personal', name: 'Personal' },
       provider: 'codex',
       projectPath: HERE,
     })

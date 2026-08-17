@@ -37,16 +37,24 @@
 }
 
 /* What the shell actually said. Mono because it is a command's output, not
-   prose, and selectable because the next thing a person does is paste it. It
-   sits inside a tinted list row, so it lifts to the page colour rather than
-   tinting a tint. */
+   prose, and selectable because the next thing a person does is paste it.
+
+   A translucent fill rather than a surface colour, and that is the whole of
+   what changed here. It used to be `--bg-primary`, lifting off the tinted list
+   row it sat in; the rows lost their tint when the sheet was flattened, so the
+   lift was being measured against a surface that is no longer under it. In
+   light that left the one pure-white rectangle on a grey sheet — louder than a
+   line of shell output has any business being — and it needed a dark-theme
+   override to invert the same trick. `--fill-tertiary` composes with whatever
+   is behind it instead of naming it, so one declaration is right on both
+   themes and stays right the next time the ground moves. */
 .setup-probe {
   display: block;
   margin-top: var(--sp-1);
   padding: var(--sp-15) var(--sp-2);
   border: none;
   border-radius: var(--radius-sm);
-  background: var(--bg-primary);
+  background: var(--fill-tertiary);
   font-family: var(--font-mono);
   font-size: var(--t-footnote);
   line-height: var(--lh-body);
@@ -54,12 +62,6 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   user-select: text;
-}
-
-/* In dark the page colour is the darker surface, so "lifted" has to be the
-   lighter one — the same move the segmented control makes. */
-[data-theme='dark'] .setup-probe {
-  background: var(--bg-tertiary);
 }
 
 /* ------------------------------------------------------------------ hooks -- */
@@ -87,13 +89,24 @@
 }
 
 /* One soft block per CLI. No border: the fill and the corner already say where
-   it starts and stops. */
+   it starts and stops.
+
+   The fill has to be a fill. This was `--bg-secondary` back when the settings
+   sheet was `--bg-primary`, and when the sheet was flattened onto
+   `--bg-secondary` the block became exactly the colour of the page it sits on:
+   three provider blocks, each with a heading, a path, ten event chips and three
+   buttons, and nothing at all saying where one ended and the next began. A
+   thing that has *appeared* must not be page-coloured. `--fill-tertiary` is
+   what the flattening pass gave every other appearing surface — the notices,
+   the confirmations — and being translucent it cannot repeat this failure: it
+   is defined as a lift off whatever is behind it rather than as a colour that
+   happens to differ from it today. */
 .setup-hooks {
   margin-top: var(--sp-3);
   padding: var(--sp-4);
   border: none;
   border-radius: var(--radius-lg);
-  background: var(--bg-secondary);
+  background: var(--fill-tertiary);
 }
 
 .setup-hooks-head {
@@ -119,17 +132,18 @@
   margin: var(--sp-2) 0 0;
 }
 
-/* Inside a tinted block a tinted notice disappears into it, so it lifts to the
-   page colour instead. */
-.setup-hooks .settings-notice[data-tone='warn'],
-.setup-hooks .settings-notice[data-tone='error'] {
-  background: var(--bg-primary);
-}
+/* A notice inside a hook block needs no override any more, and the absence is
+   worth a sentence because it looks like something is missing.
 
-[data-theme='dark'] .setup-hooks .settings-notice[data-tone='warn'],
-[data-theme='dark'] .setup-hooks .settings-notice[data-tone='error'] {
-  background: var(--bg-tertiary);
-}
+   There were two rules here, one per theme, pushing a nested notice up to the
+   page colour so that a tint inside a tint did not vanish. Both were lifting
+   off a block that had itself become the page colour, so they were lifting off
+   nothing — and the light one painted a white card inside a grey sheet. Now
+   that the block is `--fill-tertiary` the arithmetic does itself: the notice
+   keeps the same fill from `SettingsWindow.css`, and two translucent layers
+   over one ground land a step apart, in both themes, with no rule naming
+   either colour. Codex's `codex_hooks = true` requirement is the notice this
+   was verified against. */
 
 /* The events, in the order the CLI fires them. Wrapping rather than scrolling:
    Claude has ten and all ten matter equally. */

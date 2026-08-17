@@ -17,11 +17,25 @@
    end.
    ============================================================================ */
 
+/*
+  Pinned to the top, not centred.
+
+  It was `place-items: center`, and that is why the heading moved. This page has
+  four states of four different heights — new tab, failed load with a sentence
+  and a Try-again line, a long port list, a short one — and centring means every
+  one of them puts "Open a page" at a different height. In the recording of
+  2026-08-16 the panel lands in three visibly different places within a minute,
+  which reads as the app jumping rather than as content changing.
+
+  A fixed top offset gives the heading one home. The column still centres
+  horizontally, and `overflow: auto` still handles a list longer than the stage.
+*/
 .bw-start {
   position: absolute;
   inset: 0;
   display: grid;
-  place-items: center;
+  align-content: start;
+  justify-items: center;
   overflow: auto;
   padding: var(--sp-12) var(--sp-6);
   background: var(--bg-primary);
@@ -188,6 +202,68 @@
   color: var(--text-muted);
   font-size: var(--t-footnote);
   line-height: 18px;
+}
+
+/* ============================================================================
+   Terminal Deck's own ports.
+
+   Folded away by default and never clickable. They are on the machine, so the
+   list would be lying by omission if it dropped them — but every one of them
+   answers to this app rather than to a browser, and the one he actually clicked
+   answered with the pairing server's refusal for a plain GET: a black page
+   reading "that is not how to ask".
+
+   Drawn as flat rows rather than cards, with none of `.bw-start-port`'s hover:
+   the difference between "press me" and "for information" has to be visible
+   before the pointer arrives.
+   ============================================================================ */
+
+.bw-start-fold {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin: 0 auto var(--sp-2);
+  padding: var(--sp-1) var(--sp-2);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: var(--t-footnote);
+  transition: color var(--dur-fast) var(--ease);
+}
+
+.bw-start-fold:hover {
+  color: var(--text-secondary);
+}
+
+.bw-start-fold-caret {
+  transition: transform var(--dur-fast) var(--ease);
+}
+
+.bw-start-fold[aria-expanded='true'] .bw-start-fold-caret {
+  transform: rotate(90deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bw-start-fold-caret {
+    transition: none;
+  }
+}
+
+.bw-start-ours {
+  list-style: none;
+  margin: 0 0 var(--sp-6);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.bw-start-ours li {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-4);
+  color: var(--text-muted);
+  font-size: var(--t-callout);
 }
 
 .bw-start-refresh {

@@ -7,6 +7,7 @@ import {
   parseSnapshot,
   profileBadges,
   profileBridge,
+  profileLoginLabel,
   projectDefaultFor,
   type ProfileView,
   type SnapshotView,
@@ -130,6 +131,72 @@ describe('profileBadges', () => {
   })
 })
 
+describe('profileLoginLabel', () => {
+  const system = view({ id: 'system', name: 'Default', system: true })
+  const codex = view({
+    id: 'system:codex',
+    name: 'Default (Codex CLI)',
+    provider: 'codex',
+    system: true,
+  })
+
+  it('never prints the generated key, whatever is known about the login', () => {
+    // The whole point. "Default" and "Default (Codex CLI)" are `profiles.ts`
+    // keys for the machine's own install; they had reached the one control in
+    // the New-session dialog whose job is saying which login a session runs as,
+    // one line under the address itself.
+    for (const signIn of [
+      undefined,
+      { state: 'signed-out', account: null } as const,
+      { state: 'unknown', account: null } as const,
+      { state: 'signed-in', account: 'asad@example.com' } as const,
+    ]) {
+      expect(profileLoginLabel(system, signIn)).not.toMatch(/Default/)
+      expect(profileLoginLabel(codex, signIn)).not.toMatch(/Default/)
+    }
+  })
+
+  it('prefers the address the agent named', () => {
+    expect(profileLoginLabel(system, { state: 'signed-in', account: 'asad@example.com' })).toBe(
+      'asad@example.com',
+    )
+  })
+
+  it('does not print an address the login has lost', () => {
+    // `claude auth status --json` keeps the email on an expired login, so a
+    // label taken straight off the field would name an account that cannot
+    // start a session. The state is what gates it — `accountLabel` owns that
+    // rule and this calls it rather than repeating it.
+    expect(profileLoginLabel(system, { state: 'signed-out', account: 'asad@example.com' })).toBe(
+      'Your own Claude Code install',
+    )
+  })
+
+  it('keeps a name a person chose, signed in or not', () => {
+    expect(profileLoginLabel(view(), undefined)).toBe('Work')
+    expect(profileLoginLabel(view(), { state: 'signed-out', account: null })).toBe('Work')
+  })
+
+  it('names which install it is rather than what state it is in', () => {
+    // A state is not an identity: two rows can share one, and a picker offering
+    // "Signed in · max" twice has stopped being a picker. Codex is the case
+    // that makes this permanent — its CLI never prints an address at all.
+    expect(profileLoginLabel(system, undefined)).toBe('Your own Claude Code install')
+    expect(profileLoginLabel(codex, undefined)).toBe('Your own Codex CLI install')
+    expect(profileLoginLabel(codex, { state: 'signed-in', account: null })).toBe(
+      'Your own Codex CLI install',
+    )
+  })
+
+  it('tells a generated id apart before the list says whether it is generated', () => {
+    // The chip's rule: `system` off the list when it has been read, the id
+    // before that. A snapshot from an older build carries no flag at all.
+    expect(profileLoginLabel(view({ id: 'system:gemini', name: 'Default (Gemini CLI)', provider: 'gemini' }), undefined)).toBe(
+      'Your own Gemini CLI install',
+    )
+  })
+})
+
 describe('normalizeProjectKey', () => {
   it('collapses the ways one folder gets written', () => {
     expect(normalizeProjectKey('/w/app')).toBe('/w/app')
@@ -203,7 +270,17 @@ describe('isolationNotice', () => {
   })
 
   it('explains itself for the agents it cannot', () => {
-    expect(isolationNotice('shell')).toMatch(/no login/)
+    /*
+     * One sentence per agent, now literally one.
+     *
+     * This matched `/no login/` against the renderer's own copy of the shell
+     * note while the main process said "no account to sign in to" — two
+     * spellings of one fact in two files, which is exactly what
+     * `shared/agent-catalog.ts` was created to end. Both sides read the
+     * catalogue's sentence now, and `chrome-render.test.tsx` pins the same words
+     * where the account chip prints them.
+     */
+    expect(isolationNotice('shell')).toMatch(/no account to sign in to/)
     // Gemini's reason has to be about Gemini. It has a config-directory
     // variable; what it does not have is one that moves the login.
     expect(isolationNotice('gemini')).toMatch(/one login per machine/)

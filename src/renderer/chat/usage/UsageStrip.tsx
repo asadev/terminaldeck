@@ -1,43 +1,56 @@
 import { useMemo } from 'react'
-import type { PlanLimitSnapshot, SessionSummary } from './types'
+import type { SessionSummary } from './types'
 import {
   contextReadout,
   contextWarningOf,
-  describeAge,
   formatExact,
-  formatPercent,
   formatTokens,
-  formatUsd,
-  isStale,
-  levelOfPercent,
   pickSession,
-  planLabel,
-  planTitle,
-  refreshFailureMessage,
-  spendToday,
   tokenTotals,
-  type TodaySpend,
+  usageToday,
+  type TodayUsage,
 } from './usage-model'
 import { useUsage, type UsageBridge } from './useUsage'
 import './UsageStrip.css'
 
 /**
- * What this session has cost, and how close it is to its limits.
+ * What this session has moved: tokens, requests, and how full the window is.
  *
  * A reading strip, not a dashboard: the session inspector already owns the
  * per-request detail. Everything here comes from figures the main process has
- * already computed — `cost.ts` for the money and the context window,
- * `transcript.ts` for the incremental tail, `plan-limit.ts` for whatever Claude
- * Code itself said about the subscription plan.
+ * already computed — `cost.ts` for the token and context maths, `transcript.ts`
+ * for the incremental tail.
  *
- * Two honesty rules run through it:
+ * There is no money on this strip. Two items carried it — "Session" and "Today"
+ * — and both are gone or re-based on tokens; the argument is at the bottom of
+ * `src/main/cost.ts`.
  *
- *  1. Context occupancy above 100% is shown as it is. Auto-compaction fires at
- *     the limit, so the last request before it genuinely tips over; only the
- *     bar clamps, because a bar cannot do otherwise.
- *  2. A plan limit is only ever what the CLI printed. There is no local file
- *     holding it and no flag that prints it, so when nothing has been seen the
- *     strip says so instead of estimating.
+ * ## The subscription limit is not here any more, and that is deliberate
+ *
+ * It used to be: a "Plan" item reading `Session 5% Week 80% · resets 4am`, plus
+ * the Check button that types `/usage`. Both moved to `shell/UsageBar.tsx`, on
+ * the session's own chrome beside the account chip, because that is where Asad
+ * asked for them — *"where we show the account, next to it we show a bar of the
+ * five-hour limit"* — and because down here they could not be reached at all
+ * from a session drawn as a terminal, which is how this app opens every session.
+ *
+ * They did not stay in both places. This strip and that bar would have been two
+ * readings of one fact, drawn from two different channels (`plan:*` here,
+ * `usage:*` there) with two different rules about staleness — so the day one of
+ * them refused to draw an expired window and the other went on printing it,
+ * a person looking at a chat session would have had two answers on one screen
+ * and no way to tell which was the true one.
+ *
+ * What is left is exactly the thing this strip's own heading promises, in
+ * `AgentControls`: *"This session — how many tokens it has used, and how full
+ * the context window is."* A subscription window is a fact about an **account**,
+ * not about a session, which is the other half of why it belongs beside the
+ * account and not under a composer.
+ *
+ * One honesty rule still runs through what remains: context occupancy above
+ * 100% is shown as it is. Auto-compaction fires at the limit, so the last
+ * request before it genuinely tips over; only the bar clamps, because a bar
+ * cannot do otherwise.
  */
 
 /* ------------------------------------------------------------------ pieces */
@@ -75,8 +88,7 @@ function Item({
 
 export interface UsageStripViewProps {
   session: SessionSummary | null
-  today: TodaySpend
-  plan: PlanLimitSnapshot | null
+  today: TodayUsage
   /** True while the main process is still reading this project's history. */
   scanning: boolean
   /**
@@ -85,12 +97,7 @@ export interface UsageStripViewProps {
    * screen where the project has plenty and this session simply has none yet.
    */
   scoped?: boolean
-  now: number
   unwired?: boolean
-  canRefreshPlan?: boolean
-  refreshing?: boolean
-  refreshReason?: string | null
-  onRefreshPlan?: () => void
 }
 
 interface Note {
@@ -110,15 +117,9 @@ const MAX_NOTES = 2
 export function UsageStripView({
   session,
   today,
-  plan,
   scanning,
   scoped = false,
-  now,
   unwired = false,
-  canRefreshPlan = false,
-  refreshing = false,
-  refreshReason = null,
-  onRefreshPlan,
 }: UsageStripViewProps) {
   if (unwired) {
     return (
@@ -144,23 +145,10 @@ export function UsageStripView({
 
   const context = contextReadout(session.context)
   const tokens = tokenTotals(session.usage)
-  const spend = session.cost.cost
-  const unpriced = session.cost.unpricedModels
 
   const notes: Note[] = []
-  if (refreshReason) notes.push({ tone: 'muted', text: refreshReason })
   const warning = contextWarningOf(session)
   if (warning) notes.push({ tone: warning.level, text: warning.message })
-  if (unpriced.length > 0) {
-    notes.push({
-      tone: 'muted',
-      // The total is a floor, and saying "$X" flat would be a claim it is not.
-      text: `Spend is a floor — no published rate for ${unpriced.join(', ')}.`,
-    })
-  }
-  if (session.cost.usedLegacyRate) {
-    notes.push({ tone: 'muted', text: 'Priced partly from a retired rate card.' })
-  }
   if (today.carriedOver > 0) {
     notes.push({
       tone: 'muted',
@@ -169,7 +157,7 @@ export function UsageStripView({
   }
 
   return (
-    <div className="usage-strip" role="group" aria-label="Session usage and limits">
+    <div className="usage-strip" role="group" aria-label="What this session has used">
       <div className="us-items">
         {context ? (
           <Item label="Context" title={context.title} wide>
@@ -192,36 +180,38 @@ export function UsageStripView({
           </Item>
         )}
 
+        {/*
+          "Requests", where the session's money used to be.
+
+          The item it replaces printed this session's spend, and the four token
+          classes behind it in the tooltip. Both were money. The request count
+          was already in that tooltip and is the other thing a person wants
+          beside a token total — a million tokens across six requests and a
+          million across four hundred are very different sessions.
+        */}
         <Item
-          label="Session"
-          title={`in ${formatUsd(spend.input)} · out ${formatUsd(spend.output)} · cache write ${formatUsd(
-            spend.cacheWrite,
-          )} · cache read ${formatUsd(spend.cacheRead)} · ${session.requests} requests${
-            unpriced.length > 0 ? `. A floor, not the answer — no published rate for ${unpriced.join(', ')}.` : ''
-          }`}
+          label="Requests"
+          title={`${session.requests} deduplicated API request${
+            session.requests === 1 ? '' : 's'
+          } in this session. One request writes several transcript lines and every one of them repeats the same usage block, so these are counted per request rather than per line.`}
         >
-          {/* The `≥` rides on the figure itself, as it does for Today. The note
-              below explains it, but notes are capped and this must not depend on
-              one surviving that cap. */}
-          <span className="us-value">
-            {unpriced.length > 0 ? `≥ ${formatUsd(spend.total)}` : formatUsd(spend.total)}
-          </span>
+          <span className="us-value">{session.requests}</span>
         </Item>
 
         <Item
           label="Today"
-          title={`${formatUsd(today.total)} across ${today.sessions} session${
+          title={`${formatExact(today.tokens)} tokens across ${today.sessions} session${
             today.sessions === 1 ? '' : 's'
           } active today in this project. Sessions are counted in full, so one that started yesterday makes this an upper bound.`}
         >
-          <span className="us-value">{today.hasUnpriced ? `≥ ${formatUsd(today.total)}` : formatUsd(today.total)}</span>
+          <span className="us-value">{formatTokens(today.tokens)}</span>
         </Item>
 
         <Item
           label="Tokens"
           title={`${formatExact(tokens.input)} fresh input · ${formatExact(tokens.output)} output · ${formatExact(
             tokens.cacheRead,
-          )} cache read · ${formatExact(tokens.cacheWrite)} cache write. Cache reads and writes are most of the bill; fresh input is only the part of each prompt that was neither cached nor read from cache.`}
+          )} cache read · ${formatExact(tokens.cacheWrite)} cache write. Cache reads and writes are most of the traffic; fresh input is only the part of each prompt that was neither cached nor read from cache.`}
           wide
         >
           <span className="us-value">
@@ -243,13 +233,6 @@ export function UsageStripView({
           </Item>
         ) : null}
 
-        <PlanSection
-          plan={plan}
-          now={now}
-          canRefresh={canRefreshPlan}
-          refreshing={refreshing}
-          onRefresh={onRefreshPlan}
-        />
       </div>
 
       {notes.length > 0 ? (
@@ -265,101 +248,10 @@ export function UsageStripView({
   )
 }
 
-/* --------------------------------------------------------------- the plan */
-
-const PLAN_UNAVAILABLE =
-  'Claude Code reports plan usage only in its own output — there is no file or flag that holds it. Run /usage in the session and it appears here.'
-
-function PlanSection({
-  plan,
-  now,
-  canRefresh,
-  refreshing,
-  onRefresh,
-}: {
-  plan: PlanLimitSnapshot | null
-  now: number
-  canRefresh: boolean
-  refreshing: boolean
-  onRefresh?: () => void
-}) {
-  const age = plan?.available ? describeAge(plan.capturedAt, now) : ''
-  const stale = plan?.available ? isStale(plan.capturedAt, now) : false
-
-  return (
-    <Item
-      label="Plan"
-      title={
-        plan?.available
-          ? // `age` is empty when the reading carries no timestamp, and
-            // "…output ." would be a dangling sentence.
-            (plan.message ?? `Read from Claude Code's own output${age ? ` ${age}` : ''}.`)
-          : (plan?.reason ?? PLAN_UNAVAILABLE)
-      }
-      wide
-    >
-      {plan?.available && plan.limits.length > 0 ? (
-        <>
-          {plan.limits.map((limit) => (
-            <span key={limit.id} className="us-plan-limit" title={planTitle(limit)}>
-              <span className="us-plan-name">{planLabel(limit)}</span>
-              <span className="us-value" data-level={levelOfPercent(limit.percent)}>
-                {limit.percent === null ? 'near limit' : formatPercent(limit.percent)}
-              </span>
-            </span>
-          ))}
-          {/* The separator is drawn in CSS, not written into the string. It has
-              to be there when this sits beside the last limit — "80% resets Aug
-              14" otherwise reads as one phrase — and it has to be gone when the
-              strip is stacked into a narrow column, where a hard-coded "·" was
-              starting a line on its own like a stray bullet. */}
-          <span className="us-sub us-sub-after" data-tone={stale ? 'warning' : undefined}>
-            {planFootnote(plan, age)}
-          </span>
-        </>
-      ) : (
-        <span className="us-value us-muted">not available</span>
-      )}
-      {/* Only rendered when it can actually run: it types `/usage` into the
-          session and closes the panel again, exactly as a person would. */}
-      {canRefresh && onRefresh ? (
-        <button
-          type="button"
-          className="us-refresh"
-          onClick={onRefresh}
-          disabled={refreshing}
-          title="Types /usage into this session, reads the panel Claude Code draws, then closes it with Esc. Only runs while the session is idle and its prompt is empty."
-        >
-          {refreshing ? 'Checking…' : 'Check'}
-        </button>
-      ) : null}
-    </Item>
-  )
-}
-
-/**
- * The line under the limits: when they reset, and how old the reading is.
- *
- * A limit the CLI named without a reset time simply contributes nothing here —
- * "no reset time reported" is noise, and the per-limit tooltip already says it.
- */
-function planFootnote(plan: PlanLimitSnapshot, age: string): string {
-  const withReset = plan.limits.find((limit) => limit.resetsAt !== null)
-  // Limits reset at different times — a session window in hours, a weekly one
-  // in days — so an unlabelled reset beside three chips would read as though it
-  // covered all of them.
-  const resets = withReset?.resetsAt
-    ? plan.limits.length > 1
-      ? `${planLabel(withReset)} resets ${withReset.resetsAt}`
-      : `resets ${withReset.resetsAt}`
-    : ''
-  return [resets, age ? `read ${age}` : ''].filter(Boolean).join(' · ')
-}
-
 /* ------------------------------------------------------------- the strip */
 
 export interface UsageStripProps {
-  /** Project folder — the cost watcher is keyed on it. */
+  /** Project folder — the transcript watcher is keyed on it. */
   cwd: string | null
   /** A specific transcript. Wins over the project's newest session. */
   transcriptPath?: string
@@ -371,34 +263,22 @@ export interface UsageStripProps {
    * which is what `pickSession` falls back to. For a session view it means
    * "this session has not written a transcript yet" — and there the fallback is
    * a lie: it borrows whichever session in the folder ran last and prints its
-   * spend and its context fill under a heading that says "This session". A tab
+   * tokens and its context fill under a heading that says "This session". A tab
    * opened under a second account, which by definition has no transcript in the
-   * default account's store, showed the default account's money.
+   * default account's store, showed the default account's numbers.
    *
    * So the flag is not a display preference. It is the difference between a
    * number about you and a number about somebody else.
    */
   scoped?: boolean
-  /**
-   * The live PTY session. Plan limits are read from its screen, so without one
-   * they are simply not available and the strip says so.
-   */
-  sessionId?: string
   /** Injectable for tests; defaults to the preload bridge on `window.deck`. */
   bridge?: UsageBridge
   /** Clock, for tests. */
   now?: number
 }
 
-export function UsageStrip({
-  cwd,
-  transcriptPath,
-  scoped = false,
-  sessionId,
-  bridge,
-  now,
-}: UsageStripProps) {
-  const usage = useUsage(cwd, sessionId, bridge)
+export function UsageStrip({ cwd, transcriptPath, scoped = false, bridge, now }: UsageStripProps) {
+  const usage = useUsage(cwd, bridge)
   const at = now ?? Date.now()
 
   const session = useMemo(
@@ -409,21 +289,15 @@ export function UsageStrip({
       scoped && !transcriptPath ? null : pickSession(usage.summary, { transcriptPath }),
     [usage.summary, transcriptPath, scoped],
   )
-  const today = useMemo(() => spendToday(usage.summary, at), [usage.summary, at])
+  const today = useMemo(() => usageToday(usage.summary, at), [usage.summary, at])
 
   return (
     <UsageStripView
       session={session}
       today={today}
-      plan={usage.plan}
       scanning={usage.summary?.scanning ?? false}
       scoped={scoped}
-      now={at}
       unwired={usage.unwired}
-      canRefreshPlan={usage.canRefreshPlan}
-      refreshing={usage.refreshing}
-      refreshReason={usage.refreshReason ? refreshFailureMessage(usage.refreshReason) : null}
-      onRefreshPlan={usage.refreshPlan}
     />
   )
 }

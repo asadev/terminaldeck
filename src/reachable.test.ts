@@ -130,6 +130,26 @@ const KNOWN_UNREACHABLE: Record<string, string> = {
   // answers 'appcontainer' whenever `windowsConfinementReady()` is true. The
   // entry described a build where it was not wired, and leaving it would have
   // been documentation asserting the opposite of the code.
+  'src/main/remote/copilot-grants.ts':
+    'the store for a capability whose transport does not exist yet, and it stays unwired on ' +
+    'purpose rather than by omission. COPILOT-DESIGN.md numbers this work phase 4 — "remote ' +
+    'access to an agent that can rewrite settings and spawn sessions is the highest-stakes ' +
+    'surface in the product, and it should be built last, against a copilot whose permission ' +
+    'model has already been used in anger locally" — and phases 1 to 3 are what shipped: the ' +
+    'copilot runs as a local session, deck-control gates its tools, and nothing in ' +
+    'src/main/remote/ carries a copilot frame. Grepped rather than assumed: no module outside ' +
+    'this one names CopilotGrants or remoteCopilotCaller, and the relay protocol has no frame ' +
+    'a phone could send one in. ' +
+    'The wrong fix would be to reach it from the UI. A switch in the devices panel granting a ' +
+    'phone read or act would be a permission control that changes nothing a phone can do — the ' +
+    'exact defect the second check in this file exists to catch, and a worse instance of it ' +
+    'than a dead font size, because a person who granted it would believe they had. ' +
+    'What is honest today is that the store is right and nothing dispatches through it, and ' +
+    'that is what this entry says. `remoteCopilotCaller` is the single seam the transport will ' +
+    'call, so wiring it is one import rather than an assembly of `Caller` by hand with ' +
+    'ALL_TIERS in it; `copilot-grants.test.ts` pins the rules it enforces — alter is never ' +
+    'grantable, absence is no access, an unreadable file fails closed — so phase 4 starts ' +
+    'against a store that has already been argued with.',
   'src/shared/pairing-link.ts':
     'reachable, but not from the desktop app: `pwa/src/endpoint.ts` and `pwa/src/rendezvous.ts` ' +
     'import it, and this walk starts at the Electron entry points. What is left in the file is ' +

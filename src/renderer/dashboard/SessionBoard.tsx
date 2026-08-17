@@ -1,8 +1,11 @@
 import { useState, type ReactElement } from 'react'
+import { profileLoginLabel, useKnownSignIns } from '../accounts'
 import { PageEmpty } from '../components/PageEmpty'
 import { chordFor } from '../keymap'
 import { useEvery } from '../schedule'
 import { panelSpec } from '../shell/panels'
+import { shortSessionId } from '../session-title'
+import { sessionLabel } from '../shell/workspace-tabs'
 import {
   attentionLabel,
   attentionOf,
@@ -17,7 +20,7 @@ import {
   type BoardSession,
 } from './board'
 import { FolderWorkLoader, useBoardSessions } from './useBoard'
-import { formatTokens, formatUsd, plural } from './widgets'
+import { formatTokens, plural } from './widgets'
 import './SessionBoard.css'
 
 /**
@@ -55,7 +58,7 @@ import './SessionBoard.css'
  * | Title | `SessionMeta.title`, derived in `session-title.ts` |
  * | Folder, agent, account | `SessionMeta.cwd` / `provider` / `profileName`, set at spawn |
  * | Started | `SessionMeta.createdAt` |
- * | Tokens, spend, context, last activity | this session's own transcript, matched by `pickSessionTranscript` and totalled by `transcript.ts` |
+ * | Tokens, requests, context, last activity | this session's own transcript, matched by `pickSessionTranscript` and totalled by `transcript.ts` |
  */
 
 export interface SessionBoardProps {
@@ -158,6 +161,65 @@ export function BoardBody({
   const ordered = sortBoard(sessions)
   const counts = countBoard(sessions)
 
+  /**
+   * What each card is called, numbered the way the sidebar numbers it.
+   *
+   * A session starts out titled after the folder it runs in, and the card
+   * printed that title raw — so eight sessions in one project gave eight cards
+   * all headed `terminaldeck`, with the same word repeated as the folder chip
+   * directly above each one. The page whose whole job is "which one do I need
+   * to go into" could not tell you which one you were looking at.
+   *
+   * `sessionLabel` is the rule the rail already follows: the agent's title when
+   * it has written one, and `Session N` until then. The number is counted over
+   * the *unsorted* list, which is the order the store holds and therefore the
+   * order the sidebar counts in — take it off `ordered` instead and a card
+   * would be "Session 2" here while the rail called the same session
+   * "Session 4", which is the class of defect this whole pass is closing.
+   */
+  const names = new Map<string, string>()
+  const seen = new Map<string, number>()
+  for (const session of sessions) {
+    const nth = seen.get(session.projectPath) ?? 0
+    seen.set(session.projectPath, nth + 1)
+    names.set(session.id, sessionLabel(session.title, nth, folderOf(session.projectPath)))
+  }
+
+  /**
+   * And the fact that separates two cards the name cannot.
+   *
+   * Everything else a card could be told apart by is already printed on it: the
+   * folder is the chip in its top corner and the account is in its meta line.
+   * So the only case left is the one the rail has too — two agents given the
+   * same task in the same folder on the same login write the same sentence —
+   * and the answer is the same as the rail's, in the same eight characters, so
+   * a card and a row can be matched by eye.
+   *
+   * Empty for every card that does not need one. A card carrying an id when its
+   * name is already unique is a card asking you to read a hex string for
+   * nothing.
+   */
+  /*
+   * The separator, spelled as an escape and never as the byte itself.
+   *
+   * NUL is the right character here — it cannot occur in a name, a POSIX path
+   * or an account id, so no two different sessions can be made to collide by
+   * the joining. What is not right is typing the raw byte, which is how this
+   * line was first written: a single NUL makes `file`(1) report the source as
+   * `data` and makes `grep`(1) treat it as binary and match it silently. A
+   * search for any symbol in this file then comes back empty, and the only
+   * honest reading of that is "it is declared somewhere else". That has
+   * already cost real time on this project, in this file's siblings.
+   *
+   * `src/encoding.test.ts` fails the build on a NUL in any tracked source, and
+   * it is what caught this one.
+   */
+  const KEY_SEP = '\u0000'
+  const twins = new Map<string, number>()
+  const keyOf = (session: BoardSession): string =>
+    [names.get(session.id), session.projectPath, session.account?.id ?? ''].join(KEY_SEP)
+  for (const session of sessions) twins.set(keyOf(session), (twins.get(keyOf(session)) ?? 0) + 1)
+
   return (
     <>
       <header className="board-head">
@@ -184,6 +246,8 @@ export function BoardBody({
           <li key={session.id}>
             <Card
               session={session}
+              name={names.get(session.id) ?? session.title}
+              twin={(twins.get(keyOf(session)) ?? 0) > 1}
               now={now}
               here={session.projectPath === projectPath}
               onOpen={onOpenSession}
@@ -204,17 +268,41 @@ export function BoardBody({
  */
 function Card({
   session,
+  name,
+  twin,
   now,
   here,
   onOpen,
 }: {
   session: BoardSession
+  /** What to call it — see the numbering in `BoardBody`, which owns the rule. */
+  name: string
+  /** Another card carries the same name, folder and account. See `BoardBody`. */
+  twin: boolean
   now: number
   /** True when this session runs in the project the Overview page is open on. */
   here: boolean
   onOpen?: (id: string) => void
 }): ReactElement {
   const attention = attentionOf(session.status)
+  /*
+   * Who it is running as, in the words the chip and the rail use.
+   *
+   * The card printed `session.account` raw — the profile key — so every card on
+   * this page read `Claude Code · Default · started 25m ago` while the chip
+   * inside that same session read the address. `useKnownSignIns` is a read of
+   * the answers the chip has already paid for and never starts a probe of its
+   * own: the board can hold a card per session, and a page that spawned an
+   * agent CLI per card on mount would cost more to look at than to run.
+   */
+  const known = useKnownSignIns()
+  const login =
+    session.account === null
+      ? null
+      : profileLoginLabel(
+          { ...session.account, provider: session.provider },
+          known[session.account.id],
+        )
   const body = (
     <>
       <div className="board-card-top">
@@ -233,14 +321,21 @@ function Card({
         </span>
       </div>
 
-      <h3 className="board-title">{session.title}</h3>
+      {/* The session, not the folder. The folder is the chip above this line
+          and repeating it here left every card in a project headed with one
+          word. `title` carries the derived title even when the heading is
+          "Session 3", because that is the string a search would match. */}
+      <h3 className="board-title" title={session.title}>
+        {name}
+        {twin && <span className="board-title-id">{shortSessionId(session.id)}</span>}
+      </h3>
       <p className="board-state" data-attention={attention}>
         {stateSentence(session, now)}
       </p>
 
       <p className="board-meta">
         {providerLabel(session.provider)}
-        {session.account ? ` · ${session.account}` : ''}
+        {login ? ` · ${login}` : ''}
         {session.startedAt > 0 ? ` · started ${formatElapsed(now - session.startedAt)} ago` : ''}
       </p>
 
@@ -254,7 +349,7 @@ function Card({
     <button
       type="button"
       className={className}
-      title={`Open ${session.title}`}
+      title={`Open ${name}`}
       onClick={() => onOpen(session.id)}
     >
       {body}
@@ -265,8 +360,8 @@ function Card({
 /**
  * The numbers, when this session's own transcript could be established.
  *
- * Absent entirely otherwise — a row of zeroes under a session that has spent
- * money is worse than no row, and the two cases are indistinguishable to a
+ * Absent entirely otherwise — a row of zeroes under a session that has done
+ * real work is worse than no row, and the two cases are indistinguishable to a
  * reader once they are both printed as `0`.
  */
 function Figures({ session, now }: { session: BoardSession; now: number }): ReactElement | null {
@@ -279,12 +374,18 @@ function Figures({ session, now }: { session: BoardSession; now: number }): Reac
         <dt>Tokens</dt>
         <dd>{formatTokens(work.tokens)}</dd>
       </div>
-      {work.costUsd !== null && (
-        <div>
-          <dt>Spent</dt>
-          <dd>{formatUsd(work.costUsd)}</dd>
-        </div>
-      )}
+      {/*
+        Requests, where this card's "Spent" figure used to be.
+
+        A token count on its own does not say whether it came from six long
+        turns or four hundred short ones, and that is the difference a person
+        scanning the board is looking for. The money it replaces is gone from
+        the whole app — see the bottom of `src/main/cost.ts`.
+      */}
+      <div>
+        <dt>Requests</dt>
+        <dd>{work.requests}</dd>
+      </div>
       {work.contextPercent !== null && (
         <div>
           <dt>Context</dt>

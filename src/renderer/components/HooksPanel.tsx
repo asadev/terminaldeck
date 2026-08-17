@@ -35,7 +35,8 @@ export interface HookWriteResult {
 }
 
 export interface HookServerInfo {
-  port: number | null
+  /** The socket path, or null when it is not listening. Never the token. */
+  address: string | null
   running: boolean
 }
 
@@ -142,18 +143,22 @@ export function foreignNote(status: HookProviderStatus): string | null {
  * The line under the header: where the local endpoint is, or that it is not up.
  *
  * The running half used to carry a second sentence — that the address and its
- * token change every run, so hooks are reinstalled when the app starts. True,
- * and a description of our own implementation: nothing in it changes what the
- * reader does, and it doubled the length of a line whose whole job is to show
- * an address. The *not* running half keeps its consequence, because "hooks have
- * nowhere to report to" is why the page underneath will look inert.
+ * token change every run, so hooks are reinstalled when the app starts. It was
+ * cut for being a description of our own implementation, which was the right
+ * call for the wrong reason: it was also a description of a defect, and cutting
+ * it made the defect quieter rather than smaller. Neither half is true any more.
+ * The address is a socket path that does not change between runs, and the token
+ * is no longer in the hook command at all — see `hook-server.ts`.
+ *
+ * The *not* running half keeps its consequence, because "hooks have nowhere to
+ * report to" is why the page underneath will look inert.
  *
  * Pure and exported so both halves can be pinned; `server` arrives from an
  * effect, which a static render never runs.
  */
 export function endpointLine(server: HookServerInfo | null): string {
   return server?.running
-    ? `Listening on 127.0.0.1:${server.port}.`
+    ? `Listening on ${server.address}.`
     : 'The local endpoint is not running, so hooks have nowhere to report to.'
 }
 

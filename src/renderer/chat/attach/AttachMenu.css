@@ -166,6 +166,65 @@
   outline-offset: -2px;
 }
 
+/* ------------------------------------------------------------- browse -- */
+
+/* The escape hatch, between the search box and the project list.
+
+   Separated with space and a fill, not with a rule — the design note in
+   CLAUDE.md, in the user's own words: "a lot of separations is not a good idea,
+   it's not Apple style." It reads as a different kind of thing from the rows
+   below it because it is a filled row and they are not, which is enough. */
+.at-browse {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-15);
+  width: 100%;
+  margin-top: var(--sp-15);
+  padding: var(--sp-1) var(--sp-2);
+  border-radius: var(--radius-md);
+  background: var(--fill-tertiary);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: var(--t-callout);
+  text-align: left;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.at-browse:hover:not(:disabled) {
+  background: var(--fill-secondary);
+}
+
+.at-browse:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* Disabled and still legible. This row is only ever disabled for one reason —
+   the session is held inside a folder by the OS — and the reason is printed on
+   the row underneath the label, so fading it to the point of being unreadable
+   would hide the explanation along with the button. */
+.at-browse:disabled {
+  cursor: default;
+  color: var(--text-secondary);
+}
+
+.at-browse-text {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.at-browse-label {
+  line-height: var(--lh-tight);
+}
+
+.at-browse-hint {
+  color: var(--text-muted);
+  font-size: var(--t-footnote);
+  line-height: var(--lh-tight);
+}
+
 .at-list {
   max-height: 240px;
   margin: var(--sp-1) 0 0;

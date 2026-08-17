@@ -71,6 +71,22 @@
   background: var(--bg-primary);
 }
 
+/* A file is being dragged over the box.
+
+   The same accent border and halo as focus, because it is the same claim — this
+   is where what you are doing will land — and a second visual language for it
+   would be a second thing to learn. It has to be visible: without any feedback,
+   a drop that misses the box replaces the whole window with the dropped file,
+   and the only warning anybody had was the cursor. */
+.cc-box-drop {
+  border-color: var(--accent-line);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+  /* Not a colour of its own: the fill lifts a step so the target reads at a
+     glance in both themes without introducing a tint that means nothing
+     elsewhere in the app. */
+  background: var(--bg-tertiary);
+}
+
 .cc-input {
   min-width: 0;
   /* Three lines and a little, before a word is typed. The auto-grow in

@@ -130,17 +130,24 @@ export function deliveryCopy(
  * One list, in one file, rather than a literal id compared inside each section
  * that happens to draw one of these switches. That is not tidiness — it is the
  * only arrangement that survives the settings window being reorganised. These
- * two switches have already moved once (both were in Notifications; the
- * headline pair now lives in General), and the section that draws a switch is
- * the section that has to trigger the prompt, because the prompt has to appear
- * while the user is looking at the thing they just flipped. Leave the id
- * hard-coded in the section and the next move silently detaches the ask from
- * the switch — and "silently" is the whole problem: macOS asks exactly once,
- * with a banner whose Allow is hidden under `Options`, so a prompt that fires
- * with nobody watching is a feature that never works again and never says why.
+ * two switches have now moved twice — both started in Notifications, spent a
+ * release in General, and are back here with every other notification row — and
+ * the section that draws a switch is the section that has to trigger the
+ * prompt, because the prompt has to appear while the user is looking at the
+ * thing they just flipped. Leave the id hard-coded in the section and the next
+ * move silently detaches the ask from the switch — and "silently" is the whole
+ * problem: macOS asks exactly once, with a banner whose Allow is hidden under
+ * `Options`, so a prompt that fires with nobody watching is a feature that
+ * never works again and never says why.
+ *
+ * Both ids are the ones the schema declares *today*. An older name reaching
+ * this list would compare against nothing and quietly stop asking, which is why
+ * a rename in `settings-schema.ts` has to be echoed here — and why
+ * `notification-check.test.ts` asserts that every id below is a declared
+ * setting rather than trusting the two strings to stay true.
  */
 export const BANNER_SETTINGS: readonly string[] = [
-  'general.notifyOnAttention',
+  'notifications.onNeedsInput',
   'notifications.onComplete',
 ]
 

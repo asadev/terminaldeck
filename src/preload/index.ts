@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
+import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
 import type { CreateSessionInput, SessionMeta } from '../shared/types'
 
 /**
@@ -9,6 +9,22 @@ const api = {
   getBrand: (): Promise<{ name: string; tagline: string }> => ipcRenderer.invoke('brand:get'),
 
   detectProviders: (): Promise<Record<string, boolean>> => ipcRenderer.invoke('providers:detect'),
+
+  /* ------------------------------------------------- the agents you added -- */
+  // Three methods rather than one "save the list", and the asymmetry is the
+  // rule: `addAgent` is the only way an agent comes into existence, because it
+  // is the only path that resolves the command on this machine's login PATH
+  // before writing anything. A channel taking a whole list would be a way to put
+  // an agent in the picker without that check, arriving from the side of the
+  // bridge where no check can be trusted to have happened.
+  //
+  // `unknown` in and `unknown` out, like every other feature module: the shapes
+  // live in `main/custom-agents.ts` and `shared/custom-agents.ts`, and the
+  // narrowers there are what the renderer reads them back through.
+
+  listAgents: (): Promise<unknown> => ipcRenderer.invoke('agents:list'),
+  addAgent: (draft: unknown): Promise<unknown> => ipcRenderer.invoke('agents:add', draft),
+  removeAgent: (id: string): Promise<unknown> => ipcRenderer.invoke('agents:remove', id),
 
   listProjects: (): Promise<Array<{ path: string; lastOpenedAt: number }>> =>
     ipcRenderer.invoke('projects:list'),
@@ -69,7 +85,12 @@ const api = {
     return () => ipcRenderer.off('session:created', handler)
   },
 
-  /* ------------------------------------------------------------ cost -- */
+  /* ----------------------------------------------------------- usage -- */
+  // Still spelled `cost:*` on both sides, and carrying no cost. Two methods
+  // were removed here with the pricing — `getModelPricing`, which asked the
+  // main process for a model's per-million rates, and `formatCost`, which was
+  // never callable as typed (it passed a bare number to a handler that read
+  // `value.usd`). Neither had a caller. See the bottom of `src/main/cost.ts`.
 
   getProjectCost: (cwd: string): Promise<unknown> => ipcRenderer.invoke('cost:project', cwd),
   getSessionCost: (transcriptPath: string): Promise<unknown> =>
@@ -77,8 +98,6 @@ const api = {
   listSessionTranscripts: (cwd: string): Promise<unknown> => ipcRenderer.invoke('cost:sessions', cwd),
   watchProjectCost: (cwd: string): Promise<unknown> => ipcRenderer.invoke('cost:watch', cwd),
   unwatchProjectCost: (cwd: string): Promise<void> => ipcRenderer.invoke('cost:unwatch', cwd),
-  getModelPricing: (model: string): Promise<unknown> => ipcRenderer.invoke('cost:pricing', model),
-  formatCost: (value: number): Promise<string> => ipcRenderer.invoke('cost:format', value),
   onCostUpdate: (cb: (summary: unknown) => void): (() => void) => {
     const handler = (_e: IpcRendererEvent, summary: unknown) => cb(summary)
     ipcRenderer.on('cost:update', handler)
@@ -218,6 +237,27 @@ const api = {
     return () => ipcRenderer.off('plan:update', handler)
   },
 
+  /* ----------------------------------------------------- usage windows -- */
+  // The same readings as `plan:*`, normalised across agents and joined by
+  // Codex's — each one tagged with the account it describes, the window it
+  // covers, when the source produced it and when this app read it. Separate
+  // from the plan channels because those also carry an *action* (`plan:refresh`
+  // types `/usage` into the session), and a surface that only draws a bar
+  // should not have to know that one of its sources can be prodded.
+  //
+  // `usage:read` takes null for the machine-wide read — what can be answered
+  // without a session, which today is the user's own Codex install.
+  watchUsage: (sessionId: string): Promise<unknown> => ipcRenderer.invoke('usage:watch', sessionId),
+  readUsage: (sessionId: string | null): Promise<unknown> =>
+    ipcRenderer.invoke('usage:read', sessionId),
+  unwatchUsage: (sessionId: string): void => ipcRenderer.send('usage:unwatch', sessionId),
+  onUsage: (cb: (sessionId: string, payload: unknown) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, sessionId: string, payload: unknown) =>
+      cb(sessionId, payload)
+    ipcRenderer.on('usage:update', handler)
+    return () => ipcRenderer.off('usage:update', handler)
+  },
+
   /* ------------------------------------------------------------- git -- */
 
   gitStatus: (cwd: string): Promise<unknown> => ipcRenderer.invoke('git:status', cwd),
@@ -242,6 +282,47 @@ const api = {
 
   searchProjectFiles: (request: { root: string; refresh?: boolean; limit?: number }): Promise<unknown> =>
     ipcRenderer.invoke('search:files', request),
+
+  /* ------------------------------------------- attaching from outside -- */
+
+  /** The real open panel, for a file that is not in the open project. */
+  browseForAttachment: (request: {
+    mode: 'file' | 'folder' | 'image'
+    startIn?: string
+    extensions?: string[]
+  }): Promise<unknown> => ipcRenderer.invoke('attach:browse', request),
+
+  /** Stat what was dropped: a dropped directory and an empty file look alike. */
+  inspectAttachPaths: (paths: string[]): Promise<unknown> =>
+    ipcRenderer.invoke('attach:inspect', paths),
+
+  /** What is on the clipboard — a copied file, or a bitmap written out as a PNG. */
+  pasteAttachment: (): Promise<unknown> => ipcRenderer.invoke('attach:paste'),
+
+  /** Whether this session is held inside a folder, and which one. */
+  sessionAttachBoundary: (sessionId: string): Promise<unknown> =>
+    ipcRenderer.invoke('attach:boundary', sessionId),
+
+  /**
+   * The path behind a dropped `File`.
+   *
+   * `File.path` was Electron's own extension to the web `File` and it was
+   * removed in Electron 32; this app is on 41, so a drop handler reading
+   * `file.path` gets `undefined` and silently attaches nothing. `webUtils` is
+   * the replacement and it only exists in the preload, which is why this is a
+   * bridge method rather than three lines in the renderer.
+   *
+   * Returns '' rather than throwing for anything that is not a real file — a
+   * drag of selected *text* produces a `File`-shaped item with no path behind
+   * it, and that is a normal thing for a person to do over a text box.
+   */
+  pathForDroppedFile: (file: File): string => {
+    try {
+      return webUtils.getPathForFile(file)
+    } catch {
+      return ''
+    }
+  },
   cancelProjectFileSearch: (): Promise<void> => ipcRenderer.invoke('search:cancel'),
   invalidateProjectFiles: (root?: string): Promise<void> =>
     ipcRenderer.invoke('search:invalidate', root),
@@ -410,6 +491,142 @@ const api = {
   profileSignIn: (id: string, options?: { refresh?: boolean }): Promise<unknown> =>
     ipcRenderer.invoke('profiles:signin', id, options),
 
+  /* --------------------------------------------------------- copilot -- */
+
+  /**
+   * The copilot: one session, in a folder of its own.
+   *
+   * Every one of the first five takes **no arguments**, and that is the
+   * validation. The copilot's folder, its account and its boundary are all
+   * decided in the main process, so there is no path for page code to point
+   * somewhere else and no id for it to guess. `copilot-session.ts` says why each
+   * of those is fixed.
+   *
+   * `copilotFiles` is the list the settings pane draws so a person can see what
+   * their assistant read before it said anything — the answer to *"whatever
+   * files it reads in the beginning… properly organized"*.
+   */
+  ensureCopilot: (): Promise<unknown> => ipcRenderer.invoke('copilot:ensure'),
+  copilotState: (): Promise<unknown> => ipcRenderer.invoke('copilot:state'),
+  copilotFiles: (): Promise<unknown> => ipcRenderer.invoke('copilot:files'),
+  stopCopilot: (): Promise<unknown> => ipcRenderer.invoke('copilot:stop'),
+  /** Signed in *as the copilot* — asked of the CLI from inside its boundary. */
+  copilotSignIn: (): Promise<unknown> => ipcRenderer.invoke('copilot:signin'),
+  /**
+   * Put this build's `CLAUDE.md` back, keeping whatever was there as a `.bak`.
+   *
+   * Takes nothing for the same reason as the five above: *which* file and
+   * *what* goes in it are both decided in the main process, so the page can ask
+   * for the shipped instructions and can ask for nothing else to be written
+   * anywhere.
+   */
+  copilotResetInstructions: (): Promise<unknown> =>
+    ipcRenderer.invoke('copilot:reset-instructions'),
+
+  /**
+   * Looking at the copilot rather than running it — `copilot-inspect.ts`.
+   *
+   * The three that take an argument take a *memory file name* or a place key,
+   * and both are checked in the main process against a shape that cannot
+   * express a separator, a `..` or an absolute path. That check is the reason
+   * these are registered apart from the five above, whose contract is that they
+   * take nothing at all.
+   *
+   * `copilotScaffold` writes the folder and its two files without starting
+   * anything, so a person can read what their assistant would be told before
+   * deciding to spend anything running it.
+   */
+  copilotScaffold: (): Promise<unknown> => ipcRenderer.invoke('copilot:scaffold'),
+  copilotMemory: (): Promise<unknown> => ipcRenderer.invoke('copilot:memory'),
+  copilotMemoryRead: (name: string): Promise<unknown> =>
+    ipcRenderer.invoke('copilot:memory-read', name),
+  copilotMemoryDelete: (name: string): Promise<unknown> =>
+    ipcRenderer.invoke('copilot:memory-delete', name),
+  copilotActions: (limit?: number): Promise<unknown> =>
+    ipcRenderer.invoke('copilot:actions', limit),
+  copilotReveal: (place: string): Promise<unknown> => ipcRenderer.invoke('copilot:reveal', place),
+
+  /* ---------------------------------------------------- deck-control -- */
+
+  /**
+   * The copilot's tool surface, and the confirmation gate in front of it.
+   *
+   * `deckControlStatus` is what is running and what it costs the copilot in
+   * context every turn; `deckControlActivity` is the tail of the action log.
+   * Neither carries the bearer token or the path of the file holding it — a
+   * secret that reaches page code is one screenshot away from leaving, and the
+   * renderer has no use for either.
+   *
+   * ## The two that matter, and the order they must be used in
+   *
+   * `attachConsent` is how a window says *I am the one who will answer*. Until
+   * some window has said it, every alter-tier call is refused with
+   * `no-approver` — which is the intended state and not a gap: a gate that
+   * opens because the UI is missing reads as protection while providing none.
+   * The main process checks the sender against the app's own window, so this
+   * throws for anything else; it returns whatever questions are already
+   * outstanding, so a window that opened mid-flight draws them rather than
+   * leaving them to time out behind its back.
+   *
+   * `answerConsent` sends the answer. Anything other than a literal `true` is a
+   * no on the far side, and the window that answers has to be the window the
+   * question was delivered to — a second frame that somehow reached this bridge
+   * cannot answer a dialog it never displayed.
+   *
+   * `onCopilotConsentSettled` is not optional decoration. A question can end
+   * without anybody pressing anything — it times out, the app quits, the
+   * copilot hangs up — and a dialog that did not listen for that would sit on
+   * screen offering to allow something that can no longer be allowed.
+   */
+  deckControlStatus: (): Promise<unknown> => ipcRenderer.invoke('deck-control:status'),
+  deckControlActivity: (count?: number): Promise<unknown> =>
+    ipcRenderer.invoke('deck-control:activity', count),
+  attachConsent: (): Promise<unknown> => ipcRenderer.invoke('deck-control:consent-attach'),
+  answerConsent: (id: string, approved: boolean): Promise<unknown> =>
+    ipcRenderer.invoke('deck-control:consent-respond', id, approved),
+  onCopilotConsentRequest: (cb: (request: unknown) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, request: unknown) => cb(request)
+    ipcRenderer.on('deck-control:consent-request', handler)
+    return () => ipcRenderer.off('deck-control:consent-request', handler)
+  },
+  onCopilotConsentSettled: (cb: (settled: unknown) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, settled: unknown) => cb(settled)
+    ipcRenderer.on('deck-control:consent-settled', handler)
+    return () => ipcRenderer.off('deck-control:consent-settled', handler)
+  },
+  /** Every tool call, as it is written to the log. For a live Activity list. */
+  onCopilotAction: (cb: (row: unknown) => void): (() => void) => {
+    const handler = (_e: IpcRendererEvent, row: unknown) => cb(row)
+    ipcRenderer.on('deck-control:action', handler)
+    return () => ipcRenderer.off('deck-control:action', handler)
+  },
+
+  /* -------------------------------------------------------- routines -- */
+
+  /**
+   * Saved instructions that run on their own.
+   *
+   * Read, then the two that steer a routine without editing the file its owner
+   * wrote, then the one that deletes it. `routines/ipc.ts` marks each with the
+   * tier it belongs to and explains why creating one is not here: authoring a
+   * routine is an alter-tier act, the folder is outside the copilot's boundary,
+   * and the only two doors onto it are a person clicking or a confirmed tool
+   * call.
+   *
+   * `routinesPause` and `routinesResume` are what a person's Armed switch
+   * actually does. They are deliberately *not* a write to the routine's own
+   * `enabled:` line — a switch in Settings that silently rewrote a file
+   * somebody hand-edited would be the app editing their work to record a
+   * preference of its own.
+   */
+  routinesList: (): Promise<unknown> => ipcRenderer.invoke('routines:list'),
+  routinesGet: (id: string): Promise<unknown> => ipcRenderer.invoke('routines:get', id),
+  routinesRun: (id: string): Promise<unknown> => ipcRenderer.invoke('routines:run', id),
+  routinesPause: (id: string, reason?: string): Promise<unknown> =>
+    ipcRenderer.invoke('routines:pause', id, reason),
+  routinesResume: (id: string): Promise<unknown> => ipcRenderer.invoke('routines:resume', id),
+  routinesDelete: (id: string): Promise<unknown> => ipcRenderer.invoke('routines:delete', id),
+
   /* ------------------------------------------------------ deckignore -- */
 
   ignoreOverview: (root: string): Promise<unknown> =>
@@ -551,6 +768,15 @@ const api = {
   browserDevtools: (id: string): Promise<void> => ipcRenderer.invoke('browser-view:devtools', id),
   browserScreenshot: (id: string): Promise<unknown> =>
     ipcRenderer.invoke('browser-view:screenshot', id),
+  // Draw mode's two halves. `browserFrame` captures without saving — entering
+  // the mode is not a decision to keep a file — and `browserScreenshotMarked`
+  // writes the canvas the user drew on into the same folder the ordinary
+  // screenshots live in. Both are optional to the renderer on purpose; see
+  // `draw-bridge.ts` for why adding them to the required list would blank the
+  // whole browser panel on any build whose preload predates them.
+  browserFrame: (id: string): Promise<unknown> => ipcRenderer.invoke('browser-view:frame', id),
+  browserScreenshotMarked: (id: string, png: string): Promise<unknown> =>
+    ipcRenderer.invoke('browser-view:screenshot-marked', id, png),
   browserRevealScreenshot: (path: string): Promise<void> =>
     ipcRenderer.invoke('browser-view:reveal', path),
   browserUserAgent: (id: string, ua: string | null): Promise<unknown> =>
@@ -674,13 +900,19 @@ const api = {
 
   /** Ports actually listening on this machine, for the browser start page. */
   devPorts: (force?: boolean): Promise<unknown> => ipcRenderer.invoke('dev:ports', force === true),
-  readAgentControls: (request: { sessionId?: string; cwd?: string }): Promise<unknown> =>
+  // `provider` is what is running in the session, and it decides whether the
+  // main process is willing to type anything into it at all — these are Claude
+  // Code's commands, and it has no verified way of driving any other CLI. It is
+  // optional because absent is a real answer: an agent started by hand inside a
+  // shell session, which `src/main/agent-controls.ts` resolves from the screen.
+  readAgentControls: (request: { sessionId?: string; cwd?: string; provider?: string }): Promise<unknown> =>
     ipcRenderer.invoke('agent:controls:read', request),
   applyAgentControl: (request: {
     sessionId: string
     cwd?: string
     control: string
     value: string
+    provider?: string
   }): Promise<unknown> => ipcRenderer.invoke('agent:controls:apply', request),
 
   listBrowsers: (): Promise<unknown> => ipcRenderer.invoke('chrome-import:browsers'),

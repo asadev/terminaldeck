@@ -15,8 +15,8 @@
  * folder with five warnings gets ignored within a day, and then it is worse
  * than nothing because the one real alert is ignored too. Every rule below
  * therefore requires positive evidence — sessions that actually ran, a provider
- * actually in use, enough priced sessions for a median to mean anything — and
- * returns nothing when it has none.
+ * actually in use, enough sessions with tokens on them for a median to mean
+ * anything — and returns nothing when it has none.
  *
  * Thresholds for context come from `cost.ts` rather than being restated here,
  * so the inspector's bloat warning and this panel can never disagree.
@@ -34,8 +34,8 @@ import type { ProviderId, SessionStatus } from '../shared/types'
 import {
   contextWarning,
   formatTokens,
-  formatUsd,
   preContextWarning,
+  totalTokens,
   type ContextUsage,
 } from './cost'
 import { readGitStatus, type GitStatusResult } from './git'
@@ -66,23 +66,37 @@ export const ALERTS_CHANNEL = 'alerts:project'
 export const BLOCKED_WARNING_MS = 10 * 60 * 1000
 export const BLOCKED_CRITICAL_MS = 45 * 60 * 1000
 
-/** Priced sessions needed before a median is worth comparing against. */
-export const EXPENSIVE_MIN_SAMPLE = 5
-/** Multiple of the project median that counts as unusual. */
-export const EXPENSIVE_MULTIPLE = 3
 /**
- * Where an expensive session stops being a curiosity and starts being worth
- * acting on. It still never reaches `critical`: money already spent is not an
+ * This rule used to be about money: a session that had *cost* several times the
+ * project median, with the two dollar figures in its detail line. It is about
+ * tokens now, and it is a better rule for it. The money was never the signal —
+ * it was tokens multiplied by a rate card, and the rate card was the part this
+ * app had no honest way to apply (see the bottom of `cost.ts`). A session that
+ * moved eight times the usual number of tokens is the same runaway session,
+ * measured directly, in a unit the transcript actually recorded.
+ */
+
+/** Sessions with tokens on them needed before a median is worth comparing against. */
+export const HEAVY_MIN_SAMPLE = 5
+/** Multiple of the project median that counts as unusual. */
+export const HEAVY_MULTIPLE = 3
+/**
+ * Where a heavy session stops being a curiosity and starts being worth acting
+ * on. It still never reaches `critical`: tokens already spent are not an
  * emergency, and ranking it above a blocked session or a missing CLI would put
  * the one alert you cannot act on at the top of the list.
  */
-export const EXPENSIVE_SEVERE_MULTIPLE = 6
+export const HEAVY_SEVERE_MULTIPLE = 6
 /**
- * Absolute floor, because a ratio alone is meaningless at small sums: a project
- * whose median session costs $0.004 would otherwise raise an alert the first
- * time one costs two cents.
+ * Absolute floor, because a ratio alone is meaningless at small counts: a
+ * project whose median session moves 4k tokens would otherwise raise an alert
+ * the first time one moves 20k, which is a single long answer.
+ *
+ * A million is roughly one warm agent session that never compacted — the shape
+ * this alert exists to catch. Below it, a multiple of the median is describing
+ * noise.
  */
-export const EXPENSIVE_MIN_USD = 1
+export const HEAVY_MIN_TOKENS = 1_000_000
 
 /** Sessions that have to have run since the working tree was last touched. */
 export const DIRTY_TREE_SESSION_STREAK = 3
@@ -101,7 +115,7 @@ export type AlertKind =
   | 'pre-context-bloat'
   | 'session-blocked'
   | 'provider-missing'
-  | 'expensive-session'
+  | 'heavy-session'
   | 'dirty-tree'
 
 /**
@@ -142,8 +156,8 @@ export interface AlertSession {
   preContextTokens: number
   /** Deduplicated API requests. Zero means the transcript exists but is empty. */
   requests: number
-  /** Priced spend. Null when no model in the session had a published rate. */
-  costUsd: number | null
+  /** Every token class summed — input, output and both cache sides. */
+  tokens: number
   startedAt: number
   lastActivityAt: number
   /** Live status when the session is open in the app; null for history. */
@@ -361,42 +375,37 @@ export function providerAlerts(input: AlertInput): Alert[] {
 }
 
 /**
- * A session that cost far more than this project's usual.
+ * A session that moved far more tokens than this project's usual.
  *
  * Median rather than mean, because one runaway session drags a mean up far
  * enough to hide the next one. Requires a real sample and an absolute floor —
- * see `EXPENSIVE_MIN_USD` for why a ratio alone is not enough.
+ * see `HEAVY_MIN_TOKENS` for why a ratio alone is not enough.
  */
-export function expensiveSessionAlerts(input: AlertInput): Alert[] {
-  const priced = activeSessions(input.sessions).filter(
-    (session): session is AlertSession & { costUsd: number } =>
-      typeof session.costUsd === 'number' && session.costUsd > 0,
-  )
-  if (priced.length < EXPENSIVE_MIN_SAMPLE) return []
+export function heavySessionAlerts(input: AlertInput): Alert[] {
+  const counted = activeSessions(input.sessions).filter((session) => session.tokens > 0)
+  if (counted.length < HEAVY_MIN_SAMPLE) return []
 
-  const middle = median(priced.map((session) => session.costUsd))
+  const middle = median(counted.map((session) => session.tokens))
   if (middle <= 0) return []
 
   const alerts: Alert[] = []
   // Only the worst offender: a project that changed shape produces a dozen of
   // these at once, and a dozen alerts saying the same thing is noise.
-  const worst = [...priced].sort((a, b) => b.costUsd - a.costUsd)[0]
-  const ratio = worst.costUsd / middle
-  if (ratio < EXPENSIVE_MULTIPLE || worst.costUsd < EXPENSIVE_MIN_USD) return alerts
+  const worst = [...counted].sort((a, b) => b.tokens - a.tokens)[0]
+  const ratio = worst.tokens / middle
+  if (ratio < HEAVY_MULTIPLE || worst.tokens < HEAVY_MIN_TOKENS) return alerts
 
   alerts.push({
-    id: `expensive-session:${worst.sessionId}`,
-    kind: 'expensive-session',
+    id: `heavy-session:${worst.sessionId}`,
+    kind: 'heavy-session',
     severity:
-      ratio >= EXPENSIVE_SEVERE_MULTIPLE && worst.costUsd >= EXPENSIVE_MIN_USD * 5
-        ? 'warning'
-        : 'info',
-    title: `One session cost ${ratio.toFixed(1)}x the usual`,
-    detail: `Session ${shortId(worst.sessionId)} cost ${formatUsd(
-      worst.costUsd,
-    )} against a median of ${formatUsd(
+      ratio >= HEAVY_SEVERE_MULTIPLE && worst.tokens >= HEAVY_MIN_TOKENS * 5 ? 'warning' : 'info',
+    title: `One session used ${ratio.toFixed(1)}x the usual tokens`,
+    detail: `Session ${shortId(worst.sessionId)} moved ${formatTokens(
+      worst.tokens,
+    )} tokens against a median of ${formatTokens(
       middle,
-    )} across ${priced.length} priced sessions here. Worth a look at what it spent it on — usually a context that was never compacted, or a tool loop.`,
+    )} across ${counted.length} sessions here. Worth a look at what it spent them on — usually a context that was never compacted, or a tool loop.`,
     sessionId: worst.sessionId,
     at: worst.lastActivityAt,
     action: { kind: 'open-inspector', label: 'See where it went', target: worst.transcriptPath },
@@ -447,7 +456,7 @@ const RULES: Array<(input: AlertInput) => Alert[]> = [
   contextAlerts,
   blockedAlerts,
   providerAlerts,
-  expensiveSessionAlerts,
+  heavySessionAlerts,
   dirtyTreeAlerts,
 ]
 
@@ -529,6 +538,23 @@ export interface AlertsOptions {
    * instead of the developer's real one.
    */
   deviceHomes?: string | null
+  /**
+   * Every report this channel produces, as it produces it.
+   *
+   * There is no push side to alerts and there deliberately still is not: the
+   * panel asks, and this module answers. What this hook adds is a way for the
+   * main process to *overhear* an answer somebody already asked for, which is
+   * what the routine engine's `alert` trigger subscribes to. It is not a
+   * scanner and it does not cause a scan — a machine where nothing ever asks
+   * for alerts produces no reports and therefore fires no alert routines, and
+   * the engine reports that state rather than looking quietly idle.
+   *
+   * Called after the report is built and before it is returned, so a routine
+   * reacting to an alert cannot be beaten to it by the window rendering it.
+   * Defensive, because an observer that throws must not turn the panel's answer
+   * into an error.
+   */
+  onReport?(report: AlertReport): void
 }
 
 /**
@@ -657,9 +683,7 @@ export async function collectAlertInput(
       context: summary.context,
       preContextTokens: summary.preContextTokens,
       requests: summary.requests,
-      // `unpricedModels` non-empty means the total is a floor, so it stays a
-      // number; only a session with no priced model at all reports null.
-      costUsd: Object.keys(summary.cost.byModel).length > 0 ? summary.cost.cost.total : null,
+      tokens: totalTokens(summary.usage),
       startedAt: summary.startedAt,
       lastActivityAt: summary.lastActivityAt,
       // Never a live status: see the loop below for why the two cannot be joined.
@@ -677,8 +701,8 @@ export async function collectAlertInput(
    * `sessionId` matches nothing and the blocked rule would silently never fire —
    * the failure mode being that the panel looks fine and simply never warns.
    *
-   * Kept apart, each carries what it actually knows: transcripts carry cost and
-   * context, live sessions carry status. `requests: 0` keeps these entries out
+   * Kept apart, each carries what it actually knows: transcripts carry tokens
+   * and context, live sessions carry status. `requests: 0` keeps these entries out
    * of every rule except the blocked one, which is the only rule that wants them.
    */
   for (const session of live) {
@@ -688,7 +712,7 @@ export async function collectAlertInput(
       context: null,
       preContextTokens: 0,
       requests: 0,
-      costUsd: null,
+      tokens: 0,
       startedAt: session.statusSince ?? now,
       lastActivityAt: session.statusSince ?? now,
       status: session.status,
@@ -772,6 +796,14 @@ export function registerAlertsIpc(ipcMain: IpcMain, options: AlertsOptions = {})
 
       const scan = collectAlertInput(root, options)
         .then(deriveAlerts)
+        .then((report) => {
+          try {
+            options.onReport?.(report)
+          } catch (error) {
+            console.error('[alerts] a report observer threw:', error)
+          }
+          return report
+        })
         .finally(() => {
           inFlight.delete(root)
         })

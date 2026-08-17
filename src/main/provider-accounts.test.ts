@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { ProviderId } from '../shared/types'
+import { AGENT_CATALOG } from '../shared/agent-catalog'
 import {
   ACCOUNT_PROVIDERS,
   ACCOUNT_STRATEGIES,
@@ -187,37 +188,37 @@ describe('the labels, which are duplicated on purpose', () => {
  * count assertion below fails rather than the check silently matching nothing,
  * which is the failure mode that makes source-reading tests worthless.
  */
-describe('the renderer’s copy of this table', () => {
+describe('the renderer and the main process, on one declaration', () => {
   const source = readFileSync(
     join(__dirname, '..', 'renderer', 'components', 'ProviderPicker.tsx'),
     'utf8',
   )
 
-  const declared = new Map<string, boolean>()
-  for (const match of source.matchAll(
-    /id:\s*'([a-z]+)',[\s\S]*?canHaveAccounts:\s*(true|false),/g,
-  )) {
-    declared.set(match[1], match[2] === 'true')
-  }
-
-  it('was actually found, so a shape change fails loudly rather than silently', () => {
-    expect([...declared.keys()].sort()).toEqual(['claude', 'codex', 'gemini', 'shell'])
-  })
-
-  it('offers exactly the agents this table says can hold a separate login', () => {
-    for (const [id, canHaveAccounts] of declared) {
-      expect(canHaveAccounts).toBe(supportsAccounts(id as ProviderId))
+  /*
+   * This used to scrape `PROVIDER_OPTIONS` out of the renderer with a regular
+   * expression and compare the labels and booleans it found against the table
+   * above — because there genuinely were two hand-written lists and the only
+   * thing keeping them in step was a comment asking nicely.
+   *
+   * There is one list now. `shared/agent-catalog.ts` declares every agent and
+   * both sides read it, so the two cannot disagree; what is worth guarding is
+   * that nobody quietly reintroduces the second copy. Hence a check on the
+   * *derivation* rather than on the values, plus a source check that the
+   * renderer still has no literal table of its own.
+   */
+  it('builds both tables from the same catalogue', () => {
+    for (const id of ALL) {
+      const entry = AGENT_CATALOG[id]
+      expect(ACCOUNT_STRATEGIES[id].label).toBe(entry.label)
+      expect(ACCOUNT_STRATEGIES[id].configEnv).toBe(entry.configEnv)
+      expect(supportsAccounts(id)).toBe(entry.logins === 'multiple')
     }
   })
 
-  it('calls each agent what this table calls it', () => {
-    const labels = [...source.matchAll(/id:\s*'([a-z]+)',\s*\n\s*label:\s*'([^']+)',/g)]
-    // Counted first. A `for` over an empty match list passes every assertion
-    // inside it, which is how a source-reading test comes to guard nothing at
-    // all while still showing green.
-    expect(labels).toHaveLength(ALL.length)
-    for (const match of labels) {
-      expect(ACCOUNT_STRATEGIES[match[1] as ProviderId].label).toBe(match[2])
-    }
+  it('leaves the renderer with no second list to drift', () => {
+    // A literal `canHaveAccounts: true` in that file is the shape of the copy
+    // this consolidation removed. Its return is what this catches.
+    expect(source).not.toMatch(/canHaveAccounts:\s*(true|false)\s*,/)
+    expect(source).toContain('AGENT_ENTRIES')
   })
 })

@@ -213,13 +213,20 @@
   outline-offset: -2px;
 }
 
+/* The change, in a word. It was 16px of monospace holding one letter — the size
+   and the face a status *code* wants. A word wants a column of its own and the
+   app's own type, and every row gets the same column so the filenames beside
+   them still form a straight edge. 66px is the widest word here, "Untracked",
+   at the footnote size. */
 .git-code {
   flex-shrink: 0;
-  width: 16px;
-  font-family: var(--font-mono);
+  width: 66px;
   font-size: var(--t-footnote);
   font-weight: var(--w-medium);
-  text-align: center;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   color: var(--text-muted);
 }
 
@@ -241,9 +248,9 @@
   color: var(--git-untracked);
 }
 
-/* Conflicts get the widest letter pair, and the loudest colour. */
+/* Conflicts keep the loudest colour. The extra width they used to get was for
+   porcelain's two-letter XY pair; every row is a word in one column now. */
 .git-code[data-kind='conflicted'] {
-  width: 22px;
   color: var(--git-conflicted);
 }
 

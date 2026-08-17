@@ -8,14 +8,35 @@
    opening something over it; the layout below did not change when it became a
    sheet, only how much room it is given.
 
-   Everything that used to be separated by a hairline is separated by space or
-   by a soft fill instead: a run of rows is one rounded block of
-   `--bg-secondary` with nothing drawn between the rows, a section is a heading
-   and a gap, and the only lines left are the two the Modal shell draws around
-   its own header and footer.
+   One surface, not three. The rail, the pane beside it, and the header and
+   footer the Modal shell draws around them are all `--bg-secondary`, and
+   nothing is painted on top of it: a run of rows is a run of rows rather than a
+   card, and a section is a heading and a gap.
+
+   That last part is a change of mind about the paragraph it replaces, which
+   said a run of rows was "one rounded block of `--bg-secondary` with nothing
+   drawn between the rows". The half about hairlines was right and still holds —
+   there is no rule between two rows anywhere in this file. The half about the
+   block was wrong about what it cost. The pane behind it was `--bg-primary`, so
+   in the dark theme a #202020 card sat on a #191919 pane inside a #202020 rail:
+   three greys, and the lightest of them was the card, which is why it read as a
+   window floating inside the dialog rather than as part of it. Asad, on the
+   Notifications pane: *"Settings page needs to show the same colour inside the
+   selected box, also selected section, also in the background, as the side
+   panel — not a kind of window thing like terminal."*
+
+   So the fill is gone and the space it used to be holding is now real space
+   between the rows. Nothing about the preference order changed — *separate with
+   space, then with a tint, and only then with a line* — it is simply stopped at
+   the first step instead of the second. Grouping is carried by the gap above a
+   heading being larger than the gap between two rows, and by the heading's own
+   weight; check both when you add a section, because a long pane is where a
+   flat surface fails first.
 
    Colour carries meaning here and nowhere else — a status dot, the selected
-   rail row, the one destructive button.
+   rail row, the one destructive button. The selected rail row is now carried
+   *only* by colour, and that is a direct consequence of the above: see
+   `.settings-nav-item` for why the grey pill could not stay.
    ============================================================================ */
 
 :root,
@@ -63,17 +84,24 @@
   grid-template-columns: var(--settings-rail) minmax(0, 1fr);
   height: 100%;
   min-height: 0;
+  /* The containing block for the shortcut popover, which is `inset: 0` over the
+     whole sheet. Without this it resolves against the modal panel's ancestor
+     and takes the *window's* height, so `max-height: 100%` stops clamping and
+     the popover's own header is pushed off the top of the sheet — which is
+     exactly what the first screenshot of it showed. */
+  position: relative;
 }
 
 /* ------------------------------------------------------------------ rail -- */
 
-.settings-nav {
+/* The rail is a column of two parts now: the tab list, which scrolls, and a
+   footer of two things that are not tabs. The fill and the corner moved here
+   from `.settings-nav` so the footer sits on the same surface as the list
+   rather than on a strip of the panel's own background. */
+.settings-rail {
   display: flex;
   flex-direction: column;
-  gap: var(--sp-05);
   min-height: 0;
-  overflow-y: auto;
-  padding: var(--sp-4) var(--sp-2) var(--sp-6);
   background: var(--bg-secondary);
   /* The sheet has corners now, and `.modal-panel` does not clip its children —
      it cannot, or a focus ring on the last control in the footer would be cut
@@ -84,7 +112,79 @@
   border-bottom-left-radius: var(--radius-xl);
 }
 
+.settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-05);
+  min-height: 0;
+  /* Takes the space the footer does not, so a long rail scrolls under a footer
+     that stays put. */
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: var(--sp-4) var(--sp-2) var(--sp-2);
+}
+
+/* ------------------------------------------------------------ rail foot -- */
+
+.settings-rail-foot {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-05);
+  flex-shrink: 0;
+  padding: var(--sp-1) var(--sp-2) var(--sp-4);
+}
+
+/* Deliberately quieter than a nav item: these are not places you can be, so
+   neither of them ever wears the selected fill. Same height and the same
+   indent, so the column still reads as one list. */
+.settings-rail-btn {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-shrink: 0;
+  height: var(--row-h);
+  padding: 0 var(--sp-3);
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  font-family: var(--font-ui);
+  font-size: var(--t-body);
+  color: var(--text-tertiary);
+  text-decoration: none;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.settings-rail-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.settings-rail-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.settings-rail-btn svg {
+  flex-shrink: 0;
+  opacity: 0.85;
+}
+
+.settings-rail-btn-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-rail-btn-out {
+  margin-left: auto;
+  font-size: var(--t-caption);
+  opacity: 0.7;
+}
+
 .settings-nav-item {
+  /* The containing block for the selected marker below. */
+  position: relative;
   display: flex;
   align-items: center;
   flex-shrink: 0;
@@ -104,15 +204,64 @@
   transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
 
-.settings-nav-item:hover {
+/* Hover is the one grey pill left in the rail, and it deliberately does not
+   apply to the row you are already on. Selection is no longer a fill (see
+   below), so a fill under the cursor would be the loudest thing in the column —
+   and putting one under the *selected* row as well would hand back exactly the
+   grey box that was removed, only intermittently, which is worse than keeping
+   it. Hover means "not here yet"; the accent means "here". */
+.settings-nav-item:hover:not([aria-selected='true']) {
   background: var(--bg-hover);
   color: var(--text-primary);
 }
 
+/*
+  Where you are, in the accent, with a mark beside it — and no fill at all.
+
+  It was `--bg-active`, a pill twenty-odd levels lighter than the rail. Two
+  things were wrong with that and only one of them was Asad's flattening note.
+
+  The first is the note: with the rail, the pane and the rows all on one colour,
+  a lighter grey pill is the last stacked grey in the window and the most
+  visible one, so it survives the change looking like an oversight. He asked for
+  the selected section to be the rail's own colour, and this is it.
+
+  The second was already on the defect list before any of this: *in dark mode
+  the selected Settings section is invisible, dark-on-dark, a blank gap in the
+  nav.* A grey-on-grey pill is a weak signal to begin with — it says "here" with
+  about a fifth of the contrast that the word itself is set in — and the fix for
+  it has twice been "raise the alpha", which is a fix that has to be repeated
+  every time a surface underneath it moves. Removing the surface removes that
+  whole class of bug: the accent is a hue, not a level, so it cannot go
+  dark-on-dark or light-on-light however the greys around it are retuned.
+
+  Three marks, because one of them alone is not enough for a word in a column of
+  twelve: the ink is the accent (5.1:1 on the light rail, 5.3:1 on the dark
+  one — it is the same blue tokens.css already clears as body text), the weight
+  steps up from regular to semibold, and a capsule sits against the rail's left
+  edge. The capsule is what makes it findable without reading — the eye lands on
+  the one saturated thing in a grey column — and the weight is what keeps it
+  legible for anyone who cannot separate the blue from the grey at all.
+*/
 .settings-nav-item[aria-selected='true'] {
-  background: var(--bg-active);
-  color: var(--text-primary);
-  font-weight: var(--w-medium);
+  background: transparent;
+  color: var(--accent);
+  font-weight: var(--w-semibold);
+}
+
+.settings-nav-item[aria-selected='true']::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 3px;
+  height: 15px;
+  /* Half the height, so the capsule is centred on the row's midline without a
+     transform — this element never animates, and a transform here would
+     establish a containing block for nothing. */
+  margin-top: -7.5px;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
 }
 
 .settings-nav-item:focus-visible {
@@ -132,7 +281,13 @@
      gutter never drops below --sp-10, so a narrow window is unchanged. */
   padding-block: var(--sp-6) var(--sp-10);
   padding-inline: max(var(--sp-6), calc((100% - var(--content-measure)) / 2));
-  background: var(--bg-primary);
+  /* The rail's colour, not the canvas. This is the seam Asad was pointing at:
+     `--bg-primary` made the pane a second surface and the row block a third, so
+     a dialog that is one thing was painted as three. It is `--bg-secondary`
+     everywhere now — rail, pane, header, footer — and the only boundary between
+     the rail and the pane is the gutter, which at the sheet's own width is
+     sixty-odd pixels of it. */
+  background: var(--bg-secondary);
   border-bottom-right-radius: var(--radius-xl);
 }
 
@@ -175,9 +330,16 @@
 }
 
 /* A group is a gap and a small quiet label. Sentence case, because a tracked-out
-   uppercase caption is a Notion idiom and this window is not one. */
+   uppercase caption is a Notion idiom and this window is not one.
+
+   Forty pixels, up from thirty-two, and the label stays eight pixels off the
+   first row under it. Those two numbers are the whole grouping mechanism now
+   that the card is gone: 40 above the heading, 8 below it, 20 between the rows
+   it covers. The heading has to be nearer the rows it names than the rows above
+   it are to each other, or it floats between two groups belonging to neither —
+   which is what 32/8/16 looked like the first time this was rendered flat. */
 .settings-group {
-  margin-top: var(--sp-8);
+  margin-top: var(--sp-10);
 }
 
 .settings-group-title {
@@ -244,24 +406,23 @@
 
 /* ------------------------------------------------------------------ rows -- */
 
-/* A run of rows is one block, not a stack of ruled lines. The corners are only
-   drawn where the run starts and stops, so consecutive rows read as a single
-   inset group and the space inside each row is the only separation between
-   them.
+/* A run of rows is a run of rows: no fill, no radius, no rule — a gap.
+
+   This block used to paint the run as one rounded `--bg-secondary` slab with
+   the corners stripped off every join, so consecutive rows read as a single
+   inset card. That card is what the header note is about; it is gone, and what
+   held the rows apart *inside* it — their own padding — is now what holds them
+   apart on the page, moved from padding to margin so the amount is stated once
+   here rather than being an accident of how much room a switch needed.
+
+   Twenty pixels between two rows against six between a label and its own help
+   line: a row and its description have to bind more tightly to each other than
+   to the row above, or a flat list turns into alternating lines of dark text
+   and grey text with no telling which grey belongs to which dark.
 
    A bare `<Row>` — one placed by hand rather than generated from the schema —
-   has no `.settings-item` around it, so it is named here too. Only the ones
-   that are not already inside an item, or the fill would be painted twice. */
-:is(
-    .settings-item,
-    .settings-fact,
-    .settings-group > .settings-row,
-    .settings-panel > .settings-row
-  ) {
-  background: var(--bg-secondary);
-  border-radius: var(--radius-lg);
-}
-
+   has no `.settings-item` around it, so it is named here too, or a hand-placed
+   row would sit flush against the generated one above it. */
 :is(
     .settings-item,
     .settings-fact,
@@ -274,25 +435,7 @@
     .settings-group > .settings-row,
     .settings-panel > .settings-row
   ) {
-  border-top-left-radius: 0;
-  border-top-right-radius: 0;
-}
-
-:is(
-    .settings-item,
-    .settings-fact,
-    .settings-group > .settings-row,
-    .settings-panel > .settings-row
-  ):has(
-    + :is(
-        .settings-item,
-        .settings-fact,
-        .settings-group > .settings-row,
-        .settings-panel > .settings-row
-      )
-  ) {
-  border-bottom-left-radius: 0;
-  border-bottom-right-radius: 0;
+  margin-top: var(--sp-5);
 }
 
 /* An option that needs a paragraph to explain itself is two pieces of type with
@@ -302,16 +445,21 @@
    and the two are pushed apart — both from each other and from the rows either
    side.
 
-   The vertical padding is the description's, not the title's. A one-line row
-   and a row with a paragraph under it used to be padded identically, which made
-   the explained ones feel cramped exactly where there was most to read. */
+   The padding is gone with the card that made it padding. Horizontally it was
+   an inset from a fill that no longer exists, and an inset from nothing is an
+   orphan indent: with it, every label in the pane started sixteen pixels to the
+   right of the heading above it and of the pane's own title. Flush left, the
+   title, the blurb, the group headings and the row labels are all on one edge,
+   and that shared edge is doing a good half of the work the card used to do.
+   Vertically it became the margin in the block above, which is the same space
+   in a place where it can be stated once. */
 .settings-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--sp-6);
   min-height: var(--control-h-lg);
-  padding: var(--sp-4);
+  padding: 0;
 }
 
 .settings-row-text {
@@ -344,12 +492,16 @@
   flex-shrink: 0;
 }
 
+/* The buttons that belong to the row above them. Flush with the row's left edge
+   now the row has no inset, and held to it by a gap smaller than the one
+   between two rows — otherwise they float exactly halfway between the row they
+   act on and the row underneath. */
 .settings-item-extra {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--sp-2);
-  padding: 0 var(--sp-4) var(--sp-3);
+  padding: var(--sp-3) 0 0;
 }
 
 /* -------------------------------------------------------------- controls -- */
@@ -452,6 +604,28 @@
 
 .settings-input.wide {
   min-width: 260px;
+}
+
+/*
+ * A setting whose answer is fixed — an option with no alternative.
+ *
+ * `general.language` is the case: one translation exists, so the row states
+ * English rather than offering a dropdown that can only ever choose English
+ * again. It deliberately wears no fill, no border and no chevron: every one of
+ * those is this window's vocabulary for "you can change this", and borrowing
+ * them for something you cannot change is how a dead control gets drawn in the
+ * first place. Held to the same height and type size as a real control so the
+ * row still aligns with the ones above and below it.
+ */
+.settings-value {
+  display: inline-flex;
+  align-items: center;
+  box-sizing: border-box;
+  height: var(--control-h);
+  padding: 0 var(--sp-2);
+  color: var(--text-secondary);
+  font-family: var(--font-ui);
+  font-size: var(--t-callout);
 }
 
 .settings-select:hover:not(:disabled),
@@ -595,13 +769,22 @@
 
   Space below as well as above: a notice with a surface sits directly against
   the row block that follows it otherwise, and the two read as one.
+
+  `--fill-tertiary` rather than `--bg-secondary`, and this is one of the two
+  places in the file where a surface survived the flattening. A notice is not
+  chrome — it is a thing that has appeared, and the whole point of it is that it
+  is set apart from the rows around it. It cannot be set apart by the page's own
+  colour, which is what `--bg-secondary` now is, so it takes a system fill
+  instead: a tint of the ink, which lands a step darker than the page on paper
+  and a step lighter in the dark theme, and is legible over either without
+  knowing which one it is on.
 */
 .settings-notice {
   margin: var(--sp-3) 0;
   padding: var(--sp-3) var(--sp-4);
   border: none;
   border-radius: var(--radius-md);
-  background: var(--bg-secondary);
+  background: var(--fill-tertiary);
   font-size: var(--t-callout);
   line-height: var(--lh-body);
   color: var(--text-primary);
@@ -623,6 +806,8 @@
   background: var(--color-critical);
 }
 
+/* "Are you sure?" — the same reasoning as the notice above it. A confirmation
+   that is the same colour as the page is a sentence you can miss. */
 .settings-confirm {
   display: flex;
   flex-wrap: wrap;
@@ -632,7 +817,7 @@
   padding: var(--sp-3) var(--sp-4);
   border: none;
   border-radius: var(--radius-md);
-  background: var(--bg-secondary);
+  background: var(--fill-tertiary);
   font-size: var(--t-callout);
   color: var(--text-primary);
 }
@@ -665,17 +850,42 @@
 
 /* ----------------------------------------------------------------- lists -- */
 
-/* Same shape as a run of rows: one soft block, and space between the entries
-   instead of a rule under each. */
+/* Same shape as a run of rows, which now means: no block at all, and space
+   between the entries instead of a rule under each. These lists were the other
+   half of the card — Advanced's "Where things are kept" is five three-line
+   entries in one slab, and it was the largest single grey rectangle in the
+   window. */
 .settings-tools,
 .settings-urls,
 .settings-profiles,
 .settings-paths {
   list-style: none;
-  margin: var(--sp-2) 0 0;
-  padding: var(--sp-1) 0;
-  border-radius: var(--radius-lg);
-  background: var(--bg-secondary);
+  margin: 0;
+  padding: 0;
+}
+
+/* One rhythm for the whole pane: twenty pixels between two entries, the same
+   twenty as between two rows, so a section that mixes rows and a list does not
+   change tempo halfway down.
+
+   The list's own top margin went with it. With `--sp-2` there and padding on
+   every entry, "Where things are kept" stood 20px above its first entry while
+   its entries stood 24px apart — a heading four pixels more attached to its
+   list than the list was to itself, which is not a hierarchy, it is a rounding
+   error. It is 8px above the first entry now, against 20 between them. */
+:is(.settings-tools, .settings-urls, .settings-profiles, .settings-paths) > * + * {
+  margin-top: var(--sp-5);
+}
+
+/* And a control that acts on the *whole* list has to stand further off it than
+   the entries stand off each other, or it is read as the last entry's button.
+   Agents is where that showed: "Check again" re-probes all three CLIs, and with
+   the list's fill gone it sat closer to "Gemini CLI" than "Gemini CLI" sat to
+   "Codex CLI" — so the one button on the pane looked like it belonged to the
+   one agent that cannot be chosen. Twenty-four against twenty. */
+:is(.settings-tools, .settings-urls, .settings-profiles, .settings-paths)
+  + :is(.settings-btn, .settings-actions, .settings-add-account, .settings-chips) {
+  margin-top: var(--sp-6);
 }
 
 /* A list with nothing in it is not a very short block — it is nothing. Without
@@ -687,6 +897,12 @@
   display: none;
 }
 
+/* An entry in one of those lists. Three lines of type in the worst case — a
+   name, a sentence, a path — with two pixels between them, against the twenty
+   the rule above puts between two entries. That ten-to-one ratio is what stops
+   Advanced's five paths reading as fifteen unrelated lines; the fill used to
+   make the distinction for free and now the space has to. No padding, so the
+   names line up with the heading over them and with every row in the pane. */
 .settings-tool,
 .settings-url,
 .settings-path-row,
@@ -694,7 +910,7 @@
   display: flex;
   align-items: center;
   gap: var(--sp-3);
-  padding: var(--sp-2) var(--sp-4);
+  padding: 0;
   border-bottom: none;
 }
 
@@ -919,6 +1135,30 @@
   background: var(--color-warning);
 }
 
+/* Why there is no Sign in button on this row.
+   
+   Warning-toned rather than critical: nothing is broken about the *account* —
+   its agent will not start, which is fixable in one command, and the command is
+   the `code` inside it. The whole reason this element exists is that the row
+   used to carry the agent's own Node stack trace instead. */
+.settings-account-blocked {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--sp-15);
+  font-size: var(--t-footnote);
+  color: var(--color-warning);
+}
+
+.settings-account-blocked code {
+  font-family: var(--font-mono);
+  font-size: var(--t-caption);
+  padding: 1px var(--sp-1);
+  border-radius: var(--radius-sm);
+  background: var(--fill-secondary);
+  color: var(--text-secondary);
+}
+
 .settings-account-foot {
   display: flex;
   align-items: center;
@@ -962,8 +1202,13 @@
   white-space: nowrap;
 }
 
-/* Output, not chrome: it lifts off the block it sits in rather than being boxed
-   inside it. */
+/* Output, not chrome — the second surface that survives the flattening, and the
+   one with the best claim to it: this is a scrolling well of text a process
+   printed, and a well is exactly what it should look like. `--bg-sunken` is the
+   darkest paper in each theme, so it recedes in both rather than lifting in one
+   and sinking in the other. Ink on it is 6.3:1 in the light theme, which is the
+   figure tokens.css checks `--text-secondary` against for precisely this
+   surface. */
 .settings-code {
   margin: var(--sp-2) 0 0;
   padding: var(--sp-3) var(--sp-4);
@@ -971,7 +1216,7 @@
   overflow: auto;
   border: none;
   border-radius: var(--radius-md);
-  background: var(--bg-secondary);
+  background: var(--bg-sunken);
   font-family: var(--font-mono);
   font-size: var(--t-footnote);
   line-height: var(--lh-body);
@@ -1010,7 +1255,7 @@
   display: flex;
   align-items: baseline;
   gap: var(--sp-4);
-  padding: var(--sp-2) var(--sp-4);
+  padding: 0;
   font-size: var(--t-callout);
   line-height: var(--lh-body);
 }
@@ -1029,10 +1274,12 @@
 
 /* --------------------------------------------------------- font preview -- */
 
-/* It sits inside a `--bg-secondary` row, so it lifts off it rather than tinting
-   again — a tint on a tint is a box by another name. In light the lift is the
-   page colour; in dark the page is the darker surface, so "raised" has to mean
-   the lighter one instead. Same move as the segmented control. */
+/* It sits on `--bg-secondary` — which used to be the row's fill and is now the
+   whole pane's, so the reasoning is unchanged and the value it lifts off is the
+   same one. It lifts rather than tinting again: a tint on a tint is a box by
+   another name. In light the lift is the canvas white; in dark the canvas is
+   the darker surface, so "raised" has to mean the lighter one instead. Same
+   move as the segmented control. */
 .settings-font-preview {
   width: 100%;
   padding: var(--sp-2) var(--sp-3);
@@ -1055,8 +1302,31 @@
 
 /* -------------------------------------------------------------- density -- */
 
-[data-density='compact'] .settings-row {
-  padding: var(--sp-2) var(--sp-4);
+/* Compact tightens the gaps, not the padding — there is no padding left to
+   tighten. The proportions are what have to survive: the gap above a heading
+   stays double the gap between two rows, so a dense pane groups the same way a
+   comfortable one does. */
+:is(
+    [data-density='compact'] .settings-item,
+    [data-density='compact'] .settings-fact,
+    [data-density='compact'] .settings-group > .settings-row,
+    [data-density='compact'] .settings-panel > .settings-row
+  )
+  + :is(
+    .settings-item,
+    .settings-fact,
+    .settings-group > .settings-row,
+    .settings-panel > .settings-row
+  ) {
+  margin-top: var(--sp-3);
+}
+
+[data-density='compact'] .settings-fact + .settings-fact {
+  margin-top: 0;
+}
+
+[data-density='compact'] .settings-facts {
+  gap: var(--sp-2);
 }
 
 [data-density='compact'] .settings-group {
@@ -1067,11 +1337,14 @@
   padding: var(--sp-6) var(--sp-8) var(--sp-8);
 }
 
-[data-density='compact'] .settings-tool,
-[data-density='compact'] .settings-url,
-[data-density='compact'] .settings-profile,
-[data-density='compact'] .settings-path-row {
-  padding: var(--sp-15) var(--sp-4);
+[data-density='compact'] :is(
+    .settings-tools,
+    .settings-urls,
+    .settings-profiles,
+    .settings-paths
+  )
+  > * + * {
+  margin-top: var(--sp-3);
 }
 
 /* ------------------------------------------------- borrowed panels -- */
@@ -1124,6 +1397,20 @@
     padding: var(--sp-2) var(--sp-3);
   }
 
+  /* The selected marker turns with the rail. A capsule against the left edge of
+     a horizontal tab is a mark between two tabs — it points at the gap, not at
+     the tab — so in this layout it becomes the underline the shape is already
+     asking for. Same token, same job, ninety degrees round. */
+  .settings-nav-item[aria-selected='true']::before {
+    top: auto;
+    bottom: 0;
+    left: var(--sp-3);
+    right: var(--sp-3);
+    width: auto;
+    height: 2px;
+    margin-top: 0;
+  }
+
   .settings-panel {
     padding: var(--sp-6) var(--sp-4) var(--sp-8);
   }
@@ -1136,4 +1423,193 @@
   .settings-switch-thumb {
     transition: none;
   }
+}
+
+/* --------------------------------------------------------------- the ⓘ -- */
+
+/* A label and its ⓘ on one line, with the opened body wrapping onto the next.
+   `flex-basis: 100%` on the body is what puts it there without a second
+   container: the row is the flex line, the body is a line of its own. */
+.settings-label-line {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+
+/* Sized to the type rather than to a button: it sits inside a sentence, so a
+   32px hit target would push the label off its own baseline. The padding is
+   what makes it clickable without making it look like a control. */
+.settings-info {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font-family: var(--font-ui);
+  font-size: var(--t-caption);
+  line-height: 1;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+}
+
+.settings-info:hover,
+.settings-info[aria-expanded='true'] {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.settings-info:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* The same sentence the tooltip carries, for a click rather than a hover.
+   Placed by its host *after* the help line rather than inside the label line —
+   a disclosure that opens above the text it is expanding reads as an
+   interruption. A step dimmer than the help line, and held to the reading
+   measure so it does not run under the control on the right. */
+.settings-info-body {
+  display: block;
+  margin-top: var(--sp-15);
+  max-width: 62ch;
+  font-size: var(--t-caption);
+  line-height: var(--lh-body);
+  color: var(--text-tertiary);
+}
+
+/* ------------------------------------------------------------- popover -- */
+
+/* Over the sheet, inside it. `position: absolute` against `.settings`, which is
+   the grid — so the popover covers the rail and the panel together and cannot
+   be scrolled away from underneath. */
+.settings-popover-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  padding: var(--sp-6);
+}
+
+/* Invisible on purpose: this already sits inside a dialog that has a scrim, and
+   a second dim layer would read as the app going two steps away. It exists to
+   catch "somewhere else". */
+.settings-popover-scrim {
+  position: absolute;
+  inset: 0;
+  border: none;
+  background: transparent;
+  cursor: default;
+}
+
+.settings-popover {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: min(560px, 100%);
+  max-height: 100%;
+  min-height: 0;
+  border-radius: var(--radius-lg);
+  /* The same glass every other floating surface in this app wears. The sheen is
+     what makes it read as glass over an area that is mostly empty; transparency
+     on its own does not. */
+  background: var(--material-bg);
+  background-image: var(--material-sheen);
+  backdrop-filter: var(--material-filter);
+  box-shadow: var(--shadow-lg);
+}
+
+.settings-popover:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.settings-popover-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  flex-shrink: 0;
+  padding: var(--sp-4) var(--sp-4) var(--sp-2);
+}
+
+.settings-popover-title {
+  margin: 0;
+  font-size: var(--t-headline);
+  font-weight: var(--w-semibold);
+  color: var(--text-primary);
+}
+
+.settings-popover-note {
+  font-size: var(--t-caption);
+  color: var(--text-tertiary);
+}
+
+.settings-popover-close {
+  margin-left: auto;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font-size: var(--t-caption);
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+
+.settings-popover-close:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.settings-popover-close:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.settings-popover-body {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 var(--sp-4) var(--sp-4);
+}
+
+/* ------------------------------------------------------------ about ---- */
+
+/* The four facts, with no group headings between them. About is the one pane
+   with a hard requirement to fit without scrolling, and a heading over a
+   two-row list costs more height than it saves in comprehension. */
+.settings-facts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  margin-top: var(--sp-4);
+}
+
+/* The facts are the one run of rows that is already a flex column, so its gap
+   is the space between them and the run's shared margin would be added on top
+   of it. Cancelled here rather than by taking `.settings-fact` out of that
+   selector list, because a fact placed outside `.settings-facts` — About is one
+   refactor away from that — should still be held off whatever precedes it.
+   Twelve pixels rather than twenty: these are single lines of small type, and
+   About is the one pane that has to fit without scrolling. */
+.settings-fact + .settings-fact {
+  margin-top: 0;
+}
+
+/* Electron, Chromium, Node and the platform on one line — a string to paste
+   into a bug report, so it is set in the mono face and allowed to wrap rather
+   than being clipped. */
+.settings-about-build {
+  font-family: var(--font-mono);
+  font-size: var(--t-caption);
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
 }

@@ -3,7 +3,8 @@ import { useOneMenu } from '../../shell/one-menu'
 import { AttachPicker, type PickerMode } from './AttachPicker'
 import { McpServers } from './McpServers'
 import { useControlOffer } from '../../features/offer'
-import type { Attachment } from './mentions'
+import type { Attachment, AttachScope } from './mentions'
+import { browseForAttachment, resolveOutsideBridge, type AttachOutsideBridge } from './outside'
 import './AttachMenu.css'
 
 /**
@@ -39,17 +40,43 @@ interface Props {
   root: string
   attachments: readonly Attachment[]
   /**
-   * Project-relative path chosen in the picker. The composer decides what to do
-   * with it — a mention in `mention` mode, a quoted path in `path` mode — and
-   * validates it either way.
+   * The **absolute** paths chosen somewhere behind this button. The composer
+   * decides what to do with them — mentions in `mention` mode, quoted paths in
+   * `path` mode — and validates them either way.
+   *
+   * A list rather than one at a time, and that is a bug fix rather than a
+   * generalisation: a multi-selection in the open panel used to be added in a
+   * loop, and every call in that loop read the same state, so only the last file
+   * survived. `addAttachments` folds a batch; see it for the whole account.
+   *
+   * `scope` is how the composer knows whether these are allowed to be outside
+   * the project. It is not advice: `addAttachment` refuses an outside path
+   * unless it is told `'anywhere'`, so a route that reaches outside has to say
+   * so, and the project list cannot start producing outside paths by accident.
    */
-  onAdd: (relPath: string, isDirectory: boolean) => void
+  onAdd: (picks: ReadonlyArray<{ path: string; isDirectory: boolean }>, scope: AttachScope) => void
   /** Free text to drop into the message, used by the connector list. */
   onInsert: (text: string) => void
+  /**
+   * Something to say that is not an attachment — a browse that failed, a build
+   * with no file browser in it. It lands in the composer's own notice line,
+   * beside the chips, rather than in a toast this popover would outlive.
+   */
+  onNotice?: (message: string) => void
   /** Called on every close so the composer can take focus back. */
   onClose: () => void
   disabled?: boolean
   mode?: AttachMode
+  /**
+   * Why browsing outside the project is refused on this session, or null.
+   *
+   * Passed down rather than worked out here, because the answer belongs to the
+   * session and the composer is what knows which session this is. See
+   * `main/session-boundary.ts`.
+   */
+  browseRefusal?: string | null
+  /** Test seam for the three outside routes. Absent means the real bridge. */
+  outsideBridge?: AttachOutsideBridge
 }
 
 export interface MenuItem {
@@ -125,9 +152,12 @@ export function AttachMenu({
   attachments,
   onAdd,
   onInsert,
+  onNotice,
   onClose,
   disabled = false,
   mode = 'mention',
+  browseRefusal = null,
+  outsideBridge,
 }: Props) {
   const [surface, setSurface] = useState<AttachSurface | 'menu' | null>(null)
   const hostRef = useRef<HTMLDivElement>(null)
@@ -202,9 +232,42 @@ export function AttachMenu({
     }
   }, [surface, close])
 
+  /**
+   * The real open panel, and what happens to the popover while it is up.
+   *
+   * This menu stays mounted. Closing it first would be tidier to look at and
+   * would break the feature: the popover closes on any `mousedown` outside
+   * itself, the open panel is a separate native window, and unmounting the
+   * component that owns this promise while the user is browsing would drop the
+   * result on the floor. So it stays, the picks are added, and *then* it closes
+   * — for the reason `pick` gives about a path, applied to a modal: the panel
+   * covered the screen, and coming back to a popover still sitting over the chip
+   * row would hide the only confirmation there is.
+   */
+  const browse = useCallback(
+    async (surface: PickerMode) => {
+      const bridge = resolveOutsideBridge(outsideBridge)
+      if (bridge === null) {
+        onNotice?.('The file browser is not wired into this build.')
+        return
+      }
+      const outcome = await browseForAttachment(bridge, surface, root)
+      if (outcome.kind === 'failed') {
+        onNotice?.(outcome.message)
+        return
+      }
+      // Escape in the panel. Nothing to say and nothing to close — the user is
+      // back where they were, which is what they asked for.
+      if (outcome.kind === 'cancelled') return
+      onAdd(outcome.picks, 'anywhere')
+      close()
+    },
+    [outsideBridge, onNotice, root, onAdd, close],
+  )
+
   const pick = useCallback(
-    (relPath: string, isDirectory: boolean) => {
-      onAdd(relPath, isDirectory)
+    (path: string, isDirectory: boolean) => {
+      onAdd([{ path, isDirectory }], 'project')
       // Attaching deliberately stays open: three files should be three clicks,
       // not three trips through the menu. The confirmation is the "added" tag
       // the picker puts on the row — measured: this popover is 340×309 anchored
@@ -273,6 +336,8 @@ export function AttachMenu({
               mode={surface}
               attachments={attachments}
               onPick={pick}
+              onBrowse={() => void browse(surface)}
+              browseRefusal={browseRefusal}
               onBack={() => setSurface('menu')}
             />
           )}

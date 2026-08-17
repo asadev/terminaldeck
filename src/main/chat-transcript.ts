@@ -197,7 +197,11 @@ export function parseChatLine(line: string): ChatLine | null {
       // *different* content block, so the id alone cannot be the key — that
       // would keep the first sentence of a reply and drop the rest. The id plus
       // the text drops only true repeats, which compaction replays do produce.
-      dedupeKey: `agent ${messageId} ${text}`,
+      // NUL joins the parts because it can occur in none of them, so two
+      // genuinely different messages cannot be collapsed by the joining
+      // itself. Written as an escape: one literal NUL byte would make this
+      // file binary to `grep`(1), which then matches it silently.
+      dedupeKey: `agent\u0000${messageId}\u0000${text}`,
       sessionId,
       cwd,
     }
@@ -238,7 +242,7 @@ export function parseChatLine(line: string): ChatLine | null {
     // Prompts are deduped by line identity, never by text: "continue" typed
     // twice is two turns, but the same uuid replayed across a compaction
     // boundary is one.
-    dedupeKey: `you ${key}`,
+    dedupeKey: `you\u0000${key}`,
     sessionId,
     cwd,
   }

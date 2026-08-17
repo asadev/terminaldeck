@@ -10,10 +10,32 @@
    which is what the rest of the app now does too.
    ============================================================================ */
 
+/*
+  The dialog is sized to what is in it, and that is two different things.
+
+  A read session is a report: six hero stats over a tab strip over a table, and
+  the shell's `lg` is a two-column table's worth of room short of showing it.
+  Everything *before* that is one sentence — "No transcript yet", "Reading the
+  transcript…", or the reason it could not be read — and the same 920px column
+  around one sentence is what Asad found: a dialog the size of a report, empty,
+  with a line of grey text floating in the middle of it. His note on the whole
+  screen, and it applies here exactly: *"these things should be reasonable and
+  they should make sense."*
+
+  So the narrow size is the default and the report widens it, rather than the
+  other way round. Keyed off `data-state` on the container rather than off the
+  presence of a child, because the state is a fact the component already knows
+  and a selector that infers it from the DOM goes wrong the first time somebody
+  adds a second element to the empty branch.
+
+  Widened from here rather than by adding a size to Modal.tsx, so the dialog
+  shell stays owned by whoever wrote it.
+*/
 .modal-panel:has(.session-inspector) {
-  /* The shell's `lg` is a two-column table's worth of room short. Widened from
-     here rather than by adding a size to Modal.tsx, so the dialog shell stays
-     owned by whoever wrote it. */
+  width: 460px;
+}
+
+.modal-panel:has(.session-inspector[data-state='ready']) {
   width: 920px;
 }
 
@@ -250,7 +272,11 @@
   color: var(--text-secondary);
 }
 
-.si-row-cost {
+/* Was `.si-row-cost`, and its lead line was `.si-row-money`. The money is gone
+   from this app entirely — see the bottom of `src/main/cost.ts` — and the
+   column now leads with the request's token total. Same two-line stack, same
+   right edge, so the timeline reads exactly as it did. */
+.si-row-aside {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
@@ -258,7 +284,7 @@
   white-space: nowrap;
 }
 
-.si-row-money {
+.si-row-tokens {
   font-size: var(--t-body);
   font-weight: var(--w-medium);
   font-variant-numeric: tabular-nums;
@@ -676,9 +702,12 @@ th .si-chip {
   color: var(--color-warning);
 }
 
+/* One sentence, in a dialog that is now the size of one sentence. The 32pt
+   band above and below it was there to keep it off the floor of a 720px box
+   that no longer exists in this state. */
 .si-empty {
   margin: 0;
-  padding: var(--sp-8) 0;
+  padding: var(--sp-2) 0;
   text-align: center;
   font-size: var(--t-body);
   color: var(--text-muted);

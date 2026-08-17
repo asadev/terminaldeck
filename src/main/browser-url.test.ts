@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { isNavigationAllowed, normalizeUrl, shortLabel } from './browser-url'
+import {
+  NEW_TAB_LABEL,
+  isNavigationAllowed,
+  normalizeUrl,
+  pageTitle,
+  shortLabel,
+} from './browser-url'
 
 function url(input: string): string | null {
   const result = normalizeUrl(input)
@@ -111,5 +117,50 @@ describe('shortLabel', () => {
   it('strips control characters from a string it could not parse', () => {
     // The parsed branch gets percent-encoding for free; the fallback does not.
     expect(shortLabel('not a url\u001b[2K\nsecond line')).toBe('not a url [2K second line')
+  })
+})
+
+/**
+ * The app's own start page used to introduce itself as `about:blank`.
+ *
+ * `webContents.getTitle()` never comes back empty: with no `<title>` in the
+ * document Chromium hands back the address, and a tab that has not been
+ * anywhere has the address `about:blank`. `stateOf` passed that through as the
+ * page's title and four surfaces printed it — the sidebar row, the tab strip,
+ * the pane bar, and the tooltip each of those carries. Seen on screen rather
+ * than inferred: a fresh browser tab in a dev build, sidebar row and strip tab
+ * both reading `about:blank` over a page headed "Open a page".
+ */
+describe('pageTitle', () => {
+  it('refuses the address Chromium substitutes for a missing <title>', () => {
+    expect(pageTitle('about:blank', 'about:blank')).toBe('')
+    // Also when the state has already blanked the URL out from under it.
+    expect(pageTitle('about:blank', '')).toBe('')
+  })
+
+  it('leaves a page that actually named itself alone', () => {
+    expect(pageTitle('Dashboard', 'http://localhost:3000/')).toBe('Dashboard')
+    expect(pageTitle('  Dashboard  ', 'http://localhost:3000/')).toBe('Dashboard')
+  })
+
+  it('drops a title that is only the address again', () => {
+    // shortLabel already renders the same address better, so falling back to it
+    // is an improvement rather than a loss.
+    expect(pageTitle('http://localhost:3000/pricing', 'http://localhost:3000/pricing')).toBe('')
+    expect(shortLabel('http://localhost:3000/pricing')).toBe('localhost:3000/pricing')
+  })
+
+  it('treats anything that is not a string as no title', () => {
+    expect(pageTitle(undefined, 'http://localhost:3000/')).toBe('')
+    expect(pageTitle(null, 'http://localhost:3000/')).toBe('')
+    expect(pageTitle('   ', 'http://localhost:3000/')).toBe('')
+  })
+
+  it('returns emptiness rather than a placeholder of its own', () => {
+    // Two functions both inventing a name is how a pane bar and a sidebar row
+    // end up calling the same page two different things. Naming stays with
+    // shortLabel, which had a name for this case all along.
+    expect(pageTitle('about:blank', 'about:blank')).toBe('')
+    expect(shortLabel('about:blank')).toBe(NEW_TAB_LABEL)
   })
 })

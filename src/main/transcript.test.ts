@@ -1,18 +1,22 @@
 import { appendFileSync, mkdirSync, mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { promptTokens } from './cost'
 import {
   claudeConfigDir,
   configDirs,
+  configDirsFor,
   encodeProjectPath,
+  homeScopes,
   installDeviceHomes,
+  installHomeScopes,
   isTranscriptPath,
   listTranscripts,
   parseEventLine,
   parseUsage,
   resetDeviceHomes,
+  resetHomeScopes,
   SessionAggregator,
   transcriptDir,
   transcriptDirs,
@@ -141,7 +145,10 @@ describe('transcriptDir', () => {
  * directory for the wrong home.
  */
 describe('the stores a project can have', () => {
-  afterEach(() => resetDeviceHomes())
+  afterEach(() => {
+    resetDeviceHomes()
+    resetHomeScopes()
+  })
 
   /** A device-homes root with the given devices in it, each with a store. */
   function homes(devices: Record<string, string[]>): string {
@@ -219,6 +226,109 @@ describe('the stores a project can have', () => {
     const dirs = transcriptDirs(PROJECT, { configDir: '/tmp/cfg', deviceHomes: root })
     for (const dir of dirs) expect(dir.endsWith(encodeProjectPath(PROJECT))).toBe(true)
     expect(dirs).toHaveLength(2)
+  })
+
+  /**
+   * One of those homes belongs to an agent, and that is a different question.
+   *
+   * A paired device's home is writable by sessions the person started, in
+   * folders they granted. The copilot's home is in the same root — deliberately,
+   * because that is what makes its own conversation visible to every reader —
+   * but nobody paired it, it has no write access to any project, and its job is
+   * to report on *other* sessions. So the one directory it can write was a way
+   * to publish a conversation under any project's name.
+   *
+   * `copilot-transcript-forgery.test.ts` proves the write really happens inside
+   * the real Seatbelt profile and then asks the readers. These are the same rule
+   * at the unit it lives in.
+   */
+  const COPILOT = ON_WINDOWS ? 'I:\\copilot' : '/fake/user-data/copilot'
+  const OTHER = ON_WINDOWS ? 'I:\\Someone Else' : '/fake/someone-else'
+
+  it('consults a scoped home for its own folder and no other', () => {
+    const root = homes({ copilot: [COPILOT, OTHER], 'dev-a': [OTHER] })
+    const scope = {
+      configDir: '/tmp/cfg',
+      deviceHomes: root,
+      homeScopes: [{ home: join(root, 'copilot'), folder: COPILOT }],
+    }
+
+    // Its own conversation: found, exactly as before.
+    expect(transcriptDirs(COPILOT, scope)).toContain(
+      join(root, 'copilot', '.claude', 'projects', encodeProjectPath(COPILOT)),
+    )
+    // A conversation it wrote under somebody else's project: never looked for.
+    expect(transcriptDirs(OTHER, scope)).not.toContain(
+      join(root, 'copilot', '.claude', 'projects', encodeProjectPath(OTHER)),
+    )
+  })
+
+  it('leaves every unscoped home answering for every project', () => {
+    // The half that must not move. A phone's session writes into that phone's
+    // own home, and the desktop reading it is the entire reason this function
+    // answers with a list.
+    const root = homes({ copilot: [OTHER], 'dev-a': [OTHER] })
+    const dirs = transcriptDirs(OTHER, {
+      configDir: '/tmp/cfg',
+      deviceHomes: root,
+      homeScopes: [{ home: join(root, 'copilot'), folder: COPILOT }],
+    })
+    expect(dirs).toContain(join(root, 'dev-a', '.claude', 'projects', encodeProjectPath(OTHER)))
+    expect(dirs).toContain(join('/tmp/cfg', 'projects', encodeProjectPath(OTHER)))
+  })
+
+  it('changes nothing at all when no scope has been installed', () => {
+    // The default on any machine with no copilot, and in every test that has
+    // not said otherwise. Absence of a scope must never mean absence of a store.
+    const root = homes({ 'dev-a': [PROJECT] })
+    expect(transcriptDirs(PROJECT, { configDir: '/tmp/cfg', deviceHomes: root, homeScopes: [] })).toEqual(
+      transcriptDirs(PROJECT, { configDir: '/tmp/cfg', deviceHomes: root }),
+    )
+  })
+
+  it('is read from the installed list when the caller does not pass one', () => {
+    const root = homes({ copilot: [COPILOT, OTHER] })
+    installDeviceHomes(root)
+    installHomeScopes([{ home: join(root, 'copilot'), folder: COPILOT }])
+
+    expect(transcriptDirs(OTHER, { configDir: '/tmp/cfg' })).toEqual([
+      join('/tmp/cfg', 'projects', encodeProjectPath(OTHER)),
+    ])
+    expect(homeScopes()).toHaveLength(1)
+  })
+
+  it('still narrows when the folder is spelled with a trailing separator', () => {
+    // `installHomeScopes` resolves what it is given and `configDirsFor` resolves
+    // what it is asked, because the two sides are composed in different modules
+    // — and a rule that stops applying because somebody wrote `foo/` instead of
+    // `foo` is a rule that fails open and silently.
+    const root = homes({ copilot: [COPILOT, OTHER] })
+    const scope = {
+      configDir: '/tmp/cfg',
+      deviceHomes: root,
+      homeScopes: [{ home: `${join(root, 'copilot')}${sep}`, folder: `${COPILOT}${sep}` }],
+    }
+    expect(transcriptDirs(OTHER, scope)).toHaveLength(1)
+    expect(transcriptDirs(COPILOT, scope)).toHaveLength(2)
+  })
+
+  it('answers the same for configDirsFor as for the dirs it produces', () => {
+    // They are one function with a `join` between them, and the watcher uses
+    // the first to decide what to *subscribe* to while the readers use the
+    // second to decide what to *list*. Two answers there would leave a watch
+    // live on a store nothing reads — which is how a fabricated file gets
+    // enqueued by a change event after being left out of the listing.
+    const root = homes({ copilot: [COPILOT, OTHER], 'dev-a': [OTHER] })
+    const scope = {
+      configDir: '/tmp/cfg',
+      deviceHomes: root,
+      homeScopes: [{ home: join(root, 'copilot'), folder: COPILOT }],
+    }
+    for (const project of [COPILOT, OTHER, PROJECT]) {
+      expect(transcriptDirs(project, scope), project).toEqual(
+        configDirsFor(project, scope).map((dir) => join(dir, 'projects', encodeProjectPath(project))),
+      )
+    }
   })
 })
 
@@ -401,7 +511,7 @@ describe('parseEventLine', () => {
     expect(event?.timestamp).toBe(Date.parse('2026-08-11T11:33:22.579Z'))
   })
 
-  it('flags fast-mode requests so they can be priced at the premium rate', () => {
+  it('flags fast-mode requests so they keep their own bucket', () => {
     expect(parseEventLine(assistantLine({ messageId: 'm', speed: 'fast' }))?.speed).toBe('fast')
     expect(parseEventLine(assistantLine({ messageId: 'm' }))?.speed).toBeUndefined()
   })
@@ -426,7 +536,7 @@ describe('parseEventLine', () => {
     expect(event?.compactedFrom).toBe(984_388)
   })
 
-  it('ignores everything that costs nothing', () => {
+  it('ignores every line that carries no usage', () => {
     expect(parseEventLine('')).toBeNull()
     expect(parseEventLine('   ')).toBeNull()
     expect(
@@ -471,7 +581,7 @@ describe('SessionAggregator', () => {
     expect(summary.requests).toBe(1)
     expect(summary.usage.output).toBe(2540)
     expect(summary.usage.cacheWrite1h).toBe(21_857)
-    expect(summary.cost.cost.total).toBeCloseTo(0.2972875, 10)
+    expect(summary.usage.cacheRead).toBe(30_415)
   })
 
   it('accumulates genuinely distinct requests', () => {
@@ -493,7 +603,7 @@ describe('SessionAggregator', () => {
     expect(aggregator.summary().requests).toBe(1)
   })
 
-  it('splits usage per model and prices each on its own card', () => {
+  it('splits usage per model', () => {
     const aggregator = new SessionAggregator('/tmp/sess-1.jsonl')
     feed(aggregator, [
       assistantLine({ messageId: 'm1', model: 'claude-opus-5', output: 1_000_000 }),
@@ -502,7 +612,8 @@ describe('SessionAggregator', () => {
     const summary = aggregator.summary()
     expect(summary.models).toContain('claude-opus-5')
     expect(summary.models).toContain('claude-haiku-4-5')
-    expect(summary.cost.cost.total).toBeCloseTo(30, 6)
+    expect(summary.usageByModel['claude-opus-5'].output).toBe(1_000_000)
+    expect(summary.usageByModel['claude-haiku-4-5'].output).toBe(1_000_000)
   })
 
   it('takes context from the latest prompt, never the running total', () => {
@@ -531,7 +642,7 @@ describe('SessionAggregator', () => {
     expect(summary.warnings.some((w) => w.kind === 'pre-context')).toBe(true)
   })
 
-  it('keeps tokens from a request with no model id, flagged as unpriced', () => {
+  it('keeps tokens from a request with no model id, under its own bucket', () => {
     // Regression: every bucket is keyed on the model id, so a usage record with
     // no model silently dropped its tokens out of the session total while still
     // counting as a request.
@@ -550,9 +661,11 @@ describe('SessionAggregator', () => {
     const summary = aggregator.summary()
     expect(summary.usage.input).toBe(500)
     expect(summary.usage.output).toBe(700)
-    expect(summary.cost.unpricedModels).toEqual([UNKNOWN_MODEL])
-    // Unpriced, not free: the money stays at zero and the UI is told why.
-    expect(summary.cost.cost.total).toBe(0)
+    // Visible under a sentinel key rather than dropped — a bucket that cannot
+    // be named still has to be counted, or the total stops matching the
+    // requests it is made of.
+    expect(summary.usageByModel[UNKNOWN_MODEL].output).toBe(700)
+    expect(summary.models).toEqual([UNKNOWN_MODEL])
   })
 
   it('still ignores synthetic messages entirely', () => {
@@ -572,30 +685,29 @@ describe('SessionAggregator', () => {
         }),
       )!,
     )
-    expect(aggregator.summary().cost.unpricedModels).toEqual([])
+    expect(aggregator.summary().models).toEqual([])
   })
 
-  it('charges a fast-mode request at the premium rate', () => {
+  it('keeps a fast-mode request in its own bucket', () => {
     // Regression: `speed: fast` was parsed off the wire and then dropped on the
-    // floor by the aggregator, so an Opus fast session billed at $25/M output
-    // instead of $50/M — half price.
+    // floor by the aggregator, so a fast session was indistinguishable from a
+    // standard one in every table that reads `usageByModel`.
     const aggregator = new SessionAggregator('/tmp/sess-1.jsonl')
     feed(aggregator, [
       assistantLine({ messageId: 'm1', model: 'claude-opus-5', output: 1_000_000, speed: 'fast' }),
     ])
-    expect(aggregator.summary().cost.cost.total).toBeCloseTo(50, 6)
+    expect(aggregator.summary().models).toEqual(['claude-opus-5-fast'])
   })
 
-  it('keeps fast and standard requests to one model on separate rate cards', () => {
+  it('keeps fast and standard requests to one model in separate buckets', () => {
     const aggregator = new SessionAggregator('/tmp/sess-1.jsonl')
     feed(aggregator, [
       assistantLine({ messageId: 'm1', model: 'claude-opus-5', output: 1_000_000 }),
       assistantLine({ messageId: 'm2', model: 'claude-opus-5', output: 1_000_000, speed: 'fast' }),
     ])
     const summary = aggregator.summary()
-    expect(summary.cost.cost.total).toBeCloseTo(75, 6) // $25 standard + $50 fast
+    expect(summary.models.sort()).toEqual(['claude-opus-5', 'claude-opus-5-fast'])
     expect(summary.usage.output).toBe(2_000_000)
-    expect(summary.cost.unpricedModels).toEqual([])
   })
 
   it('does not let a sub-agent model pick the context window', () => {
@@ -647,10 +759,10 @@ describe('SessionAggregator', () => {
       assistantLine({ messageId: 'm1', model: 'claude-opus-5', read: 1000, output: 10, sidechain: true }),
     ])
     const summary = aggregator.summary()
-    // No main-thread prompt, so no context reading — but the spend still counts.
+    // No main-thread prompt, so no context reading — but the tokens still count.
     expect(summary.context).toBeNull()
     expect(summary.requests).toBe(1)
-    expect(summary.cost.cost.total).toBeGreaterThan(0)
+    expect(summary.usage.output).toBe(10)
   })
 
   it('does not let a sub-agent prompt masquerade as the main thread context', () => {
@@ -699,7 +811,17 @@ describe('SessionAggregator', () => {
     expect(summary.lastActivityAt).toBe(Date.parse('2026-08-11T11:00:00.000Z'))
   })
 
-  it('prices against when the work ran, not when the panel was opened', () => {
+  it('reports the same totals no matter when it is asked', () => {
+    /*
+     * This test used to be called "prices against when the work ran, not when
+     * the panel was opened", and it existed because rates were time-boxed: a
+     * session run under an introductory rate had to keep costing what it cost.
+     * `summary()` took an `at` for exactly that, and nothing else used it.
+     *
+     * With the rate card gone there is no clock in the answer at all, which is
+     * the stronger property and the one worth pinning: two reads of the same
+     * aggregator, any distance apart, are identical objects.
+     */
     const aggregator = new SessionAggregator('/tmp/sess-1.jsonl')
     feed(aggregator, [
       assistantLine({
@@ -709,8 +831,8 @@ describe('SessionAggregator', () => {
         timestamp: '2026-08-11T10:00:00.000Z',
       }),
     ])
-    // Sonnet 5's introductory $10/M output rate was live on that date.
-    expect(aggregator.summary().cost.cost.total).toBeCloseTo(10, 6)
+    expect(aggregator.summary()).toEqual(aggregator.summary())
+    expect(aggregator.summary().usage.output).toBe(1_000_000)
   })
 
   it('starts empty and reports no context before the first request', () => {
@@ -718,7 +840,13 @@ describe('SessionAggregator', () => {
     expect(aggregator.isEmpty).toBe(true)
     const summary = aggregator.summary()
     expect(summary.context).toBeNull()
-    expect(summary.cost.cost.total).toBe(0)
+    expect(summary.usage).toEqual({
+      input: 0,
+      output: 0,
+      cacheWrite5m: 0,
+      cacheWrite1h: 0,
+      cacheRead: 0,
+    })
     expect(summary.warnings).toEqual([])
   })
 

@@ -11,7 +11,7 @@ import {
   readInsightLines,
   readSessionInsights,
   shortToolName,
-  COSTLIEST_COUNT,
+  HEAVIEST_COUNT,
   DEFAULT_MAX_CONTEXT_POINTS,
   type ContextPoint,
   type InsightLine,
@@ -394,38 +394,37 @@ describe('buildSessionInsights — tool usage', () => {
   })
 })
 
-/* ---------------------------------------------------------------- cost */
+/* --------------------------------------------------------------- tokens */
 
-describe('buildSessionInsights — cost', () => {
-  it('prices each request against its own rate card', () => {
+describe('buildSessionInsights — tokens', () => {
+  it('reports each request’s own prompt, output and total', () => {
     const insights = insightsFor([
       assistantLine({ id: 'm1', offset: 0, usage: { input: 100, output: 200, write1h: 5000 } }),
       assistantLine({ id: 'm2', offset: 1000, usage: { input: 50, output: 300, write5m: 1000, read: 5000 } }),
     ])
-    // Opus 5 at $5/$25 per M: writes are 2x (1h) and 1.25x (5m), reads 0.1x.
-    expect(insights.timeline[0].costUsd).toBeCloseTo(0.0555, 8)
-    expect(insights.timeline[1].costUsd).toBeCloseTo(0.0165, 8)
-    expect(insights.cost.cost.total).toBeCloseTo(0.072, 8)
+    expect(insights.timeline[0].promptTokens).toBe(5100)
+    expect(insights.timeline[0].totalTokens).toBe(5300)
+    expect(insights.timeline[1].promptTokens).toBe(6050)
+    expect(insights.timeline[1].totalTokens).toBe(6350)
   })
 
-  it('makes the total the sum of the rows even across a rate change', () => {
-    // Sonnet 5's introductory $2/$10 runs out on 2026-09-01. Pricing the whole
-    // session at its last activity would bill the August request at September
-    // rates and silently disagree with the row the user is reading.
-    const august = Date.UTC(2026, 7, 15) - T0
-    const september = Date.UTC(2026, 8, 15) - T0
+  it('makes the session total the sum of the rows', () => {
+    /*
+     * The invariant this replaces was about money: a session was priced one
+     * request at a time so the headline could never disagree with the row the
+     * user was reading. The money is gone (see the bottom of `cost.ts`) and the
+     * property is the same one — the totals are the rows added up.
+     */
     const insights = insightsFor([
-      assistantLine({ id: 'm1', offset: august, model: 'claude-sonnet-5', usage: { output: 1000 } }),
-      assistantLine({ id: 'm2', offset: september, model: 'claude-sonnet-5', usage: { output: 1000 } }),
+      assistantLine({ id: 'm1', offset: 0, usage: { output: 1000 } }),
+      assistantLine({ id: 'm2', offset: 1000, usage: { output: 1000, speed: 'fast' } }),
     ])
-    expect(insights.timeline[0].costUsd).toBeCloseTo(0.01, 8)
-    expect(insights.timeline[1].costUsd).toBeCloseTo(0.015, 8)
-    expect(insights.cost.cost.total).toBeCloseTo(0.025, 8)
-    const summed = insights.timeline.reduce((total, entry) => total + (entry.costUsd ?? 0), 0)
-    expect(insights.cost.cost.total).toBeCloseTo(summed, 10)
+    const summed = insights.timeline.reduce((total, entry) => total + entry.totalTokens, 0)
+    expect(insights.usage.output).toBe(2000)
+    expect(summed).toBe(2000)
   })
 
-  it('keeps fast mode on its own rate card', () => {
+  it('keeps fast mode in its own bucket', () => {
     const insights = insightsFor([
       assistantLine({ id: 'm1', offset: 0, usage: { output: 1000, speed: 'fast' } }),
       assistantLine({ id: 'm2', offset: 10, usage: { output: 1000 } }),
@@ -434,36 +433,49 @@ describe('buildSessionInsights — cost', () => {
       'claude-opus-5',
       'claude-opus-5-fast',
     ])
-    // $50/M fast against $25/M standard.
-    expect(insights.timeline[0].costUsd).toBeCloseTo(0.05, 8)
-    expect(insights.timeline[1].costUsd).toBeCloseTo(0.025, 8)
   })
 
-  it('breaks cost down per model with shares that sum to one', () => {
+  it('breaks tokens down per model with shares that sum to one', () => {
     const insights = insightsFor([
-      assistantLine({ id: 'm1', offset: 0, usage: { output: 1000 } }),
-      assistantLine({ id: 'm2', offset: 10, model: 'claude-haiku-4-5', usage: { output: 1000 } }),
-      assistantLine({ id: 'm3', offset: 20, model: 'claude-haiku-4-5', usage: { output: 1000 } }),
+      assistantLine({ id: 'm1', offset: 0, usage: { output: 2000 } }),
+      assistantLine({ id: 'm2', offset: 10, model: 'claude-haiku-4-5', usage: { output: 500 } }),
+      assistantLine({ id: 'm3', offset: 20, model: 'claude-haiku-4-5', usage: { output: 500 } }),
     ])
     const [first, second] = insights.models
     expect(first.model).toBe('claude-opus-5')
     expect(first.requests).toBe(1)
-    expect(first.costUsd).toBeCloseTo(0.025, 8)
+    expect(first.outputTokens).toBe(2000)
     expect(second.model).toBe('claude-haiku-4-5')
     expect(second.requests).toBe(2)
-    expect(second.costUsd).toBeCloseTo(0.01, 8)
+    expect(second.outputTokens).toBe(1000)
+    expect(first.share).toBeCloseTo(2 / 3, 10)
     expect(first.share + second.share).toBeCloseTo(1, 10)
     expect(insights.models.reduce((n, model) => n + model.requests, 0)).toBe(insights.requests)
   })
 
-  it('reports an unknown model as unpriced rather than free', () => {
+  it('shares by tokens rather than by what the tokens would have cost', () => {
+    /*
+     * The share column used to be a share of priced cost, which made two
+     * buckets of identical size draw wildly different bars because Opus and
+     * Haiku sat on different rate cards. Equal tokens, equal share.
+     */
+    const insights = insightsFor([
+      assistantLine({ id: 'm1', offset: 0, usage: { output: 1000 } }),
+      assistantLine({ id: 'm2', offset: 10, model: 'claude-haiku-4-5', usage: { output: 1000 } }),
+    ])
+    expect(insights.models[0].share).toBeCloseTo(0.5, 10)
+    expect(insights.models[1].share).toBeCloseTo(0.5, 10)
+  })
+
+  it('counts a model it has never heard of like any other', () => {
+    // There is no rate card to miss any more, so an unknown model is simply a
+    // bucket. Its tokens used to be reported as "unpriced" and excluded.
     const insights = insightsFor([
       assistantLine({ id: 'm1', offset: 0, model: 'some-other-llm', usage: { output: 1000 } }),
     ])
-    expect(insights.timeline[0].cost).toBeNull()
-    expect(insights.timeline[0].costUsd).toBeNull()
-    expect(insights.cost.unpricedModels).toEqual(['some-other-llm'])
-    expect(insights.cost.cost.total).toBe(0)
+    expect(insights.models.map((model) => model.model)).toEqual(['some-other-llm'])
+    expect(insights.models[0].share).toBeCloseTo(1, 10)
+    expect(insights.usage.output).toBe(1000)
   })
 
   it('keeps a request with tokens but no model id visible', () => {
@@ -471,28 +483,21 @@ describe('buildSessionInsights — cost', () => {
       assistantLine({ id: 'm1', offset: 0, model: '', usage: { output: 1000 } }),
     ])
     expect(insights.requests).toBe(1)
-    expect(insights.cost.unpricedModels).toEqual(['unknown'])
+    expect(insights.models.map((model) => model.model)).toEqual(['unknown'])
   })
 
-  it('does not flag synthetic messages as unpriced', () => {
-    // The CLI writes `<synthetic>` for interrupts and API errors. They carry no
-    // tokens, so treating them as unknown models would caveat almost every
-    // session that ever errored.
+  it('records a synthetic message without letting it claim any share', () => {
+    // The CLI writes `<synthetic>` for interrupts and API errors. The request
+    // happened, so it keeps its bucket; it carries no tokens, so it takes none
+    // of the share and sorts to the bottom.
     const insights = insightsFor([
       assistantLine({ id: 'm1', offset: 0, usage: { output: 1000 } }),
       assistantLine({ id: 'm2', offset: 10, model: '<synthetic>', usage: {} }),
     ])
     expect(insights.requests).toBe(2)
-    expect(insights.cost.unpricedModels).toEqual([])
-    expect(insights.cost.cost.total).toBeCloseTo(0.025, 8)
-  })
-
-  it('flags a legacy rate on the model that used it', () => {
-    const insights = insightsFor([
-      assistantLine({ id: 'm1', offset: 0, model: 'claude-opus-4-1', usage: { output: 1000 } }),
-    ])
-    expect(insights.models[0].legacyRate).toBe(true)
-    expect(insights.cost.usedLegacyRate).toBe(true)
+    expect(insights.models.map((model) => model.model)).toEqual(['claude-opus-5', '<synthetic>'])
+    expect(insights.models[1].share).toBe(0)
+    expect(insights.models[0].share).toBeCloseTo(1, 10)
   })
 
   it('reports the cache hit rate over the whole session', () => {
@@ -611,7 +616,6 @@ describe('buildSessionInsights — payload bounds', () => {
     expect(insights.omittedRequests).toBe(3)
     // Totals still cover everything, not just the visible rows.
     expect(insights.usage.output).toBe(50)
-    expect(insights.cost.cost.total).toBeCloseTo(0.00125, 8)
   })
 
   it('leaves a short timeline alone', () => {
@@ -688,17 +692,17 @@ describe('corrupt token counts', () => {
     expect(insights.usage.cacheRead).toBe(0)
     expect(insights.usage.output).toBe(100)
     expect(insights.cacheHitRate).toBe(0)
-    expect(insights.cost.cost.total).toBeGreaterThanOrEqual(0)
+    expect(insights.usage.output).toBe(100)
   })
 
-  it('keeps the cost finite when a count is absurdly large', () => {
-    // `cost.ts` prices with `tokens * rate / 1e6` — it multiplies first, so a
-    // finite 1e308 overflows to Infinity and every figure in the panel renders
-    // as "$Infinity".
+  it('keeps every figure finite when a count is absurdly large', () => {
+    // A finite 1e308 survives `parseUsage`, and unclamped it makes every share
+    // in the per-model table zero and every total read "Infinity" — one bad
+    // line taking down a panel of otherwise good numbers.
     const insights = insightsFor([usageLine({ output_tokens: 1e308, input_tokens: 1e308 })])
-    expect(Number.isFinite(insights.cost.cost.total)).toBe(true)
-    expect(Number.isFinite(insights.timeline[0].costUsd ?? 0)).toBe(true)
     expect(Number.isFinite(insights.usage.output)).toBe(true)
+    expect(Number.isFinite(insights.timeline[0].totalTokens)).toBe(true)
+    expect(Number.isFinite(insights.models[0].share)).toBe(true)
   })
 
   it('drops a non-numeric or fractional count to something countable', () => {
@@ -808,10 +812,10 @@ describe('downsampleContext', () => {
   })
 })
 
-describe('costliest requests', () => {
+describe('heaviest requests', () => {
   it('ranks across the whole session, not just the rows that survived trimming', () => {
-    // The expensive request is #1 and the timeline only keeps the last five, so
-    // ranking the timeline reported a request that cost a rounding error.
+    // The heavy request is #1 and the timeline only keeps the last five, so
+    // ranking the timeline reported a request that moved ten tokens.
     const lines = [
       assistantLine({ id: 'whale', offset: 0, usage: { input: 2_000_000, output: 2_000_000 } }),
       ...Array.from({ length: 30 }, (_unused, i) =>
@@ -820,40 +824,40 @@ describe('costliest requests', () => {
     ]
     const insights = insightsFor(lines, 5)
     expect(insights.timeline.map((entry) => entry.key)).not.toContain('whale')
-    expect(insights.costliest[0].key).toBe('whale')
-    expect(insights.costliest[0].costUsd).toBeCloseTo(60, 6)
-    expect(insights.costliest).toHaveLength(COSTLIEST_COUNT)
-    // Descending, and every row genuinely priced.
-    const costs = insights.costliest.map((entry) => entry.costUsd ?? 0)
-    expect([...costs].sort((a, b) => b - a)).toEqual(costs)
-    expect(insights.costliest.every((entry) => entry.costUsd !== null)).toBe(true)
+    expect(insights.heaviest[0].key).toBe('whale')
+    expect(insights.heaviest[0].totalTokens).toBe(4_000_000)
+    expect(insights.heaviest).toHaveLength(HEAVIEST_COUNT)
+    // Descending, and every row carrying real tokens.
+    const counts = insights.heaviest.map((entry) => entry.totalTokens)
+    expect([...counts].sort((a, b) => b - a)).toEqual(counts)
+    expect(insights.heaviest.every((entry) => entry.totalTokens > 0)).toBe(true)
   })
 
-  it('omits unpriced requests rather than ranking them as free', () => {
+  it('omits requests that recorded no tokens at all', () => {
     const insights = insightsFor([
-      assistantLine({ id: 'm1', offset: 0, model: 'some-other-llm', usage: { output: 9_000_000 } }),
+      assistantLine({ id: 'm1', offset: 0, model: '<synthetic>', usage: {} }),
       assistantLine({ id: 'm2', offset: 10, usage: { output: 10 } }),
     ])
-    expect(insights.costliest.map((entry) => entry.key)).toEqual(['m2'])
+    expect(insights.heaviest.map((entry) => entry.key)).toEqual(['m2'])
   })
 
   it('does not reorder the timeline while ranking', () => {
-    // When nothing is trimmed, `timeline` and the array `costliest` is derived
+    // When nothing is trimmed, `timeline` and the array `heaviest` is derived
     // from are the same reference — sorting it in place would scramble the
     // chronology the whole panel is read in.
     const insights = insightsFor([
-      assistantLine({ id: 'cheap', offset: 0, usage: { output: 1 } }),
+      assistantLine({ id: 'small', offset: 0, usage: { output: 1 } }),
       assistantLine({ id: 'whale', offset: 10, usage: { output: 1_000_000 } }),
       assistantLine({ id: 'mid', offset: 20, usage: { output: 100 } }),
     ])
     expect(insights.omittedRequests).toBe(0)
-    expect(insights.timeline.map((entry) => entry.key)).toEqual(['cheap', 'whale', 'mid'])
+    expect(insights.timeline.map((entry) => entry.key)).toEqual(['small', 'whale', 'mid'])
     expect(insights.timeline.map((entry) => entry.index)).toEqual([1, 2, 3])
-    expect(insights.costliest.map((entry) => entry.key)).toEqual(['whale', 'mid', 'cheap'])
+    expect(insights.heaviest.map((entry) => entry.key)).toEqual(['whale', 'mid', 'small'])
   })
 
-  it('is empty for a session with nothing priced', () => {
-    expect(buildSessionInsights([]).costliest).toEqual([])
+  it('is empty for a session with nothing in it', () => {
+    expect(buildSessionInsights([]).heaviest).toEqual([])
   })
 })
 

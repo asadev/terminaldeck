@@ -1,10 +1,11 @@
+import { readFileSync } from 'node:fs'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import {
   ContextTab,
-  CostTab,
   TimelineTab,
   ToolsTab,
+  UsageTab,
   describeSource,
   downsample,
   formatPercent,
@@ -40,8 +41,7 @@ function entry(partial: Partial<TimelineEntry> & { index: number }): TimelineEnt
     usage: { input: 10, output: 20, cacheWrite5m: 0, cacheWrite1h: 0, cacheRead: 0 },
     promptTokens: 10,
     outputTokens: 20,
-    cost: { input: 0, output: 0.0005, cacheWrite: 0, cacheRead: 0, total: 0.0005 },
-    costUsd: 0.0005,
+    totalTokens: 30,
     contextPercent: 1,
     isSidechain: false,
     stopReason: 'end_turn',
@@ -78,18 +78,12 @@ function insightsFor(partial: Partial<SessionInsights> = {}): SessionInsights {
     sidechainRequests: 0,
     timeline: [],
     omittedRequests: 0,
-    costliest: [],
+    heaviest: [],
     tools: [],
     toolCalls: 0,
     toolFailures: 0,
     models: [],
     usage: { input: 10, output: 20, cacheWrite5m: 0, cacheWrite1h: 0, cacheRead: 0 },
-    cost: {
-      cost: { input: 0, output: 0.0005, cacheWrite: 0, cacheRead: 0, total: 0.0005 },
-      byModel: {},
-      unpricedModels: [],
-      usedLegacyRate: false,
-    },
     cacheHitRate: 0,
     context: null,
     contextSeries: [],
@@ -175,43 +169,78 @@ describe('TimelineTab', () => {
   })
 })
 
-/* -------------------------------------------------------------------- cost */
+/* ------------------------------------------------------------------- usage */
 
-describe('CostTab', () => {
-  it('ranks the priciest requests from the session, not from the visible rows', () => {
-    // The expensive request is request #1 of 3,000 and has been trimmed out of
-    // `timeline`. Ranking `timeline` locally reported a request that cost a
-    // rounding error and labelled it "most expensive".
-    const whale = entry({ index: 1, key: 'whale', costUsd: 60, promptTokens: 2_000_000 })
+describe('UsageTab', () => {
+  it('ranks the heaviest requests from the session, not from the visible rows', () => {
+    // The heavy request is request #1 of 3,000 and has been trimmed out of
+    // `timeline`. Ranking `timeline` locally reported a request that moved
+    // thirty tokens and labelled it the largest in the session.
+    const whale = entry({
+      index: 1,
+      key: 'whale',
+      promptTokens: 2_000_000,
+      outputTokens: 40_000,
+      totalTokens: 2_040_000,
+    })
     const html = renderToStaticMarkup(
-      <CostTab
+      <UsageTab
         insights={insightsFor({
           timeline: [entry({ index: 2999 }), entry({ index: 3000 })],
-          costliest: [whale],
+          heaviest: [whale],
           omittedRequests: 2998,
           requests: 3000,
         })}
       />,
     )
-    expect(html).toContain('Most expensive requests')
+    expect(html).toContain('Largest requests')
     expect(html).toContain('#1')
-    expect(html).toContain('$60.00')
+    expect(html).toContain('2.04M')
     expect(html).not.toContain('#3000')
   })
 
-  it('drops the section when nothing in the session was priced', () => {
-    const html = renderToStaticMarkup(
-      <CostTab insights={insightsFor({ timeline: [entry({ index: 1, costUsd: null, cost: null })] })} />,
-    )
-    expect(html).not.toContain('Most expensive requests')
+  it('drops the section when the session recorded no tokens at all', () => {
+    const html = renderToStaticMarkup(<UsageTab insights={insightsFor({ heaviest: [] })} />)
+    expect(html).not.toContain('Largest requests')
   })
 
-  it('tolerates an insights payload from a main process that predates costliest', () => {
+  it('tolerates an insights payload from a main process that predates heaviest', () => {
     // The bridge hands the renderer an unchecked cast, so a stale main process
-    // means `costliest` is simply absent — that must not throw.
+    // means `heaviest` is simply absent — that must not throw.
     const stale = insightsFor({ timeline: [entry({ index: 1 })] }) as SessionInsights
-    delete (stale as Partial<SessionInsights>).costliest
-    expect(() => renderToStaticMarkup(<CostTab insights={stale} />)).not.toThrow()
+    delete (stale as Partial<SessionInsights>).heaviest
+    expect(() => renderToStaticMarkup(<UsageTab insights={stale} />)).not.toThrow()
+  })
+
+  it('shows no money on any of its three sections', () => {
+    /*
+     * This tab was called Cost and had a money column in both of its tables
+     * plus a "most expensive requests" list keyed on a dollar figure. Every one
+     * of those is a token count now — the argument is at the bottom of
+     * `src/main/cost.ts`, and the check is on the rendered markup because that
+     * is what a person actually sees.
+     */
+    const html = renderToStaticMarkup(
+      <UsageTab
+        insights={insightsFor({
+          timeline: [entry({ index: 1 })],
+          heaviest: [entry({ index: 1 })],
+          models: [
+            {
+              model: 'claude-opus-5',
+              requests: 1,
+              usage: { input: 10, output: 20, cacheWrite5m: 0, cacheWrite1h: 0, cacheRead: 0 },
+              promptTokens: 10,
+              outputTokens: 20,
+              share: 1,
+            },
+          ],
+        })}
+      />,
+    )
+    expect(html).not.toMatch(/[$]/)
+    expect(html).toContain('Where the tokens went')
+    expect(html).not.toContain('Where the money went')
   })
 })
 
@@ -363,5 +392,40 @@ describe('describeSource', () => {
       'terminaldeck — from its Claude Code transcript',
     )
     expect(describeSource(undefined, null, null)).toBeUndefined()
+  })
+})
+
+/* ------------------------------------------------------------ dialog size */
+
+/**
+ * The dialog is sized to what is in it.
+ *
+ * Opened on a folder with no transcript, this was a 920px sheet — the width a
+ * six-column report needs — holding one grey sentence in the middle of a great
+ * deal of nothing. Only the `ready` state has a report in it; the other three
+ * have a sentence, and the sheet has to be a sentence wide for them.
+ *
+ * Read as text, the way `tokens.test.ts` reads the token sheet: the container
+ * renders through `Modal`'s portal and needs a real document, and the rule that
+ * matters here is a stylesheet rule rather than anything a render would show.
+ */
+describe('the inspector dialog is the size of its contents', () => {
+  const css = readFileSync(new URL('./SessionInspector.css', import.meta.url), 'utf8')
+  const tsx = readFileSync(new URL('./SessionInspector.tsx', import.meta.url), 'utf8')
+
+  it('is a narrow dialog by default', () => {
+    expect(css).toMatch(/\.modal-panel:has\(\.session-inspector\)\s*\{[^}]*width:\s*460px/)
+  })
+
+  it('only widens to the report width once there is a report', () => {
+    expect(css).toMatch(
+      /\.modal-panel:has\(\.session-inspector\[data-state='ready'\]\)\s*\{[^}]*width:\s*920px/,
+    )
+  })
+
+  it('publishes the state the width rule keys off', () => {
+    // Without this attribute both rules above match nothing and the dialog
+    // silently goes back to being one size for every state.
+    expect(tsx).toContain('className="session-inspector" data-state={state.status}')
   })
 })

@@ -89,8 +89,8 @@ export function wantsYou(attention: Attention): boolean {
  * Only ever attached when the transcript could be *ruled in* as this session's
  * — see `pickSessionTranscript` in `renderer/session-transcript.ts`, which
  * exists because "the newest transcript in this folder" once put a stranger's
- * $18.49 under a tab that had done nothing. The board would rather show no
- * money than the wrong money.
+ * 4.2M tokens under a tab that had done nothing. The board would rather show no
+ * figures than the wrong ones.
  */
 export interface SessionWork {
   transcriptPath: string
@@ -98,8 +98,6 @@ export interface SessionWork {
   requests: number
   /** Every token class summed — input, output and both cache sides. */
   tokens: number
-  /** Null when no model in the session had a published rate. Never 0, which reads as free. */
-  costUsd: number | null
   /** Occupancy of the context window, or null before the first request. */
   contextPercent: number | null
   /** Epoch ms of the last line written to the transcript. 0 when unknown. */
@@ -121,8 +119,14 @@ export interface BoardSession {
   title: string
   projectPath: string
   provider: ProviderId
-  /** The resolved account, when one applies. A plain shell has no login. */
-  account: string | null
+  /**
+   * The resolved account, when one applies. A plain shell has no login.
+   *
+   * The id travels with the name because the name on its own cannot be trusted
+   * to be one: `Default` is the key for the machine's own install, and only the
+   * id says so. See {@link profileLoginLabel}, which is what the card prints.
+   */
+  account: { id: string; name: string } | null
   status: SessionStatus
   /** Epoch ms this window first saw this status. See `Session.statusSince`. */
   statusSince: number
@@ -375,7 +379,7 @@ export function numberAt(value: unknown, ...path: string[]): number {
  * `sessionId` is the *transcript's* id — the name Claude Code gave the
  * conversation — never this window's tab id. They are different namespaces and
  * matching the wrong one silently yields nothing, which reads on screen as "this
- * session has spent nothing" rather than as "we could not tell".
+ * session has done nothing" rather than as "we could not tell".
  */
 export function workFromSummary(summary: unknown, sessionId: string, transcriptPath: string): SessionWork | null {
   if (!isRecord(summary) || !Array.isArray(summary.sessions)) return null
@@ -389,11 +393,6 @@ export function workFromSummary(summary: unknown, sessionId: string, transcriptP
     numberAt(row, 'usage', 'cacheWrite1h') +
     numberAt(row, 'usage', 'cacheRead')
 
-  // `cost.byModel` is empty when nothing in the session had a published rate.
-  // The total is then 0, and a `$0.00` beside 40k tokens is a claim that the
-  // work was free rather than an admission that it could not be priced.
-  const priced = isRecord(row.cost) && isRecord(row.cost.byModel) && Object.keys(row.cost.byModel).length > 0
-
   // Null before the first request, and it has to stay null: reading a percent
   // off a missing context block yields 0, and "0% of the window" is a reading,
   // not an absence.
@@ -403,7 +402,6 @@ export function workFromSummary(summary: unknown, sessionId: string, transcriptP
     transcriptPath,
     requests: numberAt(row, 'requests'),
     tokens,
-    costUsd: priced ? numberAt(row, 'cost', 'cost', 'total') : null,
     contextPercent: context ? numberAt(context, 'percent') : null,
     lastActivityAt: numberAt(row, 'lastActivityAt'),
   }
@@ -423,7 +421,17 @@ export function asSessionMeta(value: unknown): {
   createdAt: number
   exitCode: number | null
   resumed: boolean
-  profileName: string | null
+  /**
+   * The account, as the pair a label needs.
+   *
+   * The name alone used to come through, and the card printed it — which is how
+   * `Claude Code · Default · started 25m ago` reached the Overview page.
+   * "Default" is the *key* `profiles.ts` generates for the machine's own
+   * install, and the only way to know that of a name is to look at the id it
+   * belongs to. So both travel together or neither does; a name with no id is
+   * a string this page cannot judge.
+   */
+  account: { id: string; name: string } | null
 } | null {
   if (!isRecord(value)) return null
   const id = typeof value.id === 'string' ? value.id : ''
@@ -437,6 +445,12 @@ export function asSessionMeta(value: unknown): {
     createdAt: numberAt(value, 'createdAt'),
     exitCode: typeof value.exitCode === 'number' ? value.exitCode : null,
     resumed: value.resumed === true,
-    profileName: typeof value.profileName === 'string' && value.profileName ? value.profileName : null,
+    account:
+      typeof value.profileId === 'string' &&
+      value.profileId !== '' &&
+      typeof value.profileName === 'string' &&
+      value.profileName !== ''
+        ? { id: value.profileId, name: value.profileName }
+        : null,
   }
 }

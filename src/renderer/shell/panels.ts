@@ -17,13 +17,33 @@
  * pairing code is minted by one desk in the main process and only one screen can
  * honestly be showing it.
  */
+/**
+ * There is no `alerts` here either, and that absence is load-bearing in a way
+ * the missing `machines` above is not.
+ *
+ * Alerts is a **pop-up**, not a page — Asad: *"and notifications should be a
+ * pop-up just like settings, not a full page."* Being in this union is what
+ * makes something a place the window can travel to: `showPanel` takes a
+ * `PanelId`, `PanelView` switches on one, `isPanelId` is what lets a remembered
+ * id come back out of storage and fill the window at the next launch, and
+ * `reachable.test.ts` requires every member to have a case that renders. A
+ * member with no page is a dead route by construction, and a member *with* a
+ * page is the full page he asked us to stop having.
+ *
+ * So Alerts left the union rather than merely losing its row. It is drawn by
+ * the bell on the Settings line in `Sidebar.tsx`, it opens `AlertsWindow` in
+ * `components/AlertsPanel.tsx`, and the feature registry gates it as a control
+ * (`sidebar.alerts`) rather than as a panel. Putting the id back here would
+ * quietly re-create the page: nothing else has to change for it to reappear,
+ * which is exactly why the absence is worth this paragraph.
+ */
 export type PanelId =
+  | 'copilot'
   | 'overview'
   | 'files'
   | 'artifacts'
   | 'git'
   | 'github'
-  | 'alerts'
   | 'readiness'
   | 'mcp'
   | 'hooks'
@@ -35,12 +55,27 @@ export type PanelId =
  * `project` and `integrations` are the two labelled runs in the scrolling list.
  * `foot` is the quiet strip at the bottom, beside Settings — deliberately *not*
  * in `PANEL_GROUPS`, because that array is the list of labelled runs and the
- * foot has no label. A view in `foot` is one you check on rather than work in:
- * Alerts belongs there because it is the app talking to you, which is the same
- * category of thing as the update notice and Settings, and none of the three is
+ * foot has no label. A view in `foot` is one you check on rather than work in,
+ * which is the same category of thing as the update notice and Settings and no
  * part of "what am I doing in this project".
+ *
+ * There was a fourth, `icon`, for the one view drawn as a glyph on the Settings
+ * line instead of as a row, and it existed for exactly one member: Alerts. That
+ * member is a dialog now and not a view at all, so the group went with it — a
+ * group no panel can be in is a branch in `Sidebar.tsx` that renders nothing
+ * and a shape the next reader has to work out the purpose of.
  */
-export type PanelGroupId = 'project' | 'integrations' | 'foot'
+/**
+ * `pinned` is the block above everything, and today it holds exactly one view.
+ *
+ * Deliberately not in `PANEL_GROUPS`, for the same reason `foot` is not: that
+ * array is the list of *labelled* runs, and a heading reading "Copilot" over a
+ * single row that also reads "Copilot" is the same word twice in eleven pixels.
+ * A view in `pinned` is one the sidebar places by hand, at the top, before the
+ * views you work in and before what you have open — which is where Asad asked
+ * for it: *"in the top of the session we will make a copilot."*
+ */
+export type PanelGroupId = 'pinned' | 'project' | 'integrations' | 'foot' | 'icon'
 
 export interface PanelSpec {
   id: PanelId
@@ -77,12 +112,39 @@ export const PANEL_GROUPS: ReadonlyArray<{ id: PanelGroupId; label: string }> = 
  */
 export const PANELS: PanelSpec[] = [
   {
+    /*
+     * The copilot, pinned above everything else in the rail.
+     *
+     * A view rather than a tab, and that is the decision the rest of the
+     * feature hangs off. It is a **singleton** — there is one copilot, so there
+     * is no ＋ that starts a second and no ✕ that ends this one — and a tab is
+     * by definition one of many with a ✕ on it. Being a view also means the
+     * routing it needs already exists: `showPanel` opens it, `PanelView`
+     * renders it, `isPanelId` brings it back after a relaunch, and the `focus`
+     * argument every other view uses is what lets a copilot-started session's
+     * row land on the exact turn that started it.
+     *
+     * The glyph is a compass rose — a ring with a needle through it — chosen
+     * against the two marks it has to be told apart from at a glance in the
+     * same rail: the session's `>_` and the browser's globe. Not a sparkle,
+     * which is what every product draws beside the word "AI" and says nothing
+     * about what this one does, and not a speech bubble, which would promise a
+     * chatbot when the whole argument of `COPILOT-DESIGN.md` is that this is a
+     * window onto machinery.
+     */
+    id: 'copilot',
+    label: 'Copilot',
+    group: 'pinned',
+    icon: 'M12 3.4a8.6 8.6 0 1 0 0 17.2 8.6 8.6 0 0 0 0-17.2zM15.2 8.8l-1.9 4.5-4.5 1.9 1.9-4.5z',
+    blurb: 'Your assistant for this deck — the sessions, the diffs, the prompts.',
+  },
+  {
     id: 'overview',
     label: 'Overview',
     group: 'project',
     command: 'view.dashboard',
     icon: 'M4.5 5.5h5.5v5.5H4.5zM14 5.5h5.5v5.5H14zM4.5 13h5.5v5.5H4.5zM14 13h5.5v5.5H14z',
-    blurb: 'Cost, context and activity for this project.',
+    blurb: 'Usage, context and activity for this project.',
   },
   {
     id: 'files',
@@ -130,18 +192,22 @@ export const PANELS: PanelSpec[] = [
     icon: 'M12 3a9 9 0 0 0-2.8 17.5c.4.1.6-.2.6-.5v-2c-2.5.5-3-1.2-3-1.2-.4-1-1-1.3-1-1.3-.9-.6 0-.6 0-.6 1 .1 1.4 1 1.4 1 .9 1.5 2.4 1 3 .8.1-.6.3-1 .6-1.3-2-.2-4.1-1-4.1-4.4 0-1 .3-1.8.9-2.4-.1-.3-.4-1.2.1-2.4 0 0 .7-.3 2.5 1a8.6 8.6 0 0 1 4.5 0c1.8-1.3 2.5-1 2.5-1 .5 1.2.2 2.1.1 2.4.6.6.9 1.4.9 2.4 0 3.4-2.1 4.2-4.1 4.4.3.3.6.9.6 1.8v2.7c0 .3.2.6.6.5A9 9 0 0 0 12 3z',
     blurb: 'Pull requests, checks and issues for this remote.',
   },
-  {
-    id: 'alerts',
-    label: 'Alerts',
-    // The foot, not Integrations. Alerts is not an integration — it is the app
-    // telling you something about your own work, which is why it now sits with
-    // the update notice and Settings at the bottom of the rail rather than in
-    // the top-right of the toolbar, where it was competing with the controls
-    // you use while you are actually working.
-    group: 'foot',
-    icon: 'M12 4.2a5.6 5.6 0 0 0-5.6 5.6c0 3.7-1.8 4.7-1.8 4.7h14.8s-1.8-1-1.8-4.7A5.6 5.6 0 0 0 12 4.2zM10.3 18.5a2 2 0 0 0 3.4 0',
-    blurb: 'What this project is waiting on you for.',
-  },
+  // Alerts was a row here, then a glyph on the Settings line, and it is not a
+  // view at all any more.
+  //
+  // The move to a glyph was the right half of the answer — *"let's not keep it
+  // a complete separate pill. Let's make it a small icon next to the settings
+  // pill"* — and it kept the wrong half, because pressing the glyph still
+  // navigated the window to a full Alerts page. The rest of the answer arrived
+  // the same day: *"and notifications should be a pop-up just like settings,
+  // not a full page."*
+  //
+  // Settings is not in this list either, for the same reason: a dialog is not
+  // somewhere you go, it is something you open over where you already are. The
+  // bell that opens it lives in `Sidebar.tsx` beside the gear, the dialog is
+  // `AlertsWindow`, and the feature registry gates the pair as a control. See
+  // the note on `PanelId` for why leaving the entry here would have put the
+  // page straight back.
   {
     id: 'readiness',
     label: 'AI readiness',
@@ -172,9 +238,9 @@ export const PANELS: PanelSpec[] = [
      * Machines was in the rail to begin with, and the merge should have moved
      * Remote *out* rather than pulling Machines *in*.
      *
-     * The foot, with Alerts and Settings: another machine is not something this
-     * project integrates with, and the machines you can reach do not change when
-     * you open a different folder.
+     * The foot, with the update notice and Settings: another machine is not
+     * something this project integrates with, and the machines you can reach do
+     * not change when you open a different folder.
      */
     id: 'remote',
     label: 'Remote',

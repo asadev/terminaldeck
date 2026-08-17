@@ -164,6 +164,41 @@ export const PRIMARY_CONTROLS: readonly ControlId[] = ['model', 'permission']
  */
 export const MENU_CONTROLS: readonly ControlId[] = ['effort', 'fast']
 
+/**
+ * Why these controls are withheld from an agent CLI that is not Claude Code, or
+ * null when the provider is one they work on.
+ *
+ * ## Why there is a sentence here at all
+ *
+ * Every option in this file is a Claude Code command, and every value the
+ * pickers display is read back out of Claude Code's own screen or its
+ * `settings.json`. Neither half generalises to another CLI. Leaving the pickers
+ * on for a Codex or Gemini session would give it five model aliases that mean
+ * nothing there, wired to a `/model sonnet` nobody has checked it understands,
+ * showing an effort level read out of a file it never wrote — a dead control
+ * three ways over, which is the exact failure class this composer keeps being
+ * audited for.
+ *
+ * ## Why the sentence says "not established" rather than "not possible"
+ *
+ * Because that is what was found. Both were looked at on the machine this was
+ * written on and neither could be driven: the Codex install is broken (its
+ * vendored binary is missing) and the Gemini CLI stops on an unanswered
+ * authentication picker. So this build has no evidence either way, and claiming
+ * they *cannot* change a model at runtime would be inventing a fact in order to
+ * sound more final. Saying what is true costs nothing and stays true when
+ * somebody comes back to add support.
+ *
+ * `shell` is not here: it has its own sentence, because "there is no model in a
+ * shell" and "this build has not learned this CLI's commands" are different
+ * things and collapsing them would make the shell case sound like a gap.
+ */
+export function unsupportedProviderNote(provider: string | undefined): string | null {
+  if (provider !== 'codex' && provider !== 'gemini') return null
+  const name = provider === 'codex' ? 'Codex' : 'Gemini'
+  return `These work by typing Claude Code’s own commands into the session. ${name} has its own, and this build has not been shown what they are — so nothing is offered here rather than a button that types the wrong thing.`
+}
+
 /** The short name on the button. Sentence case; it is a name, not a heading. */
 export function controlName(control: ControlId): string {
   if (control === 'model') return 'Model'
@@ -237,28 +272,58 @@ export function displayValue(reading: ControlReading | undefined, control?: Cont
 /**
  * What a control says when nothing could be read.
  *
- * Fast mode gets its own word, and the reason is structural rather than
- * cosmetic. The other three resolve on essentially every machine: permission
- * and model are painted in the session's own footer, effort is persisted in
- * `settings.json`. Fast mode is in neither place — checked against the shipped
- * CLI, the only write it makes to `fastMode` in user settings is a *clear*,
- * and the enabled state lives in a store this app does not read — so the screen
- * is the sole source, and the CLI prints "Fast mode ON/OFF" only at the moment
- * it *changes*. A session that has never been told either way therefore has
- * nothing to report, for good, and "Unknown" beside three resolved siblings
- * reads as this app failing rather than as the CLI never having said.
+ * ## Two different silences, and only one of them is a failure
+ *
+ * "Unknown" is the right word for a read that *should* have worked and did not
+ * — the model is painted in the session's own footer and recoverable from the
+ * transcript, effort is persisted in `settings.json`, so nothing coming back
+ * from either means something went wrong and the word should say so.
+ *
+ * Fast mode and permission mode are a different case. For both there are
+ * states in which nothing has ever said, and no amount of waiting changes it.
+ *
+ *  - **Fast mode.** Checked against the shipped CLI, the only write it makes to
+ *    `fastMode` in user settings is a *clear*, and the enabled state lives in a
+ *    store this app does not read — so the screen is the sole source, and the
+ *    CLI prints "Fast mode ON/OFF" only at the moment it *changes*.
+ *
+ *  - **Permission mode.** Asad, watching the composer: the model "eventually
+ *    resolves", permission "never does". He was right, and it was not slow — it
+ *    was unreachable. The footer lines this app matches are the confirmations
+ *    the CLI prints *on entering* a mode, so a session nobody has pressed
+ *    shift+tab in has nothing on screen to read at all. That now falls back to
+ *    `permissions.defaultMode` in the settings files the CLI itself reads (see
+ *    `readPermissionDefault` in `src/main/agent-controls.ts`), which settles it
+ *    on any machine that has set one. What is left here is the genuinely
+ *    unknowable remainder: no confirmation on screen and no default written
+ *    anywhere. The CLI has a built-in default in that case and this app has not
+ *    been told what it is, and inventing one would be a claim about what an
+ *    agent is allowed to do — the last thing in this window to guess at.
+ *
+ * So both say the same thing, and it is what actually happened: nothing
+ * reported it. One word for one situation, and "Unknown" left meaning "a read
+ * failed" rather than doing double duty for "there was nothing to read".
  */
 export function unreadLabel(control: ControlId | undefined): string {
-  return control === 'fast' ? 'Not reported' : 'Unknown'
+  return control === 'fast' || control === 'permission' ? 'Not reported' : 'Unknown'
 }
 
 /**
  * The sentence under an unread control, or null where the plain source note
- * already covers it. Only fast mode has an explanation worth the line.
+ * already covers it.
+ *
+ * Both controls that can be honestly silent get one, because in both cases the
+ * reader's next question is the same — why not, and what do I do about it — and
+ * so is the answer: pick one, and the session will say.
  */
 export function unreadNote(control: ControlId | undefined): string | null {
-  if (control !== 'fast') return null
-  return 'The CLI announces fast mode only when it changes, and keeps the setting out of settings.json — so until this session says so, nothing here can. Pick On or Off to set it.'
+  if (control === 'fast') {
+    return 'The CLI announces fast mode only when it changes, and keeps the setting out of settings.json — so until this session says so, nothing here can. Pick On or Off to set it.'
+  }
+  if (control === 'permission') {
+    return 'Claude prints the permission mode only when it changes, and no default is set in your Claude settings — so this session has not said which one it is in. Pick one and it will.'
+  }
+  return null
 }
 
 /**

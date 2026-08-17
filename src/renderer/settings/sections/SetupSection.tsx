@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Button, Explain, Group, LinkOut, Notice, SectionHead, ToolVersion } from '../controls'
 import { useFeatures } from '../../features/FeaturesProvider'
-import { sectionMeta } from '../settings-schema'
 import { errorText, missingChannelNote, type SectionProps } from '../settings-bridge'
 import {
   eventState,
@@ -200,8 +199,25 @@ function HookBlock({
  */
 export const AGENT_TOOL_IDS: readonly string[] = ['claude', 'codex', 'gemini']
 
-export function SetupSection({ bridge, goTo }: SectionProps) {
-  const meta = sectionMeta('setup')
+/**
+ * Setup is a pair of groups inside Agents now, not a rail entry.
+ *
+ *   > "This also needs to be reorganized properly at some better place instead
+ *   > of here as setup a separate page. Maybe here we can bring a section of
+ *   > setting up CLI's, accounts, agents, everything and choosing ones."
+ *
+ * `head` is what makes that possible without moving a line of the code below:
+ * off, the pane draws its groups straight into whatever is already on screen.
+ * Kept as a flag rather than deleted so this can still be rendered on its own
+ * in a test.
+ */
+export function SetupSection({ bridge, head = true }: SectionProps & { head?: boolean }) {
+  /*
+   * `sectionMeta('setup')` resolves to Agents now, so the heading is written
+   * here: what this half of the pane is called is "Setup", whatever the rail
+   * calls the pane that contains it.
+   */
+  const meta = { label: 'Setup', blurb: 'What this app needs on your machine, and what it found.' }
   /*
    * Hooks are a feature, and an uninstalled feature gets no settings block.
    *
@@ -272,7 +288,7 @@ export function SetupSection({ bridge, goTo }: SectionProps) {
   if (!bridge.setupStatus) {
     return (
       <>
-        <SectionHead title={meta.label} blurb={meta.blurb} />
+        {head && <SectionHead title={meta.label} blurb={meta.blurb} />}
         <Notice tone="warn">{missingChannelNote('The setup check')}</Notice>
       </>
     )
@@ -283,12 +299,12 @@ export function SetupSection({ bridge, goTo }: SectionProps) {
   // agents have a section of their own.
   const tools = (snapshot?.tools ?? []).filter((tool) => !AGENT_TOOL_IDS.includes(tool.id))
   const hooks = snapshot?.hooks ?? []
-  const endpoint = snapshot?.endpoint ?? { running: false, port: null }
+  const endpoint = snapshot?.endpoint ?? { running: false, address: null }
   const canWrite = Boolean(bridge.installHooks && bridge.removeHooks)
 
   return (
     <>
-      <SectionHead title={meta.label} blurb={meta.blurb} />
+      {head && <SectionHead title={meta.label} blurb={meta.blurb} />}
 
       {error && <Notice tone="error">{error}</Notice>}
 
@@ -300,13 +316,13 @@ export function SetupSection({ bridge, goTo }: SectionProps) {
         </Notice>
       )}
 
-      <Explain title="The agent CLIs are in Agents">
-        Claude Code, Codex and Gemini are listed there, with the login each one runs as — the same
-        three rows used to be drawn here as well, under a second heading.{' '}
-        <button type="button" className="settings-inline-btn" onClick={() => goTo('agents')}>
-          Open Agents
-        </button>
-      </Explain>
+      {/*
+        The block that used to be here said "the agent CLIs are in Agents" and
+        offered a button to go there. They are on this page now, above this
+        group, so the sentence would be pointing at itself. That cross-reference
+        is the clearest single piece of evidence that these two panes were one
+        subject: it existed only because the merge had not happened yet.
+      */}
 
       {/* What is left after the three: the coding tools this app can find and
           cannot start a session with. GitHub Copilot is the one today — it has
@@ -361,17 +377,30 @@ export function SetupSection({ bridge, goTo }: SectionProps) {
 
       {features.on('hooks') && (
       <Group title="Session hooks">
-        <p className="settings-prose">
-          A hook is a command the CLI runs at each step of a session. Ours posts that event to a
-          local endpoint, which is how a tab knows an agent is working, waiting on you, or done
-          without anything reading its terminal output. Installing writes into the CLI’s own
-          settings file alongside whatever is already there, and every entry we write is tagged, so
-          removing takes back only ours.
-        </p>
+        {/* Sixty-five words became eleven. What survived is what the buttons
+            below are about; the mechanism — the local endpoint, the tagging
+            that makes Remove safe — is behind the ⓘ, which is exactly the trade
+            he asked for: "one or two liner descriptions and one eye buttons
+            next to them so they can click or hover over there and they can read
+            the full description". */}
+        <Explain
+          title="What a hook does"
+          more="A hook is a command the CLI runs at each step of a session; ours reports that step to a local endpoint, which is how a tab knows an agent is working, waiting on you, or done without anything reading its terminal output. Every entry we write is tagged, so Remove takes back only ours."
+        >
+          Lets a tab tell whether the agent is working, waiting or done.
+        </Explain>
 
+        {/*
+          The second sentence used to read "It moves to a new port every run,
+          which is why hooks from a previous run need repairing." That was an
+          accurate description of a defect: the pane was explaining, calmly, why
+          the feature above it did not survive a restart. The endpoint no longer
+          moves, so the sentence is gone and the state it described is gone with
+          it — the line now says where it is listening and nothing more.
+        */}
         <p className="setup-endpoint" data-running={endpoint.running || undefined}>
           {endpoint.running
-            ? `Local endpoint: listening on 127.0.0.1:${endpoint.port}. It moves to a new port every run, which is why hooks from a previous run need repairing.`
+            ? `Local endpoint: listening on ${endpoint.address}. The address stays the same between runs, so installed hooks keep working after a restart.`
             : 'Local endpoint: not running, so an installed hook has nowhere to report until the app starts it.'}
         </p>
 

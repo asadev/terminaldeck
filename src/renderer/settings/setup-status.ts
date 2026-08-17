@@ -68,7 +68,8 @@ export interface SetupHookBlock {
 
 export interface SetupEndpoint {
   running: boolean
-  port: number | null
+  /** The socket path, or null when it is not listening. Never the token. */
+  address: string | null
 }
 
 export interface SetupSnapshot {
@@ -165,7 +166,7 @@ export function toSetupSnapshot(raw: unknown): SetupSnapshot | null {
     hooks: Array.isArray(record.hooks) ? record.hooks.flatMap(toHookBlock) : [],
     endpoint: {
       running: asBoolean(endpoint?.running),
-      port: typeof endpoint?.port === 'number' ? endpoint.port : null,
+      address: typeof endpoint?.address === 'string' && endpoint.address !== '' ? endpoint.address : null,
     },
     checkedAt: typeof record.checkedAt === 'number' ? record.checkedAt : 0,
   }
@@ -259,9 +260,28 @@ export function eventState(block: SetupHookBlock, event: string): EventState {
  * The one-line state of a provider's hooks.
  *
  * A stale entry is deliberately *not* counted as installed: it is tagged as
- * ours and sitting in the file, but it points at the port and token of a
- * previous run, so it fires into nothing. Counting it would put "All hooks
+ * ours and sitting in the file, but it is aimed somewhere other than this app's
+ * endpoint, so it fires into nothing. Counting it would put "All hooks
  * installed" above a block that reports nothing at all.
+ *
+ * That rule has one shape it must not be applied to literally. When *every*
+ * entry is stale, arithmetic gives "0 of 10 installed · 10 out of date", which
+ * is a pair of numbers nobody can hold at once: ten entries are out of date, and
+ * none is installed, so where did the ten come from? It was printed directly
+ * above the block's own sentence, which says the opposite in words. Both were
+ * derived from the same two arrays, so neither was wrong; the count was simply
+ * answering a question ("how many are live?") in a form that reads as an answer
+ * to a different one ("how many are there?").
+ *
+ * All-stale used to be the ordinary state of every machine, because the endpoint
+ * took a new port on each launch and the port was written into the command. It
+ * is now the rare case it was always meant to be — see `hook-server.ts` — but
+ * the wording stays, because "rare" is not "impossible" and an older install
+ * still lands here exactly once.
+ *
+ * So the all-stale case is named rather than counted, and the count is kept for
+ * the mixed case, where "3 of 10 installed · 7 out of date" adds up to the ten
+ * on screen and nothing has to be reconciled.
  */
 export function hookSummary(block: SetupHookBlock): string {
   if (block.state === 'unsupported') return 'Not supported'
@@ -271,9 +291,12 @@ export function hookSummary(block: SetupHookBlock): string {
   const stale = block.staleEvents.length
   if (total > 0 && installed === total) return 'All hooks installed'
   if (installed === 0 && stale === 0) return 'Not installed'
-  // Without the second half this read "0 of 10 installed" directly above
-  // "Installed, but 10 events still point at a previous run" — two true
-  // sentences that look like a contradiction.
+  if (installed === 0) {
+    // Present, ours, and aimed at something that is not this app's endpoint.
+    // "Out of date" is the same word the event chips underneath carry, so the
+    // heading and the ten marks below it are saying one thing.
+    return stale === total ? 'All hooks out of date' : `${stale} of ${total} out of date`
+  }
   const count = `${installed} of ${total} installed`
   return stale > 0 ? `${count} · ${stale} out of date` : count
 }

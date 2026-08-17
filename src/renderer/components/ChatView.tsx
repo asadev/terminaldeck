@@ -899,6 +899,12 @@ export function ChatView({
         // anything. It used to withdraw the menu outright, which left a shell
         // composer with a microphone and a send button — see the `shell` prop.
         shell={shell}
+        // The same live session the controls read, handed over for one
+        // question: is it held inside a folder by the OS? A session a phone or
+        // the copilot started is, and it looks like any other tab from here —
+        // so the composer has to ask before it offers to attach a file from
+        // outside that folder, which such a session cannot read at all.
+        sessionId={liveSessionId}
         controls={
           <AgentControls
             sessionId={liveSessionId}
@@ -928,12 +934,7 @@ export function ChatView({
                  * "Nothing from this session yet". Two halves of one pane
                  * disagreeing about whether the session had done anything.
                  */
-                <UsageStrip
-                  cwd={cwd}
-                  transcriptPath={target ?? undefined}
-                  scoped={scoped}
-                  sessionId={sessionId}
-                />
+                <UsageStrip cwd={cwd} transcriptPath={target ?? undefined} scoped={scoped} />
               )
             }
           />

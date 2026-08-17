@@ -1,13 +1,112 @@
 /** Shared contract between the main process and the renderer. */
 
-/** Which agent CLI a session is running. */
-export type ProviderId = 'claude' | 'codex' | 'gemini' | 'shell'
+/**
+ * An agent this build was shipped knowing about.
+ *
+ * ## Why this list is closed and the one below it is not
+ *
+ * Everything in this app that is *specific* to an agent keys off this union, and
+ * that specificity is the reason it has to stay closed. Transcript reading is
+ * Claude Code's JSONL format and nothing else's; hook installation writes into
+ * three CLIs' own configuration files in three different shapes; account
+ * isolation depends on a config-directory variable that was watched move a
+ * login on a real machine; the model and effort pickers type Claude Code's own
+ * slash commands. Each of those is a `Record<BuiltinProviderId, …>` somewhere,
+ * total by construction, so an agent added to this union fails to compile at
+ * every place that would otherwise have skipped it silently. That guard has
+ * caught real bugs and is worth keeping exactly as it is.
+ *
+ * What it is *not* is a limit on how many agents the app can run, and that is
+ * the thing this pass was opened to fix. The brief said so twice:
+ *
+ *   > *"There should be a plus button to add, with the big list of type of AI
+ *   > agents to connect — not only Codex, not only Claude Code. There are so
+ *   > many, Grok agents… Just take a look how many types of agents and setup
+ *   > they have in Cursor and in Visual Studio Code… They should be able to
+ *   > connect a huge number of type of agents."*
+ *
+ * The answer is {@link CustomProviderId} below, not a longer list here, and the
+ * distinction is the whole design. This union is not "agents we like" — it is
+ * *agents this build makes specific claims about*, and every name in it has to
+ * carry a `verified` line in `shared/agent-catalog.ts` saying what was run and
+ * what answered. `AGENT_CATALOG` is a `Record` over this union, so a name added
+ * here without that evidence does not compile.
+ *
+ * ## Seven names were in this union for a night, and are not now
+ *
+ * `copilot`, `opencode`, `qwen`, `crush`, `grok`, `auggie` and `amp` were added
+ * to it ahead of the catalogue entries they need, and this is the note so nobody
+ * puts them back the same way. They are real, they were installed into a
+ * throwaway prefix and launched, and the header of `shared/agent-catalog.ts`
+ * records the package, the binary and the version each one printed. What none of
+ * them has is the other half of an entry — the argument lists, whether a resume
+ * flag is safe in a folder with no history, whether a config-directory variable
+ * actually moves the login — and those are measurements, not defaults. Declaring
+ * them unmeasured would have shipped a picker full of rows that die on
+ * selection, which is the one failure the catalogue's own rule names.
+ *
+ * The union widening also went in alone: `AGENT_CATALOG`, the spawn table, the
+ * account strategies and `knownProvider` all stayed at four names, so nothing
+ * type-checked, and `session-create.test.ts` was asserting that
+ * `knownProvider('copilot')` is null while the type said copilot was an agent.
+ * A closed union is only worth having while everything it closes over is total.
+ *
+ * None of that costs anybody an agent today. Every one of the seven can be run
+ * *right now* through the plus button, because a custom agent is a command
+ * resolved on this machine's PATH rather than a claim this build is making —
+ * which is exactly the honest shape for an agent nobody here has characterised.
+ * Promoting one is then a real piece of work with a measurement at the end of
+ * it: an entry with a `verified` line, and its name here.
+ */
+export type BuiltinProviderId = 'claude' | 'codex' | 'gemini' | 'shell'
+
+/**
+ * An agent the person at the keyboard added themselves.
+ *
+ * A template-literal type rather than a bare `string`, and the prefix is doing
+ * real work rather than decorating an id. Three things depend on being able to
+ * tell the two kinds apart *at the type level* and not by a lookup that might
+ * come back empty:
+ *
+ *  1. Every builtin table above stays exhaustively checked. `Record<ProviderId,
+ *     T>` would have collapsed into an index signature the moment the union
+ *     opened, and the compiler would have stopped complaining about a builtin
+ *     nobody had wired up — trading the bug being fixed here for the bug that
+ *     guard was added to prevent.
+ *  2. A custom id can never collide with a builtin one. `custom:claude` is not
+ *     `claude`, so an agent somebody names "Claude" cannot quietly inherit
+ *     Claude Code's transcript reader, hooks or account isolation.
+ *  3. Anything narrowing a string off the wire — a session restored from disk,
+ *     a `create` frame from a phone — has one shape to test rather than a list
+ *     to keep in step. `isCustomProviderId` in `shared/custom-agents.ts` is the
+ *     single test, and it is the only place the prefix is spelled.
+ */
+export type CustomProviderId = `custom:${string}`
+
+/** Which agent a session is running: one this build ships, or one you added. */
+export type ProviderId = BuiltinProviderId | CustomProviderId
 
 /**
  * Live state of a session, surfaced as the coloured dot on its tab.
  * Derived in the renderer from output patterns and process state.
  */
 export type SessionStatus = 'idle' | 'working' | 'waiting' | 'input' | 'completed' | 'exited'
+
+/**
+ * Who wanted this session to exist.
+ *
+ * `COPILOT-DESIGN.md` needs this for two things and they pull in the same
+ * direction. The sidebar groups sessions the copilot started under their own
+ * heading — *"Each one links back to the copilot turn that spawned it, and that
+ * turn links forward to the session"* — and the routine engine needs it to
+ * refuse to be triggered by its own work: "when a session finishes, start a
+ * session" is an obvious loop, and provenance is the only exact way to break
+ * it. See `src/main/routines/engine.ts`.
+ *
+ * Absent means `user`, which is every session that existed before this field
+ * did. Nothing may treat the absence as unknown.
+ */
+export type SessionOrigin = 'user' | 'copilot'
 
 export interface SessionMeta {
   id: string
@@ -46,6 +145,19 @@ export interface SessionMeta {
   profileId?: string
   /** The account's name, so a list can show it without a second lookup. */
   profileName?: string
+  /** Who wanted this session. Absent means the person did. See {@link SessionOrigin}. */
+  origin?: SessionOrigin
+  /**
+   * The routine whose run started this session, when a routine did.
+   *
+   * Carried on the session rather than held in a table beside it, because the
+   * question "why does this session exist" is asked about a session — by the
+   * sidebar, by the routine engine's loop guard, and by a person looking at a
+   * tab they did not open.
+   */
+  originRoutineId?: string
+  /** The individual run, so a session and the turn that spawned it link both ways. */
+  originRunId?: string
 }
 
 export interface CreateSessionInput {
@@ -58,6 +170,18 @@ export interface CreateSessionInput {
   resume?: boolean
   /** Which agent profile (isolated login) to run as. Null uses the default. */
   profileId?: string | null
+  /**
+   * Who is asking. Absent means the person at the keyboard.
+   *
+   * Set only by the copilot's own tools and by the routine engine. It is
+   * deliberately *not* a permission — a session started by the copilot runs
+   * under exactly the same rules as any other, and the confinement, the profile
+   * and the folder checks all apply unchanged. It is a label, so that what the
+   * machine did on its own can be told apart from what you did.
+   */
+  origin?: SessionOrigin
+  originRoutineId?: string
+  originRunId?: string
 }
 
 export interface BrandInfo {
@@ -81,7 +205,33 @@ export interface PersistedProject {
 
 export interface DeckApi {
   getBrand(): Promise<BrandInfo>
-  detectProviders(): Promise<Record<ProviderId, boolean>>
+  /**
+   * Which agents can actually be started here, keyed by id.
+   *
+   * `Record<string, boolean>` rather than a record over `ProviderId`, because
+   * the answer now includes agents this build was not shipped knowing about —
+   * the ones the person added. Totality has not been given up, it has moved to
+   * where it can still be checked: `detectProviders` in `main/providers.ts`
+   * builds the builtin half as an object literal typed
+   * `Record<BuiltinProviderId, boolean>`, so a builtin agent left out of the
+   * detection loop is still a compile error, and the custom half is merged on
+   * top of it.
+   */
+  detectProviders(): Promise<Record<string, boolean>>
+
+  /**
+   * The agents the person added themselves, and the machinery to manage them.
+   *
+   * These cross the bridge as `unknown` like every other feature module —
+   * `main/custom-agents.ts` owns the shapes and `shared/custom-agents.ts` holds
+   * the narrowers both sides use. `addAgent` is deliberately the only way one
+   * comes into existence: it probes the command on the user's login PATH and
+   * refuses a draft it could not resolve, which is the same rule the built-in
+   * table lives by — never declare an agent that has not been launched.
+   */
+  listAgents(): Promise<unknown>
+  addAgent(draft: unknown): Promise<unknown>
+  removeAgent(id: string): Promise<unknown>
   listProjects(): Promise<PersistedProject[]>
   addProject(path: string): Promise<PersistedProject>
   removeProject(path: string): Promise<void>
@@ -126,8 +276,6 @@ export interface DeckApi {
   listSessionTranscripts(cwd: string): Promise<unknown>
   watchProjectCost(cwd: string): Promise<unknown>
   unwatchProjectCost(cwd: string): Promise<void>
-  getModelPricing(model: string): Promise<unknown>
-  formatCost(value: number): Promise<string>
   onCostUpdate(cb: (summary: unknown) => void): () => void
 
   gitStatus(cwd: string): Promise<unknown>
@@ -156,6 +304,22 @@ export interface DeckApi {
   githubAwaitConnect(cwd?: string): Promise<unknown>
   githubCancelConnect(cwd?: string): Promise<unknown>
   githubDisconnect(cwd?: string): Promise<unknown>
+
+  /**
+   * The copilot — one session, in a folder of its own, held inside it.
+   *
+   * None of these takes an argument, and that is deliberate rather than
+   * incidental: where the copilot runs, which account it runs as and what it
+   * may reach are all decided in the main process, so there is nothing for a
+   * window to pass and nothing for page code to point somewhere else. They
+   * cross as `unknown` like every other feature module — `src/main/copilot-session.ts`
+   * owns the shapes.
+   */
+  ensureCopilot(): Promise<unknown>
+  copilotState(): Promise<unknown>
+  copilotFiles(): Promise<unknown>
+  stopCopilot(): Promise<unknown>
+  copilotSignIn(): Promise<unknown>
 
   scanReadiness(projectPath: string): Promise<unknown>
   applyReadinessFix(projectPath: string, checkId: string): Promise<unknown>

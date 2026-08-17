@@ -47,6 +47,9 @@ import {
   type DerivedTitle,
 } from './session-title'
 import type { ProviderId } from '@shared/types'
+// Relative, not '@shared/…': vitest runs without the electron-vite alias, so a
+// *value* import through it resolves in the app and throws in a test.
+import { isCustomProviderId } from '../shared/custom-agents'
 
 /* ---------------------------------------------------------------- inputs -- */
 
@@ -366,7 +369,22 @@ function setEntry(target: StartMemory, key: string, entry: ProjectStartDefaults)
 function parseDefaults(raw: unknown, known: readonly ProviderId[]): ProjectStartDefaults | null {
   if (!isRecord(raw)) return null
   const entry: ProjectStartDefaults = {}
-  if (typeof raw.provider === 'string' && (known as readonly string[]).includes(raw.provider)) {
+  /*
+   * In the catalogue, **or** an id somebody added on this machine.
+   *
+   * The second half is not a loosening of the rule above, it is the only way the
+   * rule can be applied to an agent that is per machine by definition: a custom
+   * id cannot be in a catalogue shipped inside a build, so filtering against one
+   * silently forgot every remembered choice of an added agent — tick "Remember
+   * these choices", reopen the dialog, and it is back on Claude Code with
+   * nothing said. An id whose agent has since been removed still costs nothing:
+   * it is not in the rows, so the resolver falls back and *says so* in a notice,
+   * which is the behaviour for an uninstalled agent too.
+   */
+  if (
+    typeof raw.provider === 'string' &&
+    ((known as readonly string[]).includes(raw.provider) || isCustomProviderId(raw.provider))
+  ) {
     entry.provider = raw.provider as ProviderId
   }
   if (typeof raw.profileId === 'string' && raw.profileId !== '') entry.profileId = raw.profileId

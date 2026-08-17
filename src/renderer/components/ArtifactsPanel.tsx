@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { readFailure, withDeadline } from '../deadline'
+import { recall, remember } from '../panel-cache'
 import { PageEmpty, PageNote } from './PageEmpty'
 import { formatBytes, relativeTime } from './relative-time'
 import './ArtifactsPanel.css'
@@ -430,9 +432,65 @@ interface HistoryState {
   message: string | null
 }
 
-function messageOf(error: unknown): string {
-  const raw = error instanceof Error ? error.message : String(error)
-  return raw.replace(/^Error invoking remote method '[^']*':\s*/, '')
+/**
+ * How long a scan has to answer.
+ *
+ * The main process gives itself eight seconds of walking transcripts
+ * (`DEFAULT_TIME_BUDGET_MS` in `src/main/artifacts.ts`) and then returns what
+ * it has, so a deadline under that would turn a working scan into a timeout on
+ * any large project. Twenty leaves room for the budget plus the disk under it.
+ */
+const SCAN_DEADLINE_MS = 20_000
+
+/**
+ * How long a completed scan stays good for.
+ *
+ * Longer than anything else in this app, because it is by far the most
+ * expensive read here: the answer is produced by walking every transcript in
+ * the project, and a project with a hundred sessions is tens of megabytes of
+ * JSONL. Leaving this page and coming back re-ran the whole thing from scratch
+ * — Asad watched it do exactly that, repeatedly, in the recording. Two minutes
+ * covers a working session of flipping between the page and a terminal;
+ * anything older is re-read silently, under the list that is already drawn.
+ */
+export const SCAN_FRESH_MS = 120_000
+
+function listKey(root: string, scope: ArtifactScope): string {
+  return `artifacts:list:${root}|${scope}`
+}
+
+/**
+ * What a reply means for the page.
+ *
+ * Pulled out and exported because of the arm that was missing. The panel used
+ * to read:
+ *
+ *     if (response.ok) setList(ready)
+ *     else if (response.error !== 'cancelled') setList(error)
+ *
+ * — so a `cancelled` reply set **nothing at all**, and the page stayed on
+ * "Reading this project’s history…" or "Reading the changes…" for the rest of
+ * the session. That is not hypothetical: the main process cancels a scan
+ * whenever the same window starts another one, and until the fix beside this
+ * one a *changes* request cancelled an in-flight *list* request. Toggling the
+ * scope on this page wedged it permanently, every time.
+ *
+ * The generation guard above this already drops replies the page has moved on
+ * from, so anything that reaches here is a reply the page is still waiting for
+ * — and every one of them has to leave the page in a state it can recover from.
+ */
+export function scanOutcome<T extends { ok: true }>(
+  response: T | { ok: false; error: string; message: string },
+): { done: T } | { failed: string } {
+  if (response.ok) return { done: response }
+  if (response.error === 'cancelled') {
+    // Deliberately worded as a fact rather than an apology, and it is offered
+    // with a Retry: a scan the app cancelled on itself is worth trying again,
+    // and a scan the *window* cancelled is one whose newer request already
+    // owns the page and never reaches this line.
+    return { failed: 'That scan was stopped before it finished. Read it again?' }
+  }
+  return { failed: response.message }
 }
 
 export function ArtifactsPanel({ projectPath, onOpenFile, bridge, now }: ArtifactsPanelProps) {
@@ -449,6 +507,14 @@ export function ArtifactsPanel({ projectPath, onOpenFile, bridge, now }: Artifac
   const listRun = useRef(0)
   const historyRun = useRef(0)
 
+  /**
+   * Bumped to ask for the scan again after one failed or was cut short. Held
+   * as state rather than called directly so the effect below stays the one
+   * place a scan is started — two entry points into a scan is how the two
+   * requests that cancel each other happened in the first place.
+   */
+  const [listAttempt, setListAttempt] = useState(0)
+
   useEffect(() => {
     if (!host) {
       setList({
@@ -461,25 +527,49 @@ export function ArtifactsPanel({ projectPath, onOpenFile, bridge, now }: Artifac
 
     const id = listRun.current + 1
     listRun.current = id
-    setList({ status: 'loading', list: null, message: null })
-    setSelected(null)
-    setSession(null)
-    setHistory(null)
+
+    /*
+     * What this page found last time, before anything is asked for.
+     *
+     * Walking every transcript in the project is the most expensive read in
+     * this app, and the shell unmounts the page every time a session takes the
+     * window — so a trip to a terminal and back used to cost the whole scan
+     * again. See `SCAN_FRESH_MS`.
+     */
+    const held = listAttempt === 0 ? recall<ArtifactList>(listKey(projectPath, scope), SCAN_FRESH_MS) : null
+    if (held) {
+      setList({ status: 'ready', list: held.value, message: null })
+    } else {
+      setList({ status: 'loading', list: null, message: null })
+      setSelected(null)
+      setSession(null)
+      setHistory(null)
+    }
+    if (held?.fresh) return
 
     void (async () => {
       try {
-        const response = await host.listArtifacts({ cwd: projectPath, scope })
+        const response = await withDeadline(
+          host.listArtifacts({ cwd: projectPath, scope }),
+          'Reading this project’s history',
+          SCAN_DEADLINE_MS,
+        )
         if (listRun.current !== id) return
-        if (response.ok) setList({ status: 'ready', list: response, message: null })
-        else if (response.error !== 'cancelled') {
-          setList({ status: 'error', list: null, message: response.message })
+        const outcome = scanOutcome(response)
+        if ('done' in outcome) {
+          remember(listKey(projectPath, scope), outcome.done)
+          setList({ status: 'ready', list: outcome.done, message: null })
+          return
         }
+        // A silent re-read behind a list that is already drawn leaves it alone.
+        if (held) return
+        setList({ status: 'error', list: null, message: outcome.failed })
       } catch (error) {
-        if (listRun.current !== id) return
-        setList({ status: 'error', list: null, message: messageOf(error) })
+        if (listRun.current !== id || held) return
+        setList({ status: 'error', list: null, message: readFailure(error) })
       }
     })()
-  }, [host, projectPath, scope])
+  }, [host, projectPath, scope, listAttempt])
 
   const visible = useMemo(() => {
     const artifacts = list.list?.artifacts ?? []
@@ -510,6 +600,9 @@ export function ArtifactsPanel({ projectPath, onOpenFile, bridge, now }: Artifac
     setSelected(visible[0].relPath)
   }, [visible, selected])
 
+  /** Same idea as `listAttempt`, for the change list beside it. */
+  const [historyAttempt, setHistoryAttempt] = useState(0)
+
   useEffect(() => {
     if (!host || selected === null) {
       setHistory(null)
@@ -522,19 +615,29 @@ export function ArtifactsPanel({ projectPath, onOpenFile, bridge, now }: Artifac
 
     void (async () => {
       try {
-        const response = await host.artifactChanges({ cwd: projectPath, relPath: selected, scope })
+        const response = await withDeadline(
+          host.artifactChanges({ cwd: projectPath, relPath: selected, scope }),
+          'Reading the changes',
+          SCAN_DEADLINE_MS,
+        )
         if (historyRun.current !== id) return
-        if (response.ok) {
-          setHistory({ status: 'ready', relPath: selected, history: response, message: null })
-        } else if (response.error !== 'cancelled') {
-          setHistory({ status: 'error', relPath: selected, history: null, message: response.message })
+        const outcome = scanOutcome(response)
+        if ('done' in outcome) {
+          setHistory({ status: 'ready', relPath: selected, history: outcome.done, message: null })
+          return
         }
+        setHistory({ status: 'error', relPath: selected, history: null, message: outcome.failed })
       } catch (error) {
         if (historyRun.current !== id) return
-        setHistory({ status: 'error', relPath: selected, history: null, message: messageOf(error) })
+        setHistory({
+          status: 'error',
+          relPath: selected,
+          history: null,
+          message: readFailure(error),
+        })
       }
     })()
-  }, [host, projectPath, scope, selected])
+  }, [host, projectPath, scope, selected, historyAttempt])
 
   const current = useMemo(
     () => visible.find((artifact) => artifact.relPath === selected) ?? null,
@@ -616,13 +719,27 @@ export function ArtifactsPanel({ projectPath, onOpenFile, bridge, now }: Artifac
         {list.status === 'loading'
           ? 'Reading this project’s history…'
           : list.status === 'error'
-            ? list.message
+            ? ''
             : list.list
               ? summarize(list.list, visible.length)
               : ''}
       </p>
 
-      {list.status === 'ready' && list.list && list.list.artifacts.length === 0 ? (
+      {/*
+        A failed scan is a page with a reason and a way out, not a sentence in
+        the status line above an empty list. Before this, a scan that was
+        cancelled produced no state change at all and the status line simply
+        never stopped saying "Reading this project’s history…".
+      */}
+      {list.status === 'error' ? (
+        <PageEmpty
+          icon={ARTIFACTS_ICON}
+          title="Could not read this project’s history"
+          action={{ label: 'Try again', onClick: () => setListAttempt((n) => n + 1), primary: true }}
+        >
+          {list.message}
+        </PageEmpty>
+      ) : list.status === 'ready' && list.list && list.list.artifacts.length === 0 ? (
         <PageEmpty
           icon={ARTIFACTS_ICON}
           title="Nothing produced here yet"
@@ -685,7 +802,24 @@ export function ArtifactsPanel({ projectPath, onOpenFile, bridge, now }: Artifac
             )}
 
             {history?.status === 'loading' && <PageNote busy>Reading the changes…</PageNote>}
-            {history?.status === 'error' && <PageNote>{history.message}</PageNote>}
+            {/*
+              And a reason with a way out here too. This is the pane the
+              recording caught stuck on "Reading the changes…": the main
+              process had cancelled the scan and the reply's shape was one this
+              component quietly ignored, so the sentence stayed put.
+            */}
+            {history?.status === 'error' && (
+              <div className="artifacts-failed">
+                <PageNote>{history.message}</PageNote>
+                <button
+                  type="button"
+                  className="artifacts-chip"
+                  onClick={() => setHistoryAttempt((n) => n + 1)}
+                >
+                  Try again
+                </button>
+              </div>
+            )}
             {history?.status === 'ready' &&
               history.history &&
               (history.history.changes.length === 0 ? (

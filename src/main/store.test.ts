@@ -165,3 +165,85 @@ describe('a state file written by an older build', () => {
     }
   })
 })
+
+describe('the project list, as an event', () => {
+  /**
+   * The listener exists for one caller and one direction: the copilot holds a
+   * read grant over these folders that the operating system fixed when its
+   * process started, so a folder *leaving* the list has to reach it promptly or
+   * the app is enforcing something the person has already withdrawn.
+   *
+   * A fresh store per test, because the listener set lives on the instance and
+   * the file is shared with everything above.
+   */
+  async function withStore(): Promise<{
+    api: Awaited<ReturnType<typeof freshStore>>
+    seen: readonly string[][]
+    off: () => void
+  }> {
+    const dir = join(USER_DATA, `projects-${Math.random().toString(16).slice(2)}`)
+    mkdirSync(dir, { recursive: true })
+    const api = await freshStore(dir)
+    const seen: string[][] = []
+    const off = api.store().onProjectsChanged((paths) => seen.push([...paths]))
+    return { api, seen, off }
+  }
+
+  it('fires when a folder is added', async () => {
+    const { api, seen, off } = await withStore()
+    api.store().addProject('/Users/asad/Projects/one')
+    expect(seen).toEqual([['/Users/asad/Projects/one']])
+    off()
+  })
+
+  it('fires when a folder is removed', async () => {
+    const { api, seen, off } = await withStore()
+    api.store().addProject('/Users/asad/Projects/one')
+    api.store().removeProject('/Users/asad/Projects/one')
+    expect(seen).toHaveLength(2)
+    expect(seen[1]).toEqual([])
+    off()
+  })
+
+  it('says nothing when a folder already in the list is re-opened', async () => {
+    // Re-opening bumps `lastOpenedAt` and reorders `getProjects()`, and that
+    // happens every time somebody clicks a folder. A listener that fired on it
+    // would fire constantly and mean nothing — and, for the copilot, would keep
+    // asking whether a grant it already holds is still correct.
+    const { api, seen, off } = await withStore()
+    api.store().addProject('/Users/asad/Projects/one')
+    api.store().addProject('/Users/asad/Projects/one')
+    expect(seen).toHaveLength(1)
+    off()
+  })
+
+  it('says nothing when a folder that was never there is removed', async () => {
+    const { api, seen, off } = await withStore()
+    api.store().removeProject('/Users/asad/Projects/never')
+    expect(seen).toEqual([])
+    off()
+  })
+
+  it('stops after the unsubscribe it handed back', async () => {
+    const { api, seen, off } = await withStore()
+    off()
+    api.store().addProject('/Users/asad/Projects/one')
+    expect(seen).toEqual([])
+  })
+
+  it('still opens the project when a listener throws', async () => {
+    // The callers are the IPC handlers on the path a person takes to open a
+    // folder. A consequence of the change must not become part of it.
+    const dir = join(USER_DATA, `projects-throwing-${process.pid}`)
+    mkdirSync(dir, { recursive: true })
+    const api = await freshStore(dir)
+    const off = api.store().onProjectsChanged(() => {
+      throw new Error('listener is broken')
+    })
+    expect(() => api.store().addProject('/Users/asad/Projects/one')).not.toThrow()
+    expect(api.store().getProjects().map((project) => project.path)).toEqual([
+      '/Users/asad/Projects/one',
+    ])
+    off()
+  })
+})

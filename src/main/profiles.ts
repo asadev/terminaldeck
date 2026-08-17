@@ -14,7 +14,11 @@
  * which of those move the *login* rather than only the configuration, and how
  * each one was measured is in `provider-accounts.ts` — this module owns the
  * list, the directories and the precedence, and asks that one for the rest.
- * Gemini is deliberately refused there; the reason is written out in full.
+ * Gemini is admitted there with **one** login and refused a second; the reason
+ * is written out in full, and the distinction is load-bearing here: this module
+ * lists from `hasSignIn` (is there a login?) and offers Add from
+ * `supportsAccounts` (may there be two?). Reading one predicate for both is what
+ * left Gemini with no row on the Accounts screen and no way to sign in at all.
  *
  * Verified on this machine against the real CLI (2.1.206), because every part
  * of this is the kind of thing that is easy to assume and wrong:
@@ -60,9 +64,10 @@ import { profileIsolation, type ProfileIsolation } from './platform/credential-s
 import { currentPlatform, type Platform } from './platform/host'
 import { userDataDir } from './platform/paths'
 import {
-  ACCOUNT_PROVIDERS,
   ACCOUNT_STRATEGIES,
   accountEnv,
+  hasSignIn,
+  SIGN_IN_PROVIDERS,
   supportsAccounts,
   unsupportedAccountReason,
 } from './provider-accounts'
@@ -104,6 +109,28 @@ export interface ProfilesState {
   defaultProfileId: string | null
   /** Canonical project path -> profile id. */
   projectDefaults: Record<string, string>
+  /**
+   * Names the user has given the agents' own installs, by system profile id.
+   *
+   * A system profile is not a record in `profiles` — it is generated from the
+   * agent list every time it is asked for, because it *is* the machine's own
+   * install and there is nothing about it to store. Its name was therefore the
+   * one name in the app that could not be changed, and that was the complaint:
+   *
+   *   > "And account name also above there — if we want to change the account
+   *   > name we can change."
+   *
+   * This is the smallest thing that can be stored to answer it. It holds a
+   * display name and nothing else: not the id, not the config directory, not
+   * the credential — so a name here can never point a session at a different
+   * login, which is the property that makes renaming safe to offer from a chip
+   * inside a running session rather than only from a settings screen.
+   *
+   * An entry is deleted rather than written when the name matches the generated
+   * one, so "call it Default again" is a real reset and the file does not
+   * accumulate rows that say nothing.
+   */
+  systemNames: Record<string, string>
 }
 
 export interface ResolveInput {
@@ -147,14 +174,18 @@ export function systemProfileId(provider: ProviderId): string {
 /**
  * Which agent's own install an id names, or null when it names a real account.
  *
- * Matched against the providers that actually have accounts rather than by
- * splitting on the colon, so `system:gemini` — a string a hand-edited file or a
+ * Matched against the providers that actually have a login rather than by
+ * splitting on the colon, so `system:copilot` — a string a hand-edited file or a
  * build that offered more agents could contain — is *not* a system profile
  * here. It resolves to nothing and falls through the chain, which is the same
  * treatment a deleted account gets.
+ *
+ * `system:gemini` **is** one, since Gemini has a single machine login. It was
+ * not, while this matched `ACCOUNT_PROVIDERS`, and the consequence was that
+ * nothing could name Gemini's own install: no row, no resolution, no sign-in.
  */
 export function systemProfileProvider(id: string): ProviderId | null {
-  return ACCOUNT_PROVIDERS.find((provider) => systemProfileId(provider) === id) ?? null
+  return SIGN_IN_PROVIDERS.find((provider) => systemProfileId(provider) === id) ?? null
 }
 
 /** True for any agent's own install. */
@@ -180,6 +211,7 @@ const EMPTY_STATE: ProfilesState = {
   profiles: [],
   defaultProfileId: null,
   projectDefaults: {},
+  systemNames: {},
 }
 
 /* ----------------------------------------------------------- validation -- */
@@ -303,7 +335,7 @@ export function isProtectedDir(configDir: string): boolean {
     // its home directory in the same edit rather than in a file nobody thinks
     // to open — and `~/.codex` holds a live `auth.json`, so a recursive delete
     // reaching it would sign the user out of ChatGPT for real.
-    ACCOUNT_PROVIDERS.some((provider) => target === resolve(systemConfigDir(provider))) ||
+    SIGN_IN_PROVIDERS.some((provider) => target === resolve(systemConfigDir(provider))) ||
     target === resolve(join(homedir(), '.claude'))
   )
 }
@@ -329,27 +361,57 @@ export function systemConfigDir(provider: ProviderId, env = process.env): string
 }
 
 /**
+ * The name an agent's own install is given when the user has not given it one.
+ *
+ * Claude's keeps the bare "Default" it has always had, and the others carry the
+ * agent's name.
+ *
+ * Not decoration. Once there is more than one agent there is more than one
+ * "your own install", and a list showing two rows both called "Default" is a
+ * list where the whole point — telling two logins apart — has been lost.
+ * Claude's is left alone because that string is already on screen in a shipped
+ * build and in `profiles.json` name-collision checks.
+ *
+ * Exported because `renameProfile` needs to recognise it: typing the generated
+ * name back in is a reset, not an override, and storing it as one would leave a
+ * row in `profiles.json` that changes nothing and would go stale the moment an
+ * agent's label changed.
+ */
+export function generatedSystemName(provider: ProviderId): string {
+  return provider === 'claude' ? 'Default' : `Default (${ACCOUNT_STRATEGIES[provider].label})`
+}
+
+/**
  * The user's own install of an agent, presented as a profile so the picker has
  * something to select and the resolution chain always terminates.
+ *
+ * `state` is optional and only carries the one thing about a system profile a
+ * person can change: what it is called. Omitting it yields the generated name,
+ * which is right for the callers that only want the *shape* of the row — a
+ * config directory, a colour, an id — and wrong for anything drawn on screen.
+ * Every listing path threads it through; see {@link ProfilesState.systemNames}.
  */
-export function systemProfileFor(provider: ProviderId): Profile {
+export function systemProfileFor(provider: ProviderId, state?: ProfilesState): Profile {
+  const id = systemProfileId(provider)
   return {
-    id: systemProfileId(provider),
-    /*
-     * Claude's keeps the bare "Default" it has always had, and the others carry
-     * the agent's name.
-     *
-     * Not decoration. Once there is more than one agent there is more than one
-     * "your own install", and a list showing two rows both called "Default" is
-     * a list where the whole point — telling two logins apart — has been lost.
-     * Claude's is left alone because that string is already on screen in a
-     * shipped build and in `profiles.json` name-collision checks.
-     */
-    name: provider === 'claude' ? 'Default' : `Default (${ACCOUNT_STRATEGIES[provider].label})`,
+    id,
+    name: state?.systemNames[id] ?? generatedSystemName(provider),
     provider,
     configDir: systemConfigDir(provider),
     system: true,
-    color: PROFILE_COLORS[0],
+    /*
+     * A colour per agent, not one colour for every "your own install".
+     *
+     * There is one of these rows per agent now, and they all wore
+     * `PROFILE_COLORS[0]`: three identical dots down the left of the one list
+     * whose whole job is telling logins apart. Indexed by position in
+     * `SIGN_IN_PROVIDERS` so the assignment is stable — a row does not change
+     * colour when another agent is admitted after it.
+     */
+    color:
+      PROFILE_COLORS[
+        Math.max(0, SIGN_IN_PROVIDERS.indexOf(provider)) % PROFILE_COLORS.length
+      ],
     createdAt: 0,
     lastUsedAt: null,
   }
@@ -362,8 +424,8 @@ export function systemProfileFor(provider: ProviderId): Profile {
  * `resolveProfile` falls back to it when nothing else resolves — and because
  * every existing caller means exactly this one.
  */
-export function systemProfile(): Profile {
-  return systemProfileFor('claude')
+export function systemProfile(state?: ProfilesState): Profile {
+  return systemProfileFor('claude', state)
 }
 
 /* ------------------------------------------------------------ persistence -- */
@@ -445,7 +507,31 @@ export function sanitizeState(raw: unknown): ProfilesState {
       ? defaultId
       : null
 
-  return { version: STATE_VERSION, profiles, defaultProfileId, projectDefaults }
+  /*
+   * Names given to the agents' own installs.
+   *
+   * Every key is checked against `isSystemProfileId` and every value goes
+   * through the same normaliser a typed name does. `profiles.json` is a file a
+   * person can edit, and this map is the one place in it whose values are drawn
+   * as an *identity* — so a name with a right-to-left override in it would
+   * render in the chip as an address it is not, which is precisely the attack
+   * `normalizeProfileName` was written for. A key or a value that does not
+   * survive is dropped rather than repaired: the row then falls back to its
+   * generated name, which is always true.
+   */
+  const systemNames: Record<string, string> = {}
+  if (typeof value.systemNames === 'object' && value.systemNames !== null) {
+    for (const [id, name] of Object.entries(value.systemNames)) {
+      if (!isSystemProfileId(id)) continue
+      try {
+        systemNames[id] = normalizeProfileName(name)
+      } catch {
+        // Blank, over-long, or not a string. Generated name it is.
+      }
+    }
+  }
+
+  return { version: STATE_VERSION, profiles, defaultProfileId, projectDefaults, systemNames }
 }
 
 let cached: ProfilesState | null = null
@@ -456,6 +542,7 @@ const KNOWN_STATE_KEYS: ReadonlySet<string> = new Set([
   'profiles',
   'defaultProfileId',
   'projectDefaults',
+  'systemNames',
 ])
 
 /**
@@ -559,6 +646,7 @@ function persist(state: ProfilesState): void {
     profiles: state.profiles,
     defaultProfileId: state.defaultProfileId,
     projectDefaults: state.projectDefaults,
+    systemNames: state.systemNames,
   }
 
   // Temp file plus rename, so a crash mid-write cannot truncate the list and
@@ -573,7 +661,11 @@ function persist(state: ProfilesState): void {
 /** Ids that can actually be selected right now, every system id among them. */
 export function knownProfileIds(state: ProfilesState): Set<string> {
   return new Set([
-    ...ACCOUNT_PROVIDERS.map(systemProfileId),
+    // Every agent with a login, not only the ones that can hold two. Gemini has
+    // exactly one and it is the machine's own; leaving its id out of this set is
+    // what made `resolveProfileId` unable to select it and the Accounts screen
+    // unable to show it.
+    ...SIGN_IN_PROVIDERS.map(systemProfileId),
     ...state.profiles.map((profile) => profile.id),
   ])
 }
@@ -624,17 +716,19 @@ export function resolveProfileId(state: ProfilesState, input: ResolveInput = {})
   // An agent with no account mechanism has no system id of its own, so it
   // terminates on Claude's exactly as it did before providers existed —
   // `sessionEnv` then exports nothing for it, which is the honest answer.
-  return wanted !== null && supportsAccounts(wanted) ? systemProfileId(wanted) : SYSTEM_PROFILE_ID
+  return wanted !== null && hasSignIn(wanted) ? systemProfileId(wanted) : SYSTEM_PROFILE_ID
 }
 
 export function findProfile(state: ProfilesState, id: string): Profile | null {
   const system = systemProfileProvider(id)
-  if (system !== null) return systemProfileFor(system)
+  // With the state, so a system profile the user has renamed comes back under
+  // the name they gave it. Every caller of this has the state in hand already.
+  if (system !== null) return systemProfileFor(system, state)
   return state.profiles.find((profile) => profile.id === id) ?? null
 }
 
 export function resolveProfile(state: ProfilesState, input: ResolveInput = {}): Profile {
-  return findProfile(state, resolveProfileId(state, input)) ?? systemProfile()
+  return findProfile(state, resolveProfileId(state, input)) ?? systemProfile(state)
 }
 
 /** Every account of one agent, its own install first. */
@@ -642,9 +736,14 @@ export function listProfilesForProvider(
   provider: ProviderId,
   state = getState(),
 ): Profile[] {
-  if (!supportsAccounts(provider)) return []
+  // `hasSignIn`, not `supportsAccounts`. An agent that keeps one login per
+  // machine still has that one login, and returning an empty list for it is
+  // what left Gemini with no row to sign in from. Its stored-account list is
+  // always empty — `sanitizeProvider` refuses to admit one — so what comes back
+  // is the single system row, which is the truth.
+  if (!hasSignIn(provider)) return []
   return [
-    systemProfileFor(provider),
+    systemProfileFor(provider, state),
     ...state.profiles.filter((profile) => profile.provider === provider),
   ]
 }
@@ -759,7 +858,11 @@ function adoptableConfigDir(state: ProfilesState, raw: string, provider: Provide
  * list that has never heard of that id shows an account chip with nothing in it.
  */
 export function listProfiles(state = getState()): Profile[] {
-  return [...ACCOUNT_PROVIDERS.map(systemProfileFor), ...state.profiles]
+  // An arrow rather than a bare reference, so the state reaches
+  // `systemProfileFor` — `Array.map` would otherwise hand it the *index* as its
+  // second argument, which typechecks against nothing and silently drops every
+  // name the user has given their own installs.
+  return [...SIGN_IN_PROVIDERS.map((provider) => systemProfileFor(provider, state)), ...state.profiles]
 }
 
 export function createProfile(name: string, options: CreateProfileOptions = {}): Profile {
@@ -822,10 +925,34 @@ export function createProfile(name: string, options: CreateProfileOptions = {}):
   return profile
 }
 
+/**
+ * Give an account a different name.
+ *
+ * ## Including an agent's own install, which used to be the one that could not
+ *
+ * This refused every system id outright — *"the default profile cannot be
+ * renamed"* — and on a machine where nobody has added a second login, **every**
+ * account is a system one. So the rename offered in the account chip failed on
+ * every row it was drawn on, and failed by rejecting from the main process,
+ * which is the shape of failure that reaches a person as an Electron IPC string.
+ *
+ * The refusal was guarding something real, but not the name: a system profile
+ * is generated rather than stored, so there was nowhere to put one. There is
+ * now — {@link ProfilesState.systemNames}, which holds a display name and
+ * nothing else. The id, the config directory and the credential are all still
+ * generated from the agent list and still cannot be touched from here, so the
+ * thing the old refusal protected is protected by construction instead of by a
+ * rule that also blocked the harmless half.
+ *
+ * Typing the generated name back in deletes the entry rather than storing it,
+ * which makes "Default" a reset rather than an override — and keeps
+ * `profiles.json` free of rows that would go stale the day an agent's label
+ * changes.
+ */
 export function renameProfile(id: string, name: string): Profile {
   const state = getState()
-  if (isSystemProfileId(id)) throw new ProfileError('the default profile cannot be renamed')
-  const profile = state.profiles.find((entry) => entry.id === id)
+  const system = systemProfileProvider(id)
+  const profile = system !== null ? systemProfileFor(system, state) : state.profiles.find((entry) => entry.id === id)
   if (!profile) throw new ProfileError(`no profile with id ${id}`)
 
   const clean = normalizeProfileName(name)
@@ -836,6 +963,13 @@ export function renameProfile(id: string, name: string): Profile {
     (entry) => entry.id !== id && entry.name.toLowerCase() === clean.toLowerCase(),
   )
   if (clash) throw new ProfileError(`a ${profile.provider} account called "${clean}" already exists`)
+
+  if (system !== null) {
+    if (clean === generatedSystemName(system)) delete state.systemNames[id]
+    else state.systemNames[id] = clean
+    persist(state)
+    return systemProfileFor(system, state)
+  }
 
   profile.name = clean
   persist(state)
@@ -1091,11 +1225,20 @@ function optionalProvider(value: unknown): ProviderId | null {
 export interface AccountProviderView {
   id: ProviderId
   label: string
-  /** Whether adding an account of this agent is offered at all. */
+  /** Whether adding a *second* account of this agent is offered. */
   supported: boolean
+  /**
+   * Whether this agent has a login at all, one or many.
+   *
+   * Carried separately from `supported` because the two answers differ for
+   * exactly one agent and that difference was the bug: Gemini is `supported:
+   * false` and `canSignIn: true`, and a screen with only the first field draws
+   * no Gemini row, which is what left its single login unreachable.
+   */
+  canSignIn: boolean
   /** The variable that would carry the account directory. Shown as evidence. */
   configEnv: string | null
-  /** Why not, when `supported` is false. Rendered verbatim; never generic. */
+  /** Why there is no second one, when there is not. Verbatim; never generic. */
   reason: string | null
 }
 
@@ -1119,6 +1262,7 @@ export function accountProvidersView(): AccountProvidersView {
         id: strategy.provider,
         label: strategy.label,
         supported: supportsAccounts(strategy.provider),
+        canSignIn: hasSignIn(strategy.provider),
         configEnv: strategy.configEnv,
         reason: supportsAccounts(strategy.provider)
           ? null

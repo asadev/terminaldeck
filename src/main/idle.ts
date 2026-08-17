@@ -27,7 +27,7 @@
  * knew about the port scanner, the activity trackers and the relay would be a
  * module that has to be edited every time a shell gains a part — and the two
  * shells do not have the same parts. The desktop has file watchers, transcript
- * tailing and cost polling; the headless build has never had any of those, and
+ * tailing and usage polling; the headless build has never had any of those, and
  * `status` says so out loud rather than claiming to have switched off something
  * it never started. A list nobody can read is indistinguishable from a bug.
  *

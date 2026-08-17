@@ -1,10 +1,19 @@
 /* ============================================================================
-   Split panes.
+   Split panes — one host and its guests.
 
-   The same shape as swarm mode, at a different scale: cards on the app's
-   ground, separated by a gap rather than by a rule, and the focused one marked
-   with the app's one focus idiom — a 2px accent ring, inset so moving focus
-   never nudges the layout.
+   It was the same shape as swarm mode until 2026-08-17: every pane a card on
+   the app's ground, all alike, the focused one ringed. Alike was the problem.
+   Two identical cards say nothing about which of them the window is *about*,
+   and with each pane now carrying its own account and folder there is a second
+   reason to tell them apart at a glance.
+
+   So the first pane in visual order keeps the window — its ground, its edges,
+   no container — and everything opened beside it is a bounded card sitting on
+   the desk. `.pane-leaf[data-primary]` is where that lives, with the quote it
+   comes from. The host keeps its chrome upstairs in the window's toolbar too,
+   and only the guests draw a bar of their own; that half is in `shell.css`
+   under `.pane-cell-head`, and the reason is that a box around a pane that
+   states its identity in exactly the same place as its neighbour is decoration.
 
    `--pane-divider` is read by SplitView.tsx to size the divider's grid track,
    so the name is a contract even though the value is taste. Colour comes only
@@ -23,9 +32,10 @@
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  /* The desk, as in swarm mode: darker than a pane, so the gap between two of
-     them is visible without a rule down the middle of it. A lone pane covers
-     this entirely, so it costs the single-pane case nothing. */
+  /* The desk the guests sit on, as in swarm mode: a level away from a pane, so
+     the gap around a card is visible without a rule drawn down the middle of
+     it. A lone pane — and, now, the host — covers this entirely, so it costs
+     the undivided window nothing. */
   background: var(--bg-sunken);
 }
 
@@ -41,11 +51,16 @@
   height: 100%;
 }
 
-/* Once there is more than one pane the cards need room to be cards. A single
-   pane is the window, and gets no inset. */
-.split-view:has(> .pane-split) {
-  padding: var(--sp-2);
-}
+/*
+  No inset on the view itself, and that is the change of 2026-08-17.
+
+  It used to pad the whole grid by 8px so both panes floated as cards on the
+  desk. They are no longer both cards — the primary pane is flush with the
+  window and every other pane is a box inset into it (see the panes section
+  below) — and a pad here would have put the primary one 8px off the window's
+  own edges, which is the one thing "flush" cannot mean. The inset the boxes
+  need is now theirs, so it travels with them.
+*/
 
 /* ---------------------------------------------------------------- splits -- */
 
@@ -160,6 +175,44 @@
 
 /* ----------------------------------------------------------------- panes -- */
 
+/*
+  Two panes, deliberately not alike.
+
+  Asad, 2026-08-17, on what a split should look like:
+
+    > *"The first view, main view, can be on the left side with the overall same
+    > background, everything. The other one — the new split view, secondary
+    > view — it can be only inside a box, and the other one will not be inside a
+    > box… and inside that session we can have the related settings above that."*
+
+  So the asymmetry is the design and not an oversight. The pane you were already
+  working in keeps the window: its ground, its edges, no container. Everything
+  opened beside it is a bounded card sitting on the desk, which is what it is —
+  a guest in a window that was about something else a moment ago. At a glance
+  you know which pane the window is "really" showing, and the boxed one is
+  plainly the addition.
+
+  It holds at three panes too, and reads as one host and two guests, which is
+  the truth about how the arrangement was built: you split a window you were
+  already in, then split it again. `SplitView.tsx` decides which leaf is primary
+  — the first in visual order — and stamps `data-primary`.
+
+  The chrome is asymmetric for the same reason, and it is what makes the box
+  worth drawing. Asad, on the pass that gave every pane an identical bar:
+
+    > *"If we make both exactly the same placement — if the name and the account
+    > come down — then there is no reason to keep one of them in a box, because
+    > all the sizes, everything, is the same. So let's keep the main. Let's not
+    > move its everything."*
+
+  He is right, and it is the sharper half of the idea. Two panes that state
+  their identity in the same place, at the same size, are two of the same thing
+  and a border around one of them is arbitrary. What makes the host read as *the*
+  session is that its chrome never left the window's toolbar — so it has no bar
+  of its own, the guests do, and the box is then the visible edge of a real
+  difference rather than a decoration. `shell.css`'s `.pane-cell-head` and
+  `.toolbar-heading` are the two halves of that.
+*/
 .pane-leaf {
   position: relative;
   display: flex;
@@ -167,12 +220,45 @@
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  border-radius: var(--radius-lg);
-  background: var(--bg-secondary);
+  /* The terminal's own paper, so the bar at the top of the pane and the session
+     under it are one surface — the rule `.pane-cell-head` in `shell.css`
+     explains at length, and this is the other half of it. It used to be
+     `--bg-secondary`, which nothing ever saw: the bar and the body between them
+     cover every pixel of this box. What made it worth correcting is the box's
+     rounded corners, which are this element's and now show the right colour. */
+  background: var(--terminal-bg);
 }
 
 /*
-  The focus ring, drawn as a pseudo-element rather than as an `outline`.
+  The guest: a box, inset from whatever is around it.
+
+  The margin is the whole of "inside a box" — it is what lets the desk
+  (`--bg-sunken` on `.split-view`) show around all four sides, so the card has
+  somewhere to sit. On the divider side it stacks with the divider's own track,
+  which is intended: the gap between the window's pane and the box is the widest
+  gap in the layout, because that is the seam that matters.
+*/
+.pane-leaf[data-primary='false'] {
+  margin: var(--sp-2);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+
+/*
+  The host: no box at all.
+
+  Flush to the window on every side it touches, square corners, and no ring —
+  the window's own edge is already this pane's boundary, and a card drawn inside
+  a boundary that already exists is the second separation the design brief
+  forbids.
+*/
+.pane-leaf[data-primary='true'] {
+  border-radius: 0;
+}
+
+/*
+  The box's edge, and its focus ring, drawn as a pseudo-element rather than as
+  an `outline`.
 
   It was an inset outline for as long as this file existed, and it was invisible
   — which nobody could have known, because nothing rendered this component until
@@ -199,9 +285,27 @@
     `--pane-unfocus` was written for this and referenced nowhere in the renderer
     until now, which is the same class of miss as the ring below.
   */
-  border: 2px solid var(--pane-unfocus);
+  border: 1px solid var(--pane-unfocus);
   border-radius: inherit;
-  transition: border-color var(--dur-fast) var(--ease);
+  transition: border-color var(--dur-fast) var(--ease), border-width var(--dur-fast) var(--ease);
+}
+
+/*
+  The host pane has no ring in either state.
+
+  A ring is how a *box* says it has focus, and this pane is deliberately not a
+  box: drawing one around it would put back the container the whole asymmetry
+  exists to remove, and it would run down the window's own edges, which is a
+  frame around the window rather than a mark on a pane.
+
+  Its focus is said where its chrome is, which is upstairs: `.toolbar-heading`
+  in `shell.css` draws back to the same 0.55 an unfocused guest bar does. So the
+  idiom is still one idiom — a pane's identity dims when the keyboard is
+  somewhere else — and it is the coupling that teaches "the top bar is this
+  pane", because the two brighten and dim together as focus moves.
+*/
+.pane-leaf[data-primary='true']::after {
+  display: none;
 }
 
 /*
@@ -217,27 +321,40 @@
 */
 .pane-leaf[data-focused='true']::after {
   border-color: var(--pane-focus);
+  border-width: 2px;
 }
 
-/* A single pane is not a split, so the ring and the corner are noise — the
-   window edge is already the boundary. */
+/* A single pane is not a split, so the ring, the corner and the inset are all
+   noise — the window edge is already the boundary. It is also always the
+   primary, so the two rules above have said most of this already; this is what
+   catches the margin. */
 .split-view > .pane-leaf {
+  margin: 0;
   border-radius: 0;
+  box-shadow: none;
 }
 
 .split-view > .pane-leaf::after {
   display: none;
 }
 
-/* Positioned so an absolutely-filled child (the terminal host) sits inside
-   the ring rather than painting over it. The page colour, not the card's, for
-   the reason `.swarm-cell-body` gives: the terminal paints `--bg-primary`
-   inside its own padding, and a card colour behind it shows as a margin. */
+/*
+  Positioned so an absolutely-filled child (the terminal host) sits inside the
+  ring rather than painting over it.
+
+  The terminal's paper, and it used to be `--bg-primary` on the argument that
+  the terminal paints the canvas inside its own padding. It does not, and has
+  not since the light theme gave the session a surface of its own:
+  `.terminal-host` in `app.css` paints `--terminal-bg` right out to its edges.
+  The old colour was therefore invisible under a session and visible under
+  everything else — an empty pane and a pane waiting for its page were white
+  rectangles under a grey bar, in the light theme only.
+*/
 .pane-leaf-body {
   position: relative;
   flex: 1;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  background: var(--bg-primary);
+  background: var(--terminal-bg);
 }

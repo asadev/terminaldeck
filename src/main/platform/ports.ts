@@ -149,6 +149,105 @@ export function isLocallyReachable(host: string): boolean {
 export const LSOF: CommandSpec = { command: 'lsof', args: ['-nP', '-iTCP', '-sTCP:LISTEN'] }
 
 /**
+ * The same question in `lsof`'s machine-readable field mode.
+ *
+ * `-F` prints one value per line, each prefixed by a single letter naming the
+ * field, and it answers two things the column output above cannot. Both were
+ * measured on this machine rather than read off a manual page:
+ *
+ *  - **The command is not truncated.** Column mode pads COMMAND to nine
+ *    characters, so `ControlCenter` prints as `ControlCe`, `Google Chrome` as
+ *    `Google`, and — the one that started this — every port `Terminal Deck`
+ *    holds prints as `Terminal`. Field mode prints `cControlCenter`,
+ *    `cGoogle Chrome`, `cTerminal Deck`. A start page listing eight rows all
+ *    called "Terminal" is a direct consequence of the nine-character clamp.
+ *  - **`R` is the parent PID**, which is what makes "is this port one of ours?"
+ *    answerable. Electron's helper processes are direct children of the main
+ *    process, so a row is this app's when its pid or its ppid is our own — no
+ *    guessing from a name, and no second `ps`.
+ *
+ * The fields asked for are `p` (pid), `c` (command), `R` (ppid), `t` (type,
+ * IPv4/IPv6) and `n` (the address). `f` (the descriptor) is printed whether or
+ * not it is asked for; it is what separates one socket from the next.
+ */
+export const LSOF_FIELDS: CommandSpec = {
+  command: 'lsof',
+  args: ['-nP', '-iTCP', '-sTCP:LISTEN', '-FpcRtn'],
+}
+
+/**
+ * A {@link PortOwner} that also knows which process, exactly, is holding it.
+ *
+ * `process` is narrowed to a plain string because field mode always prints the
+ * command — the `null` case in `PortOwner` is the Windows one, where `netstat`
+ * names a PID that `tasklist` will not describe.
+ *
+ * `ppid` is -1 when `lsof` printed no `R` field for the process set. That is not
+ * expected on any platform this runs on, and it fails towards "not one of ours",
+ * which leaves a port listed rather than hiding somebody's dev server.
+ */
+export interface PortProcess extends PortOwner {
+  process: string
+  pid: number
+  ppid: number
+}
+
+/**
+ * Parse `lsof -F` output.
+ *
+ * The format is a stream, not a table: a `p` line opens a *process set* and
+ * everything after it — the command, the parent pid, then one `f` block per
+ * open file — belongs to that process until the next `p`. So the parser is a
+ * small state machine rather than a line-per-row loop.
+ *
+ * `t` is reset by every `f` rather than only by `p`. TYPE belongs to the file,
+ * not to the process, and a socket that printed no type would otherwise inherit
+ * the family of the one before it — which is precisely the IPv4/IPv6 confusion
+ * that left a dev server listed and unreachable.
+ */
+export function parseLsofFields(stdout: string): PortProcess[] {
+  const owners: PortProcess[] = []
+  let pid = -1
+  let ppid = -1
+  let command = ''
+  let type = ''
+
+  for (const line of stdout.split('\n')) {
+    if (line === '') continue
+    const tag = line[0]
+    const value = line.slice(1)
+    if (tag === 'p') {
+      pid = Number(value)
+      // A new process set inherits nothing from the last one.
+      ppid = -1
+      command = ''
+      type = ''
+    } else if (tag === 'R') {
+      ppid = Number(value)
+    } else if (tag === 'c') {
+      command = value
+    } else if (tag === 'f') {
+      type = ''
+    } else if (tag === 't') {
+      type = value
+    } else if (tag === 'n') {
+      if (!Number.isInteger(pid) || pid < 0 || command === '') continue
+      const split = splitHostPort(value)
+      if (!split || !isLocallyReachable(split.host)) continue
+      owners.push({
+        port: split.port,
+        process: command,
+        pid,
+        ppid: Number.isInteger(ppid) ? ppid : -1,
+        family: loopbackFamily(split.host, type),
+      })
+    }
+  }
+
+  return owners
+}
+
+/**
  * Every local listening row `lsof` printed, in the order it printed them.
  *
  * Deliberately does no filtering and no de-duplication: both are policy that

@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it } from 'vitest'
 import { AgentControls } from './AgentControls'
@@ -105,7 +107,10 @@ describe('a live agent session', () => {
       provider: 'claude',
       extra: <span data-usage="here" />,
     })
-    expect(names(html).some((name) => /cost/i.test(name))).toBe(true)
+    // "used", not "cost": this app prints no money anywhere. See the bottom of
+    // `src/main/cost.ts`.
+    expect(names(html).some((name) => /used/i.test(name))).toBe(true)
+    expect(names(html).some((name) => /cost/i.test(name))).toBe(false)
   })
 
   it('gives every button a name a person can read or hear', () => {
@@ -124,6 +129,28 @@ describe('when nothing here can be changed', () => {
     expect(html).toContain('Options')
   })
 
+  it('withdraws every picker from an agent CLI this build cannot drive', () => {
+    /*
+     * Codex and Gemini get the same treatment as a shell and for a related
+     * reason: every option in `catalog.ts` is a Claude Code command, and every
+     * value the pickers show is read out of Claude Code's own screen or its
+     * settings file. A Codex session wearing this row would offer five model
+     * aliases that mean nothing there and print an effort level out of a file
+     * it never wrote.
+     *
+     * The panel's sentence explaining it cannot be asserted here — the panel is
+     * shut in a static render — so it lives in `catalog.ts` and is pinned in
+     * `catalog.test.ts` instead.
+     */
+    withBridge()
+    for (const provider of ['codex', 'gemini'] as const) {
+      const html = render({ sessionId: 's1', cwd: '/tmp/p', provider })
+      for (const control of PRIMARY_CONTROLS) {
+        expect(html, `${provider} still shows the ${control} picker`).not.toContain(controlName(control))
+      }
+    }
+  })
+
   it('draws no button at all on a shell, because nothing is behind it', () => {
     // A shell has no model, no effort, no fast mode and no permission mode, and
     // its usage readout is withheld — so the panel could only open onto a
@@ -132,5 +159,40 @@ describe('when nothing here can be changed', () => {
     withBridge()
     const html = render({ sessionId: 's1', cwd: '/tmp/p', provider: 'shell' })
     expect(html).not.toContain('<button')
+  })
+})
+
+/**
+ * Two facts about this component that a rendered string cannot carry.
+ *
+ * Both calls into the bridge happen in places a static render never reaches —
+ * one in an effect, one in a click handler — and this project has no DOM in its
+ * test setup to run either. So they are asserted against the source, the way
+ * `wiring.test.ts` and `finish.test.ts` already assert the things that are only
+ * visible there. The alternative was to leave the most important line in the
+ * file untested because it is awkward to reach.
+ */
+describe('what the controls tell the main process', () => {
+  const source = readFileSync(join(__dirname, 'AgentControls.tsx'), 'utf8')
+
+  it('names the provider on every call, because the main process refuses on it', () => {
+    // Without this the main process sees `provider: undefined` for a Codex
+    // session and falls back to asking the screen — which, finding none of
+    // Claude Code's markers, refuses. Correct by luck rather than by design,
+    // and wrong the moment another CLI draws something that looks similar.
+    expect(source).toMatch(/readAgentControls\(\{[^}]*provider[^}]*\}\)/)
+    expect(source).toMatch(/applyAgentControl\(\{[^}]*provider[^}]*\}\)/)
+  })
+
+  it('shows the value the session reported, not the one that was clicked', () => {
+    /*
+     * `answer.reading` is what the main process re-read off the session after
+     * the change settled. Writing `{ ...was, [control]: { value, label: value } }`
+     * here instead would tick the row that was pressed whether or not anything
+     * happened — a picker showing an intention rather than a state, which is a
+     * bug class this app has already shipped once.
+     */
+    expect(source).toContain('setReadings((was) => (was ? { ...was, [control]: answer.reading } : was))')
+    expect(source).not.toMatch(/\[control\]:\s*\{\s*value\b/)
   })
 })

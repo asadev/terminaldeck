@@ -34,6 +34,17 @@
   animation: modal-scrim-in var(--dur-fast) var(--ease);
 }
 
+/* Stepped aside for a native panel — see `hidden` in Modal.tsx.
+
+   `display: none` rather than `opacity: 0` or `visibility: hidden`, because the
+   dialog has to be gone in every sense while a system window is up: no scrim
+   tinting the workspace behind the picker, nothing in the tab order, nothing in
+   the accessibility tree. The subtree stays mounted, so every choice already
+   made in the dialog is still there when it comes back. */
+.modal-overlay[data-hidden='true'] {
+  display: none;
+}
+
 .modal-panel {
   display: flex;
   flex-direction: column;

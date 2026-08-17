@@ -56,7 +56,18 @@ describe('buildProviderRows', () => {
     const rows = buildProviderRows(detected)
     const codex = rows.find((r) => r.id === 'codex')
     expect(codex?.available).toBe(false)
-    expect(codex?.reason).toContain('PATH')
+    /*
+     * "Could not start", not "not on your PATH".
+     *
+     * `detectProviders` runs each agent once now instead of only looking it up,
+     * because a `codex` that resolves on PATH and then dies with a spawn error
+     * is the case that put a Node stack trace in front of the user. The old
+     * sentence was wrong about exactly that case — the binary *was* on his PATH
+     * — so the row no longer claims to know which of the two happened, and the
+     * install line below it is the fix for both.
+     */
+    expect(codex?.reason).toContain('could not start')
+    expect(codex?.reason).not.toContain('PATH')
   })
 
   it('lists every provider even when most are missing', () => {
@@ -187,7 +198,7 @@ describe('which agents the Add-account dialog offers', () => {
     const rows = buildAccountProviderRows({ claude: false, codex: true, gemini: true, shell: true })
     const claude = rows.find((row) => row.id === 'claude')
     expect(claude?.canAdd).toBe(false)
-    expect(claude?.reason).toMatch(/not found on your PATH/)
+    expect(claude?.reason).toMatch(/could not start/)
     expect(claude?.install).toBe('npm install -g @anthropic-ai/claude-code')
     // The first *usable* agent is preselected, not the first listed one.
     expect(firstAccountProvider(rows)).toBe('codex')

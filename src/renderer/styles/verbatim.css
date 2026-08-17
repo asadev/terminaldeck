@@ -1,0 +1,270 @@
+/* ============================================================================
+   Verbatim text — the surfaces that must show the characters that are there
+
+   `--font-mono` puts JetBrains Mono in front of Menlo, and on this machine it
+   *is* what renders: 'SF Mono' is not a family macOS exposes to a web engine
+   unless the developer has installed Apple's separate download, so the stack
+   falls straight through to the copy bundled in `assets/fonts`. JetBrains Mono
+   ships programming ligatures switched on in `liga`/`calt`. Nothing in this
+   repository had ever switched them off, so the file viewer was drawing
+
+       <!-- CSP is applied …                    as    ←!— CSP is applied …
+       … inline preamble. -->                   as    … inline preamble. ⟶
+       </head>  </div>  </script>  <br />       as    ⟨/head⟩ … with the slash
+                                                      welded to the bracket
+
+   — verified on screen against `src/renderer/index.html`, not deduced.
+
+   In a font meant for writing code that is a feature. In a pane whose whole
+   job is to show a reader what a file or a process actually contains it is a
+   correctness bug, and a nastier one than it looks: the glyph is a lie the
+   reader cannot detect. Selecting the line and copying it yields the real
+   bytes, so the screen and the clipboard disagree with no warning, and anyone
+   transcribing what they see by hand — into a bug report, into a chat message,
+   into another editor — writes down characters that were never in the file.
+
+   ## Why the whole mono stack, and not a hand-picked list of "code" panes
+
+   Every rule below was found mechanically: it is every selector in every
+   stylesheet under `src/renderer` that sets `font-family: var(--font-mono)`,
+   plus the three that reach for the same stack from TypeScript instead of CSS.
+   (Not written with a glob: a `*` followed by a `/` ends a CSS comment, which
+   is a way to lose a stylesheet inside its own explanation.)
+   That is deliberate, and `verbatim.test.ts` re-derives the same list on every
+   run so the two cannot drift.
+
+   The alternative — deciding case by case which panes are "really" verbatim —
+   fails on contact with the actual list. A file path is verbatim (macOS allows
+   `->` in a filename, and `ls -l` prints one for every symlink). A shell
+   command offered for copying is verbatim, and `curl … 2>&1 | tee` is full of
+   pairs this font welds. A JSON field the user types into is verbatim twice
+   over: what is shown has to equal what was typed *and* what will be sent. A
+   diff, a CI log, an MCP payload, a git ref, an SSH fingerprint, a version
+   range like `>=0.2.0`, a CSS selector like `.a > .b` — all verbatim. Not one
+   surface in this app sets the mono face because ligatures were wanted there;
+   it is set because the text is machine text, and machine text is exactly the
+   text nobody may re-draw.
+
+   Ordinary UI text is untouched. It is `--font-ui` / `--font-display` — SF Pro
+   and Hanken Grotesk — and it keeps its `fi`/`ffi` ligatures, which are the
+   kind a reader is supposed to have.
+
+   ## Why `font-variant-ligatures: none` and nothing else
+
+   It is the high-level property, so it says what it means and one line covers
+   `liga`, `clig`, `dlig`, `hlig` and `calt` — `calt` matters because that is
+   the feature JetBrains Mono actually hangs most of its arrows off, and the
+   low-level `font-feature-settings: 'liga' 0` alone would leave them running.
+
+   What `none` does *not* switch off is `rlig`, required ligatures, which is
+   what Arabic and the Indic scripts need in order to be legible at all. That
+   is the correct line: a script that cannot be written without a ligature
+   keeps it, and a font that welds two ASCII characters together for looks does
+   not. Terminal output is not always Latin, so this distinction is load-
+   bearing rather than pedantic.
+   ============================================================================ */
+
+/* ------------------------------------------------------------ terminals -- */
+/*
+   xterm's DOM renderer does not ligate today, and the reason is an accident
+   worth writing down so nobody deletes this line believing it is dead.
+
+   It sizes every cell itself and then corrects the leftover sub-pixel drift by
+   putting a `letter-spacing` on each run — on this machine, `-0.00986842px` on
+   the span and `7.8px` on the row container. Blink drops ligatures whenever
+   letter-spacing is non-zero, so the correction suppresses them as a side
+   effect. Measured, not assumed: rendering `-->` to a canvas in the renderer at
+   `letterSpacing: 0` produces different pixels from drawing `-`, `-`, `>` at
+   cell pitch, and at `letterSpacing: -0.0099px` produces identical pixels.
+
+   That means the terminal is one rounding away from lying about a process's
+   output. xterm only writes the inline spacing when it differs from the row's
+   default (`M !== this.defaultSpacing`), so a font and size whose natural
+   advance lands exactly on the cell width would leave a run at zero spacing and
+   the arrows would appear — in a pane whose entire contract is that it shows
+   what the process printed. Settings lets the user choose both the font and the
+   size, which is to say the user can walk into that case. Saying it outright
+   costs one declaration.
+
+   `.xterm` and `.xterm-rows` both carry it because `TerminalView.tsx` and
+   `machines/RemoteTerminal.tsx` set `fontFamily` on the xterm instance from
+   `--font-mono` in JavaScript, so no CSS rule here names that font stack and
+   the sweep in `verbatim.test.ts` would never see them.
+*/
+.xterm,
+.xterm-rows,
+
+/* The specimen under Appearance → Terminal font. It exists to show what a
+   session will look like, so it has to be wrong in none of the ways a session
+   is not. Its family comes from an inline style in `AppearanceSection.tsx`. */
+.settings-font-preview,
+
+/* ------------------------------------------- file viewer, diffs, patches -- */
+.file-viewer-badge,
+.file-viewer-doc,
+.artifact-diff,
+.artifacts-detail-path,
+.artifact-change-tool,
+.git-track,
+.git-stat,
+.widget-branch-name,
+
+/* --------------------------------------------- code blocks and inline code -- */
+.cv-rich code,
+.cv-code > summary,
+.help-inline-code,
+.help-code code,
+.at-note code,
+.gh-note code,
+.gh-failure-action code,
+.gh-conn-source code,
+.gh-conn-note code,
+.gh-device-body code,
+.gh-asks-body code,
+.settings-account-blocked code,
+.settings-code,
+.remote-code,
+.ns-install,
+.picker-install,
+.bw-dev-cmd,
+.mcp-server-command,
+.page-blank-body code,
+.page-blank-line code,
+.page-blank-hint code,
+.upd-notes-body code,
+.upd-notes-plain,
+
+/* ------------------------------------------- logs, transcripts, payloads -- */
+
+/*
+   The copilot's consent dialog, and it is the strictest case in this file.
+
+   `.cc-arg dd` holds the *arguments the copilot is asking permission to use* —
+   a session title it wants to set, a line it wants typed into a terminal, the
+   value it wants written into a setting. `.cc-tool-id` is the name of the tool
+   it wants to call. The whole dialog exists so that a person reads those and
+   decides; the app has no other question to ask them.
+
+   So a redrawn glyph here is not a cosmetic wrong, it is consent obtained for
+   something other than what was shown. The `=>` in a line the agent wants typed
+   is the difference between `x => y` and a shell heredoc; the `</` in a snippet
+   is the difference between opening and closing a tag. `CopilotConsent.tsx`
+   already refuses to hand this text to a parser for the same reason it is
+   refused a ligature: everything on that dialog is quoted, never interpreted.
+*/
+.cc-arg dd,
+.cc-tool-id,
+
+/* The name of the tool or action in the copilot's action log — `sessions.start`,
+   `settings.set`. Machine text, and it is read against the tool ids on the
+   consent dialog above, so the two must draw the same characters. */
+.copilot-action-name,
+
+.debug-pre,
+.debug-channel,
+.debug-number,
+.debug-path,
+.gh-failure-detail pre,
+.mcp-pre,
+.mcp-args code,
+.mcp-item-name,
+.mcp-field-name,
+.mcp-input-json,
+
+/* The command and argument boxes on the Add-an-agent form. Verbatim for the
+   same reason `.mcp-input-json` is: what is shown has to equal what was typed
+   *and* what will be run, and this one is executed rather than sent. */
+.aa-mono,
+
+.setup-probe,
+.setup-event-name,
+.si-row-index,
+.si-chip,
+.si-tool-chip,
+.si-list-lead,
+.panel-error-detail,
+
+/* -------------------------------------------------- paths, names, addresses -- */
+.folder-title,
+.folder-menu-path,
+.hooks-file,
+.profiles-path,
+.picker-path,
+.ns-project-path,
+.ns-chosen-path,
+.machines-session-path,
+.machines-pane-path,
+.machine-entry-box,
+.machines-key,
+.df-folder-path,
+.settings-path,
+.settings-profile-path,
+.settings-url-address,
+.bw-start-address,
+.bw-capture-url,
+.bw-shot code,
+.bw-shot-path code,
+.bw-custom input,
+.bw-selector,
+.bw-step-selector,
+.bw-facts code,
+.bw-domains code,
+.bw-unwired-list,
+.at-chip-kind,
+
+/* ------------------------------------------ identifiers, versions, counters -- */
+
+/*
+   Three surfaces that reach for the mono face to line a column up rather than
+   to quote anything, listed anyway. Worth saying why, because the temptation on
+   reading the failing test was to add six lines without looking at what is in
+   them.
+
+   `.copilot-ordinal` is `{index + 1}` — decimal digits and nothing else, and
+   `aria-hidden` at that. `.ub-row-value` is `39%` or the words `Not reported`.
+   Neither can contain a pair this font welds today. `.copilot-action-time` is
+   the one that can: `whenIso` formats a parsed timestamp for the reader, and
+   falls back to printing the stored string *verbatim* when `Date.parse` cannot
+   read it — so a malformed record shows its own bytes, which is precisely the
+   case where redrawing them would send somebody chasing a timestamp that was
+   never written.
+
+   The other two are here because the rule this sheet enforces is about the
+   face, not about today's content: the mono face is where machine text goes, so
+   anything wearing it is promised verbatim, and a promise that holds only while
+   nobody changes the string is not one. Registering costs a line; discovering
+   later that a counter grew a `->` in it costs a bug nobody can see.
+*/
+.copilot-ordinal,
+.copilot-action-time,
+.ub-row-value,
+
+.remote-fingerprint,
+.remote-tunnel-port,
+.bw-start-port-num,
+.bw-zoom-value,
+.bw-applied,
+.bw-badge,
+.gh-scope,
+.gh-device-code,
+.join-input-code,
+.join-input-pin,
+.join-note-ok,
+.onboarding-version,
+.settings-tool-version,
+.settings-about-version,
+.settings-about-build,
+.help-about-row dd,
+.help-count,
+.board-title-id,
+.palette-count,
+.sb-qualifier,
+.sheet-count,
+.us-value,
+.run-agent-glyph,
+.widget-note.mono,
+.widget-row-main.mono,
+.widget-row-side.mono,
+.tooltip-label[data-mono] {
+  font-variant-ligatures: none;
+}

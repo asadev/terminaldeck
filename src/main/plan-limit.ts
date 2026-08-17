@@ -41,6 +41,14 @@ import { Terminal } from '@xterm/headless'
 import type { IpcMain, IpcMainInvokeEvent, WebContents } from 'electron'
 import { stripAnsi } from './session-activity'
 import { onWebContentsDestroyed } from './web-contents-teardown'
+import {
+  fractionFromPercent,
+  readingId,
+  resetDescribed,
+  type UsageAccountRef,
+  type UsageWindowKind,
+  type UsageWindowReading,
+} from './usage-window'
 
 /* -------------------------------------------------------------------------- */
 /* Types                                                                       */
@@ -76,6 +84,23 @@ export interface PlanLimitSnapshot {
   message: string | null
   /** When the reading was taken off the screen. Plan limits go stale. */
   capturedAt: number
+  /**
+   * When these exact numbers first appeared on the screen.
+   *
+   * `capturedAt` is re-stamped every time the viewport is read, which is right
+   * for "when did this app last look" and wrong for "how old is this number".
+   * A `/usage` panel sits on screen until it is dismissed, so re-reading it an
+   * hour later would otherwise report an hour-old figure as one second old —
+   * and the whole reason this feature was not built on `~/.claude.json` is that
+   * a stale figure presented as current is worse than no figure.
+   *
+   * So this holds the *earliest* moment the current text was seen, and it only
+   * moves when the text does. It errs old: a panel that Claude Code redrew with
+   * unchanged numbers keeps the earlier time, because the screen cannot tell a
+   * redraw from a leftover. Under-claiming freshness costs a slightly dimmer
+   * bar; over-claiming it is the bug.
+   */
+  firstSeenAt: number
   /** One sentence explaining an unavailable reading. */
   reason: string | null
 }
@@ -88,6 +113,7 @@ export function emptySnapshot(sessionId: string, reason: string): PlanLimitSnaps
     source: null,
     message: null,
     capturedAt: 0,
+    firstSeenAt: 0,
     reason,
   }
 }
@@ -275,6 +301,68 @@ function parseWarning(
 }
 
 /* -------------------------------------------------------------------------- */
+/* Translating into the shared usage vocabulary                                */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Claude's own words for a window, mapped onto the period it actually is.
+ *
+ * "Current session" is the five-hour rolling window — the CLI names it after
+ * the thing being limited rather than after its length, and the chrome draws
+ * bars per period, so the two have to be reconciled somewhere. It is done here,
+ * once, and the CLI's own label rides along untouched in `label` so nothing on
+ * screen has to take this translation's word for it.
+ */
+function windowForScope(scope: PlanLimitScope): UsageWindowKind {
+  if (scope === 'session') return 'five-hour'
+  if (scope === 'week') return 'weekly'
+  return 'other'
+}
+
+/**
+ * One session's screen reading, in the shape every provider shares.
+ *
+ * The account is supplied rather than derived: this module watches a terminal
+ * and knows nothing about which login the terminal was started under. See
+ * `usage-ipc.ts`, which resolves it from the session's profile.
+ *
+ * An unavailable snapshot yields an empty list rather than a list of zeroes.
+ * There is no reading to translate, and inventing one at 0% would be the
+ * `~/.claude.json` mistake with a different source.
+ */
+export function planUsageReadings(
+  snapshot: PlanLimitSnapshot,
+  account: UsageAccountRef,
+): UsageWindowReading[] {
+  if (!snapshot.available || snapshot.source === null) return []
+  const source = snapshot.source === 'usage-panel' ? 'claude-usage-panel' : 'claude-warning'
+  return snapshot.limits.map((limit) => {
+    const window = windowForScope(limit.scope)
+    // `week:opus` and `other:usage-credit` carry a qualifier after the colon.
+    // It has to survive into the id or a model-scoped weekly limit would
+    // collide with the unscoped one and the second would be dropped.
+    const qualifier = limit.id.includes(':') ? limit.id.slice(limit.id.indexOf(':') + 1) : ''
+    return {
+      id: readingId(account, window, qualifier),
+      account,
+      window,
+      // Claude Code never states a window length — the panel says "Current
+      // session", not "300 minutes" — so there is nothing truthful to put here.
+      windowMinutes: null,
+      label: limit.label,
+      used: fractionFromPercent(limit.percent),
+      // Words, not an instant: "Resets 4am (Asia/Dubai)" omits the date, the
+      // year and the DST rule, and `usage-window.ts` explains why guessing them
+      // would be worse than being unable to count down.
+      resets: resetDescribed(limit.resetsAt),
+      observedAt: snapshot.capturedAt,
+      reportedAt: snapshot.firstSeenAt || snapshot.capturedAt,
+      source,
+    }
+  })
+}
+
+/* -------------------------------------------------------------------------- */
 /* Watching one session's screen                                               */
 /* -------------------------------------------------------------------------- */
 
@@ -356,7 +444,7 @@ export class PlanLimitTracker {
    * are unknown again" would make the strip flicker between a number and a
    * shrug every time the user pressed a key.
    */
-  capture(at = Date.now()): boolean {
+  capture(at = Date.now(), confirmed = false): boolean {
     const parsed = parsePlanLimits(this.screen())
     if (!parsed) return false
 
@@ -374,6 +462,12 @@ export class PlanLimitTracker {
       source: parsed.source,
       message: parsed.message,
       capturedAt: at,
+      // Identical text keeps its original age — see `firstSeenAt`. `confirmed`
+      // is the one exception, and only `refresh` sets it: it has just typed
+      // `/usage`, so whatever the CLI draws in response is a fresh answer even
+      // when it matches the last one. The window in which that could mislabel a
+      // pre-existing warning line is bounded by `REFRESH_TIMEOUT_MS`.
+      firstSeenAt: same && !confirmed ? this.snapshot.firstSeenAt : at,
       reason: null,
     }
     if (!same) this.onChange(this.snapshot)
@@ -417,13 +511,33 @@ export const PLAN_LIMIT_CHANNEL = 'plan:update'
 /** Ceiling on resident trackers; each holds a small headless terminal. */
 const MAX_TRACKERS = 8
 
+/** A listener inside this process, as opposed to a window across the bridge. */
+export type PlanLimitListener = (snapshot: PlanLimitSnapshot) => void
+
 interface Entry {
   tracker: PlanLimitTracker
   subscribers: Set<WebContents>
+  /**
+   * Subscribers in the main process itself.
+   *
+   * This reading used to be reachable only by whoever called `plan:watch` over
+   * the bridge, which made it a property of the chat view rather than a
+   * property of the session. `usage-ipc.ts` needs the same numbers to fold in
+   * with Codex's, and the window chrome will need them for a session that has
+   * no chat view at all, so the tracker now has an in-process audience as well.
+   * Both audiences are fed by the same `broadcast`, so neither can be given a
+   * reading the other did not get.
+   */
+  listeners: Set<PlanLimitListener>
   refreshing: boolean
 }
 
 const entries = new Map<string, Entry>()
+
+/** True while anything at all is still interested in this session. */
+function isWatched(entry: Entry): boolean {
+  return entry.subscribers.size > 0 || entry.listeners.size > 0
+}
 
 function broadcast(entry: Entry, snapshot: PlanLimitSnapshot): void {
   for (const contents of entry.subscribers) {
@@ -436,6 +550,14 @@ function broadcast(entry: Entry, snapshot: PlanLimitSnapshot): void {
     } catch (err) {
       entry.subscribers.delete(contents)
       console.error('[plan-limit] dropping a dead subscriber:', err)
+    }
+  }
+  for (const listener of [...entry.listeners]) {
+    try {
+      listener(snapshot)
+    } catch (err) {
+      // An in-process listener that throws must not cost a window its update.
+      console.error('[plan-limit] a listener threw:', err)
     }
   }
 }
@@ -466,10 +588,55 @@ function ensureEntry(sessionId: string): Entry {
   const entry: Entry = {
     tracker: new PlanLimitTracker(sessionId, (snapshot) => broadcast(entry, snapshot)),
     subscribers: new Set(),
+    listeners: new Set(),
     refreshing: false,
   }
   entries.set(sessionId, entry)
   return entry
+}
+
+/**
+ * Watch a session's plan readings from inside the main process.
+ *
+ * The same subscription `plan:watch` performs for a window, without a window.
+ * Returns the reading held right now — which is an unavailable snapshot with a
+ * reason when the CLI has not printed anything yet — and calls back on every
+ * change until the returned function is invoked.
+ *
+ * Holding one of these keeps the tracker resident: a window closing its tab
+ * must not tear down the reading that the chrome, or the usage aggregator, is
+ * still watching.
+ */
+export function watchPlanSnapshots(
+  sessionId: string,
+  listener: PlanLimitListener,
+): { snapshot: PlanLimitSnapshot; stop: () => void } {
+  const entry = ensureEntry(sessionKey(sessionId))
+  entry.listeners.add(listener)
+  let stopped = false
+  return {
+    snapshot: entry.tracker.current,
+    stop: () => {
+      if (stopped) return
+      stopped = true
+      const current = entries.get(sessionId)
+      if (!current) return
+      current.listeners.delete(listener)
+      if (!isWatched(current)) dropPlanSession(sessionId)
+    },
+  }
+}
+
+/**
+ * The reading held for a session right now, without subscribing.
+ *
+ * An unwatched session has no tracker and therefore no reading — not an empty
+ * one. The distinction is the point: `NOT_WATCHED` means "nobody is looking at
+ * this session's screen", which a caller fixes by watching, and it is a
+ * different sentence from "Claude Code has not printed anything".
+ */
+export function planSnapshot(sessionId: string): PlanLimitSnapshot {
+  return entries.get(sessionId)?.tracker.current ?? emptySnapshot(sessionId, NOT_WATCHED)
 }
 
 /**
@@ -496,7 +663,9 @@ export function dropPlanSession(sessionId: string): void {
 function releaseAll(contents: WebContents): void {
   for (const [sessionId, entry] of [...entries]) {
     entry.subscribers.delete(contents)
-    if (entry.subscribers.size === 0) dropPlanSession(sessionId)
+    // `isWatched`, not `subscribers.size`: a closing window must not take the
+    // tracker away from an in-process listener that is still reading it.
+    if (!isWatched(entry)) dropPlanSession(sessionId)
   }
 }
 
@@ -569,7 +738,9 @@ async function refresh(sessionId: string, options: PlanLimitOptions): Promise<Re
     const deadline = startedAt + REFRESH_TIMEOUT_MS
     while (Date.now() < deadline) {
       await delay(POLL_MS)
-      entry.tracker.capture()
+      // Confirmed: `/usage` was just typed, so what comes back is a fresh
+      // answer from the CLI even if it prints the same numbers as before.
+      entry.tracker.capture(Date.now(), true)
       const snapshot = entry.tracker.current
       if (snapshot.source === 'usage-panel' && snapshot.capturedAt >= startedAt) {
         options.write(sessionId, CLOSE_PANEL)
@@ -617,6 +788,6 @@ export function registerPlanLimitIpc(ipcMain: IpcMain, options: PlanLimitOptions
     const entry = entries.get(sessionId)
     if (!entry) return
     entry.subscribers.delete(event.sender)
-    if (entry.subscribers.size === 0) dropPlanSession(sessionId)
+    if (!isWatched(entry)) dropPlanSession(sessionId)
   })
 }

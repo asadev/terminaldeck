@@ -16,13 +16,18 @@ import {
 import './SessionInspector.css'
 
 /**
- * Everything about one session: what it spent, what it called, and how full its
+ * Everything about one session: what it moved, what it called, and how full its
  * context is.
  *
  * The numbers all come from `src/main/session-insights.ts`, which reads the
- * same JSONL transcript the cost panel reads. Nothing is computed here beyond
+ * same JSONL transcript the usage tile reads. Nothing is computed here beyond
  * formatting and a couple of view-local sorts — if a figure looks wrong, the
  * bug is in the main process, not in this file.
+ *
+ * No figure on this panel is money. There used to be several — a hero "Cost"
+ * stat, a per-request money column down the timeline, a whole "Cost" tab with
+ * two priced tables and a "most expensive requests" list. The argument for
+ * deleting all of them is at the bottom of `src/main/cost.ts`.
  */
 
 /* -------------------------------------------------------------------- types */
@@ -41,21 +46,6 @@ export interface TokenUsage {
   cacheRead: number
 }
 
-export interface CostBreakdown {
-  input: number
-  output: number
-  cacheWrite: number
-  cacheRead: number
-  total: number
-}
-
-export interface AggregateCost {
-  cost: CostBreakdown
-  byModel: Record<string, CostBreakdown>
-  unpricedModels: string[]
-  usedLegacyRate: boolean
-}
-
 export interface TimelineEntry {
   index: number
   key: string
@@ -68,8 +58,7 @@ export interface TimelineEntry {
   usage: TokenUsage
   promptTokens: number
   outputTokens: number
-  cost: CostBreakdown | null
-  costUsd: number | null
+  totalTokens: number
   contextPercent: number | null
   isSidechain: boolean
   stopReason: string | null
@@ -94,10 +83,8 @@ export interface ModelStat {
   usage: TokenUsage
   promptTokens: number
   outputTokens: number
-  cost: CostBreakdown | null
-  costUsd: number | null
+  /** Share of the session's tokens, 0–1. */
   share: number
-  legacyRate: boolean
 }
 
 export interface CompactionMarker {
@@ -146,19 +133,18 @@ export interface SessionInsights {
   timeline: TimelineEntry[]
   omittedRequests: number
   /**
-   * Priciest requests across the whole session, most expensive first.
+   * Largest requests across the whole session by total tokens, heaviest first.
    *
    * Ranked in the main process rather than here: `timeline` is trimmed to the
-   * newest few hundred rows, so ranking it locally reported the priciest of
+   * newest few hundred rows, so ranking it locally reported the heaviest of
    * what happened to be *visible* — on a long session, never the real answer.
    */
-  costliest: TimelineEntry[]
+  heaviest: TimelineEntry[]
   tools: ToolStat[]
   toolCalls: number
   toolFailures: number
   models: ModelStat[]
   usage: TokenUsage
-  cost: AggregateCost
   cacheHitRate: number
   context: ContextUsage | null
   contextSeries: ContextPoint[]
@@ -178,20 +164,6 @@ interface InsightsBridge {
 }
 
 /* --------------------------------------------------------------- formatting */
-
-/**
- * Mirrors `formatUsd`/`formatTokens` in `src/main/cost.ts` — same reason the
- * types are mirrored, and the reasoning is written out there: two places,
- * because a three-place figure reads as thousands wherever the full stop is the
- * group separator, and a spend under half a cent says `<$0.01` rather than
- * rounding to nothing.
- */
-function formatUsd(usd: number): string {
-  const abs = Math.abs(usd)
-  if (abs === 0) return '$0.00'
-  if (abs < 0.005) return usd < 0 ? '-<$0.01' : '<$0.01'
-  return `$${usd.toFixed(2)}`
-}
 
 /**
  * One tier beyond `cost.ts`: a long session reads 1.5 *billion* prompt tokens
@@ -278,10 +250,11 @@ function shortModelName(model: string): string {
   return model.startsWith('claude-') ? model.slice('claude-'.length) : model
 }
 
-/** Why a bucket has no price, for the tooltip on its row. */
+/** Why a bucket is not a model, for the tooltip on its row. */
 function modelHint(model: string): string | undefined {
-  if (model === '<synthetic>') return 'Interrupts and API errors the CLI wrote locally. Never billed.'
-  if (model === 'unknown') return 'Tokens with no model id on the request — the total is a floor.'
+  if (model === '<synthetic>')
+    return 'Interrupts and API errors the CLI wrote locally. No model ran, and they carry no tokens.'
+  if (model === 'unknown') return 'Tokens the request recorded without naming a model.'
   return undefined
 }
 
@@ -506,11 +479,24 @@ function ContextChart({ series }: { series: ContextPoint[] }) {
 
 /* --------------------------------------------------------------------- tabs */
 
-type TabId = 'timeline' | 'cost' | 'tools' | 'context'
+/*
+ * `'usage'` was `'cost'`, and the tab it names was called Cost.
+ *
+ * The tab did not lose its contents when the money came out — it lost a column
+ * from each of its two tables and gained an honest heading. What it shows now
+ * is where a session's tokens went, split the way the API reports them and then
+ * split again by model, which is what somebody clicking it was reading past the
+ * dollar signs to find.
+ *
+ * The id is view-local: `SessionInspector` holds it in a `useState`, nothing
+ * persists it and nothing outside this file names it, so renaming it costs no
+ * migration.
+ */
+type TabId = 'timeline' | 'usage' | 'tools' | 'context'
 
 const TABS: ReadonlyArray<{ id: TabId; label: string }> = [
   { id: 'timeline', label: 'Timeline' },
-  { id: 'cost', label: 'Cost' },
+  { id: 'usage', label: 'Usage' },
   { id: 'tools', label: 'Tools' },
   { id: 'context', label: 'Context' },
 ]
@@ -612,9 +598,16 @@ export function TimelineTab({ insights }: { insights: SessionInsights }) {
                   </div>
                 </dl>
               </div>
-              <div className="si-row-cost">
-                <span className="si-row-money">
-                  {entry.costUsd === null ? 'unpriced' : formatUsd(entry.costUsd)}
+              {/*
+                The right-hand column used to lead with this request's money and
+                put its context reading underneath. The money is gone; the
+                column keeps the total that request moved, because the two
+                figures under `si-row-facts` are the prompt and the output
+                separately and a reader comparing rows wants one number.
+              */}
+              <div className="si-row-aside">
+                <span className="si-row-tokens" title="Prompt and output together.">
+                  {formatTokens(entry.totalTokens)}
                 </span>
                 {entry.contextPercent !== null && (
                   <span className="si-row-context" data-level={levelOf(entry.contextPercent)}>
@@ -638,33 +631,41 @@ export function TimelineTab({ insights }: { insights: SessionInsights }) {
   )
 }
 
-export function CostTab({ insights }: { insights: SessionInsights }) {
-  const { cost, usage } = insights
-  const total = cost.cost.total
+export function UsageTab({ insights }: { insights: SessionInsights }) {
+  const { usage } = insights
+  const total =
+    usage.input + usage.output + usage.cacheWrite5m + usage.cacheWrite1h + usage.cacheRead
 
+  /*
+   * Four line items, largest first.
+   *
+   * This table used to have a Cost column between Tokens and Share, and the
+   * rows were ordered by money. Ordering by tokens moves cache reads to the top
+   * of almost every real session, which is the honest picture: a warm agent
+   * session is mostly the same prefix being read back, over and over.
+   */
   const parts = [
-    { label: 'Output', value: cost.cost.output, tokens: usage.output },
-    { label: 'Cache writes', value: cost.cost.cacheWrite, tokens: usage.cacheWrite5m + usage.cacheWrite1h },
-    { label: 'Cache reads', value: cost.cost.cacheRead, tokens: usage.cacheRead },
-    { label: 'Fresh input', value: cost.cost.input, tokens: usage.input },
-  ].sort((a, b) => b.value - a.value)
+    { label: 'Output', tokens: usage.output },
+    { label: 'Cache writes', tokens: usage.cacheWrite5m + usage.cacheWrite1h },
+    { label: 'Cache reads', tokens: usage.cacheRead },
+    { label: 'Fresh input', tokens: usage.input },
+  ].sort((a, b) => b.tokens - a.tokens)
 
   // Ranked over every request by the main process. An older build sorted
   // `insights.timeline` here, which is the newest few hundred rows and not the
-  // session — on a 3,000-request session the expensive requests are almost
-  // always among the ones trimmed away.
-  const priciest = insights.costliest ?? []
+  // session — on a 3,000-request session the heavy requests are almost always
+  // among the ones trimmed away.
+  const heaviest = insights.heaviest ?? []
 
   return (
     <div className="si-sections">
       <section>
-        <h3>Where the money went</h3>
+        <h3>Where the tokens went</h3>
         <table className="si-table">
           <thead>
             <tr>
               <th scope="col">Line item</th>
               <th scope="col">Tokens</th>
-              <th scope="col">Cost</th>
               <th scope="col">Share</th>
             </tr>
           </thead>
@@ -673,20 +674,19 @@ export function CostTab({ insights }: { insights: SessionInsights }) {
               <tr key={part.label}>
                 <th scope="row">{part.label}</th>
                 <td className="si-num">{formatTokens(part.tokens)}</td>
-                <td className="si-num">{formatUsd(part.value)}</td>
                 <td className="si-bar-cell">
-                  <Meter percent={total > 0 ? (part.value / total) * 100 : 0} level="ok" />
+                  <Meter percent={total > 0 ? (part.tokens / total) * 100 : 0} level="ok" />
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
-        {/* The rate card moves to the hover. Somebody reading a cost table
-            wants the number; the person who wants to know why cache writes
-            cost more than cache reads can ask for it. */}
+        {/* Fresh input is the surprising row and the note is where it gets
+            explained — on a warm session it is a rounding error, because
+            almost the whole prompt came back out of cache. */}
         <p
           className="si-note"
-          title="Cache reads are billed at a tenth of input. Cache writes cost 1.25x input at five minutes, 2x at an hour."
+          title="Fresh input is only the part of a prompt that was neither written to cache nor read from it. On a warm session that is a few hundred tokens against a prompt of hundreds of thousands."
         >
           {formatPercent(insights.cacheHitRate * 100)} of the prompt came from cache.
         </p>
@@ -701,7 +701,6 @@ export function CostTab({ insights }: { insights: SessionInsights }) {
               <th scope="col">Requests</th>
               <th scope="col">Prompt</th>
               <th scope="col">Output</th>
-              <th scope="col">Cost</th>
               <th scope="col">Share</th>
             </tr>
           </thead>
@@ -710,18 +709,10 @@ export function CostTab({ insights }: { insights: SessionInsights }) {
               <tr key={model.model}>
                 <th scope="row">
                   <span title={modelHint(model.model)}>{shortModelName(model.model)}</span>
-                  {model.legacyRate && (
-                    <span className="si-chip si-chip-quiet" title="Historical list price — re-verify before quoting it.">
-                      legacy rate
-                    </span>
-                  )}
                 </th>
                 <td className="si-num">{model.requests}</td>
                 <td className="si-num">{formatTokens(model.promptTokens)}</td>
                 <td className="si-num">{formatTokens(model.outputTokens)}</td>
-                <td className="si-num">
-                  {model.costUsd === null ? <span className="si-muted">unpriced</span> : formatUsd(model.costUsd)}
-                </td>
                 <td className="si-bar-cell">
                   <Meter percent={model.share * 100} level="ok" />
                 </td>
@@ -729,19 +720,13 @@ export function CostTab({ insights }: { insights: SessionInsights }) {
             ))}
           </tbody>
         </table>
-        {cost.unpricedModels.length > 0 && (
-          <p className="si-note si-warn">
-            No published rate for {cost.unpricedModels.join(', ')} — the total above is a floor, not
-            the answer.
-          </p>
-        )}
       </section>
 
-      {priciest.length > 0 && (
+      {heaviest.length > 0 && (
         <section>
-          <h3>Most expensive requests</h3>
+          <h3>Largest requests</h3>
           <ul className="si-list">
-            {priciest.map((entry) => (
+            {heaviest.map((entry) => (
               <li key={`${entry.key}-${entry.index}`}>
                 <span className="si-list-lead">#{entry.index}</span>
                 <span className="si-muted">
@@ -750,7 +735,7 @@ export function CostTab({ insights }: { insights: SessionInsights }) {
                 <span>
                   {formatTokens(entry.promptTokens)} prompt · {formatTokens(entry.outputTokens)} out
                 </span>
-                <span className="si-list-trail">{formatUsd(entry.costUsd ?? 0)}</span>
+                <span className="si-list-trail">{formatTokens(entry.totalTokens)}</span>
               </li>
             ))}
           </ul>
@@ -1134,7 +1119,13 @@ export function SessionInspector({
         </>
       }
     >
-      <div className="session-inspector">
+      {/*
+        `data-state` is what sizes the dialog — see the two width rules at the
+        top of SessionInspector.css. Only `ready` has a report in it; the other
+        three have one sentence, and a report-sized sheet around one sentence is
+        the defect this attribute exists to fix.
+      */}
+      <div className="session-inspector" data-state={state.status}>
         {state.status === 'loading' && <p className="si-empty">Reading the transcript…</p>}
 
         {state.status === 'error' && (
@@ -1153,24 +1144,29 @@ export function SessionInspector({
           <>
             <div className="si-stats si-stats-hero">
               <Stat label="Requests" value={String(insights.requests)} />
+              {/*
+                Prompt, where Cost used to be.
+
+                The hero row keeps its six slots rather than closing to five,
+                and the figure that fills the gap was already on the page —
+                buried in the Output stat's tooltip as "the prompt side read X".
+                It belongs beside Output: the two are the halves of every
+                request, and a session's shape is the ratio between them.
+              */}
               <Stat
-                label="Cost"
-                value={formatUsd(insights.cost.cost.total)}
-                hint={
-                  insights.cost.unpricedModels.length > 0
-                    ? 'A floor — some models have no published rate.'
-                    : undefined
-                }
-              />
-              <Stat
-                label="Output"
-                value={formatTokens(insights.usage.output)}
-                hint={`Output tokens. The prompt side read ${formatTokens(
+                label="Prompt"
+                value={formatTokens(
                   insights.usage.input +
                     insights.usage.cacheRead +
                     insights.usage.cacheWrite5m +
                     insights.usage.cacheWrite1h,
-                )} across the session.`}
+                )}
+                hint="Every prompt token the session sent, cache reads and writes included — not the uncached remainder the API reports as input."
+              />
+              <Stat
+                label="Output"
+                value={formatTokens(insights.usage.output)}
+                hint="Output tokens across the session."
               />
               <Stat label="Tools" value={String(insights.toolCalls)} />
               <Stat
@@ -1217,7 +1213,7 @@ export function SessionInspector({
               tabIndex={0}
             >
               {tab === 'timeline' && <TimelineTab insights={insights} />}
-              {tab === 'cost' && <CostTab insights={insights} />}
+              {tab === 'usage' && <UsageTab insights={insights} />}
               {tab === 'tools' && <ToolsTab insights={insights} />}
               {tab === 'context' && <ContextTab insights={insights} />}
             </div>

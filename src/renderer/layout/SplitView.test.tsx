@@ -20,7 +20,7 @@ import {
 
 function twoPanes(direction: 'horizontal' | 'vertical' = 'horizontal'): PaneLayout {
   return splitPane(createLayout('left', 'left'), 'left', direction, {
-    sessionId: 'right',
+    tabId: 'right',
     paneId: 'right',
     splitId: 'split-1',
   })
@@ -31,7 +31,7 @@ function render(layout: PaneLayout, empty?: string): string {
     <SplitView
       layout={layout}
       onLayoutChange={() => {}}
-      renderPane={({ sessionId }) => <i>{`terminal:${sessionId ?? 'none'}`}</i>}
+      renderPane={({ tabId }) => <i>{`terminal:${tabId ?? 'none'}`}</i>}
       empty={empty ? <p>{empty}</p> : null}
     />,
   )
@@ -90,7 +90,7 @@ describe('SplitView', () => {
 
   it('nests splits', () => {
     const layout = splitPane(twoPanes(), 'right', 'vertical', {
-      sessionId: 'bottom',
+      tabId: 'bottom',
       paneId: 'bottom',
       splitId: 'split-2',
     })

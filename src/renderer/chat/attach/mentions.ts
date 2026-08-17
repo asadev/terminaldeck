@@ -68,10 +68,41 @@ export type AttachmentKind = 'file' | 'image' | 'folder'
 export interface Attachment {
   /** Absolute path. Identity: the same path twice is one attachment. */
   path: string
-  /** Project-relative, for the chip label. Never leaves this app. */
+  /**
+   * What the chip is labelled with: project-relative for something inside the
+   * open project, and the absolute path for anything else.
+   *
+   * Not a lie about what "rel" means — it is *the shortest unambiguous way to
+   * name this file to this user*, and for a file outside the project there is no
+   * shorter one. `relativeTo` cannot be used there at all: it slices by the
+   * root's length, so pointed at `/tmp/x.png` with a root of `/Users/apple/proj`
+   * it returns a fragment of the wrong string rather than an error.
+   */
   relPath: string
   kind: AttachmentKind
+  /**
+   * True when this path is not inside the session's project.
+   *
+   * Carried on the attachment rather than recomputed by whoever draws it,
+   * because two different surfaces need the answer — the chip marks it, and the
+   * composer decides whether to warn about a folder — and a second `insideRoot`
+   * call somewhere else is a second place that can disagree about what the root
+   * was when the file was added. The project changing underneath clears the
+   * whole list anyway; see `ChatComposer`.
+   */
+  outside?: boolean
 }
+
+/**
+ * Whether a path from outside the open project is acceptable to this call.
+ *
+ * The default is `'project'` and every existing caller keeps it, which is the
+ * point: the project-scoped picker can only produce paths inside the project, so
+ * the containment test there stays a real second gate rather than becoming
+ * decoration. Only the three routes that deliberately reach outside — the open
+ * panel, a drop and a paste — pass `'anywhere'`, and they say so at the call.
+ */
+export type AttachScope = 'project' | 'anywhere'
 
 /**
  * Why an attachment was refused. Each maps to a sentence the user sees — a
@@ -85,6 +116,22 @@ export const REJECTION_TEXT: Record<RejectReason, string> = {
   duplicate: 'That is already attached.',
   full: `A message can carry ${MAX_ATTACHMENTS} attachments.`,
 }
+
+/**
+ * The one caution that comes with reaching outside the project, and it applies
+ * to folders only.
+ *
+ * A file from anywhere on the disk expands fine — that is the measurement at the
+ * top of this file, and it is what makes the whole escape hatch honest. A
+ * *folder* is the exception: the same mention pointed at a directory outside the
+ * project produced a listing the model read as an injection attempt and refused.
+ * So the folder still attaches, because the user asked for it and because on a
+ * shell session the same pick is just a quoted path that works perfectly — and
+ * the composer says this once, rather than the agent saying something stranger
+ * a minute later.
+ */
+export const OUTSIDE_FOLDER_CAUTION =
+  'That folder is outside the project. The agent may refuse its listing — a file from out there is read normally.'
 
 /* ------------------------------------------------------------------ paths -- */
 
@@ -255,26 +302,46 @@ export type AddResult =
 /**
  * Validate one candidate against the project root and the current list.
  *
- * Every path shown by the picker is already inside the root, so this is the
- * second gate rather than the first — it also covers anything that arrives
- * from a native dialog later, where the user can point anywhere on the disk.
+ * Every path shown by the picker is already inside the root, so for that caller
+ * this is the second gate rather than the first. It is the *first* gate for the
+ * three routes that reach outside the project — the open panel, a drop and a
+ * paste — and those have to ask for it: `scope` defaults to `'project'`, so a
+ * caller that has not thought about the question gets the old, narrow answer.
+ *
+ * The path is only ever tested against the root, never against the confinement
+ * a session may be running under. That is deliberate and the two are genuinely
+ * different questions: a root is a preference this module can evaluate, and a
+ * boundary is a fact about a live process that only the main process knows. See
+ * `main/session-boundary.ts` — the composer asks before it gets here.
  */
 export function addAttachment(
   current: readonly Attachment[],
   root: string,
   path: string,
   isDirectory: boolean,
+  scope: AttachScope = 'project',
 ): AddResult {
   const target = normalise(path)
   if (!target.startsWith(SEP)) return { ok: false, reason: 'not-absolute' }
-  if (!insideRoot(root, target)) return { ok: false, reason: 'outside-root' }
+  const inside = insideRoot(root, target)
+  if (!inside && scope === 'project') return { ok: false, reason: 'outside-root' }
   if (current.some((a) => a.path === target)) return { ok: false, reason: 'duplicate' }
   if (current.length >= MAX_ATTACHMENTS) return { ok: false, reason: 'full' }
   return {
     ok: true,
     attachments: [
       ...current,
-      { path: target, relPath: relativeTo(root, target), kind: kindFor(target, isDirectory) },
+      {
+        path: target,
+        // The absolute path is the label for anything outside the project. See
+        // {@link Attachment.relPath} — `relativeTo` is not merely unhelpful for
+        // an outside path, it is wrong, because it slices by the root's length.
+        relPath: inside ? relativeTo(root, target) : target,
+        kind: kindFor(target, isDirectory),
+        // Absent rather than `false` for something inside, so that the common
+        // case serialises and compares as the shape it has always had.
+        ...(inside ? {} : { outside: true }),
+      },
     ],
   }
 }
@@ -284,6 +351,55 @@ export function removeAttachment(
   path: string,
 ): Attachment[] {
   return current.filter((a) => a.path !== normalise(path))
+}
+
+/** One candidate, as the three outside routes hand them over. */
+export interface AttachCandidate {
+  path: string
+  isDirectory: boolean
+}
+
+/**
+ * A whole batch, folded once.
+ *
+ * This exists because of a bug that was written, shipped into a running app and
+ * caught by looking at it: two files dropped together produced **one** chip.
+ * The composer was calling `addAttachment` in a loop, and every call in that
+ * loop read the same `attachments` out of the same closure — so each result
+ * discarded the one before it and the last pick won. It is invisible in a unit
+ * test of `addAttachment`, which is correct, and invisible in any test that
+ * attaches one thing at a time.
+ *
+ * Batching is also the honest shape. Every route that reaches outside the
+ * project can produce several at once — a multi-selection in the open panel,
+ * four screenshots dropped together, two files copied in Finder — so "add these"
+ * is the operation, and "add this one" was only ever a special case of it.
+ *
+ * The notice follows one rule: a refusal outranks a caution, and the first
+ * refusal is the one reported. Someone who dropped twelve files onto a list with
+ * room for two needs to know the list is full, not that the last of them was a
+ * folder.
+ */
+export function addAttachments(
+  current: readonly Attachment[],
+  root: string,
+  candidates: readonly AttachCandidate[],
+  scope: AttachScope = 'project',
+): { attachments: Attachment[]; notice: string | null } {
+  let list: Attachment[] = [...current]
+  let refusal: string | null = null
+  let caution: string | null = null
+  for (const candidate of candidates) {
+    const result = addAttachment(list, root, candidate.path, candidate.isDirectory, scope)
+    if (!result.ok) {
+      refusal ??= REJECTION_TEXT[result.reason]
+      continue
+    }
+    list = result.attachments
+    const added = list[list.length - 1]
+    if (added?.outside === true && added.kind === 'folder') caution = OUTSIDE_FOLDER_CAUTION
+  }
+  return { attachments: list, notice: refusal ?? caution }
 }
 
 /**

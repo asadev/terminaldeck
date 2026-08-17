@@ -4,10 +4,13 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it } from 'vitest'
 import { BrowserWorkspace, onStartPage, pageVisible } from './BrowserWorkspace'
 import { newTab, type WorkspaceTab } from './tabs'
-import { composeSend, describeLabelSource, oneLine } from './CapturePanel'
+import { composeSend, describeLabelSource, oneLine } from './capture-text'
+import { composeShot, shortenPath } from './ScreenshotPopup'
+import { elide } from './CapturePopup'
 import { formatBytes } from './SessionModal'
 import {
   BRIDGE_METHODS,
+  humanError,
   missingBridgeMethods,
   resolveBrowserBridge,
   type BrowserBridge,
@@ -60,7 +63,7 @@ const noopBridge: BrowserBridge = {
   browserRelease: async () => undefined,
   browserZoom: async () => 1,
   browserDevtools: async () => true,
-  browserScreenshot: async () => ({ path: '/tmp/x.png', width: 10, height: 10 }),
+  browserScreenshot: async () => ({ path: '/tmp/x.png', width: 10, height: 10, preview: '' }),
   browserRevealScreenshot: async () => undefined,
   browserUserAgent: async () => 'Chromium',
   browserRecord: async () => NO_RECORDING,
@@ -147,11 +150,11 @@ describe('the wired panel', () => {
       'Forward',
       'Reload',
       'Home',
-      'Inspect an element',
-      'Record a flow',
+      'Inspect an element in the page',
+      'Record what you do on this page',
       'Screenshot the page',
-      'Responsive sizes',
-      'Open devtools for the page',
+      'Show the page at a phone or tablet size',
+      'Open Chrome devtools for the page',
       'Cookies and site data',
       'Address and search',
     ]) {
@@ -166,8 +169,39 @@ describe('the wired panel', () => {
     expect(html).toContain('aria-label="Forward" disabled=""')
   })
 
-  it('starts on the element panel with an instruction rather than emptiness', () => {
-    expect(html).toContain('Turn on Inspect')
+  it('prints every action’s name beside its glyph', () => {
+    // Six unlabelled icons sat here on 2026-08-16 and he could not name one of
+    // them. The accessible name above is the sentence; this is the word on
+    // screen, and a tooltip is not a substitute for it.
+    for (const word of ['Inspect', 'Record', 'Shot', 'Size', 'Devtools', 'Cookies']) {
+      expect(html, `no visible label for ${word}`).toContain(
+        `<span class="bw-icon-word">${word}</span>`,
+      )
+    }
+  })
+
+  it('leaves the four navigation glyphs bare', () => {
+    // Back, Forward, Reload and Home have looked the same in every browser for
+    // thirty years. Captioning those would be noise on the same bar the words
+    // were added to.
+    expect(html).not.toContain('<span class="bw-icon-word">Back</span>')
+    expect(html).not.toContain('<span class="bw-icon-word">Home</span>')
+  })
+
+  it('has one bottom panel, and it is the recorder', () => {
+    // There were two tabs down here — Element and Flow — and a capture forced
+    // the strip onto Element. An element is a popup at the element now, so the
+    // strip has one thing in it and nothing to switch with.
+    expect(html).toContain('<span class="bw-bottom-title">Flow')
+    expect(html).not.toContain('role="tab"')
+  })
+
+  it('does not print a second instruction under the first', () => {
+    // "Turn on Inspect, then click something in the page to capture its
+    // selector" used to sit at the bottom while "Click any element in the page.
+    // Escape stops." sat under the toolbar — two instruction strips at once,
+    // one of them telling him to do the thing he was already doing.
+    expect(html).not.toContain('Turn on Inspect')
   })
 })
 
@@ -280,6 +314,8 @@ describe('when a native page is composited', () => {
     parkPage: false,
     sessionOpen: false,
     covered: false,
+    drawing: false,
+    shotOpen: false,
   }
 
   it('shows a real page on the active tab of the visible panel', () => {
@@ -301,6 +337,24 @@ describe('when a native page is composited', () => {
   it('hides the page for a dialog, which is the same fault with a flag', () => {
     expect(pageVisible(showing, { ...everythingOpen, parkPage: true })).toBe(false)
     expect(pageVisible(showing, { ...everythingOpen, sessionOpen: true })).toBe(false)
+  })
+
+  it('hides the page while it is being drawn on, from the state and not the geometry', () => {
+    /*
+     * `covered` would eventually catch the canvas too, and "eventually" is a
+     * frame too late. It is discovered by an observer *after* the surface
+     * appears, and in that one frame the live website is on top and receives the
+     * pointerdown that was meant for the drawing. Parking it from the state that
+     * opened the canvas is what "the overlay must not receive the page's input
+     * while drawing" actually requires.
+     */
+    expect(pageVisible(showing, { ...everythingOpen, drawing: true })).toBe(false)
+  })
+
+  it('hides the page while a screenshot popup is over it', () => {
+    // Same reason, and it is what stops the website flashing back for a frame
+    // between draw mode ending and the popup for the saved image opening.
+    expect(pageVisible(showing, { ...everythingOpen, shotOpen: true })).toBe(false)
   })
 
   it('hides the page on a tab that is not the one on screen', () => {
@@ -330,5 +384,93 @@ describe('when a native page is composited', () => {
     const refused: WorkspaceTab = { ...showing, error: 'Blocked a pop-up to ads.example.' }
     expect(onStartPage(refused)).toBe(false)
     expect(pageVisible(refused, everythingOpen)).toBe(true)
+  })
+})
+
+/**
+ * The screenshot popup replaced a one-line banner — *"Saved 3072 x 1496 to
+ * …png"* with Reveal and Dismiss beside it, and no picture. His instruction was
+ * to show the shot with a box to type into, so the two strings the popup builds
+ * are held here.
+ */
+describe('the screenshot popup', () => {
+  it('cuts the path at the front, where the useless half is', () => {
+    // `/Users/apple/Pictures/Terminal Deck/` is identical on every row; the
+    // filename carries the site and the timestamp.
+    expect(shortenPath('/Users/apple/Pictures/Terminal Deck/localhost-8791-20260817-012405.png'))
+      .toBe('…/Terminal Deck/localhost-8791-20260817-012405.png')
+  })
+
+  it('leaves a short path alone', () => {
+    expect(shortenPath('/tmp/a.png')).toBe('/tmp/a.png')
+  })
+
+  it('never reorders the path, which is what the CSS version did', () => {
+    // `direction: rtl` moved the leading slash to the visual end and printed
+    // `…Terminal Deck/localhost-8791.png/` — a path that reads as a directory.
+    expect(shortenPath('/Users/apple/Pictures/Terminal Deck/x.png')).not.toMatch(/\/$/)
+  })
+
+  it('hands the agent the path and the size, on one line', () => {
+    const line = composeShot(
+      { path: '/tmp/page.png', width: 3072, height: 1496, preview: 'data:image/png;base64,AA' },
+      'why is the header cut off?',
+    )
+    expect(line).toBe('why is the header cut off? [browser screenshot: /tmp/page.png (3072 x 1496)]')
+    expect(line).not.toContain('\n')
+    // The preview is for the popup. An agent cannot do anything with a data URL
+    // typed into a terminal, and it would be a megabyte of it.
+    expect(line).not.toContain('base64')
+  })
+})
+
+/**
+ * What the notice band says when an invoke rejects.
+ *
+ * Seen on screen on 2026-08-17, pressing Draw on a tab that had not been
+ * anywhere: *"Error invoking remote method 'browser-view:frame': Error: The page
+ * has to be on screen to capture it."* The main process phrases that as a
+ * sentence precisely so a person can read it, and Electron's wrapper undoes the
+ * work on the way across.
+ */
+describe('an error that came back over the bridge', () => {
+  it('is the sentence the main process wrote, without Electron’s wrapper', () => {
+    const wrapped = new Error(
+      "Error invoking remote method 'browser-view:frame': Error: The page has to be on screen to capture it.",
+    )
+    expect(humanError(wrapped)).toBe('The page has to be on screen to capture it.')
+  })
+
+  it('keeps a message that was never wrapped, even one starting with Error:', () => {
+    expect(humanError(new Error('Error: something local'))).toBe('Error: something local')
+    expect(humanError(new Error('plain'))).toBe('plain')
+  })
+
+  it('never returns nothing, whatever it is handed', () => {
+    // A blank notice band is the same as no notice at all, and the case it is
+    // reporting is one where a control appeared to do nothing.
+    const empty = new Error("Error invoking remote method 'x': Error: ")
+    expect(humanError(empty)).toBe("Error invoking remote method 'x': Error: ")
+    expect(humanError('a string')).toBe('a string')
+    expect(humanError(null)).toBe('null')
+  })
+})
+
+describe('the capture popup’s text line', () => {
+  it('shows a short label whole', () => {
+    expect(elide('Place order')).toBe('Place order')
+  })
+
+  it('cuts a long one on a word boundary', () => {
+    const long =
+      'Country United Arab Emirates Pakistan Portugal Afghanistan Albania Algeria Andorra Angola Argentina'
+    const shown = elide(long)
+    expect(shown.endsWith('…')).toBe(true)
+    expect(shown.length).toBeLessThanOrEqual(91)
+    // Cut between words, not through one: what is shown is a prefix of the
+    // original that ends where a word does.
+    const visible = shown.slice(0, -1)
+    expect(long.startsWith(visible)).toBe(true)
+    expect(long[visible.length]).toBe(' ')
   })
 })

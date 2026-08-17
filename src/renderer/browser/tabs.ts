@@ -58,12 +58,30 @@ export interface WorkspaceTab {
   isolationKey: string | null
 }
 
+/**
+ * What a page with no name of its own is called, in this renderer.
+ *
+ * A second copy of `NEW_TAB_LABEL` in `src/main/browser-url.ts`, because the
+ * renderer cannot import from `src/main`. The test file pins them equal by
+ * reading the other one off disk, which is the only way two copies of a
+ * user-visible string stay one string.
+ */
+export const NEW_TAB_LABEL = 'New tab'
+
+/**
+ * The address a tab holds before it has been anywhere.
+ *
+ * Also spelled out in `src/main/browser-url.ts` as `BLANK_URL`, and for the
+ * same reason.
+ */
+export const BLANK_URL = 'about:blank'
+
 export function newTab(key: string, url = '', isolated = false): WorkspaceTab {
   return {
     key,
     id: null,
     url: '',
-    label: 'New tab',
+    label: NEW_TAB_LABEL,
     title: '',
     loading: false,
     canGoBack: false,
@@ -164,7 +182,19 @@ export function moveTab(tabs: WorkspaceTab[], key: string, toIndex: number): Wor
  * The page's own title first, because that is what the user recognises, then
  * the host, and only then a placeholder — a sidebar of rows all reading "New
  * tab" is a sidebar you cannot use.
+ *
+ * A title of `about:blank` is not a title. `webContents.getTitle()` returns the
+ * address when a document has no `<title>`, so the app's own start page arrived
+ * here calling itself `about:blank` and this function passed it straight
+ * through to the sidebar row, the tab strip, the pane bar and their tooltips.
+ * `pageTitle` in `src/main/browser-url.ts` now drops it at the source; this is
+ * the backstop, and it is not decorative — `patchFrom` in `BrowserWorkspace`
+ * already carries a field that "older main processes did not send", so a
+ * renderer talking to a main process older than that fix is a real arrangement
+ * in this app rather than a hypothetical one.
  */
 export function tabTitle(tab: WorkspaceTab): string {
-  return tab.title.trim() || tab.label.trim() || 'New tab'
+  const title = tab.title.trim()
+  const named = title && title !== BLANK_URL && title !== tab.url.trim() ? title : ''
+  return named || tab.label.trim() || NEW_TAB_LABEL
 }

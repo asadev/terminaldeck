@@ -8,26 +8,24 @@
  * prints something about them.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react'
-import type { PlanLimitSnapshot, ProjectSummary, RefreshResult } from './types'
-import { readPlanSnapshot, readProjectSummary, sameProject } from './usage-model'
+import { useEffect, useRef, useState } from 'react'
+import type { ProjectSummary } from './types'
+import { readProjectSummary, sameProject } from './usage-model'
 
 /**
  * The preload methods this strip uses.
  *
- * The cost half is already exposed, so it is declared as required and the
- * preload-contract test holds it to that. The plan half is wired separately —
- * optional until it lands, and the strip says "not available" rather than
- * rendering a control that does nothing.
+ * Three, and all required: the transcript watcher is the whole of this strip's
+ * source now. The plan-limit channels used to be here as well, optional, for a
+ * "Plan" item that has since moved to the session's chrome — see the note at
+ * the top of `UsageStrip.tsx`. They are gone from this interface rather than
+ * left unused, because an optional method nobody calls is how a bridge comes to
+ * describe a feature that no longer exists.
  */
 export interface UsageBridge {
   watchProjectCost(cwd: string): Promise<unknown>
   unwatchProjectCost(cwd: string): Promise<void>
   onCostUpdate(cb: (summary: unknown) => void): () => void
-  watchPlanLimits?(sessionId: string): Promise<unknown>
-  unwatchPlanLimits?(sessionId: string): void
-  onPlanLimits?(cb: (sessionId: string, snapshot: unknown) => void): () => void
-  refreshPlanLimits?(sessionId: string): Promise<unknown>
 }
 
 /** Read defensively: this strip can mount before its half of the bridge exists. */
@@ -124,34 +122,13 @@ export function useTranscriptChanges(cwd: string | null, onChange: () => void): 
 
 export interface UsageState {
   summary: ProjectSummary | null
-  plan: PlanLimitSnapshot | null
-  /** Null until a refresh has failed; the words the user is shown. */
-  refreshReason: RefreshResult['reason']
-  refreshing: boolean
   /** True when the preload has no cost methods at all. */
   unwired: boolean
-  canRefreshPlan: boolean
-  refreshPlan: () => void
 }
 
-export function useUsage(
-  cwd: string | null,
-  sessionId: string | undefined,
-  injected?: UsageBridge,
-): UsageState {
+export function useUsage(cwd: string | null, injected?: UsageBridge): UsageState {
   const [bridge] = useState<UsageBridge | null>(() => injected ?? resolveUsageBridge())
   const [summary, setSummary] = useState<ProjectSummary | null>(null)
-  const [plan, setPlan] = useState<PlanLimitSnapshot | null>(null)
-  const [refreshReason, setRefreshReason] = useState<RefreshResult['reason']>(null)
-  const [refreshing, setRefreshing] = useState(false)
-  const live = useRef(true)
-
-  useEffect(() => {
-    live.current = true
-    return () => {
-      live.current = false
-    }
-  }, [])
 
   /* ------------------------------------------------------------- cost -- */
 
@@ -188,64 +165,5 @@ export function useUsage(
     }
   }, [bridge, cwd])
 
-  /* ------------------------------------------------------- plan limits -- */
-
-  useEffect(() => {
-    setPlan(null)
-    setRefreshReason(null)
-    if (!bridge || !sessionId || typeof bridge.watchPlanLimits !== 'function') return
-    let mounted = true
-
-    const off = bridge.onPlanLimits?.((id, payload) => {
-      if (!mounted || id !== sessionId) return
-      const next = readPlanSnapshot(payload)
-      if (next) setPlan(next)
-    })
-
-    void bridge
-      .watchPlanLimits(sessionId)
-      .then((payload) => {
-        const next = readPlanSnapshot(payload)
-        if (mounted && next) setPlan(next)
-      })
-      .catch(() => {})
-
-    return () => {
-      mounted = false
-      off?.()
-      bridge.unwatchPlanLimits?.(sessionId)
-    }
-  }, [bridge, sessionId])
-
-  const refreshPlan = useCallback(() => {
-    if (!bridge || !sessionId || typeof bridge.refreshPlanLimits !== 'function') return
-    setRefreshing(true)
-    setRefreshReason(null)
-    void bridge
-      .refreshPlanLimits(sessionId)
-      .then((payload) => {
-        if (!live.current) return
-        const result = payload as Partial<RefreshResult> | null
-        const snapshot = readPlanSnapshot(result?.snapshot)
-        if (snapshot) setPlan(snapshot)
-        setRefreshReason(result?.ok === true ? null : (result?.reason ?? 'no-panel'))
-      })
-      .catch(() => {
-        if (live.current) setRefreshReason('no-panel')
-      })
-      .finally(() => {
-        if (live.current) setRefreshing(false)
-      })
-  }, [bridge, sessionId])
-
-  return {
-    summary,
-    plan,
-    refreshReason,
-    refreshing,
-    unwired: bridge === null,
-    canRefreshPlan:
-      bridge !== null && typeof bridge.refreshPlanLimits === 'function' && Boolean(sessionId),
-    refreshPlan,
-  }
+  return { summary, unwired: bridge === null }
 }

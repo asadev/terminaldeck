@@ -54,7 +54,7 @@ function build(over: Partial<SetupInput> = {}) {
     copilot: { state: 'missing', route: null, probe: { ...probe, command: 'which copilot', line: 'copilot not found' } },
     probes: { codex: probe },
     hooks: [hookStatus('claude'), hookStatus('codex'), hookStatus('gemini')],
-    endpoint: { port: 51234 },
+    endpoint: { socketPath: '/tmp/terminaldeck-test/hook.sock' },
     now: 1,
     ...over,
   })
@@ -69,6 +69,59 @@ describe('the tool list', () => {
     const tools = new Map(build().tools.map((tool) => [tool.id, tool]))
     expect(tools.get('codex')?.probe?.line).toBe('codex not found')
     expect(tools.get('claude')?.probe).toBeNull()
+  })
+
+  /**
+   * A binary that is there and will not start prints what it said, not what a
+   * lookup found.
+   *
+   * The lookup *succeeds* in that case — `which codex` resolves the npm
+   * launcher perfectly well — so printing `/opt/homebrew/bin/codex` under a row
+   * headed "Not found" reads as a contradiction rather than as evidence. The
+   * failed launch is the thing worth quoting, and it is the only place in this
+   * app that quotes it: the account row and the remedy line are both plain
+   * sentences, because the machine's own words were the entire error message
+   * the user was given and he could not read them.
+   */
+  it('prefers what a failed launch said over what the lookup found', () => {
+    const snapshot = build({
+      prerequisites: {
+        ...prerequisites,
+        tools: prerequisites.tools.map((tool) =>
+          tool.id === 'codex'
+            ? {
+                ...tool,
+                remedy: 'Codex CLI is installed at /opt/homebrew/bin/codex but will not start.',
+                evidence: 'Error: spawn /opt/homebrew/.../codex ENOENT',
+              }
+            : tool,
+        ),
+      },
+    })
+    const codex = snapshot.tools.find((tool) => tool.id === 'codex')
+    expect(codex?.probe?.line).toContain('ENOENT')
+    expect(codex?.probe?.command).toBe('codex --version')
+  })
+
+  /**
+   * A note is not a remedy, and it survives the trip.
+   *
+   * The one note today says an agent is running from a copy other than the one
+   * on the user's PATH. Dropping it here would leave a person to discover that
+   * by watching `codex` fail in their own terminal and work in this app.
+   */
+  it('carries a caveat that is true even when the tool is fine', () => {
+    const snapshot = build({
+      prerequisites: {
+        ...prerequisites,
+        tools: prerequisites.tools.map((tool) =>
+          tool.id === 'claude' ? { ...tool, note: 'Runs from /elsewhere/claude.' } : tool,
+        ),
+      },
+    })
+    expect(snapshot.tools.find((tool) => tool.id === 'claude')?.note).toBe(
+      'Runs from /elsewhere/claude.',
+    )
   })
 
   it('does not contradict itself when Copilot came in through gh', () => {
@@ -114,10 +167,23 @@ describe('the hook blocks', () => {
     expect(codex?.requirement).toContain('codex_hooks')
   })
 
-  it('adds Copilot as a block that says why there is nothing to install', () => {
-    const copilot = build().hooks.find((block) => block.id === 'copilot')
-    expect(copilot?.state).toBe('unsupported')
-    expect(copilot?.unsupportedReason).toContain('no session-hook configuration')
+  /**
+   * Copilot is named once on this page, not twice.
+   *
+   * It used to get a hook block of its own whose whole content was "there is
+   * nothing to install" — no events, no file, no buttons — directly under a tool
+   * row already headed "GitHub Copilot". One page, one tool, two headings, and
+   * the second one existed only to say it had nothing to say. That is the
+   * *"what are these repeats?"* from the recording.
+   *
+   * The sentence survives, on the row it belongs to. Both halves are asserted,
+   * because deleting the block and losing the fact would be the other bug.
+   */
+  it('gives Copilot a tool row and no hook block of its own', () => {
+    const snapshot = build()
+    expect(snapshot.hooks.find((block) => block.id === 'copilot')).toBeUndefined()
+    const row = snapshot.tools.find((tool) => tool.id === 'copilot')
+    expect(row?.note).toContain('no session-hook configuration')
   })
 
   it('passes through the counts the status reported, without recounting', () => {
@@ -140,12 +206,15 @@ describe('the hook blocks', () => {
 })
 
 describe('the endpoint', () => {
-  it('reports the port and nothing else — the token stays in the main process', () => {
-    expect(Object.keys(build().endpoint).sort()).toEqual(['port', 'running'])
-    expect(build().endpoint).toEqual({ running: true, port: 51234 })
+  it('reports the address and nothing else — the token stays in the main process', () => {
+    expect(Object.keys(build().endpoint).sort()).toEqual(['address', 'running'])
+    expect(build().endpoint).toEqual({
+      running: true,
+      address: '/tmp/terminaldeck-test/hook.sock',
+    })
   })
 
-  it('says it is not running rather than inventing a port', () => {
-    expect(build({ endpoint: null }).endpoint).toEqual({ running: false, port: null })
+  it('says it is not running rather than inventing an address', () => {
+    expect(build({ endpoint: null }).endpoint).toEqual({ running: false, address: null })
   })
 })

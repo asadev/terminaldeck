@@ -5,34 +5,74 @@
  * writes to its stdin at this server, which turns it into a typed event the
  * rest of the app can act on without scraping terminal output.
  *
- * Three properties do the security work, in this order:
+ * ## Why this is a unix socket and not a loopback port
  *
- *  1. It binds to 127.0.0.1 only. Nothing off this machine can reach it, which
- *     is the boundary that actually matters.
- *  2. Every request must carry a per-run token, compared in constant time. The
- *     token is generated at startup and never persists, so an install from a
- *     previous run cannot post into this one.
- *  3. The Host header must be a loopback literal. A browser on this machine can
- *     be pointed at 127.0.0.1 by a hostile page (DNS rebinding), and while such
- *     a page cannot guess the token, refusing a rebound Host costs nothing.
+ * It was a TCP listener on `127.0.0.1:0` — an ephemeral port — and that one
+ * decision broke the whole feature, silently, on every single launch. The port
+ * is baked into the command written into the user's `~/.claude/settings.json`,
+ * so the moment the app restarted every installed hook pointed at a port this
+ * run does not own. All three providers sat permanently on "Needs reinstalling",
+ * the user had to press Reinstall three times per launch, and if they did not,
+ * every lifecycle event — including session-finished — went nowhere. Nothing was
+ * in an error state anywhere; it just did not work.
  *
- * Be honest about what the token is worth: it lives in the user's provider
- * config, which on this machine is mode 0644 for two of the three providers.
- * Another process running as this user can read it. The token stops confused
- * software and drive-by browser requests; it is not a defence against a local
- * attacker who is already reading your home directory.
+ * A filesystem socket fixes the cause rather than the symptom, because a path is
+ * something we choose and a port is something the kernel hands out:
+ *
+ *  - **The address is stable.** `<userData>/hook.sock` is the same string on
+ *    every launch, so the command written into a provider config in March is
+ *    still correct in August. Nothing goes stale, so nothing needs repairing.
+ *  - **It cannot be inherited by a stranger.** A recycled port number is the
+ *    quiet hazard of the old design: a hook firing while the app is closed would
+ *    POST an agent's tool input at whatever had since bound that number. A path
+ *    we own cannot be handed to unrelated software.
+ *  - **It is unreachable from a network stack at all.** There is no port to
+ *    scan, no interface to bind wrongly, and — the reason the old design needed
+ *    a Host check — no way for a page in a browser to open one. `fetch`, `XHR`
+ *    and `WebSocket` cannot address a unix socket, so DNS rebinding stops being
+ *    a threat model rather than being defended against.
+ *  - **Access control becomes the filesystem's.** The socket is `chmod 0600`
+ *    inside the app's own data directory, so the kernel refuses another user
+ *    before a single byte is read.
+ *
+ * ## The token, and where it now lives
+ *
+ * Every request still carries a per-run token compared in constant time, but it
+ * is no longer written into the hook command — which is the second half of the
+ * staleness fix and, separately, a real improvement. The old design put a 48-hex
+ * secret directly into `~/.gemini/settings.json` and `~/.codex/hooks.json`, both
+ * mode 0644. Now the token goes into {@link HookEndpoint.configPath}, a curl
+ * config file written 0600 beside the socket, and the hook command reads it at
+ * call time with `curl -K`. So the hook command holds two stable paths and no
+ * secret, and the secret is readable only by this user.
+ *
+ * Be honest about what the token is still worth: another process running as this
+ * user can read that file, and can also just connect to the socket. It stops
+ * confused software posting nonsense at us; it is not a defence against a local
+ * attacker who is already inside the home directory. The filesystem permissions
+ * are the boundary that does the work now.
  */
 
 import { randomBytes, timingSafeEqual } from 'node:crypto'
+import { chmodSync, existsSync, mkdirSync, unlinkSync, writeFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
-import type { AddressInfo } from 'node:net'
+import { connect } from 'node:net'
+import { join } from 'node:path'
 import { BRAND } from '../shared/brand'
 
 /* ------------------------------------------------------------------ types -- */
 
 export interface HookEndpoint {
-  port: number
-  /** Per-run secret. Regenerated on every start; never written to disk by us. */
+  /** The unix socket hooks connect to. Stable for the life of an install. */
+  socketPath: string
+  /**
+   * The curl config file a hook reads the token out of, at call time.
+   *
+   * Stable like the socket, and rewritten with a fresh token on every start.
+   * That indirection is the whole reason an installed hook survives a restart.
+   */
+  configPath: string
+  /** Per-run secret. Regenerated on every start; lives only in `configPath`. */
   token: string
 }
 
@@ -59,13 +99,36 @@ export type HookEventListener = (event: HookEvent) => void
 export interface HookServerOptions {
   /** Called for every accepted event. Errors thrown here are swallowed. */
   onEvent?: HookEventListener
-  /** Fixed port, for tests. Zero (the default) takes whatever is free. */
-  port?: number
+  /**
+   * The directory the socket and its config file are created in.
+   *
+   * Required rather than defaulted, for the reason `platform/paths.ts` refuses
+   * to default: the Electron shell and the headless shell keep their files in
+   * different places, and a default would let one of them silently serve hooks
+   * from the other's directory. Every caller states it — `src/main/index.ts`
+   * and `src/headless/host.ts` from their own user-data directory, tests from a
+   * temporary one.
+   */
+  dir: string
 }
 
 /* -------------------------------------------------------------- constants -- */
 
-const HOST = '127.0.0.1'
+/** Names inside {@link HookServerOptions.dir}. Stable across runs on purpose. */
+export const SOCKET_FILE = 'hook.sock'
+export const CONFIG_FILE = 'hook-endpoint.conf'
+
+/**
+ * The longest a unix socket path may be.
+ *
+ * `sun_path` is 104 bytes on macOS and 108 on Linux, and going over it does not
+ * produce a helpful error — `bind` fails with ENAMETOOLONG or, worse, silently
+ * truncates on some platforms. The real path is about 64 bytes
+ * (`~/Library/Application Support/Terminal Deck/hook.sock`), so this is a guard
+ * against a future data directory nobody measured, and it fails with a sentence
+ * rather than with an errno.
+ */
+const MAX_SOCKET_PATH_BYTES = 100
 
 /** Header names, kept in step with the brand rather than spelled out twice. */
 export const TOKEN_HEADER = `x-${BRAND.id}-token`
@@ -151,16 +214,25 @@ function tokenMatches(supplied: unknown, expected: string): boolean {
   return timingSafeEqual(a, b)
 }
 
-function isLoopback(address: string | undefined): boolean {
-  if (!address) return false
-  return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1'
-}
-
-/** Reject a Host that resolved somewhere other than this machine's loopback. */
-function hostIsLocal(host: string | undefined, port: number): boolean {
+/**
+ * Reject a Host header that names somebody else's server.
+ *
+ * This used to be the DNS-rebinding guard and it no longer has to be: a page in
+ * a browser cannot open a unix socket by any API, so there is nothing to rebind.
+ * What is left is a cheap sanity check that the caller believes it is talking to
+ * us — a proxy or a confused tool that reused the socket while addressing
+ * `example.com` is not a hook, and answering it would be answering a question
+ * nobody asked us.
+ *
+ * The port is stripped rather than matched, because there is no longer a port to
+ * match against: curl over `--unix-socket http://localhost/…` sends
+ * `Host: localhost`, and a client that spells the default port out sends
+ * `localhost:80`. Both are the same claim.
+ */
+export function hostIsLocal(host: string | undefined): boolean {
   if (!host) return false
-  const expected = new Set([`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`])
-  return expected.has(host.toLowerCase())
+  const name = host.toLowerCase().replace(/:\d+$/, '')
+  return name === 'localhost' || name === '127.0.0.1' || name === '[::1]' || name === '::1'
 }
 
 /** `/hook/<provider>/<event>` and nothing else. */
@@ -277,9 +349,12 @@ function deny(res: ServerResponse, code: number): void {
 }
 
 async function handle(req: IncomingMessage, res: ServerResponse, live: HookEndpoint): Promise<void> {
-  if (!isLoopback(req.socket.remoteAddress)) return deny(res, 403)
+  // No check on the peer address, and none is possible: a unix socket has no
+  // remote address, because the peer is on this machine by construction. The
+  // old `isLoopback(remoteAddress)` guard was answering the question "is this
+  // connection from this machine", and the transport now answers it.
   if (req.method !== 'POST') return deny(res, 405)
-  if (!hostIsLocal(req.headers.host, live.port)) return deny(res, 403)
+  if (!hostIsLocal(req.headers.host)) return deny(res, 403)
 
   // Token before path: an unauthenticated caller learns nothing about which
   // routes exist.
@@ -321,7 +396,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, live: HookEndpo
  *     await registerHookServer(ipcMain)
  *
  * Channels:
- *  - `hooks:server` (invoke) → { port, running } — the token is deliberately
+ *  - `hooks:server` (invoke) → { address, running } — the token is deliberately
  *    not exposed to the renderer. The renderer never needs to call the endpoint,
  *    and a secret that reaches page code is a secret one XSS away from leaving.
  *
@@ -330,7 +405,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, live: HookEndpo
  */
 export async function registerHookServer(
   ipcMain: Electron.IpcMain,
-  options: HookServerOptions = {},
+  options: HookServerOptions,
 ): Promise<HookEndpoint> {
   if (options.onEvent) listeners.add(options.onEvent)
 
@@ -339,7 +414,7 @@ export async function registerHookServer(
   // kept here too, not just for the socket below.
   ipcMain.removeHandler('hooks:server')
   ipcMain.handle('hooks:server', () => ({
-    port: endpoint?.port ?? null,
+    address: endpoint?.socketPath ?? null,
     running: endpoint !== null,
   }))
 
@@ -353,7 +428,7 @@ export async function registerHookServer(
  * Safe to call concurrently: the second caller joins the first start rather
  * than opening a socket of its own.
  */
-export async function startHookServer(options: HookServerOptions = {}): Promise<HookEndpoint> {
+export async function startHookServer(options: HookServerOptions): Promise<HookEndpoint> {
   if (options.onEvent) listeners.add(options.onEvent)
   if (endpoint) return endpoint
   if (starting) return starting
@@ -366,9 +441,97 @@ export async function startHookServer(options: HookServerOptions = {}): Promise<
   }
 }
 
+/**
+ * Does something answer on this path right now?
+ *
+ * A socket file left behind by a crash looks exactly like a socket file being
+ * served, and the difference decides between "clean up and bind" and "another
+ * copy of the app owns this". The only way to tell them apart is to try: a live
+ * server accepts the connection, an abandoned inode refuses it with ECONNREFUSED.
+ * Nothing is sent — the connection is opened and immediately dropped.
+ */
+function socketAnswers(socketPath: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const probe = connect(socketPath)
+    const settle = (answer: boolean): void => {
+      probe.destroy()
+      resolve(answer)
+    }
+    probe.once('connect', () => settle(true))
+    probe.once('error', () => settle(false))
+  })
+}
+
+/**
+ * Make the path free, or explain why it is not.
+ *
+ * The "two copies of the app" case ends here, and it ends by refusing rather
+ * than by stealing. Unlinking a socket somebody else is serving would not stop
+ * them serving it — their listener keeps the open inode — but it *would* take
+ * every hook on the machine away from them and give it to us, invisibly, with
+ * their sessions silently losing their events. A second copy that cannot have
+ * the endpoint is a second copy whose Settings pane says so, which is a state a
+ * person can act on.
+ *
+ * In practice `app.requestSingleInstanceLock()` in `src/main/index.ts` already
+ * stops a second copy of the *same* install, so what reaches here is a dev build
+ * meeting a packaged one — two different data directories, two different socket
+ * paths, and therefore no contention at all. This exists for the case that is
+ * left: a crash that left the file behind.
+ */
+async function clearStaleSocket(socketPath: string): Promise<void> {
+  if (!existsSync(socketPath)) return
+  if (await socketAnswers(socketPath)) {
+    throw new Error(
+      `hook server: ${socketPath} is already being served, so another copy of ${BRAND.name} owns it`,
+    )
+  }
+  unlinkSync(socketPath)
+}
+
+/**
+ * Write the curl config a hook reads its token out of.
+ *
+ * 0600 before anything is written into it, not after: a file created 0644 and
+ * tightened a moment later has a window in which the token is world-readable,
+ * and the whole point of moving the secret out of the provider configs was that
+ * those are 0644. `writeFileSync`'s mode is masked by the process umask, so it
+ * is set explicitly afterwards as well — the same belt-and-braces `hooks.ts`
+ * uses for the same reason.
+ *
+ * The values are quoted in curl's own config syntax. The socket path genuinely
+ * contains a space on macOS ("Application Support"), so an unquoted line here
+ * would be a feature that works on every machine except a real one.
+ */
+function writeEndpointConfig(configPath: string, socketPath: string, token: string): void {
+  const body = [
+    `# Written by ${BRAND.name} on every start. The token changes; the path does not.`,
+    `unix-socket = ${curlConfigValue(socketPath)}`,
+    `header = ${curlConfigValue(`${TOKEN_HEADER}: ${token}`)}`,
+    '',
+  ].join('\n')
+  writeFileSync(configPath, body, { mode: 0o600 })
+  chmodSync(configPath, 0o600)
+}
+
+/** A double-quoted curl config value, with the two characters it escapes. */
+function curlConfigValue(value: string): string {
+  return `"${value.split('\\').join('\\\\').split('"').join('\\"')}"`
+}
+
 async function openServer(options: HookServerOptions): Promise<HookEndpoint> {
+  const socketPath = join(options.dir, SOCKET_FILE)
+  if (Buffer.byteLength(socketPath) > MAX_SOCKET_PATH_BYTES) {
+    throw new Error(
+      `hook server: ${socketPath} is too long for a unix socket (${Buffer.byteLength(socketPath)} bytes, the limit is ${MAX_SOCKET_PATH_BYTES})`,
+    )
+  }
+
   const token = randomBytes(24).toString('hex')
-  const live: HookEndpoint = { port: 0, token }
+  const live: HookEndpoint = { socketPath, configPath: join(options.dir, CONFIG_FILE), token }
+
+  mkdirSync(options.dir, { recursive: true })
+  await clearStaleSocket(socketPath)
 
   const next = createServer((req, res) => {
     void handle(req, res, live).catch(() => {
@@ -392,10 +555,9 @@ async function openServer(options: HookServerOptions): Promise<HookEndpoint> {
       reject(error)
     }
     next.once('error', onListenError)
-    // Port 0 asks the OS for a free one: a fixed port would collide with
-    // whatever else on this machine already wanted it, and a second copy of
-    // the app would fail to start.
-    next.listen(options.port ?? 0, HOST, () => {
+    // A path, not a port. See the header: this is the whole staleness fix — the
+    // address a hook was installed with is the address it still is next week.
+    next.listen(socketPath, () => {
       next.removeListener('error', onListenError)
       // From here the server needs a permanent 'error' listener. An emitter
       // with none rethrows, so a failed accept() — EMFILE when the machine is
@@ -406,13 +568,18 @@ async function openServer(options: HookServerOptions): Promise<HookEndpoint> {
     })
   })
 
-  const address = next.address() as AddressInfo | null
-  if (!address) {
-    next.close()
-    throw new Error('hook server: could not determine the listening port')
-  }
+  // Only this user may connect. `listen` creates the socket with the process
+  // umask applied, which on a default macOS account is 0755 — every other
+  // account on the machine could open it. The kernel enforces this before a
+  // single byte is read, which is a stronger boundary than the token inside.
+  chmodSync(socketPath, 0o600)
+  writeEndpointConfig(live.configPath, socketPath, token)
 
-  live.port = address.port
+  // Nothing is claimed in `own-ports.ts` any more, and that is the point: this
+  // endpoint no longer holds a loopback port, so there is no longer a way for
+  // `remote/tunnel.ts` to offer a phone a tunnel to it by accident. A control
+  // plane that cannot be addressed over the network needs no list keeping it
+  // off one.
   server = next
   endpoint = live
   return live
@@ -436,14 +603,45 @@ export async function stopHookServer(): Promise<void> {
   }
 
   const running = server
+  const dead = endpoint
   server = null
   endpoint = null
   listeners.clear()
-  if (!running) return
-  await new Promise<void>((resolve) => {
-    running.close(() => resolve())
-    // Hook connections are short-lived, but a half-open one should not hold
-    // app shutdown open.
-    running.closeAllConnections?.()
-  })
+
+  /*
+   * The config file goes first, and it goes even if the close below throws.
+   *
+   * It is the only copy of this run's token, so deleting it is what makes the
+   * promise in this function's name true — a hook that fires after the app has
+   * quit presents no credential to anything. The socket file is removed with it
+   * so the next start finds a clean path rather than having to probe a corpse;
+   * `clearStaleSocket` handles the case where a crash meant this never ran.
+   */
+  if (dead) {
+    forget(dead.configPath)
+  }
+
+  if (running) {
+    await new Promise<void>((resolve) => {
+      running.close(() => resolve())
+      // Hook connections are short-lived, but a half-open one should not hold
+      // app shutdown open.
+      running.closeAllConnections?.()
+    })
+  }
+
+  // After the close, not before: Node unlinks the socket itself as part of
+  // closing a unix-socket server, and removing it first would leave the next
+  // start's freshly bound socket looking like ours to delete.
+  if (dead) forget(dead.socketPath)
+}
+
+/** Remove a file we own, treating "already gone" as success. */
+function forget(path: string): void {
+  try {
+    unlinkSync(path)
+  } catch {
+    // ENOENT is the ordinary case — Node removes the socket on close, and a
+    // config file may never have been written if the start failed early.
+  }
 }

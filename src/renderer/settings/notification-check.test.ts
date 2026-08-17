@@ -90,14 +90,14 @@ describe('deliveryCopy', () => {
  */
 describe('turnedOnABanner', () => {
   it('fires only when a banner setting is switched on', () => {
-    expect(turnedOnABanner({ 'general.notifyOnAttention': true })).toBe(true)
+    expect(turnedOnABanner({ 'notifications.onNeedsInput': true })).toBe(true)
     expect(turnedOnABanner({ 'notifications.onComplete': true })).toBe(true)
   })
 
   it('does not fire when one is switched off', () => {
     // Posting a banner to announce that banners are off would be absurd, and
     // would also burn the one prompt the OS ever gives us.
-    expect(turnedOnABanner({ 'general.notifyOnAttention': false })).toBe(false)
+    expect(turnedOnABanner({ 'notifications.onNeedsInput': false })).toBe(false)
     expect(turnedOnABanner({ 'notifications.onComplete': false })).toBe(false)
   })
 
@@ -117,7 +117,25 @@ describe('turnedOnABanner', () => {
 })
 
 describe('the ask is wired to the switch, not to a button', () => {
-  const sections = ['sections/GeneralSection.tsx', 'sections/NotificationsSection.tsx']
+  /*
+   * One section now, where there were two.
+   *
+   * Both banner switches lived in General until the window was regrouped by
+   * subject on 2026-08-17 — which is why this list existed at all, and why
+   * `BANNER_SETTINGS` is a list in a module rather than an id inside a section.
+   * Derived from the schema rather than typed out, so the day one of them moves
+   * again, the section it moves *to* is the one this checks.
+   */
+  const sections = [...new Set(
+    BANNER_SETTINGS.map((id) => {
+      const setting = SETTINGS.find((entry) => entry.id === id)
+      const section = setting?.section ?? 'notifications'
+      // The pane for a section id, by the convention every file in `sections/`
+      // follows. Agents is the assembled pane, so a banner switch landing there
+      // would have to be checked in the file that draws it.
+      return `sections/${section[0].toUpperCase()}${section.slice(1)}Section.tsx`
+    }),
+  )]
 
   it('every section drawing a banner switch routes its saves through the ask', () => {
     const detached: string[] = []

@@ -1,5 +1,9 @@
+import { readFileSync } from 'node:fs'
+import { join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
+  BLANK_URL,
+  NEW_TAB_LABEL,
   closeTab,
   moveTab,
   newTab,
@@ -103,5 +107,60 @@ describe('tabTitle', () => {
     expect(tabTitle({ ...tab, title: 'Dashboard', label: 'localhost:3000' })).toBe('Dashboard')
     expect(tabTitle({ ...tab, title: '   ', label: 'localhost:3000' })).toBe('localhost:3000')
     expect(tabTitle(tab)).toBe('New tab')
+  })
+
+  /**
+   * The app's own start page called itself `about:blank` — in the sidebar row,
+   * in the tab strip, in the pane bar, and in the tooltip on each of them,
+   * because all four read this one function. Chromium substitutes the address
+   * for a document with no `<title>`, `stateOf` in the main process forwarded
+   * it, and nothing here questioned a title that was plainly a URL.
+   *
+   * Fixed at the source in `src/main/browser-url.ts`; kept here as well because
+   * the renderer is not always talking to a main process built from the same
+   * commit — `patchFrom` in `BrowserWorkspace` already carries a field that
+   * "older main processes did not send".
+   */
+  it('does not let the blank address pass itself off as a name', () => {
+    const tab = newTab('a')
+    expect(tabTitle({ ...tab, title: BLANK_URL })).toBe(NEW_TAB_LABEL)
+    // With a real page behind it the host still wins over the placeholder.
+    expect(tabTitle({ ...tab, title: BLANK_URL, label: 'localhost:3000' })).toBe('localhost:3000')
+  })
+
+  it('does not repeat the address a tab is already showing', () => {
+    const tab = newTab('a')
+    expect(
+      tabTitle({
+        ...tab,
+        title: 'http://localhost:3000/pricing',
+        url: 'http://localhost:3000/pricing',
+        label: 'localhost:3000/pricing',
+      }),
+    ).toBe('localhost:3000/pricing')
+  })
+})
+
+/**
+ * The placeholder is one string in two files.
+ *
+ * The renderer cannot import from `src/main`, so `NEW_TAB_LABEL` exists twice.
+ * That is survivable only while something checks. Reading the other copy off
+ * disk is the check: rename one and this fails, instead of the sidebar and the
+ * main process quietly calling the same page two different things.
+ */
+describe('the name of an unvisited page', () => {
+  const mainSource = readFileSync(
+    join(resolve(__dirname, '..', '..'), 'main', 'browser-url.ts'),
+    'utf8',
+  )
+
+  it('matches the copy in the main process', () => {
+    expect(mainSource).toContain(`export const NEW_TAB_LABEL = '${NEW_TAB_LABEL}'`)
+    expect(mainSource).toContain(`export const BLANK_URL = '${BLANK_URL}'`)
+  })
+
+  it('is what a tab is born with, so the strip never jumps', () => {
+    expect(newTab('a').label).toBe(NEW_TAB_LABEL)
   })
 })

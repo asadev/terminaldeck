@@ -1,8 +1,16 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import type { ProviderId } from '../shared/types'
-import { currentPlatform, envPath, isWindows, withPath, type Env, type Platform } from './platform/host'
-import { firstLookupPath, loginPathSpec, lookupSpec } from './platform/lookup'
+import { AGENT_CATALOG, LOOKUP_AGENTS } from '../shared/agent-catalog'
+import type { CustomAgent } from '../shared/custom-agents'
+import {
+  canStart,
+  resolveAgentBinaries,
+  type AgentBinary,
+  type ResolveOptions,
+} from './agent-binaries'
+import { currentPlatform, envPath, isWindows, type Env, type Platform } from './platform/host'
+import { loginPathSpec } from './platform/lookup'
 import {
   IN_DISTRO_TIMEOUT_MS,
   WSL_EXE,
@@ -98,24 +106,33 @@ export interface ProviderSpec {
  * A target is honoured on Windows only. `wsl.exe` exists nowhere else, and
  * silently accepting one on macOS would produce a table that cannot spawn.
  */
-export function providersFor(
+/**
+ * How this platform gets a command running in a pty, as a function of the
+ * command.
+ *
+ * `wsl.exe … -- <login shell> -lic '<cli>'` inside a distro, `cmd.exe /c <cli>`
+ * on Windows, the CLI itself everywhere else.
+ *
+ * `exec` in front of the in-distro command so the agent replaces the login shell
+ * rather than running as its child: without it the pty's foreground process is a
+ * shell, so a Ctrl-C reaches the shell, and the exit code the tab reports is the
+ * shell's rather than the agent's.
+ *
+ * Lifted out of `providersFor`, where it was a closure, when a second caller
+ * appeared: {@link customProviderSpec} builds the same field for an agent the
+ * person added. Two copies of this would have been two answers to "how does a
+ * command start on Windows", and the added agent — the one nobody here has
+ * tested — would have had the copy that was never exercised.
+ */
+function launcher(
   platform: Platform,
   env: Env,
-  wsl: WslTarget | null = null,
-): Record<ProviderId, ProviderSpec> {
+  wsl: WslTarget | null,
+): (bin: string, args: string[], resumeArgs: string[]) => ProviderSpec['spawn'] {
   const windows = isWindows(platform)
   const target = windows ? wsl : null
 
-  /**
-   * `wsl.exe … -- <login shell> -lic '<cli>'` inside a distro, `cmd.exe /c <cli>`
-   * on Windows, the CLI itself everywhere else.
-   *
-   * `exec` in front of the in-distro command so the agent replaces the login
-   * shell rather than running as its child: without it the pty's foreground
-   * process is a shell, so a Ctrl-C reaches the shell, and the exit code the tab
-   * reports is the shell's rather than the agent's.
-   */
-  const launch = (bin: string, args: string[], resumeArgs: string[]): ProviderSpec['spawn'] => {
+  return (bin: string, args: string[], resumeArgs: string[]): ProviderSpec['spawn'] => {
     if (target) {
       const start = wslLaunch({
         distro: target.distro,
@@ -148,6 +165,50 @@ export function providersFor(
       resumeArgs: resumeArgs.length > 0 ? ['/c', bin, ...resumeArgs] : [],
     }
   }
+}
+
+/**
+ * The spawn spec for an agent somebody added.
+ *
+ * Everything a session start needs, built the same way and by the same function
+ * as the four shipped agents' — which is the whole reason this is here rather
+ * than in `custom-agents.ts`. An added agent is a name, two argument lists and a
+ * folder; nothing about how a command is launched on Windows or inside a
+ * distribution changes because this build has not heard of it, and a second
+ * launch path for the agents nobody has tested would be the one that breaks
+ * first and quietest.
+ *
+ * `label` and `bin` come straight off the record: `bin` is the name to look up,
+ * which for an added agent is the command as typed, and `providers.ts`'s own
+ * distinction between `bin` and `spawn.command` applies unchanged — the first
+ * answers "is it installed", the second is what actually runs.
+ */
+export function customProviderSpec(
+  agent: CustomAgent,
+  platform: Platform,
+  env: Env,
+  wsl: WslTarget | null = null,
+): ProviderSpec {
+  const args = [...agent.args]
+  const resumeArgs = [...agent.resumeArgs]
+  return {
+    id: agent.id,
+    label: agent.label,
+    bin: agent.command,
+    args,
+    resumeArgs,
+    spawn: launcher(platform, env, wsl)(agent.command, args, resumeArgs),
+  }
+}
+
+export function providersFor(
+  platform: Platform,
+  env: Env,
+  wsl: WslTarget | null = null,
+): Record<ProviderId, ProviderSpec> {
+  const windows = isWindows(platform)
+  const target = windows ? wsl : null
+  const launch = launcher(platform, env, wsl)
 
   /**
    * The plain shell tab.
@@ -171,66 +232,34 @@ export function providersFor(
   const shellBin = wslShell ? WSL_EXE : windows ? env.COMSPEC || 'cmd.exe' : env.SHELL || '/bin/zsh'
   const shellArgs = wslShell ? wslShell.args : windows ? [] : ['-l']
 
+  /**
+   * One agent's spec, read out of the catalogue rather than written here.
+   *
+   * The three object literals this replaced said the same thing three times —
+   * an id, a label, a binary name and two argument lists — in a file that also
+   * has to know about `cmd.exe`, `wsl.exe` and login shells. Every one of those
+   * facts is about the CLI rather than about a platform, so they live in
+   * `shared/agent-catalog.ts` where the renderer's picker reads the same copy,
+   * and adding a fifth agent stops meaning "edit this function".
+   *
+   * The launch wrapper is what stays here, because that genuinely is a platform
+   * question: the same `codex` is spawned bare on macOS, through `cmd.exe` on
+   * Windows and through `wsl.exe` inside a distribution.
+   */
+  const fromCatalog = (id: 'claude' | 'codex' | 'gemini'): ProviderSpec => {
+    const entry = AGENT_CATALOG[id]
+    // Narrowed for the type only. `bin` is null for the shell alone, and the
+    // shell is built below rather than passed through here.
+    const bin = entry.bin ?? id
+    const args = [...entry.args]
+    const resumeArgs = [...entry.resumeArgs]
+    return { id, label: entry.label, bin, args, resumeArgs, spawn: launch(bin, args, resumeArgs) }
+  }
+
   return {
-    // --continue verified against `claude --help` on this machine.
-    claude: {
-      id: 'claude',
-      label: 'Claude Code',
-      bin: 'claude',
-      args: [],
-      resumeArgs: ['--continue'],
-      spawn: launch('claude', [], ['--continue']),
-    },
-    /*
-     * Confirmed against the installed CLI's own `--help` on 2026-08-16
-     * (`codex-cli 0.146.0-alpha.3.1`):
-     *
-     *   resume  Resume a previous interactive session (picker by default;
-     *           use --last to continue the most recent)
-     *
-     * The note that used to be here said codex's `--help` "blocks on stdin so
-     * the flags could not be confirmed", and that was true of the npm-installed
-     * launcher on this Mac — its native binary is missing from the package
-     * (`vendor/aarch64-apple-darwin/path/` holds `rg` and nothing else), so
-     * every invocation throws ENOENT before printing anything. A working copy
-     * of the same CLI is on this machine and answers normally. The distinction
-     * matters beyond this comment: the same broken launcher is why Codex was
-     * refused an account mechanism it has always had. See `provider-accounts.ts`.
-     */
-    codex: {
-      id: 'codex',
-      label: 'Codex CLI',
-      bin: 'codex',
-      args: [],
-      resumeArgs: ['resume', '--last'],
-      spawn: launch('codex', [], ['resume', '--last']),
-    },
-    /*
-     * Gemini's resume flag exists and is still not used here, which is a
-     * deliberate gap rather than an unanswered question.
-     *
-     * `gemini --help` (0.32.1, installed) documents it:
-     *
-     *   -r, --resume  Resume a previous session. Use "latest" for most recent
-     *                 or index number (e.g. --resume 5)
-     *
-     * What could not be exercised is the case that decides whether it is safe:
-     * `--resume latest` in a folder with no previous session. This machine has
-     * no Gemini login, so the CLI refuses before it reaches its session code
-     * ("Please set an Auth method in your .../settings.json"), and a resume flag
-     * that turns out to error on an empty history would kill the tab with no
-     * explanation — which is worse than the current behaviour, where the resume
-     * option is simply not offered. `ProviderPicker`'s `canResume` says the same
-     * thing, so nothing on screen promises it either.
-     */
-    gemini: {
-      id: 'gemini',
-      label: 'Gemini CLI',
-      bin: 'gemini',
-      args: [],
-      resumeArgs: [],
-      spawn: launch('gemini', [], []),
-    },
+    claude: fromCatalog('claude'),
+    codex: fromCatalog('codex'),
+    gemini: fromCatalog('gemini'),
     shell: {
       id: 'shell',
       label: 'Shell',
@@ -358,7 +387,23 @@ async function detectInsideDistro(
 }
 
 /**
- * Which provider CLIs are actually installed, so the UI can grey out the rest.
+ * Which agents a session can actually be started on, so the UI can grey out the
+ * rest.
+ *
+ * ## "Installed" was the wrong question
+ *
+ * This used to answer whether the name resolved on PATH, and that is what let
+ * the worst bug in the 2026-08-16 recording through. The npm `@openai/codex`
+ * package puts a JavaScript launcher on PATH whose vendored native binary is
+ * missing on this machine, so `which codex` succeeds, this said `codex: true`,
+ * the picker offered it, a PTY opened, and the first thing the user saw was a
+ * Node `ENOENT` stack trace in a session they then had to close by hand. Five
+ * times.
+ *
+ * So the question is now "does it run", answered by running it — see
+ * `agent-binaries.ts`, which also knows where a working copy lives when the one
+ * on PATH is broken. The name of this function is unchanged because the whole
+ * app already asks it in the right place; only the answer got honest.
  *
  * `wsl` decides **which machine is being asked about**, and that is not a
  * detail: whether `claude` exists is a question about Ubuntu's PATH, not about
@@ -415,33 +460,82 @@ export async function detectProviders(
     }
   }
 
-  const PATH = await loginPath(platform)
-  // Never `{ ...process.env, PATH }`: on Windows that leaves two spellings of
-  // the same variable in one object. `withPath` removes the ambiguity.
-  const env = withPath(process.env, PATH, platform)
+  const binaries = await agentBinaries(platform)
+  return {
+    claude: canStart(binaries.claude),
+    codex: canStart(binaries.codex),
+    gemini: canStart(binaries.gemini),
+    // The shell is never looked up: it is a path this table already resolved.
+    shell: true,
+  }
+}
 
-  /**
-   * Does this name resolve on that PATH? Never throws: `which`/`where.exe`
-   * exiting non-zero *is* the "not installed" answer, and a rejected promise
-   * here would take the whole table down over the ordinary case.
-   */
-  const onPath = async (bin: string): Promise<boolean> => {
-    const spec = lookupSpec(platform, bin)
-    try {
-      const { stdout } = await run(spec.command, spec.args, { env, windowsHide: true })
-      // `where.exe` exits 0 having printed nothing only in cases that are not
-      // a match; requiring a path keeps "found" meaning "there is a file".
-      return firstLookupPath(stdout) !== null
-    } catch {
-      return false
-    }
+/**
+ * Every agent's binary, resolved against the user's login PATH.
+ *
+ * A thin wrapper so the two callers in this module — and `prerequisites.ts`,
+ * which asks the same question to draw a Setup row — cannot get the PATH
+ * argument wrong. A GUI app on macOS inherits a minimal PATH, so probing
+ * without `loginPath` reports half the machine as missing.
+ */
+export async function agentBinaries(
+  platform: Platform = currentPlatform(),
+  options: Omit<ResolveOptions, 'platform' | 'path'> = {},
+): Promise<Record<ProviderId, AgentBinary>> {
+  // Spelled `path:` from a call rather than through a `PATH` local: an object
+  // literal holding a spread and a `PATH` token is the `{ ...process.env, PATH }`
+  // shape `platform/env-path.test.ts` scans the whole tree for, and it cannot
+  // tell this one from the one that leaves Windows holding two spellings of the
+  // same variable.
+  return resolveAgentBinaries({ ...options, platform, path: await loginPath(platform) })
+}
+
+/**
+ * The spawn table with each agent pointed at a copy that actually runs.
+ *
+ * `providersFor` is pure and stays pure — it is pinned by a test on both
+ * platforms and must keep answering the same thing without touching a disk. This
+ * is the version a session start should use, and the difference is one field:
+ * when the name on PATH will not execute and a declared alternate will,
+ * `spawn.command` becomes that alternate's absolute path.
+ *
+ * Only ever applied to a session running on *this* machine. Inside WSL the
+ * command is a `wsl.exe` line whose payload is resolved by the distribution's
+ * own login shell, and substituting a macOS or Windows path into it would name a
+ * file that side cannot see; on Windows the bare name is deliberate, because
+ * what answers a lookup there is a `.cmd` shim that has to go through the
+ * command processor rather than be executed directly. Both cases are left
+ * exactly as `providersFor` built them.
+ */
+export async function resolvedProvidersFor(
+  platform: Platform = currentPlatform(),
+  env: Env = process.env,
+  wsl: WslTarget | null = null,
+): Promise<Record<ProviderId, ProviderSpec>> {
+  const table = providersFor(platform, env, wsl)
+  if (wsl !== null || isWindows(platform)) return table
+
+  const binaries = await agentBinaries(platform)
+  const point = (spec: ProviderSpec): ProviderSpec => {
+    const binary = binaries[spec.id]
+    // `runnable` is the bare name in the ordinary case, and only an absolute
+    // path when the ordinary case failed — so this is a no-op unless something
+    // is actually wrong with the install.
+    if (!binary || binary.runnable === null || binary.runnable === spec.spawn.command) return spec
+    return { ...spec, spawn: { ...spec.spawn, command: binary.runnable } }
   }
 
-  const [claude, codex, gemini] = await Promise.all([
-    onPath(table.claude.bin),
-    onPath(table.codex.bin),
-    onPath(table.gemini.bin),
-  ])
-  // The shell is never looked up: it is a path this table already resolved.
-  return { claude, codex, gemini, shell: true }
+  return {
+    claude: point(table.claude),
+    codex: point(table.codex),
+    gemini: point(table.gemini),
+    // Nothing to point at: the shell is already an absolute path.
+    shell: table.shell,
+  }
 }
+
+/**
+ * The agent names this build looks up, for anything that wants the list rather
+ * than the answers. Derived from the catalogue, so a new entry joins by existing.
+ */
+export const LOOKUP_BINS: readonly string[] = LOOKUP_AGENTS.map((entry) => entry.bin ?? '')

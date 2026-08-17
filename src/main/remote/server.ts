@@ -111,6 +111,7 @@ import type { CredentialMessage, CredentialProxy } from './credentials'
 // filesystem. The instance is injected; nothing here constructs one.
 import type { DevServerState, DevServers, SessionOpener } from '../dev-server'
 import { scanDevPortsDetailed } from '../dev-ports'
+import { ownPorts } from '../own-ports'
 import { currentPlatform, machineNoun } from '../platform/host'
 import { createRelayClient, relayEnabled, relayUrl, type RelayLink, type RelayState } from './relay-client'
 import { loadHostIdentity } from './host-identity'
@@ -1258,7 +1259,18 @@ export function createRemoteEndpoint(options: RemoteEndpointOptions): RemoteEndp
     const hub = createTunnelHub({
       scan: scanPorts,
       send: (message) => send(connection, message),
-      reserved: options.reservedPorts,
+      /*
+       * The endpoint's own reserved list, plus every other port this app is
+       * currently serving on.
+       *
+       * Read here rather than folded in when the endpoint was created, because
+       * this runs when a phone connects and that is always after every listener
+       * has started. `own-ports.ts` says what is in it and why the list stopped
+       * being one entry long — the short version is that `deck-control` is the
+       * copilot's whole tool surface on a loopback port, and a phone being
+       * offered a tunnel to it would be a way around the per-device grant.
+       */
+      reserved: [...(options.reservedPorts ?? []), ...ownPorts()],
       budget: streams,
       // The desktop's device list shows a phone's live tunnels next to its
       // sessions, so opening or closing one has to redraw it for the same

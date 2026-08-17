@@ -138,7 +138,7 @@ describe('idle mode', () => {
     // three. Silence about the other three is indistinguishable from forgetting
     // them.
     const status = await host.status()
-    expect(status.neverRunning.join(' ')).toContain('cost polling')
+    expect(status.neverRunning.join(' ')).toContain('usage polling')
     expect(status.neverRunning.join(' ')).toContain('transcript tailing')
   })
 })

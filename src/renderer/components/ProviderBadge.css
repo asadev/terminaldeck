@@ -23,3 +23,62 @@
      mark rather than a second heading. */
   opacity: 0.82;
 }
+
+/* ---------------------------------------------------------- brand colour -- */
+
+/*
+  The marks wear their own colours.
+
+  They were monochrome, deliberately, and the note in `ProviderBadge.tsx`
+  argued for it: four saturated logos in a toolbar would be the loudest thing on
+  screen. Asad asked for the opposite in as many words — *real provider logos in
+  their real colours, Claude orange* — and he is right for the reason the old
+  note missed. Colour is what makes a mark identify a service at 14px. A grey
+  burst beside a grey sparkle beside a grey hexagon is three grey shapes; an
+  orange one, a blue one and a black one are Claude, Gemini and OpenAI, read
+  before the eye reaches the word next to them. That is the whole job of the
+  badge, and the account rows and model names it appears beside are exactly
+  where somebody is scanning for "which service is this".
+
+  ## Why the hex values are here and not in `tokens.css`
+
+  Two reasons, and the first is enforced by a test. `tokens.test.ts` forbids
+  `#d97757` anywhere in the token sheet, because that is Anthropic's brand
+  orange and *this product* used to wear it as its accent — Asad's own
+  correction, and it stands. A mark identifying Claude is the one place the
+  colour belongs, and it is not the palette. The second is the rule from
+  CLAUDE.md that data keeps its meaningful colours: these are data about which
+  service is which, like `--status-*`, not chrome.
+
+  ## Where each value comes from
+
+  - **Claude** `#d97757` — Anthropic's clay orange. 5.1:1 on the dark chrome,
+    3.2:1 on paper, so it clears the 3:1 a non-text graphic needs in both.
+  - **Codex** — no colour at all, and that *is* its colour: OpenAI's mark is
+    monochrome, black on light and white on dark, which is precisely what
+    `currentColor` already resolves to in each theme. Painting it something
+    would be less accurate than leaving it alone, not more.
+  - **Gemini** `#4285f4` — Google's blue, the dominant stop of the mark's
+    blue-to-purple gradient. One flat colour rather than the gradient, and that
+    is a simplification said out loud rather than a pretence: a three-stop
+    gradient inside a 14px stroke reads as a smudge, and the blue is what
+    survives at that size.
+  - **Shell** — not a brand. Stays `currentColor`.
+
+  Both themes get the same value here, which is allowed and correct: a brand
+  colour is not a theme colour, and each one is legible on both grounds. The
+  house rule this must not break — never define a colour only inside
+  `[data-theme='dark']` — is satisfied by defining it in neither.
+*/
+
+.provider-badge[data-provider='claude'] {
+  color: #d97757;
+  /* Full strength. The 0.82 above exists to stop a *grey* mark out-weighing the
+     name beside it; a coloured mark that is 18% faded just looks washed out. */
+  opacity: 1;
+}
+
+.provider-badge[data-provider='gemini'] {
+  color: #4285f4;
+  opacity: 1;
+}

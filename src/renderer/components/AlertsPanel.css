@@ -99,6 +99,54 @@
    `PageEmpty` in shell.css — there is one empty-state shape in the app now,
    so this file no longer carries its own. */
 
+/* ---------------------------------------------------------------- in a sheet -- */
+
+/*
+  The same panel, inside the pop-up — *"notifications should be a pop-up just
+  like settings, not a full page."*
+
+  Only two things have to give, and both are consequences of the dialog having a
+  header of its own. `--t-title2` is the size `.modal-title` is drawn at, so the
+  summary arrived as a second title the same size as "Alerts" and fifty pixels
+  under it — the doubled-heading fault this file's own comments keep undoing one
+  level down, re-created by the change of surround. It becomes the supporting
+  line the dialog would otherwise have taken as `description`, which is the role
+  it was always playing. The `78rem` measure and the page-sized gap under the
+  head are both about a panel that has a window to fill; a 620px sheet is the
+  measure now.
+
+  Scoped on `.modal-body`, not carried on a prop, because nothing about this is
+  a decision the panel makes — it is what the panel looks like when something
+  else has already put a title above it. A `compact` flag would have to be
+  passed correctly by every future caller to mean the same thing.
+*/
+.modal-body > .alerts {
+  max-width: none;
+}
+
+.modal-body > .alerts > .alerts-head {
+  min-height: 0;
+  margin-bottom: var(--sp-4);
+}
+
+/* Size and weight only — no colour.
+   The three states above already say the right thing in colour (red for the
+   worst, quiet for "Checking…", ordinary otherwise) and re-stating any of them
+   here would mean keeping two copies of that decision in step. */
+.modal-body > .alerts .alerts-summary {
+  font-size: var(--t-callout);
+  font-weight: var(--w-regular);
+  line-height: var(--lh-body);
+  letter-spacing: normal;
+}
+
+/* Critical is the one that keeps some weight: the whole point of this line is
+   that the worst thing in the list is legible before the list is read, and at
+   callout size the red alone is thin. */
+.modal-body > .alerts .alerts-summary[data-worst='critical'] {
+  font-weight: var(--w-medium);
+}
+
 /* ---------------------------------------------------------------- groups -- */
 
 .alerts-group {

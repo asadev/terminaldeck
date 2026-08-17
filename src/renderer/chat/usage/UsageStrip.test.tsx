@@ -1,7 +1,9 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { UsageStripView } from './UsageStrip'
-import type { PlanLimitSnapshot, SessionSummary, TokenUsage } from './types'
+import type { SessionSummary, TokenUsage } from './types'
 
 /**
  * No DOM in this project's test setup, so these render to static markup. That
@@ -23,12 +25,6 @@ function session(overrides: Partial<SessionSummary> = {}): SessionSummary {
     models: ['claude-opus-5'],
     requests: 12,
     usage: usage({ input: 1200, output: 3400, cacheRead: 1_200_000, cacheWrite1h: 88_000 }),
-    cost: {
-      cost: { input: 0.01, output: 0.05, cacheWrite: 0.7, cacheRead: 0.07, total: 0.83 },
-      byModel: {},
-      unpricedModels: [],
-      usedLegacyRate: false,
-    },
     context: { tokens: 142_000, window: 200_000, percent: 71, remaining: 58_000, level: 'warning' },
     warnings: [{ kind: 'context-window', level: 'warning', percent: 71, message: 'Context 71% full.' }],
     preContextTokens: 20_000,
@@ -40,25 +36,38 @@ function session(overrides: Partial<SessionSummary> = {}): SessionSummary {
   }
 }
 
-const NO_SPEND = { total: 0, sessions: 0, carriedOver: 0, hasUnpriced: false }
-const TODAY = { total: 4.1, sessions: 3, carriedOver: 0, hasUnpriced: false }
+const NOTHING_TODAY = { tokens: 0, sessions: 0, carriedOver: 0 }
+const TODAY = { tokens: 4_100_000, sessions: 3, carriedOver: 0 }
 
 function render(props: Partial<Parameters<typeof UsageStripView>[0]> = {}): string {
   return renderToStaticMarkup(
-    <UsageStripView session={session()} today={TODAY} plan={null} scanning={false} now={NOW} {...props} />,
+    <UsageStripView session={session()} today={TODAY} scanning={false} {...props} />,
   )
 }
 
 describe('what the strip reports', () => {
-  it('shows context, session spend, project spend today and the token split', () => {
+  it('shows context, requests, the project’s tokens today and the token split', () => {
     const html = render()
     expect(html).toContain('142k / 200k · 71%')
-    expect(html).toContain('$0.83')
-    expect(html).toContain('$4.10')
+    expect(html).toContain('>12<')
+    expect(html).toContain('4.1M')
     expect(html).toContain('in 1.2k')
     expect(html).toContain('out 3.4k')
-    // Cache dominates the bill, so it is on screen, not only in a tooltip.
+    // Cache dominates the traffic, so it is on screen, not only in a tooltip.
     expect(html).toContain('cache 1.2M read / 88k write')
+  })
+
+  it('prints no dollar figure anywhere', () => {
+    /*
+     * Two items on this strip were money — "Session" showed what the session
+     * had cost and "Today" what the project had, both with a `≥` variant for
+     * an unpriced model. Both are gone; the argument is at the bottom of
+     * `src/main/cost.ts`. Rendered rather than grepped for, because the point
+     * is what reaches the screen.
+     */
+    expect(render()).not.toMatch(/[$]/)
+    expect(render({ today: { ...TODAY, carriedOver: 2 } })).not.toMatch(/[$]/)
+    expect(render({ session: session({ compactions: 3 }) })).not.toMatch(/[$]/)
   })
 
   it('carries the main process&apos;s own context warning', () => {
@@ -82,44 +91,6 @@ describe('what the strip reports', () => {
     expect(render()).not.toContain('Compacted')
   })
 
-  it('says a spend is a floor when a model has no published rate', () => {
-    const html = render({
-      session: session({
-        cost: {
-          cost: { input: 0, output: 0, cacheWrite: 0, cacheRead: 0, total: 0.5 },
-          byModel: {},
-          unpricedModels: ['mystery-model'],
-          usedLegacyRate: false,
-        },
-      }),
-    })
-    expect(html).toContain('Spend is a floor')
-    expect(html).toContain('mystery-model')
-    // On the figure itself, not only in a note: notes are capped at two and this
-    // one is third in line behind a refusal and a context warning.
-    expect(html).toContain('≥ $0.50')
-  })
-
-  it('keeps the floor mark on the figure when the note is crowded out', () => {
-    const html = render({
-      refreshReason: 'The session is working — try again once it is idle.',
-      session: session({
-        cost: {
-          cost: { input: 0, output: 0, cacheWrite: 0, cacheRead: 0, total: 0.5 },
-          byModel: {},
-          unpricedModels: ['mystery-model'],
-          usedLegacyRate: false,
-        },
-      }),
-      canRefreshPlan: true,
-      onRefreshPlan: () => {},
-    })
-    // The refusal and the context warning fill both note slots…
-    expect(html).not.toContain('Spend is a floor')
-    // …so the caveat has to survive on the number.
-    expect(html).toContain('≥ $0.50')
-  })
-
   it('marks today as an upper bound when a session began before today', () => {
     const html = render({ today: { ...TODAY, carriedOver: 2 } })
     expect(html).toContain('counted in full')
@@ -128,8 +99,8 @@ describe('what the strip reports', () => {
 
 describe('empty states', () => {
   it('separates "still reading" from "nothing recorded"', () => {
-    expect(render({ session: null, today: NO_SPEND, scanning: true })).toContain('Reading transcripts…')
-    expect(render({ session: null, today: NO_SPEND })).toContain('No usage recorded for this project yet.')
+    expect(render({ session: null, today: NOTHING_TODAY, scanning: true })).toContain('Reading transcripts…')
+    expect(render({ session: null, today: NOTHING_TODAY })).toContain('No usage recorded for this project yet.')
   })
 
   it('says so when the bridge is missing rather than showing zeros', () => {
@@ -142,14 +113,14 @@ describe('empty states', () => {
    * about one session there, so the sentence has to be about one session.
    */
   it('blames the session, not the project, when the strip is about one session', () => {
-    const html = render({ session: null, today: NO_SPEND, scoped: true })
+    const html = render({ session: null, today: NOTHING_TODAY, scoped: true })
     expect(html).toContain('Nothing recorded for this session yet.')
     expect(html).not.toContain('this project yet')
   })
 
   it('still says "still reading" first, whatever the strip is about', () => {
     // Scanning outranks both sentences: neither "no usage" claim is known yet.
-    expect(render({ session: null, today: NO_SPEND, scoped: true, scanning: true })).toContain(
+    expect(render({ session: null, today: NOTHING_TODAY, scoped: true, scanning: true })).toContain(
       'Reading transcripts…',
     )
   })
@@ -161,68 +132,42 @@ describe('empty states', () => {
   })
 })
 
-describe('the plan limit', () => {
-  const plan: PlanLimitSnapshot = {
-    sessionId: 'pty-1',
-    available: true,
-    source: 'usage-panel',
-    message: null,
-    capturedAt: NOW - 60_000,
-    reason: null,
-    limits: [
-      { id: 'session', label: 'Current session', scope: 'session', percent: 5, resetsAt: '4am (Asia/Dubai)' },
-      { id: 'week', label: 'Current week (all models)', scope: 'week', percent: 80, resetsAt: 'Aug 14 at 2pm' },
-    ],
-  }
-
-  it('shows each limit the CLI reported, with its reset time', () => {
-    const html = render({ plan })
-    expect(html).toContain('Session')
-    expect(html).toContain('5%')
-    expect(html).toContain('80%')
-    expect(html).toContain('resets 4am (Asia/Dubai)')
-  })
-
-  it('says plainly that it is unavailable rather than estimating one', () => {
-    const html = render({ plan: null })
-    expect(html).toContain('not available')
-    // No limit chip at all — not a 0%, and not a guess dressed as a reading.
+describe('the subscription limit is not on this strip any more', () => {
+  /*
+   * It used to be here: a "Plan" item reading `Session 5% Week 80% · resets
+   * 4am`, and the Check button that types `/usage`. Both moved to the session's
+   * own chrome — `shell/UsageBar.tsx`, beside the account chip — because that is
+   * where Asad asked for the bar twice, and because from here it could not be
+   * reached at all by a session drawn as a terminal.
+   *
+   * These guard the *other* half of that decision, which is the half that is
+   * easy to undo by accident: it did not stay in both places. Two readings of
+   * one subscription, from two channels with two different rules about stale
+   * numbers, is how a person ends up with two answers on one screen and no way
+   * to tell which is true.
+   */
+  it('draws no limit chip, no "not available" and no Check button', () => {
+    const html = render()
     expect(html).not.toContain('us-plan-limit')
+    expect(html).not.toContain('us-refresh')
+    expect(html).not.toContain('not available')
+    expect(html).not.toMatch(/>Plan</)
   })
 
-  it('does not render a Check button that cannot run', () => {
-    // A control that silently does nothing is worse than its absence: without
-    // the refresh method on the bridge, there is no button at all.
-    expect(render({ plan: null })).not.toContain('us-refresh')
-    expect(render({ plan: null, canRefreshPlan: true })).not.toContain('us-refresh')
+  it('says in the source where the reading went, so it is not quietly re-added', () => {
+    // A deleted feature with no forwarding address is a feature somebody
+    // rebuilds. The note at the top of the file is that address, and this is
+    // what keeps it there.
+    const source = readFileSync(join(__dirname, 'UsageStrip.tsx'), 'utf8')
+    expect(source).toContain('shell/UsageBar.tsx')
   })
 
-  it('offers the Check button once it can actually type /usage', () => {
-    const html = render({ plan: null, canRefreshPlan: true, onRefreshPlan: () => {} })
-    expect(html).toContain('us-refresh')
-    expect(html).toContain('Types /usage into this session')
-  })
-
-  it('explains a refusal instead of appearing to do nothing', () => {
-    const html = render({
-      plan: null,
-      canRefreshPlan: true,
-      onRefreshPlan: () => {},
-      refreshReason: 'The session is working — try again once it is idle.',
-    })
-    expect(html).toContain('try again once it is idle')
-  })
-
-  it('reports a limit the CLI named without a number as such', () => {
-    const html = render({
-      plan: {
-        ...plan,
-        source: 'warning',
-        message: 'Approaching weekly limit',
-        limits: [{ id: 'week', label: 'weekly limit', scope: 'week', percent: null, resetsAt: null }],
-      },
-    })
-    expect(html).toContain('near limit')
-    expect(html).not.toContain('0%')
+  it('no longer asks the bridge for plan limits at all', () => {
+    // The subscription channels are gone from `UsageBridge`, not merely unused
+    // by the view: an optional method nobody calls is how a bridge comes to
+    // describe a feature that does not exist.
+    const hook = readFileSync(join(__dirname, 'useUsage.ts'), 'utf8')
+    expect(hook).not.toContain('watchPlanLimits')
+    expect(hook).not.toContain('refreshPlanLimits')
   })
 })

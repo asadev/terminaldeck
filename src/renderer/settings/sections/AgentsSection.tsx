@@ -1,5 +1,19 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Button, Explain, Group, LinkOut, Notice, Row, SectionHead, ToolVersion } from '../controls'
+// Relative, not '@shared/agent-catalog': vitest runs without the electron-vite
+// alias, so a *value* import through it resolves in the app and throws in a test.
+import { LOOKUP_AGENTS } from '../../../shared/agent-catalog'
+import { profileLoginLabel, useKnownSignIns } from '../../accounts'
+import {
+  Button,
+  Group,
+  LinkOut,
+  Notice,
+  Row,
+  SectionHead,
+  SettingList,
+  ToolVersion,
+  type OptionState,
+} from '../controls'
 import { sectionMeta } from '../settings-schema'
 import {
   errorText,
@@ -11,23 +25,63 @@ import {
   type SectionProps,
   type ToolStatus,
 } from '../settings-bridge'
+import { AccountsSection } from './AccountsSection'
+import { SetupSection } from './SetupSection'
 
 /**
- * Agents — what is installed, and which login a session runs as.
+ * Agents — the whole subject, on one pane.
  *
- * The picker for *which* agent runs by default now lives in General, with the
- * rest of the day-to-day choices. What is left is the part that is not a
- * setting at all: availability is discovered, never declared — `prerequisites.ts`
- * asks the user's login shell what is on PATH and, for Claude, whether a
- * credential exists. An agent that is not installed is shown and disabled
- * rather than hidden, because "Codex is missing from this list" is a worse bug
- * report than "Codex is greyed out and links to its install page".
+ * ## Three sections became one
  *
- * So this section stores nothing (`settingsIn('agents')` is empty) and is still
- * worth a pane.
+ * Agents, Accounts and Setup were the same subject split across three rail
+ * entries, and each of them spent a paragraph pointing at the other two. Agents
+ * opened with "which agent runs by default — that choice is in General" and
+ * closed with "manage accounts"; Setup opened with "the agent CLIs are in
+ * Agents"; General's coding-tool picker had "see what is installed" under it.
+ * Four cross-references between four screens, all describing one question.
+ *
+ *   > "Now see, agents is separate and accounts is separate page, which should
+ *   > be one place because they are related to each other and it is one thing.
+ *   > And here if I click on choose the default coding tool, it will take me
+ *   > here. See — default coding tool, agents, accounts are one place thing.
+ *   > They should be at one place and simple."
+ *
+ * All four cross-references are gone, because the things they pointed at are
+ * now the next thing down the page.
+ *
+ * ## Assembled, not rewritten
+ *
+ * The Accounts and Setup halves are the *same components* that were the
+ * Accounts and Setup panes, rendered here with their own heading suppressed.
+ * That is deliberate and it is the answer to the risk he named:
+ *
+ *   > "when you reorganize you mostly miss the things and you drop some stuff.
+ *   > So make sure you don't drop anything."
+ *
+ * Nothing was re-typed to be moved, so nothing could be lost in the typing. A
+ * feature of one of those panes that this file has never heard of still draws,
+ * because this file is not what draws it. `nothing-dropped.test.tsx` then
+ * checks the result from the outside.
+ *
+ * ## What this file itself adds
+ *
+ * The two defaults, and the list of what is installed. Availability is
+ * discovered, never declared: `prerequisites.ts` asks the user's login shell
+ * what is on PATH and, for Claude, whether a credential exists. An agent that
+ * is not installed is shown and disabled rather than hidden, because "Codex is
+ * missing from this list" is a worse bug report than "Codex is greyed out and
+ * links to its install page".
  */
 
-const AGENT_IDS = ['claude', 'codex', 'gemini']
+/**
+ * The agents, from the one declaration.
+ *
+ * This was a literal `['claude', 'codex', 'gemini']` here, another in
+ * `prerequisites.ts`, and a third in `SETUP_TOOL_IDS`. A fourth agent had to be
+ * remembered in all three, and forgetting one produces a pane that quietly
+ * disagrees with the New-session picker about which agents exist.
+ */
+const AGENT_IDS: readonly string[] = LOOKUP_AGENTS.map((entry) => entry.id as string)
 
 const STATE_LABEL: Record<ToolStatus['state'], string> = {
   ready: 'Ready',
@@ -36,7 +90,26 @@ const STATE_LABEL: Record<ToolStatus['state'], string> = {
   unknown: 'Unknown',
 }
 
-export function AgentsSection({ bridge, goTo }: SectionProps) {
+/**
+ * Suffix for the default-tool picker. Short — it renders inside an `<option>`.
+ *
+ * This moved here with the picker itself. It was in `GeneralSection` while the
+ * row was, which meant the code that knows whether a tool exists lived two
+ * files away from the code that lists the tools.
+ */
+export function optionStateFor(prereq: Prerequisites | null, value: string): OptionState {
+  // A plain shell is always available; it is the fallback the main process
+  // already falls back to when a requested provider is missing.
+  if (value === 'shell' || !prereq) return {}
+  const tool = prereq.tools.find((entry) => entry.id === value)
+  if (!tool) return {}
+  if (tool.state === 'missing') return { disabled: true, suffix: 'not installed' }
+  if (tool.state === 'installed-not-authed') return { suffix: 'sign-in needed' }
+  return {}
+}
+
+export function AgentsSection(props: SectionProps) {
+  const { values, save, bridge, loading } = props
   const meta = sectionMeta('agents')
   const [prereq, setPrereq] = useState<Prerequisites | null>(null)
   const [profiles, setProfiles] = useState<ProfilesSnapshot | null>(null)
@@ -85,6 +158,13 @@ export function AgentsSection({ bridge, goTo }: SectionProps) {
     [bridge],
   )
 
+  /*
+   * Sign-in answers this window has already read — see `useKnownSignIns`. A
+   * read, never a probe: this pane draws on open and the picker below has one
+   * option per account.
+   */
+  const knownSignIns = useKnownSignIns()
+
   const agents = prereq?.tools.filter((tool) => AGENT_IDS.includes(tool.id)) ?? []
   // profiles.ts synthesises the user's own install as `system`, so this is
   // never empty once the list has loaded.
@@ -97,21 +177,70 @@ export function AgentsSection({ bridge, goTo }: SectionProps) {
 
       {error && <Notice tone="error">{error}</Notice>}
 
-      {/*
-        An explanation, not an alert.
+      {/* The two questions a new session answers before it starts: which tool,
+          and as whom. They were on two different panes, and the picker for the
+          first carried a link to the second. */}
+      <Group title="New sessions">
+        <SettingList
+          section="agents"
+          values={values}
+          save={save}
+          disabled={loading}
+          optionStates={{
+            'agents.defaultProvider': (value) => optionStateFor(prereq, value),
+          }}
+        />
 
-        This was a `Notice tone="info"` — a tinted block with a rule down its
-        side — for a sentence that is permanently true and was the first thing
-        in the section. Two of those on one pane is how a page of settings comes
-        to read as a page of warnings. Nothing it offers has moved: the button
-        is the same button and still goes to General.
-      */}
-      <Explain title="Which agent runs by default">
-        That choice is in General.{' '}
-        <button type="button" className="settings-inline-btn" onClick={() => goTo('general')}>
-          Choose the default coding tool
-        </button>
-      </Explain>
+        {bridge.listProfiles && (
+          <Row
+            label="Run them as"
+            /* One word for one thing. These used to say "profile" while the
+               screen that manages them says "account", and a feature a person
+               cannot name is a feature they cannot find. The value and the
+               channel are unchanged — `profiles:set-default`, the same one the
+               Accounts list below writes — so the two cannot disagree. */
+            help="Which account, unless a folder or the session says otherwise."
+            more="Claude Code only. Other agents ignore this and use whichever login they already have on this machine."
+            htmlFor="settings-default-profile"
+            control={
+              <span className="settings-select-wrap">
+                <select
+                  id="settings-default-profile"
+                  className="settings-select"
+                  value={defaultProfileId}
+                  disabled={profileList.length === 0 || !bridge.setDefaultProfile}
+                  onChange={(event) => chooseProfile(event.target.value)}
+                >
+                  {/*
+                    The login, not the key it is filed under.
+
+                    This read `Default — your own install`, `Default (Codex CLI)
+                    — your own install`, `Default (Gemini CLI) — your own
+                    install`. Appending the explanation made it *less* wrong than
+                    the bare slug and no less generated: "Default" is what
+                    `systemProfileId` mints for the machine's own install, it is
+                    identical on every install of this app, and it is not a name
+                    anybody chose. `profileLoginLabel` says the same thing
+                    without the slug — the address when the agent named one, and
+                    otherwise which install this is, which is the half that was
+                    already carrying the meaning.
+
+                    Nothing here probes: a `<select>` that spawned a CLI per
+                    option would cost three processes to open. It reads what the
+                    chip and the Accounts list below have already asked, and
+                    falls to the install sentence until then.
+                  */}
+                  {profileList.map((profile) => (
+                    <option key={profile.id} value={profile.id}>
+                      {profileLoginLabel(profile, knownSignIns[profile.id])}
+                    </option>
+                  ))}
+                </select>
+              </span>
+            }
+          />
+        )}
+      </Group>
 
       <Group title="What is installed">
         {!bridge.checkPrerequisites ? (
@@ -141,6 +270,13 @@ export function AgentsSection({ bridge, goTo }: SectionProps) {
                       <ToolVersion tool={tool} />
                     </span>
                     {tool.remedy && <span className="settings-tool-note">{tool.remedy}</span>}
+                    {/* Not a remedy. Today it says one thing: that this agent
+                        is running from a copy other than the one on your PATH,
+                        which is how Codex works on a machine whose npm launcher
+                        cannot spawn its own vendored binary. A person who is
+                        never told that finds `codex` failing in their terminal
+                        and working here, and stops trusting the row. */}
+                    {tool.note && <span className="settings-tool-note">{tool.note}</span>}
                   </span>
                   <span className="settings-tool-state settings-tool-state-lit">
                     {STATE_LABEL[tool.state]}
@@ -181,57 +317,18 @@ export function AgentsSection({ bridge, goTo }: SectionProps) {
         )}
       </Group>
 
-      {/* One word for one thing. These used to say "profile" while the screen
-          that manages them says "account", and a feature a person cannot name
-          is a feature they cannot find. The value and the channel are
-          unchanged — `profiles:set-default`, the same one Accounts writes — so
-          the two views cannot disagree. */}
-      <Group title="Default account">
-        {!bridge.listProfiles ? (
-          <Notice tone="warn">{missingChannelNote('Accounts')}</Notice>
-        ) : (
-          <>
-            <Row
-              label="Run new sessions as"
-              help="Unless a folder or the session itself says otherwise."
-              htmlFor="settings-default-profile"
-              control={
-                <span className="settings-select-wrap">
-                  <select
-                    id="settings-default-profile"
-                    className="settings-select"
-                    value={defaultProfileId}
-                    disabled={profileList.length === 0 || !bridge.setDefaultProfile}
-                    onChange={(event) => chooseProfile(event.target.value)}
-                  >
-                    {profileList.map((profile) => (
-                      <option key={profile.id} value={profile.id}>
-                        {profile.name}
-                        {profile.system ? ' — your own install' : ''}
-                      </option>
-                    ))}
-                  </select>
-                </span>
-              }
-            />
-            {/*
-              An account is two logins, not a config directory.
+      {/*
+        The Accounts pane, in place. `head={false}` because this page already
+        has a heading and the rail entry that used to carry this one is gone.
+      */}
+      <AccountsSection {...props} head={false} />
 
-              This used to open with "An account points Claude Code at a
-              different config directory" — the implementation, narrated at
-              somebody who wants to know whether their second login will work.
-              What they need is which agents honour the choice, and the answer
-              fits in a clause.
-            */}
-            <Explain title="Claude Code only">
-              Other agents ignore this and use their own login.{' '}
-              <button type="button" className="settings-inline-btn" onClick={() => goTo('profiles')}>
-                Manage accounts
-              </button>
-            </Explain>
-          </>
-        )}
-      </Group>
+      {/*
+        And Setup: the coding tools that are not agents, and the session hooks.
+        Its own "the agent CLIs are in Agents" block has gone — they are on this
+        page, thirty lines up.
+      */}
+      <SetupSection {...props} head={false} />
     </>
   )
 }

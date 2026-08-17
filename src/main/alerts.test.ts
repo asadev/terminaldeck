@@ -18,11 +18,11 @@ import {
   deriveAlerts,
   DIRTY_TREE_SESSION_STREAK,
   dirtyTreeAlerts,
-  EXPENSIVE_MIN_SAMPLE,
-  EXPENSIVE_MIN_USD,
-  EXPENSIVE_MULTIPLE,
-  expensiveSessionAlerts,
   formatDuration,
+  HEAVY_MIN_SAMPLE,
+  HEAVY_MIN_TOKENS,
+  HEAVY_MULTIPLE,
+  heavySessionAlerts,
   groupBySeverity,
   median,
   providerAlerts,
@@ -53,7 +53,7 @@ function session(overrides: Partial<AlertSession> & { sessionId: string }): Aler
     context: null,
     preContextTokens: 0,
     requests: 10,
-    costUsd: null,
+    tokens: 0,
     startedAt: NOW - 60 * MINUTE,
     lastActivityAt: NOW - 5 * MINUTE,
     status: null,
@@ -93,7 +93,7 @@ describe('a brand-new project', () => {
     // the session was closed without asking anything.
     const report = deriveAlerts(
       emptyInput({
-        sessions: [session({ sessionId: 'empty', requests: 0, costUsd: 0, preContextTokens: 90_000 })],
+        sessions: [session({ sessionId: 'empty', requests: 0, tokens: 0, preContextTokens: 90_000 })],
       }),
     )
     expect(report.alerts).toEqual([])
@@ -313,70 +313,97 @@ describe('providerAlerts', () => {
   })
 })
 
-/* --------------------------------------------------------------- spending -- */
+/* ----------------------------------------------------------- heavy runs -- */
 
-describe('expensiveSessionAlerts', () => {
-  function pricedSessions(costs: number[]): AlertSession[] {
-    return costs.map((costUsd, index) =>
-      session({ sessionId: `s${index}`, costUsd, lastActivityAt: NOW - index * MINUTE }),
+/*
+ * This suite used to be `expensiveSessionAlerts` and its fixtures were dollar
+ * amounts. The rule is the same rule — one session far past the project median
+ * — measured in the unit the transcript actually recorded. See the constants in
+ * `alerts.ts`, and the bottom of `cost.ts` for why the money went.
+ */
+describe('heavySessionAlerts', () => {
+  const M = 1_000_000
+
+  function sessionsOfTokens(counts: number[]): AlertSession[] {
+    return counts.map((tokens, index) =>
+      session({ sessionId: `s${index}`, tokens, lastActivityAt: NOW - index * MINUTE }),
     )
   }
 
   it('needs a real sample before a median means anything', () => {
-    const costs = Array.from({ length: EXPENSIVE_MIN_SAMPLE - 1 }, () => 1)
-    costs[0] = 100
-    expect(expensiveSessionAlerts(emptyInput({ sessions: pricedSessions(costs) }))).toEqual([])
+    const counts = Array.from({ length: HEAVY_MIN_SAMPLE - 1 }, () => M)
+    counts[0] = 100 * M
+    expect(heavySessionAlerts(emptyInput({ sessions: sessionsOfTokens(counts) }))).toEqual([])
   })
 
   it('fires when one session is well past the project median', () => {
-    const alerts = expensiveSessionAlerts(
-      emptyInput({ sessions: pricedSessions([1, 1, 1.2, 0.9, 1.1, 12]) }),
+    const alerts = heavySessionAlerts(
+      emptyInput({ sessions: sessionsOfTokens([M, M, 1.2 * M, 0.9 * M, 1.1 * M, 12 * M]) }),
     )
     expect(alerts).toHaveLength(1)
-    expect(alerts[0].kind).toBe('expensive-session')
+    expect(alerts[0].kind).toBe('heavy-session')
     expect(alerts[0].sessionId).toBe('s5')
   })
 
-  it('does not fire on a ratio alone when the amounts are trivial', () => {
-    // Median $0.004, worst $0.05 — twelve times the median and not worth a word.
-    const alerts = expensiveSessionAlerts(
-      emptyInput({ sessions: pricedSessions([0.004, 0.004, 0.005, 0.003, 0.004, 0.05]) }),
+  it('does not fire on a ratio alone when the counts are trivial', () => {
+    // Median 4k tokens, worst 50k — twelve times the median, and a single long
+    // answer. Below the floor there is nothing here worth a word.
+    const alerts = heavySessionAlerts(
+      emptyInput({ sessions: sessionsOfTokens([4_000, 4_000, 5_000, 3_000, 4_000, 50_000]) }),
     )
     expect(alerts).toEqual([])
   })
 
   it('does not fire just under the multiple', () => {
-    const justUnder = EXPENSIVE_MIN_USD * (EXPENSIVE_MULTIPLE - 0.5)
-    const alerts = expensiveSessionAlerts(
-      emptyInput({ sessions: pricedSessions([1, 1, 1, 1, 1, justUnder]) }),
+    const justUnder = HEAVY_MIN_TOKENS * (HEAVY_MULTIPLE - 0.5)
+    const alerts = heavySessionAlerts(
+      emptyInput({
+        sessions: sessionsOfTokens([
+          HEAVY_MIN_TOKENS,
+          HEAVY_MIN_TOKENS,
+          HEAVY_MIN_TOKENS,
+          HEAVY_MIN_TOKENS,
+          HEAVY_MIN_TOKENS,
+          justUnder,
+        ]),
+      }),
     )
     expect(alerts).toEqual([])
   })
 
   it('reports only the worst offender rather than one alert per session', () => {
-    const alerts = expensiveSessionAlerts(
-      emptyInput({ sessions: pricedSessions([1, 1, 1, 1, 1, 8, 20, 15]) }),
+    const alerts = heavySessionAlerts(
+      emptyInput({ sessions: sessionsOfTokens([M, M, M, M, M, 8 * M, 20 * M, 15 * M]) }),
     )
     expect(alerts).toHaveLength(1)
-    expect(alerts[0].detail).toContain('$20')
+    expect(alerts[0].detail).toContain('20M')
   })
 
-  it('never rises to critical — money already spent is not an emergency', () => {
-    const alerts = expensiveSessionAlerts(
-      emptyInput({ sessions: pricedSessions([1, 1, 1, 1, 1, 500]) }),
+  it('never rises to critical — tokens already spent are not an emergency', () => {
+    const alerts = heavySessionAlerts(
+      emptyInput({ sessions: sessionsOfTokens([M, M, M, M, M, 500 * M]) }),
     )
     expect(alerts[0].severity).not.toBe('critical')
   })
 
-  it('ignores sessions with no published rate rather than counting them as free', () => {
+  it('ignores sessions that recorded no tokens rather than counting them as zero', () => {
     const sessions = [
-      ...pricedSessions([2, 2, 2, 2, 2, 9]),
-      session({ sessionId: 'unpriced', costUsd: null }),
+      ...sessionsOfTokens([2 * M, 2 * M, 2 * M, 2 * M, 2 * M, 9 * M]),
+      session({ sessionId: 'silent', tokens: 0 }),
     ]
-    const alerts = expensiveSessionAlerts(emptyInput({ sessions }))
-    // A null-cost session folded in as 0 would drag the median down and inflate
-    // the ratio, so its absence from the sample is the thing being asserted.
-    expect(alerts[0].detail).toContain('6 priced sessions')
+    const alerts = heavySessionAlerts(emptyInput({ sessions }))
+    // A zero-token session folded into the sample would drag the median down
+    // and inflate the ratio, so its absence from the count is the assertion.
+    expect(alerts[0].detail).toContain('6 sessions')
+  })
+
+  it('carries no dollar figure into the alert it raises', () => {
+    // The whole point of the rename. This alert used to print two prices.
+    const alerts = heavySessionAlerts(
+      emptyInput({ sessions: sessionsOfTokens([M, M, M, M, M, 40 * M]) }),
+    )
+    expect(alerts[0].title).not.toMatch(/[$]/)
+    expect(alerts[0].detail).not.toMatch(/[$]/)
   })
 })
 
@@ -461,7 +488,7 @@ describe('deriveAlerts', () => {
   const input = emptyInput({
     providersInUse: ['codex'],
     sessions: [
-      atContext('hot', 95, { lastActivityAt: NOW - MINUTE, costUsd: 2 }),
+      atContext('hot', 95, { lastActivityAt: NOW - MINUTE, tokens: 2_000_000 }),
       session({ sessionId: 'stuck', status: 'input', statusSince: NOW - BLOCKED_WARNING_MS - MINUTE }),
     ],
   })

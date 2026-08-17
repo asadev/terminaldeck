@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useId, useMemo, useState, type FormEvent } from 'react'
 import type { ProviderId } from '@shared/types'
+// Relative, not '@shared/agent-catalog': vitest runs without the electron-vite
+// alias, so a *value* import through it resolves in the app and throws in a
+// test. `McpServers.tsx` and `PowerSection.tsx` carry the same note for the
+// same reason; a type-only import is fine either way because it is erased.
+import { AGENT_ENTRIES, AGENT_CATALOG, hasAnyLogin, type AgentEntry } from '../../shared/agent-catalog'
+import { allAgentEntries, type CustomAgent } from '../../shared/custom-agents'
+import { BRAND } from '../../shared/brand'
 import { folderName } from '../session-title'
 import { Modal } from './Modal'
 import { ProviderBadge } from './ProviderBadge'
@@ -41,6 +48,17 @@ export interface ProviderOption {
   description: string
   /** What the user would run to get it, shown only when it is missing. */
   install: string | null
+  /**
+   * The program this agent runs, or null for the shell.
+   *
+   * Carried because it is what the "could not start" sentence has to name, and
+   * for an agent somebody added it is not the id: the id is `custom:grok` and
+   * the thing they typed — the thing they can go and check — is `grok`. Printing
+   * the id there told a person their machine could not start something they had
+   * never heard of. Null only for the shell, which is `$SHELL` or `%COMSPEC%`
+   * and is never reported missing.
+   */
+  command: string | null
   canResume: boolean
   /**
    * Whether this app can keep two logins of this agent apart.
@@ -66,45 +84,49 @@ export interface ProviderOption {
   accountsNote: string | null
 }
 
-export const PROVIDER_OPTIONS: readonly ProviderOption[] = [
-  {
-    id: 'claude',
-    label: 'Claude Code',
-    description: "Anthropic's agentic CLI. Writes transcripts, so cost and context tracking work.",
-    install: 'npm install -g @anthropic-ai/claude-code',
-    canResume: true,
-    canHaveAccounts: true,
-    accountsNote: null,
-  },
-  {
-    id: 'codex',
-    label: 'Codex CLI',
-    description: "OpenAI's coding agent. Sign in with a ChatGPT account.",
-    install: 'npm install -g @openai/codex',
-    canResume: true,
-    canHaveAccounts: true,
-    accountsNote: null,
-  },
-  {
-    id: 'gemini',
-    label: 'Gemini CLI',
-    description: "Google's coding agent.",
-    install: 'npm install -g @google/gemini-cli',
-    canResume: false,
-    canHaveAccounts: false,
-    accountsNote:
-      'Gemini stores one login per machine, in a place a second account cannot be pointed at. Gemini sessions use the Google account you are already signed into.',
-  },
-  {
-    id: 'shell',
-    label: 'Shell',
-    description: 'A plain login shell. No agent, no telemetry — just a terminal.',
-    install: null,
-    canResume: false,
-    canHaveAccounts: false,
-    accountsNote: 'A shell has no login to sign in to.',
-  },
-]
+/**
+ * Built from `shared/agent-catalog.ts`, not written out here.
+ *
+ * The list this replaced was four object literals holding the same labels,
+ * descriptions, install commands and booleans that the main process kept in two
+ * other files — and the comment above already had to explain how the copies were
+ * meant to stay in step. They are now one declaration read from both sides, so
+ * the answer to *"there should be a plus button to add with the big list of type
+ * of AI agents to connect"* is an entry in that table rather than an edit here.
+ *
+ * `canHaveAccounts` is `logins === 'multiple'` and nothing else: an agent that
+ * keeps one login per machine is still an agent you sign into, and conflating
+ * the two is what left Gemini with no row on the Accounts screen.
+ */
+const toOption = (entry: AgentEntry): ProviderOption => ({
+  id: entry.id,
+  label: entry.label,
+  description: entry.description,
+  install: entry.install,
+  command: entry.bin,
+  canResume: entry.resumeArgs.length > 0,
+  canHaveAccounts: entry.logins === 'multiple',
+  accountsNote: entry.logins === 'multiple' ? null : entry.loginsNote,
+})
+
+export const PROVIDER_OPTIONS: readonly ProviderOption[] = AGENT_ENTRIES.map(toOption)
+
+/**
+ * The shipped agents, then the ones this machine added.
+ *
+ * `allAgentEntries` decides the order and says why it is not alphabetical: the
+ * builtins first because they are the ones with resume, accounts and the rest,
+ * a person's own additions under them the way "Your agents" sits under a gallery
+ * in every editor that does this.
+ *
+ * A function of the added list rather than a module constant, because the added
+ * list is per machine and arrives over the bridge. `PROVIDER_OPTIONS` stays a
+ * constant and stays the first paint: a dialog that drew nothing until an IPC
+ * answered would flash empty every time it opened.
+ */
+export function providerOptionsWith(added: readonly CustomAgent[]): readonly ProviderOption[] {
+  return allAgentEntries(AGENT_ENTRIES, added).map(toOption)
+}
 
 /** The catalogue entry for an id, or undefined for one this build does not know. */
 export function providerOption(id: ProviderId): ProviderOption | undefined {
@@ -139,15 +161,39 @@ export interface ProviderRow extends ProviderOption {
  * distinction — null for unknown, `[]` for a real all-missing answer — so it
  * is reused here rather than reimplemented and left to drift.
  */
-export function buildProviderRows(detected: unknown): ProviderRow[] {
+export function buildProviderRows(
+  detected: unknown,
+  added: readonly CustomAgent[] = [],
+): ProviderRow[] {
   const installed = installedProviders(detected)
-  return PROVIDER_OPTIONS.map((option) => {
+  return providerOptionsWith(added).map((option) => {
     // A shell always exists — it is how the app spawns everything else.
     const available = option.id === 'shell' || installed === null || installed.includes(option.id)
     return {
       ...option,
       available,
-      reason: available ? null : `\`${option.id}\` was not found on your PATH.`,
+      /*
+       * "Could not start", not "was not found on your PATH".
+       *
+       * `detectProviders` no longer answers a lookup — it runs each agent once
+       * to prove it starts, because a `codex` that resolves on PATH and then
+       * dies with a spawn error is the exact case that put a Node stack trace in
+       * front of the user. So an unavailable row here covers two situations, and
+       * the old sentence was flatly wrong about the second one: the binary *was*
+       * on his PATH. This sentence is true of both, and the install line
+       * underneath is the fix for both — installing it, or replacing a copy that
+       * does not work.
+       *
+       * The *command*, not the id, and `BRAND.name`, not the words. Both were
+       * wrong in one line: an agent somebody added has the id `custom:grok`, so
+       * the sentence read "could not start `custom:grok`", naming a string the
+       * person has never seen instead of the `grok` they typed into the form;
+       * and the product's name was spelled here rather than read from the one
+       * place that holds it.
+       */
+      reason: available
+        ? null
+        : `${BRAND.name} could not start \`${option.command ?? option.id}\` on this machine.`,
     }
   })
 }
@@ -395,7 +441,10 @@ export function ProviderPicker({ open, projectPath, defaultProvider, onClose, on
 export interface AccountProviderView {
   id: string
   label: string
+  /** Whether a *second* account of this agent can be added. */
   supported: boolean
+  /** Whether this agent has a login at all — one or many. */
+  canSignIn: boolean
   configEnv: string | null
   reason: string | null
 }
@@ -423,6 +472,10 @@ export function parseAccountProviders(value: unknown): AccountProviderView[] {
       // Only an explicit `true` is support. An answer this build cannot read
       // must not turn into an offer to isolate a login it cannot isolate.
       supported: row.supported === true,
+      // Defaults to `supported` for an older main process that does not send
+      // this field: an agent that can hold two logins can certainly hold one, so
+      // the fallback is never an over-claim.
+      canSignIn: row.canSignIn === true || row.supported === true,
       configEnv: typeof row.configEnv === 'string' ? row.configEnv : null,
       reason: typeof row.reason === 'string' && row.reason !== '' ? row.reason : null,
     })
@@ -432,9 +485,17 @@ export function parseAccountProviders(value: unknown): AccountProviderView[] {
 
 /** A row of the Add-account list: the catalogue, plus whatever IPC said. */
 export interface AccountProviderRow extends ProviderRow {
-  /** Selectable: installed, and able to hold an account of its own. */
+  /** Selectable in the Add form: runnable, and able to hold a *second* login. */
   canAdd: boolean
-  /** Why not. Null when it can. */
+  /**
+   * Has a login of its own that the Accounts screen should show a row for.
+   *
+   * True for Gemini, which `canAdd` is false for. Keeping them apart is the
+   * whole Gemini fix: one predicate answered both questions, the answer was no,
+   * and the agent vanished from the screen instead of appearing once.
+   */
+  canSignIn: boolean
+  /** Why there is no second one. Null when there can be. */
   note: string | null
 }
 
@@ -462,9 +523,24 @@ export function buildAccountProviderRows(
       const said = fromMain.find((entry) => entry.id === row.id)
       const supported = said?.supported ?? option?.canHaveAccounts ?? false
       const note = supported ? null : (said?.reason ?? option?.accountsNote ?? null)
+      const catalogEntry = AGENT_CATALOG[row.id]
       return {
         ...row,
         canAdd: supported && row.available,
+        /*
+         * The catalogue answers this until the main process does, and `??`
+         * cannot be chained through `supported` to get there: `supported` is a
+         * boolean, so `false ?? x` is `false`, and Gemini — the one agent whose
+         * two answers differ — came back unsignable on every paint before the
+         * IPC landed.
+         *
+         * `hasAnyLogin` rather than `logins !== 'none'`, which is the same
+         * answer for every agent in the shipped table and a different one for an
+         * agent somebody added: that reads `unmeasured`, and `!== 'none'` would
+         * turn *nobody has looked* into a sign-in offer for a CLI this build has
+         * never watched store a credential.
+         */
+        canSignIn: said?.canSignIn ?? (catalogEntry ? hasAnyLogin(catalogEntry.id) : supported),
         note,
       }
     })

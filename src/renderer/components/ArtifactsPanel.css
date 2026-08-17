@@ -241,6 +241,17 @@
   list-style: none;
 }
 
+/* A read that failed: the reason, and the way to ask again, on one centre
+   line. Separated by space rather than boxed — a failure is a state of this
+   pane, not a card inside it. */
+.artifacts-failed {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-3);
+  padding-top: var(--sp-6);
+}
+
 /* ---------------------------------------------------------------- detail -- */
 
 .artifacts-detail {

@@ -1,4 +1,4 @@
-import { useCallback } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { userSessionTitle } from '../session-title'
 import { useOptionalStore } from './store'
 
@@ -64,4 +64,103 @@ export function useSessionRename(): SessionRename {
   )
 
   return { available: setSessionTitle !== undefined, rename }
+}
+
+/**
+ * The field itself: opening it, keeping it open, and closing it.
+ *
+ * ## Why this is a hook and not a copy
+ *
+ *   > "And session name also inside the terminal, if we want to change we
+ *   > should be able to change."
+ *
+ * A session's name is now editable from two places — the rail's row and the
+ * heading over the terminal — and there is a decision on record about how:
+ * *"I don't want this edit button here. Just double click should make it
+ * editable."* So both are the same gesture on the same name, and the parts that
+ * are easy to get subtly different between two hand-written copies live here.
+ *
+ * The one that matters is `userActed`. Timed in the running app: the field
+ * appears at t+73ms, `xterm-helper-textarea` takes focus at t+75ms, and a blur
+ * handler that treats every blur as "clicked away" closes the field at t+76ms —
+ * before a single key can be typed. `relatedTarget` cannot separate the two
+ * cases, because a real click into the terminal names the same element. What
+ * can is that a click or a keypress is something the *user* did and arrives
+ * before the focus moves; a blur with no user action behind it is a steal, and
+ * the field takes its focus back instead of closing.
+ *
+ * The listeners are on the document and in the capture phase, because the
+ * dismissing click by definition happens somewhere other than the field.
+ */
+export interface RenameField {
+  /** The id being renamed and the draft so far, or null when no field is open. */
+  editing: { id: string; draft: string } | null
+  begin(id: string, name: string): void
+  type(draft: string): void
+  /** Close, keeping what was typed or throwing it away. */
+  end(save: boolean): void
+  /**
+   * What a field's `onBlur` should do.
+   *
+   * Returns true when the blur was the user leaving — the caller has nothing
+   * more to do, the name is saved. Returns false when the focus was stolen, and
+   * the caller must put it back; on the *next frame* rather than inside the
+   * handler, because a `focus()` in the middle of a `blur` is a fight the
+   * browser arbitrates and Chromium does not always give to the caller.
+   */
+  blurred(): boolean
+}
+
+export function useRenameField(rename: SessionRename): RenameField {
+  const [editing, setEditing] = useState<{ id: string; draft: string } | null>(null)
+  /** Guards against a second `end` — a submit followed by the resulting blur. */
+  const open = useRef(false)
+  const userActed = useRef(false)
+
+  const begin = useCallback((id: string, name: string) => {
+    open.current = true
+    // Reset here, so the double-click that *opened* the field does not itself
+    // count as an action taken since it opened.
+    userActed.current = false
+    setEditing({ id, draft: name })
+  }, [])
+
+  const type = useCallback((draft: string) => {
+    setEditing((current) => (current === null ? null : { ...current, draft }))
+  }, [])
+
+  const end = useCallback(
+    (save: boolean) => {
+      if (!open.current) return
+      open.current = false
+      setEditing((current) => {
+        // A blank field is a cancel — `userSessionTitle` refuses it, and a
+        // session called nothing is a row with nothing written on it.
+        if (save && current) rename.rename(current.id, current.draft)
+        return null
+      })
+    },
+    [rename],
+  )
+
+  const blurred = useCallback((): boolean => {
+    if (!userActed.current) return false
+    end(true)
+    return true
+  }, [end])
+
+  useEffect(() => {
+    if (!editing) return
+    const mark = (): void => {
+      userActed.current = true
+    }
+    document.addEventListener('pointerdown', mark, true)
+    document.addEventListener('keydown', mark, true)
+    return () => {
+      document.removeEventListener('pointerdown', mark, true)
+      document.removeEventListener('keydown', mark, true)
+    }
+  }, [editing])
+
+  return { editing, begin, type, end, blurred }
 }

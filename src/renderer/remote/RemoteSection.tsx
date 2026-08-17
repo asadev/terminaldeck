@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Button, Explain, Group, Notice, Row, SectionHead, Switch } from '../settings/controls'
+import { Button, Group, Info, MoreBody, Notice, Row, Switch } from '../settings/controls'
 import { useAt, useEvery, useWhenActive } from '../schedule'
+import { withDeadline } from '../deadline'
 import { errorText } from '../settings/settings-bridge'
 import { detectPlatform, machineNoun, thisMachine, type UiPlatform } from '../platform'
 import { CODE_LENGTH, normaliseCode } from '../../shared/short-code'
@@ -911,13 +912,57 @@ function CopyCode({ code, disabled }: { code: string; disabled: boolean }) {
 /* The view                                                                    */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * An ⓘ that keeps its own open state, and the paragraph it opens.
+ *
+ * `Info` is deliberately controlled — a settings *row* owns whether its
+ * disclosure is open, because only the row knows where the opened text belongs
+ * relative to its own help line. Nothing on this panel is a settings row: the
+ * four disclosures here hang off a path card, a prose line and two headings,
+ * and each one wants the paragraph immediately after itself. So the state lives
+ * with the button, in the one place where that is the right answer.
+ */
+function Note({ label, children }: { label: string; children: string }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <>
+      <Info label={label} open={open} onToggle={() => setOpen((was) => !was)}>
+        {children}
+      </Info>
+      {open && <MoreBody>{children}</MoreBody>}
+    </>
+  )
+}
+
 /** Which control is mid-call, so only that one goes busy. */
 export type RemoteBusy = string | null
 
 export interface RemoteActions {
+  /**
+   * Turn it on, or off, in one press either way.
+   *
+   * There was a second press. `enable(true)` armed a confirmation, and only
+   * `confirmEnable()` started the server — the argument being that what is
+   * behind the switch is a shell and the dangerous direction should be the slow
+   * one. Asad took it out himself, twice over: *"don't give two step of this
+   * like turn on. If I close, then if I open, then I need to click again, turn
+   * it on. Only this one is good enough… and if I click on that, it turns on."*
+   *
+   * He is right that the confirmation was in the wrong place, and the reason is
+   * that it was not the gate. **Turning this on lets nothing in.** A device
+   * still has to be handed a code that lives sixty seconds, and then approved
+   * by hand, on this screen, against a fingerprint it shows first. That is two
+   * deliberate acts by the person sitting at the machine, and neither of them
+   * can be reached by pressing the switch. The confirmation was a third press
+   * guarding a door that opens onto another door.
+   *
+   * What the second press *said* has not been dropped, because that part was
+   * doing work: the word `shell` and what a device may do is now the switch's
+   * own help line, which is read before the press rather than after it.
+   */
   enable(next: boolean): void
-  confirmEnable(): void
-  dismissEnable(): void
+  /** Re-read the state, for the "Try again" beside a failed read. */
+  reread(): void
   pair(): void
   closePairing(): void
   approve(device: RemoteDevice): void
@@ -953,7 +998,6 @@ export interface RemoteViewProps {
   /** Seconds left on the code, or null when there is no code or no stated expiry. */
   secondsLeft: number | null
   busy: RemoteBusy
-  confirmEnable: boolean
   /**
    * The outward half: the machines this desktop can reach, and the field a code
    * from one of them is typed into.
@@ -1004,35 +1048,41 @@ function PathRow({
   tone,
   pill,
   blurb,
+  more,
   children,
 }: {
   name: string
   tone: 'ok' | 'down' | 'off'
   pill: string
+  /** One line. Anything longer belongs in `more`. */
   blurb: string
+  /** The rest of the explanation, behind an ⓘ beside the row's name. */
+  more?: string
   children?: ReactNode
 }) {
+  const [openMore, setOpenMore] = useState(false)
   return (
     <li className="remote-path" data-state={tone}>
       <div className="remote-path-head">
-        <span className="remote-path-name">{name}</span>
+        <span className="settings-label-line">
+          <span className="remote-path-name">{name}</span>
+          {more && (
+            <Info label={name} open={openMore} onToggle={() => setOpenMore((was) => !was)}>
+              {more}
+            </Info>
+          )}
+        </span>
         <span className="remote-pill" data-state={tone}>
           {pill}
         </span>
       </div>
       <p className="remote-path-blurb">{blurb}</p>
+      {/* Under the blurb rather than beside the ⓘ: a disclosure has to appear
+          below everything it is adding to, and here that is the one-line blurb
+          the paragraph is expanding. */}
+      {more && openMore && <MoreBody>{more}</MoreBody>}
       {children}
     </li>
-  )
-}
-
-/** A labelled value: an address, a host id, a fingerprint. Aligned in a column. */
-function Fact({ label, value }: { label: string; value: string }) {
-  return (
-    <p className="remote-fact">
-      <span className="remote-fact-label">{label}</span>
-      <code className="remote-fact-value">{value}</code>
-    </p>
   )
 }
 
@@ -1045,7 +1095,6 @@ export function RemoteView({
   pairing,
   secondsLeft,
   busy,
-  confirmEnable,
   machines,
   folders = null,
   actions,
@@ -1057,27 +1106,27 @@ export function RemoteView({
   // about the machine the reader is sitting at, so the noun has to be the one
   // they would use for it.
   const machine = thisMachine(platform)
-  const head = (
-    <SectionHead
-      title="Remote"
-      // "a phone" was the whole sentence when this section only knew about
-      // phones. It knows about the laptop on the other desk now, and a person
-      // who has come here to pair one must not have to guess whether the
-      // sentence about phones covers them.
-      //
-      // The relay, and only the relay. This used to read "…across your tailnet,
-      // or through the relay from anywhere", which put a product most readers
-      // have never installed in the first sentence of the section — and named it
-      // first, as though it were the main way in. It is the optional faster one
-      // and it has its own row further down, on the machines that have it.
-      blurb={`Drive ${machine} from a phone or another computer, from any network. Nothing to install and no account.`}
-    />
-  )
+
+  /*
+   * There is no heading here, and that is the fix rather than an omission.
+   *
+   * This section was a Settings pane before it became a page in the rail, and
+   * it brought its own `SectionHead` with it. The window toolbar already prints
+   * the page's name and `panels.ts` already prints a line under it, so the
+   * screen opened with **Remote** twice, forty pixels apart, under two
+   * different one-line descriptions of the same feature. Two subtitles is worse
+   * than two titles: a reader has to work out whether they are describing the
+   * same thing.
+   *
+   * The toolbar's copy wins because it is the one that is there on every page
+   * and cannot be missed. Nothing is lost — what this head used to say about
+   * driving the machine from a phone is now the switch's own help line, which
+   * is where somebody deciding whether to press it is already looking.
+   */
 
   if (!wired) {
     return (
       <>
-        {head}
         <Notice tone="warn">
           Remote access is not wired into this build. Nothing is listening, and nothing on this
           screen would turn anything on.
@@ -1098,6 +1147,9 @@ export function RemoteView({
   const expired = secondsLeft !== null && secondsLeft <= 0
   const pending = state?.devices.filter((device) => device.state === 'pending') ?? []
   const devices = state?.devices ?? []
+  // What `grantableDevices` will hand the folder picker. Computed here as well
+  // so the block is withheld rather than drawn empty — see the note above it.
+  const approved = devices.filter((device) => device.state === 'approved')
   const connections = state?.connections ?? []
 
   const relay = state?.relay ?? null
@@ -1132,18 +1184,33 @@ export function RemoteView({
 
   return (
     <>
-      {head}
-
       <Group>
         <div className="settings-item">
           <Row
             label="Let approved devices in"
+            // One line, and it is the line somebody deciding whether to press
+            // the switch needs: what it is for, and the word `shell`.
+            //
             // It used to read "Off by default", which was true and is not any
             // more: this machine dials out on launch so a paired phone has
             // something to attach to without anyone opening this panel first.
             // Leaving the old sentence there would have the switch describing
             // the opposite of its own position.
-            help={`On, so a paired phone can always reach ${machine}. Turn it off and nothing can, until you turn it back on.`}
+            help={`Drive ${machine} from a phone or another computer, from any network — a device you approve gets a shell here. Nothing to install and no account.`}
+            /*
+              The paragraph that used to run under this row, moved behind the ⓘ.
+              Nothing was cut: this is every clause of it.
+
+              It was six lines of grey type across the full width of the column,
+              first of five such paragraphs on one screen, and Asad's note is
+              about the screen rather than about any one of them: *"we don't
+              need to give this big descriptions… let's give only one liner or
+              two liner descriptions and one eye buttons next to them so they
+              can click or hover over there and they can read the full
+              description."* The one word that decides whether to press the
+              switch — `shell` — is in the line above, where it is read.
+            */
+            more={`A device you approve can type into any session running here — your files, your keys, your git remotes — exactly as if it were sitting at this keyboard. Nothing is published to the internet: everything is sealed end to end, so the relay that carries it routes bytes it holds no key for. That seal lets nothing in on its own — a code you mint here and an approval you give here do.`}
             labelId={`${ids}-label`}
             helpId={`${ids}-help`}
             control={
@@ -1160,47 +1227,13 @@ export function RemoteView({
           />
         </div>
 
-        {/*
-          The most important paragraph in the window, given something to hang on.
-
-          It is unchanged, down to the emphasis — this section's test pins
-          `<strong>shell</strong>`, and rightly: it is the one word that decides
-          whether somebody should press the switch above. What it did not have
-          was a title, so it arrived as six lines of grey running the full width
-          of the column, in a section that then goes on to four more paragraphs.
-          A reader who is skimming has to be able to stop here on purpose.
-        */}
-        <Explain title="What you are turning on">
-          What is on the other side of this switch is a <strong>shell</strong>. A device you approve
-          can type into any session running here — your files, your keys, your git remotes — exactly
-          as if it were sitting at this keyboard. Nothing is published to the internet: everything
-          is sealed end to end, so the relay that carries it routes bytes it holds no key for
-          {direct === null ? '' : ', and on the direct route below nothing carries it at all'}.
-          {' '}
-          That seal lets nothing in on its own — a code you mint here and an approval you give here
-          do.
-        </Explain>
-
         {state === null && problem === null && (
-          // Said once, and it resolves into a state or into the error below.
-          // There is no branch here that leaves this on screen for good.
+          // Said once, and it now genuinely resolves — into a state, or into
+          // the error below. The read is raced against a deadline in
+          // `refresh`, because this line stood on screen for the length of a
+          // recording with nothing behind it and nothing to press. See
+          // `withDeadline`.
           <p className="settings-prose">Reading the current state…</p>
-        )}
-
-        {confirmEnable && (
-          // Inline rather than a dialog, for the reason BrowserSection gives:
-          // two modals both listen for Escape, and the inner one closes the
-          // window behind it.
-          <div className="settings-confirm">
-            <span>
-              Turn on remote access? Approved devices get a shell on {machine} until you turn it
-              off.
-            </span>
-            <Button tone="primary" onClick={actions.confirmEnable}>
-              Turn it on
-            </Button>
-            <Button onClick={actions.dismissEnable}>Leave it off</Button>
-          </div>
         )}
 
         {missing.length > 0 && (
@@ -1213,7 +1246,13 @@ export function RemoteView({
 
         {problem && (
           <Notice tone="error">
-            {problem} Anything below was read before that and may be out of date.
+            {problem} Anything below was read before that and may be out of date.{' '}
+            {/* A failure with nothing to press is the loading line again, one
+                sentence longer. Every terminal state on this screen has a way
+                out of it. */}
+            <Button onClick={actions.reread} disabled={busy !== null}>
+              Try again
+            </Button>
           </Notice>
         )}
 
@@ -1234,31 +1273,47 @@ export function RemoteView({
       )}
 
       {running && (
-        // "a phone" until this section also held the machines page. Both rows
-        // carry a laptop exactly as they carry a phone, and a heading that named
-        // only one of them left somebody pairing a second desktop reading a
-        // section that appeared to be about something else.
+        /*
+         * How a device gets here — one row, because there is one way in.
+         *
+         * There were two, and the second one was the tailnet. It has now been
+         * taken off this screen four separate times and come back, so the
+         * reason is written down here rather than left to the next person to
+         * rediscover: *"then direct your tail scale thing is again here back,
+         * which I discussed before with you… if it is something that we were
+         * people knows only, then it is just like jargon for them."*
+         *
+         * It is jargon for almost everybody, and worse than jargon: on his
+         * machine it drew a card with a green **Ready** badge, which reads as
+         * the recommended route. It is not the route. The relay is the network
+         * — it is what carries every session and what a pairing code is looked
+         * up through — and the direct hop is an optimisation for the handful of
+         * people already running a mesh VPN, who need no card to tell them they
+         * have one. Nothing is lost by removing it: when a direct address
+         * exists the server still prefers it, silently, which is what an
+         * optimisation should do.
+         *
+         * `state.url` and `state.address` are still in the state and still
+         * unread here. That is deliberate, and it is the same rule the header
+         * states about `directReason`: this panel does not report on a path the
+         * reader did not ask about.
+         */
         <Group title="How a device gets here">
           <ul className="remote-paths">
-            {/*
-              The relay first, because for nearly everybody it is the only row
-              here — and because it is what actually carries the session.
-
-              This list used to open with the direct route, permanently, in every
-              state. On a machine with no mesh VPN that meant the first thing
-              under "How a phone gets here" was a route that did not exist,
-              wearing a grey "Unavailable" pill and quoting Tailscale's own
-              complaint underneath it. Everything was working. The relay two rows
-              down was carrying the phone while the panel led with what read as a
-              failure, in the vocabulary of a product the reader had never
-              installed. Ordering is an argument about what matters, and that
-              order made the argument backwards.
-            */}
             <PathRow
               name="Through the relay"
               tone={relay === null ? 'off' : relayLive ? 'ok' : 'down'}
               pill={relay === null ? 'Off' : relayLive ? 'Connected' : 'Not connected'}
-              blurb={`A rendezvous service ${machine} dials out to. It staples two sockets together and carries sealed bytes it cannot read, so a device on any network can reach this one — and it is what a pairing code is looked up through.`}
+              // One line. The three clauses that used to follow it — what a
+              // rendezvous is, that it cannot read what it carries, that a
+              // pairing code is looked up through it — are true, and they are
+              // behind the ⓘ, which is where a standing explanation belongs.
+              // "this Mac" is a mid-sentence noun, so the sentence has to be
+              // built around it rather than started with it — `thisMachine`
+              // returns a lowercase phrase and a capitalised copy of it would
+              // be a second string to keep in step with the platform.
+              blurb={`Reachable from any network: ${machine} dials out to it, so nothing has to be installed on the device.`}
+              more={`A rendezvous service. It staples two sockets together and carries sealed bytes it cannot read, so nothing on the way can see the session. It is also what a pairing code is looked up through: the code names a slot at the relay, and whatever types it finds ${machine} there.`}
             >
               {relay === null ? (
                 <p className="remote-path-note">
@@ -1273,23 +1328,28 @@ export function RemoteView({
                       lets the sentence below point at the row underneath and be
                       sure it is there. */}
                   This build is not dialling a relay — either TERMINALDECK_RELAY is off, or it was
-                  assembled without one. The direct route below is the only way in.
+                  assembled without one.
                 </p>
               ) : relayLive ? (
-                <>
-                  <Fact label="Host id" value={relay.hostId} />
-                  {/* Empty only if the identity is half-published, and an empty
-                      row under "Fingerprint" reads as "this machine has none". */}
-                  {relay.fingerprint !== '' && (
-                    <Fact label="Fingerprint" value={relay.fingerprint} />
-                  )}
-                  <p className="remote-path-note">
-                    Dialled out to {relay.url}.{' '}
-                    {relay.channels > 0
-                      ? `Carrying ${relay.channels} connection${relay.channels === 1 ? '' : 's'} right now.`
-                      : 'Nothing is coming through it right now.'}
-                  </p>
-                </>
+                /*
+                 * No host id and no fingerprint on the resting card.
+                 *
+                 * The fingerprint was printed twice on one screen — once here,
+                 * permanently, and once beside a live pairing code where it is
+                 * the check a person actually makes against the device in their
+                 * other hand. Two copies of a 24-character string make neither
+                 * of them mean anything, and *this* copy is the one with no job:
+                 * there is nothing to compare it to until a device is pairing.
+                 * It stays where the comparison happens. The host id went with
+                 * it — it is this machine's name at the rendezvous, and nothing
+                 * a person can do anything with. Both remain in the state, and
+                 * the pairing block below still shows the fingerprint.
+                 */
+                <p className="remote-path-note">
+                  {relay.channels > 0
+                    ? `Carrying ${relay.channels} connection${relay.channels === 1 ? '' : 's'} right now.`
+                    : 'Nothing is coming through it right now.'}
+                </p>
               ) : (
                 <p className="remote-path-note">
                   {relay.reason ?? 'It is not connected, and did not say why.'}{' '}
@@ -1298,29 +1358,6 @@ export function RemoteView({
               )}
             </PathRow>
 
-            {/*
-              The direct route, drawn only when there is one.
-
-              There is no "off" or "unavailable" state for this row, and that is
-              the whole point: a route that does not exist on this machine is not
-              a route that is down. Rendering it grey with a reason attached is
-              how a panel comes to report the absence of an optimisation nobody
-              asked for as a fault in the product — see this file's header.
-
-              Nothing here has to explain what a tailnet is, because the only
-              people who ever see this row are running one.
-            */}
-            {direct !== null && (
-              <PathRow
-                name="Direct on your tailnet"
-                tone="ok"
-                pill="Ready"
-                blurb={`One hop over WireGuard with nothing in the middle — no relay involved. A device can use it only from the same tailnet as ${machine}.`}
-              >
-                <Fact label="Address" value={direct} />
-                {state?.address && <Fact label="Tailnet IP" value={state.address} />}
-              </PathRow>
-            )}
           </ul>
         </Group>
       )}
@@ -1336,9 +1373,15 @@ export function RemoteView({
             to open on which machine before anything can happen, inside a code
             that lasts a minute.
           */}
+          {/* One line, with the rest behind the eye. Three paragraphs stood
+              between the heading and the button that mints the code. */}
           <p className="settings-prose">
-            A code is good for one device and expires in {PAIRING_WINDOW_SECONDS} seconds. Typing it
-            asks to be let in; it lets nothing in on its own — you still approve the device below.
+            <span className="settings-label-line">
+              A code is good for one device and lasts {PAIRING_WINDOW_SECONDS} seconds.
+              <Note label="pairing codes">
+                {`Typing the code asks to be let in; it lets nothing in on its own — you still approve the device below, by hand, on this screen. Pairing has two ends and you are standing at both: one screen shows a code and the other is typed into, which is why both halves are here rather than on two screens.`}
+              </Note>
+            </span>
           </p>
 
           <div className="remote-pair">
@@ -1431,21 +1474,27 @@ export function RemoteView({
                   {tailnetOnly && (
                     /*
                      * True and narrow: nothing can look this code up, but a
-                     * device already on the tailnet can still reach the address
-                     * above and redeem it there.
+                     * device already on the tailnet can still reach the direct
+                     * address and redeem it there.
+                     *
+                     * The address is printed *here* and nowhere else, and that
+                     * is the whole of what is left of the tailnet on this
+                     * screen. It used to be a permanent card with a green
+                     * **Ready** badge, which advertised a route almost nobody
+                     * has as the recommended one. This is the single state
+                     * where it is the only way in and therefore the only thing
+                     * the reader can act on — so it appears exactly then, in a
+                     * warning, rather than standing on the page being jargon.
                      *
                      * It no longer names the relay as the cause. Two different
-                     * things land here — the relay row being down, and this
-                     * code's own rendezvous dial failing under a relay that is
-                     * up — and the old sentence asserted the first, which sent
-                     * somebody to stare at a relay row that said Connected.
-                     * What both have in common is the only thing the reader can
-                     * act on: these digits will not be found, so use them from
-                     * the tailnet or show another.
+                     * things land here — the relay being down, and this code's
+                     * own rendezvous dial failing under a relay that is up —
+                     * and the old sentence asserted the first, which sent
+                     * somebody to stare at a row that said Connected.
                      */
                     <Notice tone="warn">
                       Nothing can look this code up, so only a device already on your tailnet can use
-                      this code — at the address above.
+                      it{direct === null ? '' : ` — at ${direct}`}.
                     </Notice>
                   )}
                 </>
@@ -1546,13 +1595,17 @@ export function RemoteView({
         </Group>
       )}
 
-      {running && (
-        <Group
-          title={connections.length > 0 ? `Attached now — ${connections.length}` : 'Attached now'}
-        >
-          {connections.length === 0 ? (
-            <p className="settings-prose">Nothing is attached.</p>
-          ) : (
+      {/*
+        Only when something is attached.
+
+        An empty "Attached now — Nothing is attached." group is a heading and a
+        sentence saying the heading has nothing under it, on a page whose whole
+        complaint was that it says too much before anything has happened. The
+        list appears when there is a list.
+      */}
+      {running && connections.length > 0 && (
+        <Group title={`Attached now — ${connections.length}`}>
+          {(
             <ul className="remote-list">
               {connections.map((connection) => (
                 <li className="remote-row remote-row-live" key={connection.id}>
@@ -1605,21 +1658,35 @@ export function RemoteView({
 
           {connections.some((connection) => connection.tunnels.length > 0) && (
             // Said once, under the list, rather than on every row. The thing
-            // worth knowing is what these are and that Stop is cheap — a
-            // person who has to guess whether "Stop" kills their session will
-            // leave a page open on this Mac rather than risk it.
+            // worth knowing is that Stop is cheap — a person who has to guess
+            // whether "Stop" kills their session will leave a page open on this
+            // Mac rather than risk it — and that fits on one line.
             <p className="settings-prose">
-              A port listed above is being served from {machine} to that phone’s browser, over the
-              same connection. <strong>Stop closes the page, and nothing else.</strong> The session
-              keeps running, the device stays approved, and the phone can tap the port again.
+              <span className="settings-label-line">
+                <strong>Stop closes the page, and nothing else.</strong>
+                <Note label="open ports">
+                  {`A port listed above is being served from ${machine} to that phone’s browser, over the same connection. Stopping it leaves the session running and the device approved, and the phone can tap the port again.`}
+                </Note>
+              </span>
             </p>
           )}
         </Group>
       )}
 
-      {/* Only once something has been read: "no device has been paired" is a
-          claim, and before the first answer lands it is an unfounded one. */}
-      {state !== null && (
+      {/*
+        Only once there is a device.
+
+        Two gates, and they answer two different objections. The first is the
+        old one: before the first answer lands, "no device has been paired" is a
+        claim nothing supports. The second is his — *"until there is nothing
+        activated or something or no device is connected… this only text doesn't
+        make any sense"* — and it is about a page that opened with four headings
+        and five paragraphs describing devices that did not exist. An empty
+        roster under a heading is not information; the way to get one is the
+        pairing block above, which is where somebody with no devices should be
+        looking.
+      */}
+      {state !== null && devices.length > 0 && (
         <Group title="Devices">
           {pending.length > 0 && (
             <p className="settings-prose">
@@ -1631,11 +1698,7 @@ export function RemoteView({
             </p>
           )}
 
-          {devices.length === 0 ? (
-            <p className="settings-prose">
-              No device has been paired. Nothing can connect until one is.
-            </p>
-          ) : (
+          {(
             <ul className="remote-list">
               {devices.map((device) => (
                 <li className={`remote-row remote-row-${device.state}`} key={device.id}>
@@ -1693,17 +1756,30 @@ export function RemoteView({
           )}
 
           <p className="settings-prose">
-            <strong>Revoking is immediate.</strong> The device is dropped where it stands — mid
-            command, mid session — not at its next connection. Disconnecting only closes what is
-            open now; an approved device can attach again straight away.
+            <span className="settings-label-line">
+              <strong>Revoking is immediate.</strong>
+              <Note label="revoking">
+                {`The device is dropped where it stands — mid command, mid session — not at its next connection. Disconnecting is the gentler one: it only closes what is open now, and an approved device can attach again straight away.`}
+              </Note>
+            </span>
           </p>
         </Group>
       )}
 
-      {folders}
+      {/*
+        Folders, only once there is a device to choose them for.
+
+        It rendered on every visit, three paragraphs of it, ending in "No device
+        has been approved yet, so there is nothing to choose for." — an
+        explanation of a decision the reader cannot make yet, on a page they
+        opened to pair their first phone. `grantableDevices` already filters to
+        approved devices; the caller now withholds the whole block on the same
+        condition, so the words arrive with the choice they are about.
+      */}
+      {approved.length > 0 && folders}
 
       {/*
-        The outward half, last.
+        The outward half, last — and only when there is one.
 
         The order is the argument the section makes, and it runs one way:
         this machine, then what may reach it, then how to pair another, then
@@ -1712,8 +1788,22 @@ export function RemoteView({
         below are dialled out to and keep working with that switch off, which
         is exactly why they come after rather than being mixed into the device
         roster.
+
+        With no machine paired this was a heading, two lines of prose about
+        pairing going both ways, and a sentence saying the list was empty —
+        three more paragraphs on a page that already had too many, describing a
+        capability whose entry point ("Add another computer") is in the pairing
+        block above. It is drawn once there is a machine to draw, while the read
+        that would find one is still running or has failed, and — always — when
+        the build cannot reach the machine channels at all, because that is a
+        broken build rather than an empty list and has to be said.
       */}
-      <MachineLinks half={machines} platform={platform} />
+      {(!machines.wired ||
+        machines.reading ||
+        machines.error != null ||
+        machines.view.machines.length > 0) && (
+        <MachineLinks half={machines} platform={platform} />
+      )}
     </>
   )
 }
@@ -1733,6 +1823,25 @@ export function RemoteView({
  * the only thing that can notice a change, and how each of them ends.
  */
 const UNSETTLED_MS = 1000
+
+/**
+ * How long a read on this panel may take before it stops waiting and says so.
+ *
+ * Two lines here — *"Reading the current state…"* and *"Reading the machines
+ * this desktop knows…"* — stood on screen for the whole of a 47-minute
+ * recording. Both were written as though they resolve, and both do resolve if
+ * the main process answers; neither had anything to say if it did not. See
+ * `renderer/deadline.ts` for why an `invoke` that never settles never rejects
+ * either, which is what makes a spinner with no timer behind it permanent.
+ *
+ * Shorter than the shared default, on purpose. That default has to cover the
+ * artifact scan, which walks every transcript in a project. The two reads here
+ * are a status object and a device list, both already in memory in the main
+ * process; the one slow thing either of them touches is a mesh-VPN CLI, which
+ * `tailnet.ts` caps at five seconds. Eight sits above that cap, so a slow probe
+ * still lands and a probe that never returns hits the deadline.
+ */
+export const READ_DEADLINE_MS = 8000
 
 /**
  * How long after a scheduled relay retry to look.
@@ -1806,7 +1915,8 @@ export interface RemoteActionDeps {
   /** The code on screen right now, so turning the switch off can kill it too. */
   pairing: RemotePairing | null
   setPairing(next: RemotePairing | null): void
-  setConfirmEnable(next: boolean): void
+  /** Re-read `remote:status` and `remote:devices` now. */
+  reread(): void
   /** Runs the work, reports it in the main process's words, then re-reads. */
   run(key: string, work: () => Promise<unknown>, done: string | null): void
   /** False once the panel has gone, so nothing writes to a dead component. */
@@ -1820,12 +1930,12 @@ export interface RemoteActionDeps {
  * environment, so anything left inside a `useState` closure is reachable by
  * nothing but a person clicking it in a packaged build — and what is behind
  * these functions is a shell on the machine. Pulled out here, the
- * dangerous ones are pinned: that turning it *on* takes two presses and turning
- * it *off* takes one, that Deny revokes rather than approves, and that a call
- * that never happened is never reported as one that did.
+ * dangerous ones are pinned: that Deny revokes rather than approves, that the
+ * switch believes the status it reads back rather than the call returning, and
+ * that a call that never happened is never reported as one that did.
  */
 export function remoteActions(deps: RemoteActionDeps): RemoteActions {
-  const { bridge, pairing, setPairing, setConfirmEnable, run, isAlive } = deps
+  const { bridge, pairing, setPairing, run, isAlive } = deps
 
   /** Approve/Deny/Revoke: do it, then believe the list that comes back, not the ask. */
   const settle = (
@@ -1850,13 +1960,28 @@ export function remoteActions(deps: RemoteActionDeps): RemoteActions {
     )
 
   return {
+    /**
+     * One press, each way. See {@link RemoteActions.enable} for why the
+     * confirmation that used to sit in front of the on direction is gone, and
+     * what still stands between this switch and a device having a shell here.
+     */
     enable: (next) => {
       if (next) {
-        // On needs the second press. Off does not.
-        setConfirmEnable(true)
+        void run(
+          'toggle',
+          async () => {
+            const answer = toRemoteState(await invoke(bridge.startRemote, 'start'), [])
+            // `remote:start` resolves with a status rather than throwing, so a
+            // start that did not take arrives here looking like a success. Its
+            // own sentence is the failure message; inventing one would bury it.
+            if (answer && !answer.running) {
+              throw new Error(answer.reason ?? 'It did not start, and did not say why.')
+            }
+          },
+          'Remote access is on. Nothing can connect until you pair and approve a device.',
+        )
         return
       }
-      setConfirmEnable(false)
       const live = pairing
       setPairing(null)
       void run(
@@ -1875,23 +2000,7 @@ export function remoteActions(deps: RemoteActionDeps): RemoteActions {
         'Remote access is off.',
       )
     },
-    confirmEnable: () => {
-      setConfirmEnable(false)
-      void run(
-        'toggle',
-        async () => {
-          const answer = toRemoteState(await invoke(bridge.startRemote, 'start'), [])
-          // `remote:start` resolves with a status rather than throwing, so a
-          // start that did not take arrives here looking like a success. Its own
-          // sentence is the failure message; inventing one would bury it.
-          if (answer && !answer.running) {
-            throw new Error(answer.reason ?? 'It did not start, and did not say why.')
-          }
-        },
-        'Remote access is on. Nothing can connect until you pair and approve a device.',
-      )
-    },
-    dismissEnable: () => setConfirmEnable(false),
+    reread: () => deps.reread(),
     /**
      * Mint the one code, and put it on screen.
      *
@@ -2003,7 +2112,6 @@ export function RemoteSection({ bridge: provided, machines: providedMachines }: 
   const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null)
   const [pairing, setPairing] = useState<RemotePairing | null>(null)
   const [busy, setBusy] = useState<RemoteBusy>(null)
-  const [confirmEnable, setConfirmEnable] = useState(false)
   const [now, setNow] = useState(() => Date.now())
 
   /* ------------------------------------------------- the machines half -- */
@@ -2014,6 +2122,8 @@ export function RemoteSection({ bridge: provided, machines: providedMachines }: 
     blocked: null,
   })
   const [machinesReading, setMachinesReading] = useState(machineBridge !== null)
+  /** Why the machines read failed, in a sentence. Null while it has not. */
+  const [machinesProblem, setMachinesProblem] = useState<string | null>(null)
   const [typed, setTyped] = useState('')
   const [pairingMachine, setPairingMachine] = useState(false)
   const [pairError, setPairError] = useState<string | null>(null)
@@ -2048,11 +2158,17 @@ export function RemoteSection({ bridge: provided, machines: providedMachines }: 
     const seq = ++readSeq.current
     try {
       // Together, so the device list and the connection list on screen are
-      // never from two different moments.
-      const [status, devices] = await Promise.all([
-        bridge.remoteStatus(),
-        bridge.listRemoteDevices?.() ?? Promise.resolve([]),
-      ])
+      // never from two different moments — and under a deadline, so the pair of
+      // them cannot leave "Reading the current state…" on screen for ever. See
+      // `withDeadline`.
+      const [status, devices] = await withDeadline(
+        Promise.all([
+          bridge.remoteStatus(),
+          bridge.listRemoteDevices?.() ?? Promise.resolve([]),
+        ]),
+        'The remote access state',
+        READ_DEADLINE_MS,
+      )
       if (!alive.current || seq !== readSeq.current) return
       const parsed = toRemoteState(status, devices)
       if (parsed) {
@@ -2095,8 +2211,27 @@ export function RemoteSection({ bridge: provided, machines: providedMachines }: 
    */
   const rereadMachines = useCallback(async (): Promise<void> => {
     if (machineBridge === null) return
-    const view = asView(await machineBridge.listMachines())
-    if (alive.current) setMachineView(view)
+    try {
+      // Under the same deadline as the status read, and for the same reason:
+      // "Reading the machines this desktop knows…" was the other line that
+      // never resolved. A failure here is a sentence in the machines block, not
+      // an empty list — "no other machine yet" is a claim, and a read that did
+      // not come back is no evidence for it.
+      const view = asView(
+        await withDeadline(
+          machineBridge.listMachines(),
+          'The machines this desktop knows',
+          READ_DEADLINE_MS,
+        ),
+      )
+      if (!alive.current) return
+      setMachineView(view)
+      setMachinesProblem(null)
+    } catch (error) {
+      if (alive.current) {
+        setMachinesProblem(errorText(error, 'Could not read the machines this desktop knows.'))
+      }
+    }
   }, [machineBridge])
 
   useEffect(() => {
@@ -2109,7 +2244,12 @@ export function RemoteSection({ bridge: provided, machines: providedMachines }: 
       if (alive.current) setMachinesReading(false)
     })
     return machineBridge.onMachinesState((value) => {
-      if (alive.current) setMachineView(asView(value))
+      if (alive.current) {
+        setMachineView(asView(value))
+        // A push is a working channel, so whatever the last read failed at is
+        // no longer the state of the world.
+        setMachinesProblem(null)
+      }
     })
   }, [machineBridge, rereadMachines])
 
@@ -2190,7 +2330,7 @@ export function RemoteSection({ bridge: provided, machines: providedMachines }: 
     bridge,
     pairing,
     setPairing,
-    setConfirmEnable,
+    reread: () => void refresh(),
     run: (key, work, done) => void run(key, work, done),
     isAlive: () => alive.current,
   })
@@ -2199,6 +2339,8 @@ export function RemoteSection({ bridge: provided, machines: providedMachines }: 
     wired: machineBridge !== null,
     view: machineView,
     reading: machinesReading,
+    error: machinesProblem,
+    retry: () => void rereadMachines(),
     entry: {
       digits: typed,
       busy: pairingMachine,
@@ -2211,7 +2353,7 @@ export function RemoteSection({ bridge: provided, machines: providedMachines }: 
         <MachineSessionPane
           // Keyed, so switching sessions builds a new terminal rather than
           // writing the next session's bytes into the last one's scrollback.
-          key={`${openSession.machineId} ${openSession.sessionId}`}
+          key={`${openSession.machineId}\u0000${openSession.sessionId}`}
           machineId={openSession.machineId}
           sessionId={openSession.sessionId}
           bridge={machineBridge}
@@ -2239,7 +2381,6 @@ export function RemoteSection({ bridge: provided, machines: providedMachines }: 
       pairing={pairing}
       secondsLeft={secondsLeft}
       busy={busy}
-      confirmEnable={confirmEnable}
       machines={machinesHalf}
       actions={actions}
       now={now}

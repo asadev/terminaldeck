@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   addAttachment,
+  addAttachments,
   basename,
   composeMessage,
   foldersFrom,
@@ -10,12 +11,15 @@ import {
   MAX_ATTACHMENTS,
   mentionFor,
   normalise,
+  OUTSIDE_FOLDER_CAUTION,
+  REJECTION_TEXT,
   relativeTo,
   removeAttachment,
   shellQuote,
   SUBMIT_GAP_MS,
   terminalPayload,
   terminalWrites,
+  type AttachCandidate,
   type Attachment,
 } from './mentions'
 
@@ -165,6 +169,152 @@ describe('the attachment list', () => {
     expect(addAttachment([], ROOT, 'src/main/index.ts', false)).toEqual({
       ok: false,
       reason: 'not-absolute',
+    })
+  })
+
+  /*
+   * The escape hatch, and the reason it is a parameter rather than a relaxation.
+   *
+   * "I should be able to take anything from my PC to paste here" is the request,
+   * and the answer is not to stop checking — it is to make the three routes that
+   * genuinely reach outside say so at the call. The project-scoped picker keeps
+   * the old behaviour by default, so it cannot start producing outside paths
+   * because somebody changed a shared function.
+   */
+  describe('a path from outside the project', () => {
+    const DESKTOP = '/Users/apple/Desktop/screenshot.png'
+
+    it('is still refused when the caller did not ask to reach outside', () => {
+      expect(addAttachment([], ROOT, DESKTOP, false)).toEqual({
+        ok: false,
+        reason: 'outside-root',
+      })
+    })
+
+    it('is accepted when the caller says anywhere, and is marked as outside', () => {
+      const result = addAttachment([], ROOT, DESKTOP, false, 'anywhere')
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      expect(result.attachments[0]).toEqual({
+        path: DESKTOP,
+        // The absolute path, not a slice of the wrong string. `relativeTo`
+        // slices by the root's length, so pointed at a path outside the root it
+        // returns a fragment rather than an error — which is why the label for
+        // an outside file has to be the whole path.
+        relPath: DESKTOP,
+        kind: 'image',
+        outside: true,
+      })
+    })
+
+    it('leaves an inside path unmarked even when anywhere was allowed', () => {
+      // Absent rather than `outside: false`, so the common case keeps exactly
+      // the shape it has always had.
+      const result = addAttachment([], ROOT, `${ROOT}/src/main/index.ts`, false, 'anywhere')
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      expect('outside' in result.attachments[0]).toBe(false)
+      expect(result.attachments[0].relPath).toBe('src/main/index.ts')
+    })
+
+    it('still refuses a relative path, a duplicate and a full list', () => {
+      // Reaching outside the project is one gate coming down, not all of them.
+      expect(addAttachment([], ROOT, 'Desktop/x.png', false, 'anywhere')).toEqual({
+        ok: false,
+        reason: 'not-absolute',
+      })
+      const first = addAttachment([], ROOT, DESKTOP, false, 'anywhere')
+      expect(first.ok).toBe(true)
+      if (!first.ok) return
+      expect(addAttachment(first.attachments, ROOT, DESKTOP, false, 'anywhere')).toEqual({
+        ok: false,
+        reason: 'duplicate',
+      })
+    })
+
+    /*
+     * The bug this suite would not have caught on its own.
+     *
+     * Two files dropped on the composer produced one chip. `addAttachment` was
+     * right; the composer called it in a loop, and every call in that loop read
+     * the same list, so each result discarded the one before it. Nothing that
+     * attaches one thing at a time can see it — which is every other test here.
+     */
+    describe('a whole batch at once', () => {
+      it('keeps every file, not just the last one', () => {
+        const result = addAttachments(
+          [],
+          ROOT,
+          [
+            { path: '/Users/apple/Desktop/one.png', isDirectory: false },
+            { path: '/tmp/two.txt', isDirectory: false },
+            { path: `${ROOT}/README.md`, isDirectory: false },
+          ],
+          'anywhere',
+        )
+        expect(result.attachments.map((a) => a.path)).toEqual([
+          '/Users/apple/Desktop/one.png',
+          '/tmp/two.txt',
+          `${ROOT}/README.md`,
+        ])
+        expect(result.notice).toBeNull()
+      })
+
+      it('applies the ceiling across the batch rather than per file', () => {
+        const full: AttachCandidate[] = Array.from({ length: MAX_ATTACHMENTS + 3 }, (_, i) => ({
+          path: `/tmp/f${i}.txt`,
+          isDirectory: false,
+        }))
+        const result = addAttachments([], ROOT, full, 'anywhere')
+        expect(result.attachments).toHaveLength(MAX_ATTACHMENTS)
+        expect(result.notice).toBe(REJECTION_TEXT.full)
+      })
+
+      it('reports a refusal ahead of a caution', () => {
+        // Someone who dropped a folder onto a full list needs to know the list
+        // is full, not that the folder was outside the project.
+        const result = addAttachments(
+          [],
+          ROOT,
+          [
+            { path: '/tmp/outside-folder', isDirectory: true },
+            { path: 'not-absolute', isDirectory: false },
+          ],
+          'anywhere',
+        )
+        expect(result.notice).toBe(REJECTION_TEXT['not-absolute'])
+      })
+
+      it('cautions about a folder from outside, which is the one measured exception', () => {
+        const result = addAttachments(
+          [],
+          ROOT,
+          [{ path: '/tmp/outside-folder', isDirectory: true }],
+          'anywhere',
+        )
+        expect(result.attachments).toHaveLength(1)
+        expect(result.notice).toBe(OUTSIDE_FOLDER_CAUTION)
+      })
+
+      it('says nothing about a folder inside the project, which works normally', () => {
+        const result = addAttachments([], ROOT, [{ path: `${ROOT}/src`, isDirectory: true }])
+        expect(result.notice).toBeNull()
+      })
+
+      it('still defaults to the project, so a batch cannot smuggle an outside path', () => {
+        const result = addAttachments([], ROOT, [
+          { path: '/Users/apple/Desktop/one.png', isDirectory: false },
+        ])
+        expect(result.attachments).toEqual([])
+        expect(result.notice).toBe(REJECTION_TEXT['outside-root'])
+      })
+    })
+
+    it('mentions an outside file by its absolute path, which is what the CLI expands', () => {
+      const result = addAttachment([], ROOT, DESKTOP, false, 'anywhere')
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      expect(mentionFor(result.attachments[0])).toBe(`@"${DESKTOP}"`)
     })
   })
 

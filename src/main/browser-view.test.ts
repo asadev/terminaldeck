@@ -1,7 +1,35 @@
+import { readFile, readdir, rm } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
+import { deflateSync } from 'node:zlib'
 import { describe, expect, it, vi } from 'vitest'
 import type { IpcMain } from 'electron'
 import { BRAND } from '../shared/brand'
+
+/**
+ * A real 9 x 5 PNG, built rather than pasted, so the size assertions below are
+ * about the header this code reads and not about a magic base64 blob.
+ */
+const TINY_PNG = (() => {
+  const chunk = (type: string, body: Buffer): Buffer => {
+    const head = Buffer.alloc(8)
+    head.writeUInt32BE(body.length, 0)
+    head.write(type, 4, 'latin1')
+    return Buffer.concat([head, body, Buffer.alloc(4)])
+  }
+  const ihdr = Buffer.alloc(13)
+  ihdr.writeUInt32BE(9, 0)
+  ihdr.writeUInt32BE(5, 4)
+  ihdr[8] = 8
+  ihdr[9] = 6
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk('IHDR', ihdr),
+    chunk('IDAT', deflateSync(Buffer.alloc(5 * (9 * 4 + 1)))),
+    chunk('IEND', Buffer.alloc(0)),
+  ])
+})()
+
+const PNG_URL = `data:image/png;base64,${TINY_PNG.toString('base64')}`
 
 /**
  * The guest session has to be one stable object: `isGuest` compares a view's
@@ -80,6 +108,24 @@ class FakeContents {
   }
   isDevToolsOpened(): boolean {
     return false
+  }
+  /**
+   * A stand-in for Electron's `NativeImage`, only as far as draw mode uses it.
+   *
+   * `capture` is what the real thing would have taken; setting it to null is how
+   * a test says "the window is hidden", which is the one failure this path has
+   * that a user can actually cause.
+   */
+  capture: { width: number; height: number } | null = { width: 2400, height: 1500 }
+  capturePage(): Promise<unknown> {
+    if (!this.capture) return Promise.reject(new Error('Current display surface not available'))
+    const make = (size: { width: number; height: number }): unknown => ({
+      getSize: () => size,
+      resize: ({ width }: { width: number }) =>
+        make({ width, height: Math.round((size.height * width) / size.width) }),
+      toDataURL: () => `data:image/png;base64,frame-${size.width}x${size.height}`,
+    })
+    return Promise.resolve(make(this.capture))
   }
   openDevTools(): void {}
   closeDevTools(): void {}
@@ -281,6 +327,100 @@ describe('revealing a screenshot', () => {
     revealed.length = 0
     invoke('browser-view:reveal', join(PICTURES, BRAND.name, 'example.com-20260812-163045.png'))
     expect(revealed).toHaveLength(1)
+  })
+})
+
+/**
+ * Draw mode, over the wire.
+ *
+ * *"So this draw option we need to have also, and we can send it to the agent
+ * like this."* — 2026-08-16. He said it in passing and it reached no plan file;
+ * these are what stop it being dropped a second time. The point of the feature
+ * is not the drawing, it is that the marked frame reaches a session, so what is
+ * pinned here is the two ends of that: the frame the renderer draws on, and the
+ * file it hands back.
+ */
+describe('the frame draw mode marks up', () => {
+  it('hands back a lossless capture, its size, and the URL the MAIN process knows', () => {
+    const wc = openTab('tab-frame')
+    wc.url = 'https://example.com/checkout'
+    return (invoke('browser-view:frame', 'tab-frame') as Promise<Record<string, unknown>>).then(
+      (frame) => {
+        expect(frame.url).toBe('https://example.com/checkout')
+        // 2400 wide is over the bound, so it comes back at 2000 with its aspect
+        // ratio kept — the marks are drawn in fractions of this, so a stretched
+        // frame would put every one of them in the wrong place.
+        expect(frame.width).toBe(2000)
+        expect(frame.height).toBe(1250)
+        expect(String(frame.image).startsWith('data:image/png;base64,')).toBe(true)
+        releaseAllBrowserViews()
+      },
+    )
+  })
+
+  it('does not write a file, because entering draw mode is not a decision to keep one', async () => {
+    // Most of the time the next thing that happens is Escape. Reusing
+    // `browser-view:screenshot` for this would leave two files in Pictures per
+    // annotation, one of which nobody asked for.
+    const wc = openTab('tab-frame-2')
+    const before = await readdir(join(PICTURES, BRAND.name)).catch(() => [] as string[])
+    await invoke('browser-view:frame', 'tab-frame-2')
+    expect(await readdir(join(PICTURES, BRAND.name)).catch(() => [] as string[])).toEqual(before)
+    expect(wc.sent.filter((message) => message.channel.includes('screenshot'))).toEqual([])
+    releaseAllBrowserViews()
+  })
+
+  it('says the page has to be on screen, rather than throwing a stack trace', async () => {
+    // Verified on Electron 41: capturing a view whose window is hidden fails
+    // outright, and `stayHidden` does not rescue it. It is a precondition, not a
+    // transient error, so it gets a sentence.
+    const wc = openTab('tab-frame-3')
+    wc.capture = null
+    await expect(invoke('browser-view:frame', 'tab-frame-3')).rejects.toThrow(/on screen/)
+    releaseAllBrowserViews()
+  })
+})
+
+describe('saving a marked frame', () => {
+  it('writes the renderer’s bytes and reports the size the FILE has', async () => {
+    const wc = openTab('tab-marked')
+    wc.url = 'http://localhost:3000/dashboard'
+
+    const saved = (await invoke('browser-view:screenshot-marked', 'tab-marked', PNG_URL)) as {
+      path: string
+      width: number
+      height: number
+      url: string
+    }
+
+    // Same folder and same stem as an ordinary screenshot, with `-marked` on it:
+    // draw mode adds a picture, not a second place for pictures to live.
+    expect(saved.path.startsWith(join(PICTURES, BRAND.name) + '/')).toBe(true)
+    expect(saved.path.endsWith('-marked.png')).toBe(true)
+    expect(saved.path).toContain('localhost-3000-')
+    expect(saved.url).toBe('http://localhost:3000/dashboard')
+    expect({ width: saved.width, height: saved.height }).toEqual({ width: 9, height: 5 })
+    expect(await readFile(saved.path)).toEqual(TINY_PNG)
+
+    // And Reveal accepts it, because it is inside the same guarded directory.
+    revealed.length = 0
+    invoke('browser-view:reveal', saved.path)
+    expect(revealed).toEqual([saved.path])
+    await rm(saved.path, { force: true })
+    releaseAllBrowserViews()
+  })
+
+  it('writes nothing at all when the payload is not a PNG', async () => {
+    const html = Buffer.from('<script>alert(1)</script>').toString('base64')
+    openTab('tab-marked-2')
+    await expect(
+      invoke('browser-view:screenshot-marked', 'tab-marked-2', `data:image/png;base64,${html}`),
+    ).rejects.toThrow(/could not be read/)
+    releaseAllBrowserViews()
+  })
+
+  it('refuses a tab that was never claimed, so no id can write a file', async () => {
+    await expect(invoke('browser-view:screenshot-marked', 'nobody', PNG_URL)).rejects.toThrow()
   })
 })
 

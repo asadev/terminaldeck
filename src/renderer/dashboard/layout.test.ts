@@ -178,6 +178,9 @@ describe('defaultLayout', () => {
     const layout = defaultLayout(PROJECT)
     expectSound(layout)
     expect(layout.widgets.map((w) => w.type)).toEqual(['cost', 'git'])
+    // Level with each other. Usage was a row taller for one round, when it
+    // carried a dollar figure and the four lines needed to qualify it; with the
+    // money gone the seventh row held 133px of nothing. See WIDGET_SPECS.
     expect(rects(layout)).toEqual({
       'cost-default': '0,0 6x6',
       'git-default': '6,0 6x6',
@@ -606,7 +609,8 @@ describe('parseLayout', () => {
 describe('selectors', () => {
   it('reports the first row below every widget', () => {
     expect(layoutRows(createLayout(PROJECT))).toBe(0)
-    // The starter layout is one row of two half-width tiles, six rows deep.
+    // The starter layout is one row of two half-width tiles, both six rows
+    // deep, and that is what the page's height is.
     expect(layoutRows(defaultLayout(PROJECT))).toBe(6)
   })
 

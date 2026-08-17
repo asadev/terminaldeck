@@ -361,7 +361,18 @@ button.widget-stat:focus-visible {
 
 /* Text that is a control: the branch name, the meter's caption, "see them all".
    No underline at rest — an underline in a tile of quiet type reads as an
-   error — and no colour change either; the hover is the whole signal. */
+   error — and no colour change either; the hover is the whole signal.
+
+   No `font: inherit` here, and its absence is load-bearing. All three are
+   `<button>`, and `app.css` already says `button { font: inherit }` — so this
+   copy added nothing to two of them and quietly broke the third. `font` is a
+   shorthand, this selector is (0,2,0) and `.widget-branch-name` is (0,1,0), so
+   the reset out-specified the branch name's own `font-family: var(--font-mono)`
+   and the git branch rendered in the UI face. Visible without a debugger: the
+   same tile draws the branch as a `<span>` when there is nowhere to navigate to,
+   and the span was monospace while the button beside it was not. Dropping the
+   line lets the element rule through and leaves the other two exactly as they
+   were, because the base `button` rule is still doing the same job for them. */
 .widget-branch-name.is-link,
 .widget-meter-link,
 .widget-inline-link {
@@ -369,7 +380,6 @@ button.widget-stat:focus-visible {
   background: none;
   padding: 0;
   color: inherit;
-  font: inherit;
   cursor: pointer;
   text-align: left;
 }
@@ -432,6 +442,26 @@ button.widget-stat:focus-visible {
   overflow-wrap: anywhere;
 }
 
+/* Provenance under a figure — where the rate came from, when it was checked.
+   A step quieter than the note above it because it answers a question the
+   reader has not asked yet, and it must not compete with the sentence that
+   says what the number is. Separated with space, not a rule. */
+.widget-note.quiet {
+  margin-top: var(--sp-15);
+  color: var(--text-muted);
+  font-size: var(--t-footnote);
+}
+
+/* The heading over one run of breakdown rows. There are two runs inside the
+   usage drill-in — the itemised total and the per-session list — and without a
+   word between them they read as one list that changes shape halfway down. */
+.widget-breakdown-label {
+  margin: var(--sp-4) 0 var(--sp-1);
+  padding: 0 var(--sp-2);
+  color: var(--text-muted);
+  font-size: var(--t-footnote);
+}
+
 .widget-note.mono,
 .widget-row-main.mono,
 .widget-row-side.mono {
@@ -491,8 +521,9 @@ button.widget-stat:focus-visible {
   margin-bottom: var(--sp-4);
 }
 
-/* Figures in a column line up: tabular figures, and one precision for money
-   everywhere in the app — two places, see `formatUsd`. */
+/* Figures in a column line up. Tabular figures are the whole rule now: this
+   used to also pin one precision for money, and there is no money left in the
+   app to pin. */
 .widget-row-side.num {
   font-variant-numeric: tabular-nums;
 }
@@ -538,13 +569,19 @@ button.widget-stat:focus-visible {
   font-variant-numeric: tabular-nums;
 }
 
+/* The change, in a word rather than in git's letter. It was 16px wide and
+   monospaced, which is the size and the face a single character wants; a word
+   needs a column it can sit in and the app's own type, so the paths beside it
+   still line up. */
 .widget-code {
   flex-shrink: 0;
-  width: 16px;
+  width: 66px;
   color: var(--text-muted);
-  font-family: var(--font-mono);
   font-size: var(--t-footnote);
-  text-align: center;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .widget-code.staged {
@@ -587,7 +624,11 @@ button.widget-stat:focus-visible {
   opacity: 0.4;
 }
 
+/* Space above, because a meter that butts straight into the sentence over it
+   reads as that sentence's third line. Separate with space, then a tint, then
+   a line — and this needs only the first. */
 .widget-meter {
+  margin-top: var(--sp-4);
   padding: 0 var(--sp-2);
 }
 
@@ -607,6 +648,15 @@ button.widget-stat:focus-visible {
   font-size: var(--t-callout);
   font-weight: var(--w-medium);
   letter-spacing: normal;
+}
+
+/* Which session the reading belongs to, under the label rather than beside it.
+   The label line already carries a name and a percentage; a third clause on the
+   same row is where a caption stops being read. */
+.widget-meter-note {
+  margin: 0 0 var(--sp-15);
+  color: var(--text-muted);
+  font-size: var(--t-footnote);
 }
 
 .widget-meter-track {

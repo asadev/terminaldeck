@@ -56,12 +56,12 @@ export function notifyPolicy(
   // which the policy's own `watching` rule already covers.
   const banners = !onlyWhenUnfocused || !windowFocused
   const onComplete = booleanSetting(values, 'notifications.onComplete')
-  const onAttention = booleanSetting(values, 'general.notifyOnAttention')
+  const onAttention = booleanSetting(values, 'notifications.onNeedsInput')
 
   return {
     banner: (status) =>
       banners && (status === 'completed' ? onComplete : status === 'input' ? onAttention : false),
-    sound: booleanSetting(values, 'general.soundOnFinish'),
+    sound: booleanSetting(values, 'notifications.onFinishSound'),
   }
 }
 

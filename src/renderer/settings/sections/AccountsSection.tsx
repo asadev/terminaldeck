@@ -1,7 +1,6 @@
 import { useCallback, useId, useState, type FormEvent } from 'react'
 import type { ProviderId } from '@shared/types'
 import { Button, Explain, Group, Notice, SectionHead } from '../controls'
-import { sectionMeta } from '../settings-schema'
 import type { SectionProps } from '../settings-bridge'
 import { ProviderBadge } from '../../components/ProviderBadge'
 import {
@@ -12,8 +11,10 @@ import {
   type AccountProviderRow,
 } from '../../components/ProviderPicker'
 import {
+  accountLabel,
   accountsBridge,
   normalizeAccountName,
+  profileLoginLabel,
   renameAccount,
   useAccounts,
   MAX_ACCOUNT_NAME_LENGTH,
@@ -72,6 +73,16 @@ import {
 const MAX_NAME_LENGTH = MAX_ACCOUNT_NAME_LENGTH
 
 /**
+ * The id of the account every unset default falls back to.
+ *
+ * `SYSTEM_PROFILE_ID` in `main/profiles.ts`, spelled here because the renderer
+ * does not import the main process. It is a string already written into
+ * `profiles.json` on every machine this app has ever run on, so it cannot change
+ * without resetting everybody's default — which is why it is safe to name.
+ */
+const SYSTEM_ACCOUNT_ID = 'system'
+
+/**
  * The agent's name for a screen reader, or undefined when there is no mark to
  * announce.
  *
@@ -84,9 +95,79 @@ function agentName(provider: ProviderId | null): string | undefined {
   return provider === null ? undefined : providerOption(provider)?.label
 }
 
+/**
+ * Can a session actually be opened on this account's agent, right now?
+ *
+ * The question the app never asked, and the reason the recording contains a Node
+ * stack trace. `detectProviders` — which is what fills `providerRows.available`
+ * — now runs each agent once to prove it starts rather than only looking it up,
+ * so an unavailable row here means "pressing Sign in would open a terminal that
+ * dies". Nothing is created and no session is started in that case.
+ *
+ * Unknown agent means allowed: an account whose provider the main process did
+ * not name is one this screen has no grounds to block.
+ */
+export function agentCanStart(
+  rows: readonly AccountProviderRow[],
+  provider: ProviderId | null,
+): boolean {
+  if (provider === null) return true
+  const row = rows.find((entry) => entry.id === provider)
+  return row === undefined || row.available
+}
+
+/**
+ * What to say instead of offering Sign in.
+ *
+ * One sentence and a command, which is the whole of the brief for this screen:
+ * *"it's very inconvenient and not understandable for me as not a technical
+ * actual coder, because I am building this mostly for normal level coders or
+ * vibe coders."*
+ */
+export function agentProblem(
+  rows: readonly AccountProviderRow[],
+  provider: ProviderId | null,
+): { text: string; install: string | null } | null {
+  if (provider === null) return null
+  const row = rows.find((entry) => entry.id === provider)
+  if (!row || row.available) return null
+  return {
+    text: `${row.label} will not start on this machine, so signing in cannot open a session yet.`,
+    install: row.install,
+  }
+}
+
+/**
+ * Can this agent hold more than one login?
+ *
+ * Separate from `agentCanStart` because they answer different questions and the
+ * screen needs both: whether to offer *this* account an action, and whether a
+ * second account of the same agent is a thing that can exist. Gemini answers no
+ * here and yes to `agentCanStart`, which is the pairing the whole Gemini fix
+ * turns on — it can be signed in; there is only ever one of it.
+ */
+export function canHaveMore(
+  rows: readonly AccountProviderRow[],
+  provider: ProviderId | null,
+): boolean {
+  if (provider === null) return true
+  const row = rows.find((entry) => entry.id === provider)
+  return row === undefined || row.canAdd
+}
+
 /* ----------------------------------------------------------------- view -- */
 
 export interface AccountsViewProps {
+  /**
+   * Draw the pane's own heading.
+   *
+   * False when this is a group inside Agents, which is now the only place it
+   * appears — Accounts stopped being a rail entry when the three agent sections
+   * were merged. Kept as a flag rather than hard-coded off so the view can
+   * still be rendered on its own in a test, which is where the interesting
+   * states are exercised.
+   */
+  head?: boolean
   snapshot: AccountsSnapshot
   signIn: Readonly<Record<string, SignInView>>
   loading: boolean
@@ -106,7 +187,20 @@ export interface AccountsViewProps {
   /** Null when nothing in this window can start a session — no Sign in button. */
   onSignIn: ((account: AccountView) => void) | null
   onCheck(): void
-  onCreate(name: string, provider: ProviderId): void
+  /**
+   * Add the account **and** start its sign-in, as one action.
+   *
+   * Two steps before this: press Add, watch a row appear, find the Sign in
+   * button on it, press that. His words: *"right away it should actually take me
+   * to sign in rather than add button. There should not be any add button. It
+   * should be just sign in button and should take me to the flow of sign in
+   * rather than we bring sign in button here separately. It is two steps
+   * separately."*
+   *
+   * Null when this window cannot start a session, in which case the form says so
+   * rather than creating an account that has no way to be signed in.
+   */
+  onSignInNew: ((name: string, provider: ProviderId) => void) | null
   onRename(account: AccountView, name: string): void
   onRemove(account: AccountView): void
   onMakeDefault(account: AccountView): void
@@ -122,6 +216,7 @@ export interface AccountsViewProps {
  * spawned process.
  */
 export function AccountsView({
+  head = true,
   snapshot,
   signIn,
   loading,
@@ -131,12 +226,19 @@ export function AccountsView({
   providerRows,
   onSignIn,
   onCheck,
-  onCreate,
+  onSignInNew,
   onRename,
   onRemove,
   onMakeDefault,
 }: AccountsViewProps) {
-  const meta = sectionMeta('profiles')
+  /*
+   * `sectionMeta('profiles')` answers with Agents now — the merge table routes
+   * every old section id at the pane that absorbed it. The heading below is
+   * therefore written here rather than read from the meta: when this view is
+   * rendered standalone it is still *Accounts* that is on screen, whatever the
+   * rail happens to call the pane it lives in.
+   */
+  const title = 'Accounts'
   const [draft, setDraft] = useState('')
   const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null)
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null)
@@ -150,48 +252,57 @@ export function AccountsView({
 
   const chosen = chosenAccountProvider(providerRows, clicked)
 
-  const create = (event: FormEvent) => {
+  const problem = agentProblem(providerRows, chosen?.id ?? null)
+
+  const startNew = (event: FormEvent) => {
     event.preventDefault()
     const name = draft.trim()
     // No agent means no account: a login has to be a login *of* something, and
     // `createProfile` in the main process refuses a provider it cannot isolate
     // with its own sentence rather than quietly making a Claude account.
-    if (name === '' || !chosen) return
+    if (name === '' || !chosen || !onSignInNew) return
+    // And no account at all for an agent that cannot start. Creating one here
+    // and letting the session die is how the recording ended with five orphan
+    // rows in the sidebar and nothing cleaned up.
+    if (problem) return
     setDraft('')
-    onCreate(name, chosen.id)
+    onSignInNew(name, chosen.id)
   }
 
   if (!available) {
     return (
-      <>
-        <SectionHead title={meta.label} blurb={meta.blurb} />
+      <Group title={title}>
         <Notice tone="warn">
           Accounts are not wired into this window, so nothing here can be read or changed.
         </Notice>
-      </>
+      </Group>
     )
   }
 
   const accounts = snapshot.accounts
 
   return (
-    <>
-      <SectionHead title={meta.label} blurb={meta.blurb} />
+    <Group title={head ? undefined : title}>
+      {head && <SectionHead title={title} blurb="One app, several agent logins." />}
 
       {/*
-        The scope sentence in the middle is what replaced a headed block called
-        "Claude only, and why" at the foot of this pane. That block was written
-        when Claude was the only agent that could hold a second login; it is now
-        wrong about Codex, and it was never the right place for the Gemini
-        answer — which belongs on the Gemini row, next to the control it
-        explains, and is there. One line, not a paragraph, and it says what you
-        get rather than how it works: nobody needs to know what a config
-        directory is to decide which account to sign in as.
+        Three sentences became one.
+
+        This block replaced a headed paragraph called "Claude only, and why",
+        which was written when Claude was the only agent that could hold a
+        second login and had become wrong about Codex. Then it grew to three
+        sentences of its own — what an account is, which agents can hold
+        several, and where to switch between them — which is how a pane becomes
+        a document one true clause at a time. What is left on screen is the
+        clause somebody actually needs before they press Add; the rest is behind
+        the ⓘ, where it can be read by anyone who wants it and skipped by
+        everyone who does not.
       */}
-      <Explain title="One app, several logins">
-        An account is a separate login for one agent — its own history, its own transcripts, and
-        two can run side by side. Claude and Codex can hold several; Gemini keeps one per machine.
-        Pick which one a session uses from the account button beside the folder.
+      <Explain
+        title="One app, several logins"
+        more="An account is a separate login for one agent, with its own history and its own transcripts, and two can run side by side. Pick which one a session uses from the account button beside the folder."
+      >
+        Claude and Codex can hold several; Gemini keeps one per machine.
       </Explain>
 
       {error && <Notice tone="error">{error}</Notice>}
@@ -199,11 +310,27 @@ export function AccountsView({
       <ul className="settings-profiles">
         {accounts.map((account) => {
           const state = signIn[account.id]
+          /*
+           * One default, not one per agent.
+           *
+           * This was `account.system && defaultId === null`, which was right
+           * while Claude's install was the only system row. There are three now
+           * — Claude's, Codex's and Gemini's — so on a fresh machine all three
+           * wore a "Default" badge, next to three rows already named "Default
+           * (…)", which is the "printed the word twice" problem this badge has
+           * had before, tripled.
+           *
+           * `SYSTEM_PROFILE_ID` is the id `resolveProfileId` terminates on when
+           * nothing else resolves, so it is the one row for which "default with
+           * nothing set" is literally true.
+           */
           const isDefault =
-            account.id === snapshot.defaultId || (account.system && snapshot.defaultId === null)
+            account.id === snapshot.defaultId ||
+            (snapshot.defaultId === null && account.id === SYSTEM_ACCOUNT_ID)
           // Held as the value rather than a boolean so the form below narrows
           // without an assertion.
           const editing = renaming?.id === account.id ? renaming : null
+          const rowProblem = agentProblem(providerRows, account.provider)
 
           return (
             <li key={account.id} className="settings-profile">
@@ -229,7 +356,12 @@ export function AccountsView({
                       value={editing.name}
                       maxLength={MAX_NAME_LENGTH}
                       autoFocus
-                      aria-label={`New name for ${account.name}`}
+                      /* The row's own label, so what a screen reader hears is
+                         what the list shows — the field holds the stored name
+                         because that is the string being edited, but "New name
+                         for Default" over a row headed with an address is the
+                         slug leaking through the accessibility tree. */
+                      aria-label={`New name for ${profileLoginLabel(account, state)}`}
                       onChange={(event) => setRenaming({ id: account.id, name: event.target.value })}
                     />
                     <Button type="submit" tone="primary">
@@ -249,7 +381,15 @@ export function AccountsView({
                           thing on the row, and here nothing else on the row says
                           it. */}
                       <ProviderBadge provider={account.provider} label={agentName(account.provider)} />
-                      {account.name}
+                      {/* The login, not the key. These rows read `Default`,
+                          `Default (Codex CLI)`, `Default (Gemini CLI)` — three
+                          generated keys sitting one above the other, which is
+                          also the shape of his complaint that the list gives no
+                          way to tell which login is which. This pane probes on
+                          open, so the address is usually already in hand;
+                          `profileLoginLabel` prints it, and says which install
+                          a row is when the agent named nobody. */}
+                      {profileLoginLabel(account, state)}
                       {/* A badge is a comparison, so it needs something to
                           compare with: on a fresh install there is one account
                           and it is *called* Default, and the badge printed the
@@ -257,7 +397,11 @@ export function AccountsView({
                       {isDefault && accounts.length > 1 && (
                         <span className="settings-badge">Default</span>
                       )}
-                      {account.system && (
+                      {/* Only when the label has not already said it. With no
+                          address to show, the label *is* "Your own Claude Code
+                          install", and the badge beside it would be the same
+                          sentence twice on one line. */}
+                      {account.system && accountLabel(state) !== null && (
                         <span className="settings-badge quiet">Your own install</span>
                       )}
                     </span>
@@ -269,6 +413,16 @@ export function AccountsView({
                       <span className="settings-account-mark" aria-hidden="true" />
                       <span>{state ? state.detail : 'Checking with the agent…'}</span>
                     </span>
+
+                    {/* Why Sign in is not there. One sentence and a command —
+                        never the launcher's own `Error: spawn … ENOENT`, which
+                        is what this row used to print verbatim. */}
+                    {rowProblem && (
+                      <span className="settings-account-blocked">
+                        {rowProblem.text}
+                        {rowProblem.install && <code>{rowProblem.install}</code>}
+                      </span>
+                    )}
 
                     <span className="settings-profile-path" title={account.configDir}>
                       {account.configDir}
@@ -282,13 +436,25 @@ export function AccountsView({
                   {/* Offered when the agent said no, and when it could not be
                       asked — both are cases where signing in is the next thing
                       to try. Never offered against a verified "signed in",
-                      where it would only start a session nobody asked for. */}
-                  {onSignIn && state && state.state !== 'signed-in' && state.state !== 'unsupported' && (
-                    <Button tone="primary" disabled={busy} onClick={() => onSignIn(account)}>
-                      Sign in
-                    </Button>
-                  )}
-                  {!isDefault && (
+                      where it would only start a session nobody asked for.
+
+                      And never offered when the agent will not start. That is
+                      the button that opened a blank terminal and printed a Node
+                      stack trace into it, five times in one recording; the row
+                      below says what is wrong and what to type instead. */}
+                  {onSignIn &&
+                    state &&
+                    state.state !== 'signed-in' &&
+                    state.state !== 'unsupported' &&
+                    agentCanStart(providerRows, account.provider) && (
+                      <Button tone="primary" disabled={busy} onClick={() => onSignIn(account)}>
+                        Sign in
+                      </Button>
+                    )}
+                  {/* Meaningless where there is only ever one. Gemini keeps a
+                      single login per machine, so "use this one by default"
+                      offers a choice between it and itself. */}
+                  {!isDefault && canHaveMore(providerRows, account.provider) && (
                     <Button disabled={busy} onClick={() => onMakeDefault(account)}>
                       Use by default
                     </Button>
@@ -347,7 +513,7 @@ export function AccountsView({
         </span>
       </div>
 
-      <Group title="Add an account">
+      <Group title="Sign in to another account">
         {/* The question the app never asked. Before this list, every account
             made here was a Claude account whatever the person adding it had in
             mind — see the module note. */}
@@ -359,7 +525,17 @@ export function AccountsView({
           onSelect={setClicked}
         />
 
-        <form className="settings-inline-form settings-add-account" onSubmit={create}>
+        {/*
+          One button, and it says what happens.
+
+          This was Add, and pressing it put a row on the list with a Sign in
+          button of its own — two steps, two places to look, and a half-made
+          account left behind if you stopped between them. The account is still
+          created (an account *is* a directory, and the agent needs one before it
+          can be signed into), but it is created and signed into in one press, so
+          there is no state in which one has happened and the other has not.
+        */}
+        <form className="settings-inline-form settings-add-account" onSubmit={startNew}>
           <input
             className="settings-input wide"
             value={draft}
@@ -373,15 +549,27 @@ export function AccountsView({
             aria-label="Name for the new account"
             onChange={(event) => setDraft(event.target.value)}
           />
-          <Button type="submit" tone="primary" disabled={busy || draft.trim() === '' || !chosen}>
-            Add
+          <Button
+            type="submit"
+            tone="primary"
+            disabled={busy || draft.trim() === '' || !chosen || !onSignInNew || problem !== null}
+          >
+            Sign in
           </Button>
         </form>
 
+        {/* The agent is installed nowhere this app can start it. Said here,
+            before the button is pressed, rather than in a terminal afterwards. */}
+        {problem && (
+          <Notice tone="warn">
+            {problem.text}
+            {problem.install && <> Install it with <code>{problem.install}</code>.</>}
+          </Notice>
+        )}
+
         {/* Every agent listed, none of them able to take one — which on this
             machine means none of them is installed. Said once, here, rather
-            than left for somebody to infer from an Add button that never
-            enables. */}
+            than left for somebody to infer from a button that never enables. */}
         {providerRows.length > 0 && !chosen && (
           <Notice tone="warn">
             No agent on this machine can hold a second login. Install Claude Code or the Codex CLI
@@ -389,13 +577,26 @@ export function AccountsView({
           </Notice>
         )}
 
-        <Explain title="Signing in happens in the terminal">
-          A new account starts signed out. Press Sign in and a session opens on that agent, where
-          it asks you to log in as it would in your own terminal — this app never sees a password
-          or a token.
+        {/* A window with no way to open a session cannot sign anything in, and
+            making the account anyway would leave exactly the orphan this pass
+            exists to stop. */}
+        {chosen && !onSignInNew && (
+          <Notice tone="warn">
+            This window cannot open a session, so there is nothing here to sign in with.
+          </Notice>
+        )}
+
+        {/* Halved. The fact that has to be on screen before the button is
+            pressed is that a terminal is about to open; that this app never
+            sees the credential is reassurance, which is what an ⓘ is for. */}
+        <Explain
+          title="Signing in happens in the terminal"
+          more="A new account starts signed out. Press Sign in and a session opens on that agent, where it asks you to log in exactly as it would in your own terminal. This app never sees a password or a token."
+        >
+          Sign in opens a session on that agent and lets it ask.
         </Explain>
       </Group>
-    </>
+    </Group>
   )
 }
 
@@ -423,6 +624,76 @@ export function createAccount(
   return bridge?.createProfile?.(name, { provider })
 }
 
+/** The id `profiles:create` answered with, or null for anything unreadable. */
+export function createdAccountId(answer: unknown): string | null {
+  if (typeof answer !== 'object' || answer === null) return null
+  const id = (answer as { id?: unknown }).id
+  return typeof id === 'string' && id !== '' ? id : null
+}
+
+/**
+ * Make the account and sign it in, as one action, and leave nothing behind if it
+ * fails.
+ *
+ * Three properties, and each one is a defect from the recording:
+ *
+ *  1. **One press.** Add then Sign in was two, and the state in between — an
+ *     account that exists and has never been signed into — was a row a person
+ *     could walk away from without noticing.
+ *  2. **Nothing is created for an agent that cannot start.** The caller checks
+ *     that before calling; this checks that a session could be started at all,
+ *     because a window with no `start` has no business making an account.
+ *  3. **A failed start takes the account with it.** If `profiles:create`
+ *     succeeds and the session does not, the directory that was just made is
+ *     removed again — otherwise the failed attempt leaves a row, and five failed
+ *     attempts leave five, which is what the sidebar looked like by the end of
+ *     the recording.
+ *
+ * Written as a plain function taking its bridge so a test can hand it spies and
+ * assert the cleanup, which is the branch no machine reproduces on demand.
+ */
+export async function signInToNewAccount(
+  bridge: Partial<AccountsBridge> | null,
+  start: ((request: { profileId: string; provider?: ProviderId }) => unknown) | null,
+  name: string,
+  provider: ProviderId,
+): Promise<{ ok: boolean; error: string | null }> {
+  if (!start) {
+    return { ok: false, error: 'This window cannot open a session, so there is nothing to sign in with.' }
+  }
+
+  let created: unknown
+  try {
+    created = await createAccount(bridge, name, provider)
+  } catch (cause) {
+    return {
+      ok: false,
+      error: cause instanceof Error && cause.message ? cause.message : 'Could not add that account.',
+    }
+  }
+
+  const id = createdAccountId(created)
+  if (id === null) return { ok: false, error: 'Could not add that account.' }
+
+  try {
+    await start({ profileId: id, provider })
+    return { ok: true, error: null }
+  } catch (cause) {
+    // The account was made a moment ago and has never been used, so removing it
+    // cannot take anything away from anybody. `deleteFiles` is deliberately not
+    // passed: `deleteProfile` keeps the directory unless asked, and an empty
+    // directory is cheaper to leave than a wrong delete is to undo.
+    await bridge?.deleteProfile?.(id).catch(() => undefined)
+    return {
+      ok: false,
+      error:
+        cause instanceof Error && cause.message
+          ? `Could not open a session to sign in: ${cause.message}`
+          : 'Could not open a session to sign in, so the account was not kept.',
+    }
+  }
+}
+
 /**
  * What Sign in asks the window to start.
  *
@@ -448,7 +719,7 @@ export function signInRequest(account: AccountView): {
 
 /* -------------------------------------------------------------- section -- */
 
-export function AccountsSection({ startSession }: SectionProps) {
+export function AccountsSection({ startSession, head }: SectionProps & { head?: boolean }) {
   const accounts = useAccounts()
   /*
    * Always on, because this pane is only mounted while it is the one on screen
@@ -490,6 +761,7 @@ export function AccountsSection({ startSession }: SectionProps) {
 
   return (
     <AccountsView
+      head={head}
       snapshot={accounts.snapshot}
       signIn={accounts.signIn}
       loading={accounts.loading}
@@ -512,8 +784,21 @@ export function AccountsSection({ startSession }: SectionProps) {
          press the button in. */
       onSignIn={startSession ? (account) => startSession(signInRequest(account)) : null}
       onCheck={() => accounts.check(true)}
-      onCreate={(name, provider) =>
-        run(createAccount(bridge, name, provider), 'Could not add that account.')
+      /* One press: make the account, open its sign-in, and unmake it if the
+         session cannot start. `signInToNewAccount` holds all three so the
+         cleanup branch can be asserted without a DOM. */
+      onSignInNew={
+        startSession
+          ? (name, provider) => {
+              setBusy(true)
+              setFailure(null)
+              void signInToNewAccount(bridge, startSession, name, provider).then((result) => {
+                setBusy(false)
+                if (result.error) setFailure(result.error)
+                accounts.reload()
+              })
+            }
+          : null
       }
       /* Through `renameAccount` rather than straight at the bridge, so this
          screen and the account chip inside a session are the same rename. */

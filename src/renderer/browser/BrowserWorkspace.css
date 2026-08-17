@@ -7,13 +7,23 @@
    rather than a dropdown, and why the cookies dialog parks the view before it
    opens. Layout follows from that constraint, not from taste.
 
-   What the chrome looks like follows from where it sits. The app's own toolbar
+   What the chrome looks like follows from where it sits. The window's tab strip
    is directly above this, and it is one piece of glass with a single hairline
    under it. A second toolbar with its own borders underneath that reads as two
-   apps stacked, so this one has no lines at all: the strip, the address bar and
-   the device row share one `--bg-secondary` band, the stage below is
-   `--bg-primary`, and the change of tint is the whole separation. The selected
-   tab is filled with the page's own colour, which is what joins the two.
+   apps stacked, so this one has no lines at all: the address bar, the device
+   row and the bottom panel share one band, the stage between them is
+   `--bg-primary`, and the change of tint is the whole separation.
+
+   That band is `--tab-active` — the colour the selected tab in the strip above
+   is filled with. It was `--bg-secondary`, and that is the seam the tab strip's
+   rebuild could not close from its own side: the selected tab paints
+   continuously into whatever is under it, and over a session that is the
+   session bar, but over a page in this panel there is no session bar and the
+   tab met a band two levels off its own colour. In the light theme it read as a
+   white plate resting on a grey bar — the exact shape the Chrome-style tab was
+   meant to stop reading as. One token on this element joins them, in both
+   appearances, and it is the tab's token rather than a grey chosen to match it
+   so the two cannot drift apart later.
 
    Colour carries meaning only: the accent is selection and focus, and the two
    status colours are recording and a refusal. Everything else is neutral.
@@ -26,7 +36,14 @@
   flex-direction: column;
   min-height: 0;
   height: 100%;
-  background: var(--bg-secondary);
+  /* So the toolbar's captions can be dropped on a narrow *panel* rather than a
+     narrow window. This panel can be half of a split; the window's width says
+     nothing about how much room its bar has. */
+  container-type: inline-size;
+  /* The surface the selected tab opens onto. `.bw-toolbar` paints nothing of
+     its own, so this is what the tab's foot actually meets — see the note at
+     the top of the sheet. */
+  background: var(--tab-active);
   color: var(--text-secondary);
   font-family: var(--font-ui);
   font-size: var(--t-callout);
@@ -71,6 +88,49 @@
   border-radius: var(--radius-sm);
   color: var(--text-secondary);
   transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+/*
+  The labelled variant: glyph plus a word.
+
+  Six unlabelled glyphs sat on the right of this bar and he could not name one
+  of them on camera. Only the actions carry a word — Back, Forward, Reload and
+  Home stay bare, because those four glyphs have meant the same thing in every
+  browser for thirty years and captioning them would be noise on the same bar.
+
+  Sized to the content instead of the square `--icon-btn`, and `flex` rather
+  than `grid`, because the box now holds two things in a row.
+*/
+.bw-icon[data-labelled] {
+  display: flex;
+  gap: var(--sp-1);
+  width: auto;
+  padding: 0 var(--sp-2);
+}
+
+.bw-icon-word {
+  font-size: var(--t-footnote);
+  white-space: nowrap;
+}
+
+/*
+  On a narrow window the words go and the buttons fall back to squares.
+
+  A container query, not a media query: this panel can be half of a split, so
+  the window's width says nothing about how much room this bar has. The
+  addresses bar is the flexible element beside these, and it must not be
+  squeezed to nothing to keep six captions.
+*/
+@container (max-width: 720px) {
+  .bw-icon[data-labelled] {
+    display: grid;
+    width: var(--icon-btn);
+    padding: 0;
+  }
+
+  .bw-icon-word {
+    display: none;
+  }
 }
 
 .bw-icon svg {
@@ -461,6 +521,71 @@
   border-radius: var(--radius-sm);
 }
 
+/*
+  The page, held still, while a popup is over it.
+
+  On the same rectangle the native view occupies, so it lines up exactly: the
+  image is a capture of that view, taken by the main process, and drawn back at
+  the size the view is. `object-fit: fill` rather than `contain` for that reason
+  — the aspect ratios are the same by construction, and any letterboxing here
+  would be the page appearing to jump.
+
+  `pointer-events: none` because it is a photograph. Nothing on it is clickable,
+  and a click that landed on a picture of a button would be the worst kind of
+  lie this app could tell.
+*/
+.bw-freeze {
+  position: absolute;
+  display: block;
+  object-fit: fill;
+  pointer-events: none;
+  user-select: none;
+}
+
+/*
+  Draw mode's canvas, on the same rectangle the native view occupies.
+
+  It carries the photograph as well as the marks — the page is parked behind it,
+  because a `WebContentsView` composites above the whole renderer and there is no
+  way to paint HTML on top of one. So this element is the page as far as the eye
+  is concerned, and the PNG that reaches the agent is this element read back.
+
+  `color` is the one thing here that is not layout: `marks.ts` reads the resolved
+  value off this element and hands it to the canvas, so `tokens.css` stays the
+  only place the colour is written and the theme switch is followed for free.
+
+  `crosshair` because it is a drawing surface, and `touch-action: none` because
+  without it a two-finger drag on a trackpad scrolls the panel instead of drawing
+  and the stroke is abandoned mid-gesture.
+*/
+.bw-draw {
+  position: absolute;
+  display: block;
+  color: var(--color-critical);
+  cursor: crosshair;
+  touch-action: none;
+  user-select: none;
+  border-radius: var(--radius-sm);
+}
+
+/* It is focused on open so that Escape reaches the panel's handler, not because
+   anybody tabbed to it — a ring round the whole page would be nonsense. */
+.bw-draw:focus {
+  outline: none;
+}
+
+/* The three shapes, as one group of text buttons at the left of the band. A
+   pressed one wears the accent, the same as every other toggle in the app. */
+.bw-draw-tools {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.bw-draw-tools .bw-text-button[data-on] {
+  color: var(--accent);
+}
+
 .bw-empty {
   position: absolute;
   inset: 0;
@@ -477,14 +602,20 @@
 /* ---------------------------------------------------------------- bottom -- */
 
 /* Back on the chrome's ground, so the stage between the two bands is the only
-   thing wearing the page colour. That is the separation; there is no rule. */
+   thing wearing the page colour. That is the separation; there is no rule.
+
+   Stated here rather than inherited from `.bw`, because this band is the one
+   place a reader looking for "what colour is the bottom panel" will look. What
+   matters is that it is the *same token* as `.bw`: it was `--bg-secondary`
+   while the top band moved to `--tab-active`, and two spellings of one ground
+   is exactly how the two ends of this panel end up two levels apart. */
 .bw-bottom {
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
   max-height: 46%;
   overflow-y: auto;
-  background: var(--bg-secondary);
+  background: var(--tab-active);
 }
 
 .bw-bottom-tabs {
@@ -495,33 +626,18 @@
   padding: var(--sp-2) var(--sp-3) 0;
 }
 
-.bw-bottom-tabs button[role='tab'] {
+/* Was one of two tabs, and is now the only thing down here — so it is a heading
+   rather than a control. A tab strip with one tab in it is a label that invites
+   a click that does nothing. */
+.bw-bottom-title {
+  display: flex;
+  align-items: center;
   height: var(--control-h);
-  padding: 0 var(--sp-3);
-  border-radius: var(--radius-sm);
-  color: var(--text-secondary);
-  font: inherit;
+  padding: 0 var(--sp-2);
+  color: var(--text-primary);
   font-size: var(--t-callout);
-  white-space: nowrap;
-  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
-}
-
-.bw-bottom-tabs button[role='tab']:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
-}
-
-.bw-bottom-tabs button[data-on] {
-  background: var(--fill-tertiary);
-  color: var(--text-primary);
   font-weight: var(--w-medium);
-}
-
-.bw-bottom-empty {
-  margin: 0;
-  padding: var(--sp-3) var(--sp-3) var(--sp-4);
-  font-size: var(--t-callout);
-  line-height: var(--lh-body);
+  white-space: nowrap;
 }
 
 .bw-panel {
@@ -620,8 +736,171 @@
 .bw-send {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: var(--sp-2);
   margin-top: var(--sp-1);
+}
+
+/* ============================================================================
+   Choosing where a send goes.
+
+   Everything the browser hands over used to go to whichever session happened to
+   be focused behind the page. This is the control that replaced that, and its
+   two visible rules come straight from him: nothing is chosen to begin with,
+   and the Send button beside it is dead until something is.
+
+   A native `<select>`. Not a styled menu — the app's own popovers are HTML, and
+   HTML cannot paint over a browser page, which is the whole reason this popup
+   parks the page in the first place. A `<select>`'s list is drawn by the
+   operating system, above everything, and it needs no help.
+   ============================================================================ */
+
+.bw-send-target {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+
+/* In a popup the three controls do not fit on one line: at 26rem the message
+   field was squeezed to about ten characters and read as broken. The picker
+   takes a row of its own and the field and the button share the next one. */
+.bw-popup .bw-send-target {
+  flex-basis: 100%;
+}
+
+.bw-popup .bw-session-picker {
+  flex: 1;
+  max-width: none;
+}
+
+.bw-send-target-word {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: var(--t-footnote);
+}
+
+.bw-session-picker {
+  max-width: 15rem;
+  height: var(--control-h);
+  padding: 0 var(--sp-2);
+  border: none;
+  border-radius: var(--radius-md);
+  background: var(--fill-tertiary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--t-callout);
+}
+
+.bw-session-picker:disabled {
+  color: var(--text-muted);
+  cursor: default;
+}
+
+/* The reason the button is off, under it, in the same breath. A greyed control
+   with no explanation is the thing this whole change is against. */
+.bw-send-reason {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--t-footnote);
+  line-height: var(--lh-body);
+}
+
+/* ============================================================================
+   The popups.
+
+   `position: fixed` and portalled into `<body>`, which is what lets
+   `overlay-watch.ts` find them and park the native page underneath. Read the
+   header of that file before moving either of those: a browser page is a native
+   view composited above the entire renderer, and a popup that stayed inside the
+   workspace's own tree would be painted behind the website.
+
+   Glass, like every other floating surface in the app: `--material-bg*` plus the
+   sheen plus the filter. Transparency alone is not glass.
+   ============================================================================ */
+
+.bw-popup {
+  position: fixed;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  width: min(26rem, calc(100vw - 2 * var(--sp-4)));
+  padding: var(--sp-3);
+  border-radius: var(--radius-lg);
+  background: var(--material-bg);
+  background-image: var(--material-sheen);
+  backdrop-filter: var(--material-filter);
+  box-shadow: var(--shadow-md);
+  color: var(--text-secondary);
+  font-size: var(--t-callout);
+}
+
+.bw-popup-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  /* Room for the close button, which is absolutely positioned in the corner so
+     it does not push the selector around as the selector's length changes. */
+  padding-right: var(--sp-5);
+}
+
+.bw-popup-close {
+  position: absolute;
+  top: var(--sp-2);
+  right: var(--sp-2);
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.bw-popup-close:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+/* The screenshot itself, which is the entire point of the popup: what it
+   replaced was a one-line banner naming a file nobody could see. Capped in
+   height so a tall page does not make a popup taller than the window. */
+.bw-shot-preview {
+  display: block;
+  width: 100%;
+  max-height: 40vh;
+  object-fit: contain;
+  object-position: top;
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+  /* Most pages are white, and so is a light-theme popup. Without an edge the
+     screenshot bleeds into the panel and stops reading as a picture of
+     something. A hairline, not a border: it is a photograph, not a card. */
+  box-shadow: 0 0 0 1px var(--border-strong);
+}
+
+.bw-shot-path {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  margin: 0;
+}
+
+/* Already cut at the front by `shortenPath`, which does it without bidi: CSS's
+   `direction: rtl` trick moved the leading slash to the visual end and printed
+   the path as if it were a directory. This is only the safety net for a
+   filename longer than the popup. */
+.bw-shot-path code {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-family: var(--font-mono);
+  font-size: var(--t-footnote);
 }
 
 .bw-instruction {

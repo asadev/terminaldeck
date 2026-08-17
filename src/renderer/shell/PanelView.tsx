@@ -1,14 +1,16 @@
-import { FileTree } from '../components/FileTree'
+import { useState } from 'react'
+import { FileTree, type TreeRootState } from '../components/FileTree'
 import { FileViewer } from '../components/FileViewer'
 import { ArtifactsPanel } from '../components/ArtifactsPanel'
 import { RemoteSection } from '../remote/RemoteSection'
 import { GitPanel, type GitFileGroup } from '../components/GitPanel'
 import { GitHubPanel } from '../components/GitHubPanel'
 import { ReadinessPanel } from '../components/ReadinessPanel'
-import { AlertsPanel, type AlertAction } from '../components/AlertsPanel'
 import { McpInspector } from '../components/McpInspector'
 import { HooksPanel } from '../components/HooksPanel'
 import { PageEmpty } from '../components/PageEmpty'
+import { CopilotView } from '../copilot/CopilotView'
+import type { Copilot } from '../copilot/useCopilot'
 import { FeatureOffer } from '../features/FeatureOffer'
 import { useFeatures } from '../features/FeaturesProvider'
 import { Dashboard } from '../dashboard/Dashboard'
@@ -34,18 +36,42 @@ interface Props {
    * covering all ten would put every panel's internals in this file.
    */
   focus?: string | null
-  /** General → Show insight alerts. */
-  showInsights?: boolean
-  /**
-   * What an alert's button does.
-   *
-   * Alerts is the one page whose whole purpose is its actions, and nothing was
-   * passing this — "Open the git panel" ran the alert re-check and left you on
-   * Alerts, "See where it went" did nothing at all.
+  /*
+   * There was a `showInsights` and an `onAlertAction` here, and both left with
+   * the Alerts page: *"notifications should be a pop-up just like settings,
+   * not a full page."* They are props of `AlertsWindow` now, passed from the
+   * same place in `App.tsx` that used to pass them here. Nothing else on any
+   * page ever read either of them — they were alerts-only props travelling
+   * through a component that renders ten views.
    */
-  onAlertAction?(action: AlertAction): void
   /** What the dashboard's widgets can reach. Everything on it is a door. */
   dashboard?: Omit<WidgetContext, 'projectPath'>
+  /**
+   * What the copilot's page can reach — spelled the same way `dashboard` is,
+   * and for the same reason.
+   *
+   * The connection to the copilot is held once, in `App.tsx`, because three
+   * places have to agree about it: the pinned row in the rail, this page, and
+   * the filter that keeps the copilot's own session out of the ordinary session
+   * list. A second `useCopilot` in here would be a second answer to "is it
+   * running", and the two would disagree for as long as one of them had not
+   * refreshed.
+   *
+   * Optional, and the page says so rather than half-rendering: without it there
+   * is no bridge to the copilot in this build, which is a sentence, not a blank.
+   */
+  copilot?: CopilotContext
+}
+
+export interface CopilotContext {
+  copilot: Copilot
+  /** Sessions the copilot started, for the link from a turn to its work. */
+  startedSessions: readonly { id: string; label: string; runId: string | null }[]
+  onOpenSession(id: string): void
+  /** The same three the session terminals read, so both look the same. */
+  fontSize?: number
+  fontFamily?: string
+  copyOnSelect?: boolean
 }
 
 const GIT_GROUPS: readonly GitFileGroup[] = ['conflicted', 'staged', 'unstaged', 'untracked']
@@ -75,6 +101,30 @@ function NeedsProject({ panel, onOpenProject }: { panel: PanelId; onOpenProject(
 }
 
 /**
+ * What the Files page is showing as a whole — decided from the tree's own
+ * condition, so the two halves of the page cannot say different things.
+ *
+ * The report this answers: the left column read **"Nothing to show."** while
+ * the right one headed a `README.md` over a blank body, in the same frame. Both
+ * components were telling the truth about themselves. The tree had finished and
+ * found nothing; the viewer had been handed a path — held above this page in
+ * `App.tsx`, and therefore outliving the project it was chosen in — and was
+ * dutifully trying to open it.
+ *
+ * A page is not the sum of its components' states. When the folder has nothing
+ * in it, there is no file in it to be reading either, and the page says one
+ * thing.
+ */
+export type FilesPageState = 'tree-and-viewer' | 'tree-only'
+
+export function filesPageState(tree: TreeRootState): FilesPageState {
+  // Loading is deliberately `tree-and-viewer`: the viewer has its own loading
+  // state and its own file, and blanking it while the tree re-reads would make
+  // a background refresh throw away the file somebody is reading.
+  return tree.status === 'empty' || tree.status === 'error' ? 'tree-only' : 'tree-and-viewer'
+}
+
+/**
  * Files, as a page rather than a 300px drawer: the tree on the left and the
  * file it selects on the right.
  *
@@ -91,17 +141,29 @@ function FilesPage({
   selected: string | null
   onSelect(relPath: string): void
 }) {
+  /*
+   * Held here rather than read out of the tree, because the tree owns it and
+   * this page only needs to be told. `FileTree` reports a change and nothing
+   * else — see its `onRootState`, which is guarded so an unchanged condition
+   * never travels and this never loops.
+   */
+  const [tree, setTree] = useState<TreeRootState>({ status: 'loading' })
+  const layout = filesPageState(tree)
+
   return (
-    <div className="files-page">
+    <div className="files-page" data-layout={layout}>
       <FileTree
         root={root}
         selected={selected}
         className="files-page-tree"
+        onRootState={setTree}
         onSelect={(entry) => {
           if (entry.kind === 'file') onSelect(entry.relPath)
         }}
       />
-      <FileViewer root={root} path={selected} className="files-page-viewer" />
+      {layout === 'tree-and-viewer' && (
+        <FileViewer root={root} path={selected} className="files-page-viewer" />
+      )}
     </div>
   )
 }
@@ -120,9 +182,8 @@ export function PanelView({
   openFile,
   onOpenFile,
   focus,
-  showInsights = true,
-  onAlertAction,
   dashboard,
+  copilot,
 }: Props) {
   const spec = panelSpec(panel)
   const features = useFeatures()
@@ -142,6 +203,33 @@ export function PanelView({
     if (owner && !features.on(owner)) return <FeatureOffer id={owner} icon={spec.icon} />
 
     switch (panel) {
+      /*
+       * Above the project gate, like `hooks`, `mcp` and `remote`.
+       *
+       * The copilot has a folder of its own and answers about every session on
+       * the machine, so which project happens to be open has nothing to do with
+       * it — and it is most worth opening on a fresh install where no project
+       * has been added yet, which is exactly when "open a project first" would
+       * hide it.
+       */
+      case 'copilot':
+        return copilot ? (
+          <CopilotView
+            copilot={copilot.copilot}
+            focus={focus}
+            startedSessions={copilot.startedSessions}
+            onOpenSession={copilot.onOpenSession}
+            {...(copilot.fontSize === undefined ? {} : { fontSize: copilot.fontSize })}
+            {...(copilot.fontFamily === undefined ? {} : { fontFamily: copilot.fontFamily })}
+            {...(copilot.copyOnSelect === undefined ? {} : { copyOnSelect: copilot.copyOnSelect })}
+          />
+        ) : (
+          // A sentence rather than a blank. This is only reachable in a build
+          // whose window did not hand the page its connection to the copilot —
+          // a harness, a test — and "nothing rendered" is precisely how an
+          // unwired feature has repeatedly been mistaken here for a broken one.
+          <PageEmpty icon={spec.icon} title="The copilot is not wired into this window" />
+        )
       case 'hooks':
         return <HooksPanel />
       case 'mcp':
@@ -192,14 +280,12 @@ export function PanelView({
         return <GitHubPanel cwd={projectPath} initialTab={focus === 'issues' ? 'issues' : 'pulls'} />
       case 'readiness':
         return <ReadinessPanel projectPath={projectPath} />
-      case 'alerts':
-        return (
-          <AlertsPanel
-            projectPath={projectPath}
-            showInsights={showInsights}
-            onAction={onAlertAction}
-          />
-        )
+      // There was an `alerts` case here and it is gone with the panel entry, in
+      // the same way the `machines` case went above: *"notifications should be
+      // a pop-up just like settings, not a full page."* Alerts is `AlertsWindow`
+      // now, opened from the bell on the rail's Settings line and from the
+      // command palette, and it is not a `PanelId` at all — so this switch
+      // cannot be navigated to it. See the note on `PanelId` in `panels.ts`.
       default:
         return null
     }

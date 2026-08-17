@@ -74,6 +74,20 @@
   color: var(--text-muted);
 }
 
+/* A chip whose control cannot act right now, and knows why.
+
+   Drawn back rather than switched off — the reason lives in the tooltip and in
+   the menu, and both need the chip to keep receiving pointer events. See the
+   note beside `aria-disabled` in ControlPicker.tsx for why this is not the
+   `disabled` attribute. */
+.cc-chip[data-blocked] {
+  color: var(--text-muted);
+}
+
+.cc-chip[data-blocked] .ac-value {
+  font-weight: var(--w-regular);
+}
+
 .ac-caret {
   flex-shrink: 0;
   align-self: center;
@@ -105,7 +119,13 @@
   thing that makes an app feel amateur when nobody can name why.
 */
 .ac-menu,
-.ac-sheet {
+.ac-sheet,
+/* The chrome's own panel wears the same inner blocks — `.ac-section`,
+   `.ac-options`, `.ac-reach` — so it has to set the same label offset they are
+   all aligned to. Listed here rather than restated in SessionControls.css:
+   two spellings of one measurement is how the two panels would come to
+   disagree about where a word starts. */
+.sc-sheet {
   --ac-label: calc(var(--sp-2) + var(--sp-3) + var(--sp-15));
 }
 
@@ -385,12 +405,6 @@
   flex-direction: column;
   align-items: flex-start;
   gap: var(--sp-1);
-}
-
-/* Stacked, so nothing sits beside anything: the separator that reads correctly
-   on one line starts a line of its own here, as a bullet pointing at nothing. */
-.ac-sheet .us-sub-after::before {
-  content: none;
 }
 
 /* -------------------------------------------------------------- notice -- */

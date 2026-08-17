@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import {
   LSOF,
+  LSOF_FIELDS,
   NETSTAT,
   TASKLIST,
   isLocallyReachable,
   loopbackFamily,
   parseLsof,
+  parseLsofFields,
   parseNetstat,
   parseTasklist,
   portScanKind,
@@ -288,5 +290,103 @@ describe('which conversation each platform gets', () => {
     // name instead, which is right whichever way `-p` behaves.
     expect(NETSTAT.args).not.toContain('-p')
     expect(TASKLIST).toEqual({ command: 'tasklist.exe', args: ['/FO', 'CSV', '/NH'] })
+  })
+})
+
+/**
+ * `lsof -F` — the form the scan asks for first.
+ *
+ * The fixture below is a real capture from
+ * `lsof -nP -iTCP -sTCP:LISTEN -FpcRtn` on the machine this was written on,
+ * trimmed to four processes. It is here because two of the three problems on
+ * that start page are visible in the difference between this and the column
+ * capture above: `ControlCe` is really `ControlCenter`, and `Terminal` is really
+ * `Terminal Deck`.
+ */
+const LSOF_FIELD_OUTPUT = [
+  'p744',
+  'R1',
+  'crapportd',
+  'f11',
+  'tIPv4',
+  'n*:62092',
+  'f12',
+  'tIPv6',
+  'n*:62092',
+  'p751',
+  'R1',
+  'cControlCenter',
+  'f12',
+  'tIPv4',
+  'n*:5000',
+  'p22310',
+  'R22309',
+  'cElectron',
+  'f34',
+  'tIPv4',
+  'n127.0.0.1:9444',
+  'p78868',
+  'R1',
+  'cTerminal Deck',
+  'f38',
+  'tIPv4',
+  'n127.0.0.1:8443',
+  '',
+].join('\n')
+
+describe('parseLsofFields', () => {
+  it('reads one row per socket, with the pid and the parent', () => {
+    expect(parseLsofFields(LSOF_FIELD_OUTPUT)).toEqual([
+      { port: 62092, process: 'rapportd', pid: 744, ppid: 1, family: 4 },
+      { port: 62092, process: 'rapportd', pid: 744, ppid: 1, family: 6 },
+      { port: 5000, process: 'ControlCenter', pid: 751, ppid: 1, family: 4 },
+      { port: 9444, process: 'Electron', pid: 22310, ppid: 22309, family: 4 },
+      { port: 8443, process: 'Terminal Deck', pid: 78868, ppid: 1, family: 4 },
+    ])
+  })
+
+  it('keeps the command whole, which the column output cannot', () => {
+    // The entire reason this parser exists. Column mode pads COMMAND to nine
+    // characters, so every port `Terminal Deck` holds printed as `Terminal` —
+    // and eight different listeners read as one thing on his screen.
+    const names = parseLsofFields(LSOF_FIELD_OUTPUT).map((owner) => owner.process)
+    expect(names).toContain('Terminal Deck')
+    expect(names).toContain('ControlCenter')
+    expect(names).not.toContain('Terminal')
+    expect(names).not.toContain('ControlCe')
+  })
+
+  it('does not let one socket inherit the previous socket’s address family', () => {
+    // TYPE belongs to the file, not the process. A socket printed without a `t`
+    // must not take the family of the one before it: that is exactly the IPv4/
+    // IPv6 confusion that left a dev server listed and unreachable.
+    const rows = parseLsofFields(['p1', 'R0', 'cthing', 'f3', 'tIPv6', 'n[::1]:1', 'f4', 'n127.0.0.1:2', ''].join('\n'))
+    expect(rows).toEqual([
+      { port: 1, process: 'thing', pid: 1, ppid: 0, family: 6 },
+      { port: 2, process: 'thing', pid: 1, ppid: 0, family: 4 },
+    ])
+  })
+
+  it('starts each process set clean rather than inheriting the last one', () => {
+    const rows = parseLsofFields(['p1', 'R7', 'cfirst', 'f3', 'tIPv4', 'n127.0.0.1:1', 'p2', 'csecond', 'f4', 'tIPv4', 'n127.0.0.1:2', ''].join('\n'))
+    // The second process printed no `R`, so its parent is unknown rather than 7.
+    expect(rows[1]).toEqual({ port: 2, process: 'second', pid: 2, ppid: -1, family: 4 })
+  })
+
+  it('drops an address that is not reachable from this machine', () => {
+    const rows = parseLsofFields(['p1', 'R0', 'cthing', 'f3', 'tIPv4', 'n192.168.1.9:8080', ''].join('\n'))
+    expect(rows).toEqual([])
+  })
+
+  it('survives a stream that opens with a file instead of a process', () => {
+    expect(parseLsofFields(['f3', 'tIPv4', 'n127.0.0.1:1', ''].join('\n'))).toEqual([])
+    expect(parseLsofFields('')).toEqual([])
+  })
+
+  it('asks lsof for exactly the five fields the parser reads', () => {
+    expect(LSOF_FIELDS).toEqual({
+      command: 'lsof',
+      args: ['-nP', '-iTCP', '-sTCP:LISTEN', '-FpcRtn'],
+    })
   })
 })

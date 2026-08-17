@@ -62,11 +62,46 @@ describe('the hook summary', () => {
     // A stale entry is tagged as ours and sitting in the file, but it points at
     // a previous run's port and token — so it reports nothing, and calling it
     // installed would put "All hooks installed" over a silent provider. The
-    // second half stops "0 of 5 installed" reading as a contradiction of the
+    // second half stops "3 of 5 installed" reading as a contradiction of the
     // "Installed, but …" sentence directly beneath it.
-    expect(hookSummary(block({ state: 'stale', staleEvents: block().events, missingEvents: [] }))).toBe(
-      '0 of 5 installed · 5 out of date',
+    expect(
+      hookSummary(
+        block({
+          state: 'partial',
+          installedEvents: ['SessionStart', 'PreToolUse', 'PostToolUse'],
+          staleEvents: ['Stop', 'SessionEnd'],
+          missingEvents: [],
+        }),
+      ),
+    ).toBe('3 of 5 installed · 2 out of date')
+  })
+
+  it('names the all-stale case instead of counting it to zero', () => {
+    // The state this machine is in every time the app restarts, and the one the
+    // count could not describe: "0 of 5 installed · 5 out of date" asks the
+    // reader where the five came from if none is installed, and it sat directly
+    // above "Installed, but 5 events still point at a previous run of the app".
+    // Nothing here is allowed to print a zero beside a non-zero drawn from the
+    // same five entries.
+    const summary = hookSummary(
+      block({ state: 'stale', staleEvents: block().events, missingEvents: [] }),
     )
+    expect(summary).toBe('All hooks out of date')
+    expect(summary).not.toMatch(/\b0 of\b/)
+  })
+
+  it('still counts the stale ones when some events are missing outright', () => {
+    // Two of five are ours-but-stale and three were never written, so "all" is
+    // untrue and the total is what tells the reader the rest are simply absent.
+    expect(
+      hookSummary(
+        block({
+          state: 'partial',
+          staleEvents: ['SessionStart', 'Stop'],
+          missingEvents: ['PreToolUse', 'PostToolUse', 'SessionEnd'],
+        }),
+      ),
+    ).toBe('2 of 5 out of date')
   })
 
   it('separates nothing installed from nothing installable', () => {
@@ -134,12 +169,12 @@ describe('a snapshot off the wire', () => {
     const snapshot = toSetupSnapshot({
       tools: [{ id: 'claude', state: 'nonsense' }, { label: 'no id' }],
       hooks: [{ id: 'claude', state: 'complete', events: ['SessionStart', 7] }],
-      endpoint: { running: true, port: 51234 },
+      endpoint: { running: true, address: '/tmp/terminaldeck/hook.sock' },
     })
     expect(snapshot?.tools).toHaveLength(1)
     expect(snapshot?.tools[0].state).toBe('unknown')
     expect(snapshot?.hooks[0].events).toEqual(['SessionStart'])
-    expect(snapshot?.endpoint).toEqual({ running: true, port: 51234 })
+    expect(snapshot?.endpoint).toEqual({ running: true, address: '/tmp/terminaldeck/hook.sock' })
   })
 })
 
@@ -167,10 +202,20 @@ describe('the glyph on a tool row', () => {
   })
 })
 
-describe('the section with nothing wired', () => {
+describe('setup, now that it is part of Agents', () => {
+  /**
+   * `setup` is no longer a pane; it is two groups inside Agents. The id still
+   * has to resolve, though, because `App.tsx` opens Settings at it from the
+   * application menu — a menu item that lands on General because its section
+   * was merged away is a menu item that appears to do nothing.
+   */
+  it('opens the Agents pane when the old section id is asked for', () => {
+    const html = renderToStaticMarkup(<SettingsPanel bridge={{}} initialSection="setup" />)
+    expect(html).toContain('data-section="agents" class="settings-nav-item" aria-selected="true"')
+  })
+
   it('explains itself instead of rendering an empty page', () => {
     const html = renderToStaticMarkup(<SettingsPanel bridge={{}} initialSection="setup" />)
-    expect(html).toContain('Setup')
     expect(html).toContain('not available in this build yet')
   })
 })

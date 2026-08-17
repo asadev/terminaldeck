@@ -12,7 +12,7 @@ import {
 } from 'electron'
 import { backgroundFor, safeBackground } from './browser-background'
 import { isAbortCode, loadFailureSentence } from './browser-error'
-import { BLANK_URL, isNavigationAllowed, normalizeUrl, shortLabel } from './browser-url'
+import { BLANK_URL, isNavigationAllowed, normalizeUrl, pageTitle, shortLabel } from './browser-url'
 import {
   GUEST_CANCEL_CHANNEL,
   GUEST_ELEMENT_CHANNEL,
@@ -94,6 +94,109 @@ export interface BrowserTabState {
 export interface BrowserCapture extends ElementCapture {
   /** The single line to hand the agent, already sanitised. */
   context: string
+  /**
+   * The page as it looked at the instant of the click, as a `data:image/jpeg`.
+   *
+   * ## Why a picture of the page is part of a capture
+   *
+   * The popup is HTML and the page is a native `WebContentsView` composited
+   * above the entire renderer, so the only way to show a popup over a page at
+   * all is to hide the page while it is open — `overlay-watch.ts` is the essay
+   * on why there is no other lever. Hiding it leaves the app's empty canvas
+   * where the website was, and a website that vanishes when you click it reads
+   * as a crash, not as a dialog.
+   *
+   * So the page is captured *before* it is hidden and the renderer paints that
+   * capture on the same rectangle. The website appears to freeze under the
+   * popup instead of disappearing, which is what actually happens: the
+   * WebContents keeps running, it is simply not composited.
+   *
+   * It is a real photograph of the real page and nothing else — not a
+   * reconstruction, not a placeholder. Empty when the capture failed, in which
+   * case the renderer shows its own canvas and the popup, as it did before.
+   *
+   * JPEG rather than PNG: this crosses the bridge as base64 on every click while
+   * inspecting, and a full-window PNG is several megabytes where the JPEG is a
+   * few hundred kilobytes. It is a backdrop behind a dialog; the file a
+   * screenshot writes to disk is still a lossless PNG.
+   */
+  pageImage: string
+  /**
+   * Where the element sat inside the view when it was clicked, in CSS pixels.
+   *
+   * Carried so the renderer can open its capture popup *at* the element rather
+   * than in a docked panel at the bottom of the window — his words on
+   * 2026-08-16: *"rather than it comes here down, it should open a pop up
+   * here"*. Null when the page reported nothing usable, which the renderer
+   * treats as "put it somewhere sensible" rather than as a failure.
+   *
+   * Read off the raw payload rather than through `parseCapture`, because it is
+   * geometry rather than a selector: `selector.ts` decides what may reach an
+   * agent's prompt, and a rectangle never does. It is still clamped here — the
+   * numbers come from an untrusted page and end up in a `style` attribute.
+   */
+  rect: CaptureRect | null
+}
+
+/**
+ * How wide the frozen backdrop is, in device pixels, and how hard it is squeezed.
+ *
+ * It is drawn behind a dialog at whatever size the page's rectangle happens to
+ * be — usually around 1000 CSS pixels — so 1600 is generous even on a Retina
+ * display. Quality 80 is where JPEG stops showing ringing around body text at
+ * this scale, and it is roughly a tenth of the bytes of the equivalent PNG.
+ */
+const FREEZE_WIDTH = 1600
+const FREEZE_QUALITY = 80
+
+/**
+ * A photograph of the page right now, as a data URL, or an empty string.
+ *
+ * Never throws and never rejects. Every caller is on the path between a user's
+ * click and the popup that answers it, and a backdrop is the least important
+ * thing on that path: if the capture fails, the popup opens over the app's own
+ * canvas exactly as it did before this existed.
+ */
+async function freezeFrame(wc: WebContents): Promise<string> {
+  try {
+    const image = await wc.capturePage()
+    const size = image.getSize()
+    if (size.width === 0 || size.height === 0) return ''
+    const scaled = size.width > FREEZE_WIDTH ? image.resize({ width: FREEZE_WIDTH }) : image
+    return `data:image/jpeg;base64,${scaled.toJPEG(FREEZE_QUALITY).toString('base64')}`
+  } catch {
+    return ''
+  }
+}
+
+/** The clicked element's box, in the view's own CSS pixels. */
+export interface CaptureRect {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+/**
+ * A rectangle from the guest, or null.
+ *
+ * Every number is finite and clamped to a range a viewport could plausibly
+ * hold. That is not paranoia about arithmetic: the value is interpolated into
+ * an inline `style` on our own trusted page, and `1e308` there is a layout that
+ * never recovers.
+ */
+export function readCaptureRect(raw: unknown): CaptureRect | null {
+  if (typeof raw !== 'object' || raw === null) return null
+  const r = raw as Record<string, unknown>
+  const numbers = [r.x, r.y, r.width, r.height]
+  if (!numbers.every((value) => typeof value === 'number' && Number.isFinite(value))) return null
+  const clamp = (value: number, low: number): number => Math.max(low, Math.min(100000, value))
+  return {
+    x: clamp(r.x as number, -100000),
+    y: clamp(r.y as number, -100000),
+    width: clamp(r.width as number, 0),
+    height: clamp(r.height as number, 0),
+  }
 }
 
 interface BrowserTab {
@@ -173,7 +276,10 @@ function stateOf(tab: BrowserTab): BrowserTabState {
     id: tab.id,
     url: url === BLANK_URL ? '' : url,
     label: shortLabel(url),
-    title: wc ? wc.getTitle() : '',
+    // Not `wc.getTitle()` — Chromium substitutes the address for a document
+    // with no `<title>`, which is how the start page came to call itself
+    // `about:blank`. See `pageTitle`.
+    title: pageTitle(wc ? wc.getTitle() : '', url),
     loading: wc ? wc.isLoading() : false,
     canGoBack: wc ? wc.navigationHistory.canGoBack() : false,
     canGoForward: wc ? wc.navigationHistory.canGoForward() : false,
@@ -623,8 +729,32 @@ export function registerBrowserIpc(ipcMain: IpcMain): void {
     const capture = parseCapture(payload, wc.getURL())
     if (!capture) return
 
-    const message: BrowserCapture = { ...capture, context: composeAgentContext(capture) }
-    if (!tab.host.isDestroyed()) tab.host.send('browser:element', tab.id, message)
+    const rect = readCaptureRect(
+      typeof payload === 'object' && payload !== null
+        ? (payload as Record<string, unknown>).rect
+        : null,
+    )
+
+    /*
+     * Photograph the page, then send.
+     *
+     * In that order, and awaited rather than sent afterwards as a second
+     * message. The renderer hides the native view the moment the popup opens,
+     * and `capturePage` on a hidden view fails outright — verified on Electron
+     * 41, where it answers "Current display surface not available for capture".
+     * Sending the capture first and the picture second would therefore race its
+     * own consequence. The cost is the tens of milliseconds between the click
+     * and the popup, which reads as the click being answered.
+     */
+    void freezeFrame(wc).then((pageImage) => {
+      const message: BrowserCapture = {
+        ...capture,
+        context: composeAgentContext(capture),
+        pageImage,
+        rect,
+      }
+      if (!tab.host.isDestroyed()) tab.host.send('browser:element', tab.id, message)
+    })
   })
 
   ipcMain.on(GUEST_CANCEL_CHANNEL, (event: IpcMainEvent) => {

@@ -45,14 +45,27 @@ export type FeatureState = Readonly<Record<string, FeatureStatus>>
  * Where the map lives. No product-name prefix: `localStorage` is already scoped
  * to this app's renderer origin, and the product name is allowed in exactly one
  * file, which is not this one.
+ *
+ * Bumped to v2 when the store was removed, and the bump is the whole migration.
+ * Four features that shipped `uninstalled` now ship `on`, but a machine that
+ * had already written a v1 map carries `"mcp":"uninstalled"` in it — and with
+ * no store left, nothing on screen could ever have put it back. Ignoring the
+ * old key hands everyone the new defaults exactly once. The only choice it
+ * discards is a choice the app no longer offers.
  */
-export const FEATURES_KEY = 'features.v1'
+export const FEATURES_KEY = 'features.v2'
 
 function isStatus(value: unknown): value is FeatureStatus {
   return value === 'on' || value === 'off' || value === 'uninstalled'
 }
 
-/** What a fresh install has: the starter set on, the specialist tools off. */
+/**
+ * What a fresh install has: everything on, except voice dictation.
+ *
+ * It used to be "the starter set on, the specialist tools off", which was the
+ * right shape while a store existed to turn the specialist ones on. See the
+ * note at the top of `registry.ts`.
+ */
 export function defaultFeatureState(): FeatureState {
   return Object.fromEntries(
     FEATURES.map((entry) => [entry.id, entry.default === 'on' ? 'on' : 'uninstalled']),

@@ -104,29 +104,12 @@
   background: var(--fill-quaternary);
 }
 
-/* A label and a value, aligned down a column so the host id and the fingerprint
-   read as one block instead of two sentences. */
-.remote-fact {
-  display: flex;
-  align-items: baseline;
-  gap: var(--sp-3);
-  margin: var(--sp-15) 0 0;
-}
-
-.remote-fact-label {
-  flex-shrink: 0;
-  width: 88px;
-  font-size: var(--t-footnote);
-  color: var(--text-muted);
-}
-
-.remote-fact-value {
-  font-family: var(--font-mono);
-  font-size: var(--t-callout);
-  color: var(--text-primary);
-  user-select: text;
-  overflow-wrap: anywhere;
-}
+/* There was a `.remote-fact` here — a label-and-value row for the host id, the
+   fingerprint, the tailnet address and the tailnet IP. All four are gone from
+   this panel and the rules went with them, rather than being left behind as
+   dead selectors for the next reader to wonder about. The fingerprint still
+   appears once, beside a live pairing code, and it has its own `.remote-check`
+   block below because that is a comparison rather than a fact sheet. */
 
 /* ----------------------------------------------------------- the pairing -- */
 

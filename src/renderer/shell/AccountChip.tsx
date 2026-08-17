@@ -8,9 +8,13 @@ import { providerOption } from '../components/ProviderPicker'
 import { chipMode, useAgentPresence, type ChromeSession } from './agent-presence'
 import {
   accountForFolder,
+  accountIdentity,
   accountsBridge,
+  isSystemAccountId,
+  profileLoginLabel,
   renameAccount,
-  signInLabel,
+  signInStateSummary,
+  useAccountIdentity,
   useAccounts,
   MAX_ACCOUNT_NAME_LENGTH,
   type AccountView,
@@ -104,6 +108,19 @@ import './AccountChip.css'
  * about whether a blank name means "clear it" — and the main process will
  * happily store an account called `''`, which neither surface can then show.
  *
+ * The button was drawn on every row and worked on none of them. `renameProfile`
+ * refused any system id outright, and on a machine where nobody has added a
+ * second login *every* account is a system one — so every press came back with
+ * "the default profile cannot be renamed", as a rejected IPC invoke, which is
+ * the failure shape that reaches a person as `Error invoking remote method`.
+ * `profiles.ts` now stores a display name for those too; the refusal it
+ * replaces was guarding the id and the config directory, which are still
+ * generated and still untouchable from here.
+ *
+ * Whatever does come back, it comes back under the field. A collision is a
+ * correction to make in the box you are typing in, not a notice at the bottom
+ * of a list of other people's accounts.
+ *
  * ## A shell has no account, so it is offered an agent instead
  *
  *   > "Starting a session gives you a plain shell. Today that shell still shows
@@ -118,6 +135,31 @@ import './AccountChip.css'
  * does the thing the command does rather than telling you the command:
  * `claude`, typed into the session's own pty, exactly as if it had been typed
  * in the terminal view.
+ *
+ * ## The chip says who, not which record
+ *
+ *   > "inside the terminal page it is still showing selected account as Default
+ *   > and not showing the email ID. … It should show clearly which one is
+ *   > actually selected there. It just says Default."
+ *
+ * "Default" is the name `main/profiles.ts` generates for the machine's own
+ * install of an agent. It is an internal key — it is the same word for every
+ * user, it is the same word for a login that works and one that has expired,
+ * and on a machine where nobody has added a second account it is the *only*
+ * word the chip ever showed. So the one control whose entire job is saying
+ * which login a session is running as was saying nothing at all.
+ *
+ * What it shows instead is {@link accountIdentity}, whose ladder is documented
+ * where it lives: the address the agent's own CLI named, failing that a name a
+ * person chose, failing that the state that was actually read. Nothing in that
+ * ladder invents an address and nothing in it falls back to the profile key.
+ *
+ * Getting the address costs a probe, and this chip is mounted for the whole
+ * life of every session — which is exactly why the menu's list is only checked
+ * when it opens. {@link useAccountIdentity} is the narrow exception: **one**
+ * account, the one on screen, asked once per id and memoised for thirty seconds
+ * in the main process. Three processes for a control nobody clicked is a cost;
+ * one process for the only fact the control exists to state is the control.
  *
  * The moment an agent is running the button gives way to the account chip. That
  * swap is driven by {@link useAgentPresence}, never by what was typed: `claude`
@@ -193,6 +235,20 @@ interface Props {
 const CHEVRON = 'M6.5 9.5 10 13l3.5-3.5'
 
 /**
+ * The mark on the account this session is already running as.
+ *
+ *   > "It should show clearly which one is actually selected there."
+ *
+ * It did not. The current row was distinguished by its *name* being drawn in
+ * the accent colour and by nothing else — which is a difference you can only
+ * see by comparing it against the rows above and below, is invisible to anyone
+ * who cannot separate those two greys, and disappears entirely when the rows
+ * are inert. A tick is the mark every menu on this platform uses for the item
+ * in force, and it is the same shape whether the row can be pressed or not.
+ */
+const TICK = 'M4.5 10.5 8 14l7.5-8'
+
+/**
  * What Run Claude types.
  *
  * The bare command, with no flags. Not `--continue`: that silently resumes
@@ -245,10 +301,17 @@ export function AccountChip({
    * account to be given. The rows below stop being buttons when it is set.
    */
   const blocked = isolationNotice(provider)
-  // Only while the menu is open. Mounted, this chip is on screen for the whole
-  // life of every session, and checking sign-in state on mount would spawn a
-  // process per account every time a tab changed.
-  const accounts = useAccounts(menu.open)
+  /*
+   * The list always; the sign-in probes only while the menu is open.
+   *
+   * The probes are the expensive half — one spawn of the agent's CLI per
+   * account — and running them on mount would cost three processes every time a
+   * tab changed. The *list* is a JSON file read, and gating it behind the menu
+   * was a mistake with a visible symptom: until you had opened the menu once,
+   * the chip did not know which account a new session here would use, could not
+   * colour its dot, and could not tell a generated name from one you chose.
+   */
+  const accounts = useAccounts(true, menu.open)
 
   const rows: readonly AccountView[] = accounts.snapshot.accounts
 
@@ -291,7 +354,85 @@ export function AccountChip({
   const fallback = accountForFolder(accounts.snapshot, projectPath)
   const currentId = current?.id ?? fallback?.id ?? null
   const listed = currentId === null ? null : rows.find((row) => row.id === currentId) ?? null
-  const label = current?.name ?? fallback?.name ?? null
+
+  /**
+   * The account this chip is about, as a record the identity ladder can read.
+   *
+   * The name is taken from the *list* first and from the session second. Both
+   * are true statements about different moments — the session's copy was
+   * written at spawn — and a rename lands in the list, so preferring the
+   * session's would leave the chip showing the old name until the session ended.
+   *
+   * Not called `account`: the rows below are mapped over a parameter of that
+   * name, and one of them being the whole chip's subject while the other is
+   * whichever row is being drawn is a shadow nobody should have to hold in
+   * their head while reading a menu.
+   */
+  const currentAccount =
+    currentId === null
+      ? null
+      : {
+          id: currentId,
+          name: listed?.name ?? current?.name ?? fallback?.name ?? currentId,
+          system: listed?.system,
+        }
+
+  /*
+   * Who this session is running as.
+   *
+   * Two sources, and the order matters. While the menu is open the whole list
+   * has been probed, so `accounts.signIn` holds the freshest answer for every
+   * row and the chip must agree with the row the tick is on. The rest of the
+   * time — which is nearly all of it — that map is empty and the single-account
+   * probe is the only thing that knows.
+   */
+  const probed = useAccountIdentity(currentId)
+  const currentSignIn = (currentId === null ? undefined : accounts.signIn[currentId]) ?? probed
+  const identity = accountIdentity(currentAccount, currentSignIn)
+
+  /**
+   * The account's name, for the tooltip, when the name is worth saying.
+   *
+   * Only a name a person chose. The generated one — "Default", "Default (Codex
+   * CLI)" — is exactly the string this whole change is about getting off the
+   * chip, and putting it back on hover would be the same claim in smaller type;
+   * it says nothing the provider badge does not already say. Dropped too when
+   * it is already the label, which is the ordinary case for a chosen name whose
+   * agent has not reported an address.
+   */
+  const chosen =
+    currentAccount !== null &&
+    !(currentAccount.system ?? isSystemAccountId(currentAccount.id))
+      ? currentAccount.name
+      : null
+  const chosenName = chosen === identity.label ? null : chosen
+
+  /**
+   * Whether this chip has an account to name at all.
+   *
+   * Two subjects, and until now the chip could show one while explaining the
+   * other. With an account of its own — `current`, the account the session on
+   * screen was actually spawned under — it describes that session, and it stays
+   * true whatever the app's *default* agent has since been set to. With none, it
+   * describes what a new session here would use, which is a claim about the
+   * agent in `provider`, and `blocked` is precisely the answer "that agent
+   * cannot be given an account".
+   *
+   * Both halves were being drawn at once. Reported from one frame: a chip
+   * reading `Claude Code · Work` whose own tooltip read *"A plain shell has no
+   * account to sign in to"*, over a session whose chat body said *"This session
+   * is a shell"* — three statements, two of them contradicting the third. The
+   * label and the mark came from `accountForFolder`, which resolves the folder's
+   * default account regardless of whether anything could be handed it, while the
+   * tooltip came from the notice. Neither was wrong on its own terms; they were
+   * answering different questions in one control.
+   *
+   * So when there is no session account *and* nothing could be given one, the
+   * chip names nobody. The menu still opens — the accounts are still worth
+   * seeing, and Add or sign in is still the way to another one — and the notice
+   * inside it says why the rows are inert.
+   */
+  const names = current !== null || blocked === null
 
   /**
    * Which agent's mark goes on the button, in three fallbacks that are three
@@ -304,12 +445,15 @@ export function AccountChip({
    * that is describing what a *new* session here would use — the agent that new
    * session would run, because the account is resolved against it.
    *
-   * Undefined while `blocked`, and that is the case worth spelling out: the
-   * agent named there is one that cannot take an account at all, so its mark
-   * beside an account name would be claiming a pairing that is exactly what the
-   * notice underneath says is impossible.
+   * Undefined when the chip names nobody, and that is the case worth spelling
+   * out: the agent it would otherwise name is one that cannot take an account at
+   * all, so a mark beside an account name would be claiming exactly the pairing
+   * the notice underneath says is impossible. The check is `names` rather than
+   * `blocked` because a *session's* account outranks it — a Claude session keeps
+   * its Anthropic mark while the default coding tool is a plain shell, which is
+   * a setting about the next session and not about this one.
    */
-  const mark = current?.provider ?? listed?.provider ?? (blocked ? undefined : provider)
+  const mark = names ? current?.provider ?? listed?.provider ?? provider : undefined
 
   /**
    * Start Claude in this session.
@@ -404,26 +548,74 @@ export function AccountChip({
         className="folder-chip-button account-chip-button"
         aria-haspopup="menu"
         aria-expanded={menu.open}
+        /*
+         * Everything the label had to leave out.
+         *
+         * The label is one short line and is now the *identity* rather than the
+         * record, so the account's own name — which is genuinely useful when it
+         * is a word somebody chose, and is the thing being renamed a few pixels
+         * below — has nowhere else to be. The last sentence is the agent's own,
+         * naming the command it came from; that is what makes the line above it
+         * something a person can check rather than something they must believe.
+         */
         title={
-          blocked
-            ? blocked
-            : current
-              ? `This session is signed in as ${current.name} — start one under a different account`
-              : 'Choose which account a new session here uses'
+          !names
+            ? // Nothing is named, so the notice is the whole of what there is to
+              // say — and now it is the only thing the chip is claiming, rather
+              // than a contradiction of the name printed beside it.
+              blocked
+            : [
+                /*
+                 * The running session keeps the account it started with — a
+                 * process's environment cannot be rewritten after it starts —
+                 * so the offer is to start one under a different account and
+                 * the wording has to stay that offer and not a promised switch.
+                 */
+                current
+                  ? 'This session is running as this account — start one under a different account.'
+                  : 'A new session here would use this account.',
+                chosenName === null ? null : `Account: ${chosenName}.`,
+                identity.detail,
+                /*
+                 * And nothing about `blocked` here, deliberately. When this
+                 * chip is naming a session's own account, the notice is about a
+                 * *different* session — the one that would start if you picked
+                 * a row — and a sentence about another session inside a tooltip
+                 * describing this one is how the two subjects got mixed up in
+                 * the first place. The menu says it, at the moment the rows
+                 * that cannot be picked are actually on screen.
+                 */
+              ]
+                .filter((line) => line !== null)
+                .join(' ')
         }
         onClick={menu.toggle}
       >
+        {/* The colour belongs to an account, so it is only painted while one is
+            being named. Left on, it put the folder's default account's colour
+            beside a chip that has just said there is no login to speak of. */}
         <span
           className="account-chip-dot"
           aria-hidden="true"
-          style={listed ? { background: `var(${listed.color})` } : undefined}
+          style={names && listed ? { background: `var(${listed.color})` } : undefined}
         />
         {/* The dot says which account; this says which agent. Both are needed:
             the dot is a colour assigned round-robin and means nothing on its
             own, and the name is a word somebody typed. Announced, because
             nothing else in the chip names the agent. */}
         <ProviderBadge provider={mark} size={13} label={agentLabel(mark)} />
-        <span className="account-chip-name">{label ?? 'Account'}</span>
+        {/* `data-verified` is set only for an address the agent's own CLI
+            named. The stylesheet leans on it to draw a read fact at full
+            strength and an app-composed state — "Checking…", "Not signed in" —
+            one step back, so the two can never be mistaken for each other. */}
+        <span className="account-chip-name" data-verified={(names && identity.verified) || undefined}>
+          {/* "No login" is the word this app already uses for an agent that has
+              none to give — `signInStateSummary`'s `unsupported` rung says the
+              same thing about an account whose CLI cannot be signed into. Reused
+              rather than reworded so the chip and the menu row for the same
+              situation do not read as two different findings. */}
+          {names ? identity.label : 'No login'}
+        </span>
         <svg
           width="14"
           height="14"
@@ -456,6 +648,25 @@ export function AccountChip({
 
             {rows.map((account) => {
               const state = accounts.signIn[account.id]
+              /*
+               * The tick follows the button. A chip that has just said there is
+               * no login to speak of must not then mark one of these rows as
+               * the one in force — that is the same contradiction one level
+               * down, and the tick is the strongest claim in the menu.
+               */
+              const isCurrent = names && account.id === currentId
+              /*
+               * What this row is called on screen, and therefore what every
+               * control on it is called to a screen reader.
+               *
+               * The rename affordances used to name `account.name`, which is
+               * the stored name and — for the machine's own install — the
+               * generated key: a row reading `app.imatch.ae@gmail.com` with a
+               * button announced as "Rename Default". The field itself still
+               * holds the stored name, because that is the string being
+               * edited; what is *announced* is the row you are on.
+               */
+              const login = profileLoginLabel(account, state)
 
               /*
                * Renaming in place, in the row the name is already on.
@@ -466,42 +677,87 @@ export function AccountChip({
                */
               if (editing?.id === account.id) {
                 return (
-                  <form
-                    key={account.id}
-                    className="folder-menu-item account-menu-item account-menu-rename"
-                    onSubmit={(event) => {
-                      event.preventDefault()
-                      save(account)
-                    }}
-                  >
-                    <span
-                      className="account-chip-dot"
-                      aria-hidden="true"
-                      style={{ background: `var(${account.color})` }}
-                    />
-                    <input
-                      className="account-menu-input"
-                      value={editing.draft}
-                      maxLength={MAX_ACCOUNT_NAME_LENGTH}
-                      autoFocus
-                      disabled={saving}
-                      aria-label={`New name for ${account.name}`}
-                      onChange={(event) => setEditing({ id: account.id, draft: event.target.value })}
-                      onKeyDown={(event) => {
-                        // The menu is holding Escape open for exactly this.
-                        if (event.key !== 'Escape') return
+                  <div key={account.id} className="account-menu-editing">
+                    <form
+                      className="folder-menu-item account-menu-item account-menu-rename"
+                      onSubmit={(event) => {
                         event.preventDefault()
-                        setEditing(null)
-                        setFailure(null)
+                        save(account)
                       }}
-                    />
-                  </form>
+                    >
+                      <span
+                        className="account-chip-dot"
+                        aria-hidden="true"
+                        style={{ background: `var(${account.color})` }}
+                      />
+                      <input
+                        className="account-menu-input"
+                        value={editing.draft}
+                        maxLength={MAX_ACCOUNT_NAME_LENGTH}
+                        autoFocus
+                        disabled={saving}
+                        aria-label={`New name for ${login}`}
+                        aria-invalid={failure !== null || undefined}
+                        aria-describedby={failure === null ? undefined : 'account-rename-problem'}
+                        onChange={(event) => setEditing({ id: account.id, draft: event.target.value })}
+                        onKeyDown={(event) => {
+                          // The menu is holding Escape open for exactly this.
+                          if (event.key !== 'Escape') return
+                          event.preventDefault()
+                          setEditing(null)
+                          setFailure(null)
+                        }}
+                      />
+                    </form>
+                    {/*
+                      Why the name did not take, under the field it was typed
+                      into.
+
+                      A rename can collide — the main process refuses two
+                      accounts of one agent with the same name — and the only
+                      thing that reaches the renderer for that is a rejected
+                      `invoke`, whose message arrives wrapped as `Error invoking
+                      remote method 'profiles:rename': ProfileError: …`. That
+                      string names a channel nobody using this app has heard of.
+                      `errorMessage` in `accounts.ts` takes the sentence off the
+                      end of it; this puts that sentence where the correction
+                      has to be made, rather than at the bottom of a list of
+                      other people's accounts where it used to sit.
+                    */}
+                    {failure && (
+                      <p id="account-rename-problem" className="account-menu-problem" role="alert">
+                        {failure}
+                      </p>
+                    )}
+                  </div>
                 )
               }
 
               const line = (
                 <>
                   <span className="account-menu-line">
+                    {/* The one in force. A fixed slot whether it is drawn or
+                        not, so the names below it stay in one column — a tick
+                        that shunts its own row 14px right turns a scannable
+                        list into a ragged one. Inside this span rather than
+                        beside it, because the row is `space-between` and a
+                        third child would be pushed to the middle of it. */}
+                    <span className="account-menu-tick" aria-hidden="true">
+                      {isCurrent && (
+                        <svg
+                          width="14"
+                          height="14"
+                          viewBox="0 0 20 20"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
+                          <path d={TICK} />
+                        </svg>
+                      )}
+                    </span>
                     <span
                       className="account-chip-dot"
                       aria-hidden="true"
@@ -513,13 +769,29 @@ export function AccountChip({
                         without this the list can hold two rows reading "Work"
                         that start different CLIs. */}
                     <ProviderBadge provider={account.provider} label={agentLabel(account.provider)} />
-                    <span className="folder-menu-name">{account.name}</span>
+                    {/* The login, not the key it is filed under. These rows
+                        printed `account.name`, so a menu opened from a chip
+                        reading `app.imatch.ae@gmail.com` offered a row reading
+                        `Default` — the same account, two names, one frame.
+                        `profileLoginLabel` is the ladder the pickers use, and
+                        the probe it reads has already run: this menu asks about
+                        every account the moment it is opened. */}
+                    <span className="folder-menu-name">{login}</span>
                   </span>
                   {/* Read, not assumed. An account the agent has not answered
                       about yet says so, and one it could not answer about says
-                      that instead of a cross. */}
+                      that instead of a cross.
+
+                      `signInStateSummary` is `signInSummary` with its address
+                      rung removed, and the removal is what keeps this column
+                      saying anything at all: the left of the row now prints the
+                      address off that same ladder, so both halves resolved to
+                      the identical string and the row said one fact twice while
+                      the state — whether this account can start a session —
+                      went unsaid. The two are one ladder with one entry point
+                      each, so they cannot drift apart. */}
                   <span className="account-menu-state" data-state={state?.state ?? 'unknown'}>
-                    {state ? state.account ?? signInLabel(state) : 'Checking…'}
+                    {signInStateSummary(state).label}
                   </span>
                 </>
               )
@@ -538,13 +810,31 @@ export function AccountChip({
               return (
                 <div key={account.id} className="account-menu-row">
                   {blocked ? (
-                    <p className="folder-menu-item account-menu-item is-inert">{line}</p>
+                    /* `data-current` here too. The rows are inert because this
+                       agent cannot be handed a config directory, which has
+                       nothing to do with which account the session on screen is
+                       running as — and that was the state the mark disappeared
+                       in, i.e. the state where the question is hardest. */
+                    <p
+                      className="folder-menu-item account-menu-item is-inert"
+                      data-current={isCurrent || undefined}
+                      aria-current={isCurrent || undefined}
+                    >
+                      {line}
+                    </p>
                   ) : (
                     <button
                       type="button"
-                      role="menuitem"
+                      /*
+                       * `menuitemradio`, not `menuitem`. These rows are a choice
+                       * of exactly one account and one of them is already in
+                       * force; `aria-checked` is how that is said out loud, and
+                       * without it the tick is a mark only a sighted user gets.
+                       */
+                      role="menuitemradio"
+                      aria-checked={isCurrent}
                       className="folder-menu-item account-menu-item"
-                      data-current={account.id === currentId || undefined}
+                      data-current={isCurrent || undefined}
                       onClick={() =>
                         menu.choose(() => onPick(account.id, account.provider ?? undefined))
                       }
@@ -555,8 +845,8 @@ export function AccountChip({
                   <button
                     type="button"
                     className="account-menu-rename-button"
-                    title={`Rename ${account.name}`}
-                    aria-label={`Rename ${account.name}`}
+                    title={`Rename ${login}`}
+                    aria-label={`Rename ${login}`}
                     onClick={() => {
                       setFailure(null)
                       setEditing({ id: account.id, draft: account.name })
@@ -568,10 +858,17 @@ export function AccountChip({
               )
             })}
 
-            {/* Why a rename did not take. Held next to the field rather than
-                announced and dismissed, because the field is still open with
-                the typed name in it. */}
-            {failure && <p className="account-menu-empty">{failure}</p>}
+            {/*
+              A rename that failed with no field left open.
+
+              Only reachable if the row being edited leaves the list between the
+              submit and the reply — the account was deleted from the Accounts
+              screen in another window, say. The message is still worth printing:
+              it says what went wrong, and the alternative is a rename that
+              silently did not happen. The ordinary case is handled beside the
+              field itself, above.
+            */}
+            {failure && editing === null && <p className="account-menu-problem">{failure}</p>}
 
             {rows.length === 0 && (
               <p className="account-menu-empty">

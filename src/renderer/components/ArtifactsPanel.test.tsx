@@ -8,6 +8,8 @@ import {
   diffLines,
   directoryOf,
   MAX_DIFF_LINES,
+  SCAN_FRESH_MS,
+  scanOutcome,
   splitLines,
   summarize,
   type Artifact,
@@ -276,5 +278,62 @@ describe('ArtifactsPanel', () => {
     expect(html).toContain('This project’s sessions')
     expect(html).toContain('Every session')
     expect(html.indexOf('This project’s sessions')).toBeLessThan(html.indexOf('Every session'))
+  })
+})
+
+/* ------------------------------------------------- every reply is an answer -- */
+
+/**
+ * The page that never resolved.
+ *
+ * Two of the four stuck sentences in the recording — "Reading this project’s
+ * history…" and "Reading the changes…" — came from one omission here:
+ *
+ *     if (response.ok) setList(ready)
+ *     else if (response.error !== 'cancelled') setList(error)
+ *
+ * A `cancelled` reply set nothing at all, so the page kept the sentence it had
+ * and kept it for good. The main process produces that reply whenever a scan is
+ * superseded, and — until the fix in `artifacts.ts` — a *changes* request
+ * superseded the *list* request beside it on every scope toggle.
+ *
+ * The generation guard in the component already drops replies the page has
+ * moved on from, so anything reaching this function is a reply the page is
+ * still waiting on. Every one of them has to end the wait.
+ */
+describe('scanOutcome', () => {
+  it('hands a successful scan straight through', () => {
+    const ok = { ok: true as const, artifacts: [] }
+    expect(scanOutcome(ok)).toEqual({ done: ok })
+  })
+
+  it('turns a cancelled scan into something the page can act on', () => {
+    const outcome = scanOutcome({ ok: false, error: 'cancelled', message: 'Scan cancelled.' })
+    expect(outcome).not.toEqual({ done: expect.anything() })
+    expect('failed' in outcome && outcome.failed.length > 0).toBe(true)
+  })
+
+  it('quotes the main process’s own reason for anything else', () => {
+    expect(scanOutcome({ ok: false, error: 'failed', message: 'Could not read it.' })).toEqual({
+      failed: 'Could not read it.',
+    })
+  })
+
+  it('never answers with nothing, whatever the error is called', () => {
+    // The shape of the original bug: an error name nobody thought of falling
+    // through every arm and leaving the spinner where it was.
+    for (const error of ['cancelled', 'failed', 'invalid-project', 'something-new']) {
+      const outcome = scanOutcome({ ok: false, error, message: 'why' })
+      expect('failed' in outcome).toBe(true)
+    }
+  })
+})
+
+describe('SCAN_FRESH_MS', () => {
+  it('is long enough that a trip to a terminal does not re-walk every transcript', () => {
+    // Asad watched this page re-scan from scratch each time he came back to it.
+    // The scan is the most expensive read in the app; the window has to cover a
+    // working session of flipping between the page and a session.
+    expect(SCAN_FRESH_MS).toBeGreaterThanOrEqual(60_000)
   })
 })

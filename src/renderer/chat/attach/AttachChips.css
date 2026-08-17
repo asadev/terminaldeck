@@ -42,6 +42,19 @@
   white-space: nowrap;
 }
 
+/* "outside" — a word, not a colour. The chips row is read for its content, and
+   the app's colours already mean selection and status; a fourth meaning
+   assigned to a tint would be a legend nobody has. Same treatment as the
+   picker's "added" tag, which is the other small word that qualifies a row. */
+.at-chip-out {
+  flex-shrink: 0;
+  padding: 0 var(--sp-1);
+  border-radius: var(--radius-sm);
+  background: var(--fill-secondary);
+  color: var(--text-muted);
+  font-size: var(--t-caption);
+}
+
 .at-chip-x {
   display: grid;
   place-items: center;

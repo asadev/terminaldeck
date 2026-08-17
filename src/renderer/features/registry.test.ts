@@ -16,6 +16,7 @@ import {
   featureOwningWidget,
   featureRegistryProblems,
   isFeatureId,
+  type FeatureId,
 } from './registry'
 
 /**
@@ -44,14 +45,28 @@ describe('the table itself', () => {
     }
   })
 
-  it('ships a starter set that is neither everything nor nothing', () => {
-    // A fresh install has to feel complete without being the busy window this
-    // was built to calm down. Both extremes would mean the defaults had stopped
-    // being a decision: all-on is the app before the store, all-off is an app
-    // that greets you with an empty room.
-    const on = FEATURES.filter((entry) => entry.default === 'on')
-    expect(on.length).toBeGreaterThan(0)
-    expect(on.length).toBeLessThan(FEATURES.length)
+  /**
+   * Everything ships on, except what somebody can genuinely switch off.
+   *
+   * This asserted the opposite until the store was removed: that the defaults
+   * were "neither everything nor nothing", because a store existed and a fresh
+   * install had to feel complete without being busy. With no store, `off` is
+   * not a starting position — it is a feature nothing in the app can reach:
+   *
+   *   > "let's keep them all installed and all active always and remove this
+   *   > section… they are all necessary basic."
+   *
+   * So the rule is now the strict one, and it is the rule that would have
+   * caught the mistake this change could most easily have made. A feature left
+   * `off` here with no switch anywhere fails, and `SWITCHABLE` is the list of
+   * the ones a person can still turn off — one entry, in Settings → Tools.
+   */
+  it('ships everything on, except what has a switch of its own', () => {
+    const SWITCHABLE: readonly FeatureId[] = ['voice']
+    for (const entry of FEATURES) {
+      const expected = SWITCHABLE.includes(entry.id) ? 'off' : 'on'
+      expect(entry.default, `${entry.id} ships ${entry.default}`).toBe(expected)
+    }
   })
 })
 

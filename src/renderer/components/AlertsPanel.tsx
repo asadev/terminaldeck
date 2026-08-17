@@ -1,8 +1,20 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useEvery } from '../schedule'
-import { panelSpec } from '../shell/panels'
+import { Modal } from './Modal'
 import { PageEmpty } from './PageEmpty'
 import './AlertsPanel.css'
+
+/**
+ * The bell, on a 24×24 grid at 1.5 stroke like every other glyph in the app.
+ *
+ * It lives here rather than in `shell/panels.ts` because Alerts is not a panel
+ * any more — the rail draws this next to the gear, and this file is what the
+ * glyph is *of*. Two places need it and they are this panel's own empty states
+ * and that button, so the icon travels with the feature rather than with the
+ * list of pages.
+ */
+export const ALERTS_GLYPH =
+  'M12 4.2a5.6 5.6 0 0 0-5.6 5.6c0 3.7-1.8 4.7-1.8 4.7h14.8s-1.8-1-1.8-4.7A5.6 5.6 0 0 0 12 4.2zM10.3 18.5a2 2 0 0 0 3.4 0'
 
 /* ------------------------------------------------------------------ types -- */
 
@@ -19,7 +31,7 @@ export type AlertKind =
   | 'pre-context-bloat'
   | 'session-blocked'
   | 'provider-missing'
-  | 'expensive-session'
+  | 'heavy-session'
   | 'dirty-tree'
 
 export interface AlertAction {
@@ -168,14 +180,14 @@ export function createScanGate(): ScanGate {
  * facts about the project that are true whether or not anyone is working, and
  * hiding them would hide a broken setup. The four below are read out of what
  * sessions have been doing — a context window filling up, a session blocked on
- * a question, a run that cost more than the rest put together — and those are
- * the ones somebody may not want raised without being asked.
+ * a question, a run that moved more tokens than the rest put together — and
+ * those are the ones somebody may not want raised without being asked.
  */
 export const INSIGHT_ALERT_KINDS: ReadonlySet<AlertKind> = new Set<AlertKind>([
   'context-bloat',
   'pre-context-bloat',
   'session-blocked',
-  'expensive-session',
+  'heavy-session',
 ])
 
 export function isInsightAlert(alert: Alert): boolean {
@@ -378,12 +390,12 @@ export function AlertsPanel({
       )}
 
       {!host ? (
-        <PageEmpty icon={panelSpec('alerts').icon} title="Alerts are not available here">
+        <PageEmpty icon={ALERTS_GLYPH} title="Alerts are not available here">
           Alerts are not connected to the main process yet.
         </PageEmpty>
       ) : quiet ? (
         <PageEmpty
-          icon={panelSpec('alerts').icon}
+          icon={ALERTS_GLYPH}
           /* Not `summarize`, which writes a sentence for the header line and
              ends it with a full stop. This slot is a title, and every other
              one in the app is a phrase without one — one treatment includes
@@ -422,6 +434,92 @@ export function AlertsPanel({
         ))
       )}
     </section>
+  )
+}
+
+/* ----------------------------------------------------------------- window -- */
+
+export interface AlertsWindowProps extends Omit<AlertsPanelProps, 'projectPath'> {
+  open: boolean
+  onClose(): void
+  /**
+   * The project to check, or null when nothing is open.
+   *
+   * Nullable where the panel's own prop is not, and that is the whole
+   * difference between a dialog and a page: `PanelView` gated every page behind
+   * "open a project first" and drew `NeedsProject` in front of the ones that
+   * needed one. There is no page any more, so this dialog has to answer the
+   * same question itself — the bell is on the rail from the first launch, and
+   * pressing it with no folder open must say why it has nothing rather than
+   * mount a panel that would scan the string "null".
+   */
+  projectPath: string | null
+}
+
+/**
+ * Alerts, as a pop-up.
+ *
+ * *"And notifications should be a pop-up just like settings, not a full page."*
+ * So it is literally the same shell: `Modal`, the same glass, the same scrim,
+ * the same Escape and the same focus trap that Settings gets, with the panel
+ * that used to fill the window dropped into the body. Writing a second dialog
+ * of our own is how the two would have drifted — one of them would grow a
+ * different close button, or lose the focus trap, and nobody would notice until
+ * somebody tabbed out of it.
+ *
+ * `lg` rather than Settings' `xl`. The size is not what "just like settings"
+ * means — Settings is `xl` because it carries a rail of twelve sections and one
+ * of them is the whole remote-access panel, and a list of three or four alerts
+ * in a sheet that big would be a wall of empty glass. What has to match is that
+ * the workspace stays visible around it and closing it puts you back exactly
+ * where you were.
+ *
+ * Split from `AlertsPanel` for the reason `SettingsWindow` is split from
+ * `SettingsPanel`: `Modal` portals into `document.body`, and this project's
+ * render tests run with no document at all.
+ */
+export function AlertsWindow({ open, onClose, projectPath, ...panel }: AlertsWindowProps) {
+  return (
+    <Modal
+      open={open}
+      title="Alerts"
+      /*
+       * No description, for the reason Settings gives at length: the panel's own
+       * summary line is the description — "2 needing you now", or "Nothing needs
+       * your attention" — and it is the one that is true of what is underneath
+       * it. A fixed sentence here would sit between the title and that line and
+       * say a third, vaguer version of the same thing.
+       */
+      onClose={onClose}
+      size="lg"
+      footer={
+        <button type="button" className="modal-btn primary" onClick={onClose}>
+          Done
+        </button>
+      }
+    >
+      {projectPath === null ? (
+        /*
+         * No button on this one, deliberately.
+         *
+         * The page it replaces offered "Open a project", which opens an
+         * `NSOpenPanel` — a native window that draws above every pixel the
+         * renderer paints, so a dialog underneath one has to step aside for it
+         * (`Modal`'s `hidden` prop, and the note there about the New-session
+         * panel showing through a folder picker). That is real machinery for a
+         * button nobody presses here: you arrive at this dialog by pressing a
+         * bell about a project, not by looking for a folder. The sentence says
+         * what is missing, and the rail behind the scrim still has the ＋ that
+         * opens one.
+         */
+        <PageEmpty icon={ALERTS_GLYPH} title="No project open">
+          Alerts are about the project you have open — what is blocked in it, what is filling up,
+          what it is waiting on you for. Open one and this will have something to say.
+        </PageEmpty>
+      ) : (
+        <AlertsPanel projectPath={projectPath} {...panel} />
+      )}
+    </Modal>
   )
 }
 

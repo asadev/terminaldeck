@@ -3,24 +3,24 @@ import {
   MIN_PANE_RATIO,
   clampRatio,
   closePane,
-  closePanesForSession,
+  closePanesForTab,
   computeRects,
   createLayout,
   deserialiseLayout,
   emptyLayout,
   findPane,
   focusPane,
-  focusSession,
+  focusTab,
   focusedPane,
-  focusedSessionId,
+  focusedTabId,
   listPanes,
   moveFocus,
   paneCount,
-  panesForSession,
+  panesForTab,
   resizeSplit,
   serialiseLayout,
-  sessionIds,
-  setPaneSession,
+  tabIds,
+  setPaneTab,
   splitPane,
   type FocusDirection,
   type PaneLayout,
@@ -39,7 +39,7 @@ function ids(layout: PaneLayout): string[] {
 
 /** Panes in visual order, named by the session each one shows. */
 function order(layout: PaneLayout): (string | null)[] {
-  return listPanes(layout).map((p) => p.sessionId)
+  return listPanes(layout).map((p) => p.tabId)
 }
 
 /**
@@ -55,17 +55,17 @@ function order(layout: PaneLayout): (string | null)[] {
 function quadLayout(): PaneLayout {
   let layout = createLayout('nw', 'nw')
   layout = splitPane(layout, 'nw', 'horizontal', {
-    sessionId: 'ne',
+    tabId: 'ne',
     paneId: 'ne',
     splitId: 'root-split',
   })
   layout = splitPane(layout, 'nw', 'vertical', {
-    sessionId: 'sw',
+    tabId: 'sw',
     paneId: 'sw',
     splitId: 'west-split',
   })
   layout = splitPane(layout, 'ne', 'vertical', {
-    sessionId: 'se',
+    tabId: 'se',
     paneId: 'se',
     splitId: 'east-split',
   })
@@ -75,8 +75,8 @@ function quadLayout(): PaneLayout {
 /** One tall pane on the left, two stacked on the right. */
 function threePaneLayout(): PaneLayout {
   let layout = createLayout('a', 'a')
-  layout = splitPane(layout, 'a', 'horizontal', { sessionId: 'b', paneId: 'b', splitId: 's1' })
-  layout = splitPane(layout, 'b', 'vertical', { sessionId: 'c', paneId: 'c', splitId: 's2' })
+  layout = splitPane(layout, 'a', 'horizontal', { tabId: 'b', paneId: 'b', splitId: 's1' })
+  layout = splitPane(layout, 'b', 'vertical', { tabId: 'c', paneId: 'c', splitId: 's2' })
   return layout
 }
 
@@ -120,26 +120,26 @@ describe('createLayout / emptyLayout', () => {
     expect(layout.focusedPaneId).toBeNull()
     expect(paneCount(layout)).toBe(0)
     expect(focusedPane(layout)).toBeNull()
-    expect(focusedSessionId(layout)).toBeNull()
+    expect(focusedTabId(layout)).toBeNull()
   })
 
   it('starts a single focused pane', () => {
     const layout = createLayout('s1', 'p1')
-    expect(layout.root).toEqual({ type: 'leaf', id: 'p1', sessionId: 's1' })
+    expect(layout.root).toEqual({ type: 'leaf', id: 'p1', tabId: 's1' })
     expect(layout.focusedPaneId).toBe('p1')
     expect(paneCount(layout)).toBe(1)
-    expect(focusedSessionId(layout)).toBe('s1')
+    expect(focusedTabId(layout)).toBe('s1')
   })
 
   it('allows a pane with no session yet', () => {
-    expect(createLayout().root).toMatchObject({ type: 'leaf', sessionId: null })
+    expect(createLayout().root).toMatchObject({ type: 'leaf', tabId: null })
   })
 })
 
 describe('splitPane', () => {
   it('puts the new pane after the existing one and focuses it', () => {
     const layout = splitPane(createLayout('a', 'a'), 'a', 'horizontal', {
-      sessionId: 'b',
+      tabId: 'b',
       paneId: 'b',
       splitId: 's',
     })
@@ -149,8 +149,8 @@ describe('splitPane', () => {
       direction: 'horizontal',
       ratio: 0.5,
       children: [
-        { type: 'leaf', id: 'a', sessionId: 'a' },
-        { type: 'leaf', id: 'b', sessionId: 'b' },
+        { type: 'leaf', id: 'a', tabId: 'a' },
+        { type: 'leaf', id: 'b', tabId: 'b' },
       ],
     })
     expect(layout.focusedPaneId).toBe('b')
@@ -158,7 +158,7 @@ describe('splitPane', () => {
 
   it('can put the new pane first', () => {
     const layout = splitPane(createLayout('a', 'a'), 'a', 'vertical', {
-      sessionId: 'b',
+      tabId: 'b',
       paneId: 'b',
       insertFirst: true,
     })
@@ -190,7 +190,7 @@ describe('splitPane', () => {
 
   it('splits a nested pane without disturbing its siblings', () => {
     const layout = splitPane(threePaneLayout(), 'c', 'horizontal', {
-      sessionId: 'd',
+      tabId: 'd',
       paneId: 'd',
       splitId: 's3',
     })
@@ -230,7 +230,7 @@ describe('splitPane id and depth safety', () => {
   // verbatim, and the result could not be closed or restored correctly.
   it('mints a fresh id rather than duplicating a pane id that is taken', () => {
     let layout = createLayout('a', 'dup')
-    layout = splitPane(layout, 'dup', 'horizontal', { sessionId: 'b', paneId: 'dup' })
+    layout = splitPane(layout, 'dup', 'horizontal', { tabId: 'b', paneId: 'dup' })
 
     const paneIds = ids(layout)
     expect(paneIds).toHaveLength(2)
@@ -264,7 +264,7 @@ describe('splitPane id and depth safety', () => {
 
   it('keeps a duplicated id from costing the user the whole layout on restart', () => {
     let layout = createLayout('a', 'dup')
-    layout = splitPane(layout, 'dup', 'horizontal', { sessionId: 'b', paneId: 'dup' })
+    layout = splitPane(layout, 'dup', 'horizontal', { tabId: 'b', paneId: 'dup' })
     // deserialiseLayout rejects duplicate ids outright, so building one meant
     // the stored layout came back null and was replaced by a fresh one.
     expect(deserialiseLayout(serialiseLayout(layout))).toEqual(layout)
@@ -272,7 +272,7 @@ describe('splitPane id and depth safety', () => {
 
   it('closes the pane that was asked for, not its twin', () => {
     let layout = createLayout('a', 'dup')
-    layout = splitPane(layout, 'dup', 'horizontal', { sessionId: 'b', paneId: 'dup' })
+    layout = splitPane(layout, 'dup', 'horizontal', { tabId: 'b', paneId: 'dup' })
     expect(order(closePane(layout, 'dup'))).toEqual(['b'])
     expect(order(closePane(layout, ids(layout)[1]))).toEqual(['a'])
   })
@@ -281,7 +281,7 @@ describe('splitPane id and depth safety', () => {
     let layout = createLayout('s0')
     for (let i = 0; i < 200; i += 1) {
       const deepest = listPanes(layout)[listPanes(layout).length - 1]
-      layout = splitPane(layout, deepest.id, 'horizontal', { sessionId: `s${i + 1}` })
+      layout = splitPane(layout, deepest.id, 'horizontal', { tabId: `s${i + 1}` })
     }
     assertWellFormed(layout)
     // Whatever it stopped at, the layout must still survive a restart.
@@ -367,26 +367,26 @@ describe('closePane', () => {
   })
 })
 
-describe('closePanesForSession', () => {
+describe('closePanesForTab', () => {
   it('closes every pane showing a dead session', () => {
     let layout = threePaneLayout()
-    layout = setPaneSession(layout, 'c', 'b')
-    expect(panesForSession(layout, 'b')).toHaveLength(2)
+    layout = setPaneTab(layout, 'c', 'b')
+    expect(panesForTab(layout, 'b')).toHaveLength(2)
 
-    layout = closePanesForSession(layout, 'b')
+    layout = closePanesForTab(layout, 'b')
     expect(order(layout)).toEqual(['a'])
     assertWellFormed(layout)
   })
 
   it('empties the layout when the session filled it', () => {
     let layout = createLayout('a', 'a')
-    layout = splitPane(layout, 'a', 'horizontal', { sessionId: 'a', paneId: 'a2' })
-    expect(closePanesForSession(layout, 'a')).toEqual(emptyLayout())
+    layout = splitPane(layout, 'a', 'horizontal', { tabId: 'a', paneId: 'a2' })
+    expect(closePanesForTab(layout, 'a')).toEqual(emptyLayout())
   })
 
   it('does nothing for a session that is not open', () => {
     const before = threePaneLayout()
-    expect(closePanesForSession(before, 'zzz')).toBe(before)
+    expect(closePanesForTab(before, 'zzz')).toBe(before)
   })
 })
 
@@ -429,7 +429,7 @@ describe('resizeSplit', () => {
   })
 })
 
-describe('focusPane / focusSession / setPaneSession', () => {
+describe('focusPane / focusTab / setPaneTab', () => {
   it('focuses an existing pane', () => {
     expect(focusPane(threePaneLayout(), 'a').focusedPaneId).toBe('a')
   })
@@ -442,38 +442,38 @@ describe('focusPane / focusSession / setPaneSession', () => {
   })
 
   it('focuses the first pane showing a session', () => {
-    const layout = focusSession(threePaneLayout(), 'a')
+    const layout = focusTab(threePaneLayout(), 'a')
     expect(layout.focusedPaneId).toBe('a')
-    expect(focusSession(layout, 'ghost')).toBe(layout)
+    expect(focusTab(layout, 'ghost')).toBe(layout)
   })
 
   it('repoints a pane at another session without moving it', () => {
-    const layout = setPaneSession(threePaneLayout(), 'b', 'other')
+    const layout = setPaneTab(threePaneLayout(), 'b', 'other')
     expect(order(layout)).toEqual(['a', 'other', 'c'])
-    expect(sessionIds(layout)).toEqual(['a', 'other', 'c'])
+    expect(tabIds(layout)).toEqual(['a', 'other', 'c'])
   })
 
   it('returns the same layout when the session is unchanged or the pane unknown', () => {
     const before = threePaneLayout()
-    expect(setPaneSession(before, 'b', 'b')).toBe(before)
-    expect(setPaneSession(before, 'nope', 'x')).toBe(before)
-    expect(setPaneSession(emptyLayout(), 'a', 'x')).toEqual(emptyLayout())
+    expect(setPaneTab(before, 'b', 'b')).toBe(before)
+    expect(setPaneTab(before, 'nope', 'x')).toBe(before)
+    expect(setPaneTab(emptyLayout(), 'a', 'x')).toEqual(emptyLayout())
   })
 
   it('can empty a pane', () => {
-    expect(order(setPaneSession(threePaneLayout(), 'b', null))).toEqual(['a', null, 'c'])
+    expect(order(setPaneTab(threePaneLayout(), 'b', null))).toEqual(['a', null, 'c'])
   })
 
   it('reports each session once even when open twice', () => {
-    const layout = setPaneSession(threePaneLayout(), 'c', 'a')
-    expect(sessionIds(layout)).toEqual(['a', 'b'])
+    const layout = setPaneTab(threePaneLayout(), 'c', 'a')
+    expect(tabIds(layout)).toEqual(['a', 'b'])
   })
 })
 
 describe('computeRects', () => {
   it('gives a single pane the whole area', () => {
     expect(computeRects(createLayout('a', 'a').root)).toEqual([
-      { paneId: 'a', sessionId: 'a', x: 0, y: 0, width: 1, height: 1 },
+      { paneId: 'a', tabId: 'a', x: 0, y: 0, width: 1, height: 1 },
     ])
   })
 
@@ -484,8 +484,8 @@ describe('computeRects', () => {
       0.3,
     )
     expect(computeRects(layout.root)).toEqual([
-      { paneId: 'a', sessionId: 'a', x: 0, y: 0, width: 0.3, height: 1 },
-      { paneId: 'b', sessionId: null, x: 0.3, y: 0, width: 0.7, height: 1 },
+      { paneId: 'a', tabId: 'a', x: 0, y: 0, width: 0.3, height: 1 },
+      { paneId: 'b', tabId: null, x: 0.3, y: 0, width: 0.7, height: 1 },
     ])
   })
 
@@ -499,18 +499,18 @@ describe('computeRects', () => {
 
   it('nests correctly', () => {
     expect(computeRects(quadLayout().root)).toEqual([
-      { paneId: 'nw', sessionId: 'nw', x: 0, y: 0, width: 0.5, height: 0.5 },
-      { paneId: 'sw', sessionId: 'sw', x: 0, y: 0.5, width: 0.5, height: 0.5 },
-      { paneId: 'ne', sessionId: 'ne', x: 0.5, y: 0, width: 0.5, height: 0.5 },
-      { paneId: 'se', sessionId: 'se', x: 0.5, y: 0.5, width: 0.5, height: 0.5 },
+      { paneId: 'nw', tabId: 'nw', x: 0, y: 0, width: 0.5, height: 0.5 },
+      { paneId: 'sw', tabId: 'sw', x: 0, y: 0.5, width: 0.5, height: 0.5 },
+      { paneId: 'ne', tabId: 'ne', x: 0.5, y: 0, width: 0.5, height: 0.5 },
+      { paneId: 'se', tabId: 'se', x: 0.5, y: 0.5, width: 0.5, height: 0.5 },
     ])
   })
 
   it('honours custom bounds', () => {
     const layout = splitPane(createLayout('a', 'a'), 'a', 'horizontal', { paneId: 'b' })
     expect(computeRects(layout.root, { x: 10, y: 20, width: 200, height: 100 })).toEqual([
-      { paneId: 'a', sessionId: 'a', x: 10, y: 20, width: 100, height: 100 },
-      { paneId: 'b', sessionId: null, x: 110, y: 20, width: 100, height: 100 },
+      { paneId: 'a', tabId: 'a', x: 10, y: 20, width: 100, height: 100 },
+      { paneId: 'b', tabId: null, x: 110, y: 20, width: 100, height: 100 },
     ])
   })
 
@@ -522,12 +522,12 @@ describe('computeRects', () => {
 describe('moveFocus', () => {
   /** Focus `from`, move, and report the session now focused. */
   function step(layout: PaneLayout, from: string, direction: FocusDirection): string | null {
-    return focusedSessionId(moveFocus(focusPane(layout, from), direction))
+    return focusedTabId(moveFocus(focusPane(layout, from), direction))
   }
 
   it('moves across a horizontal split', () => {
     const layout = splitPane(createLayout('a', 'a'), 'a', 'horizontal', {
-      sessionId: 'b',
+      tabId: 'b',
       paneId: 'b',
     })
     expect(step(layout, 'a', 'right')).toBe('b')
@@ -543,7 +543,7 @@ describe('moveFocus', () => {
 
   it('moves across a vertical split', () => {
     const layout = splitPane(createLayout('a', 'a'), 'a', 'vertical', {
-      sessionId: 'b',
+      tabId: 'b',
       paneId: 'b',
     })
     expect(step(layout, 'a', 'down')).toBe('b')
@@ -577,8 +577,8 @@ describe('moveFocus', () => {
 
   it('steps one column at a time rather than jumping to the far edge', () => {
     let layout = createLayout('a', 'a')
-    layout = splitPane(layout, 'a', 'horizontal', { sessionId: 'b', paneId: 'b' })
-    layout = splitPane(layout, 'b', 'horizontal', { sessionId: 'c', paneId: 'c' })
+    layout = splitPane(layout, 'a', 'horizontal', { tabId: 'b', paneId: 'b' })
+    layout = splitPane(layout, 'b', 'horizontal', { tabId: 'c', paneId: 'c' })
     expect(step(layout, 'a', 'right')).toBe('b')
     expect(step(layout, 'c', 'left')).toBe('b')
   })
@@ -606,9 +606,9 @@ describe('moveFocus', () => {
 
   it('picks whichever of three stacked neighbours straddles the centre line', () => {
     let layout = createLayout('a', 'a')
-    layout = splitPane(layout, 'a', 'horizontal', { sessionId: 'b', paneId: 'b', splitId: 's1' })
-    layout = splitPane(layout, 'b', 'vertical', { sessionId: 'c', paneId: 'c', splitId: 's2' })
-    layout = splitPane(layout, 'c', 'vertical', { sessionId: 'd', paneId: 'd', splitId: 's3' })
+    layout = splitPane(layout, 'a', 'horizontal', { tabId: 'b', paneId: 'b', splitId: 's1' })
+    layout = splitPane(layout, 'b', 'vertical', { tabId: 'c', paneId: 'c', splitId: 's2' })
+    layout = splitPane(layout, 'c', 'vertical', { tabId: 'd', paneId: 'd', splitId: 's3' })
 
     // 'a' spans the full height, so its centre line (y 0.5) decides. Evenly
     // split, the right column is b 0–0.5, c 0.5–0.75, d 0.75–1 — 'c' is the
@@ -679,8 +679,8 @@ describe('serialiseLayout / deserialiseLayout', () => {
       direction: 'horizontal',
       ratio: 0.5,
       children: [
-        { type: 'leaf', id: 'dup', sessionId: 'a' },
-        { type: 'leaf', id: 'dup', sessionId: 'b' },
+        { type: 'leaf', id: 'dup', tabId: 'a' },
+        { type: 'leaf', id: 'dup', tabId: 'b' },
       ],
     }
     expect(
@@ -693,8 +693,8 @@ describe('serialiseLayout / deserialiseLayout', () => {
       JSON.stringify({ version: 1, root, focusedPaneId: null })
 
     expect(deserialiseLayout(bad({ type: 'leaf' }))).toBeNull()
-    expect(deserialiseLayout(bad({ type: 'leaf', id: '', sessionId: null }))).toBeNull()
-    expect(deserialiseLayout(bad({ type: 'leaf', id: 'a', sessionId: 7 }))).toBeNull()
+    expect(deserialiseLayout(bad({ type: 'leaf', id: '', tabId: null }))).toBeNull()
+    expect(deserialiseLayout(bad({ type: 'leaf', id: 'a', tabId: 7 }))).toBeNull()
     expect(deserialiseLayout(bad({ type: 'wat', id: 'a' }))).toBeNull()
     expect(
       deserialiseLayout(
@@ -709,8 +709,8 @@ describe('serialiseLayout / deserialiseLayout', () => {
           direction: 'horizontal',
           ratio: 'half',
           children: [
-            { type: 'leaf', id: 'a', sessionId: null },
-            { type: 'leaf', id: 'b', sessionId: null },
+            { type: 'leaf', id: 'a', tabId: null },
+            { type: 'leaf', id: 'b', tabId: null },
           ],
         }),
       ),
@@ -723,7 +723,7 @@ describe('serialiseLayout / deserialiseLayout', () => {
           id: 's',
           direction: 'horizontal',
           ratio: 0.5,
-          children: [{ type: 'leaf', id: 'a', sessionId: null }],
+          children: [{ type: 'leaf', id: 'a', tabId: null }],
         }),
       ),
     ).toBeNull()
@@ -735,14 +735,14 @@ describe('serialiseLayout / deserialiseLayout', () => {
   })
 
   it('rejects a tree too deep to be real, rather than blowing the stack', () => {
-    let root: PaneNode = { type: 'leaf', id: 'leaf-0', sessionId: null }
+    let root: PaneNode = { type: 'leaf', id: 'leaf-0', tabId: null }
     for (let i = 1; i <= 80; i++) {
       root = {
         type: 'split',
         id: `split-${i}`,
         direction: 'horizontal',
         ratio: 0.5,
-        children: [root, { type: 'leaf', id: `leaf-${i}`, sessionId: null }],
+        children: [root, { type: 'leaf', id: `leaf-${i}`, tabId: null }],
       }
     }
     expect(
@@ -757,8 +757,8 @@ describe('serialiseLayout / deserialiseLayout', () => {
       direction: 'horizontal',
       ratio: 0.999,
       children: [
-        { type: 'leaf', id: 'a', sessionId: null },
-        { type: 'leaf', id: 'b', sessionId: null },
+        { type: 'leaf', id: 'a', tabId: null },
+        { type: 'leaf', id: 'b', tabId: null },
       ],
     }
     const restored = deserialiseLayout(JSON.stringify({ version: 1, root, focusedPaneId: 'a' }))
@@ -784,7 +784,7 @@ describe('serialiseLayout / deserialiseLayout', () => {
   it('survives a restored layout being edited further', () => {
     const restored = deserialiseLayout(serialiseLayout(quadLayout()))
     if (!restored) throw new Error('expected a layout')
-    const layout = splitPane(restored, 'se', 'horizontal', { sessionId: 'new' })
+    const layout = splitPane(restored, 'se', 'horizontal', { tabId: 'new' })
     expect(paneCount(layout)).toBe(5)
     assertWellFormed(layout)
   })
@@ -820,7 +820,7 @@ describe('invariants under random editing', () => {
         } else if (roll < 0.45) {
           const target = panes[Math.floor(rand() * panes.length)]
           layout = splitPane(layout, target.id, rand() < 0.5 ? 'horizontal' : 'vertical', {
-            sessionId: `s${(sessionCounter += 1)}`,
+            tabId: `s${(sessionCounter += 1)}`,
           })
         } else if (roll < 0.7) {
           layout = closePane(layout, panes[Math.floor(rand() * panes.length)].id)
@@ -850,7 +850,7 @@ describe('invariants under random editing', () => {
 describe('findPane / listPanes ordering', () => {
   it('finds a pane by id and reports null otherwise', () => {
     const layout = threePaneLayout()
-    expect(findPane(layout, 'b')).toEqual({ type: 'leaf', id: 'b', sessionId: 'b' })
+    expect(findPane(layout, 'b')).toEqual({ type: 'leaf', id: 'b', tabId: 'b' })
     expect(findPane(layout, 'nope')).toBeNull()
     expect(findPane(layout, 's1')).toBeNull()
   })

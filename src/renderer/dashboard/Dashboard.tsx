@@ -20,6 +20,7 @@ import {
   type WidgetType,
 } from './layout'
 import { getWidgetDefinition, listWidgetDefinitions, type WidgetContext } from './widgets'
+import { reconcileGrid } from './grid-sync'
 import { SessionBoard } from './SessionBoard'
 import { PageNote } from '../components/PageEmpty'
 import { useFeatures } from '../features/FeaturesProvider'
@@ -39,7 +40,7 @@ import './Dashboard.css'
  * leave open.
  *
  * The widget grid keeps the second half of the page rather than being deleted:
- * Cost, Git, AI readiness and GitHub are about the *folder*, not about a
+ * Usage, Git, AI readiness and GitHub are about the *folder*, not about a
  * session, and none of them is answered by the board. What did go is the
  * Sessions tile — a count of the very thing the board now lists in full, three
  * inches below it (see `layout.ts`).
@@ -113,8 +114,16 @@ export function Dashboard({ projectPath, context, bridge }: DashboardProps) {
    * and the tile would keep occupying cells nothing renders into.
    */
   const elements = useRef(new Map<string, HTMLDivElement>())
-  /** Ids gridstack currently manages, which is not the same as ids React renders. */
-  const managed = useRef(new Set<string>())
+  /**
+   * What gridstack currently manages: id → **the node it was handed**.
+   *
+   * A `Map` and not a `Set` of ids, and that is the fix for a widget vanishing
+   * from this page and never coming back — see `reconcileGrid`, which carries
+   * the whole account. The short version: a tile that renders `null` for one
+   * commit and returns mounts a *new* node under the *same* id, and an id-only
+   * record cannot tell that from nothing having happened.
+   */
+  const managed = useRef(new Map<string, HTMLDivElement>())
 
   /* ------------------------------------------------------------ persistence -- */
 
@@ -250,56 +259,95 @@ export function Dashboard({ projectPath, context, bridge }: DashboardProps) {
     }
   }, [])
 
-  // Reconcile gridstack's nodes with the model after every render that changed
-  // the widget set or their geometry.
+  /**
+   * Reconcile gridstack's nodes with the model after every render that changed
+   * the widget set, their geometry, **or which of them this install draws**.
+   *
+   * That last clause is a dependency this effect did not have. A widget is only
+   * rendered while `features.widgetOn` says its feature is installed, so
+   * switching a feature off and on again changes the page without changing
+   * `layout` at all — and the effect that adopts the new node never ran. The
+   * tile came back in the DOM, unpositioned, and stayed invisible. `drawnKey`
+   * is what makes that a change this effect can see.
+   */
+  const drawnKey = layout.widgets
+    .filter((widget) => getWidgetDefinition(widget.type) && features.widgetOn(widget.type))
+    .map((widget) => `${widget.id}@${widget.x},${widget.y},${widget.w},${widget.h}`)
+    .join('|')
+
   useEffect(() => {
     const grid = gridRef.current
     if (!grid) return
 
-    const live = new Set(layout.widgets.map((widget) => widget.id))
+    /*
+     * The tiles React actually has on screen, in visual order, each with the
+     * node it is mounted on right now.
+     *
+     * Filtered by the same two conditions as the render below — a definition
+     * this build knows, and a feature this install has — because a widget in
+     * the layout that renders nothing must not be treated as present. And in
+     * `readingOrder`, because gridstack packs upwards: adding top-left tiles
+     * first means it has nothing to pull up, so a saved arrangement lands
+     * exactly as it was left.
+     */
+    const drawn = new Map<string, HTMLDivElement>()
+    for (const widget of readingOrder(layout)) {
+      if (!getWidgetDefinition(widget.type) || !features.widgetOn(widget.type)) continue
+      const el = elements.current.get(widget.id)
+      if (el) drawn.set(widget.id, el)
+    }
+
+    const { drop, adopt } = reconcileGrid(managed.current, drawn)
+    const geometryOf = new Map(layout.widgets.map((widget) => [widget.id, widget]))
 
     // One batch, so intermediate compaction never renders and gridstack emits a
     // single change event at the end rather than one per widget.
     grid.batchUpdate()
     try {
-      for (const id of [...managed.current]) {
-        if (live.has(id)) continue
-        const el = elements.current.get(id)
+      for (const { id, element } of drop) {
         // `false, false`: React unmounts the node itself, and the repacking
         // this causes is reported once when the batch commits.
-        if (el) grid.removeWidget(el, false, false)
+        grid.removeWidget(element, false, false)
         managed.current.delete(id)
       }
 
       // Prune the element map separately from the grid bookkeeping — the two
       // go out of step whenever the grid is torn down and rebuilt underneath
-      // tiles that never unmounted.
+      // tiles that never unmounted. Only ids that have left the *layout* are
+      // dropped here: an id that is merely undrawn this moment (its feature is
+      // off) keeps its entry, and `reconcileGrid` sorts the node out when it
+      // comes back.
+      const inLayout = new Set(layout.widgets.map((widget) => widget.id))
       for (const id of [...elements.current.keys()]) {
-        if (!live.has(id)) elements.current.delete(id)
+        if (!inLayout.has(id)) elements.current.delete(id)
       }
 
-      // Visual order, not insertion order: adding top-left tiles first means
-      // gridstack's upward packing has nothing to pull up, so a saved
-      // arrangement lands exactly as it was left.
-      for (const widget of readingOrder(layout)) {
-        const el = elements.current.get(widget.id)
-        if (!el) continue
+      for (const { id, element } of adopt) {
+        const widget = geometryOf.get(id)
+        if (!widget) continue
         const spec = WIDGET_SPECS[widget.type]
-        const geometry = { x: widget.x, y: widget.y, w: widget.w, h: widget.h }
+        grid.makeWidget(element, {
+          x: widget.x,
+          y: widget.y,
+          w: widget.w,
+          h: widget.h,
+          id,
+          minW: spec.minW,
+          minH: spec.minH,
+        })
+        managed.current.set(id, element)
+      }
 
-        if (!managed.current.has(widget.id)) {
-          grid.makeWidget(el, { ...geometry, id: widget.id, minW: spec.minW, minH: spec.minH })
-          managed.current.add(widget.id)
-          continue
-        }
-
+      for (const [id, element] of managed.current) {
+        const widget = geometryOf.get(id)
+        if (!widget) continue
         // The model moved without gridstack's involvement — a keyboard nudge,
         // or a reset. Pushing it back is what keeps the two from diverging.
         // gridstack hangs its node off the element it was given; the cast is
         // only naming that, since React's ref hands back a plain HTMLDivElement.
-        const node = (el as GridItemHTMLElement).gridstackNode
+        const node = (element as GridItemHTMLElement).gridstackNode
         if (node && (node.x !== widget.x || node.y !== widget.y || node.w !== widget.w || node.h !== widget.h)) {
-          grid.update(el, geometry)
+          grid.update(element, { x: widget.x, y: widget.y, w: widget.w, h: widget.h })
         }
       }
     } finally {
@@ -307,7 +355,7 @@ export function Dashboard({ projectPath, context, bridge }: DashboardProps) {
       // frozen for the rest of the session.
       grid.batchUpdate(false)
     }
-  }, [layout])
+  }, [layout, drawnKey, features])
 
   /* ---------------------------------------------------------------- actions -- */
 
@@ -369,7 +417,7 @@ export function Dashboard({ projectPath, context, bridge }: DashboardProps) {
   /*
    * The tiles this install has.
    *
-   * Three of the five belong to features — Cost to Cost and usage, GitHub to
+   * Three of the five belong to features — Usage to the Usage feature, GitHub to
    * GitHub, AI readiness to its own — and a saved layout outlives an uninstall,
    * so both ends need the check: the picker must not offer a tile the app
    * cannot draw, and a layout that already contains one must skip it rather
@@ -426,8 +474,8 @@ export function Dashboard({ projectPath, context, bridge }: DashboardProps) {
 
         {empty && (
           <PageNote>
-            Nothing here yet. Add a widget for this folder&apos;s spend, git state, GitHub or AI
-            readiness.
+            Nothing here yet. Add a widget for this folder&apos;s token usage, git state,
+            GitHub or AI readiness.
           </PageNote>
         )}
 

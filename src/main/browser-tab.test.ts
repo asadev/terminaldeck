@@ -23,6 +23,9 @@ const USER_DATA = vi.hoisted(() => {
 /** Set before a create when the test wants the load to abort. */
 let rejectLoads = false
 
+/** Set when the test wants `capturePage` to fail, as it does on a hidden view. */
+let captureFails = false
+
 class FakeWebContents extends EventEmitter {
   private static nextId = 1
   readonly id = FakeWebContents.nextId++
@@ -64,6 +67,28 @@ class FakeWebContents extends EventEmitter {
 
   send(channel: string, ...args: unknown[]): void {
     this.sent.push({ channel, args })
+  }
+
+  /**
+   * What Electron's own `capturePage` does, closely enough.
+   *
+   * Present because a capture now photographs the page before it sends — the
+   * popup that answers a click hides the page to be seen over it, and without a
+   * still frame the website appears to vanish. `captureFails` is the other half
+   * of the contract: the capture must still arrive when the photograph does not.
+   */
+  capturePage(): Promise<{
+    getSize(): { width: number; height: number }
+    resize(options: { width: number }): unknown
+    toJPEG(quality: number): Buffer
+  }> {
+    if (captureFails) return Promise.reject(new Error('Current display surface not available'))
+    const image = {
+      getSize: () => ({ width: 2000, height: 1000 }),
+      resize: () => image,
+      toJPEG: () => Buffer.from('jpeg-bytes'),
+    }
+    return Promise.resolve(image)
   }
 
   setWindowOpenHandler(): void {}
@@ -128,7 +153,7 @@ vi.mock('electron', () => ({
   WebContentsView: FakeWebContentsView,
 }))
 
-const { destroyAllBrowserTabs, registerBrowserIpc } = await import('./browser-tab')
+const { destroyAllBrowserTabs, readCaptureRect, registerBrowserIpc } = await import('./browser-tab')
 const { GUEST_CANCEL_CHANNEL, GUEST_ELEMENT_CHANNEL } = await import('./browser-preload')
 
 type Handler = (event: unknown, ...args: unknown[]) => unknown
@@ -199,10 +224,21 @@ async function inspecting(): Promise<{ state: TabState; guest: FakeWebContents }
   return tab
 }
 
+/**
+ * Let the microtask queue drain.
+ *
+ * A capture is now sent *after* the page has been photographed, so the message
+ * arrives a promise tick after the guest's IPC rather than inside it. The
+ * ordering is deliberate — see `freezeFrame` — so the tests wait rather than
+ * asserting on a synchronous send that no longer exists.
+ */
+const settled = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
+
 beforeEach(() => {
   destroyAllBrowserTabs()
   created.length = 0
   rejectLoads = false
+  captureFails = false
   host = new FakeWebContents()
 })
 
@@ -215,6 +251,7 @@ describe('guest messages', () => {
   it('accepts a capture from the tab’s own main frame', async () => {
     const { state, guest } = await inspecting()
     emit(GUEST_ELEMENT_CHANNEL, { sender: guest, senderFrame: guest.mainFrame }, ELEMENT_PAYLOAD)
+    await settled()
 
     const message = host.sent.find((m) => m.channel === 'browser:element')
     expect(message).toBeDefined()
@@ -232,6 +269,7 @@ describe('guest messages', () => {
     // through by losing that race on purpose.
     const { guest } = await inspecting()
     emit(GUEST_ELEMENT_CHANNEL, { sender: guest, senderFrame: null }, ELEMENT_PAYLOAD)
+    await settled()
     expect(host.sent.some((m) => m.channel === 'browser:element')).toBe(false)
   })
 
@@ -242,6 +280,7 @@ describe('guest messages', () => {
       { sender: guest, senderFrame: { name: 'an-embedded-ad' } },
       ELEMENT_PAYLOAD,
     )
+    await settled()
     expect(host.sent.some((m) => m.channel === 'browser:element')).toBe(false)
   })
 
@@ -253,6 +292,7 @@ describe('guest messages', () => {
       { sender: stranger, senderFrame: stranger.mainFrame },
       ELEMENT_PAYLOAD,
     )
+    await settled()
     expect(host.sent.some((m) => m.channel === 'browser:element')).toBe(false)
   })
 
@@ -260,7 +300,57 @@ describe('guest messages', () => {
     const { guest } = await openTab({ url: 'http://localhost:3000' })
     host.sent.length = 0
     emit(GUEST_ELEMENT_CHANNEL, { sender: guest, senderFrame: guest.mainFrame }, ELEMENT_PAYLOAD)
+    await settled()
     expect(host.sent.some((m) => m.channel === 'browser:element')).toBe(false)
+  })
+
+  it('carries the element’s box through, so the popup can open at it', async () => {
+    const { guest } = await inspecting()
+    emit(
+      GUEST_ELEMENT_CHANNEL,
+      { sender: guest, senderFrame: guest.mainFrame },
+      { ...ELEMENT_PAYLOAD, rect: { x: 40, y: 120, width: 200, height: 32 } },
+    )
+    await settled()
+    const message = host.sent.find((m) => m.channel === 'browser:element')
+    expect((message?.args[1] as { rect: unknown }).rect).toEqual({
+      x: 40,
+      y: 120,
+      width: 200,
+      height: 32,
+    })
+  })
+
+  it('says null rather than guessing when the page reported no box', async () => {
+    const { guest } = await inspecting()
+    emit(GUEST_ELEMENT_CHANNEL, { sender: guest, senderFrame: guest.mainFrame }, ELEMENT_PAYLOAD)
+    await settled()
+    const message = host.sent.find((m) => m.channel === 'browser:element')
+    expect((message?.args[1] as { rect: unknown }).rect).toBeNull()
+  })
+
+  it('photographs the page, so the popup does not open over a black hole', async () => {
+    // The popup is HTML and the page is a native layer above the renderer, so
+    // opening the popup necessarily hides the page. Without a still frame the
+    // website appears to vanish the instant it is clicked.
+    const { guest } = await inspecting()
+    emit(GUEST_ELEMENT_CHANNEL, { sender: guest, senderFrame: guest.mainFrame }, ELEMENT_PAYLOAD)
+    await settled()
+    const message = host.sent.find((m) => m.channel === 'browser:element')
+    expect((message?.args[1] as { pageImage: string }).pageImage).toMatch(/^data:image\/jpeg;base64,/)
+  })
+
+  it('still delivers the capture when the photograph fails', async () => {
+    // A backdrop is the least important thing on the path between a click and
+    // the answer to it. Losing it must cost the backdrop and nothing else.
+    captureFails = true
+    const { guest } = await inspecting()
+    emit(GUEST_ELEMENT_CHANNEL, { sender: guest, senderFrame: guest.mainFrame }, ELEMENT_PAYLOAD)
+    await settled()
+    const message = host.sent.find((m) => m.channel === 'browser:element')
+    expect(message).toBeDefined()
+    expect((message?.args[1] as { pageImage: string }).pageImage).toBe('')
+    expect((message?.args[1] as { selector: string }).selector).toBe('#buy')
   })
 
   it('turns inspection off when the guest reports Escape', async () => {
@@ -502,5 +592,35 @@ describe('the view’s backdrop', () => {
     expect(view.backgrounds.at(-1)).toBe('#ffffff')
     const refused = await openTab({ background: 'var(--bg-primary)' })
     expect(refused.view.backgrounds.at(-1)).toBe('#ffffff')
+  })
+})
+
+/**
+ * The rectangle comes from an untrusted page and is interpolated into an inline
+ * `style` on our own trusted document, so it is checked like everything else
+ * that crosses that line — not because the arithmetic is delicate, but because
+ * `left: 1e308px` is a layout that never recovers.
+ */
+describe('readCaptureRect', () => {
+  it('takes a plain rectangle', () => {
+    expect(readCaptureRect({ x: 1, y: 2, width: 3, height: 4 })).toEqual({
+      x: 1,
+      y: 2,
+      width: 3,
+      height: 4,
+    })
+  })
+
+  it('refuses anything that is not four finite numbers', () => {
+    expect(readCaptureRect(null)).toBeNull()
+    expect(readCaptureRect('40,120')).toBeNull()
+    expect(readCaptureRect({ x: 1, y: 2, width: 3 })).toBeNull()
+    expect(readCaptureRect({ x: 1, y: 2, width: 3, height: Number.NaN })).toBeNull()
+    expect(readCaptureRect({ x: Number.POSITIVE_INFINITY, y: 0, width: 1, height: 1 })).toBeNull()
+  })
+
+  it('clamps a number that would break the layout it lands in', () => {
+    const rect = readCaptureRect({ x: 1e308, y: -1e308, width: 1e308, height: -5 })
+    expect(rect).toEqual({ x: 100000, y: -100000, width: 100000, height: 0 })
   })
 })

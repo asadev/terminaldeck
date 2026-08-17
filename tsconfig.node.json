@@ -23,6 +23,8 @@
     "src/preload/**/*",
     "src/shared/**/*",
     "src/headless/**/*",
+    "src/renderer/platform.ts",
+    "src/renderer/settings/settings-schema.ts",
     "relay/**/*",
     "ios/Harness/**/*",
     "electron.vite.config.ts",

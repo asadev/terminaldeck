@@ -49,6 +49,65 @@ const SOURCE_LABEL: Record<DevUrl['source'], string> = {
 }
 
 /**
+ * The one Full Disk Access warning, however many browsers are behind it.
+ *
+ * There were three, and they were word-for-word identical except for the
+ * browser's name — three paragraphs, three tinted blocks with a rule down each
+ * side, all ending "…add this app, then run the import again." The remedy is
+ * one remedy: Full Disk Access is granted to *this* app once, and every blocked
+ * browser becomes readable at the same moment. Repeating it per browser turned
+ * one instruction into a wall and made the pane read as three separate faults.
+ *
+ * So the names are collected into a list and the instruction is said once.
+ * A browser's own `note` is not lost when there is only one to show — that is
+ * where a non-standard reason would live — and the multi-browser wording names
+ * every one of them, because "some browsers" would be a warning the reader has
+ * to go and check.
+ *
+ * Pure and exported: on a screen whose job is to say one true thing rather than
+ * three copies of it, the wording is the fix, and a test that could not read it
+ * would be testing the wrong half.
+ */
+export function blockedNote(blocked: readonly DetectedBrowser[]): string | null {
+  if (blocked.length === 0) return null
+  if (blocked.length === 1) {
+    const only = blocked[0]
+    return (
+      only.note ??
+      `${only.name}’s data is protected by the system. Grant Full Disk Access to read it.`
+    )
+  }
+  const names = blocked.map((browser) => browser.name)
+  const list = `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
+  return (
+    `macOS will not let this app read ${list} until it is given full disk access. ` +
+    'Open Privacy & Security → Full Disk Access, add this app, then run the import again. ' +
+    'One grant covers all of them.'
+  )
+}
+
+/**
+ * What a browser button says.
+ *
+ * The profile count is dropped from a browser we cannot read, and that is the
+ * fix for a real contradiction rather than a tidy-up. The pane advertised
+ * **"Chrome (14 profiles)"** on a *disabled* segment — a count of things behind
+ * a control that cannot be pressed — while the only working profile picker was
+ * a bare dropdown three hundred pixels below it, in a different group. Two
+ * controls about the same fourteen profiles, one dead and shouting, one live and
+ * silent.
+ *
+ * The count is still worth saying where it means something: on a browser that
+ * can be scanned, it tells you how much the button is about to look through.
+ */
+export function browserButtonLabel(browser: DetectedBrowser): string {
+  if (browser.access === 'blocked') return browser.name
+  return browser.profiles.length > 1
+    ? `${browser.name} (${browser.profiles.length} profiles)`
+    : browser.name
+}
+
+/**
  * The line under an address: where it came from, what it is called, and how
  * sure we are.
  *
@@ -268,6 +327,7 @@ export function BrowserSection({ values, save, bridge, loading }: SectionProps) 
   }, [bridge])
 
   const blocked = browsers?.filter((browser) => browser.access === 'blocked') ?? []
+  const blockedText = blockedNote(blocked)
 
   return (
     <>
@@ -298,9 +358,13 @@ export function BrowserSection({ values, save, bridge, loading }: SectionProps) 
                   key={browser.id}
                   onClick={() => scan(browser.id)}
                   disabled={scanning || browser.access === 'blocked'}
+                  title={
+                    browser.access === 'blocked'
+                      ? `This app cannot read ${browser.name}’s data yet — see below.`
+                      : undefined
+                  }
                 >
-                  {browser.name}
-                  {browser.profiles.length > 1 ? ` (${browser.profiles.length} profiles)` : ''}
+                  {browserButtonLabel(browser)}
                 </Button>
               ))}
               <Button onClick={() => scan()} disabled={scanning}>
@@ -312,12 +376,8 @@ export function BrowserSection({ values, save, bridge, loading }: SectionProps) 
               <Notice tone="info">No Chromium-based browser was found on this machine.</Notice>
             )}
 
-            {blocked.map((browser) => (
-              <Notice key={browser.id} tone="warn">
-                {browser.note ??
-                  `${browser.name}’s data is protected by the system. Grant Full Disk Access to read it.`}
-              </Notice>
-            ))}
+            {/* One notice, one remedy — see `blockedNote`. */}
+            {blockedText && <Notice tone="warn">{blockedText}</Notice>}
 
             {urls !== null && urls.length === 0 && !scanning && (
               <Notice tone="info">Nothing local turned up in there.</Notice>

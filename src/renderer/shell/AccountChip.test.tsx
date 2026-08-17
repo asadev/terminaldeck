@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AccountChip, RUN_AGENT_COMMAND } from './AccountChip'
@@ -266,6 +268,141 @@ describe('which agent the chip is about', () => {
   })
 })
 
+describe('who the session is running as, rather than which record', () => {
+  /**
+   * His words:
+   *
+   *   > "inside the terminal page it is still showing selected account as
+   *   > Default and not showing the email ID. … It should show clearly which
+   *   > one is actually selected there. It just says Default."
+   *
+   * "Default" is the name `main/profiles.ts` generates for the machine's own
+   * install of an agent. It is the same word for every user, the same word for
+   * a login that works and one that has expired, and on a machine where nobody
+   * has added a second account it was the only word this chip ever showed.
+   *
+   * The ladder itself is pinned in `accounts.test.ts`, where every rung can be
+   * driven directly. What is pinned here is that this component is on it: a
+   * static render resolves no promises, so the probe never answers, and this is
+   * therefore the *worst* case — the one where falling back to the record's own
+   * name would be most tempting.
+   */
+  const chip = (current: { id: string; name: string }) =>
+    renderToStaticMarkup(
+      <AccountChip current={current} projectPath="/w/app" onPick={noop} onManage={noop} />,
+    )
+
+  it('never puts the generated name on the chip, even before anything is read', () => {
+    const html = chip({ id: 'system', name: 'Default' })
+    // Nowhere on it — not in the label, and not in the tooltip either, where it
+    // would be the same claim in smaller type.
+    expect(html).not.toContain('Default')
+    // What it says instead is what is true at that instant: it is asking.
+    expect(html).toContain('Checking…')
+  })
+
+  it('does the same for an agent whose own install is named after the agent', () => {
+    expect(chip({ id: 'system:codex', name: 'Default (Codex CLI)' })).not.toContain('Default')
+  })
+
+  it('still shows a name a person chose, because that one is an identity', () => {
+    expect(chip({ id: 'work', name: 'Work' })).toContain('>Work<')
+  })
+
+  it('reads the label off the identity ladder rather than off the record', () => {
+    /*
+     * The regression this guards is a one-word edit: `identity.label` back to
+     * `current?.name`, which typechecks, renders, and puts "Default" straight
+     * back on the chip. Read from the source because the interesting states
+     * need a resolved promise, which a static render does not have.
+     */
+    const source = readFileSync(join(__dirname, 'AccountChip.tsx'), 'utf8')
+    expect(source).toContain('const identity = accountIdentity(currentAccount, currentSignIn)')
+    expect(source).toContain('names ? identity.label')
+    expect(source).not.toMatch(/account-chip-name[^>]*>\{[^}]*current\?\.name/)
+    /*
+     * And the menu's rows come off the same ladder, so the address on a row is
+     * the address on the button, in the same words. It is `profileLoginLabel`
+     * rather than `signInSummary` because a *list* cannot fall back to a state
+     * — two rows reading "Signed in · max" have stopped being a picker — and
+     * the state has its own column on the right, which is why that column now
+     * asks for the state alone.
+     */
+    expect(source).toContain('const login = profileLoginLabel(account, state)')
+    expect(source).toContain('<span className="folder-menu-name">{login}</span>')
+    expect(source).toContain('{signInStateSummary(state).label}')
+    // The stored name survives in exactly one place: the field that edits it.
+    expect(source).not.toMatch(/folder-menu-name[^>]*>\{account\.name\}/)
+  })
+
+  it('asks about the one account it is about, and only that one', () => {
+    /*
+     * The cost that stopped this being done sooner. Checking the *list* spawns
+     * the agent's CLI once per account and this chip is mounted for the whole
+     * life of every session — so the list is still only probed when the menu
+     * opens. The single account on screen is the exception, because there is no
+     * way to draw an address without asking and the address is the whole point
+     * of the control.
+     */
+    const source = readFileSync(join(__dirname, 'AccountChip.tsx'), 'utf8')
+    expect(source).toContain('useAccountIdentity(currentId)')
+    // List always, probes only while open.
+    expect(source).toContain('useAccounts(true, menu.open)')
+  })
+})
+
+describe('which account is selected', () => {
+  /**
+   * His words: *"It should show clearly which one is actually selected there."*
+   *
+   * The current row was distinguished by its name being drawn in the accent
+   * colour and by nothing else — a difference you can only see by comparing it
+   * against the rows above and below, invisible to anyone who cannot separate
+   * those two greys, and absent entirely when the rows are inert. The menu is
+   * portalled and only exists once opened, which a static render cannot do, so
+   * the mark is read from the source.
+   */
+  const source = readFileSync(join(__dirname, 'AccountChip.tsx'), 'utf8')
+
+  it('draws a tick on the account in force', () => {
+    expect(source).toContain('const isCurrent = names && account.id === currentId')
+    expect(source).toContain('className="account-menu-tick"')
+    expect(source).toContain('{isCurrent && (')
+  })
+
+  it('marks no row at all on a chip that names no login', () => {
+    /*
+     * `names` is the chip's one decision about which subject it is describing —
+     * this session's account, or the one a new session here would use. When the
+     * answer is "nobody", the button says `No login` and the tick has to agree:
+     * a mark on a row is the strongest claim in the menu, and the same
+     * contradiction the button was reported for would simply move one level
+     * down. The condition is read from the source because the state needs a
+     * resolved account list, which a static render does not have.
+     */
+    expect(source).toContain('const isCurrent = names && account.id === currentId')
+  })
+
+  it('says it out loud as well as drawing it', () => {
+    // A tick nobody can see is a mark only a sighted user gets. These rows are
+    // a choice of exactly one account, which is what `menuitemradio` means.
+    expect(source).toContain('role="menuitemradio"')
+    expect(source).toContain('aria-checked={isCurrent}')
+  })
+
+  it('keeps the mark on a row that cannot be picked', () => {
+    /*
+     * Whether this agent can be handed a config directory has nothing to do
+     * with which account the session on screen is running as — and the inert
+     * state is where the question is hardest, because nothing else on the row
+     * responds to anything.
+     */
+    const inert = source.slice(source.indexOf('account-menu-item is-inert'))
+    expect(inert.slice(0, 300)).toContain('data-current={isCurrent || undefined}')
+    expect(inert.slice(0, 300)).toContain('aria-current={isCurrent || undefined}')
+  })
+})
+
 describe('renaming an account where you can see it', () => {
   /**
    * His words:
@@ -298,6 +435,62 @@ describe('renaming an account where you can see it', () => {
   it('says so rather than failing silently when the bridge has no rename', async () => {
     const { renameAccount } = await import('../accounts')
     expect(await renameAccount({}, { id: 'work', name: 'Work' }, 'Personal')).toContain('not wired')
+  })
+
+  it('turns a collision into a sentence instead of an Electron IPC string', async () => {
+    /*
+     * The failure shape on record, verbatim from the app:
+     *
+     *   Error invoking remote method 'profiles:create': ProfileError: a claude
+     *   account called "…" already exists
+     *
+     * A rename collides the same way — the main process refuses two accounts of
+     * one agent with the same name — and the only thing that crosses back is a
+     * rejected `invoke`, wrapped in a channel name nobody using this app has
+     * heard of. What must reach the field is the sentence at the end of it.
+     */
+    const { renameAccount } = await import('../accounts')
+    const renameProfile = vi
+      .fn()
+      .mockRejectedValue(
+        new Error(
+          `Error invoking remote method 'profiles:rename': ProfileError: a claude account called "Work" already exists`,
+        ),
+      )
+    const problem = await renameAccount({ renameProfile }, { id: 'system', name: 'Default' }, 'Work')
+    expect(problem).toBe('a claude account called "Work" already exists')
+    expect(problem).not.toContain('invoking remote method')
+    expect(problem).not.toContain('profiles:rename')
+  })
+
+  it('holds that message under the field, with the typed name still in it', () => {
+    /*
+     * It used to be printed at the foot of the menu, below three other people's
+     * accounts, where it read as a fact about the list rather than about the box
+     * the cursor is still in. The field stays open on a failure — closing it
+     * would throw the name away along with the explanation.
+     */
+    const source = readFileSync(join(__dirname, 'AccountChip.tsx'), 'utf8')
+    const editing = source.slice(source.indexOf('className="account-menu-editing"'))
+    const upToRowEnd = editing.slice(0, editing.indexOf('const line = ('))
+    expect(upToRowEnd).toContain('className="account-menu-problem"')
+    expect(upToRowEnd).toContain("aria-describedby={failure === null ? undefined : 'account-rename-problem'}")
+    expect(source).toContain('if (!problem) {')
+  })
+
+  it('renames an agent’s own install, which is every account on a fresh machine', () => {
+    /*
+     * The button was drawn on every row and worked on none of them:
+     * `renameProfile` refused any system id outright, and until somebody adds a
+     * second login every account *is* a system one. The main process now stores
+     * a display name for those — `profiles.test.ts` pins the storage, the reset
+     * and the collision — so what is left for here is that this menu does not
+     * hide the button or special-case the row.
+     */
+    const source = readFileSync(join(__dirname, 'AccountChip.tsx'), 'utf8')
+    const button = source.slice(source.indexOf('className="account-menu-rename-button"'))
+    expect(button.slice(0, 400)).toContain('setEditing({ id: account.id, draft: account.name })')
+    expect(button.slice(0, 400)).not.toContain('account.system')
   })
 })
 

@@ -7,29 +7,13 @@
  * field defensively instead of casting one of these over a raw payload.
  */
 
-/** `src/main/cost.ts` — token counts split by how each part is billed. */
+/** `src/main/cost.ts` — token counts split by how each part is recorded. */
 export interface TokenUsage {
   input: number
   output: number
   cacheWrite5m: number
   cacheWrite1h: number
   cacheRead: number
-}
-
-export interface CostBreakdown {
-  input: number
-  output: number
-  cacheWrite: number
-  cacheRead: number
-  total: number
-}
-
-export interface AggregateCost {
-  cost: CostBreakdown
-  byModel: Record<string, CostBreakdown>
-  /** Non-empty means the total is a floor, not the answer. */
-  unpricedModels: string[]
-  usedLegacyRate: boolean
 }
 
 export type ContextLevel = 'ok' | 'warning' | 'critical'
@@ -58,7 +42,6 @@ export interface SessionSummary {
   models: string[]
   requests: number
   usage: TokenUsage
-  cost: AggregateCost
   context: ContextUsage | null
   warnings: BloatWarning[]
   preContextTokens: number
@@ -72,7 +55,7 @@ export interface ProjectSummary {
   cwd: string
   sessions: SessionSummary[]
   usage: TokenUsage
-  cost: AggregateCost
+  usageByModel: Record<string, TokenUsage>
   requests: number
   activeSessionId: string | null
   /** True while the first pass over historical transcripts is still running. */

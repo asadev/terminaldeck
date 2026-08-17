@@ -61,12 +61,14 @@ import type { ProviderId } from '../shared/types'
 import { currentPlatform, withPath, type Platform } from './platform/host'
 import {
   ACCOUNT_STRATEGIES,
+  hasSignIn,
   signInCommandLine,
-  supportsAccounts,
   unsupportedAccountReason,
   type AccountStatusFormat,
 } from './provider-accounts'
-import { loginPath, PROVIDERS } from './providers'
+import { agentBinaries, loginPath, PROVIDERS } from './providers'
+import { binaryProblem, type AgentBinary } from './agent-binaries'
+import { describeGeminiSignIn, readGeminiSignIn } from './gemini-signin'
 import { launchSpec } from './tool-probe'
 import { findProfile, getState, sessionEnv, type Profile } from './profiles'
 
@@ -186,9 +188,18 @@ export function parseCodexLoginStatus(raw: string): AuthAnswer | null {
   return null
 }
 
-/** Route the probe's output to the parser its agent needs. */
+/**
+ * Route the probe's output to the parser its agent needs.
+ *
+ * `gemini-local` never reaches here: Gemini has no status command to parse, and
+ * `readSignIn` answers it from the machine before any spawn is considered. It is
+ * named rather than defaulted so a format added to the union is a compile error
+ * here instead of being silently read as Claude's JSON.
+ */
 export function parseAuthOutput(format: AccountStatusFormat, raw: string): AuthAnswer | null {
-  return format === 'claude-json' ? parseAuthStatus(raw) : parseCodexLoginStatus(raw)
+  if (format === 'claude-json') return parseAuthStatus(raw)
+  if (format === 'codex-text') return parseCodexLoginStatus(raw)
+  return null
 }
 
 /**
@@ -339,6 +350,14 @@ export interface SignInOptions {
    * asking the machine's login shell for its PATH means spawning it.
    */
   path?: string
+  /**
+   * The binary resolution, when the caller already has one.
+   *
+   * Injected in tests so the "installed but will not start" branch can be
+   * exercised without a machine that has a broken install on it — which is
+   * otherwise only reproducible on the one Mac this was found on.
+   */
+  binary?: AgentBinary
   /** The spawn itself. Replaced in tests; nothing else ever passes it. */
   exec?(command: string, args: string[], options: { env: Record<string, string | undefined>; cwd: string; timeout: number }): Promise<ProbeInput>
 }
@@ -409,7 +428,15 @@ export async function readSignIn(
   const platform = options.platform ?? currentPlatform()
   const strategy = ACCOUNT_STRATEGIES[provider]
 
-  if (!supportsAccounts(provider) || !strategy?.statusArgs) {
+  /*
+   * `hasSignIn`, not `supportsAccounts`.
+   *
+   * The old test asked whether this agent could hold a *second* login and, when
+   * it could not, reported the row as `unsupported` — no state, no button,
+   * nothing to do. For Gemini, which has exactly one login, that was the whole
+   * reported bug: an agent that can be signed in, presented as one that cannot.
+   */
+  if (!hasSignIn(provider)) {
     return {
       profileId: profile.id,
       provider,
@@ -431,10 +458,94 @@ export async function readSignIn(
     if (cached && Date.now() - cached.checkedAt < SIGNIN_CACHE_MS) return cached
   }
 
+  /*
+   * An agent with no status command, answered from the machine.
+   *
+   * Gemini is the case: `gemini --help` lists no auth or login subcommand, so
+   * there is nothing to spawn and nothing to parse. `gemini-signin.ts` reads the
+   * four places the shipped `gemini-cli-core` puts a credential.
+   */
+  if (strategy.statusFormat === 'gemini-local') {
+    const local = await readGeminiSignIn({ platform })
+    const report: SignInReport = {
+      profileId: profile.id,
+      provider,
+      state: local.signedIn ? 'signed-in' : 'signed-out',
+      account: local.account,
+      plan: local.method,
+      detail: describeGeminiSignIn(local),
+      // Nothing was run, so nothing is quoted. An invented command here would be
+      // the one thing on this screen a person could not reproduce.
+      command: '',
+      checkedAt: Date.now(),
+    }
+    cache.set(key, report)
+    return report
+  }
+
+  if (!strategy.statusArgs) {
+    return {
+      profileId: profile.id,
+      provider,
+      state: 'unsupported',
+      account: null,
+      plan: null,
+      detail: unsupportedReason(provider),
+      command: '',
+      checkedAt: Date.now(),
+    }
+  }
+
   const bin = PROVIDERS[provider].bin
-  const launch = launchSpec(bin, null, platform)
   const args = [...strategy.statusArgs]
   const command = `${bin} ${args.join(' ')}`
+
+  /*
+   * Does the binary run, before anything asks it a question?
+   *
+   * This is where the recording's worst moment used to land. `codex login
+   * status` was spawned through the npm launcher on PATH, the launcher failed to
+   * spawn its own missing native binary, and the row printed the Node stack
+   * trace verbatim: *"Could not read this account's sign-in state. codex login
+   * status said: Error: spawn …/codex ENOENT"*. Asking first turns that into a
+   * sentence with an install command in it — and, when a working copy exists
+   * elsewhere, into a real answer, because the probe then runs *that* copy.
+   */
+  /*
+   * `options.exec` means the caller has taken over spawning, so the machine is
+   * not asked about either.
+   *
+   * Without that clause this probe reached past an injected `exec` and ran the
+   * real `claude --version` — a login-shell spawn plus three CLI launches, per
+   * case, in a unit test, whose answer then depended on what happened to be
+   * installed on the runner. It failed exactly once, in a batch run under load,
+   * and passed on its own; a test that depends on the host is a test that will
+   * do that again at the worst moment. Production passes no `exec` and so is
+   * unaffected, and the broken-binary branch is exercised by passing `binary`
+   * outright.
+   */
+  const binary: AgentBinary | undefined =
+    options.binary ?? (options.exec ? undefined : (await agentBinaries(platform))[provider])
+  if (binary && binary.runnable === null) {
+    const report: SignInReport = {
+      profileId: profile.id,
+      provider,
+      state: 'unknown',
+      account: null,
+      plan: null,
+      detail:
+        binaryProblem(binary) ??
+        `${strategy.label} could not be started, so this account's sign-in state is unread.`,
+      command,
+      checkedAt: Date.now(),
+    }
+    cache.set(key, report)
+    return report
+  }
+
+  // The copy that was proved to run, which is the bare name in every ordinary
+  // case and an absolute path only when the one on PATH is broken.
+  const launch = launchSpec(binary?.runnable ?? bin, null, platform)
 
   const PATH = options.path ?? (await loginPath(platform))
   const env = {

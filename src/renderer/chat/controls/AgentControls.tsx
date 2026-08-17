@@ -8,6 +8,7 @@ import {
   optionsFor,
   PRIMARY_CONTROLS,
   reachOf,
+  unsupportedProviderNote,
   type ControlId,
   type ControlsReading,
 } from './catalog'
@@ -68,12 +69,19 @@ import './AgentControls.css'
  */
 
 export interface AgentControlsBridge {
-  readAgentControls(request: { sessionId?: string; cwd?: string }): Promise<unknown>
+  readAgentControls(request: { sessionId?: string; cwd?: string; provider?: string }): Promise<unknown>
   applyAgentControl(request: {
     sessionId: string
     cwd?: string
     control: ControlId
     value: string
+    /**
+     * What is running in the session, so the main process can refuse a CLI it
+     * has no verified way of driving instead of typing Claude's commands at it.
+     * `undefined` is a real answer — see `refuseByProvider` in
+     * `src/main/agent-controls.ts` — and is resolved there from the screen.
+     */
+    provider?: string
   }): Promise<unknown>
 }
 
@@ -194,6 +202,26 @@ function deckBridge(): Partial<AgentControlsBridge> | undefined {
 
 export function AgentControls({ sessionId, cwd, provider, extra }: Props) {
   const shell = provider === 'shell'
+  /**
+   * An agent CLI this app has no established way of driving.
+   *
+   * Everything these pickers do is one Claude Code command or another, and the
+   * values they show are read back out of Claude Code's own screen and Claude
+   * Code's own settings file. Neither half generalises. Offering the same five
+   * model aliases on a Codex or Gemini session would be a row of buttons that
+   * type `/model sonnet` at a CLI nobody has checked understands it — the exact
+   * dead control this composer keeps being audited for, dressed up as support.
+   *
+   * `undefined` is deliberately not in this set. It means an agent is running
+   * inside a session this app launched as a shell, and the app never saw which
+   * one — a question the *screen* answers, in the main process, because the
+   * markers it matches are Claude Code's. `refuseByProvider` in
+   * `src/main/agent-controls.ts` is where that is decided and is the
+   * authoritative refusal; this is the same judgement made early enough to
+   * withdraw the buttons rather than let them be pressed into an error.
+   */
+  const foreignNote = unsupportedProviderNote(provider)
+  const foreign = foreignNote !== null
   const [readings, setReadings] = useState<ControlsReading | null>(null)
   const [busy, setBusy] = useState<ControlId | null>(null)
   const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null)
@@ -212,13 +240,13 @@ export function AgentControls({ sessionId, cwd, provider, extra }: Props) {
   // Derived, not state: an effect that flips this would render one frame of
   // working controls before admitting the bridge is missing, and would never run
   // at all when the view is rendered to a string.
-  const wired = typeof bridge?.readAgentControls === 'function' && !shell
+  const wired = typeof bridge?.readAgentControls === 'function' && !shell && !foreign
   const usable = wired && sessionId !== undefined
 
   const refresh = useCallback(async (): Promise<void> => {
     if (!sessionId || typeof bridge?.readAgentControls !== 'function') return
     try {
-      const answer = await bridge.readAgentControls({ sessionId, cwd: cwd ?? undefined })
+      const answer = await bridge.readAgentControls({ sessionId, cwd: cwd ?? undefined, provider })
       if (!alive.current) return
       const parsed = asReadings(answer)
       if (parsed) setReadings(parsed)
@@ -227,7 +255,7 @@ export function AgentControls({ sessionId, cwd, provider, extra }: Props) {
       // last thing that was genuinely read, and blanking them would be a
       // regression in honesty, not an improvement.
     }
-  }, [bridge, sessionId, cwd])
+  }, [bridge, sessionId, cwd, provider])
 
   useEffect(() => {
     if (!wired) return
@@ -317,9 +345,20 @@ export function AgentControls({ sessionId, cwd, provider, extra }: Props) {
       setBusy(control)
       setNotice(null)
       try {
-        const answer = asApplyResult(await bridge.applyAgentControl({ sessionId, cwd: cwd ?? undefined, control, value }))
+        const answer = asApplyResult(
+          await bridge.applyAgentControl({ sessionId, cwd: cwd ?? undefined, control, value, provider }),
+        )
         if (!alive.current) return
         setNotice({ ok: answer.ok, text: answer.message })
+        /*
+         * The reading comes from the answer, and the answer's reading is one
+         * the main process re-read off the session after the change settled —
+         * never the value that was clicked. That distinction is the whole
+         * feature: a picker that ticks the row you pressed is showing your
+         * intention, and this app already had that bug once. The `refresh` in
+         * the `finally` then asks again from scratch, so even a wrong optimistic
+         * value would survive only until the next screen read.
+         */
         setReadings((was) => (was ? { ...was, [control]: answer.reading } : was))
       } catch (error) {
         if (alive.current) setNotice({ ok: false, text: error instanceof Error ? error.message : 'The change failed.' })
@@ -328,7 +367,7 @@ export function AgentControls({ sessionId, cwd, provider, extra }: Props) {
         void refresh()
       }
     },
-    [bridge, sessionId, cwd, refresh],
+    [bridge, sessionId, cwd, provider, refresh],
   )
 
   /**
@@ -342,11 +381,20 @@ export function AgentControls({ sessionId, cwd, provider, extra }: Props) {
   const unusable =
     shell
       ? 'This session is a shell, not an agent. Model, effort, fast mode and permission modes belong to an agent CLI — there is nothing here to set them on.'
-      : wired
-        ? sessionId === undefined
-          ? 'These type into a running session, and there is no single live session for this folder to type into.'
-          : null
-        : 'Model, effort and permission controls are not wired into this build.'
+      : foreignNote !== null
+        ? // Named rather than lumped in with the shell, because the reason is a
+          // different one and the difference is the honest part: a shell has no
+          // model to set, whereas this session certainly has one and this app
+          // has simply not established how to change it from the outside. The
+          // sentence lives in `catalog.ts` so it can be pinned without a DOM —
+          // this panel is shut in a static render, which is the only kind this
+          // project's tests can produce.
+          foreignNote
+        : wired
+          ? sessionId === undefined
+            ? 'These type into a running session, and there is no single live session for this folder to type into.'
+            : null
+          : 'Model, effort and permission controls are not wired into this build.'
 
   // Fast mode is the one control an account can be barred from, and the CLI is
   // the only thing that knows. Once it has said so, the reason is shown in place
@@ -384,8 +432,8 @@ export function AgentControls({ sessionId, cwd, provider, extra }: Props) {
             .reduce((sentence, name, index) =>
               index === parts.length - 1 ? `${sentence} and ${name}` : `${sentence}, ${name}`,
             )
-    if (named === '') return 'What this session has cost so far'
-    return extra ? `${named}, and what this session has cost` : named
+    if (named === '') return 'What this session has used so far'
+    return extra ? `${named}, and what this session has used` : named
   })()
 
   return (
@@ -473,7 +521,7 @@ export function AgentControls({ sessionId, cwd, provider, extra }: Props) {
           {extra ? (
             <section className="ac-section">
               <h4 className="ac-section-name">This session</h4>
-              <p className="ac-section-desc">What it has cost so far, and how full the context window is.</p>
+              <p className="ac-section-desc">How many tokens it has used, and how full the context window is.</p>
               {extra}
             </section>
           ) : null}

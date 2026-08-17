@@ -1,39 +1,25 @@
 /**
- * Cost, token and context-window maths for agent sessions.
+ * Token and context-window maths for agent sessions.
  *
  * Everything here is pure — numbers in, numbers out — so the arithmetic can be
  * tested without a transcript, a filesystem or an Electron app. `transcript.ts`
  * feeds it; the IPC layer formats what comes back.
+ *
+ * The file is still called `cost.ts`, and the money is gone from it. That is
+ * deliberate on both counts. The channels the renderer talks to are named
+ * `cost:*` and are wired through the preload bridge, so renaming the module
+ * would leave the name half-changed across a boundary this module does not own;
+ * and this is the file somebody will open when they decide the app should show
+ * a dollar figure again. The argument waiting for them is at the bottom, under
+ * "why this app shows no prices". Read it before adding one.
  */
 
 const MILLION = 1_000_000
 
-/**
- * Cache rates are multipliers on a model's input rate rather than separately
- * published numbers, and they are uniform across the Claude family:
- *
- *   cache read      0.10x input  — a hit is ~90% off, which is why a session
- *                                  can bill 900k prompt tokens for pennies
- *   5-minute write  1.25x input  — the default ephemeral TTL
- *   1-hour write    2.00x input  — what Claude Code actually writes
- *
- * The two write rates are the reason this module tracks them separately.
- * Charging every cache write at the 5-minute rate under-reports a Claude Code
- * session's spend by 37.5% on the cached portion, and cache writes dominate
- * the bill on a long session.
- *
- * Source: Anthropic prompt-caching docs (economics section) — "Cache reads cost
- * ~0.1x base input price. Cache writes cost 1.25x for 5-minute TTL, 2x for
- * 1-hour TTL."
- */
-const CACHE_READ_MULTIPLIER = 0.1
-const CACHE_WRITE_5M_MULTIPLIER = 1.25
-const CACHE_WRITE_1H_MULTIPLIER = 2
-
 /** Model id Claude Code writes for locally generated messages (errors, interrupts). */
 export const SYNTHETIC_MODEL = '<synthetic>'
 
-/** Token counts for one or more API requests, split by how each part is billed. */
+/** Token counts for one or more API requests, split by how the API reports each part. */
 export interface TokenUsage {
   /** Fresh input — the part of the prompt that was neither written to nor read from cache. */
   input: number
@@ -83,78 +69,57 @@ export function totalTokens(usage: TokenUsage): number {
   return promptTokens(usage) + usage.output
 }
 
-/** Share of the prompt that was served from cache, 0–1. Zero-safe. */
+/**
+ * Share of the prompt that was served from cache, 0–1. Zero-safe.
+ *
+ * A measured ratio of two token counts, which is why it survived the deletion
+ * of everything priced: nothing about it depends on what anybody was charged.
+ */
 export function cacheHitRate(usage: TokenUsage): number {
   const prompt = promptTokens(usage)
   return prompt === 0 ? 0 : usage.cacheRead / prompt
 }
 
-interface ModelEntry {
-  /** USD per million fresh input tokens. */
-  input: number
-  /** USD per million output tokens. */
-  output: number
-  contextWindow: number
-  /** Promotional rate, applied while `at` is before `until`. */
-  intro?: { input: number; output: number; until: number }
-  /** Fast-mode rate, applied when the request ran with `speed: "fast"`. */
-  fast?: { input: number; output: number }
-  /**
-   * Historical list price, no longer in the published table. Kept so old
-   * transcripts still produce a number, flagged so the UI can caveat it.
-   */
-  legacy?: boolean
-}
-
 /**
- * List prices in USD per million tokens, first-party Anthropic API.
+ * How many tokens each model can hold in one conversation.
  *
- * Sources:
- *  - Current models (Fable 5, Mythos 5, Opus 5/4.8/4.7/4.6, Sonnet 5/4.6,
- *    Haiku 4.5): Anthropic models-overview pricing table, cached 2026-06-24.
- *  - Sonnet 5's $2/$10 introductory rate runs through 2026-08-31, so it is
- *    time-boxed here rather than hardcoded — a session priced today and the
- *    same session re-priced in September must not silently disagree.
- *  - Opus 5 fast mode is $10/$50. Fast mode also exists on Opus 4.8 but no
- *    rate is published for it, so 4.8 falls back to its standard rate rather
- *    than guessing high.
- *  - Entries marked `legacy` are historical list prices for models that have
- *    aged out of the published table. They exist so an old transcript still
- *    costs out; re-verify before quoting them.
+ * This used to be a rate card with a `contextWindow` column bolted on: per
+ * million input and output prices, a fast-mode premium, cache multipliers, and
+ * a `legacy` flag for models that had aged out of the published table. All of
+ * the money is gone — see "why this app shows no prices" at the bottom of this
+ * file — and the window is what is left, because a window is not a price. It is
+ * a capability of the model, it does not move with anybody's billing, and the
+ * context percentage this app draws is meaningless without it: 3% of 200k and
+ * 3% of a million are the same reading of two very different situations.
  *
- * Bedrock and Vertex are partner-operated and priced separately — those rates
- * are deliberately not modelled here.
+ * Retired models stay in the table for the same reason they always did. A
+ * transcript from March still has to report its occupancy against the right
+ * denominator, and dropping the row would silently re-measure it against the
+ * 200k default.
+ *
+ * Bedrock and Vertex serve the same models with the same windows, so their
+ * prefixes are normalised away rather than given rows of their own.
  */
-const MODELS: Record<string, ModelEntry> = {
-  'claude-fable-5': { input: 10, output: 50, contextWindow: 1_000_000 },
-  'claude-mythos-5': { input: 10, output: 50, contextWindow: 1_000_000 },
-  'claude-opus-5': {
-    input: 5,
-    output: 25,
-    contextWindow: 1_000_000,
-    fast: { input: 10, output: 50 },
-  },
-  'claude-opus-4-8': { input: 5, output: 25, contextWindow: 1_000_000 },
-  'claude-opus-4-7': { input: 5, output: 25, contextWindow: 1_000_000 },
-  'claude-opus-4-6': { input: 5, output: 25, contextWindow: 1_000_000 },
-  'claude-opus-4-5': { input: 5, output: 25, contextWindow: 200_000, legacy: true },
-  'claude-sonnet-5': {
-    input: 3,
-    output: 15,
-    contextWindow: 1_000_000,
-    // Introductory pricing, ends 2026-08-31 inclusive.
-    intro: { input: 2, output: 10, until: Date.UTC(2026, 8, 1) },
-  },
-  'claude-sonnet-4-6': { input: 3, output: 15, contextWindow: 1_000_000 },
-  'claude-sonnet-4-5': { input: 3, output: 15, contextWindow: 200_000, legacy: true },
-  'claude-haiku-4-5': { input: 1, output: 5, contextWindow: 200_000 },
-  // Retired or deprecated, historical list prices only.
-  'claude-opus-4-1': { input: 15, output: 75, contextWindow: 200_000, legacy: true },
-  'claude-opus-4-0': { input: 15, output: 75, contextWindow: 200_000, legacy: true },
-  'claude-sonnet-4-0': { input: 3, output: 15, contextWindow: 200_000, legacy: true },
-  'claude-3-5-haiku': { input: 0.8, output: 4, contextWindow: 200_000, legacy: true },
-  'claude-3-haiku': { input: 0.25, output: 1.25, contextWindow: 200_000, legacy: true },
-  'claude-3-opus': { input: 15, output: 75, contextWindow: 200_000, legacy: true },
+const CONTEXT_WINDOWS: Record<string, number> = {
+  'claude-fable-5': 1_000_000,
+  'claude-mythos-5': 1_000_000,
+  'claude-opus-5': 1_000_000,
+  'claude-opus-4-8': 1_000_000,
+  'claude-opus-4-7': 1_000_000,
+  'claude-opus-4-6': 1_000_000,
+  'claude-opus-4-5': 200_000,
+  'claude-sonnet-5': 1_000_000,
+  'claude-sonnet-4-6': 1_000_000,
+  'claude-sonnet-4-5': 200_000,
+  'claude-haiku-4-5': 200_000,
+  // Retired or deprecated. Kept so an old transcript is still measured against
+  // the window it actually ran in.
+  'claude-opus-4-1': 200_000,
+  'claude-opus-4-0': 200_000,
+  'claude-sonnet-4-0': 200_000,
+  'claude-3-5-haiku': 200_000,
+  'claude-3-haiku': 200_000,
+  'claude-3-opus': 200_000,
 }
 
 /** Window assumed for a model we have no entry for. */
@@ -180,208 +145,47 @@ export function normalizeModelId(model: string): string {
     .replace(/-\d{8}$/, '')
 }
 
-/** True for real API models. Synthetic and empty ids are not billed at all. */
+/**
+ * True for real API models. Synthetic and empty ids are not real requests.
+ *
+ * The name is a leftover from when this decided what to bill, and it still asks
+ * the right question: `<synthetic>` lines are interrupts and API errors the CLI
+ * wrote locally, carrying no tokens and belonging to no model, so they must not
+ * appear in a per-model token table either.
+ */
 export function isBillableModel(model: string): boolean {
   const id = normalizeModelId(model)
   return id !== '' && id !== SYNTHETIC_MODEL
 }
 
-export interface PriceOptions {
-  /** When the request happened, for time-boxed rates. Defaults to now. */
-  at?: number
-  speed?: 'standard' | 'fast'
-}
-
-export interface ResolvedPrice {
-  /** Normalized id the rate was found under. */
-  model: string
-  input: number
-  output: number
-  cacheWrite5m: number
-  cacheWrite1h: number
-  cacheRead: number
-  contextWindow: number
-  legacy: boolean
-}
-
-/** Split a trailing `-fast` off an id — some deployments encode speed in the name. */
-function splitSpeed(id: string): { id: string; fast: boolean } {
-  return id.endsWith('-fast') ? { id: id.slice(0, -'-fast'.length), fast: true } : { id, fast: false }
-}
-
-/** Resolved rates for a model, or null when we have no published rate for it. */
-export function priceFor(model: string, opts: PriceOptions = {}): ResolvedPrice | null {
-  const { id, fast: fastSuffix } = splitSpeed(normalizeModelId(model))
-  const entry = MODELS[id]
-  if (!entry) return null
-
-  const at = opts.at ?? Date.now()
-  let { input, output } = entry
-  if (entry.intro && at < entry.intro.until) {
-    input = entry.intro.input
-    output = entry.intro.output
-  }
-  // Fast mode is a premium rate, so it wins over any promotional rate.
-  if ((opts.speed === 'fast' || fastSuffix) && entry.fast) {
-    input = entry.fast.input
-    output = entry.fast.output
-  }
-
-  return {
-    model: id,
-    input,
-    output,
-    cacheWrite5m: input * CACHE_WRITE_5M_MULTIPLIER,
-    cacheWrite1h: input * CACHE_WRITE_1H_MULTIPLIER,
-    cacheRead: input * CACHE_READ_MULTIPLIER,
-    contextWindow: entry.contextWindow,
-    legacy: entry.legacy ?? false,
-  }
-}
-
-export interface CostBreakdown {
-  input: number
-  output: number
-  /** 5-minute and 1-hour writes combined — they are one line item to a user. */
-  cacheWrite: number
-  cacheRead: number
-  total: number
-}
-
-export function emptyCost(): CostBreakdown {
-  return { input: 0, output: 0, cacheWrite: 0, cacheRead: 0, total: 0 }
-}
-
 /**
- * Cost of some usage in USD, or null when the model has no known rate.
+ * Split a trailing `-fast` off an id.
  *
- * Null rather than 0 on purpose: a zero renders as "this was free", which is a
- * worse lie than "we don't know".
+ * `transcript.ts` buckets a fast-mode request under `<model>-fast` so the two
+ * speeds stay distinguishable in a per-model token table — speed is a fact
+ * about the request, and it survived the deletion of the rate card that
+ * originally forced the split. The window does not change with the speed, so
+ * the suffix comes off before the lookup.
  */
-export function costOf(
-  usage: TokenUsage,
-  model: string,
-  opts: PriceOptions = {},
-): CostBreakdown | null {
-  const price = priceFor(model, opts)
-  if (!price) return null
-
-  const input = (usage.input * price.input) / MILLION
-  const output = (usage.output * price.output) / MILLION
-  const cacheWrite =
-    (usage.cacheWrite5m * price.cacheWrite5m + usage.cacheWrite1h * price.cacheWrite1h) / MILLION
-  const cacheRead = (usage.cacheRead * price.cacheRead) / MILLION
-
-  return { input, output, cacheWrite, cacheRead, total: input + output + cacheWrite + cacheRead }
-}
-
-export function addCost(a: CostBreakdown, b: CostBreakdown): CostBreakdown {
-  return {
-    input: a.input + b.input,
-    output: a.output + b.output,
-    cacheWrite: a.cacheWrite + b.cacheWrite,
-    cacheRead: a.cacheRead + b.cacheRead,
-    total: a.total + b.total,
-  }
-}
-
-export interface AggregateCost {
-  cost: CostBreakdown
-  /** Per-model costs, keyed by normalized id. Only priced models appear. */
-  byModel: Record<string, CostBreakdown>
-  /**
-   * Models whose tokens were counted but not priced. Non-empty means the
-   * total is a floor, not the answer — say so in the UI.
-   */
-  unpricedModels: string[]
-  /** True when a legacy (historical) rate contributed to the total. */
-  usedLegacyRate: boolean
-}
-
-/**
- * Price a whole session or project. Sessions routinely mix models — a Haiku
- * background task inside an Opus session — so each model is priced against its
- * own rate card and only then summed.
- */
-export function aggregateCost(
-  byModel: Iterable<readonly [string, TokenUsage]>,
-  opts: PriceOptions = {},
-): AggregateCost {
-  const result: AggregateCost = {
-    cost: emptyCost(),
-    byModel: {},
-    unpricedModels: [],
-    usedLegacyRate: false,
-  }
-
-  for (const [model, usage] of byModel) {
-    // Synthetic messages carry zero usage and have no rate; counting them as
-    // "unpriced" would flag almost every session that ever hit an API error.
-    if (!isBillableModel(model)) continue
-
-    const cost = costOf(usage, model, opts)
-    if (!cost) {
-      const id = normalizeModelId(model)
-      if (!result.unpricedModels.includes(id)) result.unpricedModels.push(id)
-      continue
-    }
-
-    const id = normalizeModelId(model)
-    result.byModel[id] = result.byModel[id] ? addCost(result.byModel[id], cost) : cost
-    result.cost = addCost(result.cost, cost)
-    if (priceFor(model, opts)?.legacy) result.usedLegacyRate = true
-  }
-
-  result.unpricedModels.sort()
-  return result
-}
-
-/**
- * Combine aggregates that have already been priced.
- *
- * A project total must be the sum of its sessions, and each session is priced
- * against the moment its work ran. Pooling every session's raw token counts and
- * re-running `aggregateCost` prices the whole project at *today's* rates, so the
- * project total silently stops matching the sessions it is made of as soon as a
- * time-boxed rate expires. Adding the money instead keeps them in agreement.
- */
-export function mergeAggregates(parts: Iterable<AggregateCost>): AggregateCost {
-  const merged: AggregateCost = {
-    cost: emptyCost(),
-    byModel: {},
-    unpricedModels: [],
-    usedLegacyRate: false,
-  }
-  const unpriced = new Set<string>()
-
-  for (const part of parts) {
-    merged.cost = addCost(merged.cost, part.cost)
-    for (const [model, cost] of Object.entries(part.byModel)) {
-      merged.byModel[model] = merged.byModel[model] ? addCost(merged.byModel[model], cost) : cost
-    }
-    for (const model of part.unpricedModels) unpriced.add(model)
-    if (part.usedLegacyRate) merged.usedLegacyRate = true
-  }
-
-  merged.unpricedModels = [...unpriced].sort()
-  return merged
+function baseModelId(id: string): string {
+  return id.endsWith('-fast') ? id.slice(0, -'-fast'.length) : id
 }
 
 export type ContextLevel = 'ok' | 'warning' | 'critical'
 
 /** Context is filling up — worth surfacing, not yet urgent. */
 export const CONTEXT_WARNING_PERCENT = 70
-/** Compaction is imminent; quality and cost both degrade past here. */
+/** Compaction is imminent; quality degrades before it lands. */
 export const CONTEXT_CRITICAL_PERCENT = 90
 /**
- * Fixed prefix (system prompt, CLAUDE.md, MCP tool schemas) that is paid for on
+ * Fixed prefix (system prompt, CLAUDE.md, MCP tool schemas) that is re-sent on
  * every single request before the conversation has said anything. Past this
  * share of the window it is worth trimming.
  */
 export const PRE_CONTEXT_BLOAT_PERCENT = 15
 
 export function contextWindowFor(model: string): number {
-  return priceFor(model)?.contextWindow ?? DEFAULT_CONTEXT_WINDOW
+  return CONTEXT_WINDOWS[baseModelId(normalizeModelId(model))] ?? DEFAULT_CONTEXT_WINDOW
 }
 
 /** The context sizes Anthropic actually ships, smallest first. */
@@ -469,7 +273,7 @@ export function contextWarning(usage: ContextUsage): BloatWarning | null {
  * Warning for an oversized fixed prefix.
  *
  * Measured from the first request of a session: everything in that prompt is
- * paid for again on every later turn, so it is the one number worth optimising.
+ * re-sent on every later turn, so it is the one number worth optimising.
  */
 export function preContextWarning(
   preContextTokens: number,
@@ -489,36 +293,6 @@ export function preContextWarning(
 }
 
 /**
- * Money, the way money is written: two decimal places.
- *
- * It used to print three below ten dollars and four below a cent, on the
- * argument that a bill worth watching deserves the precision. What that
- * produced on screen was "$2.101" and "$1.741" beside "$12.35", and in half the
- * world the full stop is the thousands separator — so the number this whole
- * feature exists to make legible read, at a glance, as two thousand one hundred
- * and one. Against the bar Asad set for the app: *"stupid simple, for every
- * stupid person to easily understand what is what."*
- *
- * A spend too small to show still must not read as nothing, which is what
- * `$0.00` would be. It says so in words instead: `<$0.01`. The threshold is
- * half a cent, so anything that would round *to* a cent prints as one and only
- * what would round to zero gets the "less than".
- *
- * Three copies of this exist in the renderer (`usage-model.ts`,
- * `SessionInspector.tsx`, `dashboard/widgets.tsx`) because the renderer's
- * tsconfig cannot see `src/main`. They say so, and they say the same thing.
- */
-export function formatUsd(usd: number): string {
-  const abs = Math.abs(usd)
-  if (abs === 0) return '$0.00'
-  // The sign is kept rather than dropped. No cost in this app is negative
-  // today, and a formatter that silently turns one positive is worse than an
-  // ugly string nobody will ever see.
-  if (abs < 0.005) return usd < 0 ? '-<$0.01' : '<$0.01'
-  return `$${usd.toFixed(2)}`
-}
-
-/**
  * Below this the `k` form rounds to `1000.0` and renders as "1000k" instead of
  * "1M" — the one seam where the two branches disagree about the same number.
  */
@@ -531,3 +305,72 @@ export function formatTokens(tokens: number): string {
   if (abs >= 1000) return `${(tokens / 1000).toFixed(1).replace(/\.0$/, '')}k`
   return String(Math.round(tokens))
 }
+
+/* ------------------------------------------ why this app shows no prices -- */
+
+/*
+ * Terminal Deck shows no cost, no spend and no dollar figure anywhere, and this
+ * is where all of the arithmetic that used to produce one was deleted. Read
+ * this before putting any of it back — the case against it is not that it was
+ * hard, it is that neither of the two numbers that could be shown is honest.
+ *
+ * What was here: `MODELS` as a rate card (per-million `input` / `output`,
+ * `fast`, `intro` and `legacy` rates), `CACHE_READ_MULTIPLIER`,
+ * `CACHE_WRITE_5M_MULTIPLIER`, `CACHE_WRITE_1H_MULTIPLIER`, `PriceOptions`,
+ * `ResolvedPrice`, `priceFor`, `CostBreakdown`, `emptyCost`, `costOf`,
+ * `addCost`, `AggregateCost`, `aggregateCost`, `mergeAggregates`, `formatUsd`
+ * and `RATES_VERIFIED_ON`; before that, a subscription block of `PlanPrice`,
+ * `SUBSCRIPTION_PLANS`, `subscriptionCost`, `MS_PER_BILLING_MONTH` and
+ * `billingMonths`, and after it a `PLAN_LABELS` / `normalizePlanId` /
+ * `planLabel` trio that existed only to caption a price. Three hand copies of
+ * `formatUsd` lived in the renderer — `chat/usage/usage-model.ts`,
+ * `components/SessionInspector.tsx` and `dashboard/widgets.tsx` — because the
+ * renderer tsconfig cannot see `src/main`. All four are gone, and `cost.test.ts`
+ * asserts by name that none of them come back.
+ *
+ * **The API figure is real arithmetic and still misleads.** It was correct: the
+ * rate table matched Anthropic's published one, and a warm agent session at
+ * ~90% cache hits genuinely moves a million tokens for a couple of dollars. But
+ * almost nobody running this app is billed that way. Asad, seeing `$4558` on
+ * the Overview tile: *"people are using subscription and we are showing API
+ * price."* A subscription is a flat monthly fee. Telling someone on a flat fee
+ * that they spent four and a half thousand dollars states a number that never
+ * left their account, and no label rescues it — "API equivalent" is still four
+ * figures in the largest type on the page, and a figure is read before its
+ * caption is.
+ *
+ * **The subscription figure cannot be computed at all.** Not "is hard to get
+ * right" — there is no published input. Anthropic quantifies no token allowance
+ * and no per-token value for any plan. Both pages were read on 2026-08-17
+ * (`platform.claude.com/docs/en/about-claude/pricing` and `claude.com/pricing`)
+ * and neither states how many tokens a Pro or Max plan buys; plan limits are
+ * published as *usage windows* — messages and hours, varying by model and by
+ * demand — which is a deliberately different unit. The obvious shortcut, taking
+ * the multiplier in "Max 5×" and "Max 20×" as a discount on API rates, is a
+ * misreading: those are multiples of the Pro plan's usage allowance, not of a
+ * price. Any per-token subscription figure would be invented.
+ *
+ * So one figure is misleading and the other is unknowable. There is no honest
+ * pair to show side by side, and there is no honest single either. Asad, on
+ * exactly that: *"if we cannot show the both, let's not show any of them
+ * completely."* And earlier, on the same tile: *"we don't keep anything which is
+ * not credible, which is not accurate. If we can't have it accurate we don't
+ * keep it."*
+ *
+ * **What would have to change.** Anthropic would have to publish, for a named
+ * plan, either a token allowance per billing period or an effective per-token
+ * price — something a session's own token counts could be measured against. A
+ * blog post, a forum estimate, or a rate somebody reverse-engineered from their
+ * own usage is not that: it is one account's experience of a limit that moves
+ * with demand, and pricing every user's dashboard off it would invent the same
+ * number by a longer route. Until such a figure exists, this app counts tokens
+ * and says nothing about money.
+ *
+ * **A note on what the deletion also fixed.** The rate card carried a live bug:
+ * Sonnet 5's $2/$10 was time-boxed to revert to $3/$15 on 2026-09-01, an
+ * increase Anthropic has since cancelled. Nothing was wrong on screen and no
+ * test failed — the table was simply going to start over-reporting Sonnet 5 by
+ * fifty per cent a fortnight later, silently, on a date nobody was watching.
+ * That is what a hardcoded price does when the world moves and the code does
+ * not. It is gone with the rest of the table.
+ */

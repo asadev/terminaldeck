@@ -17,7 +17,10 @@ import {
   resetStoredSettings,
   sanitizeValues,
   SETTINGS_FILE_VERSION,
+  SETTINGS_SNAPSHOT_FILE,
   storedValue,
+  writeSettingsSnapshot,
+  type SettingsSnapshotFile,
 } from './settings-extra'
 
 /**
@@ -255,5 +258,99 @@ describe('the app data folder', () => {
     resetSettingsCache()
     patchStoredSettings({ a: 1 })
     expect(existsSync(FILE)).toBe(true)
+  })
+})
+
+/**
+ * The last-good copy the copilot takes before it changes anything.
+ *
+ * The `.bak-<timestamp>` this module already writes is for a file that could not
+ * be *parsed*, and that is a different failure: a confirmed-but-wrong copilot
+ * write produces a perfectly parseable file full of values that break the app.
+ * One value outside one enum cost OpenClaw their whole gateway and needed
+ * another machine to hand-edit the JSON back.
+ */
+describe('the last-good snapshot', () => {
+  const SNAPSHOT = join(USER_DATA, SETTINGS_SNAPSHOT_FILE)
+
+  function snapshotOnDisk(): SettingsSnapshotFile {
+    return JSON.parse(readFileSync(SNAPSHOT, 'utf8')) as SettingsSnapshotFile
+  }
+
+  it('copies both stores, and says when and why', () => {
+    patchStoredSettings({ 'appearance.density': 'compact' })
+    const written = writeSettingsSnapshot({ theme: 'dark' }, 'copilot settings.write')
+
+    expect(written.path).toBe(SNAPSHOT)
+    const saved = snapshotOnDisk()
+    expect(saved.reason).toBe('copilot settings.write')
+    expect(Date.parse(saved.at)).toBeGreaterThan(0)
+    expect(saved.preferences).toEqual({ theme: 'dark' })
+    expect((saved.settings as { values: Record<string, unknown> }).values['appearance.density']).toBe('compact')
+    expect(saved.fromCache).toBe(false)
+  })
+
+  it('keeps keys written by a newer build, which is the whole reason it copies the file', () => {
+    // `load()` carries unknown top-level keys forward but does not interpret
+    // them, and the sanitised cache does not contain them at all. A snapshot
+    // built from the cache would quietly drop a newer build's data from the one
+    // copy that exists to restore from.
+    writeFileSync(
+      FILE,
+      JSON.stringify({ version: 99, values: { 'appearance.density': 'compact' }, fromTheFuture: { a: 1 } }),
+      'utf8',
+    )
+    resetSettingsCache()
+
+    writeSettingsSnapshot({}, 'copilot settings.write')
+    expect((snapshotOnDisk().settings as { fromTheFuture: unknown }).fromTheFuture).toEqual({ a: 1 })
+  })
+
+  it('falls back to the live values when the file cannot be read, and says so', () => {
+    // First run, or a settings file somebody truncated. "There is no snapshot"
+    // and "the snapshot is of the cache" are different facts and the file says
+    // which one it is rather than leaving a reader to assume.
+    rmSync(FILE, { force: true })
+    resetSettingsCache()
+    patchStoredSettings({ 'appearance.density': 'compact' })
+    rmSync(FILE, { force: true })
+
+    writeSettingsSnapshot({}, 'copilot settings.write')
+    const saved = snapshotOnDisk()
+    expect(saved.fromCache).toBe(true)
+    expect((saved.settings as { values: Record<string, unknown> }).values['appearance.density']).toBe('compact')
+  })
+
+  it('replaces the previous copy rather than accumulating them', () => {
+    // One generation, overwritten, matching `DEFAULT_KEEP = 1` in the action
+    // log. The limit is real and stated where it is decided: two bad writes in
+    // a row and the snapshot is of the state after the first.
+    writeSettingsSnapshot({ theme: 'dark' }, 'first')
+    writeSettingsSnapshot({ theme: 'light' }, 'second')
+    expect(snapshotOnDisk().reason).toBe('second')
+    expect(readdirSync(USER_DATA).filter((name) => name.includes('last-good'))).toEqual([
+      SETTINGS_SNAPSHOT_FILE,
+    ])
+  })
+
+  it('is listed as a place the app writes to, before anything has written one', () => {
+    rmSync(SNAPSHOT, { force: true })
+    const entry = configPaths().find((path) => path.key === 'settingsLastGood')
+    // Named in Advanced whether or not it exists, for the same reason the debug
+    // trace is: a way back is only worth having if you know it is there before
+    // you need it.
+    expect(entry?.path).toBe(SNAPSHOT)
+    expect(entry?.exists).toBe(false)
+  })
+
+  it('throws rather than reporting a snapshot it did not write', () => {
+    // The caller treats a failure as a reason not to proceed, so a silent
+    // failure here would be a settings write with nothing behind it. A file
+    // where the folder should be is the cheapest way to make the write fail
+    // for real rather than by stubbing `fs`.
+    rmSync(USER_DATA, { recursive: true, force: true })
+    writeFileSync(USER_DATA, 'this is a file where the folder should be', 'utf8')
+    expect(() => writeSettingsSnapshot({}, 'copilot settings.write')).toThrow()
+    rmSync(USER_DATA, { force: true })
   })
 })

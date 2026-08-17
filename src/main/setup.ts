@@ -28,6 +28,7 @@
 import type { IpcMain } from 'electron'
 import { checkPrerequisites, type Prerequisites, type ToolStatus } from './prerequisites'
 import { loginPath, PROVIDERS } from './providers'
+import { LOOKUP_AGENTS } from '../shared/agent-catalog'
 import {
   defaultContext,
   readAllStatus,
@@ -40,23 +41,46 @@ import {
   copilotToolStatus,
   detectCopilot,
   COPILOT_ID,
-  COPILOT_LABEL,
   type CopilotDetection,
 } from './copilot'
 import { probeBinary, type ProbeResult } from './tool-probe'
 
 /* ------------------------------------------------------------------ types -- */
 
-/** The tools this panel answers for, in the order it lists them. */
-export const SETUP_TOOL_IDS = ['claude', 'codex', 'gemini', COPILOT_ID] as const
+/**
+ * The tools this panel answers for, in the order it lists them.
+ *
+ * The agents come from the catalogue rather than being spelled out, so a Setup
+ * panel cannot end up knowing about a different set of agents than the
+ * New-session picker does. Copilot is appended by hand because it is the one
+ * tool here that is *not* a session provider — `providers.ts` has no entry for
+ * it and this build cannot start it — which is exactly why it needs naming.
+ */
+export const SETUP_TOOL_IDS: readonly string[] = [
+  ...LOOKUP_AGENTS.map((entry) => entry.id as string),
+  COPILOT_ID,
+]
 
 export interface SetupProbe {
   command: string
   line: string
 }
 
-export interface SetupTool extends ToolStatus {
-  /** The literal probe, present only for a tool we could not find. */
+/**
+ * `note` is widened from optional-string to string-or-null, which is why this
+ * omits it rather than extending straight through: `ToolStatus` leaves it off
+ * when there is nothing to say, and every row of this panel carries the field so
+ * a renderer never has to distinguish absent from empty.
+ */
+export interface SetupTool extends Omit<ToolStatus, 'note'> {
+  /**
+   * The literal probe.
+   *
+   * Present for a tool we could not find *and* for one that is there and will
+   * not start — the second is newer and is the more important of the two, since
+   * "Not found" beside a binary the user can see on their disk is not a verdict
+   * anybody believes without the evidence.
+   */
   probe: SetupProbe | null
   /** A caveat that is not a remedy — something true even when all is well. */
   note: string | null
@@ -88,8 +112,14 @@ export interface SetupHookBlock {
 
 export interface SetupEndpoint {
   running: boolean
-  /** Null when it is not listening. The token is never included. */
-  port: number | null
+  /**
+   * The socket path it is listening on, or null when it is not listening.
+   *
+   * A path rather than a port, because the endpoint no longer has one — see
+   * `hook-server.ts`. The token is never included, here or anywhere the
+   * renderer can reach.
+   */
+  address: string | null
 }
 
 export interface SetupSnapshot {
@@ -108,10 +138,8 @@ export interface SetupSnapshot {
  * session cannot run it in this build. Saying that on the row is the difference
  * between a check that informs and a check that implies something untrue.
  */
-const COPILOT_NOTE = 'Detected only — this build does not start Copilot sessions yet.'
-
-const COPILOT_HOOK_REASON =
-  'Copilot CLI has no session-hook configuration this app can write, so there is nothing to install.'
+const COPILOT_NOTE =
+  'Detected only — this build does not start Copilot sessions, and Copilot has no session-hook configuration this app can write.'
 
 /* -------------------------------------------------------------- composing -- */
 
@@ -121,8 +149,8 @@ export interface SetupInput {
   /** Probes by tool id. Only the missing ones are probed. */
   probes: Readonly<Record<string, ProbeResult>>
   hooks: HookProviderStatus[]
-  /** The live endpoint, or null. Only its port is ever read. */
-  endpoint: { port: number } | null
+  /** The live endpoint, or null. Only its socket path is ever read. */
+  endpoint: { socketPath: string } | null
   now?: number
 }
 
@@ -149,14 +177,28 @@ export function composeSetup(input: SetupInput): SetupSnapshot {
             required: false,
           })
     const probe = id === COPILOT_ID ? input.copilot.probe : input.probes[id]
+    /*
+     * What the machine said when the binary refused to start.
+     *
+     * `prerequisites.ts` sets this only for a tool that is present and
+     * unrunnable, and it takes precedence over the lookup probe because on that
+     * machine the lookup *succeeds* — printing "/opt/homebrew/bin/codex" under
+     * a row headed "Not usable" would read as a contradiction rather than as
+     * evidence. The command quoted is the one that failed.
+     */
+    const evidence = status.evidence
     return {
       ...status,
       // A probe next to "Installed" reads as a contradiction — and for Copilot
       // found through `gh` it literally is one, since `which copilot` fails on a
       // machine that has the extension.
       probe:
-        status.state === 'missing' && probe ? { command: probe.command, line: probe.line } : null,
-      note: id === COPILOT_ID ? COPILOT_NOTE : null,
+        status.state === 'missing' && evidence
+          ? { command: `${binFor(id) ?? id} --version`, line: evidence }
+          : status.state === 'missing' && probe
+            ? { command: probe.command, line: probe.line }
+            : null,
+      note: id === COPILOT_ID ? COPILOT_NOTE : (status.note ?? null),
     }
   })
 
@@ -177,22 +219,21 @@ export function composeSetup(input: SetupInput): SetupSnapshot {
     requirement: HOOK_PROVIDERS[status.id].requirement,
   }))
 
-  hooks.push({
-    id: COPILOT_ID,
-    label: COPILOT_LABEL,
-    state: 'unsupported',
-    unsupportedReason: COPILOT_HOOK_REASON,
-    events: [],
-    installedEvents: [],
-    staleEvents: [],
-    missingEvents: [],
-    file: null,
-    fileExists: false,
-    foreignHooks: 0,
-    foreignOwners: [],
-    message: COPILOT_HOOK_REASON,
-    requirement: null,
-  })
+  /*
+   * Copilot gets no hook block, and that is the fix for a repeat rather than a
+   * dropped fact.
+   *
+   * It used to get one: a block headed "GitHub Copilot" whose entire content was
+   * `unsupportedReason` — "Copilot CLI has no session-hook configuration this
+   * app can write, so there is nothing to install" — with no events, no file and
+   * no buttons. So the Setup page named GitHub Copilot twice, once as a tool row
+   * and once as a block that existed only to say it had nothing to show. That is
+   * the *"what are these repeats?"* in the recording, on the page he was looking
+   * at when he said it.
+   *
+   * The sentence is not lost. It is the tool row's `note`, next to the row it is
+   * about, which is where it was always meant to be read.
+   */
 
   return {
     tools,
@@ -201,7 +242,7 @@ export function composeSetup(input: SetupInput): SetupSnapshot {
     canRunSessions: input.prerequisites.canRunSessions,
     needsLogin: input.prerequisites.needsLogin,
     hooks,
-    endpoint: { running: input.endpoint !== null, port: input.endpoint?.port ?? null },
+    endpoint: { running: input.endpoint !== null, address: input.endpoint?.socketPath ?? null },
     checkedAt: input.now ?? Date.now(),
   }
 }

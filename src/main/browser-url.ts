@@ -103,9 +103,17 @@ export function isNavigationAllowed(url: unknown): boolean {
  */
 const MAX_LABEL_LENGTH = 120
 
+/**
+ * What a page with no name of its own is called.
+ *
+ * The renderer keeps its own copy in `browser/tabs.ts` — it cannot import from
+ * `src/main` — and `tabs.test.ts` pins the two to the same string.
+ */
+export const NEW_TAB_LABEL = 'New tab'
+
 /** Origin plus path, for the tab label. Falls back to the raw string. */
 export function shortLabel(url: unknown): string {
-  if (typeof url !== 'string' || !url || url === BLANK_URL) return 'New tab'
+  if (typeof url !== 'string' || !url || url === BLANK_URL) return NEW_TAB_LABEL
   const source = url.length > MAX_LABEL_LENGTH * 4 ? url.slice(0, MAX_LABEL_LENGTH * 4) : url
   let label: string
   try {
@@ -119,4 +127,34 @@ export function shortLabel(url: unknown): string {
   // went through it, and this string is rendered as-is.
   label = label.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, ' ').trim()
   return label.length > MAX_LABEL_LENGTH ? `${label.slice(0, MAX_LABEL_LENGTH)}…` : label
+}
+
+/**
+ * The page's own title — or nothing, when what Chromium handed back is really
+ * the address wearing a title's clothes.
+ *
+ * `webContents.getTitle()` never returns empty. A document with no `<title>`
+ * gets the URL instead, and for a tab that has not been anywhere that URL is
+ * `about:blank`. Nothing downstream questioned it, so Terminal Deck's own start
+ * page — the one headed "Open a page", with the list of dev servers on it —
+ * introduced itself as `about:blank` in the sidebar, in the tab strip, in the
+ * pane bar, and in the tooltip on all three. Every one of those is one string
+ * read four times: `shortLabel` had already decided the page is called
+ * "New tab", and the fallback title buried it.
+ *
+ * Chromium's fallback is dropped rather than special-cased on `about:blank`,
+ * because the general shape is the bug: a title identical to the address is not
+ * a name, it is the address — and `shortLabel` renders the address better,
+ * `localhost:3000/pricing` rather than `http://localhost:3000/pricing`. A page
+ * that genuinely titles itself with its own URL therefore reads as its host,
+ * which is what that surface wanted in the first place.
+ *
+ * Compared against the raw `getURL()`, before {@link BLANK_URL} is blanked out
+ * of the state, so both halves of the check are looking at the same string.
+ */
+export function pageTitle(title: unknown, url: unknown): string {
+  if (typeof title !== 'string') return ''
+  const trimmed = title.trim()
+  if (!trimmed || trimmed === BLANK_URL) return ''
+  return typeof url === 'string' && trimmed === url.trim() ? '' : trimmed
 }

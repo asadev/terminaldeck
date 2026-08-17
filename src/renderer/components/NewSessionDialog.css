@@ -12,6 +12,13 @@
   --ns-mark: 14px;
   /* The pop-up button's lane, so the row does not resize as logins change. */
   --ns-select-min: 168px;
+  /* And its ceiling, now that a login is named by its email address rather
+     than by a profile key. "Default (Gemini CLI)" was as wide as this control
+     could ever get; an address has no such limit, and a pop-up that grows with
+     one would squeeze the line beside it and then push the dialog. Wide enough
+     for an ordinary address, and the ones past it end in an ellipsis with the
+     whole thing still in the list when it is opened. */
+  --ns-select-max: 264px;
 }
 
 /* 20px between sections, not 24.
@@ -156,11 +163,23 @@
   padding: 0 var(--sp-3);
 }
 
+/* The row is the label plus whatever acts on it. The label still fills the row
+   — it is the hit target for choosing the folder — and Remove sits on top of
+   its right end rather than beside it, so a list of eight folders is still a
+   list of eight names and not a column of buttons. */
+.ns-project-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
 .ns-project {
   position: relative;
   display: flex;
+  flex: 1;
   align-items: baseline;
   gap: var(--sp-2);
+  min-width: 0;
   min-height: var(--control-h-lg);
   padding: var(--sp-15) var(--sp-3);
   border-radius: var(--radius-md);
@@ -170,6 +189,45 @@
 
 .ns-project:hover {
   background: var(--bg-hover);
+}
+
+/* Quiet until it is wanted: shown on hover, on keyboard focus, and while its
+   own confirm is open. A destructive action that is visible on all eight rows
+   at rest turns a shortlist into a control panel — and this one is reached by
+   pointing at the row you mean, which is how the sidebar's ✕ works too. */
+.ns-project-btn {
+  flex-shrink: 0;
+  padding: var(--sp-05) var(--sp-2);
+  margin-left: var(--sp-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--t-footnote);
+  font-weight: var(--w-medium);
+  color: var(--text-secondary);
+  opacity: 0;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease),
+    opacity var(--dur-fast) var(--ease);
+}
+
+.ns-project-row:hover .ns-project-btn,
+.ns-project-btn:focus-visible,
+.ns-project-confirm .ns-project-btn {
+  opacity: 1;
+}
+
+.ns-project-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.ns-project-btn.danger:hover {
+  color: var(--color-critical);
+}
+
+.ns-project-confirm {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex-shrink: 0;
 }
 
 .ns-project[data-selected='true'] {
@@ -252,6 +310,14 @@
 .ns-choices {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  /* Every card the same height, not just the two sharing a row.
+
+     `align-items: stretch` is the default and it only ever equalised *within* a
+     grid row, so the four agents came out as two tall cards over two short
+     ones — purely because one agent's description runs to a second line and
+     another's does not. Four cards of three different heights is what a form
+     looks like when nobody laid it out; `1fr` rows make the block a block. */
+  grid-auto-rows: 1fr;
   gap: var(--sp-1);
   align-items: stretch;
 }
@@ -294,6 +360,91 @@
   cursor: default;
   background: transparent;
   box-shadow: none;
+}
+
+/* ------------------------------------------------ adding and removing one -- */
+
+/* The last card in the grid, wearing the same fill as the others so it reads as
+   the end of the list rather than as a control parked beside it. A `<button>`
+   has to be told all of this: it does not inherit the font, the colour or the
+   alignment a `<label>` gets for free. */
+.ns-agent-add {
+  width: 100%;
+  color: inherit;
+  font-family: inherit;
+  text-align: left;
+}
+
+.ns-agent-add:hover {
+  background: var(--fill-tertiary);
+}
+
+.ns-agent-add:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* The same box the radio dot occupies, so the text of every card in the grid
+   starts on one vertical line. Square rather than round, because it is not one
+   of the choices. */
+.ns-add-mark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: var(--ns-mark);
+  height: var(--ns-mark);
+  margin-top: var(--sp-05);
+  border-radius: var(--radius-sm);
+  background: var(--fill-secondary);
+  color: var(--text-secondary);
+  font-size: var(--t-caption);
+  line-height: 1;
+  transition: color var(--dur-fast) var(--ease);
+}
+
+.ns-agent-add:hover .ns-add-mark {
+  color: var(--accent);
+}
+
+/* Sits above the radio input, which covers the whole card so the card is the hit
+   target; without a stacking context of its own the click lands on the input and
+   selects the agent being removed. */
+.ns-agent-remove {
+  position: relative;
+  z-index: 1;
+  align-self: flex-start;
+  flex-shrink: 0;
+  margin-left: auto;
+  padding: var(--sp-05) var(--sp-15);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: var(--t-caption);
+  cursor: pointer;
+  /* Out of sight until the card is under the pointer or the keyboard is on it.
+     A Remove standing permanently beside every added agent turns a list somebody
+     reads into a list somebody has to be careful in. */
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+
+.ns-agent:hover .ns-agent-remove,
+.ns-agent-remove:focus-visible {
+  opacity: 1;
+}
+
+.ns-agent-remove:hover {
+  background: var(--fill-secondary);
+  color: var(--color-critical);
+}
+
+.ns-agent-remove:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .ns-agent-text {
@@ -392,6 +543,8 @@
 .ns-select {
   appearance: none;
   min-width: var(--ns-select-min);
+  max-width: var(--ns-select-max);
+  text-overflow: ellipsis;
   height: var(--control-h);
   padding: 0 var(--sp-6) 0 var(--sp-3);
   border: none;

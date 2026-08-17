@@ -564,9 +564,51 @@ const POLL_MS = 1000
  */
 const FULL_REFRESH_MS = 4000
 
+/**
+ * Somebody inside the main process who wants to know when a repository moves.
+ *
+ * The push above goes to a `WebContents`, which is the git panel. The routine
+ * engine needs the same information and has no window: a routine with a
+ * `git-change` trigger has to keep working whether or not anybody has the git
+ * panel open. Rather than give it a second poller over the same directory —
+ * which is exactly the "events, not polling" complaint, doubled — it subscribes
+ * here and, when no panel is watching that folder, asks {@link holdGitWatch} to
+ * keep this module's own watcher alive.
+ */
+export type GitObserver = (cwd: string, status: GitStatusResult) => void
+
+const observers = new Set<GitObserver>()
+
+/**
+ * The last payload *observed* per folder, which is not the same bookkeeping as
+ * the per-watch `payload` field.
+ *
+ * Two watches can exist for one folder — the git panel's and a routine's hold —
+ * and each keeps its own idea of what it last sent, so without this an
+ * observer would be told twice about one change. Keyed by folder because that
+ * is what the observer is told about.
+ */
+const lastObserved = new Map<string, string>()
+
+/** Subscribe to git changes anywhere in this process. Returns the unsubscribe. */
+export function onGitStatusChanged(observer: GitObserver): () => void {
+  observers.add(observer)
+  return () => {
+    observers.delete(observer)
+  }
+}
+
 interface Watch {
   cwd: string
-  target: WebContents
+  /**
+   * Where pushes go, or null for a watch held by the main process itself.
+   *
+   * Null is what makes a `git-change` routine possible with no window open. It
+   * costs one branch in three places and it is the difference between the
+   * trigger working and the trigger working only while a panel happens to be on
+   * screen.
+   */
+  target: WebContents | null
   gitDir: string | null
   timer: NodeJS.Timeout | null
   /** mtimes of .git/HEAD and .git/index, as seen after the last full run. */
@@ -586,8 +628,10 @@ interface Watch {
 
 const watches = new Map<string, Watch>()
 
-function watchKey(target: WebContents, cwd: string): string {
-  return `${target.id}\x00${cwd}`
+function watchKey(target: WebContents | null, cwd: string): string {
+  // `main` rather than an id: there is one main process, so one held watch per
+  // folder, however many things inside it asked for one.
+  return `${target === null ? 'main' : target.id}\x00${cwd}`
 }
 
 async function signatureOf(gitDir: string | null): Promise<string> {
@@ -624,13 +668,29 @@ async function emit(watch: Watch): Promise<void> {
   const payload = JSON.stringify(result)
   if (payload === watch.payload) return
   watch.payload = payload
-  if (!watch.target.isDestroyed()) watch.target.send(GIT_STATUS_CHANGED, watch.cwd, result)
+  if (watch.target !== null && !watch.target.isDestroyed()) {
+    watch.target.send(GIT_STATUS_CHANGED, watch.cwd, result)
+  }
+
+  // Observers are told once per *folder* change, not once per watch. See
+  // `lastObserved`. A throwing observer must not stop the panel being updated
+  // or take the poller down with it, so each is called defensively.
+  if (observers.size > 0 && lastObserved.get(watch.cwd) !== payload) {
+    lastObserved.set(watch.cwd, payload)
+    for (const observer of observers) {
+      try {
+        observer(watch.cwd, result)
+      } catch (error) {
+        console.error('[git] a status observer threw:', error)
+      }
+    }
+  }
 }
 
 async function tick(watch: Watch): Promise<void> {
   if (watch.stopped) return
   try {
-    if (watch.target.isDestroyed()) {
+    if (watch.target !== null && watch.target.isDestroyed()) {
       stopWatch(watch)
       return
     }
@@ -660,7 +720,7 @@ function bindTeardown(target: WebContents): void {
   })
 }
 
-async function startWatch(target: WebContents, cwd: string): Promise<GitStatusResult> {
+async function startWatch(target: WebContents | null, cwd: string): Promise<GitStatusResult> {
   const key = watchKey(target, cwd)
   const existing = watches.get(key)
   if (existing && !existing.stopped) {
@@ -683,7 +743,7 @@ async function startWatch(target: WebContents, cwd: string): Promise<GitStatusRe
     refs: 1,
   }
   watches.set(key, watch)
-  bindTeardown(target)
+  if (target !== null) bindTeardown(target)
 
   const first = await readGitStatus(cwd)
   watch.gitDir = first.repo ? await findGitDir(cwd) : null
@@ -698,10 +758,44 @@ async function startWatch(target: WebContents, cwd: string): Promise<GitStatusRe
   return first
 }
 
+/**
+ * Keep a watch on a folder with no window behind it.
+ *
+ * For the routine engine, and for anything else inside the main process that
+ * needs to know about a repository whether or not somebody is looking at it.
+ * Reference-counted for the same reason the panel's watches are: two routines
+ * on one folder must not have the first one released stopping the second.
+ *
+ * This deliberately reuses the panel's poller rather than adding a second
+ * mechanism. That poller is a `stat` of two files a second with a full read
+ * every four — the design and the numbers are already argued for above — and
+ * one of it per folder is the whole cost, whether it is feeding a panel, a
+ * routine, or both.
+ */
+export function holdGitWatch(cwd: string): Promise<GitStatusResult> {
+  return startWatch(null, cwd)
+}
+
+/** Let go of a held watch. Stops the poller when nothing else holds it. */
+export function releaseGitWatch(cwd: string): void {
+  const key = watchKey(null, cwd)
+  const watch = watches.get(key)
+  if (!watch) return
+  watch.refs -= 1
+  if (watch.refs > 0) return
+  stopWatch(watch)
+  watches.delete(key)
+  // The folder may still be watched by a panel, so the observed payload stays —
+  // dropping it here would make the panel's next push look like a change to an
+  // observer that had already been told about it.
+  if (![...watches.values()].some((other) => other.cwd === cwd)) lastObserved.delete(cwd)
+}
+
 /** Drop every poller — call on app quit so no timer outlives the window. */
 export function stopAllGitWatches(): void {
   for (const watch of watches.values()) stopWatch(watch)
   watches.clear()
+  lastObserved.clear()
 }
 
 /** Live poller count. Exported so tests can assert the watch bookkeeping. */

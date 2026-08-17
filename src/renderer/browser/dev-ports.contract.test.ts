@@ -34,7 +34,7 @@ describe('the renderer reads the shape main actually sends', () => {
   it('main declares the fields this test was written against', () => {
     // If this fails, main changed its shape — which is allowed, but the start
     // page and the expectation below have to change with it.
-    expect(mainFields).toEqual(['guessed', 'port', 'process'])
+    expect(mainFields).toEqual(['guessed', 'ours', 'port', 'process'])
   })
 
   it('the renderer declares exactly the same fields', () => {
@@ -47,5 +47,12 @@ describe('the renderer reads the shape main actually sends', () => {
     expect(src).toContain('p.process')
     expect(src).toContain('p.guessed')
     expect(src).not.toMatch(/p\.(command|likely)\b/)
+  })
+
+  it('the start page reads `ours`, because a port it holds is not a page', () => {
+    // The other half of the same seam. `ours` reaching the renderer as
+    // `undefined` would put every one of this app's own ports back on the list
+    // as a clickable link to "that is not how to ask".
+    expect(read('StartPage.tsx')).toContain('rec.ours === true')
   })
 })

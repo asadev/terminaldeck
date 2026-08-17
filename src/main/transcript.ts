@@ -1,5 +1,5 @@
 /**
- * Reads Claude Code's JSONL transcripts and turns them into cost and context
+ * Reads Claude Code's JSONL transcripts and turns them into token and context
  * numbers.
  *
  * Claude Code writes one JSONL file per session under
@@ -42,6 +42,41 @@
  * the confined session keeps writing where it was always going to write, and the
  * readers learn to look there. See `confine/index.ts` for why the home has to
  * move in the first place.
+ *
+ * ## And one of those homes belongs to an agent, which changes the question
+ *
+ * A device home is writable by the sessions that run under it — that is what a
+ * home is for. For a paired phone that is unremarkable: the person paired the
+ * device, approved it, and chose the folders its sessions may start in, and
+ * those sessions already have full write access to the person's own code.
+ *
+ * The copilot's home sits in the same root, deliberately — `copilot-session.ts`
+ * explains that putting it there is the whole reason the transcript viewer, chat
+ * mode, the cost pane and the alert watcher can see the copilot's conversation
+ * with no change to any of them. But the copilot is not a paired device. Nobody
+ * paired it, it runs whenever the app does, it has **no** write access to any of
+ * the person's projects, and its entire job is to report to the person about
+ * *other* sessions.
+ *
+ * Which made this module the one channel that turned "I may write inside my own
+ * home" into "I may put a conversation under somebody else's project". Writing
+ * `<copilotHome>/.claude/projects/<encode(/Users/x/Projects/api)>/anything.jsonl`
+ * is an ordinary file write inside the boundary, and every reader above would
+ * then have rendered it as a conversation belonging to that project — in the
+ * viewer, in chat mode, in the usage pane and in the alert watcher, with no way
+ * for any of them to tell. That is not a permission bypass; it is fabricated
+ * input to four readers, and the readers are the person's independent check on
+ * what their assistant tells them.
+ *
+ * {@link installHomeScopes} closes it without taking anything away.
+ * A **scoped home** is one whose store is consulted for exactly one folder, and
+ * the copilot's is registered with its own working directory. Its real
+ * conversation is still found, by every reader, exactly as before; a transcript
+ * it writes under any other project's encoding is simply never looked for.
+ * Paired devices are untouched and keep answering for every project, because
+ * narrowing those would need a per-device folder list that
+ * `remote/folder-grants.ts` deliberately does not always have — see its
+ * "absence is not denial".
  */
 
 import { watch, type FSWatcher } from 'chokidar'
@@ -52,20 +87,17 @@ import { basename, dirname, extname, join, resolve, sep } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 import {
   addUsage,
-  aggregateCost,
   contextUsage,
   contextWarning,
   contextWindowFor,
   effectiveContextWindow,
   emptyUsage,
   isBillableModel,
-  mergeAggregates,
   normalizeModelId,
   preContextWarning,
   promptTokens,
   sumUsage,
   totalTokens,
-  type AggregateCost,
   type BloatWarning,
   type ContextUsage,
   type TokenUsage,
@@ -159,6 +191,53 @@ export function deviceHomesRoot(): string | null {
   return deviceHomes
 }
 
+/* ------------------------------------------------ homes that answer for one -- */
+
+/**
+ * A confined home whose store is consulted for one folder and no other.
+ *
+ * Today there is exactly one of these and it is the copilot's; the header
+ * explains why an agent's own home is a different thing from a paired phone's.
+ * It is a list rather than a single entry because the shape of the rule is
+ * "homes belonging to agents this app runs itself", and the app will run more
+ * than one of those before it runs none.
+ */
+export interface HomeScope {
+  /** The home directory, e.g. `<userData>/remote/device-home/copilot`. */
+  home: string
+  /** The only project folder this home's store may answer for. */
+  folder: string
+}
+
+/**
+ * The scopes in force, or none.
+ *
+ * Installed rather than computed, for exactly the reason {@link deviceHomes} is:
+ * both paths are composed from `<userData>`, this module is imported by readers
+ * that never boot a shell, and reaching for `userDataDir()` here would make a
+ * unit test depend on a seam it is not asking about.
+ *
+ * Empty is the honest default and means "every store answers for every project",
+ * which is the truth on a machine with no copilot and in every test that has not
+ * said otherwise.
+ */
+let homeScopeList: readonly HomeScope[] = []
+
+/** Called once at assembly by whichever shell built the host core. */
+export function installHomeScopes(scopes: readonly HomeScope[]): void {
+  homeScopeList = scopes
+}
+
+/** Forget them. Exported for tests, which install their own per case. */
+export function resetHomeScopes(): void {
+  homeScopeList = []
+}
+
+/** The scopes in force. */
+export function homeScopes(): readonly HomeScope[] {
+  return homeScopeList
+}
+
 export interface TranscriptScope {
   /** The profile's config directory. Defaults to this app's own. */
   configDir?: string
@@ -167,6 +246,11 @@ export interface TranscriptScope {
    * pass `null` to ask about the profile's store alone.
    */
   deviceHomes?: string | null
+  /**
+   * Homes that answer for one folder only. Defaults to whatever was installed;
+   * pass `[]` to ask without any scoping at all.
+   */
+  homeScopes?: readonly HomeScope[]
 }
 
 /**
@@ -215,6 +299,65 @@ export function configDirs(options: TranscriptScope = {}): string[] {
 }
 
 /**
+ * The config directories to consult when the question is about **one project**.
+ *
+ * {@link configDirs} answers "which stores exist"; this answers "which of them
+ * could honestly hold this folder's conversations", and the difference is the
+ * scoped homes. A store belonging to an agent this app runs itself answers for
+ * that agent's own working directory and for nothing else, so a file it wrote
+ * under another project's encoding is never looked for — see the header.
+ *
+ * The filter is a whitelist inversion on purpose: a directory that is not a
+ * scoped home passes untouched. Adding a scope must never be able to *remove* a
+ * paired device's store from an answer, and a rule written the other way round —
+ * "only these homes, for these folders" — is one edit away from doing exactly
+ * that.
+ */
+export function configDirsFor(cwd: string, options: TranscriptScope = {}): string[] {
+  const scopes = options.homeScopes ?? homeScopeList
+  if (scopes.length === 0) return configDirs(options)
+  /*
+   * Both sides resolved, here, rather than once when a scope is installed.
+   *
+   * The two halves are composed in different modules from different starting
+   * points — `configDirs` joins the device-homes root it was handed,
+   * `copilotHomeScope` joins `<userData>` — and a scope can also arrive through
+   * `options` without passing the installer at all. A rule that stopped
+   * applying because one side wrote `foo/` and the other wrote `foo` would fail
+   * *open*, silently, which is the one direction a rule like this must never
+   * fail in. Normalising at the comparison is what makes that impossible to get
+   * wrong from either side.
+   */
+  const asked = resolve(cwd)
+  return configDirs(options).filter((dir) => {
+    const resolved = resolve(dir)
+    const scope = scopes.find((entry) => resolved === resolve(claudeConfigDirIn(entry.home)))
+    return scope === undefined || resolve(scope.folder) === asked
+  })
+}
+
+/**
+ * The scope a config directory belongs to, or undefined when it belongs to none.
+ *
+ * For the caller that has no project in mind — the artifacts scan under
+ * `scope: 'all'`, which walks *every* project directory in *every* store
+ * because a transcript in one folder can record writes into another. That scan
+ * cannot be filtered by {@link configDirsFor}, and it must not simply be handed
+ * a scoped store whole: the copilot could then claim, in a transcript it wrote,
+ * to have written files into somebody's repository, and the panel would list
+ * them.
+ *
+ * So the caller asks which folder the store belongs to and enumerates that one
+ * directory instead of all of them. A scoped home legitimately holds exactly one
+ * project directory, so nothing real is lost.
+ */
+export function homeScopeFor(configDir: string, options: TranscriptScope = {}): HomeScope | undefined {
+  const scopes = options.homeScopes ?? homeScopeList
+  const resolved = resolve(configDir)
+  return scopes.find((entry) => resolved === resolve(claudeConfigDirIn(entry.home)))
+}
+
+/**
  * Every directory that can hold a transcript for one project.
  *
  * The single-directory {@link transcriptDir} is left exactly as it was and is
@@ -225,7 +368,7 @@ export function configDirs(options: TranscriptScope = {}): string[] {
  */
 export function transcriptDirs(cwd: string, options: TranscriptScope = {}): string[] {
   const encoded = encodeProjectPath(cwd)
-  return configDirs(options).map((dir) => join(dir, 'projects', encoded))
+  return configDirsFor(cwd, options).map((dir) => join(dir, 'projects', encoded))
 }
 
 /**
@@ -244,6 +387,15 @@ export function transcriptDirs(cwd: string, options: TranscriptScope = {}): stri
  * the root's; the extension check refuses everything that is not a transcript.
  * Nested paths are allowed on purpose — sub-agent transcripts live one level
  * down.
+ *
+ * It asks {@link configDirs} rather than {@link configDirsFor}, and that is not
+ * an oversight. This is a question about a *path*, not about a project — it has
+ * no `cwd` to be scoped against, and the one thing it is for is refusing a read
+ * of a file that is not a transcript at all. A scoped home's real conversation
+ * is loaded by path like any other, so narrowing here would refuse the copilot's
+ * own chat view. The forgery this module closes is closed one level up, where a
+ * project is turned into a list of directories: nothing offers the renderer a
+ * fabricated path, so nothing asks about one.
  */
 export function isTranscriptPath(path: string, options: TranscriptScope = {}): boolean {
   if (typeof path !== 'string' || path.length === 0) return false
@@ -385,11 +537,11 @@ function str(value: unknown): string | undefined {
  *     cache_creation: { ephemeral_5m_input_tokens, ephemeral_1h_input_tokens },
  *     service_tier, speed, iterations, server_tool_use }
  *
- * `cache_creation` is what makes correct pricing possible — Claude Code writes
- * 1-hour caches, which cost 2x input rather than the 1.25x a 5-minute write
- * costs. Older transcripts have only the flat total; the unexplained remainder
- * is attributed to the 5-minute rate, so an unknown split can never inflate
- * the bill.
+ * `cache_creation` is what splits the two cache TTLs apart — Claude Code writes
+ * 1-hour caches, and a transcript that reports them separately is reporting two
+ * different things. Older transcripts have only the flat total; the unexplained
+ * remainder is attributed to the 5-minute column, which is the one the CLI wrote
+ * before it learned to say.
  */
 export function parseUsage(raw: unknown): TokenUsage | null {
   if (!isRecord(raw)) return null
@@ -470,7 +622,7 @@ export function parseEventLine(line: string): TranscriptEvent | null {
  * some are hundreds of kilobytes. Substring-testing first keeps a 14 MB file
  * from becoming 14 MB of parsed objects.
  */
-function mayCarryCost(line: string): boolean {
+function mayCarryUsage(line: string): boolean {
   return line.includes('"usage"') || line.includes('compact_boundary')
 }
 
@@ -565,7 +717,7 @@ export class TranscriptTail {
 
       const events: TranscriptEvent[] = []
       for (const line of lines) {
-        if (!mayCarryCost(line)) continue
+        if (!mayCarryUsage(line)) continue
         const event = parseEventLine(line)
         if (event) events.push(event)
       }
@@ -583,16 +735,19 @@ export class TranscriptTail {
 /**
  * Bucket for requests that carry tokens but no model id.
  *
- * Deliberately not a real model id, so it can never collide with one and always
- * lands in `AggregateCost.unpricedModels`.
+ * Deliberately not a real model id, so it can never collide with one and is
+ * always visible as its own row in a per-model table.
  */
 export const UNKNOWN_MODEL = 'unknown'
 
 /**
- * Bucket key for one rate card.
+ * Bucket key for one model at one speed.
  *
- * Standard and fast requests to the same model are billed differently, so they
- * are kept apart here and rejoined by `priceFor`, which understands the suffix.
+ * Fast mode is a different service from the same model, and the transcript says
+ * which one ran, so the two stay in separate buckets. The suffix used to exist
+ * because they were billed differently; it survives the deletion of the rate
+ * card because the speed is a fact about the request either way, and
+ * `contextWindowFor` strips it back off — the window does not change with speed.
  */
 function rateKey(normalizedModel: string, speed: TranscriptEvent['speed']): string {
   if (speed !== 'fast' || normalizedModel.endsWith('-fast')) return normalizedModel
@@ -603,13 +758,12 @@ export interface SessionSummary {
   sessionId: string
   transcriptPath: string
   cwd: string
-  /** Billable models seen, heaviest first. */
+  /** Real models seen, heaviest first. */
   models: string[]
   /** Deduplicated API requests. */
   requests: number
   usage: TokenUsage
   usageByModel: Record<string, TokenUsage>
-  cost: AggregateCost
   /** Occupancy of the context window right now, or null before the first request. */
   context: ContextUsage | null
   warnings: BloatWarning[]
@@ -697,9 +851,9 @@ export class SessionAggregator {
     if (event.isSidechain) this.sidechainRequests += 1
     // A request with tokens but no model id would otherwise vanish from the
     // totals entirely — the id is what every bucket is keyed on. Park it under
-    // a sentinel so `aggregateCost` reports it as unpriced (making the total a
-    // stated floor) instead of quietly under-counting. Synthetic messages are
-    // excluded: they are locally generated and carry no tokens.
+    // a sentinel so it shows up as its own row instead of quietly
+    // under-counting. Synthetic messages are excluded: they are locally
+    // generated and carry no tokens.
     if (!isBillableModel(model) && normalizeModelId(model) === '' && totalTokens(event.usage) > 0) {
       this.byModel.set(
         UNKNOWN_MODEL,
@@ -707,10 +861,9 @@ export class SessionAggregator {
       )
     }
     if (isBillableModel(model)) {
-      // Fast mode is a separate rate card (2x on Opus 5), so it cannot share a
-      // bucket with the standard rate — the `-fast` suffix is exactly what
-      // `priceFor` splits back off. Without this the premium is parsed off the
-      // wire and then thrown away, billing a fast session at half price.
+      // Fast mode gets its own bucket — see `rateKey`. Merging it into the
+      // standard one would throw away a distinction the transcript went to the
+      // trouble of recording.
       const id = rateKey(normalizeModelId(model), event.speed)
       this.byModel.set(id, addUsage(this.byModel.get(id) ?? emptyUsage(), event.usage))
       this.lastAnyModel = id
@@ -757,19 +910,19 @@ export class SessionAggregator {
     return this.requests === 0
   }
 
-  summary(at = Date.now()): SessionSummary {
+  /**
+   * This used to take an `at` so the session could be priced against the moment
+   * its work ran rather than the moment a panel opened. Nothing here depends on
+   * a clock any more — a token count is the same number whenever it is asked
+   * for — so the parameter is gone rather than kept as decoration.
+   */
+  summary(): SessionSummary {
     const usageByModel: Record<string, TokenUsage> = {}
     for (const [model, usage] of this.byModel) usageByModel[model] = usage
 
     const models = [...this.byModel.entries()]
       .sort((a, b) => promptTokens(b[1]) + b[1].output - (promptTokens(a[1]) + a[1].output))
       .map(([model]) => model)
-
-    // Price against when the work happened, not when the panel was opened —
-    // rates are time-boxed and a session run under an introductory rate must
-    // keep costing what it cost.
-    const pricedAt = this.lastActivityAt > 0 ? this.lastActivityAt : at
-    const cost = aggregateCost(this.byModel, { at: pricedAt })
 
     // Window and occupancy have to come from the same thread. A Task sub-agent
     // running Haiku after an Opus turn would otherwise pin a 200k window onto
@@ -797,7 +950,6 @@ export class SessionAggregator {
       requests: this.requests,
       usage: sumUsage(this.byModel.values()),
       usageByModel,
-      cost,
       context,
       warnings,
       preContextTokens: this.firstPromptTokens,
@@ -840,7 +992,18 @@ export interface ProjectSummary {
   /** Sessions, most recently active first. */
   sessions: SessionSummary[]
   usage: TokenUsage
-  cost: AggregateCost
+  /**
+   * The project's tokens split by model, keyed the way `SessionSummary` keys
+   * them.
+   *
+   * Added when the money came out. The Overview tile used to name the models a
+   * figure had been priced from by reading the keys of the cost aggregate, and
+   * that aggregate no longer exists — but "which models did this folder's work"
+   * is a fact worth keeping, and the totals are already summed here to produce
+   * `usage`. Recomputing it in the renderer from `sessions` would be the same
+   * sum done twice, in two places, with two chances to disagree.
+   */
+  usageByModel: Record<string, TokenUsage>
   requests: number
   /** Session the user is most likely looking at. */
   activeSessionId: string | null
@@ -858,6 +1021,11 @@ export interface TranscriptWatcherOptions {
    * pass `null` to watch the profile's store alone. See {@link installDeviceHomes}.
    */
   deviceHomes?: string | null
+  /**
+   * Homes that answer for one folder only. Defaults to whatever was installed;
+   * pass `[]` to watch without any scoping. See {@link installHomeScopes}.
+   */
+  homeScopes?: readonly HomeScope[]
   /** Called on every change, and repeatedly during the initial scan. */
   onUpdate: (summary: ProjectSummary) => void
   /** Coalesce bursts of appends. Default 300ms. */
@@ -928,6 +1096,8 @@ const READY_TIMEOUT_MS = 5_000
 export class TranscriptWatcher {
   private readonly dir: string
   private readonly homesRoot: string | null
+  /** Homes that answer for one folder only. See {@link installHomeScopes}. */
+  private readonly scopes: readonly HomeScope[]
   /** The encoded directory name this project's transcripts live under. */
   private readonly encoded: string
   private readonly tails = new Map<string, TranscriptTail>()
@@ -945,6 +1115,7 @@ export class TranscriptWatcher {
     this.dir = transcriptDir(options.cwd, options.configDir)
     this.encoded = encodeProjectPath(options.cwd)
     this.homesRoot = options.deviceHomes === undefined ? deviceHomesRoot() : options.deviceHomes
+    this.scopes = options.homeScopes ?? homeScopes()
   }
 
   /** Which stores this watcher answers about. Fixed for its lifetime. */
@@ -952,6 +1123,7 @@ export class TranscriptWatcher {
     return {
       ...(this.options.configDir === undefined ? {} : { configDir: this.options.configDir }),
       deviceHomes: this.homesRoot,
+      homeScopes: this.scopes,
     }
   }
 
@@ -1075,7 +1247,12 @@ export class TranscriptWatcher {
     const homes = this.homesRoot
     if (homes !== null) {
       const primary = this.options.configDir ?? claudeConfigDir()
-      for (const dir of configDirs(this.scope)) {
+      // `configDirsFor` and not `configDirs`: a store that does not answer for
+      // this watcher's folder must not be *watched* for it either. Filtering
+      // only the initial listing would leave the subscription live, and
+      // `enqueueFromStore` matches on the encoded directory name alone — which
+      // a fabricated directory carries by construction.
+      for (const dir of configDirsFor(this.options.cwd, this.scope)) {
         if (dir === primary) continue
         const store = join(dir, 'projects')
         // `watchStore` is idempotent by way of chokidar's own `add`, which is a
@@ -1137,7 +1314,8 @@ export class TranscriptWatcher {
     const homes = this.homesRoot
     if (homes !== null && existsSync(homes)) {
       const primary = this.options.configDir ?? claudeConfigDir()
-      for (const dir of configDirs(this.scope)) {
+      // Scoped to this watcher's folder, for the reason `refresh` gives.
+      for (const dir of configDirsFor(this.options.cwd, this.scope)) {
         // The profile's own store is already watched above, at the project
         // directory rather than at the store, so it must not be watched twice.
         if (dir === primary) continue
@@ -1227,9 +1405,7 @@ export class TranscriptWatcher {
       transcriptDir: this.dir,
       sessions,
       usage: sumUsage(byModel.values()),
-      // Add the sessions' money rather than re-pricing their pooled tokens:
-      // each session is already priced against when it ran.
-      cost: mergeAggregates(sessions.map((session) => session.cost)),
+      usageByModel: Object.fromEntries(byModel),
       requests,
       activeSessionId: sessions[0]?.sessionId ?? null,
       scanning: this.scanning,

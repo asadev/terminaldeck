@@ -4,7 +4,9 @@ import { existsSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { IpcMain } from 'electron'
-import { loginPath, PROVIDERS } from './providers'
+import { agentBinaries, loginPath, PROVIDERS } from './providers'
+import { binaryEvidence, binaryNote, binaryProblem, type AgentBinary } from './agent-binaries'
+import { LOOKUP_AGENTS } from '../shared/agent-catalog'
 import { currentPlatform, withPath, type Platform } from './platform/host'
 import { firstLookupPath, lookupSpec } from './platform/lookup'
 import { launchSpec } from './tool-probe'
@@ -26,6 +28,24 @@ export interface ToolStatus {
   remedy?: string
   /** Where to get it. */
   url?: string
+  /**
+   * Something true even when nothing is wrong.
+   *
+   * Today it says one thing: that an agent is running from somewhere other than
+   * the copy on your PATH. Silence there would be simpler and would also be what
+   * makes a person distrust the app later, when `codex` fails in their own
+   * terminal and works here.
+   */
+  note?: string
+  /**
+   * What the machine literally said, when it said something worth quoting.
+   *
+   * Only ever set for a tool that is present and will not start — the case where
+   * the verdict alone ("Not found"? but it *is* there) is unbelievable without
+   * the evidence. `tool-probe.ts` makes the same argument for a tool that is
+   * genuinely absent.
+   */
+  evidence?: string
   /** A missing required tool blocks the app; optional ones only disable a panel. */
   required: boolean
 }
@@ -188,28 +208,65 @@ export async function checkPrerequisites(): Promise<Prerequisites> {
   const PATH = await loginPath()
   const tools: ToolStatus[] = []
 
-  for (const id of ['claude', 'codex', 'gemini'] as ProviderId[]) {
+  /*
+   * Every agent in the catalogue, not three names written here.
+   *
+   * The list used to be a literal `['claude', 'codex', 'gemini']` in this
+   * function *and* in `AGENT_IDS` in the renderer *and* in `SETUP_TOOL_IDS`, and
+   * a fourth agent would have had to be remembered in all three. It is now the
+   * catalogue's, which is also the list the New-session picker draws from — so a
+   * Setup panel that disagrees with the picker about which agents exist is no
+   * longer a thing that can happen.
+   */
+  const binaries = await agentBinaries()
+
+  for (const entry of LOOKUP_AGENTS) {
+    const id = entry.id
     const spec = PROVIDERS[id]
-    const found = await which(spec.bin, PATH)
-    if (!found) {
+    const binary: AgentBinary | undefined = binaries[id]
+
+    /*
+     * Runnable, not merely present.
+     *
+     * `which codex` succeeds on this machine and `codex --version` exits 1 with
+     * a spawn error, and while this row asked only the first question it said
+     * "Ready" beside an agent that could not open a session. The report was the
+     * other half of the same complaint: *"Codex CLI is not installed actually…
+     * And it's not telling me it is installed also. If it is installed it should
+     * tell that."* Both halves are answered here — a working copy found anywhere
+     * declared reads as installed, with its real version; a copy that cannot
+     * start reads as not usable, with the reinstall command and the literal
+     * error underneath.
+     */
+    if (!binary || binary.runnable === null) {
+      const remedy =
+        binaryProblem(binary ?? { id, bin: entry.bin, onPath: null, runnable: null, version: null, broken: false, said: null, usedAlternate: false, checkedAt: Date.now() }) ??
+        `Install ${spec.label}, then reopen this window.`
       tools.push({
         id,
         label: spec.label,
         state: 'missing',
         purpose: AGENT_PURPOSE[id] ?? spec.label,
-        remedy: `Install ${spec.label}, then reopen this window.`,
+        remedy,
+        ...(binary && binaryEvidence(binary) ? { evidence: binaryEvidence(binary) as string } : {}),
         url: AGENT_URL[id],
         required: false,
       })
       continue
     }
+
     const state = await agentAuth(id, PATH)
+    const note = binaryNote(binary)
     tools.push({
       id,
       label: spec.label,
       state,
-      version: await version(spec.bin, PATH, found),
+      // The version the runnable copy printed, which is the copy that will
+      // actually start a session. Reading it again through the name on PATH is
+      // what produced "version not reported" beside a working install.
+      ...(binary.version ? { version: binary.version } : {}),
       purpose: AGENT_PURPOSE[id] ?? spec.label,
+      ...(note ? { note } : {}),
       remedy:
         state === 'installed-not-authed'
           ? `Installed but not signed in. Start a session and run \`${spec.bin}\` — it will walk you through signing in.`
@@ -236,7 +293,8 @@ export async function checkPrerequisites(): Promise<Prerequisites> {
     })
   }
 
-  const agents = tools.filter((t) => ['claude', 'codex', 'gemini'].includes(t.id))
+  const agentIds = LOOKUP_AGENTS.map((entry) => entry.id as string)
+  const agents = tools.filter((t) => agentIds.includes(t.id))
   return {
     tools,
     canRunSessions: agents.some((t) => t.state === 'ready'),

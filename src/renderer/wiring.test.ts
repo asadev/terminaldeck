@@ -50,6 +50,24 @@ const SEAMS: Array<{ file: string; child: string; props: string[]; why: string }
     why: 'without sessionId the controls row and usage strip render their empty state, and without session the pane reads whatever transcript in the folder was written last',
   },
   {
+    file: 'renderer/copilot/CopilotView.tsx',
+    child: 'ChatView',
+    props: ['cwd', 'session', 'sessionId', 'provider'],
+    why: 'the copilot is a session like any other, so its conversation pane has the same three seams — and `provider` besides, because without it the pane writes shell copy over an agent',
+  },
+  {
+    file: 'renderer/shell/PanelView.tsx',
+    child: 'CopilotView',
+    props: ['copilot', 'focus'],
+    why: 'without `copilot` the page has no connection to the agent and draws its "not wired" state; without `focus` a session row asking why it exists lands on the page instead of on the turn that started it',
+  },
+  {
+    file: 'renderer/App.tsx',
+    child: 'CopilotConsent',
+    props: ['question', 'onAnswer'],
+    why: 'this is the renderer half of the alter-tier gate — unmounted or unanswerable, every confirmed call the copilot makes is refused by timeout with nothing ever appearing on screen',
+  },
+  {
     file: 'renderer/App.tsx',
     child: 'SessionInspector',
     props: ['cwd', 'session', 'sessionTitle'],
@@ -64,13 +82,28 @@ const SEAMS: Array<{ file: string; child: string; props: string[]; why: string }
   {
     file: 'renderer/components/ChatView.tsx',
     child: 'UsageStrip',
-    props: ['cwd', 'scoped', 'sessionId'],
+    props: ['cwd', 'scoped'],
     // `scoped` is the one that keeps the numbers honest. Without it an absent
     // transcript path reads as "no preference", so the strip picked whichever
     // session in the folder ran last and printed its spend and context fill
     // under the heading "This session" — for a tab that had made no request at
     // all, and, under a second account, for money belonging to another login.
-    why: 'plan limits come from the running session; cost comes from the project; scoped decides whether an absent transcript means "the newest one" or "this session has none yet"',
+    //
+    // `sessionId` used to be here too, for the plan limit that was read off the
+    // running session's screen. That reading moved to the session's chrome —
+    // `shell/UsageBar.tsx`, beside the account it is a fact about — so this
+    // strip is once again about a project's transcripts and nothing else. See
+    // the note at the top of `UsageStrip.tsx` for why it did not stay in both.
+    why: 'tokens and context come from the project’s transcripts; scoped decides whether an absent transcript means "the newest one" or "this session has none yet"',
+  },
+  {
+    file: 'renderer/components/ChatView.tsx',
+    child: 'ChatComposer',
+    props: ['sessionId'],
+    why:
+      'without it the composer cannot ask whether this session is held inside a folder, and a ' +
+      'session a phone or the copilot started would be offered a file from outside that folder ' +
+      'which the OS refuses — a chip, a mention, and an agent saying it cannot open the file',
   },
   {
     file: 'renderer/components/ChatComposer.tsx',
@@ -91,6 +124,19 @@ const SEAMS: Array<{ file: string; child: string; props: string[]; why: string }
     child: 'BrowserWorkspace',
     props: ['visible', 'parkPage'],
     why: 'visible hides the whole panel per tab; parkPage hides only the native pages under a dialog',
+  },
+  {
+    file: 'renderer/App.tsx',
+    child: 'WindowToolbar',
+    props: ['title', 'sessionId'],
+    // The same failure this table exists for, one control along. The rename
+    // itself has been in the store since the rail grew a field, and the heading
+    // over the terminal renders the same session's name — but without the id it
+    // cannot say *which* session it is the name of, so the double-click has
+    // nothing to write to and `SessionTitle` correctly draws a plain heading.
+    // Dropped, the feature is invisible and looks unbuilt: "session name also
+    // inside the terminal, if we want to change we should be able to change."
+    why: 'the heading over the terminal is the second place a session can be renamed, and sessionId is what makes it one',
   },
   {
     file: 'renderer/App.tsx',
@@ -126,6 +172,20 @@ const SEAMS: Array<{ file: string; child: string; props: string[]; why: string }
     // to claude only". `onSelect` is in the list because without it the rows are
     // a picture of a choice.
     why: 'the only place in the app where an account can be made for an agent other than Claude',
+  },
+  {
+    file: 'renderer/App.tsx',
+    child: 'AlertsWindow',
+    props: ['open', 'projectPath', 'onAction'],
+    // Alerts stopped being a page on 2026-08-17 — *"and notifications should be
+    // a pop-up just like settings, not a full page"* — and a dialog is the
+    // easiest thing in this codebase to build and never mount: the bell would
+    // set a flag nothing reads, and pressing it would do nothing at all, which
+    // is the failure this table exists for. `projectPath` is what it scans;
+    // without it the sheet is permanently the "no project open" state. `onAction`
+    // is the whole point of an alert — the page it replaces spent its life with
+    // that prop undefined, drawing buttons that swallowed the click.
+    why: 'the bell and the palette row both open this, and it is the only thing that renders an alert',
   },
   {
     file: 'renderer/App.tsx',
@@ -206,6 +266,151 @@ describe('a session started from a phone appears without stealing focus', () => 
   })
 })
 
+/**
+ * Every button that starts a session goes through the dialog, and there is no
+ * second way round it.
+ *
+ * Asad, 2026-08-17: *"if we click directly on the whole button it opens a quick
+ * window. We don't want this quick window at all. We just always wanted this
+ * pop-up to come up so we choose which type of terminal we want to open…
+ * 'Remember these choices for this project' is good enough."*
+ *
+ * This is a wiring claim rather than a component one, which is why it is here.
+ * Every control involved lives in a different file — the rail's button, the
+ * strip's terminal glyph, ⌘T, the application menu's ⌘⇧T — and each of them is
+ * correct on its own however it is wired. The thing that can regress is the one
+ * line in `App.tsx` that decides where each of them lands, and nothing about
+ * that line is visible from inside the components it feeds.
+ */
+describe('one route to a new session, and it is the dialog', () => {
+  const app = read('renderer/App.tsx')
+
+  it('sends the rail’s New session button to the dialog, not to a spawn', () => {
+    const tag = openingTag(app, 'Sidebar') ?? ''
+    expect(tag, 'no <Sidebar> in App.tsx — has the shell been rewritten?').not.toBe('')
+    expect(tag).toMatch(/onNewSession=\{[\s\S]*openNewSessionDialog/)
+    // The chevron beside it is gone, by name: "remove this drop-down button at
+    // all from the side panel."
+    expect(tag).not.toContain('onNewSessionOptions')
+  })
+
+  it('keeps the folder a project’s ＋ named, rather than dropping it', () => {
+    // The ＋ on a project heading is the one press that means a *specific*
+    // folder. It used to spawn straight into it; now that it opens the dialog,
+    // that intent has to survive the trip or the press quietly changes project.
+    const tag = openingTag(app, 'NewSessionDialog') ?? ''
+    expect(tag).toMatch(/projectPath=\{newSessionPath \?\? activeProjectPath\}/)
+  })
+
+  it('leaves Continue last session immediate, because it is not the same question', () => {
+    const tag = openingTag(app, 'Sidebar') ?? ''
+    expect(tag).toMatch(/resume \?[\s\S]*newSession\(/)
+  })
+
+  it('sends the strip’s terminal glyph to the dialog too', () => {
+    const tag = openingTag(app, 'WorkspaceTabStrip') ?? ''
+    expect(tag, 'no <WorkspaceTabStrip> in App.tsx').not.toBe('')
+    expect(tag).toMatch(/onNewSession=\{\(\) => openNewSessionDialog\(\)\}/)
+  })
+
+  it('gives the strip no way to close a session at all', () => {
+    /*
+     * The ✕ on a tab takes the tab off the bar and leaves the session running.
+     * The strongest form that guarantee can take is that the component is not
+     * handed a close: no prop, no path, nothing to wire wrongly later.
+     */
+    const tag = openingTag(app, 'WorkspaceTabStrip') ?? ''
+    expect(tag).not.toContain('onClose')
+    expect(tag).toMatch(/onShowInstead=\{showInstead\}/)
+  })
+
+  it('lands ⌘T and ⌘⇧T on the same dialog, and offers one palette row', () => {
+    // ⌘T is `session.new`; ⌘⇧T is `session.newDialog`, which is the accelerator
+    // an Electron menu in the main process prints beside "New Session…" — so it
+    // has to keep working even though its palette row has gone.
+    expect(app).toMatch(/id: 'session\.new',[^}]*run: \(\) => openNewSessionDialog\(\)/)
+    expect(app).toMatch(/case 'session\.newDialog':\s*\n\s*openNewSessionDialog\(\)/)
+    // And exactly one row offering it, rather than two names for one place.
+    expect(app.match(/id: 'session\.newDialog', title:/g)).toBeNull()
+  })
+})
+
+/**
+ * Every way into Alerts opens the sheet, and none of them navigates.
+ *
+ * Asad, 2026-08-17: *"and notifications should be a pop-up just like settings,
+ * not a full page."*
+ *
+ * This is a wiring claim for the same reason the one above is. Alerts moving
+ * from the rail to a bell beside Settings already happened once and left the
+ * press still navigating the pane to a full page — the control moved and the
+ * destination did not, which no component test could see, because every piece
+ * involved was correct about itself. What can regress is the set of call sites,
+ * and they are spread across four files.
+ *
+ * The dangerous half is not the bell; it is a route left behind. A palette row
+ * that navigates to a panel nobody renders is a blank window, and this
+ * repository has caught that exact bug more than once.
+ */
+describe('Alerts is a pop-up, and there is no page left to reach', () => {
+  const app = read('renderer/App.tsx')
+
+  it('is not a view at all, so nothing can navigate to it', () => {
+    // The union is the gate: `showPanel` takes a `PanelId`, and `isPanelId` is
+    // what lets a remembered id come back out of storage and fill the window at
+    // the next launch. While `alerts` was in it, an app quit on the Alerts page
+    // reopened on a panel with no case to render.
+    const panels = read('renderer/shell/panels.ts')
+    expect(panels).not.toMatch(/\|\s*'alerts'/)
+    expect(panels).not.toMatch(/id: 'alerts'/)
+    expect(read('renderer/shell/PanelView.tsx')).not.toContain("case 'alerts':")
+    expect(app, 'nothing may navigate the window to Alerts').not.toContain("showPanel('alerts')")
+  })
+
+  it('sends the rail’s bell to the sheet', () => {
+    const tag = openingTag(app, 'Sidebar') ?? ''
+    expect(tag, 'no <Sidebar> in App.tsx — has the shell been rewritten?').not.toBe('')
+    expect(tag).toMatch(/onOpenAlerts=\{\(\) => setAlertsOpen\(true\)\}/)
+  })
+
+  it('sends the palette row to the sheet, keeping the id the registry gates on', () => {
+    // `view.alerts` is what `features/registry.ts` declares and what any menu
+    // item or chord would dispatch, so the id stays and only its `run` changes
+    // — the same trade `view.search` made when session search became a sigil.
+    expect(app).toMatch(/id: 'view\.alerts',[^}]*run: \(\) => setAlertsOpen\(true\)/)
+  })
+
+  it('closes the sheet before an alert’s button acts on the window behind it', () => {
+    // All five actions land somewhere the modal is covering — a panel, a tab, a
+    // terminal, another sheet. Acting without closing is the same defect the
+    // handlers were written to fix: something happens out of sight and the
+    // surface in front of you does not move.
+    const tag = openingTag(app, 'AlertsWindow') ?? ''
+    const action = propExpression(tag, 'onAction') ?? ''
+    expect(action, '<AlertsWindow> has no onAction={...}').not.toBe('')
+    expect(action.indexOf('setAlertsOpen(false)')).toBeGreaterThanOrEqual(0)
+    expect(action.indexOf('setAlertsOpen(false)')).toBeLessThan(action.indexOf('switch (action.kind)'))
+  })
+
+  it('respects the feature the way the page did', () => {
+    // The page was gated twice: no row in the rail, and `FeatureOffer` for
+    // anyone already on it when the feature went off. The sheet needs both
+    // halves too, or switching Alerts off leaves a dialog on screen for
+    // something the app no longer has.
+    const sidebar = openingTag(app, 'Sidebar') ?? ''
+    expect(sidebar).toContain("alerts={features.controlOn('sidebar.alerts')}")
+    const open = propExpression(openingTag(app, 'AlertsWindow') ?? '', 'open') ?? ''
+    expect(open).toMatch(/features\.on\('alerts'\)/)
+  })
+
+  it('parks the browser’s native pages while the sheet is up', () => {
+    // Same reason every other dialog is in `anyModalOpen`: the browser's pages
+    // are native views layered above the HTML, so a sheet opened over one is
+    // drawn underneath a web page and cannot be seen at all.
+    expect(app).toMatch(/anyModalOpen =[\s\S]{0,240}alertsOpen/)
+  })
+})
+
 /** The value of `<Name prop={...}>`, or null. Brace-aware, like `openingTag`. */
 function propExpression(tag: string, prop: string): string | null {
   const at = tag.search(new RegExp(`[\\s{]${prop}=\\{`))
@@ -229,10 +434,33 @@ function propExpression(tag: string, prop: string): string | null {
  * `visible` brings one of those back.
  */
 describe('the browser panel is hidden per tab, parked per dialog', () => {
-  const tag = openingTag(read('renderer/App.tsx'), 'BrowserWorkspace') ?? ''
+  /*
+   * There are two of these panels in `App.tsx` since 2026-08-17 and they answer
+   * `visible` differently, so the tag has to be found by *where* it is rather
+   * than by being the first one in the file.
+   *
+   *  - inside a pane, put there by the split renderer: what makes it visible is
+   *    that its pane is on screen. There is no "active tab" involved — the pane
+   *    is showing this page whatever the strip's selection is, which is the
+   *    whole of the fix that let a pane hold a page at all;
+   *  - filling the window, from the flat list: visible only while its own tab
+   *    is the selected one, because every other page is mounted and hidden
+   *    behind it.
+   *
+   * Both must keep the dialog out of `visible`, which is the mistake this
+   * describe block was written for and the one that duplicates most easily.
+   */
+  const app = read('renderer/App.tsx')
+  const paned = openingTag(app, 'BrowserWorkspace') ?? ''
+  const flat = openingTag(app.slice(app.indexOf(paned) + paned.length), 'BrowserWorkspace') ?? ''
 
-  it('decides visibility from the tab alone', () => {
-    const visible = propExpression(tag, 'visible')
+  it('finds both panels, so neither rule below is checked twice', () => {
+    expect(paned, 'the split renderer has no <BrowserWorkspace>').not.toBe('')
+    expect(flat, 'the flat tab list has no <BrowserWorkspace>').not.toBe('')
+  })
+
+  it('decides visibility from the tab alone, for the panel filling the window', () => {
+    const visible = propExpression(flat, 'visible')
     expect(visible, '<BrowserWorkspace> has no visible={...}').not.toBeNull()
     expect(visible).toMatch(/activeTab/)
     expect(visible, 'a dialog is not a tab switch — that belongs in parkPage').not.toMatch(
@@ -240,8 +468,21 @@ describe('the browser panel is hidden per tab, parked per dialog', () => {
     )
   })
 
-  it('parks the pages for whatever dialog is open', () => {
-    expect(propExpression(tag, 'parkPage')).toMatch(/Modal/)
+  it('decides it from the pane, for the panel inside one', () => {
+    const visible = propExpression(paned, 'visible')
+    expect(visible, 'the paned <BrowserWorkspace> has no visible={...}').not.toBeNull()
+    // Not `activeTab`: a pane draws what the pane holds. Keying this off the
+    // strip's selection is how a page in the unfocused half of a split would go
+    // blank the moment you clicked the other half.
+    expect(visible).not.toMatch(/activeTab/)
+    expect(visible, 'a dialog is not a tab switch — that belongs in parkPage').not.toMatch(
+      /Modal|Open\b/,
+    )
+  })
+
+  it('parks the pages for whatever dialog is open, in both', () => {
+    expect(propExpression(flat, 'parkPage')).toMatch(/Modal/)
+    expect(propExpression(paned, 'parkPage')).toMatch(/Modal/)
   })
 })
 
@@ -427,5 +668,60 @@ describe('the chat composer keeps every control it was given', () => {
     // cannot dictate. FEATURE-STORE.md: where a feature would have been, offer
     // it.
     expect(composer).toMatch(/useControlOffer\('chat\.dictate'\)/)
+  })
+})
+
+/**
+ * The three ways in from outside the project.
+ *
+ * All three are event handlers on elements, and this project has no DOM in its
+ * tests — so the logic behind each of them is unit-tested in
+ * `chat/attach/outside.test.ts`, and what is checked here is the one thing that
+ * file cannot see: whether the handler is attached to anything. A `onDrop`
+ * written, exported and wired to nothing is precisely the failure this file
+ * exists for, and it is the failure this feature started as: there was no drop
+ * target and no paste handler on the composer at all, so there was genuinely no
+ * way to attach anything the project did not already contain.
+ *
+ *   > "I should be able to take anything from my PC to paste here."
+ */
+describe('the composer accepts a file from outside the project', () => {
+  const composer = read('renderer/components/ChatComposer.tsx')
+
+  it('takes a drop, and tells the browser it will', () => {
+    // `onDragOver` with `preventDefault` is not optional decoration: without it
+    // the drop never fires and Chromium navigates the window to the dropped
+    // file instead, replacing the entire app with a picture.
+    expect(composer, 'nothing accepts a dropped file').toMatch(/onDrop=\{/)
+    expect(composer, 'without onDragOver a drop navigates the window to the file').toMatch(
+      /onDragOver=\{/,
+    )
+    expect(composer).toMatch(/preventDefault/)
+  })
+
+  it('takes a paste, on the box a person is typing in', () => {
+    expect(composer, 'the textarea has no paste handler').toMatch(/onPaste=\{onPaste\}/)
+  })
+
+  it('asks what the session may read before it offers anything from outside', () => {
+    // The honest half of the feature. `browseRefusal` is what disables Browse on
+    // a session the OS is holding inside a folder; `outsideRefusal` is what stops
+    // a drop or a paste onto the same session. Either one going missing turns
+    // this into a feature that fails at the agent instead of at the click.
+    expect(composer).toMatch(/sessionBoundary\(/)
+    expect(composer).toMatch(/browseRefusal=\{outsideRefusal\}/)
+    expect(composer, 'a drop or paste could still slip past the boundary').toMatch(
+      /outsideRefusal !== null/,
+    )
+  })
+
+  it('reaches outside only where it says it is doing so', () => {
+    // `addAttachment` refuses an outside path unless the caller passes
+    // 'anywhere'. If the default ever flips, the project-scoped picker starts
+    // silently accepting paths it was built to exclude.
+    expect(composer).toMatch(/'anywhere'/)
+    expect(read('renderer/chat/attach/mentions.ts')).toMatch(
+      /scope: AttachScope = 'project'/,
+    )
   })
 })

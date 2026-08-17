@@ -55,12 +55,24 @@ const ATTR_KEYS = ['aria-label', 'alt', 'placeholder', 'title', 'role', 'type', 
  * #8588f2 through two accent changes, so the picker outlined elements in a
  * colour that appeared nowhere else in the product and read as a rendering bug
  * rather than a selection. This is the dark theme's --accent (#3b8fee, itself
- * the app icon's blue) and its --accent-soft alpha, plus a heavier fill for an
- * element that has actually been captured.
+ * the app icon's blue).
+ *
+ * ## A one-pixel outline, and no fill at all
+ *
+ * There used to be a 2px border over a 16% wash, and a 38% wash once an element
+ * had been captured. On camera on 2026-08-16 that reads as the element being
+ * *replaced* by a pale blue rectangle: the text under it washes out, and on a
+ * card-shaped element the whole card turns blue. You cannot see what you are
+ * pointing at, which is the one thing an element picker exists for. Vibeyard
+ * draws a single-pixel outline and the content stays legible; that is the right
+ * answer and this now does the same.
+ *
+ * The captured state is a *ring outside* the element rather than a fill inside
+ * it. `box-shadow` paints beyond the box, so the element gains a halo and loses
+ * none of its own contrast.
  */
 const HIGHLIGHT_BORDER = '#3b8fee'
-const HIGHLIGHT_FILL = 'rgba(59, 143, 238, 0.16)'
-const CAPTURED_FILL = 'rgba(59, 143, 238, 0.38)'
+const CAPTURED_RING = '0 0 0 3px rgba(59, 143, 238, 0.35)'
 
 /**
  * The guest script.
@@ -88,10 +100,9 @@ export const GUEST_PRELOAD_SOURCE = `'use strict'
   var BASE_STYLE =
     'position:fixed;top:0;left:0;width:0;height:0;margin:0;padding:0;' +
     'box-sizing:border-box;pointer-events:none;display:none;' +
-    'z-index:2147483647;border:2px solid ${HIGHLIGHT_BORDER};border-radius:2px;' +
-    'background:${HIGHLIGHT_FILL};'
-  var FILL = ${JSON.stringify(HIGHLIGHT_FILL)}
-  var FILL_CAPTURED = ${JSON.stringify(CAPTURED_FILL)}
+    'z-index:2147483647;border:1px solid ${HIGHLIGHT_BORDER};border-radius:2px;' +
+    'background:transparent;'
+  var RING_CAPTURED = ${JSON.stringify(CAPTURED_RING)}
 
   var active = false
   var overlay = null
@@ -112,6 +123,36 @@ export const GUEST_PRELOAD_SOURCE = `'use strict'
     return !/[\\u0000-\\u001f\\u007f]/.test(value)
   }
 
+  /**
+   * The text a person can actually read on this element.
+   *
+   * Kept in step with \`terminaldeckVisibleText\` in browser-guest-dom.ts, which
+   * documents it at length. The short version, because it is the fault he saw:
+   * \`textContent\` runs every descendant together with no separator and includes
+   * the ones the page has hidden, so a wrapper around a collapsed country picker
+   * reported its whole list as one unbroken word. \`innerText\` is what is
+   * rendered.
+   *
+   * Form controls report no text. A \`<select>\`'s is its options; a
+   * \`<textarea>\`'s is its seed content. Neither names the field, and both are
+   * already covered by the naming attributes.
+   */
+  function visibleText(el) {
+    var tag = typeof el.localName === 'string' ? el.localName : ''
+    if (tag === 'select' || tag === 'textarea' || tag === 'input' || tag === 'option') return ''
+    var raw = typeof el.textContent === 'string' ? el.textContent : ''
+    // innerText forces a layout and builds the whole rendered string before
+    // anything can be sliced. Clicking <body> asks for exactly that.
+    if (raw.length <= 20000) {
+      try {
+        if (typeof el.innerText === 'string' && el.innerText !== '') raw = el.innerText
+      } catch (err) {
+        // Already have textContent, which is a true if uglier answer.
+      }
+    }
+    return flatten(raw, MAX_TEXT)
+  }
+
   function ensureOverlay() {
     // isConnected, not a null check: a single-page app can wipe the DOM out
     // from under us, and a detached box would silently stop appearing.
@@ -130,7 +171,9 @@ export const GUEST_PRELOAD_SOURCE = `'use strict'
     box.style.transform = 'translate(' + Math.round(rect.left) + 'px,' + Math.round(rect.top) + 'px)'
     box.style.width = Math.max(0, Math.round(rect.width)) + 'px'
     box.style.height = Math.max(0, Math.round(rect.height)) + 'px'
-    box.style.background = captured ? FILL_CAPTURED : FILL
+    // Outside the element, never over it: the point of the highlight is that
+    // you can still read what it is around.
+    box.style.boxShadow = captured ? RING_CAPTURED : 'none'
     box.style.display = 'block'
   }
 
@@ -269,11 +312,21 @@ export const GUEST_PRELOAD_SOURCE = `'use strict'
     swallow(event)
     if (!el) return
     place(el, true)
+    var rect = el.getBoundingClientRect()
     ipc.send(CH_ELEMENT, {
       v: 1,
       path: pathFrom(el),
-      text: flatten(el.textContent, MAX_TEXT),
-      attributes: attributesOf(el)
+      text: visibleText(el),
+      attributes: attributesOf(el),
+      // Where the element is inside the view, in CSS pixels. The renderer
+      // anchors the capture popup here — one that opened in a corner would make
+      // you look away from the thing you had just pointed at.
+      rect: {
+        x: Math.round(rect.left),
+        y: Math.round(rect.top),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height)
+      }
     })
   }
 

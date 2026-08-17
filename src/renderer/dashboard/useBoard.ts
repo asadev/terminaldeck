@@ -31,7 +31,8 @@ export interface LiveSession {
   title: string
   projectPath: string
   provider: ProviderId
-  account: string | null
+  /** The account it runs as — id and name together. See `BoardSession`. */
+  account: { id: string; name: string } | null
   status: SessionStatus
   statusSince: number
   startedAt: number
@@ -75,7 +76,12 @@ export function useLiveSessions(): LiveSession[] {
       title: session.title || folderOf(session.projectPath),
       projectPath: session.projectPath,
       provider: session.provider,
-      account: session.profileName ?? null,
+      // Both halves or neither: the card's label has to know whether the name
+      // is one somebody chose, and only the id says so.
+      account:
+        session.profileId && session.profileName
+          ? { id: session.profileId, name: session.profileName }
+          : null,
       status: session.status,
       statusSince: session.statusSince,
       startedAt: session.createdAt,
@@ -109,7 +115,7 @@ function useBridgeSessions(enabled: boolean): LiveSession[] {
         title: meta.title,
         projectPath: meta.cwd,
         provider: meta.provider,
-        account: meta.profileName,
+        account: meta.account,
         status: meta.exitCode === null ? 'idle' : 'exited',
         // Zero, not `Date.now()`: nothing has been observed about this
         // session's state, and a timestamp here would be read as one that had.

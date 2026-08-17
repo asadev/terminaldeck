@@ -2,7 +2,7 @@ import { mkdtempSync, mkdirSync, appendFileSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { formatUsd } from './cost'
+import { formatTokens, totalTokens } from './cost'
 import { encodeProjectPath, TranscriptWatcher, type ProjectSummary } from './transcript'
 
 /**
@@ -143,7 +143,7 @@ describe('TranscriptWatcher against a live file', () => {
     await watcher.start()
 
     const afterScan = watcher.summary()
-    console.log('after initial scan:', afterScan.requests, formatUsd(afterScan.cost.cost.total))
+    console.log('after initial scan:', afterScan.requests, formatTokens(totalTokens(afterScan.usage)))
     expect(afterScan.requests).toBe(1)
     expect(afterScan.scanning).toBe(false)
     expect(afterScan.activeSessionId).toBe('sess-live')
@@ -159,24 +159,29 @@ describe('TranscriptWatcher against a live file', () => {
     appendFileSync(file, line('m3', 1_000_000))
     appendFileSync(file, line('m3', 1_000_000))
     const final = await until('the third request to be picked up', watcher, (s) => s.requests >= 3)
-    console.log('after appends:', final.requests, formatUsd(final.cost.cost.total))
+    console.log('after appends:', final.requests, formatTokens(totalTokens(final.usage)))
     console.log('updates emitted:', updates.length)
     console.log('session:', final.sessions[0]?.sessionId, 'ctx:', final.sessions[0]?.context)
     watcher.stop()
 
     expect(final.requests).toBe(3)
-    // 3 x 1M output @ $25 + cache write/read crumbs.
-    expect(final.cost.cost.output).toBeCloseTo(75, 6)
+    expect(final.usage.output).toBe(3_000_000)
     expect(updates.length).toBeGreaterThan(1)
   }, 10_000)
 
   it('reports a project total that equals the sum of its sessions', async () => {
-    // Regression: the project total was computed by pooling every session's raw
-    // tokens and re-pricing them at `Date.now()`, so historical work was valued
-    // at today's rates and the headline number disagreed with the sessions
-    // listed underneath it. This session ran after Sonnet 5's introductory rate
-    // ended, so pricing it "now" would charge the wrong card.
-    const config = scratch('terminaldeck-cost-sum-')
+    /*
+     * Regression, and originally about money: the project total was computed by
+     * pooling every session's raw tokens and re-pricing them at `Date.now()`,
+     * so historical work was valued at today's rates and the headline
+     * disagreed with the sessions listed underneath it.
+     *
+     * With no rates left there is nothing to re-price, and the equality is the
+     * part that always mattered — a project is the sum of its sessions, in
+     * every column, including the per-model split the tile names its models
+     * from.
+     */
+    const config = scratch('terminaldeck-usage-sum-')
     const cwd = '/fake/project'
     const dir = join(config, 'projects', encodeProjectPath(cwd))
     mkdirSync(dir, { recursive: true })
@@ -190,12 +195,12 @@ describe('TranscriptWatcher against a live file', () => {
     const summary = watcher.summary()
     watcher.stop()
 
-    const sessionTotal = summary.sessions.reduce((sum, s) => sum + s.cost.cost.total, 0)
-    console.log('project:', summary.cost.cost.total, 'sessions:', sessionTotal)
+    const sessionTotal = summary.sessions.reduce((sum, s) => sum + totalTokens(s.usage), 0)
+    console.log('project:', totalTokens(summary.usage), 'sessions:', sessionTotal)
     expect(summary.sessions).toHaveLength(1)
-    expect(summary.cost.cost.total).toBeCloseTo(sessionTotal, 10)
-    // Standard Sonnet 5 output is $15/M; the introductory $10/M had expired.
-    expect(summary.cost.cost.output).toBeCloseTo(15, 6)
+    expect(totalTokens(summary.usage)).toBe(sessionTotal)
+    expect(summary.usage.output).toBe(1_000_000)
+    expect(summary.usageByModel['claude-sonnet-5'].output).toBe(1_000_000)
   }, 10_000)
 
   it('caps how many sessions it keeps resident as new ones appear', async () => {
@@ -402,6 +407,7 @@ describe('TranscriptWatcher against a live file', () => {
     expect(summary.requests).toBe(0)
     expect(summary.sessions).toEqual([])
     expect(summary.activeSessionId).toBeNull()
-    expect(summary.cost.cost.total).toBe(0)
+    expect(summary.usageByModel).toEqual({})
+    expect(totalTokens(summary.usage)).toBe(0)
   }, 10_000)
 })

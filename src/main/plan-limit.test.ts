@@ -6,8 +6,10 @@ import {
   isLimitLabel,
   notePlanOutput,
   parsePlanLimits,
+  planSnapshot,
   PlanLimitTracker,
   registerPlanLimitIpc,
+  watchPlanSnapshots,
   type PlanLimitSnapshot,
   type RefreshResult,
 } from './plan-limit'
@@ -250,6 +252,124 @@ describe('the tracker', () => {
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(tracker.promptIsEmpty()).toBe(false)
     tracker.dispose()
+  })
+})
+
+/**
+ * How old a reading is, as opposed to when this app last looked at it.
+ *
+ * The `/usage` panel stays on screen until it is dismissed, so re-reading the
+ * viewport every 600 ms would otherwise re-stamp an hour-old figure as current.
+ * That is the exact shape of the bug that ruled out `~/.claude.json` as a
+ * source, and it is worth a test that fails if someone collapses the two
+ * timestamps back into one.
+ */
+describe('how old a reading is', () => {
+  it('keeps the first-seen time while the numbers on screen do not change', async () => {
+    const tracker = new PlanLimitTracker('age-1', () => {}, 80, 24)
+    tracker.push('Current session\r\n██▌   5% used\r\nResets 4am (Asia/Dubai)\r\n')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    tracker.capture(1_000)
+    expect(tracker.current.firstSeenAt).toBe(1_000)
+
+    // Read again much later with the same panel still up. This app looked
+    // again; the CLI did not say anything again.
+    tracker.capture(3_600_000)
+    expect(tracker.current.capturedAt).toBe(3_600_000)
+    expect(tracker.current.firstSeenAt).toBe(1_000)
+    tracker.dispose()
+  })
+
+  it('moves the first-seen time when the number itself changes', async () => {
+    const tracker = new PlanLimitTracker('age-2', () => {}, 80, 24)
+    tracker.push('Current session\r\n██▌   5% used\r\n')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    tracker.capture(1_000)
+
+    tracker.push('\u001b[2J\u001b[HCurrent session\r\n████   9% used\r\n')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    tracker.capture(2_000)
+    expect(tracker.current.firstSeenAt).toBe(2_000)
+    tracker.dispose()
+  })
+
+  it('treats a reading it just asked for as fresh even when it repeats', async () => {
+    const tracker = new PlanLimitTracker('age-3', () => {}, 80, 24)
+    tracker.push('Current session\r\n██▌   5% used\r\n')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    tracker.capture(1_000)
+    // What `refresh` does after typing /usage: the CLI has just answered, so
+    // the same numbers are a fresh answer rather than a leftover panel.
+    tracker.capture(9_000, true)
+    expect(tracker.current.firstSeenAt).toBe(9_000)
+    tracker.dispose()
+  })
+})
+
+/**
+ * The reading as session state, not as a thing the chat view owns.
+ *
+ * The window chrome will draw this for a session that has no chat view open,
+ * and the usage aggregator folds it in with Codex's numbers inside the main
+ * process. Both need the same subscription a window gets, without a window.
+ */
+describe('watching from inside the main process', () => {
+  it('hands over the current reading and then every change', async () => {
+    const seen: PlanLimitSnapshot[] = []
+    const watch = watchPlanSnapshots('inproc-1', (snapshot) => seen.push(snapshot))
+    expect(watch.snapshot.available).toBe(false)
+    expect(watch.snapshot.reason).toContain('has not printed')
+
+    feed('inproc-1', 'Current week (all models)\n████   80% used\nResets Aug 14 at 2pm\n')
+    await new Promise((resolve) => setTimeout(resolve, 800))
+
+    expect(seen.at(-1)?.limits[0]).toMatchObject({ id: 'week', percent: 80 })
+    watch.stop()
+    dropPlanSession('inproc-1')
+  })
+
+  it('does not report a session that has never printed anything as unwatched', () => {
+    // Two different sentences: nobody is looking, versus nothing was said. The
+    // first is fixed by watching, the second by running /usage.
+    expect(planSnapshot('nobody-home').reason).toContain('No live session is being watched')
+    const watch = watchPlanSnapshots('inproc-2', () => {})
+    expect(planSnapshot('inproc-2').reason).toContain('has not printed')
+    watch.stop()
+  })
+
+  it('keeps the tracker alive for a listener after the last window lets go', async () => {
+    // A local wiring, because this is the one test that needs `plan:unwatch` —
+    // the shared `wire` above only captures the invoke handlers.
+    const handlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>()
+    const sends = new Map<string, (event: unknown, ...args: unknown[]) => unknown>()
+    registerPlanLimitIpc(
+      {
+        handle: (channel: string, fn: (event: unknown, ...args: unknown[]) => unknown) => {
+          handlers.set(channel, fn)
+        },
+        on: (channel: string, fn: (event: unknown, ...args: unknown[]) => unknown) => {
+          sends.set(channel, fn)
+        },
+      } as unknown as IpcMain,
+      {},
+    )
+
+    const seen: PlanLimitSnapshot[] = []
+    const contents = fakeContents()
+    handlers.get('plan:watch')?.({ sender: contents }, 'inproc-3')
+    const watch = watchPlanSnapshots('inproc-3', (snapshot) => seen.push(snapshot))
+
+    // The window closes its tab. The chrome is still watching, so the shadow
+    // terminal must survive — dropping it here is how the bar would freeze.
+    sends.get('plan:unwatch')?.({ sender: contents }, 'inproc-3')
+    feed('inproc-3', 'Current session\n██   7% used\n')
+    await new Promise((resolve) => setTimeout(resolve, 800))
+    expect(seen.at(-1)?.limits[0]).toMatchObject({ id: 'session', percent: 7 })
+
+    watch.stop()
+    // Stopping the last listener releases it for real.
+    expect(planSnapshot('inproc-3').reason).toContain('No live session is being watched')
   })
 })
 
