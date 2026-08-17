@@ -99,6 +99,7 @@ import {
     type CopilotActionRow,
     type CopilotChatMessage,
     type CopilotGrantWire,
+    type CopilotLinkWire,
     type CopilotPendingRow,
     type CopilotStateReport,
     type CopilotTier,
@@ -249,6 +250,17 @@ function foldersField(): { folders?: string[] } {
  *                        given this device nothing. **The product default.**
  *     --copilot read     watching: the state, the sessions, the log, the pending
  *     --copilot act      watching, and able to start a run and talk to it
+ *     --copilot alter    all of that, and able to answer its own confirmations
+ *
+ * `alter` is new and it is the one that exercises the path most likely to be
+ * got wrong: a device that may answer a question draws a dialog with the
+ * arguments in it, and `COPILOT-REMOTE.md` §4 requires refusing to be at least
+ * as easy as accepting. The stand-in does **not** reproduce the separate copilot
+ * connection — it accepts any `copilot.hello` — because it is a client harness
+ * rather than a security model, and a client that only worked against a
+ * permissive host is the failure this file exists to catch. What it does
+ * reproduce is the shape: `open` is false on every welcome, so a client that
+ * skips `copilot.hello` sees nothing.
  *
  * `absent` and `none` are the pair that matters and they are the reason this
  * flag exists rather than a boolean. **This file sends `CAPABILITIES` verbatim**
@@ -269,11 +281,25 @@ const COPILOT = flag('copilot', 'absent')
 let copilotGrant: CopilotGrantWire | null =
     COPILOT === 'absent'
         ? null
-        : { read: COPILOT === 'read' || COPILOT === 'act', act: COPILOT === 'act' }
+        : {
+              read: COPILOT === 'read' || COPILOT === 'act' || COPILOT === 'alter',
+              act: COPILOT === 'act' || COPILOT === 'alter',
+              // `alter` is grantable now, and it is what a client needs in order
+              // to draw an Allow button at all. `--copilot alter` is the flag
+              // that reproduces a device somebody has fully connected.
+              alter: COPILOT === 'alter',
+          }
 
-/** `{ copilot }`, or `{}` for a machine with no copilot layer. */
-function copilotField(): { copilot?: CopilotGrantWire } {
-    return copilotGrant === null ? {} : { copilot: copilotGrant }
+/**
+ * `{ copilot }`, or `{}` for a machine with no copilot layer.
+ *
+ * `open` is false on every welcome, always: a copilot connection is opened by
+ * `copilot.hello`, not by having said hello to the session channel. This
+ * stand-in accepts any credential — it is a client harness, not a security model
+ * — but it reproduces the *shape*, which is the part a client has to get right.
+ */
+function copilotField(): { copilot?: CopilotLinkWire } {
+    return copilotGrant === null ? {} : { copilot: { linked: true, open: false, grant: copilotGrant } }
 }
 
 /**
@@ -791,6 +817,10 @@ function seedCopilot(): void {
             // Two minutes, which is the broker's, and not one second more for a
             // phone — the design refuses the longer window on purpose.
             expiresAt: Date.now() + 120_000,
+            // Answerable here, so a client can be driven through the whole
+            // Allow/Refuse path against the stand-in. On the real desktop this
+            // is true only for a question this device's own run raised.
+            mine: true,
         },
     ]
 }
@@ -806,7 +836,7 @@ function copilotState(deviceId: string): CopilotStateReport {
         tools: 14,
         turnTokens: 3200,
         pending: copilotQuestions.length,
-        grant: copilotGrant ?? { read: false, act: false },
+        grant: copilotGrant ?? { read: false, act: false, alter: false },
         available: true,
         reason: null,
     }
