@@ -55,11 +55,14 @@
  * headless emulator. Three things came out of it, and only the first was a bug
  * in this file:
  *
- *   - **The pointer is `>`, not `❯`.** Every reading here was written against
- *     the Unicode glyph, so on Windows the composer was never found and every
- *     control refused with "there is nowhere to type that could be checked
- *     first". {@link POINTER} carries the capture, the cause and why accepting
- *     both is safe.
+ *   - **The pointer is `❯` or `>`, and which one is a variable rather than a
+ *     platform.** Every reading here was written against the Unicode glyph. On
+ *     Windows the CLI draws the ASCII one unless `TERM=xterm-256color` is in
+ *     the environment — which `pty-manager.ts` does set, so an ordinary session
+ *     is fine, and any spawn path that forgets it produces screens on which
+ *     every control refuses with "there is nowhere to type that could be
+ *     checked first". {@link POINTER} carries both captures, the cause, and why
+ *     accepting both is safe.
  *   - **ConPTY echoes the way the protocol needs.** The command written without
  *     a return appeared on the command line as `> /model`, `\r` submitted it,
  *     and `\x15` cleared the line and produced the CLI's own
@@ -467,10 +470,10 @@ export function readAgentFromScreen(screen: string): string | null {
  *   `working`   a turn is in flight.
  *   `unknown`   no prompt found, so there is nowhere safe to aim.
  *
- * Written on a Mac and then driven again on a Windows machine, which is where
- * the one platform difference in this file lives: the CLI draws `>` rather than
- * `❯` there, so *every* state above read as `unknown` and every control refused.
- * {@link POINTER} has the capture and the cause.
+ * Written on a Mac and then driven again on a Windows machine, where the CLI
+ * can draw `>` rather than `❯` for the composer and for a dialog's cursor —
+ * decided by one environment variable rather than by the platform.
+ * {@link POINTER} has both captures and the cause.
  *
  * ## The glyph, and why this is not the shared classifier
  *
@@ -555,42 +558,60 @@ const WORKING_ON_SCREEN: readonly RegExp[] = [
  * ## Measured, on his Windows machine, through the app's own spawn line
  *
  * Every reading in this file was written against `❯`. On Windows the same CLI
- * draws `>`. Captured on `DESKTOP-DDGMNCV` with `claude 2.1.233` spawned exactly
- * the way `providers.ts` spawns it there — `%COMSPEC% /c <cli>` — through
- * `node-pty`'s ConPTY backend, into the same `@xterm/headless` terminal
- * `session-activity.ts` keeps per session, read with the same
- * `translateToString(true)`:
+ * can draw `>` instead. Captured on `DESKTOP-DDGMNCV` with `claude 2.1.233`
+ * spawned exactly the way `providers.ts` spawns it there — `%COMSPEC% /c <cli>`
+ * — through `node-pty`'s ConPTY backend, into the same `@xterm/headless`
+ * terminal `session-activity.ts` keeps per session, read with the same
+ * `translateToString(true)`. Twice, from one spawn line, with `TERM` as the
+ * only difference between the runs:
  *
- *     ──────────────────────────────────────────────
- *     > /model
- *     ──────────────────────────────────────────────
+ *     with TERM=xterm-256color        with TERM unset
+ *     ──────────────────────────      ──────────────────────────
+ *     ❯ /model                        > /model
+ *     ──────────────────────────      ──────────────────────────
  *       ⏵⏵ don't ask on (shift+tab to cycle) · ← for agents
  *
  * and, with the model picker up:
  *
- *       > 1. Default (recommended) √  Opus 5 with 1M context · …
- *         2. Opus (1M context)        …
+ *     ❯ 1. Default (recommended) ✔    > 1. Default (recommended) √
+ *       2. Opus (1M context)            2. Opus (1M context)
  *
- * ## Why it is not ConPTY, and not a font
+ * `agent-controls.conpty.json` holds both sets in full, and
+ * `agent-controls-conpty.test.ts` runs these readers over every screen in both.
  *
- * It is the CLI choosing an ASCII glyph set. The `√` beside the selected model
- * is the giveaway: that is `U+221A`, the `figures` package's Windows fallback
- * for `tick`, where a Mac shows `✔`. The shipped binary carries both tables —
- * the Unicode one with `pointer: "❯"` and a fallback one beside it — and
- * picks the fallback when the terminal does not advertise Unicode support,
- * which on Windows means no `WT_SESSION`, no `TERM_PROGRAM`, and none of the
- * other markers a real console app sets. A pty opened by this app sets none of
- * them, so every Windows session in Terminal Deck gets the fallback set.
+ * ## Why it is not ConPTY, not a font, and not the platform either
  *
- * ## What it cost, before this
+ * It is the CLI choosing an ASCII glyph set, and the switch is one environment
+ * variable. The `√` beside the selected model is the giveaway: that is
+ * `U+221A`, the `figures` package's Windows fallback for `tick`, where a Mac
+ * shows `✔`. The shipped binary carries both tables — the Unicode one with
+ * `pointer: "❯"` and the fallback beside it — and picks the fallback when the
+ * terminal does not advertise Unicode support, which on Windows means no
+ * `WT_SESSION`, no `TERM_PROGRAM`, and no `TERM=xterm-256color`.
  *
- * `readComposer` found no `❯` anywhere, on any Windows screen, and answered
- * `unknown` — so `refuseToType` answered *"This session's prompt is not on
- * screen, so there is nowhere to type that could be checked first"* to every
- * model, effort and fast-mode change, forever, on that platform. Nothing unsafe
- * ever happened, because the safety here is that the return is not sent until
- * the composer has been *seen* to hold the command; the feature was simply dead
- * and said something confusing while being dead.
+ * **`pty-manager.ts` sets `TERM=xterm-256color` on every session this app
+ * starts, so a Terminal Deck session on Windows draws `❯` and these readers
+ * were never dead there.** That is stated flatly because the first capture of
+ * this was taken by a probe that did not set `TERM`, and it looked exactly like
+ * a platform bug. The two runs were then taken from the same spawn line with
+ * that one variable as the only difference, and the glyph followed it; the
+ * pty's `name` was `xterm-256color` in both and moved nothing.
+ *
+ * ## So why accept both, if the app always sets `TERM`
+ *
+ * Because "the app always sets `TERM`" is a fact about one line in one other
+ * file, and this file's readings fail *silently* when it stops being true:
+ * `readComposer` finds no composer, answers `unknown`, and `refuseToType` says
+ * *"This session's prompt is not on screen, so there is nowhere to type that
+ * could be checked first"* — to every model, effort and fast-mode change, with
+ * no hint that a variable is missing. Nothing unsafe happens, because the
+ * return is not sent until the composer has been *seen* to hold the command.
+ * The control simply stops working and explains itself badly.
+ *
+ * A spawn path that does not go through `pty-manager.ts` is not hypothetical —
+ * the sign-in probes, the headless host and anything future that opens its own
+ * pty are all one forgotten variable away from that state. Two characters here
+ * make the reading independent of it.
  *
  * ## Why accepting both is safe rather than merely convenient
  *
