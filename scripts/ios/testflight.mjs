@@ -84,10 +84,36 @@ const GROUP_ID = process.env.TD_TESTFLIGHT_GROUP || '3af9828a-ff5b-46b7-bcb6-07a
 
 const KEY_ID = process.env.ASC_KEY_ID || '999LNRXQS2';
 const KEY_PATH = process.env.ASC_KEY_PATH || `${homedir()}/private_keys/AuthKey_${KEY_ID}.p8`;
-const ISSUER = process.env.ASC_ISSUER_ID || '';
+/*
+ * The issuer id, from the environment or from the file beside the key.
+ *
+ * The file fallback is not a convenience, it is the fix for a real stall. The
+ * shell half of this flow — `asc_issuer_id()` in common.sh — has always read
+ * `issuer_id.txt` from the key's own directory when the variable is unset, so
+ * `release.sh` archived, validated and uploaded a build without being told
+ * anything. Then this script, which is the step that makes an uploaded build
+ * actually reach a phone, refused on the very next command because it looked
+ * only at the environment. Two halves of one flow disagreeing about where a
+ * value lives, and the half that stops is the half after the bytes have gone up.
+ *
+ * So it reads the same file, in the same place, by the same rule.
+ */
+function issuerFromDisk() {
+  const file = process.env.ASC_ISSUER_ID_FILE || `${dirname(KEY_PATH)}/issuer_id.txt`;
+  try {
+    return readFileSync(file, 'utf8').trim();
+  } catch {
+    return '';
+  }
+}
+
+const ISSUER = (process.env.ASC_ISSUER_ID || issuerFromDisk()).trim();
 
 if (!ISSUER) {
-  console.error('error: ASC_ISSUER_ID is not set. See scripts/ios/common.sh for where to read it off the page.');
+  console.error('error: ASC_ISSUER_ID is not set, and there is no issuer_id.txt beside the key.');
+  console.error('See scripts/ios/common.sh for where to read it off the page, then either:');
+  console.error('  export ASC_ISSUER_ID=<the-uuid>');
+  console.error(`  echo '<the-uuid>' > ${dirname(KEY_PATH)}/issuer_id.txt && chmod 600 $_`);
   process.exit(1);
 }
 

@@ -289,7 +289,14 @@ describe('detecting which agent CLIs are installed', () => {
   it('leaves a WSL launch line alone', async () => {
     const target = { distro: 'Ubuntu', cwd: '/home/asad/proj' }
     const resolved = await resolvedProvidersFor('win32', { COMSPEC: 'cmd.exe' }, target)
-    expect(resolved.codex.spawn.command).toBe('wsl.exe')
+    // The launcher is `wsl.exe`, by whatever path this machine finds it at.
+    // `wslExePath` returns the absolute `System32` path when the file is
+    // really there and the bare name when it is not — so a literal `wsl.exe`
+    // here asserted "this suite is running on a machine without WSL", which
+    // is true on the Mac these tests were written on and false on the Windows
+    // runner that gates the release. Asking the same function for the answer
+    // states the rule instead of the platform.
+    expect(resolved.codex.spawn.command).toBe(wslExePath({ COMSPEC: 'cmd.exe' }))
   })
 })
 
@@ -563,7 +570,7 @@ describe('extra launch arguments', () => {
     expect(args[args.length - 1]).toBe(
       "exec claude --mcp-config /state/copilot/deck-control.json --strict-mcp-config",
     )
-    expect(withTools.spawn.command).toBe('wsl.exe')
+    expect(withTools.spawn.command).toBe(wslExePath(env))
     // The Windows-side working directory survives the rebuild; without it
     // node-pty resolves the Linux path to `C:\home\asad\proj` and the tab dies.
     expect(withTools.spawn.hostCwd).toBe('C:\\Users\\Asad')

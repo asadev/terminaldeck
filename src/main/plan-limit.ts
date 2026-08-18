@@ -417,6 +417,27 @@ export class PlanLimitTracker {
     }, SETTLE_MS)
   }
 
+  /**
+   * Resolve once everything pushed so far is on the screen.
+   *
+   * `Terminal.write` is asynchronous — xterm queues the bytes and parses them on
+   * its own schedule — so "I pushed four chunks" and "the screen shows four
+   * chunks" are different moments, and nothing outside this class can tell them
+   * apart. The empty write with a callback is xterm's own way of asking; it is
+   * exactly what the settle timer above already does before it reads.
+   *
+   * It exists because a test waited one macrotask instead and passed on the
+   * machine it was written on for weeks, then failed on the Windows runner that
+   * gates releases — a loaded machine simply loses that race. A test that has to
+   * guess how long a parser takes is measuring the parser, not the thing it is
+   * about. This makes the wait exact.
+   */
+  flush(): Promise<void> {
+    return new Promise((resolve) => {
+      this.term.write('', () => resolve())
+    })
+  }
+
   resize(cols: number, rows: number): void {
     try {
       this.term.resize(Math.max(cols, 1), Math.max(rows, 1))

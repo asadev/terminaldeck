@@ -211,7 +211,7 @@ describe('the tracker', () => {
     tracker.push('████████████████')
     tracker.push('           80% used\r\n')
     tracker.push('Resets Aug 14 at 2pm (Asia/Dubai)\r\n')
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    await tracker.flush()
 
     expect(tracker.capture()).toBe(true)
     expect(tracker.current.available).toBe(true)
@@ -220,7 +220,7 @@ describe('the tracker', () => {
 
     // The panel is closed most of the time. Its absence is not news.
     tracker.push('\u001b[2J\u001b[H❯ \r\n')
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    await tracker.flush()
     expect(tracker.capture()).toBe(false)
     expect(tracker.current.limits[0]).toMatchObject({ percent: 80 })
     expect(seen).toEqual([1])
@@ -245,11 +245,11 @@ describe('the tracker', () => {
   it('knows when the prompt box is empty, which is when it is safe to type', async () => {
     const tracker = new PlanLimitTracker('s2', () => {}, 80, 24)
     tracker.push('❯ \r\n')
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    await tracker.flush()
     expect(tracker.promptIsEmpty()).toBe(true)
 
     tracker.push('\u001b[2J\u001b[H❯ fix the b\r\n')
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    await tracker.flush()
     expect(tracker.promptIsEmpty()).toBe(false)
     tracker.dispose()
   })
@@ -268,7 +268,7 @@ describe('how old a reading is', () => {
   it('keeps the first-seen time while the numbers on screen do not change', async () => {
     const tracker = new PlanLimitTracker('age-1', () => {}, 80, 24)
     tracker.push('Current session\r\n██▌   5% used\r\nResets 4am (Asia/Dubai)\r\n')
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    await tracker.flush()
 
     tracker.capture(1_000)
     expect(tracker.current.firstSeenAt).toBe(1_000)
@@ -284,11 +284,11 @@ describe('how old a reading is', () => {
   it('moves the first-seen time when the number itself changes', async () => {
     const tracker = new PlanLimitTracker('age-2', () => {}, 80, 24)
     tracker.push('Current session\r\n██▌   5% used\r\n')
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    await tracker.flush()
     tracker.capture(1_000)
 
     tracker.push('\u001b[2J\u001b[HCurrent session\r\n████   9% used\r\n')
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    await tracker.flush()
     tracker.capture(2_000)
     expect(tracker.current.firstSeenAt).toBe(2_000)
     tracker.dispose()
@@ -297,7 +297,7 @@ describe('how old a reading is', () => {
   it('treats a reading it just asked for as fresh even when it repeats', async () => {
     const tracker = new PlanLimitTracker('age-3', () => {}, 80, 24)
     tracker.push('Current session\r\n██▌   5% used\r\n')
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    await tracker.flush()
     tracker.capture(1_000)
     // What `refresh` does after typing /usage: the CLI has just answered, so
     // the same numbers are a fresh answer rather than a leftover panel.

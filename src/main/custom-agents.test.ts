@@ -10,7 +10,7 @@ import {
   registerCustomAgentsIpc,
 } from './custom-agents'
 import { customProviderSpec } from './providers'
-import { WSL_EXE } from './wsl'
+import { wslExePath } from './wsl'
 import { customEntry, isCustomProviderId } from '../shared/custom-agents'
 import { AGENT_ENTRIES } from '../shared/agent-catalog'
 
@@ -268,7 +268,14 @@ describe('a command a Windows user would actually type', () => {
       distro: 'Ubuntu',
       cwd: '/home/asad/proj',
     })
-    expect(distro.spawn.command).toBe(WSL_EXE)
+    // The launcher is `wsl.exe`, by whatever path this machine finds it at.
+    // `wslExePath` returns the absolute `System32` path when the file is
+    // really there and the bare name when it is not — so a literal `wsl.exe`
+    // here asserted "this suite is running on a machine without WSL", which
+    // is true on the Mac these tests were written on and false on the Windows
+    // runner that gates the release. Asking the same function for the answer
+    // states the rule instead of the platform.
+    expect(distro.spawn.command).toBe(wslExePath({ COMSPEC: 'cmd.exe' }))
     expect(distro.spawn.args.join(' ')).toContain('Ubuntu')
     expect(distro.spawn.hostCwd).toBeDefined()
   })

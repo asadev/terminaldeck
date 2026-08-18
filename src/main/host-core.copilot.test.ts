@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -40,6 +40,20 @@ let core: HostCore
 
 beforeAll(() => {
   dir = mkdtempSync(join(tmpdir(), 'td-core-copilot-'))
+  /*
+   * The folders every case below starts a session in, made rather than assumed.
+   *
+   * They were only ever named, and on macOS that is survivable — node-pty hands
+   * a missing working directory to the shell and something still starts. On
+   * Windows `CreateProcess` refuses outright with error 267, ERROR_DIRECTORY,
+   * and all four cases in this file failed on the Windows runner while passing
+   * here. The subject under test is what gets written into `openSessions`, not
+   * whether a shell tolerates a folder that is not there, so the fixture makes
+   * the folders and the assertions stay about the thing they are about.
+   */
+  for (const name of ['copilot', 'fenced', 'live-project']) {
+    mkdirSync(join(dir, name), { recursive: true })
+  }
   installPaths(nodePaths({ platform: 'linux', env: { XDG_DATA_HOME: dir }, home: dir, appRoot: dir }))
   core = createHostCore({ storageDir: join(dir, 'remote'), userData: dir })
 })
